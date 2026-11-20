@@ -47,6 +47,11 @@ thread_local! {
     /// (opcache's `persistent_compile_file` falls back to the original
     /// `compile_file` for it, bug #64482).
     static UNCACHEABLE_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `ZEND_COMPILE_IGNORE_OTHER_FILES`: while set, the compiler does not
+    /// see user functions declared by other files, so the code it produces
+    /// does not depend on what happened to be declared before (opcache sets
+    /// it for every script it caches; ZendAccelerator.c).
+    static IGNORE_OTHER_FILES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
@@ -95,6 +100,87 @@ impl Vm {
     /// script cache.
     pub fn set_cached_include_hook(f: CachedIncludeHookFn) {
         CACHED_INCLUDE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// Runs `f` with `ZEND_COMPILE_IGNORE_OTHER_FILES` set: compiling then
+    /// ignores user functions declared by other files, so the result can
+    /// be cached and reused whatever else is declared.
+    pub fn with_ignore_other_files<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = IGNORE_OTHER_FILES.with(|c| c.replace(true));
+        let out = f(self);
+        IGNORE_OTHER_FILES.with(|c| c.set(prev));
+        out
+    }
+
+    /// A hash of every compiler input besides the source that changes the
+    /// code a file compiles to: options from INI (`zend.assertions`, the
+    /// optimization level), which builtins compile to dedicated opcodes,
+    /// and the constants substituted at compile time. A cached unit is
+    /// reused only under the same fingerprint. `None` when the current
+    /// setup must not use cached code at all (user opcode handlers are
+    /// installed, or `zend.multibyte` keeps the AST for diagnostics).
+    pub fn compile_fingerprint(&mut self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        if !self.user_opcodes().is_empty() || self.ini.get_bool("zend.multibyte") {
+            return None;
+        }
+        let builtin = |vm: &Self, name: &[u8]| {
+            matches!(vm.functions.get(name), Some(crate::func::Func::Builtin(_)))
+        };
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.ini.get_long("zend.assertions").hash(&mut h);
+        self.optimization_level().hash(&mut h);
+        self.ini.get_bool("short_open_tag").hash(&mut h);
+        builtin(self, b"sprintf").hash(&mut h);
+        builtin(self, b"array_map").hash(&mut h);
+        builtin(self, b"strlen").hash(&mut h);
+        self.special_builtins().hash(&mut h);
+        self.ct_constants().fingerprint().hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// The optimizer passes a file is compiled with: opcache's
+    /// `opcache.optimization_level` when opcache optimizes (it is on for
+    /// this SAPI, or only the file cache is), else none.
+    fn optimization_level(&self) -> u32 {
+        if self.ini.get_bool("opcache.enable")
+            && (self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+        {
+            // A zend_long whose low 32 bits are the passes: `-1` is all.
+            u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Makes a unit from the script cache current, repeating what
+    /// compiling it did ([`compiler::UnitMeta`]): the anonymous class
+    /// counter, `__COMPILER_HALT_OFFSET__`, the auto-globals it names and
+    /// the registration of its declarations. Returns `false` (the caller
+    /// then compiles the file) when the unit declares anonymous classes
+    /// named for a different counter than the current one.
+    pub fn install_cached_unit(&mut self, unit: &Rc<CompiledUnit>, filename: &ZStr) -> bool {
+        let meta = &unit.meta;
+        let declares_anon = unit.anon_end != meta.anon_base;
+        if declares_anon && meta.anon_base != self.anon_counter {
+            return false;
+        }
+        if declares_anon {
+            self.anon_counter = unit.anon_end;
+        }
+        for &i in &meta.auto_globals {
+            crate::auto_globals::note_compiled_index(i);
+        }
+        self.activate_compiled_auto_globals();
+        if let Some(off) = meta.halt_offset {
+            self.ext.halt_offsets.insert(filename.clone(), off);
+        }
+        if declares_anything(unit) {
+            self.units.push(unit.clone());
+        }
+        true
     }
 
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
@@ -269,17 +355,9 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
-            optimization_level: if self.ini.get_bool("opcache.enable")
-                && (self.ini.get_bool("opcache.enable_cli")
-                    || self.ini.get_bool("opcache.file_cache_only"))
-            {
-                // A zend_long whose low 32 bits are the passes: `-1` is all.
-                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
-                    .unwrap_or(0)
-            } else {
-                0
-            },
+            optimization_level: self.optimization_level(),
         };
+        let anon_base = self.anon_counter;
         let halt_compiler_offset = program.halt_compiler_offset;
         // `opcache.opt_debug_level` & `ZEND_DUMP_AFTER_OPTIMIZER`: opcache
         // dumps each script it compiles (`zend_optimize_script`); eval'd
@@ -299,7 +377,20 @@ impl Vm {
         // it compiles. The compiler sees the function table as it stands
         // (`CG(function_table)`), for the `fbc` of calls by name.
         let functions = &self.functions;
-        let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+        let ignore_other_files = !is_eval && IGNORE_OTHER_FILES.with(std::cell::Cell::get);
+        let table = |lc: &[u8]| {
+            functions
+                .get(lc)
+                .filter(|f| match f {
+                    // `ZEND_COMPILE_IGNORE_OTHER_FILES`: a user function is
+                    // seen only if this file declared it.
+                    crate::func::Func::User(u) if ignore_other_files => {
+                        u.code.filename.as_bytes() == filename.as_bytes()
+                    }
+                    _ => true,
+                })
+                .map(compiler::FunctionInfo::of)
+        };
         let (compiled, kept) = if program.multibyte {
             let unit = compiler::compile_with_functions(&program, src, opts, &table);
             (unit, Some(program))
@@ -307,10 +398,15 @@ impl Vm {
             let unit = compiler::compile_program_with_functions(program, src, opts, &table);
             (unit, None)
         };
-        self.activate_compiled_auto_globals();
+        let auto_globals = self.activate_compiled_auto_globals();
         let unit = match compiled {
-            Ok(u) => {
+            Ok(mut u) => {
                 self.anon_counter = u.anon_end;
+                u.meta = compiler::UnitMeta {
+                    anon_base,
+                    halt_offset: halt_compiler_offset.map(|off| i64::try_from(off).unwrap_or(0)),
+                    auto_globals,
+                };
                 u
             }
             Err(e) => {

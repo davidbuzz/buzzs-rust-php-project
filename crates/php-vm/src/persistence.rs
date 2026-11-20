@@ -273,6 +273,7 @@ impl ImageBuilder {
             decls: self.table(&original.decls),
             warnings: original.warnings.clone(),
             anon_end: original.anon_end,
+            meta: original.meta.clone(),
         })
     }
 

@@ -80,6 +80,25 @@ pub struct CompiledUnit {
     /// The anonymous class counter after this unit (see
     /// [`CompileOptions::anon_base`]).
     pub anon_end: u32,
+    /// What compiling the unit did besides producing it, recorded so a
+    /// cached unit can repeat it (`zend_persistent_script`'s
+    /// `ping_auto_globals_mask` and friends). Filled by
+    /// `Vm::compile_source_default`; empty for `eval` and fresh units.
+    pub meta: UnitMeta,
+}
+
+/// The side effects of compiling a file that a cache hit has to repeat.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnitMeta {
+    /// The anonymous class counter the unit was compiled from
+    /// ([`CompileOptions::anon_base`]); anonymous class names embed it.
+    pub anon_base: u32,
+    /// `__COMPILER_HALT_OFFSET__` of the file, if it calls
+    /// `__halt_compiler()`.
+    pub halt_offset: Option<i64>,
+    /// The auto-globals (`$_SERVER`, `$_ENV`, ... by registration index)
+    /// the code names, whose just-in-time callbacks compiling armed.
+    pub auto_globals: Vec<u8>,
 }
 
 /// The global constants `zend_try_ct_eval_const` (`Zend/zend_compile.c`)
@@ -108,6 +127,41 @@ impl CtConstants {
     /// Whether no constant may be substituted.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// A hash of every substitutable constant's name and value: code
+    /// compiled against one table may only be reused (from the bytecode
+    /// cache) where the table is the same. Memoized per table.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        thread_local! {
+            static MEMO: std::cell::Cell<(usize, u64)> = const { std::cell::Cell::new((0, 0)) };
+        }
+        let key = Rc::as_ptr(&self.0) as usize;
+        let (memo_key, memo) = MEMO.with(std::cell::Cell::get);
+        if memo_key == key {
+            return memo;
+        }
+        let mut entries: Vec<(&[u8], &Value)> =
+            self.0.iter().map(|(k, v)| (k.as_bytes(), v)).collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (name, value) in entries {
+            name.hash(&mut h);
+            match value {
+                Value::Null => 0_u8.hash(&mut h),
+                Value::Bool(b) => (1_u8, *b).hash(&mut h),
+                Value::Int(i) => (2_u8, *i).hash(&mut h),
+                Value::Float(f) => (3_u8, f.to_bits()).hash(&mut h),
+                Value::Str(s) => (4_u8, s.as_bytes()).hash(&mut h),
+                // Only scalars are substitutable (`can_ct_eval_const`).
+                _ => 5_u8.hash(&mut h),
+            }
+        }
+        let fp = h.finish();
+        MEMO.with(|m| m.set((key, fp)));
+        fp
     }
 }
 
@@ -758,6 +812,7 @@ impl<'f> Compiler<'f> {
             decls: c.decls.clone(),
             warnings: std::mem::take(&mut c.warnings),
             anon_end: c.anon_counter,
+            meta: UnitMeta::default(),
         })
     }
 }

@@ -692,16 +692,20 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
 }
 
 /// `zend_finalize_system_id` for the file cache, from the internal
-/// function table as it stands after `disable_functions` (GH-17733).
+/// function table as it stands after `disable_functions` (GH-17733), and
+/// the bytecode format (php-src hashes its build id in): entries written
+/// by another build or format land in another directory and are never read.
 fn ensure_system_id(vm: &Vm) {
     if file_cache::system_id_is_final() {
         return;
     }
+    let format = php_vm::bytecode_cache::format_id();
     let names = vm
         .functions
         .iter()
         .filter(|(_, f)| matches!(f, php_vm::func::Func::Builtin(_)))
-        .map(|(name, _)| name.as_bytes());
+        .map(|(name, _)| name.as_bytes())
+        .chain(std::iter::once(format.as_bytes()));
     file_cache::set_system_id(file_cache::compute_system_id(names));
 }
 
@@ -880,6 +884,16 @@ fn opcache_compile_hook(
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename.as_bytes()));
     let realpath = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let real_str = realpath.to_string_lossy().into_owned();
+    // File cache entries are validated by the script's modification time.
+    // A script that is not a plain file (a `phar://` entry) has none here,
+    // so a stale entry could not be told apart: such scripts are neither
+    // stored in nor loaded from the file cache. (php-src stats them through
+    // the stream wrapper.)
+    let file_cache_dir = if std::fs::metadata(&realpath).is_ok() {
+        file_cache_dir
+    } else {
+        String::new()
+    };
 
     // A blacklisted script is compiled, never cached (`persistent_compile_file`).
     if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
@@ -929,8 +943,11 @@ fn opcache_compile_hook(
         }
     }
 
-    // 2. File cache check
-    if !file_cache_dir.is_empty() {
+    // 2. File cache check: the entry holds compiled bytecode
+    // (`zend_file_cache_script_load`), valid only for the compiler inputs
+    // it was compiled under (`fingerprint`).
+    let fingerprint = vm.compile_fingerprint();
+    if let (false, Some(fingerprint)) = (file_cache_dir.is_empty(), fingerprint) {
         let cache_dir = std::path::Path::new(&file_cache_dir);
         let consistency_checks = vm.ini_bool("opcache.file_cache_consistency_checks");
         match file_cache::read_file_cache(
@@ -940,24 +957,24 @@ fn opcache_compile_hook(
             validate_timestamps,
             consistency_checks,
         ) {
-            Ok(Some(cached_src)) => {
-                let res =
-                    vm.compile_source_default(Rc::from(cached_src), filename, false, skip_shebang)?;
-                if let CompileOutcome::Ok(ref unit) = res {
-                    unit.clear_runtime_caches();
+            Ok(Some(payload)) => {
+                if let Some(unit) = load_cached_unit(vm, &payload, fingerprint, filename) {
+                    if vm.ini_bool("opcache.record_warnings") {
+                        vm.emit_compile_warnings(&unit, filename)?;
+                    }
                     if !file_cache_only {
                         GLOBAL_CACHE.with(|c| {
                             c.borrow_mut().insert(
                                 real_str,
                                 mtime_sec,
-                                src.len() + 1024,
+                                payload.len(),
                                 now_sec,
                                 unit.clone(),
                             );
                         });
                     }
+                    return Ok(CompileOutcome::Ok(unit));
                 }
-                return Ok(res);
             }
             Err(corrupted_msg) => {
                 // zend_accel_error(ACCEL_LOG_WARNING, "...\n").
@@ -967,8 +984,12 @@ fn opcache_compile_hook(
         }
     }
 
-    // 3. Cache Miss: compile source
-    let res = vm.compile_source_default(src.clone(), filename, false, skip_shebang)?;
+    // 3. Cache Miss: compile source. Like `persistent_compile_file`, compile
+    // with `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
+    // depend on the functions other files happened to declare first.
+    let res = vm.with_ignore_other_files(|vm| {
+        vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+    })?;
     if let CompileOutcome::Ok(ref unit) = res {
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
         vm.call_registered_optimizer_passes();
@@ -980,16 +1001,55 @@ fn opcache_compile_hook(
                     .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit.clone());
             });
         }
-        if !file_cache_dir.is_empty() {
+        if let (false, Some(fingerprint)) = (file_cache_dir.is_empty(), fingerprint) {
             let cache_dir = std::path::Path::new(&file_cache_dir);
-            if let Err((msg, _)) =
-                file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src)
+            if let Err(msg) = store_in_file_cache(cache_dir, &realpath, mtime_sec, fingerprint, unit)
             {
                 accel_log_warning(vm, &format!("{msg}\n"));
             }
         }
     }
     Ok(res)
+}
+
+/// `zend_file_cache_script_store`: writes `unit` as a file cache entry
+/// (the compiler fingerprint, then the bytecode image). A unit that
+/// cannot be encoded (it holds a value without a compile-time form) is
+/// silently not stored.
+fn store_in_file_cache(
+    cache_dir: &std::path::Path,
+    realpath: &std::path::Path,
+    mtime_sec: i64,
+    fingerprint: u64,
+    unit: &php_vm::compiler::CompiledUnit,
+) -> Result<(), String> {
+    let Ok(image) = php_vm::bytecode_cache::encode(unit) else {
+        return Ok(());
+    };
+    let mut payload = Vec::with_capacity(8 + image.len());
+    payload.extend_from_slice(&fingerprint.to_le_bytes());
+    payload.extend_from_slice(&image);
+    file_cache::write_file_cache(cache_dir, realpath, mtime_sec, &payload)
+        .map(|_| ())
+        .map_err(|(msg, _)| msg)
+}
+
+/// Decodes a file cache entry (compiler fingerprint, then the bytecode
+/// image) and installs it. `None` when the entry was compiled under other
+/// compiler inputs, is unreadable, or cannot be installed in this request;
+/// the caller then compiles the file and overwrites the entry.
+fn load_cached_unit(
+    vm: &mut Vm,
+    payload: &[u8],
+    fingerprint: u64,
+    filename: &ZStr,
+) -> Option<Rc<php_vm::compiler::CompiledUnit>> {
+    let (stored, image) = payload.split_first_chunk::<8>()?;
+    if u64::from_le_bytes(*stored) != fingerprint {
+        return None;
+    }
+    let unit = Rc::new(php_vm::bytecode_cache::decode(image).ok()?);
+    vm.install_cached_unit(&unit, filename).then_some(unit)
 }
 
 /// An include of a file that cannot be opened: `persistent_compile_file`
@@ -1457,9 +1517,25 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 
     let real_z = ZStr::from(realpath.as_os_str().as_bytes());
-    let res = vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)?;
+    let res = vm.with_ignore_other_files(|vm| {
+        vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)
+    })?;
     match res {
         CompileOutcome::Ok(unit) => {
+            let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+            ensure_system_id(vm);
+            if !file_cache_dir.is_empty() {
+                if let Some(fingerprint) = vm.compile_fingerprint() {
+                    // The write error is not reported here, as before.
+                    let _ = store_in_file_cache(
+                        std::path::Path::new(&file_cache_dir),
+                        &realpath,
+                        mtime_sec,
+                        fingerprint,
+                        &unit,
+                    );
+                }
+            }
             let file_cache_only = vm.ini_bool("opcache.file_cache_only");
             if !file_cache_only {
                 let real_str = realpath.to_string_lossy().into_owned();
@@ -1467,12 +1543,6 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                     c.borrow_mut()
                         .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit);
                 });
-            }
-            let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
-            ensure_system_id(vm);
-            if !file_cache_dir.is_empty() {
-                let cache_dir = std::path::Path::new(&file_cache_dir);
-                let _ = file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src);
             }
             Ok(Value::Bool(true))
         }

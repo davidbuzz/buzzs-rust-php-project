@@ -21,12 +21,23 @@ pub const SYSTEM_ID: &str = "817478635848e894c2598be6984e49ef";
 pub const HEADER_SIZE: usize = 60;
 
 /// Calculates Adler-32 checksum, matching `zend_adler32` in php-src.
+///
+/// The sums are reduced only every `NMAX` bytes, as `zend_adler32` and
+/// zlib do: 5552 is the largest count for which `b` cannot overflow a
+/// `u32` before the reduction, so the result equals reducing after every
+/// byte.
 pub fn adler32(data: &[u8]) -> u32 {
+    const BASE: u32 = 65521;
+    const NMAX: usize = 5552;
     let mut a: u32 = 1;
     let mut b: u32 = 0;
-    for &byte in data {
-        a = (a + byte as u32) % 65521;
-        b = (b + a) % 65521;
+    for chunk in data.chunks(NMAX) {
+        for &byte in chunk {
+            a += u32::from(byte);
+            b += a;
+        }
+        a %= BASE;
+        b %= BASE;
     }
     (b << 16) | a
 }
@@ -241,7 +252,32 @@ pub fn is_script_cached_in_file_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_system_id;
+    use super::{adler32, compute_system_id};
+
+    /// The reduction after every byte, as `zend_adler32` defines the sum.
+    fn adler32_per_byte(data: &[u8]) -> u32 {
+        let (mut a, mut b) = (1_u32, 0_u32);
+        for &byte in data {
+            a = (a + u32::from(byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+        (b << 16) | a
+    }
+
+    #[test]
+    fn adler32_matches_the_per_byte_definition() {
+        assert_eq!(adler32(b""), 1);
+        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
+        // All-0xff input maximizes the sums; lengths around the block size.
+        for len in [1, 5551, 5552, 5553, 11104, 11105, 100_000] {
+            let ff = vec![0xff_u8; len];
+            assert_eq!(adler32(&ff), adler32_per_byte(&ff), "0xff x {len}");
+            let mixed: Vec<u8> = (0..len)
+                .map(|i| u8::try_from(i * 131 % 251).expect("below 251"))
+                .collect();
+            assert_eq!(adler32(&mixed), adler32_per_byte(&mixed), "mixed x {len}");
+        }
+    }
 
     #[test]
     fn system_id_depends_on_the_function_set_not_its_order() {

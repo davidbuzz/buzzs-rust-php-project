@@ -19,6 +19,7 @@ pub use php_parser::ast;
 mod attrs;
 mod auto_globals;
 mod builtins;
+pub mod bytecode_cache;
 mod call;
 pub mod class;
 mod classlink;
