@@ -507,6 +507,18 @@ macro_rules! take_jump {
             // demotes every slot-base access to the stack (measured:
             // +210M instructions on `fib`).
             $ip = jit::back_edge($st, &*$ctx, at, $ip);
+            // A compiled loop leaves when the safe point comes due inside
+            // it (at its head, at a nested loop's back edge, after a row
+            // that allocates): it is serviced before the next instruction
+            // runs, as the check above does for an interpreted jump, and
+            // reported at the row the trace named.
+            if crate::interrupt::safe_point_due() {
+                return Out {
+                    ip: $ip,
+                    at: (&*$ctx).poll_at(at),
+                    why: WHY_POLL,
+                };
+            }
         }
     }};
 }

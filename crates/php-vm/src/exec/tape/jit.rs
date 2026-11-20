@@ -181,6 +181,9 @@ pub(crate) struct JitCtx {
     /// The [`Tape`] the tables belong to (null if there are none): used
     /// to kill a tape's tracing once it proves useless.
     tape: *const Tape,
+    /// The row a compiled loop's poll exit belongs to (null when its
+    /// last exit was no poll): `take_jump!` reports the safe point there.
+    poll_row: Cell<*const Inst>,
 }
 
 impl JitCtx {
@@ -212,12 +215,27 @@ impl JitCtx {
             tbase: tape_slice.as_ptr(),
             tlen: tape_slice.len(),
             tape: std::ptr::from_ref(tape),
+            poll_row: Cell::new(std::ptr::null()),
         })
     }
 
     #[inline(always)]
     pub(crate) fn alive(&self) -> bool {
         !self.jcnt.get().is_null()
+    }
+
+    /// The instruction a safe point that came due inside the compiled
+    /// loop belongs to: the row the trace named (a row that allocates, a
+    /// nested loop's back edge), else `jump`, the back edge that entered
+    /// the trace. Read once: the row is forgotten.
+    #[inline]
+    pub(crate) fn poll_at(&self, jump: *const Inst) -> *const Inst {
+        let row = self.poll_row.replace(std::ptr::null());
+        if row.is_null() {
+            jump
+        } else {
+            row
+        }
     }
 
     /// Stop hooking this frame's back edges (the tape's tracing is dead).
@@ -230,6 +248,20 @@ impl JitCtx {
 /// A backward jump onto instruction `close`'s target compiles the loop
 /// once `close` has been taken this many times.
 const HOT_LIMIT: i32 = 20_000;
+
+/// [`HOT_LIMIT`], or the count `BUZZS_JIT_HOT` names (read once): a test
+/// run sets it low so that every loop of a test suite is compiled, where
+/// the default leaves all but the longest ones interpreted.
+fn hot_limit() -> i32 {
+    static HOT: OnceLock<i32> = OnceLock::new();
+    *HOT.get_or_init(|| {
+        std::env::var("BUZZS_JIT_HOT")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(HOT_LIMIT)
+    })
+}
 /// The largest region compiled (instructions, counting an inlined call as
 /// its full span); larger loops stay interpreted in this version.
 const MAX_REGION: usize = 128;
@@ -369,6 +401,21 @@ const C_SPROPISSET: u16 = 26;
 /// stores that literal, guarded only when the op resolves the constant
 /// through the frame's scope (`self::`/`static::`) — see `plan_const`.
 const C_CONSTI: u16 = 27;
+/// An array element read with an int offset (`$t = $cv[$i]`, or
+/// `$v = $cv[$i]` folded with the assignment after it): the row calls
+/// [`jit_dim_get`], which stores an `Int` element and declines anything
+/// else, leaving the row to the interpreter (see `plan_dim`).
+const C_DIMR: u16 = 28;
+/// An array element write with an int offset, or an append
+/// (`$cv[$i] = int`, `$cv[] = int`), through [`jit_dim_set`].
+const C_DIMW: u16 = 29;
+/// A compound array element write (`$cv[$i] += int` and the other
+/// int-int operators of [`jit_dim_op`]).
+const C_DIMOP: u16 = 30;
+/// `$cv = a op b` for the operators of the generic numeric rows
+/// (`NumBinC`: the `Bin` and the `AssignCv` after it, the destination
+/// variable in `inst.d`).
+pub(crate) const J_NUMBIN_D: u16 = 31;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -376,7 +423,7 @@ const NO_DST: u32 = u32::MAX;
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
 pub(crate) fn c_step(c: u16) -> usize {
-    if c == J_CMP || c == J_ARITH_CV {
+    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D {
         2
     } else if c == J_INCCMP {
         3
@@ -466,6 +513,11 @@ const NULL_SRC: u8 = 0x40;
 const OPA_BITAND: u8 = 6;
 const OPA_BITOR: u8 = 7;
 const OPA_BITXOR: u8 = 8;
+/// The shifts of the generic numeric rows: `<<` and `>>` by a count in
+/// `0..=63` (any other count exits to the interpreted row, which gives
+/// the 0 or -1 of a too wide shift or throws for a negative one).
+const ARITH_SHL: u8 = 9;
+const ARITH_SAR: u8 = 10;
 
 impl Default for JitMeta {
     fn default() -> JitMeta {
@@ -729,6 +781,19 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
                 ..JitMeta::default()
             }
         }
+        // `$cv = a op b` (`NumBinC`): the operands as for `NumBinT`, the
+        // destination variable in `inst.d`; the row covers the `AssignCv`
+        // after the `Bin`.
+        TOp::NumBinC => {
+            let (ka, kb) = (inst.k >> 4, inst.k & 0xf);
+            JitMeta {
+                class: J_NUMBIN_D,
+                ka,
+                kb,
+                arith: op_arith(inst.e)?,
+                ..JitMeta::default()
+            }
+        }
         op => op.jit_meta()?,
     };
     // The arithmetic destination's kind (the family tables leave it the
@@ -765,17 +830,21 @@ fn resolved_lit(st: &St, off: u32) -> Option<i64> {
     }
 }
 
-/// The JIT's arithmetic id for a `NUM_OPS` index (`inst.e`): `+`/`-`/`*`
-/// never reach this (the specialised `arith_tmp`/`arith_cv`/`assign_op`
-/// rows own them), so within the numeric families' reach only `%`
-/// (id 1 in `NUM_OPS`, the C `%` on x86) has an emitter id here (5,
-/// distinct from `jit_arith_id!`'s 0/1/2); division's int-or-float
-/// result and the bit/logic ops stay interpreted.
+/// The JIT's arithmetic id for a `NUM_OPS` index (`inst.e` of the generic
+/// numeric rows; `scalar.rs`'s table: 0 `/`, 1 `%`, 2 `<<`, 3 `>>`, 4 `|`,
+/// 5 `&`, 6 `^`, then the comparisons). `+`/`-`/`*` never reach this (the
+/// specialised `arith_tmp`/`arith_cv`/`assign_op` rows own them, ids
+/// 0/1/2 of `jit_arith_id!`). Division's int-or-float result and the
+/// comparisons' `Bool` stay interpreted.
 fn op_arith(e: u8) -> Option<u8> {
-    if e == 1 {
-        Some(5)
-    } else {
-        None
+    match e {
+        1 => Some(5),
+        2 => Some(ARITH_SHL),
+        3 => Some(ARITH_SAR),
+        4 => Some(OPA_BITOR),
+        5 => Some(OPA_BITAND),
+        6 => Some(OPA_BITXOR),
+        _ => None,
     }
 }
 
@@ -957,6 +1026,16 @@ fn add_class_guards(
             (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
                 && (m.db == NO_DST || fresh_dst(m.db, guards))
         }
+        // `$cv = a op b`: as `J_ARITH_CV`, the destination (`inst.d`)
+        // keeps its `Int` tag and only its payload is stored.
+        J_NUMBIN_D => {
+            read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && keep_int(inst.d, guards)
+        }
+        // The array rows hand their operands to a helper by address, and
+        // the helper checks every one of them on every iteration (a
+        // wrong type declines, which leaves the row to the interpreter):
+        // nothing to guard at the entry.
+        C_DIMR | C_DIMW | C_DIMOP => true,
         _ => false,
     }
 }
@@ -1599,6 +1678,327 @@ fn plan_ext(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<(u16, Ji
     Some((m.class, m))
 }
 
+/// Whether `op` is an array row the plan may inline ([`plan_dim`]).
+fn is_dim_row(op: TOp) -> bool {
+    matches!(
+        op,
+        TOp::FetchDimIC | TOp::FetchDimC | TOp::AssignDimIC | TOp::AssignDimC | TOp::AssignOpDimC
+    )
+}
+
+/// The operand kinds of the array rows, as `dims.rs` packs them in `k`.
+const DIM_CV: u8 = 0;
+const DIM_TMP: u8 = 1;
+const DIM_TMPKEEP: u8 = 2;
+const DIM_LIT: u8 = 3;
+const DIM_UNUSED: u8 = 4;
+/// The operators [`jit_dim_op`] computes, by `dims.rs`'s `op_code`.
+const DIM_OP_ADD: u32 = 0;
+const DIM_OP_SUB: u32 = 1;
+const DIM_OP_MUL: u32 = 2;
+const DIM_OP_OR: u32 = 8;
+const DIM_OP_AND: u32 = 9;
+const DIM_OP_XOR: u32 = 10;
+
+/// The run-time shape of an array row with an int offset: a read
+/// (`FetchDimIC`/`FetchDimC`: `$t = $cv[$i]`, or `$v = $cv[$i]` folded
+/// with the `AssignCv` after it), a write (`AssignDimIC`/`AssignDimC`:
+/// `$cv[$i] = v`, `$cv[] = v`) or a compound write (`AssignOpDimC`:
+/// `$cv[$i] += v`). The row's class, its meta and the tape rows it covers.
+///
+/// Nothing about the operands is assumed: the emitted row passes their
+/// slots' addresses to a helper (`jit_dim_get`/`jit_dim_set`/
+/// `jit_dim_op`), which checks on every iteration that the variable
+/// holds an array, that the offset and the value are `Int`s and that the
+/// element is what it handles, and declines otherwise with nothing
+/// changed (the interpreted row then runs). Only what can never be an
+/// `Int` is refused here: a literal offset or value of another type.
+///
+/// Meta fields: `sb` the array variable's slot; `kb`/`slot`/`lit_b` the
+/// offset (`KC`/`KT` and a slot offset, `KL` and the literal's address,
+/// or `KSKIP` for an append); `kc`/`db` a read's destination (`KC` the
+/// folded variable, `KT` the result temporary); `sc`/`sw`/`lit_c` and
+/// `consume` a write's value; `arith` a compound write's operator.
+fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16, JitMeta, usize)> {
+    // One operand: its kind, slot offset, literal address, and whether
+    // the row consumes it (a `Tmp`, as opposed to a `TmpKeep`).
+    let operand = |kind: u8, idx: u32| -> Option<(u8, u32, i64, bool)> {
+        if idx >= super::SLOT_LIMIT {
+            return None;
+        }
+        match kind {
+            DIM_CV if (idx as usize) < code.cv_names.len() => {
+                Some((KC, idx << SLOT_SHIFT, 0, false))
+            }
+            DIM_TMP | DIM_TMPKEEP if idx < code.num_tmps => {
+                Some((KT, idx << SLOT_SHIFT, 0, kind == DIM_TMP))
+            }
+            DIM_LIT => match code.literals.get(idx as usize) {
+                Some(php_runtime::Value::Int(_)) => {
+                    // SAFETY: a literal of this op array's table, which
+                    // `st.lits` is the base of (16 bytes each).
+                    let p = unsafe { st.lits.add((idx << SLOT_SHIFT) as usize) };
+                    Some((KL, 0, p as i64, false))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    if inst.a >= super::SLOT_LIMIT || inst.a as usize >= code.cv_names.len() {
+        return None;
+    }
+    let sb = inst.a << SLOT_SHIFT;
+    let dk = inst.k & 7;
+    match inst.op {
+        TOp::FetchDimIC | TOp::FetchDimC => {
+            let (kb, slot, lit_b, _) = operand(dk, inst.b)?;
+            // The destination: the variable of the folded `AssignCv`
+            // (`inst.d`; the row then covers that op as well, as the
+            // interpreted row jumps past it), else the result temporary
+            // (`inst.p`). `u32::MAX` is `dims.rs`'s "no folded variable".
+            let (kc, db, step) = if inst.d == u32::MAX {
+                let t = u32::try_from(inst.p).ok()?;
+                if t >= code.num_tmps || t >= super::SLOT_LIMIT {
+                    return None;
+                }
+                (KT, t << SLOT_SHIFT, 1)
+            } else {
+                if inst.d as usize >= code.cv_names.len() || inst.d >= super::SLOT_LIMIT {
+                    return None;
+                }
+                (KC, inst.d << SLOT_SHIFT, 2)
+            };
+            let m = JitMeta {
+                class: C_DIMR,
+                sb,
+                kb,
+                slot,
+                lit_b,
+                kc,
+                db,
+                ..JitMeta::default()
+            };
+            Some((C_DIMR, m, step))
+        }
+        TOp::AssignDimIC | TOp::AssignDimC | TOp::AssignOpDimC => {
+            let (kb, slot, lit_b) = if dk == DIM_UNUSED {
+                (KSKIP, 0, 0)
+            } else {
+                let (k, o, l, _) = operand(dk, inst.b)?;
+                (k, o, l)
+            };
+            let (sc, sw, lit_c, consume) = operand((inst.k >> 3) & 7, u32::try_from(inst.p).ok()?)?;
+            let (class, arith) = if inst.op == TOp::AssignOpDimC {
+                // `$cv[] op= v` has no element to read, and only the
+                // int-int operators have a helper.
+                let known = matches!(
+                    u32::from(inst.e),
+                    DIM_OP_ADD | DIM_OP_SUB | DIM_OP_MUL | DIM_OP_OR | DIM_OP_AND | DIM_OP_XOR
+                );
+                if kb == KSKIP || !known {
+                    return None;
+                }
+                (C_DIMOP, inst.e)
+            } else {
+                (C_DIMW, 0)
+            };
+            let m = JitMeta {
+                class,
+                sb,
+                kb,
+                slot,
+                lit_b,
+                sc,
+                sw,
+                lit_c,
+                consume,
+                arith,
+                ..JitMeta::default()
+            };
+            Some((class, m, 1))
+        }
+        _ => None,
+    }
+}
+
+/// The `Int` in the slot at `p` - a temporary's or a literal's `Value`,
+/// or a compiled variable's `Option<Value>`: the same tag byte and
+/// payload word (the layout tests' `value_layout`) - or `None` when the
+/// slot holds anything else, nothing included.
+///
+/// # Safety
+/// `p` points at a live 16-byte slot.
+unsafe fn slot_int(p: *const u8) -> Option<i64> {
+    // SAFETY: the caller's contract.
+    unsafe {
+        (*p == TAG_INT).then(|| std::ptr::read_unaligned(p.add(PAYLOAD as usize).cast::<i64>()))
+    }
+}
+
+/// `C_DIMR`'s helper: `$dst = $arr[$idx]` when `arr` holds an array
+/// directly, `idx` an `Int`, the array has an `Int` element at that key
+/// (a packed table or a hash), and the destination holds nothing whose
+/// release could do more than free a string - a temporary's plain value,
+/// or (`dst_cv != 0`) a compiled variable that is undefined or plain, the
+/// test the interpreter's own fast path makes (`dims.rs`
+/// `store_plain_into`). Returns 0 having stored the element; 1, nothing
+/// changed, for anything else (the interpreted row then decides: a
+/// missing key warns, another element type is copied by its own rules).
+///
+/// # Safety
+/// The three pointers are slots of the running frame (or of its op
+/// array's literal table): `arr` and, with `dst_cv`, `dst` compiled
+/// variables, `dst` otherwise a temporary.
+unsafe extern "C" fn jit_dim_get(
+    arr: *const crate::vm::CvSlot,
+    idx: *const u8,
+    dst: *mut u8,
+    dst_cv: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract; the element is copied out before the
+    // destination, which may be any slot, is written.
+    unsafe {
+        let Some(Value::Array(a)) = (*arr).get() else {
+            return 1;
+        };
+        let Some(i) = slot_int(idx) else {
+            return 1;
+        };
+        let Some(Value::Int(v)) = a.get_int(i) else {
+            return 1;
+        };
+        let v = *v;
+        if dst_cv != 0 {
+            let slot = &*dst.cast::<crate::vm::CvSlot>();
+            if matches!(
+                slot.get(),
+                Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
+            ) {
+                return 1;
+            }
+            drop(slot.set(Some(Value::Int(v))));
+        } else {
+            let slot = &mut *dst.cast::<Value>();
+            if !slot.is_plain() {
+                return 1;
+            }
+            *slot = Value::Int(v);
+        }
+        0
+    }
+}
+
+/// `C_DIMW`'s helper: `$arr[$idx] = $val` (`idx` null: `$arr[] = $val`)
+/// when `arr` holds an array directly and alone (no other handle: no
+/// separation), `val` an `Int`, and `idx` an `Int` key that is new to the
+/// table or whose element is plain (a replaced scalar owns nothing, a
+/// replaced string is released; an array, object or reference element
+/// is the interpreted row's). Returns 0 having written; 1, nothing
+/// changed, for anything else (an append past the largest key is the
+/// interpreted row's error).
+///
+/// # Safety
+/// As [`jit_dim_get`]: `arr` a compiled variable's slot, `idx` (when not
+/// null) and `val` slots or literals.
+unsafe extern "C" fn jit_dim_set(
+    arr: *mut crate::vm::CvSlot,
+    idx: *const u8,
+    val: *const u8,
+    _word: u32,
+) -> u32 {
+    use php_runtime::{ArrayKey, Value};
+    // SAFETY: the caller's contract; the operands are read before the
+    // array is borrowed mutably (they are other slots, or decline).
+    unsafe {
+        let Some(v) = slot_int(val) else {
+            return 1;
+        };
+        let key = if idx.is_null() {
+            None
+        } else {
+            match slot_int(idx) {
+                Some(i) => Some(i),
+                None => return 1,
+            }
+        };
+        let Some(Value::Array(a)) = (*arr).as_mut() else {
+            return 1;
+        };
+        let Some(tbl) = a.get_mut_unshared() else {
+            return 1;
+        };
+        match key {
+            None => u32::from(tbl.push(Value::Int(v)).is_err()),
+            Some(i) => {
+                if let Some(slot) = tbl.get_int_mut(i) {
+                    if !slot.is_plain() {
+                        return 1;
+                    }
+                    drop(std::mem::replace(slot, Value::Int(v)));
+                } else if let Err(v) = tbl.assign_packed_int(i, Value::Int(v)) {
+                    // Not the next element of a packed table (which the
+                    // call above appends in place): a new key of a hash,
+                    // a hole, a key past the end.
+                    drop(tbl.insert(ArrayKey::Int(i), v));
+                }
+                0
+            }
+        }
+    }
+}
+
+/// `C_DIMOP`'s helper: `$arr[$idx] op= $val` for an `Int` element, an
+/// `Int` value and an int-int operator (`op`: `dims.rs`'s `op_code` of
+/// `+`, `-`, `*`, `|`, `&`, `^`), in an array `arr` holds directly and
+/// alone. Returns 0 having stored the result; 1, nothing changed, for
+/// anything else: a missing key (the interpreted row warns), another
+/// element or value type, an overflow (the interpreted row's result is a
+/// float).
+///
+/// # Safety
+/// As [`jit_dim_set`].
+unsafe extern "C" fn jit_dim_op(
+    arr: *mut crate::vm::CvSlot,
+    idx: *const u8,
+    val: *const u8,
+    op: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract; as in `jit_dim_set`.
+    unsafe {
+        let (Some(i), Some(y)) = (slot_int(idx), slot_int(val)) else {
+            return 1;
+        };
+        let Some(Value::Array(a)) = (*arr).as_mut() else {
+            return 1;
+        };
+        let Some(tbl) = a.get_mut_unshared() else {
+            return 1;
+        };
+        let Some(Value::Int(x)) = tbl.get_int_mut(i) else {
+            return 1;
+        };
+        let r = match op {
+            DIM_OP_ADD => x.checked_add(y),
+            DIM_OP_SUB => x.checked_sub(y),
+            DIM_OP_MUL => x.checked_mul(y),
+            DIM_OP_OR => Some(*x | y),
+            DIM_OP_AND => Some(*x & y),
+            DIM_OP_XOR => Some(*x ^ y),
+            _ => None,
+        };
+        match r {
+            Some(r) => {
+                *x = r;
+                0
+            }
+            None => 1,
+        }
+    }
+}
+
 /// The target instruction index of the jump of the instruction at
 /// index `i`, for the classes that jump.
 fn jump_target(tape: &[Inst], i: usize) -> usize {
@@ -1674,6 +2074,11 @@ fn plan(
             match plan_prop_opa(st, code, &tape[i]) {
                 Some(m) => (C_PROPOPA, m, 1, None),
                 None => rej!(format!("[{i}] property op= not inlinable")),
+            }
+        } else if is_dim_row(tape[i].op) {
+            match plan_dim(st, code, &tape[i]) {
+                Some((c, m, step)) => (c, m, step, None),
+                None => rej!(format!("[{i}] array row not inlinable")),
             }
         } else if tape[i].op == TOp::Ext {
             // A hot spec row the tape left to the interpreter: the op
@@ -1801,6 +2206,20 @@ fn plan(
             }
             continue;
         }
+        if matches!(class[j], C_DIMR | C_DIMW | C_DIMOP) {
+            // An offset or a value the region itself left a `Bool` or a
+            // `Null` in is no `Int`: the helper would decline on every
+            // iteration, so the region is not worth compiling.
+            let m = &meta[j];
+            let non_int = |kind: u8, off: u32| match kind {
+                KT => bools.contains(&off) || nulls.contains(&off),
+                KC => cvbools.contains(&off),
+                _ => false,
+            };
+            if non_int(m.kb, m.slot) || (class[j] != C_DIMR && non_int(m.sc, m.sw)) {
+                rej!(format!("array row at {} has a non-int operand", head + j));
+            }
+        }
         if !add_class_guards(
             tape,
             head + j,
@@ -1880,6 +2299,25 @@ fn plan(
                 let c = tape[head + j].c;
                 set_tmp_kind(&mut defs, &mut bools, &mut nulls, c, TmpKind::Int);
             }
+            // An array read stored an `Int` into its destination (or left
+            // the trace): a temporary is a known `Int`, a variable is one
+            // again whatever an earlier row left there.
+            C_DIMR => {
+                let d = meta[j].db;
+                if meta[j].kc == KT {
+                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, d, TmpKind::Int);
+                } else {
+                    cvbools.retain(|c| c != &d);
+                }
+            }
+            // An array write moved a consumed value temporary out (the
+            // row nulls it, as the interpreted one does).
+            C_DIMW | C_DIMOP => {
+                if meta[j].consume {
+                    let t = meta[j].sw;
+                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, t, TmpKind::Unknown);
+                }
+            }
             _ => {}
         }
         // Any row that fully stores an int into a compiled variable (or
@@ -1892,6 +2330,10 @@ fn plan(
             }
             J_ARITH_CV => {
                 let a = tape[head + j].c;
+                cvbools.retain(|c| c != &a);
+            }
+            J_NUMBIN_D => {
+                let a = tape[head + j].d;
                 cvbools.retain(|c| c != &a);
             }
             J_ASSIGN_T if meta[j].mask == 0 => {
@@ -2524,17 +2966,44 @@ fn jcc_for(mask: u8) -> Option<u8> {
 }
 
 /// Where a branch continues: the loop head, a mid-region label, an
-/// exit stub resuming at an instruction index, an entry-guard exit
-/// (which also disarms the trace: the assumption it was built on is
-/// not holding), or an absolute position in the code written so far
-/// (a fused op's fall-through).
+/// absolute position in the code written so far (a fused op's
+/// fall-through), or one of the exits, which return to `back_edge`:
+/// - `Stub`: the loop was left (its exit jump, or the iteration cap):
+///   resume at that instruction.
+/// - `Side`: a row could not go on (a guard on its operands, an overflow,
+///   a helper that declined): resume at that row, which the interpreter
+///   runs. The exit reports the iteration it happened in, so that a trace
+///   that keeps leaving in its first iteration can be switched off.
+/// - `Poll(resume, row)`: the safe point came due at `row`: resume at
+///   `resume` once it is serviced.
+/// - `Disarm`: an assumption the trace was built on does not hold (an
+///   entry guard): resume there and never enter this trace again.
 #[derive(Clone, Copy)]
 enum Target {
     Head,
     Label(usize),
     Stub(usize),
+    Side(usize),
+    Poll(usize, usize),
     Disarm(usize),
     At(usize),
+}
+
+/// The return word of a [`Target::Poll`] exit: the instruction to resume
+/// at in the low half, the row the poll belongs to above it, plus one (so
+/// that 0 there means "not a poll exit", what every other exit returns).
+fn poll_word(resume: usize, row: usize) -> i64 {
+    ((row as i64 + 1) << 32) | (resume as i64 & 0xFFFF_FFFF)
+}
+
+/// One argument of a helper call: the address of a frame slot (`KC`/`KT`
+/// base and byte offset), an absolute address (a literal's `Value` in the
+/// op array's table), or a null pointer.
+#[derive(Clone, Copy)]
+enum HArg {
+    Slot(u8, u32),
+    Abs(i64),
+    Null,
 }
 
 /// The x86-64 emitter. Slots are addressed off `rdi` (`st.cvs`) and
@@ -2552,6 +3021,8 @@ struct Emitter {
     scratch: i64,
     labels: HashMap<usize, usize>,
     stubs: HashMap<usize, usize>,
+    sides: HashMap<usize, usize>,
+    polls: HashMap<(usize, usize), usize>,
     disms: HashMap<usize, usize>,
     fixups: Vec<(usize, Target)>,
     head_pos: usize,
@@ -2937,15 +3408,18 @@ impl Emitter {
         let m = self.plan.meta[j];
         match self.plan.class[j] {
             C_JMP => self.jmp(self.jump_tgt(j)),
-            C_PROP => self.emit_prop(m, Target::Stub(i)),
-            C_PROPW => self.emit_propw(m, Target::Stub(i)),
-            C_PROPINC => self.emit_propinc(m, Target::Stub(i)),
-            C_PROPISSET => self.emit_propisset(m, Target::Stub(i)),
-            C_PROPOPA => self.emit_propopa(m, Target::Stub(i)),
-            C_SPROP => self.emit_sprop(m, Target::Stub(i)),
-            C_SPROPW => self.emit_spropw(m, Target::Stub(i)),
-            C_SPROPISSET => self.emit_spropisset(m, Target::Stub(i)),
-            C_CONSTI => self.emit_consti(m, Target::Stub(i)),
+            C_PROP => self.emit_prop(m, Target::Side(i)),
+            C_PROPW => self.emit_propw(m, Target::Side(i)),
+            C_PROPINC => self.emit_propinc(m, Target::Side(i)),
+            C_PROPISSET => self.emit_propisset(m, Target::Side(i)),
+            C_PROPOPA => self.emit_propopa(m, Target::Side(i)),
+            C_SPROP => self.emit_sprop(m, Target::Side(i)),
+            C_SPROPW => self.emit_spropw(m, Target::Side(i)),
+            C_SPROPISSET => self.emit_spropisset(m, Target::Side(i)),
+            C_CONSTI => self.emit_consti(m, Target::Side(i)),
+            C_DIMR => self.emit_dimr(m, i),
+            C_DIMW => self.emit_dimw(m, i, jit_dim_set as *const () as usize, 0),
+            C_DIMOP => self.emit_dimw(m, i, jit_dim_op as *const () as usize, u32::from(m.arith)),
             J_CMP => {
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
@@ -2959,7 +3433,7 @@ impl Emitter {
                 self.to_r9(m.kb, inst.b, m.lit_b);
                 self.load_int(KC, inst.a);
                 self.put(&[REX_W, 0x83, if m.inc { 0xC0 } else { 0xE8 }, 0x01]);
-                self.jcc(0x80, Target::Stub(i)); // jo: overflow, before any store
+                self.jcc(0x80, Target::Side(i)); // jo: overflow, before any store
                 self.store_int(KC, inst.a);
                 self.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
                 let cc = jcc_for(m.mask).unwrap_or(0x85);
@@ -2968,7 +3442,7 @@ impl Emitter {
             c => {
                 // Every other class exits at the instruction itself
                 // (the interpreter re-runs it).
-                self.emit_op(c, m, &inst, Target::Stub(i));
+                self.emit_op(c, m, &inst, Target::Side(i));
             }
         }
     }
@@ -3034,6 +3508,8 @@ impl Emitter {
                 // `inst.a`.
                 let dst = if c == J_ASSIGN_OP || c == J_NUMBIN_C {
                     inst.a
+                } else if c == J_NUMBIN_D {
+                    inst.d
                 } else {
                     inst.c
                 };
@@ -3045,6 +3521,24 @@ impl Emitter {
                     // `imul r, r/m`: reg = `rax`, rm = `r9` (needs REX.B,
                     // not REX.R: the *rm* field names `r9`).
                     2 => self.put(&[REX_W | REX_B, 0x0F, 0xAF, 0xC1]), // imul rax, r9
+                    OPA_BITAND => self.put(&[REX_W | REX_R, 0x21, 0xC8]), // and rax, r9
+                    OPA_BITOR => self.put(&[REX_W | REX_R, 0x09, 0xC8]), // or rax, r9
+                    OPA_BITXOR => self.put(&[REX_W | REX_R, 0x31, 0xC8]), // xor rax, r9
+                    ARITH_SHL | ARITH_SAR => {
+                        // A count outside `0..=63` is the interpreted
+                        // row's: it declines as well, and the generic op
+                        // gives the 0 or -1 of a too wide shift or throws
+                        // for a negative one. One unsigned compare
+                        // catches both (a negative count is huge).
+                        self.put(&[REX_W | REX_B, 0x83, 0xF9, 0x3F]); // cmp r9, 63
+                        self.jcc(0x87, jo); // ja
+                        self.put(&[REX_W | REX_R, 0x89, 0xC9]); // mov rcx, r9
+                                                                // `shl rax, cl` / `sar rax, cl` (`D3 /4`, `/7`):
+                                                                // bits shifted out are dropped, as `checked_shl`
+                                                                // drops them, and `>>` keeps the sign.
+                        let modrm = if m.arith == ARITH_SHL { 0xE0 } else { 0xF8 };
+                        self.put(&[REX_W, 0xD3, modrm]);
+                    }
                     _ => {
                         // `%`: `idiv` faults on a zero divisor and on
                         // `i64::MIN % -1`, so both are guarded exits.
@@ -3060,7 +3554,10 @@ impl Emitter {
                         self.put(&[REX_W, 0x89, 0xD0]); // mov rax, rdx
                     }
                 }
-                if m.arith != 5 {
+                // Only `+`, `-` and `*` can overflow: the bitwise ops clear
+                // the flag, a shift leaves it undefined, and `%` was
+                // guarded above.
+                if m.arith <= 2 {
                     self.jcc(0x80, jo); // jo: overflow
                 }
                 self.store_int(m.kc, dst);
@@ -3095,11 +3592,11 @@ impl Emitter {
                 // `NonNull` niche).
                 self.load_r9_frame(THIS_FIELD);
                 self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
-                self.jcc(0x84, Target::Stub(cp.callove)); // je: no `$this`
+                self.jcc(0x84, Target::Side(cp.callove)); // je: no `$this`
                 self.obj_class_from_r9();
             } else {
                 self.cmpb(rk, roff, TAG_OBJECT);
-                self.jcc(0x85, Target::Stub(cp.callove)); // jne: not an object
+                self.jcc(0x85, Target::Side(cp.callove)); // jne: not an object
                 self.load_obj_class(rk, roff);
             }
             // `r9` holds the raw `Rc<Class>` field word: the inner
@@ -3107,7 +3604,7 @@ impl Emitter {
             // cache names.
             self.movabs_rax(cls_addr.wrapping_sub(u64::from(RC_VALUE_OFFSET)) as i64);
             self.cmp_rax_r9();
-            self.jcc(0x85, Target::Stub(cp.callove)); // jne: other class
+            self.jcc(0x85, Target::Side(cp.callove)); // jne: other class
                                                       // The calling scope the cache entry was filled for, as
                                                       // `emit_prop_slots` checks it: the method this site
                                                       // resolved is only this scope's answer.
@@ -3118,7 +3615,7 @@ impl Emitter {
                 self.movabs_rcx(cp.recv_scope);
                 self.cmp_rax_rcx();
             }
-            self.jcc(0x85, Target::Stub(cp.callove)); // jne: other scope
+            self.jcc(0x85, Target::Side(cp.callove)); // jne: other scope
         }
         for (n, arg) in cp.sends.iter().enumerate() {
             if arg.kind == KSKIP {
@@ -3653,6 +4150,117 @@ impl Emitter {
     }
 }
 impl Emitter {
+    /// `lea {rax, rcx, rdx}, [base + off]` (`8D /r` with the `reg` field
+    /// 0/1/2): the address of a frame slot, for a helper's argument.
+    fn lea_slot(&mut self, reg: u8, base: u8, off: u32) {
+        self.put(&[REX_W, 0x8D, Self::rm3(base, reg)]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// One helper argument into `rax` (0), `rcx` (1) or `rdx` (2).
+    fn helper_arg(&mut self, reg: u8, arg: HArg) {
+        match arg {
+            HArg::Slot(base, off) => self.lea_slot(reg, base, off),
+            HArg::Abs(v) => match reg {
+                0 => self.movabs_rax(v),
+                1 => self.movabs_rcx(v),
+                _ => self.movabs_rdx(v),
+            },
+            // `xor e?x, e?x` (`31 /r`, the register in both fields).
+            HArg::Null => self.put(&[0x31, 0xC0 | (reg << 3) | reg]),
+        }
+    }
+
+    /// Call the helper at `helper` as `extern "C" fn(args[0], args[1],
+    /// args[2], word) -> u32` and leave the row through `fail` when it
+    /// returns non-zero (it declined, having changed nothing).
+    ///
+    /// Every register the trace keeps across rows is caller-saved in the
+    /// C ABI, so the call saves them around itself: `rdi`/`rsi` (the slot
+    /// bases), `r8` (the iteration count), `r10` (the frame) and `r11`
+    /// (the poll address). The five pushes also bring the stack to the
+    /// 16-byte boundary a call needs: the trace was entered by a `call`
+    /// and pushes nothing else, so it runs 8 bytes off that boundary.
+    /// `rdx` (the scratch base of a region with inlined calls) is a
+    /// constant and is loaded again. The arguments are computed into
+    /// `rax`/`rcx`/`rdx` first, off the slot bases, and only then moved
+    /// into the argument registers that hold those bases.
+    fn emit_helper(&mut self, helper: usize, args: [HArg; 3], word: u32, fail: Target) {
+        // push rdi; push rsi; push r8; push r10; push r11
+        self.put(&[0x57, 0x56, 0x41, 0x50, 0x41, 0x52, 0x41, 0x53]);
+        self.helper_arg(0, args[0]);
+        self.helper_arg(1, args[1]);
+        self.helper_arg(2, args[2]);
+        self.put(&[REX_W, 0x89, 0xC7]); // mov rdi, rax
+        self.put(&[REX_W, 0x89, 0xCE]); // mov rsi, rcx
+        self.mov_ecx(word); // the fourth argument
+        self.movabs_rax(helper as i64);
+        self.put(&[0xFF, 0xD0]); // call rax
+                                 // pop r11; pop r10; pop r8; pop rsi; pop rdi
+        self.put(&[0x41, 0x5B, 0x41, 0x5A, 0x41, 0x58, 0x5E, 0x5F]);
+        if self.plan.has_calls {
+            self.movabs_rdx(self.scratch);
+        }
+        self.put(&[0x85, 0xC0]); // test eax, eax
+        self.jcc(0x85, fail); // jnz: the helper declined
+    }
+
+    /// The offset operand of an array row as a helper argument: a slot's
+    /// address, an int literal's, or null for an append.
+    fn dim_arg(m: JitMeta) -> HArg {
+        match m.kb {
+            KSKIP => HArg::Null,
+            KL => HArg::Abs(m.lit_b),
+            k => HArg::Slot(k, m.slot),
+        }
+    }
+
+    /// Emit one array element read (`C_DIMR`): [`jit_dim_get`] with the
+    /// array variable's slot, the offset and the destination (a
+    /// temporary, or the variable of the folded assignment). It stores an
+    /// `Int` element and returns 0; anything else leaves the row to the
+    /// interpreter, nothing changed.
+    fn emit_dimr(&mut self, m: JitMeta, i: usize) {
+        self.emit_helper(
+            jit_dim_get as *const () as usize,
+            [
+                HArg::Slot(KC, m.sb),
+                Self::dim_arg(m),
+                HArg::Slot(m.kc, m.db),
+            ],
+            u32::from(m.kc == KC),
+            Target::Side(i),
+        );
+    }
+
+    /// Emit one array element write (`C_DIMW`, [`jit_dim_set`]) or
+    /// compound write (`C_DIMOP`, [`jit_dim_op`] with the operator in
+    /// `word`). A consumed value temporary is left null afterwards, as
+    /// the interpreted row leaves it. The write may have allocated (the
+    /// table grows), and an allocation past the memory limit is reported
+    /// at the next safe point: the row polls right after itself, as the
+    /// interpreted row does, so the error names this line.
+    fn emit_dimw(&mut self, m: JitMeta, i: usize, helper: usize, word: u32) {
+        let val = if m.sc == KL {
+            HArg::Abs(m.lit_c)
+        } else {
+            HArg::Slot(m.sc, m.sw)
+        };
+        self.emit_helper(
+            helper,
+            [HArg::Slot(KC, m.sb), Self::dim_arg(m), val],
+            word,
+            Target::Side(i),
+        );
+        if m.consume {
+            self.store_imm_base(KT, m.sw, 0);
+            self.store_tag_base(KT, m.sw, TAG_NULL);
+        }
+        self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+        self.jcc(0x85, Target::Poll(i + 1, i)); // jne
+    }
+}
+impl Emitter {
     fn new(plan: Plan, tape: Vec<Inst>, scratch: i64) -> Emitter {
         Emitter {
             code: Vec::new(),
@@ -3661,6 +4269,8 @@ impl Emitter {
             scratch,
             labels: HashMap::new(),
             stubs: HashMap::new(),
+            sides: HashMap::new(),
+            polls: HashMap::new(),
             disms: HashMap::new(),
             fixups: Vec::new(),
             head_pos: 0,
@@ -3745,7 +4355,7 @@ impl Emitter {
         // iteration and services the safe point at its back edge).
         self.head_pos = self.code.len();
         self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
-        self.jcc(0x85, Target::Stub(self.plan.head)); // jne
+        self.jcc(0x85, Target::Poll(self.plan.head, self.plan.close)); // jne
         self.put(&[0x41, 0x83, 0xC0, 0x01]); // add r8d, 1
                                              // `cmp r8d, imm32`: `3D` has no ModRM byte (its REX prefix is
                                              // ignored and it would compare a leftover `eax`), so use the
@@ -3756,11 +4366,31 @@ impl Emitter {
                                                       // The region itself.
         let head = self.plan.head;
         let len = self.plan.close - head + 1;
+        // The landings of backward jumps inside the region (the heads of
+        // loops nested in this one), each with one of the rows that jump
+        // back to it: an inner loop polls at its own back edge when
+        // interpreted, so its compiled head polls too. Without it a long
+        // inner loop would run to its end before a timeout or a signal
+        // could be serviced.
+        let mut inner: HashMap<usize, usize> = HashMap::new();
+        for j in 0..len {
+            let c = self.plan.class[j];
+            if c == C_JMP || c == J_CMP || c == J_INCCMP {
+                let y = jump_target(&self.tape, head + j);
+                if y > head && y <= head + j {
+                    inner.insert(y, head + j);
+                }
+            }
+        }
         let mut j = 0;
         while j < len {
             let c = self.plan.class[j];
             if c != 0 {
                 self.label(head + j);
+                if let Some(&from) = inner.get(&(head + j)) {
+                    self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                    self.jcc(0x85, Target::Poll(head + j, from)); // jne
+                }
                 if c == C_CALL {
                     // Each call plan is consumed once (the driver
                     // visits each region instruction once).
@@ -3782,44 +4412,54 @@ impl Emitter {
         }
     }
 
-    /// Patch every `jmp`/`jcc` rel32 and append the exit stubs.
+    /// Patch every `jmp`/`jcc` rel32 and append the exit stubs. A stub
+    /// returns the instruction to resume at in `rax` (see [`Target`] for
+    /// the encodings) and, in `rdx`, the iteration a row left the trace in
+    /// (`Side`), or 0 for every other exit.
     fn resolve(&mut self) {
         let fixups = std::mem::take(&mut self.fixups);
-        let mut missing: Vec<(usize, bool)> = fixups
-            .iter()
-            .filter_map(|(_, t)| match t {
-                Target::Stub(i) if !self.stubs.contains_key(i) => Some((*i, false)),
-                Target::Disarm(i) if !self.disms.contains_key(i) => Some((*i, true)),
-                _ => None,
-            })
-            .collect();
-        missing.sort_unstable();
-        missing.dedup();
-        for (idx, disarm) in missing {
+        for (_, t) in &fixups {
             let at = self.code.len();
-            if disarm {
-                // `-(idx + 1)`: negative means "disarm this trace".
-                self.code.push(0x48); // REX.W
-                self.code.push(0xB8); // movabs rax, imm64
-                self.code
-                    .extend_from_slice(&((idx as i64 + 1).wrapping_neg()).to_le_bytes());
-            } else {
-                self.code.push(0xB8); // mov eax, imm32 (the resume index)
-                self.code
-                    .extend_from_slice(&u32::try_from(idx).unwrap_or(u32::MAX).to_le_bytes());
+            match *t {
+                Target::Stub(idx) if !self.stubs.contains_key(&idx) => {
+                    self.code.push(0xB8); // mov eax, imm32 (the resume index)
+                    self.code
+                        .extend_from_slice(&u32::try_from(idx).unwrap_or(u32::MAX).to_le_bytes());
+                    self.code.extend_from_slice(&[0x31, 0xD2]); // xor edx, edx
+                    self.stubs.insert(idx, at);
+                }
+                Target::Side(idx) if !self.sides.contains_key(&idx) => {
+                    self.code.push(0xB8); // mov eax, imm32 (the resume index)
+                    self.code
+                        .extend_from_slice(&u32::try_from(idx).unwrap_or(u32::MAX).to_le_bytes());
+                    self.code.extend_from_slice(&[0x44, 0x89, 0xC2]); // mov edx, r8d
+                    self.sides.insert(idx, at);
+                }
+                Target::Poll(resume, row) if !self.polls.contains_key(&(resume, row)) => {
+                    self.code.extend_from_slice(&[0x48, 0xB8]); // movabs rax, imm64
+                    self.code
+                        .extend_from_slice(&poll_word(resume, row).to_le_bytes());
+                    self.code.extend_from_slice(&[0x31, 0xD2]); // xor edx, edx
+                    self.polls.insert((resume, row), at);
+                }
+                Target::Disarm(idx) if !self.disms.contains_key(&idx) => {
+                    // `-(idx + 1)`: negative means "disarm this trace".
+                    self.code.extend_from_slice(&[0x48, 0xB8]); // movabs rax, imm64
+                    self.code
+                        .extend_from_slice(&((idx as i64 + 1).wrapping_neg()).to_le_bytes());
+                    self.disms.insert(idx, at);
+                }
+                _ => continue,
             }
             self.code.push(0xC3); // ret
-            if disarm {
-                self.disms.insert(idx, at);
-            } else {
-                self.stubs.insert(idx, at);
-            }
         }
         for (pos, t) in fixups {
             let abs = match t {
                 Target::Head => self.head_pos,
                 Target::Label(j) => self.labels[&j],
                 Target::Stub(idx) => self.stubs[&idx],
+                Target::Side(idx) => self.sides[&idx],
+                Target::Poll(resume, row) => self.polls[&(resume, row)],
                 Target::Disarm(idx) => self.disms[&idx],
                 Target::At(p) => p,
             };
@@ -3899,7 +4539,26 @@ fn mmap_scratch(total: usize) -> Option<*mut u8> {
 
 /// The compiled entry: `fn(cvs, tmps, frame) -> resume index` (the frame
 /// pointer is only read by `$this` receiver guards; others ignore it).
-type LoopFn = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> i64;
+type LoopFn = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> TraceRet;
+
+/// What a compiled loop returns (`rax` and `rdx`, the two-word return of
+/// the C ABI): `r`, where to resume - negative for "disarm this trace
+/// and resume at `-(r + 1)`", else the instruction index in its low half
+/// with a poll exit's row above it (see [`poll_word`]) - and `iters`,
+/// the iteration a row left the trace in ([`Target::Side`]: 1 is the
+/// first one of this entry), 0 for every other exit.
+#[repr(C)]
+struct TraceRet {
+    r: i64,
+    iters: u64,
+}
+
+/// A trace that left through a row during the first iteration of this
+/// many entries in a row is switched off: every such entry costs the
+/// trace's entry and exit and gains nothing over interpreting (an array
+/// of floats under an int-only row, a receiver of another class each
+/// time, a property that is never an `Int`).
+const UNPRODUCTIVE_LIMIT: i32 = 32;
 
 /// How many traces the process has compiled (bounded by `MAX_TRACES`).
 static TRACES: AtomicUsize = AtomicUsize::new(0);
@@ -3941,7 +4600,10 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             (head, close + 1)
         };
         for (i, inst) in tape[d0..d1].iter().enumerate() {
-            let note = if inst.op == TOp::CallInit || classify(st, inst).is_some() {
+            let note = if inst.op == TOp::CallInit
+                || is_dim_row(inst.op)
+                || classify(st, inst).is_some()
+            {
                 // (`CallInit`: `plan_call` decides its own whitelist.)
                 ""
             } else {
@@ -4105,7 +4767,9 @@ pub(super) unsafe fn back_edge(
         }
         // SAFETY: the region only touches the frame's slots, and exits
         // leave them exactly as an interpreted run would.
-        let r = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
+        ctx.poll_row.set(std::ptr::null());
+        let ret = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
+        let r = ret.r;
         if debug_on() {
             static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let k = RUNS.fetch_add(1, Ordering::Relaxed);
@@ -4153,11 +4817,40 @@ pub(super) unsafe fn back_edge(
             let r = (-(r + 1)).clamp(0, (ctx.tlen - 1) as i64) as usize;
             return unsafe { ctx.tbase.add(r) };
         }
-        if !ctx.tape.is_null() {
-            unsafe { (*ctx.tape).jit_good() };
+        // The instruction to resume at, and the row of a poll exit (plus
+        // one) above it: `take_jump!` reports the safe point at that row.
+        let resume = ((r & 0xFFFF_FFFF) as usize).min(ctx.tlen - 1);
+        let poll_row = (r >> 32) as usize;
+        if poll_row != 0 {
+            // SAFETY: a row of this tape (clamped to it).
+            ctx.poll_row
+                .set(unsafe { ctx.tbase.add((poll_row - 1).min(ctx.tlen - 1)) });
         }
-        let r = r.clamp(0, (ctx.tlen - 1) as i64) as usize;
-        return unsafe { ctx.tbase.add(r) };
+        // The cell's counter, free since the loop was compiled: entries
+        // in a row that a row left during their first iteration.
+        // SAFETY: the counters cover the whole tape, and the context is
+        // alive (tested above).
+        let exits = unsafe { &*ctx.jcnt.get().add(idx) };
+        if ret.iters == 1 {
+            if exits.fetch_add(1, Ordering::Relaxed) + 1 >= UNPRODUCTIVE_LIMIT {
+                if debug_on() {
+                    eprintln!(
+                        "jit: trace at {idx} switched off: it keeps leaving in its first iteration"
+                    );
+                }
+                cell.store(usize::MAX, Ordering::Release);
+                if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
+                    ctx.disarm();
+                    crate::interrupt::raise_safe_point();
+                }
+            }
+        } else {
+            exits.store(0, Ordering::Relaxed);
+            if !ctx.tape.is_null() {
+                unsafe { (*ctx.tape).jit_good() };
+            }
+        }
+        return unsafe { ctx.tbase.add(resume) };
     }
     // SAFETY: as above.
     unsafe { edge_count(st, ctx, at, target, idx) }
@@ -4188,7 +4881,7 @@ unsafe fn edge_count(
     }
     // SAFETY: the counters cover the whole tape.
     let n = unsafe { (*ctx.jcnt.get().add(idx)).fetch_add(1, Ordering::Relaxed) };
-    if n + 1 < HOT_LIMIT {
+    if n + 1 < hot_limit() {
         return target;
     }
     let compiled = attempt(&st, ctx, head, idx);
@@ -4206,8 +4899,12 @@ unsafe fn edge_count(
         }
         target
     } else {
+        // The counter now counts the trace's unproductive entries.
         // SAFETY: as above; now the cell is armed.
-        unsafe { back_edge(st, ctx, at, target) }
+        unsafe {
+            (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed);
+            back_edge(st, ctx, at, target)
+        }
     }
 }
 
@@ -4577,5 +5274,310 @@ mod layout_tests {
         assert!(!has_loop_close(&[]));
         assert!(!has_loop_close(&[forward, other]));
         assert!(has_loop_close(&[forward, other, backward]));
+    }
+
+    /// The address of a `Value` as a helper's slot argument.
+    fn at(v: &php_runtime::Value) -> *const u8 {
+        std::ptr::from_ref(v).cast()
+    }
+
+    /// The array a test's variable slot holds.
+    fn held(slot: &crate::vm::CvSlot) -> &php_runtime::ZArray {
+        match slot.get() {
+            Some(php_runtime::Value::Array(a)) => a,
+            _ => panic!("the slot holds no array"),
+        }
+    }
+
+    /// `jit_dim_get`: an `Int` element is stored into a temporary or a
+    /// plain variable; everything else declines and changes nothing.
+    #[test]
+    fn dim_get_helper() {
+        use crate::vm::CvSlot;
+        use php_runtime::{Value, ZArray};
+        let arr = CvSlot::new(Some(Value::Array(ZArray::from_values([
+            Value::Int(10),
+            Value::Int(20),
+            Value::Float(1.5),
+        ]))));
+        let p = std::ptr::from_ref(&arr).cast_mut();
+        // The temporary behind a cell: the helper writes it through the
+        // pointer, as the trace's slots are written.
+        let tmp = std::cell::UnsafeCell::new(Value::Null);
+        let t = tmp.get().cast::<u8>();
+        let tmp_is = |want: i64| matches!(unsafe { &*tmp.get() }, Value::Int(v) if *v == want);
+        // An `Int` element into a temporary.
+        assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(1)), t, 0) }, 0);
+        assert!(tmp_is(20));
+        // A float element, a missing key, an offset that is no int.
+        for k in [Value::Int(2), Value::Int(7), Value::Null, Value::Float(1.0)] {
+            assert_eq!(unsafe { jit_dim_get(p, at(&k), t, 0) }, 1);
+            assert!(tmp_is(20));
+        }
+        // Into a variable: undefined, or holding a plain value.
+        let to = CvSlot::new(None);
+        let d = std::ptr::from_ref(&to).cast_mut().cast::<u8>();
+        assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(0)), d, 1) }, 0);
+        assert!(matches!(to.get(), Some(Value::Int(10))));
+        // A variable holding an array is not overwritten here.
+        let busy = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
+        let b = std::ptr::from_ref(&busy).cast_mut().cast::<u8>();
+        assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(0)), b, 1) }, 1);
+        assert!(matches!(busy.get(), Some(Value::Array(_))));
+        // A hash table's int keys are found too.
+        let hash = CvSlot::new(Some(Value::Array(ZArray::from_pairs([
+            (9i64, Value::Int(90)),
+            (2i64, Value::Int(22)),
+        ]))));
+        let h = std::ptr::from_ref(&hash).cast_mut();
+        assert_eq!(unsafe { jit_dim_get(h, at(&Value::Int(2)), t, 0) }, 0);
+        assert!(tmp_is(22));
+        // No array in the variable at all.
+        let none = CvSlot::new(None);
+        let n = std::ptr::from_ref(&none).cast_mut();
+        assert_eq!(unsafe { jit_dim_get(n, at(&Value::Int(0)), t, 0) }, 1);
+    }
+
+    /// `jit_dim_set`: writes an `Int` over a plain element, at a new key
+    /// or at the end of an array held alone; declines a shared array (a
+    /// write must separate it first), a value that is no int and an
+    /// element that owns something.
+    #[test]
+    fn dim_set_helper() {
+        use crate::vm::CvSlot;
+        use php_runtime::{Value, ZArray};
+        let arr = CvSlot::new(Some(Value::Array(ZArray::from_values([
+            Value::Int(1),
+            Value::Int(2),
+        ]))));
+        let p = std::ptr::from_ref(&arr).cast_mut();
+        let null = std::ptr::null();
+        assert_eq!(
+            unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Int(7)), 0) },
+            0
+        );
+        assert_eq!(unsafe { jit_dim_set(p, null, at(&Value::Int(8)), 0) }, 0);
+        assert_eq!(
+            unsafe { jit_dim_set(p, at(&Value::Int(40)), at(&Value::Int(9)), 0) },
+            0
+        );
+        let a = held(&arr);
+        assert_eq!(a.len(), 4);
+        assert!(matches!(a.get_int(0), Some(Value::Int(7))));
+        assert!(matches!(a.get_int(1), Some(Value::Int(2))));
+        assert!(matches!(a.get_int(2), Some(Value::Int(8))));
+        assert!(matches!(a.get_int(40), Some(Value::Int(9))));
+        // A value or an offset that is no int.
+        assert_eq!(
+            unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Float(1.0)), 0) },
+            1
+        );
+        assert_eq!(
+            unsafe { jit_dim_set(p, at(&Value::Null), at(&Value::Int(1)), 0) },
+            1
+        );
+        assert!(matches!(held(&arr).get_int(0), Some(Value::Int(7))));
+        // A second handle on the table: the write must separate first.
+        let other = held(&arr).clone();
+        assert_eq!(
+            unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Int(5)), 0) },
+            1
+        );
+        assert_eq!(unsafe { jit_dim_set(p, null, at(&Value::Int(5)), 0) }, 1);
+        assert!(matches!(other.get_int(0), Some(Value::Int(7))));
+        assert_eq!(other.len(), 4);
+        drop(other);
+        // An element that owns something is not replaced here.
+        let nested = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Array(
+            ZArray::from_values([Value::Int(1)]),
+        )]))));
+        let n = std::ptr::from_ref(&nested).cast_mut();
+        assert_eq!(
+            unsafe { jit_dim_set(n, at(&Value::Int(0)), at(&Value::Int(5)), 0) },
+            1
+        );
+        assert!(matches!(held(&nested).get_int(0), Some(Value::Array(_))));
+    }
+
+    /// `jit_dim_op`: the int-int operators on an `Int` element; an
+    /// overflow, a missing key and an operator without a helper decline
+    /// and leave the element as it was.
+    #[test]
+    fn dim_op_helper() {
+        use crate::vm::CvSlot;
+        use php_runtime::{Value, ZArray};
+        let arr = CvSlot::new(Some(Value::Array(ZArray::from_values([
+            Value::Int(6),
+            Value::Int(i64::MAX),
+        ]))));
+        let p = std::ptr::from_ref(&arr).cast_mut();
+        let k0 = Value::Int(0);
+        let run = |op: u32, y: i64| unsafe { jit_dim_op(p, at(&k0), at(&Value::Int(y)), op) };
+        let elem = |slot: &CvSlot| match held(slot).get_int(0) {
+            Some(Value::Int(v)) => *v,
+            _ => panic!("no int element"),
+        };
+        assert_eq!(run(DIM_OP_ADD, 4), 0);
+        assert_eq!(elem(&arr), 10);
+        assert_eq!(run(DIM_OP_SUB, 3), 0);
+        assert_eq!(elem(&arr), 7);
+        assert_eq!(run(DIM_OP_MUL, 6), 0);
+        assert_eq!(elem(&arr), 42);
+        assert_eq!(run(DIM_OP_OR, 5), 0);
+        assert_eq!(elem(&arr), 47);
+        assert_eq!(run(DIM_OP_AND, 0x2C), 0);
+        assert_eq!(elem(&arr), 44);
+        assert_eq!(run(DIM_OP_XOR, 4), 0);
+        assert_eq!(elem(&arr), 40);
+        // An operator without a helper (`dims.rs`'s code of `/`).
+        assert_eq!(run(3, 2), 1);
+        assert_eq!(elem(&arr), 40);
+        // An overflow, and a missing key.
+        let k1 = Value::Int(1);
+        assert_eq!(
+            unsafe { jit_dim_op(p, at(&k1), at(&Value::Int(1)), DIM_OP_ADD) },
+            1
+        );
+        assert!(matches!(held(&arr).get_int(1), Some(Value::Int(i64::MAX))));
+        let k9 = Value::Int(9);
+        assert_eq!(
+            unsafe { jit_dim_op(p, at(&k9), at(&Value::Int(1)), DIM_OP_ADD) },
+            1
+        );
+        assert_eq!(held(&arr).len(), 2);
+    }
+
+    /// The helper call: the saves (five pushes, which also align the
+    /// stack for the call), the arguments computed off the slot bases
+    /// before those registers are overwritten, the call through `rax`,
+    /// the restores in reverse order, and the exit when it declined.
+    #[test]
+    fn helper_call_encoding() {
+        let mut em = emitter();
+        em.emit_helper(
+            0x1122_3344_5566_7788,
+            [HArg::Slot(KC, 0x10), HArg::Null, HArg::Slot(KT, 0x20)],
+            7,
+            Target::Side(3),
+        );
+        #[rustfmt::skip]
+        let want: Vec<u8> = vec![
+            0x57, 0x56, 0x41, 0x50, 0x41, 0x52, 0x41, 0x53, // push rdi, rsi, r8, r10, r11
+            0x48, 0x8D, 0x87, 0x10, 0, 0, 0,                // lea rax, [rdi + 0x10]
+            0x31, 0xC9,                                     // xor ecx, ecx
+            0x48, 0x8D, 0x96, 0x20, 0, 0, 0,                // lea rdx, [rsi + 0x20]
+            0x48, 0x89, 0xC7,                               // mov rdi, rax
+            0x48, 0x89, 0xCE,                               // mov rsi, rcx
+            0xB9, 7, 0, 0, 0,                               // mov ecx, 7
+            0x48, 0xB8, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // movabs rax
+            0xFF, 0xD0,                                     // call rax
+            0x41, 0x5B, 0x41, 0x5A, 0x41, 0x58, 0x5E, 0x5F, // pop r11, r10, r8, rsi, rdi
+            0x85, 0xC0,                                     // test eax, eax
+            0x0F, 0x85, 0, 0, 0, 0,                         // jnz (patched by `resolve`)
+        ];
+        assert_eq!(em.code, want);
+        // An address argument per register, and a slot off the temporaries.
+        em.code.clear();
+        em.fixups.clear();
+        em.helper_arg(1, HArg::Slot(KT, 0x30)); // lea rcx, [rsi + 0x30]
+        em.helper_arg(2, HArg::Null); // xor edx, edx
+        em.helper_arg(0, HArg::Null); // xor eax, eax
+        assert_eq!(
+            em.code,
+            vec![0x48, 0x8D, 0x8E, 0x30, 0, 0, 0, 0x31, 0xD2, 0x31, 0xC0]
+        );
+    }
+
+    /// The exit stubs: what each kind returns in `rax` and `rdx`.
+    #[test]
+    fn exit_stub_encodings() {
+        let mut em = emitter();
+        em.jcc(0x85, Target::Side(5));
+        em.jcc(0x85, Target::Stub(6));
+        em.jcc(0x85, Target::Poll(7, 9));
+        em.jcc(0x85, Target::Disarm(2));
+        em.jcc(0x85, Target::Side(5)); // a second use shares the stub
+        em.resolve();
+        // Five `jcc rel32` (6 bytes each), then the stubs in first-use order.
+        let c = &em.code;
+        // `Side`: the resume index, and the iteration count (`r8d`) in `edx`.
+        assert_eq!(c[30..39], [0xB8, 5, 0, 0, 0, 0x44, 0x89, 0xC2, 0xC3]);
+        // `Stub`: the resume index, `edx` zero.
+        assert_eq!(c[39..47], [0xB8, 6, 0, 0, 0, 0x31, 0xD2, 0xC3]);
+        // `Poll`: resume 7 below, row 9 plus one above; `edx` zero.
+        assert_eq!(
+            c[47..60],
+            [0x48, 0xB8, 7, 0, 0, 0, 10, 0, 0, 0, 0x31, 0xD2, 0xC3]
+        );
+        assert_eq!(poll_word(7, 9), (10 << 32) | 7);
+        // `Disarm`: `-(2 + 1)`.
+        assert_eq!(
+            c[60..71],
+            [0x48, 0xB8, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC3]
+        );
+        assert_eq!(c.len(), 71);
+        // The first and the last branch both land on the `Side` stub.
+        assert_eq!(c[2..6], 24i32.to_le_bytes());
+        assert_eq!(c[26..30], 0i32.to_le_bytes());
+    }
+
+    /// A shift row: the count is range-checked with one unsigned compare
+    /// before `shl rax, cl`, and no overflow exit follows it.
+    #[test]
+    fn shift_row_encoding() {
+        let mut em = emitter();
+        let m = JitMeta {
+            class: J_NUMBIN_T,
+            ka: KC,
+            kb: KI,
+            kc: KT,
+            arith: ARITH_SHL,
+            ..JitMeta::default()
+        };
+        let inst = Inst {
+            a: 0x10,
+            b: 3,
+            c: 0x20,
+            ..Inst::plain(TOp::NumBinT)
+        };
+        em.emit_op(J_NUMBIN_T, m, &inst, Target::Side(0));
+        #[rustfmt::skip]
+        let want: Vec<u8> = vec![
+            0x48, 0x8B, 0x87, 0x18, 0, 0, 0,          // mov rax, [rdi + 0x10 + 8]
+            0x49, 0xB9, 3, 0, 0, 0, 0, 0, 0, 0,       // movabs r9, 3
+            0x49, 0x83, 0xF9, 0x3F,                   // cmp r9, 63
+            0x0F, 0x87, 0, 0, 0, 0,                   // ja (the interpreted row)
+            0x4C, 0x89, 0xC9,                         // mov rcx, r9
+            0x48, 0xD3, 0xE0,                         // shl rax, cl
+            0x48, 0x89, 0x86, 0x28, 0, 0, 0,          // mov [rsi + 0x20 + 8], rax
+            0xC6, 0x86, 0x20, 0, 0, 0, 0x02,          // mov byte [rsi + 0x20], Int
+        ];
+        assert_eq!(em.code, want);
+        // `>>` is the arithmetic shift, and `&` one instruction.
+        em.code.clear();
+        em.fixups.clear();
+        em.emit_op(
+            J_NUMBIN_T,
+            JitMeta {
+                arith: ARITH_SAR,
+                ..m
+            },
+            &inst,
+            Target::Side(0),
+        );
+        assert_eq!(em.code[30..33], [0x48, 0xD3, 0xF8]); // sar rax, cl
+        em.code.clear();
+        em.fixups.clear();
+        em.emit_op(
+            J_NUMBIN_T,
+            JitMeta {
+                arith: OPA_BITAND,
+                ..m
+            },
+            &inst,
+            Target::Side(0),
+        );
+        assert_eq!(em.code[17..20], [0x4C, 0x21, 0xC8]); // and rax, r9
+        assert_eq!(em.code.len(), 17 + 3 + 7 + 7);
     }
 }
