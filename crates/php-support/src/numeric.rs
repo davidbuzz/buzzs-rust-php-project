@@ -9,6 +9,8 @@
 
 #![allow(clippy::many_single_char_names, dead_code)]
 
+use std::num::IntErrorKind;
+
 /// Result of a numeric-string check.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NumericValue {
@@ -186,48 +188,33 @@ pub(crate) fn is_numeric_long_type_only(s: &[u8]) -> bool {
     }
 }
 
-/// C `strtol(s, &end, 0)` with 64-bit `long`: skips leading `isspace()`
-/// characters, accepts a sign, hex/oct/bin prefixes (`0x`, `0o`, `0b`), and saturates on overflow.
-/// Returns the value and the number of bytes consumed (0 when no digits were found).
+/// C `strtol(s, &end, 10)` with 64-bit `long`: skips leading `isspace()`
+/// characters, accepts a sign, saturates on overflow. Returns the value and
+/// the number of bytes consumed (0 when no digits were found).
+///
+/// Decimal only, as `atoi()`/`atol()`/`ZEND_ATOL()` read: `"0x10"` is 0.
+/// The `0x`/`0o`/`0b` prefixes belong to `zend_ini_parse_quantity()`
+/// ([`crate::ini::parse_quantity`]), which `OnUpdateLong` uses.
 pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
-    let mut p = 0;
-    while p < s.len() && is_ws(s[p]) {
-        p += 1;
-    }
-    let neg = s.get(p) == Some(&b'-');
-    if matches!(s.get(p), Some(b'-' | b'+')) {
-        p += 1;
-    }
-    let (base, prefix_len): (i128, usize) =
-        if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'x' | b'X') {
-            (16, 2)
-        } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'o' | b'O') {
-            (8, 2)
-        } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'b' | b'B') {
-            (2, 2)
-        } else {
-            (10, 0)
-        };
-    p += prefix_len;
-    let digits_start = p;
-    let mut acc: i128 = 0;
-    while let Some(&c) = s.get(p) {
-        let d = match c {
-            b'0'..=b'9' if (c - b'0') < base as u8 => i128::from(c - b'0'),
-            b'a'..=b'f' if base == 16 => i128::from(c - b'a' + 10),
-            b'A'..=b'F' if base == 16 => i128::from(c - b'A' + 10),
-            _ => break,
-        };
-        acc = (acc * base + d).min(i128::from(u64::MAX) + 1);
-        p += 1;
-    }
-    if p == digits_start {
+    let start = s.iter().take_while(|&&c| is_ws(c)).count();
+    let sign = usize::from(matches!(s.get(start), Some(b'+' | b'-')));
+    let digits = s[start + sign..]
+        .iter()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
+    if digits == 0 {
         return (0, 0);
     }
-    let v = if neg { -acc } else { acc };
-    #[allow(clippy::cast_possible_truncation)]
-    let clamped = v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
-    (clamped, p)
+    let end = start + sign + digits;
+    // An ASCII sign and digits: valid UTF-8, and `i64::from_str` takes the
+    // sign. Out of range, strtol() saturates.
+    let text = std::str::from_utf8(&s[start..end]).unwrap_or_default();
+    let v = match text.parse::<i64>() {
+        Ok(v) => v,
+        Err(e) if *e.kind() == IntErrorKind::NegOverflow => i64::MIN,
+        Err(_) => i64::MAX,
+    };
+    (v, end)
 }
 
 /// `ZEND_ATOL()` — `strtol(s, NULL, 10)`.
@@ -296,5 +283,11 @@ mod tests {
         assert_eq!(atoi(b"99999999999999999999"), -1);
         assert_eq!(atoi(b"42"), 42);
         assert_eq!(atoi(b"+7 "), 7);
+        // Decimal only, like C: a base prefix ends the number at its "0".
+        assert_eq!(strtol(b"0x10"), (0, 1));
+        assert_eq!(atol(b"0x5"), 0);
+        assert_eq!(atoi(b"0b1"), 0);
+        assert_eq!(atoi(b"0o7"), 0);
+        assert_eq!(atol(b"010"), 10);
     }
 }
