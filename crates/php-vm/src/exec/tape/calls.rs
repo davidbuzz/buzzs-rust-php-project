@@ -698,6 +698,60 @@ pub(super) fn enter(
     Ok(())
 }
 
+/// `ZEND_DO_UCALL` of the prepared call when the function's whole body
+/// runs as machine code ([`super::jit::native_call`]: a pure int function,
+/// its recursion included): a plain call by name that passes every
+/// declared parameter an int. The result goes to `dst` and the readied
+/// frame, which is never entered, back to its empty state (the arguments
+/// were ints: nothing to release). `false`, nothing changed, when it does
+/// not apply or the native code declined (an overflow, a recursion deeper
+/// than its stack budget, a pending safe point): [`enter`] then makes the
+/// call as usual.
+pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
+    let Callee::User(uf) = &prep.callee else {
+        return false;
+    };
+    // One load for every function that is not compiled whole.
+    if uf.call_shape.native.get() == super::jit::NATIVE_REFUSED || !prep.fcall {
+        return false;
+    }
+    let n = prep.n;
+    if n != uf.params.len() || n > super::jit::NATIVE_MAX_ARGS {
+        return false;
+    }
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len {
+        return false;
+    }
+    let mut args = [0i64; super::jit::NATIVE_MAX_ARGS];
+    let Some(slots) = frame.cvs.get(..n) else {
+        return false;
+    };
+    for (a, slot) in args.iter_mut().zip(slots) {
+        let Some(Value::Int(v)) = slot.get() else {
+            return false;
+        };
+        *a = *v;
+    }
+    let Some(r) = super::jit::native_call(uf, &args[..n]) else {
+        return false;
+    };
+    if let Some(slots) = frame.cvs.get_mut(..n) {
+        for slot in slots {
+            // An int owns nothing.
+            std::mem::forget(slot.as_mut().take());
+        }
+    }
+    if let Some(slot) = dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+        crate::exec::spec::put_tmp(slot, Value::Int(r));
+    }
+    true
+}
+
 /// Whether the prepared call is a builtin's ([`call_native`]).
 impl Prepared {
     pub(super) fn is_native(&self) -> bool {

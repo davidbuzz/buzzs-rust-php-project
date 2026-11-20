@@ -1873,6 +1873,16 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             }
                         }
                     }
+                    // A function compiled whole: the call is made in
+                    // machine code and is done, as the builtin's above.
+                    Some(call) if calls::compiled(vm, &call, dst) => {
+                        fresh = false;
+                        if crate::interrupt::safe_point_due() {
+                            return ((at + 1) | switched, at);
+                        }
+                        ip = at + 1;
+                        continue 'frames;
+                    }
                     Some(call) => match calls::enter(vm, call, dst, at + 1) {
                         Ok(()) => true,
                         Err(call) => {
@@ -2064,6 +2074,11 @@ fn send_and_enter(
                 Err(back) => call = back,
             }
         } else {
+            // A function compiled whole: the call is made in machine code
+            // and is done, as a builtin's is.
+            if calls::compiled(vm, &call, dst) {
+                return next | CALLED;
+            }
             match calls::enter(vm, call, dst, next + 1) {
                 Ok(()) => return ENTERED,
                 Err(back) => call = back,

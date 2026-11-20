@@ -165,6 +165,17 @@ pub struct CallShape {
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
     first_ops: [Cell<u32>; FIRST_OPS],
+    /// The machine code of a function compiled whole (`exec/tape/jit.rs`,
+    /// "whole functions": a pure int function, its recursion included): 0
+    /// while its plain calls are being counted, 1 once it was refused,
+    /// else the address of its entry.
+    pub(crate) native: Cell<usize>,
+    /// With `native`: the address of the body, which the native code of
+    /// other functions calls.
+    pub(crate) native_body: Cell<usize>,
+    /// The plain calls counted toward compiling it; afterwards, how many
+    /// times in a row its native code declined a call.
+    pub(crate) native_count: Cell<u32>,
 }
 
 /// Passed-argument counts with a precomputed first op ([`CallShape`]):

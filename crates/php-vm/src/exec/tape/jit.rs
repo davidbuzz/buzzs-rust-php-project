@@ -1743,7 +1743,12 @@ fn plan_ext(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<(u16, Ji
 fn is_dim_row(op: TOp) -> bool {
     matches!(
         op,
-        TOp::FetchDimIC | TOp::FetchDimC | TOp::AssignDimIC | TOp::AssignDimC | TOp::AssignOpDimC
+        TOp::FetchDimIC
+            | TOp::FetchDimSC
+            | TOp::FetchDimC
+            | TOp::AssignDimIC
+            | TOp::AssignDimC
+            | TOp::AssignOpDimC
     )
 }
 
@@ -1782,8 +1787,9 @@ const DIM_OP_XOR: u32 = 10;
 /// `consume` a write's value; `arith` a compound write's operator.
 fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16, JitMeta, usize)> {
     // One operand: its kind, slot offset, literal address, and whether
-    // the row consumes it (a `Tmp`, as opposed to a `TmpKeep`).
-    let operand = |kind: u8, idx: u32| -> Option<(u8, u32, i64, bool)> {
+    // the row consumes it (a `Tmp`, as opposed to a `TmpKeep`). A literal
+    // must be an int, or (`key`: the offset of a read) a string.
+    let operand = |kind: u8, idx: u32, key: bool| -> Option<(u8, u32, i64, bool)> {
         if idx >= super::SLOT_LIMIT {
             return None;
         }
@@ -1801,6 +1807,11 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
                     let p = unsafe { st.lits.add((idx << SLOT_SHIFT) as usize) };
                     Some((KL, 0, p as i64, false))
                 }
+                Some(php_runtime::Value::Str(_)) if key => {
+                    // SAFETY: as above.
+                    let p = unsafe { st.lits.add((idx << SLOT_SHIFT) as usize) };
+                    Some((KL, 0, p as i64, false))
+                }
                 _ => None,
             },
             _ => None,
@@ -1812,8 +1823,8 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
     let sb = inst.a << SLOT_SHIFT;
     let dk = inst.k & 7;
     match inst.op {
-        TOp::FetchDimIC | TOp::FetchDimC => {
-            let (kb, slot, lit_b, _) = operand(dk, inst.b)?;
+        TOp::FetchDimIC | TOp::FetchDimSC | TOp::FetchDimC => {
+            let (kb, slot, lit_b, _) = operand(dk, inst.b, true)?;
             // The destination: the variable of the folded `AssignCv`
             // (`inst.d`; the row then covers that op as well, as the
             // interpreted row jumps past it), else the result temporary
@@ -1846,10 +1857,11 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
             let (kb, slot, lit_b) = if dk == DIM_UNUSED {
                 (KSKIP, 0, 0)
             } else {
-                let (k, o, l, _) = operand(dk, inst.b)?;
+                let (k, o, l, _) = operand(dk, inst.b, false)?;
                 (k, o, l)
             };
-            let (sc, sw, lit_c, consume) = operand((inst.k >> 3) & 7, u32::try_from(inst.p).ok()?)?;
+            let (sc, sw, lit_c, consume) =
+                operand((inst.k >> 3) & 7, u32::try_from(inst.p).ok()?, false)?;
             let (class, arith) = if inst.op == TOp::AssignOpDimC {
                 // `$cv[] op= v` has no element to read, and only the
                 // int-int operators have a helper.
@@ -1898,8 +1910,9 @@ unsafe fn slot_int(p: *const u8) -> Option<i64> {
 }
 
 /// `C_DIMR`'s helper: `$dst = $arr[$idx]` when `arr` holds an array
-/// directly, `idx` an `Int`, the array has an `Int` element at that key
-/// (a packed table or a hash), and the destination holds nothing whose
+/// directly, `idx` an `Int` or a string, the array has an `Int` element
+/// at that key (a packed table or a hash), and the destination holds
+/// nothing whose
 /// release could do more than free a string - a temporary's plain value,
 /// or (`dst_cv != 0`) a compiled variable that is undefined or plain, the
 /// test the interpreter's own fast path makes (`dims.rs`
@@ -1924,10 +1937,21 @@ unsafe extern "C" fn jit_dim_get(
         let Some(Value::Array(a)) = (*arr).get() else {
             return 1;
         };
-        let Some(i) = slot_int(idx) else {
-            return 1;
+        // The offset: an int key, or a string looked up as a key (a
+        // numeric string names its int key, as everywhere).
+        let found = match *idx {
+            TAG_INT => a.get_int(std::ptr::read_unaligned(
+                idx.add(PAYLOAD as usize).cast::<i64>(),
+            )),
+            // A slot holding a string is a `Value::Str` whatever kind of
+            // slot it is (a variable's `Some` has its value's layout).
+            TAG_STR => match &*idx.cast::<Value>() {
+                Value::Str(s) => a.get_sym_zstr(s),
+                _ => None,
+            },
+            _ => None,
         };
-        let Some(Value::Int(v)) = a.get_int(i) else {
+        let Some(Value::Int(v)) = found else {
             return 1;
         };
         let v = *v;
@@ -3143,6 +3167,14 @@ impl Emitter {
     fn jmp(&mut self, t: Target) {
         let at = self.code.len();
         self.put(&[0xE9, 0, 0, 0, 0]);
+        self.fixups.push((at + 1, t));
+    }
+
+    /// `call rel32` to `t` (a function compiled whole calling its own
+    /// body).
+    fn call(&mut self, t: Target) {
+        let at = self.code.len();
+        self.put(&[0xE8, 0, 0, 0, 0]);
         self.fixups.push((at + 1, t));
     }
 
@@ -4590,6 +4622,738 @@ impl Emitter {
         }
     }
 }
+// -------------------------------------------------------- whole functions
+//
+// A loop is not the only thing worth compiling: a function that calls
+// itself (`fib`, `Ack`) spends its time in the call protocol, and none of
+// it is in a loop. Such a function is compiled *whole* when it is pure
+// int code: every instruction it can reach is int arithmetic, a
+// comparison and branch, a `return` of an int, or a call by name of
+// itself (or of another function already compiled this way) that passes
+// every parameter.
+//
+// Its machine code keeps the function's variables and temporaries in a
+// frame on the machine stack and recurses with the machine's own `call`.
+// It touches nothing else - no interpreter frame, no heap, no output -
+// so it needs no way to hand a half-finished call back: whenever it
+// cannot go on (an int overflow, a division by zero, a recursion deeper
+// than its stack budget, a safe point that came due) it drops its whole
+// stack and reports "declined", and the interpreter makes the same call
+// from the start, as if the native code had never run.
+
+/// [`crate::func::CallShape::native`] of a function that is not compiled
+/// whole.
+pub(crate) const NATIVE_REFUSED: usize = 1;
+/// The most arguments a function compiled whole takes: one register each.
+pub(crate) const NATIVE_MAX_ARGS: usize = 6;
+/// Plain calls of a function before it is compiled whole.
+const NATIVE_HOT_CALLS: u32 = 100;
+/// Declined calls in a row after which a function's native code is given up.
+const NATIVE_MAX_BAILS: u32 = 8;
+/// The most ops of a function compiled whole.
+const NATIVE_MAX_OPS: usize = 256;
+/// The most slots (variables and temporaries) of such a function: the
+/// known-int analysis keeps one bit each.
+const NATIVE_MAX_SLOTS: usize = 120;
+/// The machine stack one native call (with all its recursion) may use; a
+/// deeper recursion is the interpreter's, whose frames are on the heap.
+const NATIVE_STACK_BUDGET: i32 = 512 * 1024;
+
+/// The entry of a function compiled whole: up to six int arguments, and
+/// the result in `r` with `iters` 0; `iters` 1 for "declined", 2 for
+/// "declined because a safe point is due".
+type NativeFn = unsafe extern "C" fn(i64, i64, i64, i64, i64, i64) -> TraceRet;
+
+/// One op of a function compiled whole.
+#[derive(Clone, Copy)]
+enum NRow {
+    /// An int row [`Emitter::emit_op`] writes: its class and meta.
+    Op(u16, JitMeta),
+    /// `Jmp` to an op.
+    Jmp(usize),
+    /// The fused compare-and-branch: to the op when the comparison holds.
+    Cmp(JitMeta, usize),
+    /// The fused `++`/`--`, compare and branch.
+    IncCmp(JitMeta, usize),
+    /// `$tmp = value` (an arm of a ternary).
+    Move(Arg, u32),
+    /// `return value`.
+    Ret(Arg),
+    /// A call's `InitFCall`: no code (the callee is in its `Call` row).
+    Nop,
+    /// A `Send`: the argument's value onto the machine stack.
+    Push(Arg),
+    /// A `DoCall`: the `n` pushed arguments into the argument registers,
+    /// the call (`body` 0: the function itself, else the callee's body),
+    /// and the result into the temporary `dst`.
+    Call {
+        n: usize,
+        dst: Option<u32>,
+        body: usize,
+    },
+}
+
+/// A function the plan accepted for compiling whole.
+struct NPlan {
+    /// The reachable ops, by op index (`None`: not reached, or covered by
+    /// the fused row before it).
+    rows: Vec<Option<NRow>>,
+    ncvs: usize,
+    ntmps: usize,
+    nparams: usize,
+    /// The function's tape (the int rows are emitted from it).
+    tape: Vec<Inst>,
+}
+
+/// The int classes a function compiled whole may hold besides its jumps.
+fn native_int_class(c: u16) -> bool {
+    matches!(
+        c,
+        C_INC
+            | C_DEC
+            | C_ASSIGN_I
+            | C_ASSIGN_L
+            | J_ASSIGN_T
+            | J_ARITH_TMP
+            | J_NUMBIN_T
+            | J_ARITH_CV
+            | J_ASSIGN_OP
+            | J_NUMBIN_C
+            | J_NUMBIN_D
+    )
+}
+
+/// An operand of a function compiled whole: a slot (`KC`/`KT` and its
+/// offset) or an int (`KL`, the value in `lit`). `None` for anything else
+/// (a literal that is no int, no operand at all).
+fn native_arg(code: &crate::opcode::OpArray, cst: &St, o: Operand) -> Option<Arg> {
+    let (kind, off) = src(code, o)?;
+    Some(match kind {
+        KC | KT => Arg { kind, off, lit: 0 },
+        #[allow(clippy::cast_possible_wrap)]
+        KI => Arg {
+            kind: KL,
+            off: 0,
+            lit: i64::from(off as i32),
+        },
+        _ => Arg {
+            kind: KL,
+            off: 0,
+            lit: resolved_lit(cst, off)?,
+        },
+    })
+}
+
+/// The callee of an `InitFCall` inside a function being compiled whole:
+/// the function itself (body 0) or one already compiled whole (its body's
+/// address), with its parameter count. `None` for anything else.
+fn native_callee(
+    uf: &Rc<crate::func::UserFunction>,
+    code: &crate::opcode::OpArray,
+    name: u32,
+) -> Option<(usize, usize)> {
+    let cache = code.fcall_cache.try_borrow().ok()?;
+    let Some(Func::User(callee)) = cache.get(name as usize)?.as_ref()?.get() else {
+        return None;
+    };
+    if Rc::ptr_eq(&callee, uf) {
+        return Some((0, uf.params.len()));
+    }
+    let shape = &callee.call_shape;
+    (shape.native.get() > NATIVE_REFUSED).then(|| (shape.native_body.get(), callee.params.len()))
+}
+
+/// Decode the call that starts at the `InitFCall` at op `start` of a
+/// function being compiled whole, up to its `DoCall`: the ops in between
+/// must follow each other without a jump (arguments are computed and
+/// sent in order; a call inside an argument nests), each one an int row,
+/// a `Send` of an int value, or a nested call. Returns the op after the
+/// `DoCall`. `inside` marks every op after the first: nothing may jump
+/// there.
+fn native_call_seq(
+    uf: &Rc<crate::func::UserFunction>,
+    cst: &St,
+    tape: &[Inst],
+    start: usize,
+    rows: &mut [Option<NRow>],
+    inside: &mut [bool],
+) -> Option<usize> {
+    let code = &uf.code;
+    // The calls begun and not made yet: (body, parameters, sent so far).
+    let mut pending: Vec<(usize, usize, usize)> = Vec::new();
+    let mut j = start;
+    loop {
+        if rows.get(j)?.is_some() {
+            return None;
+        }
+        if j != start {
+            *inside.get_mut(j)? = true;
+        }
+        match code.ops.get(j)? {
+            Op::InitFCall {
+                name,
+                fallback: None,
+                ..
+            } => {
+                let (body, params) = native_callee(uf, code, *name)?;
+                pending.push((body, params, 0));
+                rows[j] = Some(NRow::Nop);
+                j += 1;
+            }
+            Op::Send { src: arg } => {
+                pending.last_mut()?.2 += 1;
+                let o = match arg {
+                    ArgSrc::Val(o @ (Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)))
+                    | ArgSrc::CallResult(o @ Operand::Tmp(_)) => *o,
+                    ArgSrc::Place(pid) => Operand::Cv(super::calls::place_cv(code, *pid)?),
+                    _ => return None,
+                };
+                rows[j] = Some(NRow::Push(native_arg(code, cst, o)?));
+                j += 1;
+            }
+            Op::DoCall { dst } => {
+                let (body, params, sent) = pending.pop()?;
+                // Every declared parameter, and nothing more.
+                if sent != params || sent > NATIVE_MAX_ARGS {
+                    return None;
+                }
+                let dst = match dst {
+                    Some(d) => Some(tmp_off(code, *d)?),
+                    None => None,
+                };
+                rows[j] = Some(NRow::Call { n: sent, dst, body });
+                j += 1;
+                if pending.is_empty() {
+                    return Some(j);
+                }
+            }
+            _ => {
+                let (c, m) = classify(cst, tape.get(j)?)?;
+                if !native_int_class(c) {
+                    return None;
+                }
+                rows[j] = Some(NRow::Op(c, m));
+                for k in 1..c_step(c) {
+                    *inside.get_mut(j + k)? = true;
+                }
+                j += c_step(c);
+            }
+        }
+    }
+}
+
+/// The ops execution may continue at after the row at op `i`: the next
+/// op in line (`None` after a `Jmp` or a `return`) and a jump's target.
+fn native_succs(i: usize, row: NRow) -> (Option<usize>, Option<usize>) {
+    match row {
+        NRow::Op(c, _) => (Some(i + c_step(c)), None),
+        NRow::Jmp(t) => (None, Some(t)),
+        NRow::Cmp(_, t) => (Some(i + 2), Some(t)),
+        NRow::IncCmp(_, t) => (Some(i + 3), Some(t)),
+        NRow::Move(..) | NRow::Nop | NRow::Push(_) | NRow::Call { .. } => (Some(i + 1), None),
+        NRow::Ret(_) => (None, None),
+    }
+}
+
+/// The slots (bit numbers: variables first, then temporaries) the row at
+/// `inst` reads as ints, writes an int into, and leaves without one.
+fn native_effects(row: NRow, inst: &Inst, ncvs: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    let bit = |kind: u8, off: u32| -> Option<usize> {
+        match kind {
+            KC => Some((off >> SLOT_SHIFT) as usize),
+            KT => Some(ncvs + (off >> SLOT_SHIFT) as usize),
+            _ => None,
+        }
+    };
+    let arg = |a: Arg| bit(a.kind, a.off);
+    let (mut reads, mut writes, mut kills) = (Vec::new(), Vec::new(), Vec::new());
+    match row {
+        NRow::Op(c, m) => match c {
+            C_INC | C_DEC => reads.extend(bit(KC, inst.a)),
+            C_ASSIGN_I | C_ASSIGN_L => writes.extend(bit(KC, inst.a)),
+            // The source temporary is consumed (the row nulls it).
+            J_ASSIGN_T => {
+                reads.extend(bit(KT, inst.b));
+                writes.extend(bit(KC, inst.a));
+                kills.extend(bit(KT, inst.b));
+            }
+            J_ARITH_CV | J_ARITH_TMP | J_NUMBIN_T | J_NUMBIN_D => {
+                reads.extend(bit(m.ka, inst.a));
+                reads.extend(bit(m.kb, inst.b));
+                writes.extend(match c {
+                    J_ARITH_CV => bit(KC, inst.c),
+                    J_NUMBIN_D => bit(KC, inst.d),
+                    _ => bit(KT, inst.c),
+                });
+            }
+            // `$cv op= b`: the variable is read and stays an int.
+            _ => {
+                reads.extend(bit(KC, inst.a));
+                reads.extend(bit(m.kb, inst.b));
+            }
+        },
+        NRow::Cmp(m, _) => {
+            reads.extend(bit(m.ka, inst.a));
+            reads.extend(bit(m.kb, inst.b));
+        }
+        NRow::IncCmp(m, _) => {
+            reads.extend(bit(KC, inst.a));
+            reads.extend(bit(m.kb, inst.b));
+        }
+        NRow::Move(a, dst) => {
+            reads.extend(arg(a));
+            writes.extend(bit(KT, dst));
+        }
+        NRow::Ret(a) => reads.extend(arg(a)),
+        // A sent temporary is consumed.
+        NRow::Push(a) => {
+            reads.extend(arg(a));
+            if a.kind == KT {
+                kills.extend(arg(a));
+            }
+        }
+        NRow::Call { dst, .. } => writes.extend(dst.and_then(|d| bit(KT, d))),
+        NRow::Nop | NRow::Jmp(_) => {}
+    }
+    (reads, writes, kills)
+}
+
+/// Plan the user function `uf` for compiling whole, or refuse (`None`).
+#[allow(clippy::too_many_lines)] // one function's decode and its one analysis
+fn plan_native(uf: &Rc<crate::func::UserFunction>) -> Option<NPlan> {
+    macro_rules! no {
+        ($($a:tt)*) => {{
+            if debug_on() {
+                eprintln!("jit: function {} not compiled whole: {}", uf.name, format_args!($($a)*));
+            }
+            return None;
+        }};
+    }
+    let code = &uf.code;
+    let (ncvs, ntmps, nparams) = (code.cv_names.len(), code.num_tmps as usize, uf.params.len());
+    if uf.call_shape() == crate::func::CallShape::NOT_PLAIN || !uf.uses.is_empty() {
+        no!("its declaration rules out a plain call");
+    }
+    if nparams > NATIVE_MAX_ARGS || nparams > ncvs || ncvs + ntmps > NATIVE_MAX_SLOTS {
+        no!("too many parameters or slots");
+    }
+    if code.ops.len() > NATIVE_MAX_OPS {
+        no!("too long");
+    }
+    // An int must pass every declared type as it is, as for an inlined
+    // call (`plan_call`): the parameters', and the return type's.
+    if uf.params.iter().any(|p| {
+        p.ty.as_ref()
+            .is_some_and(|t| !t.is_mixed() && t.mask & mask::LONG == 0)
+    }) {
+        no!("a parameter's type does not take an int as it is");
+    }
+    if uf
+        .return_type
+        .as_ref()
+        .is_some_and(|t| t.is_void() || t.is_never() || !(t.is_mixed() || t.mask & mask::LONG != 0))
+    {
+        no!("the return type does not take an int as it is");
+    }
+    let tape = code.tape.get(code);
+    let nops = code.ops.len();
+    let cst = St {
+        cvs: std::ptr::null_mut(),
+        tmps: std::ptr::null_mut(),
+        lits: code.literals.as_ptr().cast(),
+        f: std::ptr::null_mut(),
+    };
+    // Decode every op the function can reach from its first op after the
+    // `RECV`s of its parameters (all of them are passed).
+    let start = uf.plain_first_op(nparams);
+    let mut rows: Vec<Option<NRow>> = vec![None; nops];
+    let mut inside = vec![false; nops + 4];
+    let mut work = vec![start];
+    while let Some(i) = work.pop() {
+        if i >= nops {
+            no!("it can run off its end");
+        }
+        if rows[i].is_some() {
+            continue;
+        }
+        let row = match &code.ops[i] {
+            Op::Return { val } => match native_arg(code, &cst, *val) {
+                Some(a) => NRow::Ret(a),
+                None => no!("op {i} returns something that is no int"),
+            },
+            Op::Move { src: from, dst } => {
+                match (native_arg(code, &cst, *from), tmp_off(code, *dst)) {
+                    (Some(a), Some(d)) => NRow::Move(a, d),
+                    _ => no!("op {i} moves something that is no int"),
+                }
+            }
+            Op::InitFCall { .. } => {
+                match native_call_seq(uf, &cst, tape, i, &mut rows, &mut inside) {
+                    Some(next) => work.push(next),
+                    None => no!("the call at op {i} is not one of an int function compiled whole"),
+                }
+                continue;
+            }
+            _ => {
+                let Some((c, m)) = tape.get(i).and_then(|row| classify(&cst, row)) else {
+                    no!("op {i} ({:?}) is no int row", tape.get(i).map(|r| r.op));
+                };
+                match c {
+                    C_JMP => NRow::Jmp(jump_target(tape, i)),
+                    J_CMP | J_INCCMP if jcc_for(m.mask).is_none() => {
+                        no!("op {i} compares in a way the emitter does not know")
+                    }
+                    J_CMP => NRow::Cmp(m, jump_target(tape, i)),
+                    J_INCCMP => NRow::IncCmp(m, jump_target(tape, i)),
+                    c if native_int_class(c) => NRow::Op(c, m),
+                    _ => no!("op {i} ({:?}) is no int row", tape[i].op),
+                }
+            }
+        };
+        let (next, target) = native_succs(i, row);
+        work.extend(next);
+        work.extend(target);
+        rows[i] = Some(row);
+    }
+    // A jump may not land inside a call's argument sequence.
+    for (i, row) in rows.iter().enumerate() {
+        if let Some(row) = row {
+            let (_, target) = native_succs(i, *row);
+            if target.is_some_and(|t| t >= nops || inside[t]) {
+                no!("op {i} jumps into a call's arguments");
+            }
+        }
+    }
+    // Which slots hold an int when each op starts, on every path to it:
+    // the parameters at the start, then what the rows before it wrote.
+    // (A set only ever shrinks, so the loop ends.)
+    let mut known: Vec<u128> = vec![!0; nops];
+    let mut seen = vec![false; nops];
+    known[start] = (1u128 << nparams) - 1;
+    seen[start] = true;
+    let mut work = vec![start];
+    while let Some(i) = work.pop() {
+        let Some(row) = rows[i] else { continue };
+        let (_, writes, kills) = native_effects(row, &tape[i], ncvs);
+        let mut out = known[i];
+        for b in kills {
+            out &= !(1u128 << b);
+        }
+        for b in writes {
+            out |= 1u128 << b;
+        }
+        let (next, target) = native_succs(i, row);
+        for s in next.into_iter().chain(target) {
+            let merged = known[s] & out;
+            if merged != known[s] || !seen[s] {
+                known[s] = merged;
+                seen[s] = true;
+                work.push(s);
+            }
+        }
+    }
+    for (i, row) in rows.iter().enumerate() {
+        if let Some(row) = row {
+            let (reads, _, _) = native_effects(*row, &tape[i], ncvs);
+            if reads.iter().any(|b| known[i] & (1u128 << b) == 0) {
+                no!("op {i} reads a slot that is not an int on every path");
+            }
+        }
+    }
+    Some(NPlan {
+        rows,
+        ncvs,
+        ntmps,
+        nparams,
+        tape: tape.to_vec(),
+    })
+}
+
+/// The machine code of a planned function, and where in it the body
+/// starts (what another native function calls).
+///
+/// The entry (at offset 0) is the C-ABI stub the interpreter calls: it
+/// saves `rbx`/`r12`/`r13`, keeps the stack pointer to return to in
+/// `rbx`, the stack floor in `r12` and the poll address in `r13`, moves
+/// the arguments into the body's registers and calls the body. A body
+/// that cannot go on jumps to the stub's bail block, which drops every
+/// native frame by loading `rsp` from `rbx` and returns "declined".
+///
+/// The body keeps its variables and temporaries (16 bytes each, the
+/// interpreter's slot layout, so the int rows of the loop emitter are
+/// reused as they are) in a frame on the machine stack, addressed off
+/// `rdi` (variables) and `rsi` (temporaries), which it saves for its
+/// caller. Arguments arrive in `rax`, `rcx`, `r9`, `rdx`, `r8`, `r10`
+/// (not the C registers: two of those are the slot bases), and the
+/// result leaves in `rax`. A `Send` pushes its value on the machine
+/// stack; the call pops them into the registers.
+#[allow(clippy::too_many_lines)] // one function's code, top to bottom
+fn emit_native(plan: &NPlan) -> (Vec<u8>, usize) {
+    let dummy = Plan {
+        head: 0,
+        close: 0,
+        class: Vec::new(),
+        meta: Vec::new(),
+        guards: Vec::new(),
+        entries: Vec::new(),
+        span: Vec::new(),
+        calls: Vec::new(),
+        has_calls: false,
+        frame: false,
+        version_guard: false,
+        version: 0,
+    };
+    let mut em = Emitter::new(dummy, plan.tape.clone(), 0);
+    // Label keys past every op's own.
+    let n = plan.tape.len();
+    let (l_body, l_bail, l_exit, l_poll) = (n + 1, n + 2, n + 3, n + 4);
+    let bail = Target::Label(l_bail);
+    // A safe point that came due is no fault of the function's: it leaves
+    // with its own status, which is not counted against the native code.
+    let poll = Target::Label(l_poll);
+    // ---- the entry stub
+    em.put(&[0x53, 0x41, 0x54, 0x41, 0x55]); // push rbx; push r12; push r13
+    em.put(&[0x48, 0x89, 0xE3]); // mov rbx, rsp
+    em.put(&[0x4C, 0x8D, 0xA4, 0x24]); // lea r12, [rsp - budget]
+    em.put(&(-NATIVE_STACK_BUDGET).to_le_bytes());
+    em.put(&[0x49, 0xBD]); // movabs r13, poll address
+    em.put(&(crate::interrupt::jit_poll_addr() as i64).to_le_bytes());
+    // The C argument registers into the body's: r10 <- r9, r9 <- rdx,
+    // rdx <- rcx, rcx <- rsi, rax <- rdi (`r8` is the fifth in both), in
+    // an order that reads each source before it is overwritten.
+    em.put(&[0x4D, 0x89, 0xCA]); // mov r10, r9
+    em.put(&[0x49, 0x89, 0xD1]); // mov r9, rdx
+    em.put(&[0x48, 0x89, 0xCA]); // mov rdx, rcx
+    em.put(&[0x48, 0x89, 0xF1]); // mov rcx, rsi
+    em.put(&[0x48, 0x89, 0xF8]); // mov rax, rdi
+    em.call(Target::Label(l_body));
+    em.put(&[0x31, 0xD2]); // xor edx, edx: done
+    em.set_label(l_exit);
+    em.put(&[0x41, 0x5D, 0x41, 0x5C, 0x5B, 0xC3]); // pop r13; pop r12; pop rbx; ret
+    em.set_label(l_bail);
+    em.put(&[0x48, 0x89, 0xDC]); // mov rsp, rbx: every native frame is gone
+    em.put(&[0xBA, 1, 0, 0, 0]); // mov edx, 1: declined
+    em.jmp(Target::Label(l_exit));
+    em.set_label(l_poll);
+    em.put(&[0x48, 0x89, 0xDC]); // mov rsp, rbx
+    em.put(&[0xBA, 2, 0, 0, 0]); // mov edx, 2: declined for a safe point
+    em.jmp(Target::Label(l_exit));
+    // ---- the body
+    em.set_label(l_body);
+    let body = em.code.len();
+    // The frame: the slots, and 8 bytes that keep the stack 16-aligned
+    // (the body is entered by a `call` and pushes two registers).
+    #[allow(clippy::cast_possible_truncation)] // at most `NATIVE_MAX_SLOTS`
+    let frame = (16 * (plan.ncvs + plan.ntmps) + 8) as u32;
+    #[allow(clippy::cast_possible_truncation)]
+    let tmps_at = (16 * plan.ncvs) as u32;
+    em.put(&[0x57, 0x56]); // push rdi; push rsi (the caller's slot bases)
+    em.put(&[0x48, 0x81, 0xEC]); // sub rsp, frame
+    em.put(&frame.to_le_bytes());
+    em.put(&[0x4C, 0x39, 0xE4]); // cmp rsp, r12
+    em.jcc(0x82, bail); // jb: past the stack budget
+    em.put(&[0x41, 0x80, 0x7D, 0x00, 0x00]); // cmp byte [r13], 0
+    em.jcc(0x85, poll); // jne: a safe point is due
+    em.put(&[0x48, 0x89, 0xE7]); // mov rdi, rsp
+    em.put(&[0x48, 0x8D, 0xB4, 0x24]); // lea rsi, [rsp + 16 * ncvs]
+    em.put(&tmps_at.to_le_bytes());
+    // The arguments into the first variables (tags are never read in a
+    // native frame: every read was proven an int by the plan).
+    for k in 0..plan.nparams {
+        #[allow(clippy::cast_possible_truncation)] // at most `NATIVE_MAX_ARGS`
+        let off = (k as u32) << SLOT_SHIFT;
+        match k {
+            0 => em.store_int(KC, off),
+            1 => em.store_rcx_base(KC, off),
+            2 => em.store_int_r9_base(KC, off),
+            _ => {
+                // rdx, r8, r10 through `rax` (the first argument is stored).
+                em.put(match k {
+                    3 => &[0x48, 0x89, 0xD0],
+                    4 => &[0x4C, 0x89, 0xC0],
+                    _ => &[0x4C, 0x89, 0xD0],
+                });
+                em.store_int(KC, off);
+            }
+        }
+    }
+    // The ops, in order. A loop inside the function polls at its head.
+    let order: Vec<usize> = (0..plan.rows.len())
+        .filter(|i| plan.rows[*i].is_some())
+        .collect();
+    let mut heads: Vec<usize> = Vec::new();
+    for &i in &order {
+        if let Some(row) = plan.rows[i] {
+            if let (_, Some(t)) = native_succs(i, row) {
+                if t <= i {
+                    heads.push(t);
+                }
+            }
+        }
+    }
+    for (pos, &i) in order.iter().enumerate() {
+        let Some(row) = plan.rows[i] else { continue };
+        let inst = plan.tape[i];
+        em.label(i);
+        if heads.contains(&i) {
+            em.put(&[0x41, 0x80, 0x7D, 0x00, 0x00]); // cmp byte [r13], 0
+            em.jcc(0x85, poll); // jne
+        }
+        match row {
+            NRow::Op(c, m) => em.emit_op(c, m, &inst, bail),
+            NRow::Jmp(t) => em.jmp(Target::Label(t)),
+            NRow::Cmp(m, t) => {
+                em.to_rax(m.ka, inst.a, m.lit_a);
+                em.to_r9(m.kb, inst.b, m.lit_b);
+                em.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
+                em.jcc(jcc_for(m.mask).unwrap_or(0x85), Target::Label(t));
+            }
+            NRow::IncCmp(m, t) => {
+                // `b` first: it may be the slot that is stepped.
+                em.to_r9(m.kb, inst.b, m.lit_b);
+                em.load_int(KC, inst.a);
+                em.put(&[REX_W, 0x83, if m.inc { 0xC0 } else { 0xE8 }, 0x01]);
+                em.jcc(0x80, bail); // jo
+                em.store_int(KC, inst.a);
+                em.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
+                em.jcc(jcc_for(m.mask).unwrap_or(0x85), Target::Label(t));
+            }
+            NRow::Move(a, dst) => {
+                em.to_rax(a.kind, a.off, a.lit);
+                em.store_int(KT, dst);
+                em.store_tag_base(KT, dst, TAG_INT);
+            }
+            NRow::Ret(a) => {
+                em.to_rax(a.kind, a.off, a.lit);
+                em.put(&[0x48, 0x81, 0xC4]); // add rsp, frame
+                em.put(&frame.to_le_bytes());
+                em.put(&[0x5E, 0x5F, 0xC3]); // pop rsi; pop rdi; ret
+            }
+            NRow::Nop => {}
+            NRow::Push(a) => {
+                em.to_rax(a.kind, a.off, a.lit);
+                em.put(&[0x50]); // push rax
+            }
+            NRow::Call { n, dst, body } => {
+                // The pushed arguments into rax, rcx, r9, rdx, r8, r10:
+                // the last one sent is on top.
+                const POP: [&[u8]; NATIVE_MAX_ARGS] = [
+                    &[0x58],
+                    &[0x59],
+                    &[0x41, 0x59],
+                    &[0x5A],
+                    &[0x41, 0x58],
+                    &[0x41, 0x5A],
+                ];
+                for k in (0..n.min(NATIVE_MAX_ARGS)).rev() {
+                    em.put(POP[k]);
+                }
+                if body == 0 {
+                    em.call(Target::Label(l_body));
+                } else {
+                    em.movabs(false, body as i64); // movabs r11, body
+                    em.put(&[0x41, 0xFF, 0xD3]); // call r11
+                }
+                // The callee restored `rdi`/`rsi`; the result is in `rax`.
+                if let Some(d) = dst {
+                    em.store_int(KT, d);
+                    em.store_tag_base(KT, d, TAG_INT);
+                }
+            }
+        }
+        // Where the row goes on when it does not jump, if that is not
+        // the row emitted next (a fused row's covered ops lie between,
+        // or an op that is entered on its own, as a loop's condition is).
+        if let (Some(next), _) = native_succs(i, row) {
+            if order.get(pos + 1) != Some(&next) {
+                em.jmp(Target::Label(next));
+            }
+        }
+    }
+    em.resolve();
+    (em.code, body)
+}
+
+/// Compile `uf` whole: its entry's address, or `None` when it is refused.
+fn compile_native(uf: &Rc<crate::func::UserFunction>) -> Option<usize> {
+    if TRACES.load(Ordering::Relaxed) >= MAX_TRACES {
+        return None;
+    }
+    let _g = COMPILE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let plan = plan_native(uf)?;
+    let (code, body) = emit_native(&plan);
+    let entry = place(&code)? as usize;
+    TRACES.fetch_add(1, Ordering::Relaxed);
+    uf.call_shape.native_body.set(entry + body);
+    if debug_on() {
+        eprintln!(
+            "jit: function {} compiled whole to {} bytes",
+            uf.name,
+            code.len()
+        );
+    }
+    Some(entry)
+}
+
+/// A plain call of `uf` with the int arguments `args` (one per declared
+/// parameter), made in machine code when the function is compiled whole:
+/// its result. `None` when it is not (yet: its calls are counted, and the
+/// hundredth compiles it), or when the native code declined, having
+/// changed nothing - the interpreter then makes the call.
+pub(crate) fn native_call(uf: &Rc<crate::func::UserFunction>, args: &[i64]) -> Option<i64> {
+    let shape = &uf.call_shape;
+    let mut entry = shape.native.get();
+    if entry == NATIVE_REFUSED {
+        return None;
+    }
+    if entry == 0 {
+        let n = shape.native_count.get() + 1;
+        if n < NATIVE_HOT_CALLS {
+            shape.native_count.set(n);
+            return None;
+        }
+        shape.native_count.set(0);
+        entry = if enabled() {
+            compile_native(uf).unwrap_or(NATIVE_REFUSED)
+        } else {
+            NATIVE_REFUSED
+        };
+        shape.native.set(entry);
+        if entry == NATIVE_REFUSED {
+            return None;
+        }
+    }
+    let mut a = [0i64; NATIVE_MAX_ARGS];
+    a.get_mut(..args.len())?.copy_from_slice(args);
+    // SAFETY: `entry` is the stub `compile_native` placed for this very
+    // function: it takes six ints, touches only its own machine stack and
+    // returns through the stub whatever happens inside.
+    let r = unsafe {
+        let f: NativeFn = std::mem::transmute(entry);
+        f(a[0], a[1], a[2], a[3], a[4], a[5])
+    };
+    if r.iters != 0 {
+        // Declined. A function that keeps declining for its own reasons
+        // (status 1: an overflow, a recursion past the stack budget) is
+        // the interpreter's; a safe point that came due (status 2) is not
+        // held against it.
+        if r.iters == 1 {
+            let bails = shape.native_count.get() + 1;
+            shape.native_count.set(bails);
+            if bails >= NATIVE_MAX_BAILS {
+                shape.native.set(NATIVE_REFUSED);
+            }
+        }
+        return None;
+    }
+    if shape.native_count.get() != 0 {
+        shape.native_count.set(0);
+    }
+    Some(r.r)
+}
+
 // ------------------------------------------------------------- the driver
 
 extern "C" {
@@ -5501,6 +6265,20 @@ mod layout_tests {
         let h = std::ptr::from_ref(&hash).cast_mut();
         assert_eq!(unsafe { jit_dim_get(h, at(&Value::Int(2)), t, 0) }, 0);
         assert!(tmp_is(22));
+        // String keys: a key of the table, a numeric string naming an int
+        // key, and one the table does not have.
+        let named = CvSlot::new(Some(Value::Array(ZArray::from_pairs([
+            (php_runtime::ArrayKey::from("beta"), Value::Int(2)),
+            (php_runtime::ArrayKey::Int(7), Value::Int(70)),
+        ]))));
+        let np = std::ptr::from_ref(&named).cast_mut();
+        let key = |s: &str| Value::Str(php_runtime::ZStr::from(s));
+        assert_eq!(unsafe { jit_dim_get(np, at(&key("beta")), t, 0) }, 0);
+        assert!(tmp_is(2));
+        assert_eq!(unsafe { jit_dim_get(np, at(&key("7")), t, 0) }, 0);
+        assert!(tmp_is(70));
+        assert_eq!(unsafe { jit_dim_get(np, at(&key("gamma")), t, 0) }, 1);
+        assert!(tmp_is(70));
         // No array in the variable at all.
         let none = CvSlot::new(None);
         let n = std::ptr::from_ref(&none).cast_mut();
@@ -5691,6 +6469,65 @@ mod layout_tests {
         // The first and the last branch both land on the `Side` stub.
         assert_eq!(c[2..6], 24i32.to_le_bytes());
         assert_eq!(c[26..30], 0i32.to_le_bytes());
+    }
+
+    /// A function compiled whole: the C-ABI entry stub (the saves, the
+    /// stack pointer to return to, the stack floor, the poll address, the
+    /// argument shuffle, the call of the body, the two ways out) and the
+    /// body's prologue and `return`, for `function f($a) { return $a; }`.
+    #[test]
+    fn native_function_encoding() {
+        let ret = NRow::Ret(Arg {
+            kind: KC,
+            off: 0,
+            lit: 0,
+        });
+        let plan = NPlan {
+            rows: vec![Some(ret)],
+            ncvs: 1,
+            ntmps: 1,
+            nparams: 1,
+            tape: vec![Inst::plain(TOp::Exit), Inst::plain(TOp::Exit)],
+        };
+        let (code, body) = emit_native(&plan);
+        let poll = (crate::interrupt::jit_poll_addr() as i64).to_le_bytes();
+        #[rustfmt::skip]
+        let mut want: Vec<u8> = vec![
+            0x53, 0x41, 0x54, 0x41, 0x55,                   // push rbx; push r12; push r13
+            0x48, 0x89, 0xE3,                               // mov rbx, rsp
+            0x4C, 0x8D, 0xA4, 0x24, 0x00, 0x00, 0xF8, 0xFF, // lea r12, [rsp - 512K]
+            0x49, 0xBD,                                     // movabs r13, poll
+        ];
+        want.extend_from_slice(&poll);
+        #[rustfmt::skip]
+        want.extend_from_slice(&[
+            0x4D, 0x89, 0xCA, 0x49, 0x89, 0xD1, 0x48, 0x89, 0xCA, // r10<-r9, r9<-rdx, rdx<-rcx
+            0x48, 0x89, 0xF1, 0x48, 0x89, 0xF8,             // rcx<-rsi, rax<-rdi
+            0xE8, 34, 0, 0, 0,                              // call body
+            0x31, 0xD2,                                     // xor edx, edx
+            0x41, 0x5D, 0x41, 0x5C, 0x5B, 0xC3,             // pop r13; pop r12; pop rbx; ret
+            0x48, 0x89, 0xDC, 0xBA, 1, 0, 0, 0,             // bail: mov rsp, rbx; mov edx, 1
+            0xE9, 0xED, 0xFF, 0xFF, 0xFF,                   // jmp exit
+            0x48, 0x89, 0xDC, 0xBA, 2, 0, 0, 0,             // poll: mov rsp, rbx; mov edx, 2
+            0xE9, 0xE0, 0xFF, 0xFF, 0xFF,                   // jmp exit
+        ]);
+        assert_eq!(body, want.len());
+        #[rustfmt::skip]
+        want.extend_from_slice(&[
+            0x57, 0x56,                                     // push rdi; push rsi
+            0x48, 0x81, 0xEC, 40, 0, 0, 0,                  // sub rsp, 2 * 16 + 8
+            0x4C, 0x39, 0xE4,                               // cmp rsp, r12
+            0x0F, 0x82, 0xD4, 0xFF, 0xFF, 0xFF,             // jb bail
+            0x41, 0x80, 0x7D, 0x00, 0x00,                   // cmp byte [r13], 0
+            0x0F, 0x85, 0xD6, 0xFF, 0xFF, 0xFF,             // jne poll
+            0x48, 0x89, 0xE7,                               // mov rdi, rsp
+            0x48, 0x8D, 0xB4, 0x24, 16, 0, 0, 0,            // lea rsi, [rsp + 16]
+            0x48, 0x89, 0x87, 8, 0, 0, 0,                   // mov [rdi + 8], rax
+            0x48, 0x8B, 0x87, 8, 0, 0, 0,                   // return: mov rax, [rdi + 8]
+            0x48, 0x81, 0xC4, 40, 0, 0, 0,                  // add rsp, 40
+            0x5E, 0x5F, 0xC3,                               // pop rsi; pop rdi; ret
+        ]);
+        assert_eq!(code, want);
     }
 
     /// A shift row: the count is range-checked with one unsigned compare
