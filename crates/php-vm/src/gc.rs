@@ -664,6 +664,12 @@ pub fn possible_root(v: &Value) {
     }
 }
 
+/// [`possible_root`] of an object.
+#[inline]
+pub(crate) fn possible_root_obj(o: &Obj) {
+    root_obj(o);
+}
+
 /// [`possible_root`] of the last handle of a reference: its value.
 #[inline(never)]
 fn released_ref(r: &php_runtime::PhpRef) {

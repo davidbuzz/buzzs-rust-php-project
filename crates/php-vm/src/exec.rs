@@ -3378,6 +3378,15 @@ fn release_slot_value(old: Option<Value>) {
     }
 }
 
+/// [`release_rooted`] of an object a caller took out of its slot: a
+/// possible GC root while other handles remain, then the release (the
+/// free, or a queued destructor, when it was the last).
+#[inline(never)]
+fn release_object(old: php_runtime::Obj) {
+    crate::gc::possible_root_obj(&old);
+    drop(old);
+}
+
 /// [`release_slot_value`] of an array, object or reference.
 #[inline(never)]
 fn release_rooted(old: Option<Value>) {

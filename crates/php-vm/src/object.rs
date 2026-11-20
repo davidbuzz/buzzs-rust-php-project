@@ -677,59 +677,56 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     let handle = d.handle;
     let flags = d.flags.get();
     // The common free: no side tables, no dynamic properties or native
-    // state, and only slots that own nothing. Nothing is released, so no
-    // destructor can be queued meanwhile: the root buffer entry goes, if
-    // any (`GC_REMOVE_FROM_BUFFER`: an object that was `$this` of a
-    // constructor or of a method called on a temporary has one), and the
-    // handle goes straight back on the free list (`zend_objects_store_del`
-    // of a plain object), as on the full path below. The slots are left as
-    // they are: inline ones are never dropped again (`MaybeUninit`), and a
-    // separate buffer's drop releases nothing.
-    if flags & oflags::STALE_PROPS == 0
+    // state, and only slots that own nothing. Nothing is released then
+    // (the slots are left as they are: inline ones are never dropped
+    // again, `MaybeUninit`, and a separate buffer's drop releases
+    // nothing); anything else is [`free_contents`]'s.
+    let plain = flags & oflags::STALE_PROPS == 0
         && d.unset_bits.get() & UNSET_OVERFLOW_BIT == 0
         && d.dynamic.get_mut().is_none()
         && d.internal.get_mut().is_none()
-        && slots.iter().all(owns_nothing)
-    {
-        if flags & oflags::GC_BUFFERED != 0 {
-            crate::gc::forget_root(cell, handle);
-        }
-        // A WeakMap value released by `zend_weakrefs_notify` may queue a
-        // destructor: its object is freed before this handle is reusable,
-        // as on the full path below.
-        let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
-        crate::weakref::object_freed(handle);
-        let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
-            None
-        } else {
-            last_pending_handle()
-        };
-        release_store_slot(handle, anchor);
-        return;
-    }
+        && slots.iter().all(owns_nothing);
     if flags & oflags::GC_BUFFERED != 0 {
-        // `GC_REMOVE_FROM_BUFFER`.
+        // `GC_REMOVE_FROM_BUFFER`: an object that was `$this` of a
+        // constructor or of a method called on a temporary has an entry.
         crate::gc::forget_root(cell, handle);
     }
-    if d.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
+    if !plain && d.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
         forget_unset_overflow(handle);
     }
     let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
     // `zend_weakrefs_notify`: purge WeakMap entries before the handle can
-    // be reused.
+    // be reused (a value released there may queue a destructor).
     crate::weakref::object_freed(handle);
-    // `zend_object_std_dtor` releases the properties (and objects they
-    // hold) before `zend_objects_store_del` puts this handle on the free
-    // list, so this handle is the next one reused: the declared slots in
-    // order, then the dynamic table, the native state and the stale copies
-    // of a lazy object's slots, everything taken out before anything is
-    // released.
+    if !plain {
+        free_contents(d, slots, flags);
+    }
+    // A destructor queued meanwhile runs (and frees its object) before
+    // this handle is reusable, as it would have inside php-src's
+    // `zend_object_std_dtor`; otherwise the handle goes straight back on
+    // the free list (`zend_objects_store_del`).
+    let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
+        None
+    } else {
+        last_pending_handle()
+    };
+    release_store_slot(handle, anchor);
+}
+
+/// `zend_object_std_dtor` of an object that holds something: the
+/// properties (and objects they hold) are released before
+/// `zend_objects_store_del` puts the handle on the free list, so that
+/// handle is the next one reused: the declared slots in order, then the
+/// dynamic table, the native state and the stale copies of a lazy
+/// object's slots, everything taken out before anything is released.
+#[inline(never)]
+fn free_contents(d: &mut ObjectData, slots: &mut [Option<Value>], flags: u32) {
     let dynamic = d.dynamic.get_mut().take();
     let internal = d.internal.get_mut().take();
     let stale = if flags & oflags::STALE_PROPS == 0 {
         None
     } else {
-        crate::lazy::take_stale_slots(handle)
+        crate::lazy::take_stale_slots(d.handle)
     };
     for slot in slots {
         let v = slot.take();
@@ -742,15 +739,6 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
         }
     }
     drop((dynamic, internal, stale));
-    // A destructor queued meanwhile runs (and frees its object) before
-    // this handle is reusable, as it would have inside php-src's
-    // `zend_object_std_dtor`.
-    let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
-        None
-    } else {
-        last_pending_handle()
-    };
-    release_store_slot(handle, anchor);
 }
 
 /// The tail of `zend_objects_store_del`: the store slot of `handle` is
@@ -798,7 +786,69 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
 /// (`object_properties_init` from `ce->default_properties_table`), with no
 /// vector in between: `new` of a class whose defaults are evaluated.
 pub fn new_object_from_defaults(class: Rc<Class>, defaults: &[Option<Value>]) -> Obj {
+    // The exact size classes of `create`, each with its own function.
+    macro_rules! exact {
+        ($($n:literal)*) => {
+            match defaults.len() {
+                $($n => {
+                    if let Ok(d) = <&[Option<Value>; $n]>::try_from(defaults) {
+                        return new_defaults::<$n>(class, d);
+                    }
+                })*
+                _ => {}
+            }
+        };
+    }
+    exact!(1 2 3 4 5 6 7 8);
     create(class, Fill::Defaults(defaults))
+}
+
+/// [`new_block`] for the commonest `new`: an object whose `N` slots are
+/// copies of its class's default properties (`zend_objects_new` +
+/// `object_properties_init`), `N` an exact size class of [`create`].
+/// Straight-line: the block is allocated, the defaults are copied in one
+/// move of a size the compiler knows (a default that owns something is
+/// then replaced by a real clone, as in [`Fill::write`]), the fixed part
+/// is written and the handle's store slot filled. (`new_block` hands the
+/// class, the fill and the buffer around as closure captures: 172
+/// instructions for an object of one slot, a `memcpy` call for its 16
+/// bytes among them.)
+#[inline(never)]
+fn new_defaults<const N: usize>(class: Rc<Class>, defaults: &[Option<Value>; N]) -> Obj {
+    STORE.with(|s| {
+        let mut s = s.borrow_mut();
+        let handle = s.take_handle();
+        // SAFETY: as in `new_block`: `ObjectBlock` is `repr(C)` with its
+        // `ObjectData` first and aligned like it, and the closure
+        // initializes the whole block (all `N` inline slots: bitwise
+        // copies of the defaults, complete for those that own nothing;
+        // the others are overwritten with clones before anything reads
+        // them, the copies never dropped).
+        let o = unsafe {
+            Obj::new_in_family_with::<ObjectBlock<N>, ObjectData>(|p| {
+                let block = p.as_ptr();
+                let inline = ptr::addr_of_mut!((*block).inline).cast::<Option<Value>>();
+                ptr::copy_nonoverlapping(defaults.as_ptr(), inline, N);
+                for (k, v) in defaults.iter().enumerate() {
+                    if !owns_nothing(v) {
+                        inline.add(k).write(v.clone());
+                    }
+                }
+                ptr::addr_of_mut!((*block).data).write(ObjectData {
+                    handle,
+                    class,
+                    slots: Slots::new(NonNull::new_unchecked(inline), N),
+                    dynamic: RefCell::new(None),
+                    internal: RefCell::new(None),
+                    flags: Cell::new(0),
+                    unset_bits: Cell::new(0),
+                    lazy: RefCell::new(None),
+                });
+            })
+        };
+        s.objects[handle as usize - 1] = Some(o.downgrade());
+        o
+    })
 }
 
 /// Where the slot values of a new object come from.

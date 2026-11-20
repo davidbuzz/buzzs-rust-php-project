@@ -85,6 +85,11 @@ pub(crate) static OBSERVER_ON: AtomicBool = AtomicBool::new(false);
 /// `plan_call`'s marker for a callee `return` of `Operand::Unused`
 /// (`return;`): the trace stores a null into the caller's result slot.
 const KNULL_ARG: u8 = 5;
+/// The return of an inlined call that ends in a builtin call of one int
+/// argument ([`CallPlan::ret`]): `off` is the argument's scratch slot and
+/// `lit` the builtin's id (`special::quick_id`); [`jit_quick_tail`] makes
+/// the call and stores its result.
+const KQUICK: u8 = 8;
 /// `plan_call`'s marker for a caller-side `Send` that can be left out:
 /// the callee's inlined body never mentions that untyped parameter (or
 /// the caller passed more arguments than the callee declares, and the
@@ -568,6 +573,22 @@ const C_JMPNZT: u16 = 45;
 /// row's index in it in `JitMeta.slot`), and the row copies a scalar or an
 /// array out of it.
 const C_GREAD: u16 = 46;
+/// `$cv = v` with the result kept (`AssignR`), of an int: from a variable,
+/// a temporary (consumed) or a literal into the variable and into the
+/// result temporary.
+const C_ASSIGN_R: u16 = 47;
+/// `++$cv`, `$cv++`, `--$cv`, `$cv--` with the result kept (`PreIncT` and
+/// its kin), of an int: `JitMeta.inc` the direction, `JitMeta.arr` whether
+/// the result is the value before the step.
+const C_INCDEC_T: u16 = 48;
+/// A comparison and its jump ([`J_CMP`]'s rows) with an operand the plan
+/// knows to be no int for sure: decided by the operands' tags where it
+/// runs ([`Emitter::emit_cmps`]).
+const J_CMPS: u16 = 49;
+/// `$cv op= v` ([`J_ASSIGN_OP`]'s rows, `+`, `-` and `*`) with an operand
+/// the plan knows to be no int for sure: decided by the operands' tags
+/// where it runs ([`Emitter::emit_assign_ops`]).
+const J_ASSIGN_OPS: u16 = 50;
 
 /// Whether rows of class `c` may jump (their target is the row's `c`
 /// field, as for every tape instruction that jumps).
@@ -576,6 +597,7 @@ fn is_jump_class(c: u16) -> bool {
         c,
         C_JMP
             | J_CMP
+            | J_CMPS
             | J_INCCMP
             | C_JMPZ
             | C_JMPNZ
@@ -599,7 +621,8 @@ const NO_DST: u32 = u32::MAX;
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
 pub(crate) fn c_step(c: u16) -> usize {
-    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D || c == C_ABS || c == C_ROWBR {
+    if c == J_CMP || c == J_CMPS || c == J_ARITH_CV || c == J_NUMBIN_D || c == C_ABS || c == C_ROWBR
+    {
         2
     } else if c == J_INCCMP {
         3
@@ -898,7 +921,7 @@ impl CallPlan {
         // The returned slot is one of this call's scratch slots as well:
         // left unbased, every call after the region's first would copy
         // its result out of the *first* call's slice.
-        if self.ret.kind == KR {
+        if self.ret.kind == KR || self.ret.kind == KQUICK {
             self.ret.off = self.ret.off.wrapping_add(base);
         }
     }
@@ -1161,6 +1184,33 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
                 ..JitMeta::default()
             }
         }
+        // `$cv = v` with the result kept: the source's kind by the row's
+        // `k` (a literal is resolved below: an int, or the row is the
+        // interpreter's).
+        TOp::AssignR => {
+            use super::scalar::{MOVE_CV, MOVE_LIT, MOVE_TMP};
+            let kb = match inst.k {
+                MOVE_CV => KC,
+                MOVE_TMP => KT,
+                MOVE_LIT => KL,
+                _ => return None,
+            };
+            JitMeta {
+                class: C_ASSIGN_R,
+                ka: KC,
+                kb,
+                consume: inst.k == MOVE_TMP,
+                ..JitMeta::default()
+            }
+        }
+        TOp::PreIncT | TOp::PostIncT | TOp::PreDecT | TOp::PostDecT => JitMeta {
+            class: C_INCDEC_T,
+            ka: KC,
+            kb: KI,
+            inc: matches!(inst.op, TOp::PreIncT | TOp::PostIncT),
+            arr: matches!(inst.op, TOp::PostIncT | TOp::PostDecT),
+            ..JitMeta::default()
+        },
         op => op.jit_meta()?,
     };
     // The arithmetic destination's kind (the family tables leave it the
@@ -1418,6 +1468,44 @@ fn cv_holds_array(st: &St, off: u32) -> bool {
     !st.cvs.is_null() && unsafe { *st.cvs.add(off as usize) } == TAG_ARRAY
 }
 
+/// What the compiled variable at byte offset `off` of the frame a plan is
+/// made in holds right now; `None` where there is no frame (a callee's
+/// body is planned before it runs) or the variable is undefined.
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+fn cv_now(st: &St, off: u32) -> Option<&php_runtime::Value> {
+    if st.cvs.is_null() {
+        return None;
+    }
+    // SAFETY: `off` is a variable offset the tape validated for the frame
+    // `st` describes, whose slots are alive while the plan is made.
+    unsafe { (*st.cvs.add(off as usize).cast::<crate::vm::CvSlot>()).get() }
+}
+
+/// Whether operand (`kind`, `off`) of a comparison is a compiled variable
+/// that holds a float right now: the row is then decided by its operands'
+/// tags ([`J_CMPS`]), not as two ints.
+fn cv_holds_float(st: &St, kind: u8, off: u32) -> bool {
+    kind == KC && matches!(cv_now(st, off), Some(php_runtime::Value::Float(_)))
+}
+
+/// Whether the element rows of the compiled variable at `off` take the
+/// wider helpers ([`jit_dim_get_wide`], [`jit_dim_set_wide`]): it holds a
+/// reference right now (a by-reference parameter, a `global`: the array
+/// is behind it), or an array whose first element is a float, a bool or
+/// null (a list of ints keeps the int helpers, whose results the trace
+/// computes with unchecked).
+fn dim_wide_now(st: &St, off: u32) -> bool {
+    use php_runtime::Value;
+    match cv_now(st, off) {
+        Some(Value::Reference(_)) => true,
+        Some(Value::Array(a)) => matches!(
+            a.values().next(),
+            Some(Value::Float(_) | Value::Bool(_) | Value::Null)
+        ),
+        _ => false,
+    }
+}
+
 /// The int a `KL` operand names, read from the frame's literal table
 /// (the tape validated the offset). `None` when it is not an int.
 fn resolved_lit(st: &St, off: u32) -> Option<i64> {
@@ -1637,6 +1725,27 @@ fn add_class_guards(
         // keeps its `Int` tag and only its payload is stored.
         J_NUMBIN_D => both(m, guards) && keep_int(inst.d, guards),
         C_NOP => true,
+        // `$cv = v` with the result kept: the source is read as an int,
+        // the variable and the result temporary are fully stored.
+        C_ASSIGN_R => {
+            let Some(cb) = read(m.kb, inst.b, guards) else {
+                return false;
+            };
+            m.cb = cb;
+            add_slot(guards, KC, inst.a, false) && fresh_dst(inst.c, guards)
+        }
+        // `++`/`--` with the result kept: the variable stays an int, the
+        // result temporary is fully stored.
+        C_INCDEC_T => keep_int(inst.a, guards) && fresh_dst(inst.c, guards),
+        // A comparison or an `op=` decided by its operands' tags: nothing
+        // to guard. (A temporary the region left a bool, a null or a value
+        // to release in is no number: the row would leave on every turn.)
+        J_CMPS | J_ASSIGN_OPS => {
+            let number = |kind: u8, off: u32| {
+                kind != KT || !matches!(ts.kind(off), TmpKind::Bool | TmpKind::Null | TmpKind::Val)
+            };
+            number(m.ka, inst.a) && number(m.kb, inst.b)
+        }
         // `abs(x)`: the operand is read as an int; a result temporary is
         // fully stored.
         C_ABS => {
@@ -2598,6 +2707,13 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
                 }
                 (KC, inst.d << SLOT_SHIFT, 2)
             };
+            // An offset that may be an int, into what takes the wider
+            // helper right now.
+            let str_key = dk == DIM_LIT
+                && matches!(
+                    code.literals.get(inst.b as usize),
+                    Some(php_runtime::Value::Str(_))
+                );
             let m = JitMeta {
                 class: C_DIMR,
                 sb,
@@ -2608,6 +2724,7 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
                 db,
                 // `FetchDimSC`: a string literal that is no integer key.
                 inc: inst.op == TOp::FetchDimSC,
+                arr: !str_key && dim_wide_now(st, sb),
                 ..JitMeta::default()
             };
             Some((C_DIMR, m, step))
@@ -2646,6 +2763,9 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
                 lit_c,
                 consume,
                 arith,
+                // A plain write into what takes the wider helper right
+                // now, or of a variable that holds a float.
+                arr: class == C_DIMW && (dim_wide_now(st, sb) || cv_holds_float(st, sc, sw)),
                 ..JitMeta::default()
             };
             Some((class, m, 1))
@@ -2748,6 +2868,154 @@ unsafe extern "C" fn jit_dim_get(
             }
         }
         0
+    }
+}
+
+/// The builtin call that ends an inlined body ([`KQUICK`]): the result of
+/// builtin `id` (`special::quick_eval`) for the int in the scratch slot
+/// `arg` (its payload: the rows of an inlined body store no tag there),
+/// into the caller's result temporary `dst` when that holds nothing
+/// whose release could do more than free a string. Returns 0 having stored
+/// it; 1, nothing changed, when the builtin needs its handler for this
+/// argument (the interpreter then makes the whole call).
+///
+/// # Safety
+/// `arg` is a slot of the trace's scratch buffer, `dst` a temporary of the
+/// running frame.
+#[allow(clippy::cast_ptr_alignment)] // slots: 16-byte values, 8-aligned
+unsafe extern "C" fn jit_quick_tail(
+    arg: *const u8,
+    dst: *mut u8,
+    _unused: *const u8,
+    id: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract.
+    unsafe {
+        // An int the plan proved (a body row's result): only its payload
+        // is stored in a scratch slot, no tag.
+        let i = std::ptr::read_unaligned(arg.add(PAYLOAD as usize).cast::<i64>());
+        #[allow(clippy::cast_possible_truncation)] // an id is a byte
+        let Some(v) = crate::special::quick_eval(id as u8, &Value::Int(i)) else {
+            return 1;
+        };
+        let slot = &mut *dst.cast::<Value>();
+        if !slot.is_plain() || !matches!(v, Value::Int(_) | Value::Float(_)) {
+            return 1;
+        }
+        match std::mem::replace(slot, v) {
+            old @ Value::Str(_) => drop(old),
+            old => std::mem::forget(old),
+        }
+        0
+    }
+}
+
+/// [`jit_dim_get_wide`]'s and [`jit_dim_set_wide`]'s `word`: the array
+/// variable's index, and for a read whether the destination is a compiled
+/// variable (not a temporary).
+const DIM_WIDE_CV: u32 = (1 << 31) - 1;
+const DIM_WIDE_TO_CV: u32 = 1 << 31;
+
+/// `C_DIMR`'s helper for a variable the plan found holding a reference, or
+/// an array of floats (`JitMeta.arr`): `$dst = $cv[$idx]` for an `Int`
+/// offset, the array held directly or through a reference
+/// (`dims::int_elem_copy`, the tape's own second step: a list by position,
+/// a hash by key), when the element is null, a bool, an int or a float and
+/// the destination holds nothing whose release could do more than free a
+/// string ([`jit_dim_get`]'s test). Returns 0 having stored the element;
+/// 1, nothing changed, for anything else.
+///
+/// # Safety
+/// `frame` is the running frame, `idx` a slot of it or a literal of its op
+/// array, `dst` a temporary of it, or (`word` has [`DIM_WIDE_TO_CV`]) a
+/// compiled variable; `word`'s low bits name one of its compiled
+/// variables.
+#[allow(clippy::cast_ptr_alignment)] // slots: 16-byte values, 8-aligned
+unsafe extern "C" fn jit_dim_get_wide(
+    frame: *mut crate::vm::Frame,
+    idx: *const u8,
+    dst: *mut u8,
+    word: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract; the element is copied out (and the
+    // frame no longer looked at) before the destination is written.
+    unsafe {
+        let Some(i) = slot_int(idx) else {
+            return 1;
+        };
+        let Some(v) = super::dims::int_elem_copy(&*frame, word & DIM_WIDE_CV, i) else {
+            return 1;
+        };
+        if !matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            return 1;
+        }
+        if word & DIM_WIDE_TO_CV != 0 {
+            let slot = &*dst.cast::<crate::vm::CvSlot>();
+            if matches!(
+                slot.get(),
+                Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
+            ) {
+                return 1;
+            }
+            match slot.set(Some(v)) {
+                old @ Some(Value::Str(_)) => drop(old),
+                old => std::mem::forget(old),
+            }
+        } else {
+            let slot = &mut *dst.cast::<Value>();
+            if !slot.is_plain() {
+                return 1;
+            }
+            match std::mem::replace(slot, v) {
+                old @ Value::Str(_) => drop(old),
+                old => std::mem::forget(old),
+            }
+        }
+        0
+    }
+}
+
+/// `C_DIMW`'s helper for such a variable, or for a value that is no int:
+/// `$cv[$idx] = $val` (`idx` null: `$cv[] = $val`) for an `Int` offset and
+/// a value that is null, a bool, an int or a float, the array held alone,
+/// directly or through a reference (`dims::write_wide`, the tape's own
+/// second step: over a plain element or as a new one). Returns 0 having
+/// written; 1, nothing changed, for anything else.
+///
+/// # Safety
+/// As [`jit_dim_get_wide`]: `idx` (when not null) and `val` slots or
+/// literals.
+#[allow(clippy::cast_ptr_alignment)] // slots: 16-byte values, 8-aligned
+unsafe extern "C" fn jit_dim_set_wide(
+    frame: *mut crate::vm::Frame,
+    idx: *const u8,
+    val: *const u8,
+    word: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract; the operands are read before the
+    // frame is borrowed for the write. A scalar's bytes are its copy (a
+    // variable's `Some` has its value's layout).
+    unsafe {
+        let v = match *val {
+            TAG_NULL | TAG_BOOL | TAG_INT | TAG_FLOAT => std::ptr::read(val.cast::<Value>()),
+            _ => return 1,
+        };
+        let key = if idx.is_null() {
+            None
+        } else {
+            match slot_int(idx) {
+                Some(i) => Some(i),
+                None => return 1,
+            }
+        };
+        // (A value given back is a scalar: nothing to release.)
+        u32::from(super::dims::write_wide(&mut *frame, word & DIM_WIDE_CV, key, v).is_err())
     }
 }
 
@@ -3221,7 +3489,28 @@ fn plan(
         } else {
             // No code of the trace's own: the tape's handler, if the row
             // has a thin one.
-            if let Some((c, m)) = classify(st, &tape[i]) {
+            if let Some((c, mut m)) = classify(st, &tape[i]) {
+                // A comparison of a variable that holds a float right now
+                // (not `===`: an int and a float differ there by type;
+                // not a loop's closing jump, which `emit` takes for an
+                // int row).
+                let c = if c == J_CMP
+                    && tape[i].k & crate::opcode::cmp_outcome::IDENTITY == 0
+                    && jump_target(tape, i) > i
+                    && (cv_holds_float(st, m.ka, tape[i].a) || cv_holds_float(st, m.kb, tape[i].b))
+                {
+                    m.class = J_CMPS;
+                    J_CMPS
+                } else if c == J_ASSIGN_OP
+                    && m.arith <= 2
+                    && (cv_holds_float(st, KC, tape[i].a) || cv_holds_float(st, m.kb, tape[i].b))
+                {
+                    // `$cv op= v` of a float, as the comparison.
+                    m.class = J_ASSIGN_OPS;
+                    J_ASSIGN_OPS
+                } else {
+                    c
+                };
                 (c, m, c_step(c), None)
             } else if let Some((c, m, step)) = plan_row(code, i, &tape[i]) {
                 (c, m, step, None)
@@ -3274,7 +3563,7 @@ fn plan(
         if c == 0 {
             continue;
         }
-        if (c == J_CMP || c == J_INCCMP) && jcc_for(meta[j].mask).is_none() {
+        if (c == J_CMP || c == J_CMPS || c == J_INCCMP) && jcc_for(meta[j].mask).is_none() {
             rej!(format!("unknown cmp mask {}", meta[j].mask));
         }
         if is_jump_class(c) {
@@ -3425,26 +3714,74 @@ fn plan(
                 // the callee returned, or with the `Null` of a bare
                 // `return;` - which is no int for the rows after it
                 // (`$x = f();` must store a null, not `int(0)`).
-                let kind = if cp.ret.kind == KNULL_ARG {
-                    TmpKind::Null
-                } else {
-                    TmpKind::Int
+                let kind = match cp.ret.kind {
+                    KNULL_ARG => TmpKind::Null,
+                    // What the builtin returned: a float or an int.
+                    KQUICK => TmpKind::Scalar,
+                    _ => TmpKind::Int,
                 };
                 ts.set(d, kind);
             }
             continue;
         }
+        // A comparison with an operand that is no int as far as the plan
+        // knows - a temporary an element read left a scalar in, a variable
+        // the region stores one in - is decided by its operands' tags (as
+        // in the first pass: not `===`, not a backward jump).
+        if class[j] == J_CMP {
+            let inst = &tape[head + j];
+            let scalar = |kind: u8, off: u32| match kind {
+                KT => ts.kind(off) == TmpKind::Scalar,
+                KC => cvbools.contains(&off),
+                _ => false,
+            };
+            if inst.k & crate::opcode::cmp_outcome::IDENTITY == 0
+                && jump_target(tape, head + j) > head + j
+                && (scalar(meta[j].ka, inst.a) || scalar(meta[j].kb, inst.b))
+            {
+                class[j] = J_CMPS;
+                meta[j].class = J_CMPS;
+            }
+        }
+        // `$cv op= v` likewise, with such an operand.
+        if class[j] == J_ASSIGN_OP && meta[j].arith <= 2 {
+            let inst = &tape[head + j];
+            let scalar = match meta[j].kb {
+                KT => ts.kind(inst.b) == TmpKind::Scalar,
+                KC => cvbools.contains(&inst.b),
+                _ => false,
+            };
+            if scalar || cvbools.contains(&inst.a) {
+                class[j] = J_ASSIGN_OPS;
+                meta[j].class = J_ASSIGN_OPS;
+            }
+        }
         if matches!(class[j], C_DIMR | C_DIMW | C_DIMOP) {
-            // An offset or a value the region itself left a `Bool` or a
-            // `Null` in is no `Int`: the helper would decline on every
-            // iteration, so the region is not worth compiling.
-            let m = &meta[j];
             let non_int = |kind: u8, off: u32| match kind {
                 KT => matches!(ts.kind(off), TmpKind::Bool | TmpKind::Null),
                 KC => cvbools.contains(&off),
                 _ => false,
             };
-            if non_int(m.kb, m.slot) || (class[j] != C_DIMR && non_int(m.sc, m.sw)) {
+            // A write of a value that is a scalar of unknown kind (what
+            // an element read of the wider kind left, in a temporary or
+            // in a variable) takes the wider helper too.
+            if class[j] == C_DIMW
+                && !meta[j].arr
+                && (non_int(meta[j].sc, meta[j].sw)
+                    || (meta[j].sc == KT && ts.kind(meta[j].sw) == TmpKind::Scalar))
+            {
+                meta[j].arr = true;
+            }
+            // (The wider helpers take the frame.)
+            if meta[j].arr {
+                frame = true;
+            }
+            // An offset or a value the region itself left a `Bool` or a
+            // `Null` in is no `Int`: the helper would decline on every
+            // iteration, so the region is not worth compiling. (The wider
+            // write stores any scalar.)
+            let m = &meta[j];
+            if non_int(m.kb, m.slot) || (class[j] != C_DIMR && !m.arr && non_int(m.sc, m.sw)) {
                 rej!(format!("array row at {} has a non-int operand", head + j));
             }
         }
@@ -3560,6 +3897,20 @@ fn plan(
             // An array read stored an `Int` into its destination (or left
             // the trace): a temporary is a known `Int`, a variable is one
             // again whatever an earlier row left there.
+            // (The wider read stores a scalar of any kind: no int for
+            // the rows after it, in a temporary or in a variable.)
+            C_DIMR if meta[j].arr => {
+                let d = meta[j].db;
+                if meta[j].kc == KT {
+                    ts.set(d, TmpKind::Scalar);
+                } else {
+                    for list in [&mut cvbools, &mut ever_nonint] {
+                        if !list.contains(&d) {
+                            list.push(d);
+                        }
+                    }
+                }
+            }
             C_DIMR => {
                 let d = meta[j].db;
                 if meta[j].kc == KT {
@@ -3567,6 +3918,19 @@ fn plan(
                 } else {
                     cvbools.retain(|c| c != &d);
                 }
+            }
+            // `$cv = v` and `++`/`--` with the result kept: the result is
+            // an `Int`; a consumed source temporary is left null.
+            C_ASSIGN_R => {
+                let inst = &tape[head + j];
+                if meta[j].consume {
+                    ts.set(inst.b, TmpKind::Unknown);
+                }
+                ts.set(inst.c, TmpKind::Int);
+            }
+            C_INCDEC_T => {
+                let c = tape[head + j].c;
+                ts.set(c, TmpKind::Int);
             }
             // An array write moved a consumed value temporary out (the
             // row nulls it, as the interpreted one does).
@@ -3653,7 +4017,8 @@ fn plan(
         // an int from a temporary through `AssignT`) ends its `Bool`/
         // `Null` state for the rows after it.
         match class[j] {
-            C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | J_INCCMP | J_ASSIGN_OP | J_NUMBIN_C => {
+            C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | J_INCCMP | J_ASSIGN_OP | J_NUMBIN_C
+            | C_ASSIGN_R => {
                 let a = tape[head + j].a;
                 cvbools.retain(|c| c != &a);
             }
@@ -3688,7 +4053,7 @@ fn plan(
             // The rows that jump on a temporary or through a handler close
             // no loop (a nested loop's head polls for its closing row,
             // which `emit` only finds among the plain jumps and compares).
-            if y <= head + j && matches!(class[j], C_ROWBR | C_JMPZT | C_JMPNZT) {
+            if y <= head + j && matches!(class[j], C_ROWBR | C_JMPZT | C_JMPNZT | J_CMPS) {
                 rej!(format!("a backward jump on a temporary at {}", head + j));
             }
             if y > head + j && y <= close {
@@ -3762,6 +4127,44 @@ fn plan(
         version_guard,
         version: FUNC_TABLE_VERSION.load(Ordering::Relaxed),
     })
+}
+
+/// The builtin call that ends an inlined body: the `FramelessQ` row `row`
+/// at op `bc` of `code` when it is a call of one temporary to a builtin
+/// whose result for an int is a float or an int and needs no handler
+/// (`special::quick_eval`: the math functions, `abs()`), the call site's
+/// cache holds that builtin (what `strs::frameless_quick` checks on every
+/// call; the trace's function-table guard keeps it so), and the op after
+/// the call returns its result. Gives the builtin's id, the argument's
+/// temporary and the `Return`'s operand.
+fn quick_tail(code: &crate::opcode::OpArray, bc: usize, row: &Inst) -> Option<(u8, u32, Operand)> {
+    use super::strs::{Q_CACHE_SHIFT, Q_CLASS_SHIFT, Q_ONE_TMP};
+    let Op::FramelessICall(fc) = code.ops.get(bc)? else {
+        return None;
+    };
+    if row.k != Q_ONE_TMP || row.e > crate::special::QUICK_ABS {
+        return None;
+    }
+    let p = row.p as u64;
+    {
+        let cache = code.fcall_cache.try_borrow().ok()?;
+        let slot = usize::try_from(p >> Q_CACHE_SHIFT).ok()?;
+        let entry = cache.get(slot)?.as_ref()?;
+        let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+            return None;
+        };
+        let class = u32::try_from((p >> Q_CLASS_SHIFT) & 31).ok()?;
+        if !crate::special::frameless_class_is(b.flags, class) {
+            return None;
+        }
+    }
+    let dst = u32::try_from(p & 0xffff_ffff).ok()?;
+    match code.ops.get(bc + 1 + fc.tail())? {
+        Op::Return {
+            val: val @ Operand::Tmp(t),
+        } if t.checked_shl(SLOT_SHIFT) == Some(dst) => Some((row.e, row.a, *val)),
+        _ => None,
+    }
 }
 
 /// The whole analysis of the plain user-function call started by the
@@ -4168,6 +4571,9 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let mut metas: Vec<JitMeta> = Vec::new();
     let mut rows: Vec<Inst> = Vec::new();
     let mut bc = uf.plain_first_op(ns);
+    // A builtin call that ends the body: its id and its argument's
+    // temporary (`quick_tail`).
+    let mut quick: Option<(u8, u32)> = None;
     let ret = loop {
         match uf.code.ops.get(bc) {
             Some(Op::Return { val }) => break *val,
@@ -4175,6 +4581,18 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             None => rj!("callee body walk ran off the op array at {bc}"),
         }
         let row = uf.code.tape.get(&uf.code)[bc];
+        // What a fused builtin call left of its `InitFCall` and `Send`.
+        if row.op == TOp::Nop {
+            bc += 1;
+            continue;
+        }
+        if row.op == TOp::FramelessQ {
+            let Some((id, arg, ret)) = quick_tail(&uf.code, bc, &row) else {
+                rj!("callee row {bc}: a builtin call that does not end the body");
+            };
+            quick = Some((id, arg));
+            break ret;
+        }
         let is_prop_row = matches!(
             row.op,
             TOp::FetchObjProp
@@ -4236,9 +4654,20 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             Operand::Unused => rt.is_void(),
             _ => !rt.is_void() && !rt.is_never() && (rt.is_mixed() || rt.mask & mask::LONG != 0),
         };
-        if !passes {
+        // (A builtin's result is a float or an int: only an undeclared
+        // return hands back either as it is.)
+        if !passes || quick.is_some() {
             rj!("callee's declared return type would coerce or reject the result");
         }
+    }
+    // The builtin may decline its argument, which leaves the whole call
+    // to the interpreter: nothing of it may have been written by then.
+    if quick.is_some()
+        && classes
+            .iter()
+            .any(|c| matches!(*c, C_PROPW | C_PROPINC | C_PROPOPA))
+    {
+        rj!("a builtin call ends a body that writes a property");
     }
 
     // The scratch slice: the callee's compiled variables, then its
@@ -4478,6 +4907,20 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
 
     // The `Return` operand, as the caller's `DoCall` result.
     let ret = match ret {
+        // The result of the builtin call that ends the body: its
+        // argument, a callee temporary the body left an int in.
+        _ if quick.is_some() => {
+            let (id, arg) = quick?;
+            if !scratch_idx(KT, arg).is_some_and(|i| known[i]) {
+                rj!("the builtin's argument is not a known int");
+            }
+            Arg {
+                kind: KQUICK,
+                off: arg + (u32::try_from(ncvs).ok()? << 4),
+                lit: i64::from(id),
+                chk: false,
+            }
+        }
         Operand::Unused => Arg {
             kind: KNULL_ARG,
             off: 0,
@@ -5205,6 +5648,8 @@ impl Emitter {
                 let cc = jcc_for(m.mask).unwrap_or(0x85);
                 self.jcc(cc, self.jump_tgt(j));
             }
+            J_CMPS => self.emit_cmps(m, &inst, i, j),
+            J_ASSIGN_OPS => self.emit_assign_ops(m, &inst, i),
             J_INCCMP => {
                 // `b` is read *before* the increment (it may be the
                 // same slot as `a`).
@@ -5253,6 +5698,36 @@ impl Emitter {
                 self.store_tag_base(m.ka, inst.a, TAG_INT);
             }
             C_NOP => {}
+            // `$cv = v` with the result kept: the int into the variable
+            // and into the result temporary, a consumed source temporary
+            // left null first (it may be the result's slot).
+            C_ASSIGN_R => {
+                self.chk_int(m.cb, inst.b, jo);
+                self.to_rax(m.kb, inst.b, m.lit_b);
+                if m.consume {
+                    self.store_imm_base(KT, inst.b, 0);
+                    self.store_tag_base(KT, inst.b, TAG_NULL);
+                }
+                self.store_int(KC, inst.a);
+                self.store_tag_base(KC, inst.a, TAG_INT);
+                self.store_int(KT, inst.c);
+                self.store_tag_base(KT, inst.c, TAG_INT);
+            }
+            // `++`/`--` with the result kept: the value after the step, or
+            // (`arr`) the one before it (the step undone in the register),
+            // into the result temporary; an overflow leaves before any
+            // store.
+            C_INCDEC_T => {
+                self.load_int(KC, inst.a);
+                self.put(&[REX_W, 0x83, if m.inc { 0xC0 } else { 0xE8 }, 0x01]);
+                self.jcc(0x80, jo); // jo: overflow
+                self.store_int(KC, inst.a);
+                if m.arr {
+                    self.put(&[REX_W, 0x83, if m.inc { 0xE8 } else { 0xC0 }, 0x01]);
+                }
+                self.store_int(KT, inst.c);
+                self.store_tag_base(KT, inst.c, TAG_INT);
+            }
             // `abs(x)`: nothing to do for an unused result (the operand is
             // an int, and `abs` of one has no effect); else negate a
             // negative value, leaving `PHP_INT_MIN` (the one `neg`
@@ -5536,6 +6011,21 @@ impl Emitter {
                 C_PROPOPA => self.emit_propopa(m, side),
                 _ => self.emit_op(c, m, &cp.rows[k], Target::Disarm(cp.callove)),
             }
+        }
+        // A body that ends in a builtin call: made by its helper, which
+        // stores the result; a call it declines is the interpreter's
+        // whole. (Nothing to do for an unused result: these builtins only
+        // compute.)
+        if cp.ret.kind == KQUICK {
+            if let Some(d) = cp.dst {
+                self.emit_helper(
+                    jit_quick_tail as *const () as usize,
+                    [HArg::Slot(KR, cp.ret.off), HArg::Slot(KT, d), HArg::Null],
+                    u32::try_from(cp.ret.lit).unwrap_or(u32::MAX),
+                    Target::Side(cp.callove),
+                );
+            }
+            return;
         }
         if let Some(d) = cp.dst {
             match cp.ret.kind {
@@ -6429,6 +6919,172 @@ impl Emitter {
         }
     }
 
+    /// `movsd xmm<x>, [slot payload]` (`F2 0F 10 /r`, disp32): the double
+    /// of a slot whose tag was just checked `Float`.
+    fn movsd_slot(&mut self, x: u8, kind: u8, off: u32) {
+        self.put(&[0xF2, 0x0F, 0x10, Self::rm3(kind, x)]);
+        self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
+    }
+
+    /// `cvtsi2sd xmm<x>, qword [slot payload]` (`F2 REX.W 0F 2A /r`,
+    /// disp32): the int of a slot whose tag was just checked `Int`, as a
+    /// double (`(double) lval`, as `zend_compare` of a long and a double).
+    fn cvtsi2sd_slot(&mut self, x: u8, kind: u8, off: u32) {
+        self.put(&[0xF2, REX_W, 0x0F, 0x2A, Self::rm3(kind, x)]);
+        self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
+    }
+
+    /// `cvtsi2sd xmm<x>, rax`.
+    fn cvtsi2sd_rax(&mut self, x: u8) {
+        self.put(&[0xF2, REX_W, 0x0F, 0x2A, 0xC0 | (x << 3)]);
+    }
+
+    /// Emit `$cv op= v` (`+`, `-`, `*`) for operands the plan does not
+    /// know to be ints ([`J_ASSIGN_OPS`]): by their tags, two ints as
+    /// [`J_ASSIGN_OP`] computes them (an overflow leaves before the
+    /// store); a float variable with a float or an int as doubles, the
+    /// result stored as the variable's payload (its tag stays). An int
+    /// variable with a float operand, and any other operand, leave the row
+    /// to the interpreter.
+    fn emit_assign_ops(&mut self, m: JitMeta, inst: &Inst, i: usize) {
+        let side = Target::Side(i);
+        let slot = |k: u8| k == KC || k == KT;
+        let (a_other, done) = (self.synth_label(), self.synth_label());
+        // Two ints.
+        self.cmpb(KC, inst.a, TAG_INT);
+        self.jcc(0x85, Target::Label(a_other)); // jne
+        if slot(m.kb) {
+            self.cmpb(m.kb, inst.b, TAG_INT);
+            self.jcc(0x85, side); // jne: the variable becomes a float
+        }
+        self.load_int(KC, inst.a);
+        self.to_r9(m.kb, inst.b, m.lit_b);
+        match m.arith {
+            0 => self.put(&[REX_W | REX_R, 0x01, 0xC8]), // add rax, r9
+            1 => self.put(&[REX_W | REX_R, 0x29, 0xC8]), // sub rax, r9
+            _ => self.put(&[REX_W | REX_B, 0x0F, 0xAF, 0xC1]), // imul rax, r9
+        }
+        self.jcc(0x80, side); // jo: overflow, before the store
+        self.store_int(KC, inst.a);
+        self.jmp(Target::Label(done));
+        // A float variable with a float or an int.
+        self.set_label(a_other);
+        self.cmpb(KC, inst.a, TAG_FLOAT);
+        self.jcc(0x85, side); // jne
+        self.movsd_slot(0, KC, inst.a);
+        if slot(m.kb) {
+            let (b_int, op) = (self.synth_label(), self.synth_label());
+            self.cmpb(m.kb, inst.b, TAG_FLOAT);
+            self.jcc(0x85, Target::Label(b_int)); // jne
+            self.movsd_slot(1, m.kb, inst.b);
+            self.jmp(Target::Label(op));
+            self.set_label(b_int);
+            self.cmpb(m.kb, inst.b, TAG_INT);
+            self.jcc(0x85, side); // jne
+            self.cvtsi2sd_slot(1, m.kb, inst.b);
+            self.set_label(op);
+        } else {
+            self.to_rax(m.kb, inst.b, m.lit_b);
+            self.cvtsi2sd_rax(1);
+        }
+        // addsd / subsd / mulsd xmm0, xmm1 (`F2 0F 58 / 5C / 59 /r`).
+        self.put(&[
+            0xF2,
+            0x0F,
+            [0x58, 0x5C, 0x59][usize::from(m.arith.min(2))],
+            0xC1,
+        ]);
+        // movsd [variable's payload], xmm0 (`F2 0F 11 /r`).
+        self.put(&[0xF2, 0x0F, 0x11, Self::rm3(KC, 0)]);
+        self.put(&inst.a.wrapping_add(PAYLOAD).to_le_bytes());
+        self.set_label(done);
+    }
+
+    /// Emit a comparison and its jump for operands the plan does not know
+    /// to be ints ([`J_CMPS`]): by their tags, two ints are compared as
+    /// ints (the row's int test, `m.mask`); a float with a float or an int
+    /// as doubles, the jump taken when the outcome is in the row's mask
+    /// (`inst.k`, as `hot::jump_of` decides it: a NaN operand is
+    /// unordered); any other operand leaves the row to the interpreter.
+    fn emit_cmps(&mut self, m: JitMeta, inst: &Inst, i: usize, j: usize) {
+        use crate::opcode::cmp_outcome::UNORDERED;
+        let side = Target::Side(i);
+        let tgt = self.jump_tgt(j);
+        let slot = |k: u8| k == KC || k == KT;
+        let (a_other, b_other) = (self.synth_label(), self.synth_label());
+        let (floats, done) = (self.synth_label(), self.synth_label());
+        // Two ints.
+        if slot(m.ka) {
+            self.cmpb(m.ka, inst.a, TAG_INT);
+            self.jcc(0x85, Target::Label(a_other)); // jne
+        }
+        if slot(m.kb) {
+            self.cmpb(m.kb, inst.b, TAG_INT);
+            self.jcc(0x85, Target::Label(b_other)); // jne
+        }
+        self.to_rax(m.ka, inst.a, m.lit_a);
+        self.to_r9(m.kb, inst.b, m.lit_b);
+        self.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
+        if let Some(cc) = jcc_for(m.mask) {
+            self.jcc(cc, tgt);
+        }
+        self.jmp(Target::Label(done));
+        // An int and no int: a float, or the interpreter's.
+        if slot(m.kb) {
+            self.set_label(b_other);
+            self.cmpb(m.kb, inst.b, TAG_FLOAT);
+            self.jcc(0x85, side); // jne
+            if slot(m.ka) {
+                self.cvtsi2sd_slot(0, m.ka, inst.a);
+            } else {
+                self.to_rax(m.ka, inst.a, m.lit_a);
+                self.cvtsi2sd_rax(0);
+            }
+            self.movsd_slot(1, m.kb, inst.b);
+            self.jmp(Target::Label(floats));
+        }
+        // No int and anything: a float with a float or an int.
+        if slot(m.ka) {
+            self.set_label(a_other);
+            self.cmpb(m.ka, inst.a, TAG_FLOAT);
+            self.jcc(0x85, side); // jne
+            self.movsd_slot(0, m.ka, inst.a);
+            if slot(m.kb) {
+                let b_int = self.synth_label();
+                self.cmpb(m.kb, inst.b, TAG_FLOAT);
+                self.jcc(0x85, Target::Label(b_int)); // jne
+                self.movsd_slot(1, m.kb, inst.b);
+                self.jmp(Target::Label(floats));
+                self.set_label(b_int);
+                self.cmpb(m.kb, inst.b, TAG_INT);
+                self.jcc(0x85, side); // jne
+                self.cvtsi2sd_slot(1, m.kb, inst.b);
+            } else {
+                self.to_rax(m.kb, inst.b, m.lit_b);
+                self.cvtsi2sd_rax(1);
+            }
+        }
+        self.set_label(floats);
+        self.put(&[0x66, 0x0F, 0x2E, 0xC1]); // ucomisd xmm0, xmm1
+                                             // Unordered (a NaN): taken only by a mask that names it.
+        if inst.k & UNORDERED != 0 {
+            self.jcc(0x8A, tgt); // jp
+        } else {
+            self.jcc(0x8A, Target::Label(done)); // jp
+        }
+        match inst.k & 7 {
+            1 => self.jcc(0x82, tgt), // jb: less
+            2 => self.jcc(0x84, tgt), // je
+            3 => self.jcc(0x86, tgt), // jbe
+            4 => self.jcc(0x87, tgt), // ja: greater
+            5 => self.jcc(0x85, tgt), // jne
+            6 => self.jcc(0x83, tgt), // jae
+            7 => self.jmp(tgt),
+            _ => {}
+        }
+        self.set_label(done);
+    }
+
     /// The offset operand of an array row as a helper argument: a slot's
     /// address, an int literal's, or null for an append.
     fn dim_arg(m: JitMeta) -> HArg {
@@ -6445,6 +7101,17 @@ impl Emitter {
     /// `Int` element and returns 0; anything else leaves the row to the
     /// interpreter, nothing changed.
     fn emit_dimr(&mut self, m: JitMeta, i: usize) {
+        // A variable holding a reference or an array of floats: the wider
+        // helper, with the frame and the variable's index.
+        if m.arr {
+            self.emit_helper(
+                jit_dim_get_wide as *const () as usize,
+                [HArg::Frame, Self::dim_arg(m), HArg::Slot(m.kc, m.db)],
+                (m.sb >> SLOT_SHIFT) | (u32::from(m.kc == KC) * DIM_WIDE_TO_CV),
+                Target::Side(i),
+            );
+            return;
+        }
         // `$v = $arr['key']` has a helper of its own.
         if m.inc && m.kb == KL && m.kc == KC {
             self.emit_helper(
@@ -6484,12 +7151,22 @@ impl Emitter {
         } else {
             HArg::Slot(m.sc, m.sw)
         };
-        self.emit_helper(
-            helper,
-            [HArg::Slot(KC, m.sb), Self::dim_arg(m), val],
-            word,
-            Target::Side(i),
-        );
+        if m.arr {
+            // (As in `emit_dimr`.)
+            self.emit_helper(
+                jit_dim_set_wide as *const () as usize,
+                [HArg::Frame, Self::dim_arg(m), val],
+                m.sb >> SLOT_SHIFT,
+                Target::Side(i),
+            );
+        } else {
+            self.emit_helper(
+                helper,
+                [HArg::Slot(KC, m.sb), Self::dim_arg(m), val],
+                word,
+                Target::Side(i),
+            );
+        }
         if m.consume {
             self.store_imm_base(KT, m.sw, 0);
             self.store_tag_base(KT, m.sw, TAG_NULL);
@@ -8361,6 +9038,47 @@ mod layout_tests {
         // `cmp byte [rax + d32], 0`: the `empty()` test of a `Bool` slot.
         em.cmpb_rax(0x31, 0);
         assert_eq!(em.code, vec![0x80, 0xB8, 0x31, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    /// The loads of a float comparison ([`Emitter::emit_cmps`]): a double
+    /// from a slot whose tag was checked, an int converted to one, from a
+    /// slot or from `rax`. `F2` comes before `REX.W`; the `ModRM` byte names
+    /// the slot base (`rdi` for a variable, `rsi` for a temporary) and the
+    /// `xmm` register.
+    #[test]
+    fn float_compare_encodings() {
+        let mut em = emitter();
+        // movsd xmm0, [rdi + 0x18]
+        em.movsd_slot(0, KC, 0x10);
+        assert_eq!(
+            em.code,
+            vec![0xF2, 0x0F, 0x10, 0x87, 0x18, 0x00, 0x00, 0x00]
+        );
+        em.code.clear();
+        // movsd xmm1, [rsi + 0x28]
+        em.movsd_slot(1, KT, 0x20);
+        assert_eq!(
+            em.code,
+            vec![0xF2, 0x0F, 0x10, 0x8E, 0x28, 0x00, 0x00, 0x00]
+        );
+        em.code.clear();
+        // cvtsi2sd xmm0, qword [rdi + 0x18]
+        em.cvtsi2sd_slot(0, KC, 0x10);
+        assert_eq!(
+            em.code,
+            vec![0xF2, 0x48, 0x0F, 0x2A, 0x87, 0x18, 0x00, 0x00, 0x00]
+        );
+        em.code.clear();
+        // cvtsi2sd xmm1, qword [rsi + 0x28]
+        em.cvtsi2sd_slot(1, KT, 0x20);
+        assert_eq!(
+            em.code,
+            vec![0xF2, 0x48, 0x0F, 0x2A, 0x8E, 0x28, 0x00, 0x00, 0x00]
+        );
+        em.code.clear();
+        // cvtsi2sd xmm1, rax
+        em.cvtsi2sd_rax(1);
+        assert_eq!(em.code, vec![0xF2, 0x48, 0x0F, 0x2A, 0xC8]);
     }
 
     fn emitter() -> Emitter {

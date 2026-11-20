@@ -41,13 +41,13 @@ const Q_LIT: u8 = 2;
 /// `k` of a call of one compiled variable, of one temporary and of one
 /// literal.
 const Q_ONE_CV: u8 = (1 << 6) | Q_CV;
-const Q_ONE_TMP: u8 = (1 << 6) | Q_TMP;
+pub(super) const Q_ONE_TMP: u8 = (1 << 6) | Q_TMP;
 const Q_ONE_LIT: u8 = (1 << 6) | Q_LIT;
 /// Where a frameless call instruction's `p` keeps the function's frameless
 /// class (five bits; the result's offset is below it, the call site's cache
 /// slot above).
-const Q_CLASS_SHIFT: u32 = 32;
-const Q_CACHE_SHIFT: u32 = 37;
+pub(super) const Q_CLASS_SHIFT: u32 = 32;
+pub(super) const Q_CACHE_SHIFT: u32 = 37;
 
 /// The specialised instruction of the op at `i` when this family has one.
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {

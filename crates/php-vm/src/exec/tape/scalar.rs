@@ -472,9 +472,11 @@ pub(super) unsafe fn coalesce_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> 
 /// `$cv = val` (`TOp::AssignT`, `TOp::AssignC`) when the value or the
 /// variable's old value is not a scalar. A string or a scalar over a
 /// string, a scalar or nothing is stored here (the value moved out of its
-/// temporary or copied from its variable, an old string released); any
-/// other pair is `hot::assign_cv_in`'s, which copies or moves any value
-/// and releases the old one, reached without the way through `hot::step`.
+/// temporary or copied from its variable, an old string released), and so
+/// is a temporary's value over an object (`$o = new C` again: the object
+/// goes to `exec::release_object`); any other pair is
+/// `hot::assign_cv_in`'s, which copies or moves any value and releases
+/// the old one, reached without the way through `hot::step`.
 /// `from_tmp` tells a temporary (`b`, consumed) from a compiled variable.
 /// The caller polls: a released value may queue a destructor.
 ///
@@ -515,6 +517,24 @@ pub(super) unsafe extern "C" fn assign_cv_any(
             match old {
                 Some(Value::Str(s)) => drop(s),
                 other => std::mem::forget(other),
+            }
+            return true;
+        }
+    }
+    // A temporary's value over an object: `hot::assign_cv_in`'s case of a
+    // variable whose old value may be a root, without its general steps
+    // (no symbol table mirrors the variables of a frame the tape runs).
+    // SAFETY: `dst` points at a live slot.
+    if from_tmp && matches!(unsafe { &*dst }, Some(Value::Object(_))) {
+        // SAFETY: `b` is a validated temporary offset.
+        let from = unsafe { &mut *st.tmps.add(inst.b as usize).cast::<Value>() };
+        if !matches!(from, Value::Reference(_)) {
+            // Moved out: the temporary is consumed.
+            let v = std::mem::take(from);
+            // SAFETY: `dst` is valid for writes; the object it held is
+            // released below, the slot already holding the new value.
+            if let Some(Value::Object(old)) = unsafe { std::ptr::replace(dst, Some(v)) } {
+                crate::exec::release_object(old);
             }
             return true;
         }

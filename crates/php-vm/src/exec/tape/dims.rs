@@ -505,59 +505,50 @@ pub(super) unsafe fn fetch_dim(frame: *mut Frame, inst: &Inst) -> Br {
     fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
 }
 
-/// `TOp::FetchDimIC`: [`fetch_packed_into_cv`], else the wider read
-/// ([`fetch_int_any`]). A handler of its own, so that the fast path's few
-/// registers are all its call saves: what the fast path leaves out lies
-/// behind a call for that reason, not inside it.
+/// `TOp::FetchDimIC`: the offset, then [`fetch_packed_into_cv`], else
+/// the wider read ([`fetch_int_any`]). An offset that is no int goes to
+/// the string-key step at once ([`fetch_dim_key`]: a string most likely;
+/// anything else falls through it to the general read), so no step looks
+/// at the offset to find out which one it is for. A handler of its own,
+/// so that the fast path's few registers are all its call saves: what the
+/// fast path leaves out lies behind a call for that reason, not inside
+/// it.
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn fetch_dim_int(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
-    if let Some(br) = fetch_packed_into_cv(unsafe { &mut *frame }, inst) {
+    let f = unsafe { &mut *frame };
+    let Some(i) = int_dim(f, inst) else {
+        // SAFETY: as above; the borrow of the frame has ended.
+        return unsafe { fetch_dim_key(frame, inst) };
+    };
+    if let Some(br) = fetch_packed_into_cv(f, inst, i) {
         return br;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { fetch_miss(frame, inst) }
+    unsafe { fetch_int_any(frame, inst) }
 }
 
-/// Where a read goes on after its lean path missed: to the step for a
-/// string offset ([`fetch_dim_key`]) when the offset is one, else to the
-/// second int step ([`fetch_int_any`]), which a string key would only
-/// fail in.
-///
-/// A function of its own, and without a frame (a look at the offset and
-/// one of two tail calls): inlined into the lean handlers' tails it
-/// changed their code for every lean read too.
-///
-/// # Safety
-/// As [`fetch_dim`].
-#[inline(never)]
-unsafe fn fetch_miss(frame: *mut Frame, inst: &Inst) -> Br {
-    // SAFETY: the caller's contract; `frame` is the current frame.
-    if key_str(unsafe { &*frame }, dim_kind(inst), inst.b).is_some() {
-        // SAFETY: as above.
-        unsafe { fetch_dim_key(frame, inst) }
-    } else {
-        // SAFETY: as above.
-        unsafe { fetch_int_any(frame, inst) }
-    }
-}
-
-/// `TOp::FetchDimIT`: [`fetch_packed_into_tmp`], else the wider read
-/// ([`fetch_int_any`]), as [`fetch_dim_int`].
+/// `TOp::FetchDimIT`: the offset, then [`fetch_packed_into_tmp`], else
+/// the wider read ([`fetch_int_any`]), as [`fetch_dim_int`].
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn fetch_dim_tmp(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
-    if let Some(br) = fetch_packed_into_tmp(unsafe { &mut *frame }, inst) {
+    let f = unsafe { &mut *frame };
+    let Some(i) = int_dim(f, inst) else {
+        // SAFETY: as above; the borrow of the frame has ended.
+        return unsafe { fetch_dim_key(frame, inst) };
+    };
+    if let Some(br) = fetch_packed_into_tmp(f, inst, i) {
         return br;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { fetch_miss(frame, inst) }
+    unsafe { fetch_int_any(frame, inst) }
 }
 
 /// The second step of a read with an int offset ([`fetch_int_wide`]), else
@@ -683,8 +674,7 @@ fn fetch_int_wide(f: &mut Frame, inst: &Inst) -> Option<Br> {
 /// leaves it).
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `fetch_dim_tmp`
-fn fetch_packed_into_tmp(f: &mut Frame, inst: &Inst) -> Option<Br> {
-    let i = int_dim(f, inst)?;
+fn fetch_packed_into_tmp(f: &mut Frame, inst: &Inst, i: i64) -> Option<Br> {
     let v = match f.cvs.get(inst.a as usize)?.get()? {
         Value::Array(arr) => plain_copy(arr.get_packed(i)?)?,
         // As in `fetch_packed_into_cv`.
@@ -755,7 +745,7 @@ fn operand_int(f: &Frame, o: Operand) -> Option<i64> {
 /// reference that is being written, and for any other container.
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of the second step's body
-fn int_elem_copy(f: &Frame, cv: u32, i: i64) -> Option<Value> {
+pub(super) fn int_elem_copy(f: &Frame, cv: u32, i: i64) -> Option<Value> {
     match f.cvs.get(cv as usize)?.get()? {
         Value::Array(arr) => elem_copy(int_elem(arr, i)?),
         Value::Reference(r) => match &*r.try_borrow()? {
@@ -845,11 +835,10 @@ pub(super) unsafe fn fetch_dim_str(frame: *mut Frame, inst: &Inst) -> Br {
 /// runs.
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `fetch_dim`
-fn fetch_packed_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
+fn fetch_packed_into_cv(f: &mut Frame, inst: &Inst, i: i64) -> Option<Br> {
     if f.symtab_attached {
         return None;
     }
-    let i = int_dim(f, inst)?;
     let v = match f.cvs.get(inst.a as usize)?.get()? {
         Value::Array(arr) => plain_copy(arr.get_packed(i)?)?,
         // `$str[$i]` inside the string, counted from its start: the shared
@@ -953,15 +942,10 @@ fn plain_copy(v: &Value) -> Option<Value> {
 /// the general path runs.
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `assign_dim`
-fn assign_packed(f: &mut Frame, inst: &Inst) -> Option<()> {
+fn assign_packed(f: &mut Frame, inst: &Inst, i: Option<i64>) -> Option<()> {
     if f.symtab_attached {
         return None;
     }
-    let i = if dim_kind(inst) == KIND_UNUSED {
-        None
-    } else {
-        Some(int_dim(f, inst)?)
-    };
     // A table that is no list, and an array behind a reference, are the
     // second step's: left here, before the value is taken.
     if !matches!(
@@ -1105,29 +1089,24 @@ pub(super) unsafe fn assign_dim(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(never)]
 pub(super) unsafe fn assign_dim_int(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
-    if assign_packed(unsafe { &mut *frame }, inst).is_some() {
+    let f = unsafe { &mut *frame };
+    // The offset, as a read's ([`fetch_dim_int`]): none for an append, an
+    // int for the lean path and the wider int step, anything else the
+    // string-key step's.
+    let i = if dim_kind(inst) == KIND_UNUSED {
+        None
+    } else {
+        match int_dim(f, inst) {
+            Some(i) => Some(i),
+            // SAFETY: as above; the borrow of the frame has ended.
+            None => return unsafe { assign_dim_key(frame, inst) },
+        }
+    };
+    if assign_packed(f, inst, i).is_some() {
         return true;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { assign_miss(frame, inst) }
-}
-
-/// Where a write goes on after its lean path missed, as a read's miss
-/// ([`fetch_miss`]): by the offset, to [`assign_dim_key`] or to
-/// [`assign_int_any`].
-///
-/// # Safety
-/// As [`fetch_dim`].
-#[inline(never)]
-unsafe fn assign_miss(frame: *mut Frame, inst: &Inst) -> bool {
-    // SAFETY: the caller's contract; `frame` is the current frame.
-    if key_str(unsafe { &*frame }, dim_kind(inst), inst.b).is_some() {
-        // SAFETY: as above.
-        unsafe { assign_dim_key(frame, inst) }
-    } else {
-        // SAFETY: as above.
-        unsafe { assign_int_any(frame, inst) }
-    }
+    unsafe { assign_int_any(frame, inst) }
 }
 
 /// The second step of a write with an int offset ([`assign_int_wide`]),
@@ -1276,7 +1255,7 @@ fn give_back(f: &mut Frame, inst: &Inst, v: Value) {
 /// value back, nothing changed.
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `assign_int_wide`
-fn write_wide(f: &mut Frame, cv: u32, i: Option<i64>, v: Value) -> Result<(), Value> {
+pub(super) fn write_wide(f: &mut Frame, cv: u32, i: Option<i64>, v: Value) -> Result<(), Value> {
     match f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
         Some(Some(Value::Array(arr))) => write_into(arr, i, v),
         Some(Some(Value::Reference(r))) => {

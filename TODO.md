@@ -35,13 +35,18 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       Done 2026-11-21: the string-key steps make the probe themselves
       (`HashTable::sym_zstr_probe`, no `memcmp` call for a long key) and a string key goes
       straight to them after the lean int path missed (`dims::fetch_miss`,
-      `assign_miss`): hash1 1.52 -> 1.44, hash2 1.66 -> 1.53, array_rw 1.35 -> 1.22. An
-      int key that misses the lean path pays that look at the offset (heapsort 2.21 ->
-      2.35, ary and ary2 without the JIT 3% more).
-      Open: heapsort needs floats in traces and the array rows of a trace to take a
-      reference and float elements; hash1, hash2 and array_rw are interpreted loops whose
-      `foreach` step (150 instructions), string building and handler frames still cost
-      about one and a half times C's.
+      `assign_miss`): hash1 1.52 -> 1.44, hash2 1.66 -> 1.53, array_rw 1.35 -> 1.22. Then
+      the lean handlers decode the offset once themselves and those two functions are
+      gone (the second look cost an int key that misses the lean path about 10
+      instructions): hash1 1.41, array_rw 1.19, heapsort without the JIT 2.34 -> 2.19.
+      Done 2026-11-21: a trace's element rows take a variable that holds a reference
+      or an array of floats (`jit_dim_get_wide`/`jit_dim_set_wide`), its comparisons
+      floats (`J_CMPS`), and `$i = $j` / `--$l` with a used result are rows of its own:
+      heapsort's inner loop compiles (2.35 -> 1.59).
+      Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
+      defined at run time, a `global`) stay interpreted; hash1, hash2 and array_rw are
+      interpreted loops whose `foreach` step (150 instructions), string building and
+      handler frames still cost about one and a half times C's.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
@@ -88,21 +93,29 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
-- [ ] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
-      floats in traces (the float loops meet the goal interpreted since `&&`/`||`
-      conditions jump straight to their outcome: mandel 1.57 -> 0.78, mandel2 1.00,
-      float_math 0.85; a trace would still be several times faster, and heapsort and
-      suite:objects need it); property access inside inlined callee bodies;
-      `self::`/`static::` scope guards for call inlining.
-- [~] Objects (objects 2.64, new_obj 1.97, new_Foo 1.73). Done 2026-11-21: `new
+- [~] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
+      floats in traces. Done 2026-11-21: comparisons and `+=`/`-=`/`*=` of floats are
+      compiled (by the operands' tags: `J_CMPS`, `J_ASSIGN_OPS`), and a math builtin may
+      end an inlined method (`KQUICK`). Open: float arithmetic into a temporary or
+      another variable (`$a * $b` of floats, a float literal operand) still leaves a
+      loop to the interpreter (the float loops meet the goal interpreted since `&&`/`||`
+      conditions jump straight to their outcome: mandel 0.78, mandel2 1.00, float_math
+      0.84; a trace would still be several times faster); property access inside
+      inlined callee bodies; `self::`/`static::` scope guards for call inlining.
+- [~] Objects (new_obj 1.76, new_Foo 1.39, objects 1.21). Done 2026-11-21: `new
       C(...)` with a constructor that only assigns its parameters to properties (a
       promoted constructor is one) is one tape instruction without the call
       (`calls::new_stored`, from `UserFunction::ctor_fold`), which a trace calls: new_obj
-      3.30 -> 1.97 (1,249 instructions an iteration, C 635), objects 3.99 -> 2.64. Open:
-      allocation (`object::new_block` 172) and release (~370 with the assignment, across
-      eight functions) against C's ~135 and ~130, the possible-root bookkeeping of the
-      new object (152), and that instruction itself. For `objects` besides: the method
-      call `$p->len()`, whose `sqrt` and float `+=` a trace cannot take yet.
+      3.30 -> 1.97, objects 3.99 -> 2.64. Then: an object of its class's defaults made by
+      straight-line code (`object::new_defaults`), a temporary's value stored over an
+      object and the object released directly, the free of a plain object in one
+      function (new_Foo 1.73 -> 1.39, new_obj 1.76), and `$p->len()` inlined in the
+      trace with its `sqrt` and the float `+=` (objects 2.64 -> 1.21).
+      Open, by the profile of objects: `new_stored` itself (567 instructions for two
+      arguments; a `new` the trace makes itself - an allocation helper and the stores
+      as its own code - would spare most of it), the possible-root bookkeeping of the
+      new object (152), allocation (117) and release (~270 across seven functions)
+      against C's ~135 and ~130.
 - [ ] Memory allocator: profile per-allocation cost claim (~81→~30 ins) on release build;
       update FEATURE_GAP row % from estimate to measured.
 - [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout
