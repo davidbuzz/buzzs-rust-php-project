@@ -3,7 +3,7 @@
 David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust whose goal is
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
 than the classic C impl. Passing tests: 99.9% (100% on the engine suite);
-Speed (as fast as C): 17 of 82 workloads (21%).
+Speed (as fast as C): 70 of 82 workloads (85%).
 
 The original PHP is written in C. This project ports it to idiomatic, best-practice Rust
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable

@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 68/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 19/82 with `BUZZS_JIT=0`).
+Score: 70/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 20/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -40,9 +40,13 @@ Score: 68/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       (`specialise::spread_frameless_call_at`), and `strpos`/`substr`/`max`/`min`/strict
       `in_array`/`str_contains` & co. are answered without their handler
       (`special::quick_eval_n`, tape row `FramelessQ`): suite:builtins 4.52 -> 1.55,
-      suite:strings 1.64 -> 1.34. Open: those loops in a trace (their rows through the
-      tape's handlers), the general frameless path (~155 instructions a call around the
-      function itself), and the interpreter's user-call protocol (memory note
+      suite:strings 1.64 -> 1.34. Done 2026-11-20: those loops compile (a trace calls the
+      tape's own handler for a row it has no code for: `jit::plan_row`), and calls of two
+      or three arguments are straight-line code (`special::quick_eval_2`/`quick_eval_3`):
+      suite:builtins 1.55 -> 1.16, suite:strings 1.34 -> 1.18. Open: a handler call from a
+      trace costs ~22 instructions around the handler (callee-saved registers for the
+      trace's bases would make it ~8; `ops:strlen` is 1.08 compiled against 1.01
+      interpreted), and the interpreter's user-call protocol (memory note
       `call-redesign-plan`).
 - [~] JIT Step 4 — `New` rows (new_obj 3.27, micro:new_Foo 2.02, objects 4.64),
       elvis/ternary, `$this::CONST`, `$GLOBALS['v']`, `$_GET`. Done 2026-11-20: tape
@@ -58,8 +62,12 @@ Score: 68/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       Done 2026-11-20: a trace copies and releases arrays (x_eq_f_q_f_a 2.43 -> 0.44,
       x_eq_a_elvis_null 1.86 -> 0.40) and calls the cached global read (x_eq__GET 1.96 ->
       1.79, x_eq_GLOBALS_v 1.89 -> 1.69).
-      Open: the global read itself (~200 instructions an iteration in the trace against
-      C's 121); strings and objects moved by a trace.
+      Done 2026-11-20: a trace reads a global slot itself (`C_GREAD`: the slots' addresses
+      go into a table when the trace is entered): x_eq__GET 1.79 -> 0.27, x_eq_GLOBALS_v
+      1.69 -> 0.25. `new` of a class without a constructor is a tape instruction
+      (new_Foo 2.05 -> 1.71).
+      Open: object allocation and release themselves (objects 4.04, new_obj 3.29, new_Foo
+      1.71); strings and objects moved by a trace.
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.

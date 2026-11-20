@@ -113,6 +113,7 @@ const TAG_FLOAT: u8 = 3;
 const TAG_STR: u8 = 4;
 const TAG_ARRAY: u8 = 5;
 const TAG_OBJECT: u8 = 6;
+const TAG_RESOURCE: u8 = 7;
 /// Byte offset of an `Obj` handle's payload (`ObjectData`) in its
 /// allocation, from the handle pointer (the `ObjCell<T>` header):
 /// computed by `php-runtime`'s `obj_payload_offset` from the type itself.
@@ -194,9 +195,6 @@ pub(crate) struct JitCtx {
     /// The row a compiled loop's poll exit belongs to (null when its
     /// last exit was no poll): `take_jump!` reports the safe point there.
     poll_row: Cell<*const Inst>,
-    /// [`hot_limit`], read once per context: the count at which a back
-    /// edge leaves [`back_edge`]'s counting path.
-    hot: i32,
     /// The VM the frame belongs to ([`JitCtx::set_vm`]), handed to the
     /// rows of a trace that read through its global scope.
     vm: Cell<*mut crate::vm::Vm>,
@@ -240,7 +238,6 @@ impl JitCtx {
             tlen: tape_slice.len(),
             tape: std::ptr::from_ref(tape),
             poll_row: Cell::new(std::ptr::null()),
-            hot: hot_limit(),
             vm: Cell::new(std::ptr::null_mut()),
         })
     }
@@ -316,13 +313,20 @@ fn soft<T>() -> Option<T> {
 fn hot_limit() -> i32 {
     static HOT: OnceLock<i32> = OnceLock::new();
     *HOT.get_or_init(|| {
-        std::env::var("BUZZS_JIT_HOT")
+        let hot = std::env::var("BUZZS_JIT_HOT")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .filter(|n| *n > 0)
-            .unwrap_or(HOT_LIMIT)
+            .unwrap_or(HOT_LIMIT);
+        HOT_CACHE.store(hot, Ordering::Relaxed);
+        hot
     })
 }
+
+/// [`hot_limit`] for [`back_edge`]'s counting path, which loads it on every
+/// counted back edge: 0 until `hot_limit` first ran (no count is below
+/// it, so that back edge takes the slow path, where `hot_limit` runs).
+static HOT_CACHE: AtomicI32 = AtomicI32::new(0);
 /// The largest region compiled (instructions, counting an inlined call as
 /// its full span); larger loops stay interpreted in this version.
 const MAX_REGION: usize = 128;
@@ -515,14 +519,48 @@ const C_DIMSR: u16 = 40;
 /// assignment folded behind a `FetchGlobal` (the row then covers both ops).
 const C_VMREAD: u16 = 41;
 
+/// A row run through the tape's own thin handler ([`plan_row`]): the trace
+/// has no code of its own for it. The handler checks every operand on
+/// every iteration and declines what it does not take, which leaves the
+/// row to the interpreter, nothing changed.
+const C_ROW: u16 = 42;
+/// The same for a row whose handler may jump (a type test or `isset()`
+/// fused with the jump on its result): the row covers both ops.
+const C_ROWBR: u16 = 43;
+/// `Op::JmpZ` of a temporary holding a bool (consumed).
+const C_JMPZT: u16 = 44;
+/// `Op::JmpNz` of such a temporary.
+const C_JMPNZT: u16 = 45;
+/// A read through the global scope ([`C_VMREAD`]'s ops) made by the trace
+/// itself: the slot's address comes from the trace's table of global
+/// slots, filled when the trace is entered ([`jit_resolve_globals`]; the
+/// row's index in it in `JitMeta.slot`), and the row copies a scalar or an
+/// array out of it.
+const C_GREAD: u16 = 46;
+
 /// Whether rows of class `c` may jump (their target is the row's `c`
 /// field, as for every tape instruction that jumps).
 fn is_jump_class(c: u16) -> bool {
     matches!(
         c,
-        C_JMP | J_CMP | J_INCCMP | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE
+        C_JMP
+            | J_CMP
+            | J_INCCMP
+            | C_JMPZ
+            | C_JMPNZ
+            | C_JMPSET
+            | C_COALESCE
+            | C_ROWBR
+            | C_JMPZT
+            | C_JMPNZT
     )
 }
+
+/// What a [`C_ROW`] leaves in its result temporary (`JitMeta.arith`).
+const ROW_INT: u8 = 1;
+const ROW_BOOL: u8 = 2;
+/// A value of any type, owned by the temporary ([`TmpKind::Val`]).
+const ROW_VAL: u8 = 3;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -530,7 +568,7 @@ const NO_DST: u32 = u32::MAX;
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
 pub(crate) fn c_step(c: u16) -> usize {
-    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D || c == C_ABS {
+    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D || c == C_ABS || c == C_ROWBR {
         2
     } else if c == J_INCCMP {
         3
@@ -649,6 +687,11 @@ const SCALAR_SRC: u8 = 0x20;
 /// first when it is an array (the row checks what the variable holds; it
 /// has no entry guard).
 const VAL_SRC: u8 = 0x10;
+/// `JitMeta.mask` flag for a `J_ASSIGN_T` row of such a temporary into a
+/// variable that held a string, an object or a resource when the plan was
+/// made: the tape's own assignment runs (`scalar::assign_cv_any`, through
+/// [`row_assign_any`]), which releases whatever the variable holds.
+const ANY_SRC: u8 = 0x08;
 
 const OPA_BITAND: u8 = 6;
 const OPA_BITOR: u8 = 7;
@@ -1052,6 +1095,20 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
             ..JitMeta::default()
         },
         TOp::MoveT => plan_move(st, inst)?,
+        // A jump on a temporary: a bool, consumed (the row checks it when
+        // the plan does not know).
+        TOp::JmpZT => JitMeta {
+            class: C_JMPZT,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
+        TOp::JmpNzT => JitMeta {
+            class: C_JMPNZT,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
         // `abs(x)`: the operand's kind in `inst.k`, the result temporary
         // in `inst.c` (`u32::MAX`: unused).
         TOp::AbsN => JitMeta {
@@ -1135,6 +1192,203 @@ fn plan_move(st: &St, inst: &Inst) -> Option<JitMeta> {
         arr: inst.k == MOVE_CV && cv_holds_array(st, inst.a),
         ..JitMeta::default()
     })
+}
+
+/// Whether the compiled variable at byte offset `off` of the frame a plan
+/// is made in holds a string, an object or a resource right now: a value
+/// the trace's own stores do not release.
+fn cv_holds_other(st: &St, off: u32) -> bool {
+    // SAFETY: as in `cv_holds_array`.
+    !st.cvs.is_null()
+        && matches!(
+            unsafe { *st.cvs.add(off as usize) },
+            TAG_STR | TAG_OBJECT | TAG_RESOURCE
+        )
+}
+
+/// A tape handler as a trace calls it ([`Emitter::emit_helper`]'s helper
+/// signature): 0 when the row is done, 1 when it declined, nothing changed,
+/// and for a row that may jump 2 when it did.
+type RowFn = unsafe extern "C" fn(*mut crate::vm::Frame, *const Inst, *const u8, u32) -> u32;
+
+/// The entry point of a handler that is done or declines.
+macro_rules! row_fn {
+    ($name:ident, $handler:path) => {
+        /// # Safety
+        /// `frame` is the frame the trace runs in, and `inst` a row of the
+        /// tape it was compiled from (the handler's own contract).
+        unsafe extern "C" fn $name(
+            frame: *mut crate::vm::Frame,
+            inst: *const Inst,
+            _unused: *const u8,
+            _word: u32,
+        ) -> u32 {
+            // SAFETY: the caller's contract.
+            u32::from(!unsafe { $handler(frame, &*inst) })
+        }
+    };
+}
+
+/// The entry point of a handler that may jump.
+macro_rules! row_fn_br {
+    ($name:ident, $handler:path) => {
+        /// # Safety
+        /// As the entry points of [`row_fn`].
+        unsafe extern "C" fn $name(
+            frame: *mut crate::vm::Frame,
+            inst: *const Inst,
+            _unused: *const u8,
+            _word: u32,
+        ) -> u32 {
+            // SAFETY: the caller's contract.
+            match unsafe { $handler(frame, &*inst) } {
+                super::Br::Fall => 0,
+                super::Br::Decline => 1,
+                super::Br::Jump => 2,
+            }
+        }
+    };
+}
+
+row_fn!(row_strlen, super::strs::strlen_cv);
+row_fn!(row_count, super::strs::count_cv);
+row_fn!(row_type_check, super::strs::type_check_cv);
+row_fn!(row_isset, super::strs::isset_cv);
+row_fn!(row_num_bin, super::scalar::num_bin_tmp);
+row_fn!(row_move, super::scalar::move_tmp);
+row_fn!(row_concat, super::dims::concat_cv);
+row_fn_br!(row_type_check_jmp, super::strs::type_check_jmp_cv);
+row_fn_br!(row_isset_jmp, super::strs::isset_jmp_cv);
+
+/// A frameless call answered without its handler: done, it jumps to the op
+/// after the call, which is where its row in a trace ends.
+///
+/// # Safety
+/// As the entry points of [`row_fn`].
+unsafe extern "C" fn row_frameless(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    _word: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    u32::from(unsafe { super::strs::frameless_quick(frame, &*inst) } == super::Br::Decline)
+}
+
+/// `$cv = TMP` of any value into a variable holding any value
+/// (`scalar::assign_cv_any`: the old value is released).
+///
+/// # Safety
+/// As the entry points of [`row_fn`]; `inst` is an `AssignT` row.
+unsafe extern "C" fn row_assign_any(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    _word: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    u32::from(!unsafe { super::scalar::assign_cv_any(frame, &*inst, true) })
+}
+
+/// The handler row of the instruction at op `i`, for the rows the trace has
+/// no code of its own for, with the ops it covers: the handler's entry
+/// point in `lit_a`, whether the row polls afterwards in `inc` (it may
+/// release a value or allocate), the result temporary in `db` and what it
+/// then holds in `arith`, the temporaries the handler consumes in `sb`,
+/// `slot` and `sw`, and a variable it writes in `lit_c` (-1: none).
+/// `None` for a row without a thin handler taken here.
+fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16, JitMeta, usize)> {
+    let mut m = JitMeta {
+        ka: KI,
+        kb: KI,
+        db: NO_DST,
+        sb: NO_DST,
+        slot: NO_DST,
+        sw: NO_DST,
+        lit_c: -1,
+        ..JitMeta::default()
+    };
+    let (class, handler, step): (u16, RowFn, usize) = match inst.op {
+        // (Their result field is `u32::MAX` when unused: `NO_DST`.)
+        TOp::StrlenC => {
+            (m.db, m.arith) = (inst.c, ROW_INT);
+            (C_ROW, row_strlen, 1)
+        }
+        TOp::CountC => {
+            (m.db, m.arith) = (inst.c, ROW_INT);
+            (C_ROW, row_count, 1)
+        }
+        TOp::TypeCheckC => {
+            (m.db, m.arith) = (inst.c, ROW_BOOL);
+            (C_ROW, row_type_check, 1)
+        }
+        TOp::IssetC => {
+            (m.db, m.arith) = (inst.c, ROW_BOOL);
+            (C_ROW, row_isset, 1)
+        }
+        TOp::TypeCheckJmpC => (C_ROWBR, row_type_check_jmp, 2),
+        TOp::IssetJmpC => (C_ROWBR, row_isset_jmp, 2),
+        // The operators of two numbers the trace has no code for: the
+        // comparisons (a bool), `<=>` (an int), `/` (an int or a float).
+        // The handler reads its operands where they lie.
+        TOp::NumBinT => {
+            m.db = inst.c;
+            m.arith = match inst.e {
+                7..=12 => ROW_BOOL,
+                13 => ROW_INT,
+                _ => ROW_VAL,
+            };
+            (C_ROW, row_num_bin, 1)
+        }
+        // A literal that is no int, bool or null (a string, a float, an
+        // array): a copy the temporary owns.
+        TOp::MoveT => {
+            (m.db, m.arith) = (inst.c, ROW_VAL);
+            if inst.k == super::scalar::MOVE_TMP {
+                m.sb = inst.a;
+            }
+            (C_ROW, row_move, 1)
+        }
+        // `$cv .= value`: the variable (its index in `a`) is written, a
+        // value temporary (its index in `p`) consumed.
+        TOp::ConcatCv => {
+            (m.db, m.arith) = (inst.c, ROW_VAL);
+            if super::dims::val_kind(inst) == super::dims::KIND_TMP {
+                m.sb = u32::try_from(inst.p).ok()?.checked_shl(SLOT_SHIFT)?;
+            }
+            m.lit_c = i64::from(inst.a.checked_shl(SLOT_SHIFT)?);
+            m.inc = true;
+            (C_ROW, row_concat, 1)
+        }
+        // The operands in `a`, `b` and `d` (their kinds two bits each in
+        // `k`, 1: a temporary, consumed), the result in the low half of
+        // `p`; the row covers the `Nop`s behind an op at its `InitFCall`.
+        TOp::FramelessQ => {
+            let Some(Op::FramelessICall(fc)) = code.ops.get(i) else {
+                return None;
+            };
+            m.db = u32::try_from(inst.p as u64 & 0xffff_ffff).ok()?;
+            m.arith = ROW_VAL;
+            let offs = [inst.a, inst.b, inst.d];
+            let mut consumed = [NO_DST; 3];
+            for (k, slot) in consumed
+                .iter_mut()
+                .enumerate()
+                .take(usize::from(inst.k >> 6))
+            {
+                if (inst.k >> (2 * k)) & 3 == 1 {
+                    *slot = offs[k];
+                }
+            }
+            [m.sb, m.slot, m.sw] = consumed;
+            m.inc = true;
+            (C_ROW, row_frameless, 1 + fc.tail())
+        }
+        _ => return None,
+    };
+    m.class = class;
+    m.lit_a = i64::try_from(handler as *const () as usize).ok()?;
+    Some((class, m, step))
 }
 
 /// Whether the compiled variable at byte offset `off` of the frame a plan
@@ -1396,13 +1650,22 @@ fn add_class_guards(
         }
         // The truth jumps look at their variable's tag in the trace.
         C_JMPZ | C_JMPNZ => true,
+        // A handler checks its operands, and declines a result temporary
+        // that holds a value to release.
+        C_ROW | C_ROWBR => true,
+        // A jump on a temporary takes a bool: checked by the row unless the
+        // plan knows it is one.
+        C_JMPZT | C_JMPNZT => {
+            m.ca = ts.kind(inst.a) != TmpKind::Bool;
+            true
+        }
         // The handler checks its operands and releases what its temporary
         // held.
         C_DIMSR => true,
         // A read through the global scope fully stores its temporary; the
         // variable of a folded assignment is looked at by the read itself
         // (it releases what the variable holds).
-        C_VMREAD => m.kc == KC || fresh_dst(m.db, guards),
+        C_VMREAD | C_GREAD => m.kc == KC || fresh_dst(m.db, guards),
         // `?:` and `??` as well, and fully store their result temporary
         // (`inst.b`) when they jump.
         C_JMPSET | C_COALESCE => fresh_dst(inst.b, guards),
@@ -2677,6 +2940,54 @@ fn plan_vm_read(code: &crate::opcode::OpArray, i: usize) -> Option<(JitMeta, usi
     Some((m, step))
 }
 
+/// What the slot a global read at op `at` would read holds right now (its
+/// tag): the plan's look at it. `None` when no VM is named, there is no
+/// frame, or the slot is not resolved.
+fn global_tag_now(st: &St, at: usize) -> Option<u8> {
+    let vm = TRACE_VM.with(Cell::get);
+    if vm.is_null() || st.f.is_null() {
+        return None;
+    }
+    // SAFETY: `TRACE_VM` names the VM of the frame the plan is made in
+    // ([`back_edge_slow`] set it on the way here), which nothing else uses
+    // meanwhile; the address returned is of a live slot, whose first byte
+    // is its tag.
+    unsafe {
+        let addr = super::global_slot_addr(&*vm, &*st.f, at);
+        (addr != 0).then(|| *(addr as *const u8))
+    }
+}
+
+/// The entry helper of a trace with [`C_GREAD`] rows: for each of the `n`
+/// rows, the address of the slot its read reads now (0: not resolved) into
+/// `table`. `ops` holds the rows' op indexes. Always returns 0.
+///
+/// # Safety
+/// `frame` is the frame the trace is entered in, `table` and `ops` the
+/// trace's own table (`n` words, then `n` op indexes), and [`TRACE_VM`]
+/// names the frame's VM or is null, as for [`jit_row_vm_read`].
+unsafe extern "C" fn jit_resolve_globals(
+    frame: *mut crate::vm::Frame,
+    table: *mut usize,
+    ops: *const u32,
+    n: u32,
+) -> u32 {
+    let vm = TRACE_VM.with(Cell::get);
+    for k in 0..n as usize {
+        // SAFETY: the caller's contract. The VM is only read.
+        unsafe {
+            let at = *ops.add(k) as usize;
+            let addr = if vm.is_null() {
+                0
+            } else {
+                super::global_slot_addr(&*vm, &*frame, at)
+            };
+            table.add(k).write(addr);
+        }
+    }
+    0
+}
+
 /// [`C_VMREAD`]'s helper: the read at op `at` of the frame's code on its
 /// fast path (`tape::vm_read`). Returns 0 when the value is stored (in the
 /// row's temporary, or in the variable of the folded assignment), 1 when
@@ -2776,6 +3087,9 @@ fn plan(
     let mut meta = vec![JitMeta::default(); len];
     let mut span = vec![0u32; len];
     let mut calls: Vec<Option<CallPlan>> = (0..len).map(|_| None).collect();
+    // The `C_GREAD` rows so far: each one's index in the trace's table of
+    // global slots is its rank among them.
+    let mut greads = 0u32;
 
     // Class every instruction; a fused instruction's coverage marks
     // the ops it consumes, exactly as `run_core` skips them.
@@ -2835,10 +3149,19 @@ fn plan(
         } else if tape[i].op == TOp::VmOp {
             // A read through the global scope; any other `VmOp` (a
             // frameless call with its handler) stays the interpreter's.
-            let Some((m, step)) = plan_vm_read(code, i) else {
+            let Some((mut m, step)) = plan_vm_read(code, i) else {
                 rej!(format!("[{i}] op with the VM not compiled"));
             };
-            (C_VMREAD, m, step, None)
+            // The slot holds a scalar or an array right now: the trace
+            // reads it itself. Else the tape's read, through its helper.
+            if global_tag_now(st, i).is_some_and(|tag| tag <= TAG_FLOAT || tag == TAG_ARRAY) {
+                m.class = C_GREAD;
+                m.slot = greads;
+                greads += 1;
+                (C_GREAD, m, step, None)
+            } else {
+                (C_VMREAD, m, step, None)
+            }
         } else if tape[i].op == TOp::FetchDimsC {
             // Through the tape's handler; the result temporary is `p`.
             let Ok(t) = u32::try_from(tape[i].p) else {
@@ -2870,9 +3193,14 @@ fn plan(
                 None => rej!(format!("[{i}] spec row not inlinable")),
             }
         } else {
-            match classify(st, &tape[i]) {
-                Some((c, m)) => (c, m, c_step(c), None),
-                None => rej!(format!("{:?} not whitelisted", tape[i].op)),
+            // No code of the trace's own: the tape's handler, if the row
+            // has a thin one.
+            if let Some((c, m)) = classify(st, &tape[i]) {
+                (c, m, c_step(c), None)
+            } else if let Some((c, m, step)) = plan_row(code, i, &tape[i]) {
+                (c, m, step, None)
+            } else {
+                rej!(format!("{:?} not whitelisted", tape[i].op))
             }
         };
         class[i - head] = c;
@@ -2957,7 +3285,7 @@ fn plan(
     // reads a `$this` receiver through the frame), or a property read
     // re-checks the scope: keep the frame pointer (entry argument `rdx`)
     // in `r10` for those guards.
-    let frame = class.contains(&C_PROP)
+    let mut frame = class.contains(&C_PROP)
         || class.contains(&C_PROPW)
         || class.contains(&C_PROPINC)
         || class.contains(&C_PROPISSET)
@@ -2969,6 +3297,9 @@ fn plan(
         || class.contains(&C_CONSTI)
         || class.contains(&C_DIMSR)
         || class.contains(&C_VMREAD)
+        || class.contains(&C_GREAD)
+        || class.contains(&C_ROW)
+        || class.contains(&C_ROWBR)
         || calls
             .iter()
             .flatten()
@@ -2990,10 +3321,8 @@ fn plan(
     let mut cvbools: Vec<u32> = Vec::new();
     let mut ever_nonint: Vec<u32> = Vec::new();
     // The compiled variables a row moves a value that may be an array
-    // into (they get no guard: the row looks at what they hold), and
-    // whether any temporary may hold an array at all.
+    // into (they get no guard: the row looks at what they hold).
     let mut counted: Vec<u32> = Vec::new();
-    let mut any_val = false;
     for j in 0..len {
         if class[j] == 0 {
             continue;
@@ -3011,6 +3340,15 @@ fn plan(
             incoming.retain(|(y, _)| *y != head + j);
             ts = merged.unwrap_or_default();
             if back_targets.contains(&(head + j)) {
+                // The state at a nested loop's head is not followed: a
+                // temporary holding a value to release there would be
+                // taken for free to store over.
+                if ts.has_val() {
+                    rej!(format!(
+                        "a temporary may hold a value to release at the nested loop at {}",
+                        head + j
+                    ));
+                }
                 ts.clear();
             }
             reachable = true;
@@ -3097,7 +3435,7 @@ fn plan(
         }
         // An operand the row checks is an `Int` after it (the row left the
         // trace otherwise).
-        if !matches!(class[j], C_MOVE | J_ASSIGN_T) {
+        if !matches!(class[j], C_MOVE | J_ASSIGN_T | C_JMPZT | C_JMPNZT) {
             if meta[j].ca {
                 ts.set(tape[head + j].a, TmpKind::Int);
             }
@@ -3123,6 +3461,15 @@ fn plan(
             if flag == VAL_SRC && !counted.contains(&tape[head + j].a) {
                 counted.push(tape[head + j].a);
             }
+            // The variable holds a string, an object or a resource right
+            // now: the inline store would leave the trace every time.
+            let flag = if flag == VAL_SRC && cv_holds_other(st, tape[head + j].a) {
+                // (Its helper takes the frame.)
+                frame = true;
+                ANY_SRC
+            } else {
+                flag
+            };
             if flag != 0 {
                 meta[j].mask = flag;
                 let a = tape[head + j].a;
@@ -3205,14 +3552,44 @@ fn plan(
             }
             // The handler left a value of no known kind.
             C_DIMSR => ts.set(meta[j].db, TmpKind::Unknown),
+            // What the handler stored (an int, a bool, or a value of any
+            // type the temporary owns), the temporaries it consumed, and a
+            // variable it wrote (no int the trace knows of afterwards).
+            C_ROW => {
+                let m = meta[j];
+                for t in [m.sb, m.slot, m.sw] {
+                    if t != NO_DST {
+                        ts.set(t, TmpKind::Unknown);
+                    }
+                }
+                if m.db != NO_DST {
+                    let kind = match m.arith {
+                        ROW_INT => TmpKind::Int,
+                        ROW_BOOL => TmpKind::Bool,
+                        _ => TmpKind::Val,
+                    };
+                    ts.set(m.db, kind);
+                }
+                if let Ok(cv) = u32::try_from(m.lit_c) {
+                    for list in [&mut counted, &mut cvbools, &mut ever_nonint] {
+                        if !list.contains(&cv) {
+                            list.push(cv);
+                        }
+                    }
+                }
+            }
+            // The temporary is consumed, on both ways out of the row.
+            C_JMPZT | C_JMPNZT => {
+                let a = tape[head + j].a;
+                ts.set(a, TmpKind::Unknown);
+            }
             // A value of any type, owned by the temporary, or stored into
             // the variable, which is then no int the trace knows of and
             // may hold a value to release.
-            C_VMREAD => {
+            C_VMREAD | C_GREAD => {
                 let d = meta[j].db;
                 if meta[j].kc == KT {
                     ts.set(d, TmpKind::Val);
-                    any_val = true;
                 } else {
                     for list in [&mut counted, &mut cvbools, &mut ever_nonint] {
                         if !list.contains(&d) {
@@ -3239,7 +3616,6 @@ fn plan(
                     _ if meta[j].arr => TmpKind::Val,
                     _ => TmpKind::Scalar,
                 };
-                any_val |= kind == TmpKind::Val;
                 if meta[j].sc == KT && meta[j].consume {
                     ts.set(inst.a, TmpKind::Unknown);
                 }
@@ -3274,19 +3650,25 @@ fn plan(
         // the jump is taken) a scalar. Nothing falls through a plain jump.
         if is_jump_class(class[j]) {
             let y = jump_target(tape, head + j);
-            // A temporary that may hold an array is consumed before the
-            // loop goes round: the next iteration stores over it.
-            if y == head && ts.has_val() {
+            // A temporary that may hold a value to release is consumed
+            // before a loop goes round (this one or one nested in it): the
+            // next iteration stores over it.
+            if y <= head + j && ts.has_val() {
                 rej!(format!(
-                    "a temporary may hold an array at the back edge at {}",
+                    "a temporary may hold a value to release at the back edge at {}",
                     head + j
                 ));
+            }
+            // The rows that jump on a temporary or through a handler close
+            // no loop (a nested loop's head polls for its closing row,
+            // which `emit` only finds among the plain jumps and compares).
+            if y <= head + j && matches!(class[j], C_ROWBR | C_JMPZT | C_JMPNZT) {
+                rej!(format!("a backward jump on a temporary at {}", head + j));
             }
             if y > head + j && y <= close {
                 let mut edge = ts.clone();
                 if matches!(class[j], C_JMPSET | C_COALESCE) {
                     let kind = if meta[j].arr {
-                        any_val = true;
                         TmpKind::Val
                     } else {
                         TmpKind::Scalar
@@ -3322,12 +3704,6 @@ fn plan(
         .any(|g| g.base == KC && counted.contains(&g.off))
     {
         rej!("a variable that may hold an array is also written or read as a scalar");
-    }
-    // The state at a nested loop's head is not followed (`ts.clear()`): a
-    // temporary holding an array there would be taken for free to store
-    // over.
-    if any_val && !back_targets.is_empty() {
-        rej!("a temporary may hold an array in a region with a nested loop");
     }
     // With calls in the region, `rdx` holds the scratch base for its
     // whole run, so no `%` (whose `idiv` clobbers it) may be compiled
@@ -4254,6 +4630,10 @@ struct Emitter {
     /// The closure objects the emitted guards name by handle word: kept
     /// alive ([`PINNED_OBJS`]) once the code is placed.
     pins: Vec<(u64, php_runtime::Obj)>,
+    /// The address of the trace's table of global slots (one word per
+    /// [`C_GREAD`] row, in row order, then the rows' op indexes as `u32`s:
+    /// what [`jit_resolve_globals`] reads); 0 when it has none.
+    gtable: i64,
 }
 
 /// REX.W (0x40) plus the ModRM-reg field's high bit (0x04) plus the
@@ -4658,18 +5038,17 @@ impl Emitter {
             // The tape's handler for the row, then the poll every row that
             // may release or allocate ends with.
             C_DIMSR => {
-                let row = self.tbase.wrapping_add(i * std::mem::size_of::<Inst>());
-                // The row's address as the 64 bits a `movabs` loads.
-                let row = i64::from_ne_bytes(row.to_ne_bytes());
+                let row = self.row_arg(i);
                 self.emit_helper(
                     jit_row_fetch_dims as *const () as usize,
-                    [HArg::Frame, HArg::Abs(row), HArg::Null],
+                    [HArg::Frame, row, HArg::Null],
                     0,
                     Target::Side(i),
                 );
                 self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
                 self.jcc(0x85, Target::Poll(i + 1, i)); // jne
             }
+            C_GREAD => self.emit_gread(m, i),
             // The read's fast path through the helper, then the poll every
             // row that may release a value ends with.
             C_VMREAD => {
@@ -4686,6 +5065,65 @@ impl Emitter {
                 let next = i + self.plan.span[j] as usize;
                 self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
                 self.jcc(0x85, Target::Poll(next, i)); // jne
+            }
+            // The row's handler, then the poll of a row that may release a
+            // value or allocate.
+            C_ROW => {
+                let row = self.row_arg(i);
+                self.emit_helper(
+                    usize::try_from(m.lit_a).unwrap_or(0),
+                    [HArg::Frame, row, HArg::Null],
+                    0,
+                    Target::Side(i),
+                );
+                if m.inc {
+                    let next = i + self.plan.span[j] as usize;
+                    self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                    self.jcc(0x85, Target::Poll(next, i)); // jne
+                }
+            }
+            // A handler that may jump: 1 declined, 2 jumped, 0 goes on.
+            C_ROWBR => {
+                let row = self.row_arg(i);
+                self.emit_helper_call(
+                    usize::try_from(m.lit_a).unwrap_or(0),
+                    [HArg::Frame, row, HArg::Null],
+                    0,
+                );
+                self.put(&[0x83, 0xF8, 0x01]); // cmp eax, 1
+                self.jcc(0x84, Target::Side(i)); // je
+                self.jcc(0x87, self.jump_tgt(j)); // ja
+            }
+            // A jump on a temporary: a bool (checked unless the plan knows),
+            // read and left null as the interpreted row leaves it.
+            C_JMPZT | C_JMPNZT => {
+                if m.ca {
+                    self.cmpb(KT, inst.a, TAG_BOOL);
+                    self.jcc(0x85, Target::Side(i)); // jne
+                }
+                self.load_cl_base(KT, inst.a.wrapping_add(BOOL_BYTE));
+                self.store_imm_base(KT, inst.a, 0);
+                self.store_tag_base(KT, inst.a, TAG_NULL);
+                self.put(&[0x85, 0xC9]); // test ecx, ecx
+                let cc = if self.plan.class[j] == C_JMPZT {
+                    0x84 // jz
+                } else {
+                    0x85 // jnz
+                };
+                self.jcc(cc, self.jump_tgt(j));
+            }
+            // `$cv = TMP` of any value over any value: the tape's own
+            // assignment, then its poll (the old value is released).
+            J_ASSIGN_T if m.mask == ANY_SRC => {
+                let row = self.row_arg(i);
+                self.emit_helper(
+                    row_assign_any as *const () as usize,
+                    [HArg::Frame, row, HArg::Null],
+                    0,
+                    Target::Side(i),
+                );
+                self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                self.jcc(0x85, Target::Poll(i + 1, i)); // jne
             }
             C_JMPZ | C_JMPNZ => {
                 let end = self.synth_label();
@@ -5152,6 +5590,58 @@ impl Emitter {
     /// array whose handle is in `rax`.
     fn count_op(&mut self, ext: u8, imm: i8) {
         self.put(&[REX_W, 0x83, ext << 3, imm.to_le_bytes()[0]]);
+    }
+
+    /// Emit one [`C_GREAD`] row: the global's slot (its address in the
+    /// trace's table; 0 when the entry helper did not find it) holds a
+    /// scalar, copied as it is, or an array, copied with one more handle on
+    /// it; anything else leaves through the row's side exit. The value goes
+    /// into the row's temporary, or into the variable of the assignment
+    /// folded behind the read, whose old value is released as a
+    /// [`VAL_SRC`] assignment releases it. Every test comes before the
+    /// first change.
+    fn emit_gread(&mut self, m: JitMeta, i: usize) {
+        let side = Target::Side(i);
+        self.movabs_rax(self.gtable + 8 * i64::from(m.slot));
+        self.put(&[REX_W | REX_R, 0x8B, 0x08]); // mov r9, [rax]
+        self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+        self.jcc(0x84, side); // jz: not resolved
+        self.put(&[REX | REX_B, 0x0F, 0xB6, 0x09]); // movzx ecx, byte [r9]: the tag
+        let known = self.synth_label();
+        self.put(&[0x80, 0xF9, TAG_ARRAY]); // cmp cl, TAG_ARRAY
+        self.jcc(0x84, Target::Label(known)); // je
+        self.put(&[0x80, 0xF9, TAG_FLOAT]); // cmp cl, TAG_FLOAT
+        self.jcc(0x87, side); // ja: not a scalar
+        self.set_label(known);
+        if m.kc == KC {
+            // The variable's old value: an array with other handles loses
+            // this one; the last handle, a string, an object, a reference:
+            // the interpreted row.
+            let store = self.synth_label();
+            self.cmpb(KC, m.db, TAG_FLOAT);
+            self.jcc(0x86, Target::Label(store)); // jbe: a scalar
+            self.cmpb(KC, m.db, TAG_NONE);
+            self.jcc(0x84, Target::Label(store)); // je: undefined
+            self.cmpb(KC, m.db, TAG_ARRAY);
+            self.jcc(0x85, side); // jne
+            self.load_int(KC, m.db);
+            self.count_op(7, 1); // cmp qword [rax], 1
+            self.jcc(0x84, side); // je: the last handle
+            self.count_op(5, 1); // sub qword [rax], 1
+            self.set_label(store);
+        }
+        let copy = self.synth_label();
+        self.put(&[0x80, 0xF9, TAG_ARRAY]); // cmp cl, TAG_ARRAY
+        self.jcc(0x85, Target::Label(copy)); // jne
+        self.put(&[REX_W | REX_B, 0x8B, 0x41, 0x08]); // mov rax, [r9 + 8]
+        self.count_op(0, 1); // add qword [rax], 1
+        self.set_label(copy);
+        self.put(&[REX_W | REX_B, 0x8B, 0x01]); // mov rax, [r9]
+        self.put(&[REX_W | REX_B, 0x8B, 0x49, 0x08]); // mov rcx, [r9 + 8]
+                                                      // `mov [base + off], rax`, then the payload word from `rcx`.
+        self.put(&[REX_W, 0x89, Self::rm3(m.kc, 0)]);
+        self.put(&m.db.to_le_bytes());
+        self.store_rcx_base(m.kc, m.db);
     }
 
     /// Copies the compiled variable at `from` into the temporary at `to`
@@ -5864,6 +6354,21 @@ impl Emitter {
     /// `rax`/`rcx`/`rdx` first, off the slot bases, and only then moved
     /// into the argument registers that hold those bases.
     fn emit_helper(&mut self, helper: usize, args: [HArg; 3], word: u32, fail: Target) {
+        self.emit_helper_call(helper, args, word);
+        self.put(&[0x85, 0xC0]); // test eax, eax
+        self.jcc(0x85, fail); // jnz: the helper declined
+    }
+
+    /// The address of row `i` of the tape the trace is of, as a helper's
+    /// argument (the handlers read their operands from the row).
+    fn row_arg(&self, i: usize) -> HArg {
+        let row = self.tbase.wrapping_add(i * std::mem::size_of::<Inst>());
+        HArg::Abs(i64::try_from(row).unwrap_or(0))
+    }
+
+    /// [`Emitter::emit_helper`]'s call alone: what the helper returned is
+    /// in `eax`.
+    fn emit_helper_call(&mut self, helper: usize, args: [HArg; 3], word: u32) {
         // push rdi; push rsi; push r8; push r10; push r11
         self.put(&[0x57, 0x56, 0x41, 0x50, 0x41, 0x52, 0x41, 0x53]);
         self.helper_arg(0, args[0]);
@@ -5879,8 +6384,6 @@ impl Emitter {
         if self.plan.has_calls {
             self.movabs_rdx(self.scratch);
         }
-        self.put(&[0x85, 0xC0]); // test eax, eax
-        self.jcc(0x85, fail); // jnz: the helper declined
     }
 
     /// The offset operand of an array row as a helper argument: a slot's
@@ -5970,6 +6473,7 @@ impl Emitter {
             head_pos: 0,
             synth: 0,
             pins: Vec::new(),
+            gtable: 0,
         }
     }
 
@@ -6048,6 +6552,22 @@ impl Emitter {
             // autoloaded class since the plan must not cost the loop its
             // trace for the rest of the run).
             self.jcc(0x85, Target::Replan(self.plan.head)); // jne
+        }
+        // The slots of the globals the trace reads itself, found once per
+        // entry (the helper always returns 0).
+        let greads = self.plan.class.iter().filter(|c| **c == C_GREAD).count();
+        if greads != 0 {
+            let n = u32::try_from(greads).unwrap_or(0);
+            self.emit_helper(
+                jit_resolve_globals as *const () as usize,
+                [
+                    HArg::Frame,
+                    HArg::Abs(self.gtable),
+                    HArg::Abs(self.gtable + 8 * i64::from(n)),
+                ],
+                n,
+                Target::Stub(self.plan.head),
+            );
         }
         // The head: per-iteration interrupt poll and iteration cap,
         // both exiting at the head (the interpreter then runs one
@@ -7152,7 +7672,36 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             }
         }
     }
+    // The table of global slots: a word per `C_GREAD` row, then the rows'
+    // op indexes (what the entry helper resolves).
+    let greads: Vec<u32> = p
+        .class
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c == C_GREAD)
+        .filter_map(|(j, _)| u32::try_from(head + j).ok())
+        .collect();
+    let mut gtable = 0i64;
+    if !greads.is_empty() {
+        let Some(ptr) = mmap_scratch(greads.len() * 12) else {
+            if debug_on() {
+                eprintln!("jit: region {head}..={close}: global table mmap failed");
+            }
+            return usize::MAX;
+        };
+        // SAFETY: the mapping holds `len` words and `len` `u32`s behind
+        // them, and is page-aligned (the `u32`s start at a multiple of 8).
+        #[allow(clippy::cast_ptr_alignment)]
+        unsafe {
+            let list = ptr.add(greads.len() * 8).cast::<u32>();
+            for (k, at) in greads.iter().enumerate() {
+                list.add(k).write(*at);
+            }
+        }
+        gtable = ptr as i64;
+    }
     let mut em = Emitter::new(p, tape.to_vec(), scratch);
+    em.gtable = gtable;
     em.tbase = ctx.tbase as usize;
     em.emit();
     em.resolve();
@@ -7242,7 +7791,7 @@ pub(super) unsafe fn back_edge(
         // SAFETY: the counters cover the whole tape.
         let count = unsafe { &*counts.add(idx) };
         let n = count.load(Ordering::Relaxed).wrapping_add(1);
-        if n < ctx.hot {
+        if n < HOT_CACHE.load(Ordering::Relaxed) {
             count.store(n, Ordering::Relaxed);
             return target;
         }
@@ -7269,6 +7818,9 @@ unsafe fn back_edge_slow(
     if !ctx.alive() {
         return target;
     }
+    // The VM, for the rows that read through its global scope and for the
+    // plan that looks at what those reads would find.
+    TRACE_VM.with(|vm| vm.set(ctx.vm.get()));
     // SAFETY: guaranteed by the caller.
     let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
     // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
@@ -7304,7 +7856,6 @@ unsafe fn back_edge_slow(
         // SAFETY: the region only touches the frame's slots, and exits
         // leave them exactly as an interpreted run would.
         ctx.poll_row.set(std::ptr::null());
-        TRACE_VM.with(|vm| vm.set(ctx.vm.get()));
         let ret = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
         let r = ret.r;
         if debug_on() {
@@ -7552,6 +8103,99 @@ mod layout_tests {
         assert_eq!((ts.kind(16), ts.kind(32)), (TmpKind::Null, TmpKind::Int));
         ts.set(16, TmpKind::Unknown);
         assert_eq!(ts.known, vec![(32, TmpKind::Int)]);
+    }
+
+    /// A jump on a temporary reads the bool's byte, leaves the temporary
+    /// null and jumps on the byte; one the plan knows nothing about is
+    /// checked first. A handler row is a helper call with the frame and
+    /// the row's address.
+    #[test]
+    fn rows_on_temporaries_and_through_handlers() {
+        let row = |op: TOp| Inst {
+            a: 0x30,
+            ..Inst::plain(op)
+        };
+        let plan = |class: u16, m: JitMeta| Plan {
+            head: 0,
+            close: 0,
+            class: vec![class],
+            meta: vec![m],
+            guards: Vec::new(),
+            entries: Vec::new(),
+            span: vec![1],
+            calls: Vec::new(),
+            has_calls: false,
+            frame: true,
+            version_guard: false,
+            version: 0,
+        };
+        for (class, op, cc) in [(C_JMPZT, TOp::JmpZT, 0x84u8), (C_JMPNZT, TOp::JmpNzT, 0x85)] {
+            for checked in [false, true] {
+                let m = JitMeta {
+                    class,
+                    ca: checked,
+                    ..JitMeta::default()
+                };
+                let mut em = Emitter::new(plan(class, m), vec![row(op)], 0);
+                em.emit_instr(0);
+                let mut want = emitter();
+                if checked {
+                    want.cmpb(KT, 0x30, TAG_BOOL);
+                    want.put(&[0x0F, 0x85, 0, 0, 0, 0]); // jne out
+                }
+                want.put(&[0x0F, 0xB6, 0x8E, 0x31, 0, 0, 0]); // movzx ecx, byte [rsi + 0x31]
+                want.put(&[0x48, 0xC7, 0x86, 0x38, 0, 0, 0, 0, 0, 0, 0]); // mov qword [rsi + 0x38], 0
+                want.put(&[0xC6, 0x86, 0x30, 0, 0, 0, TAG_NULL]); // mov byte [rsi + 0x30], 0
+                want.put(&[0x85, 0xC9]); // test ecx, ecx
+                want.put(&[0x0F, cc, 0, 0, 0, 0]); // jz / jnz to the target
+                assert_eq!(em.code, want.code, "{op:?} checked={checked}");
+            }
+        }
+        // A handler row: `emit_helper` with the frame, the row and nothing.
+        let m = JitMeta {
+            class: C_ROW,
+            lit_a: 0x1234,
+            inc: true,
+            ..JitMeta::default()
+        };
+        let mut em = Emitter::new(plan(C_ROW, m), vec![row(TOp::StrlenC)], 0);
+        em.tbase = 0x7000;
+        em.emit_instr(0);
+        let mut want = emitter();
+        want.emit_helper(
+            0x1234,
+            [HArg::Frame, HArg::Abs(0x7000), HArg::Null],
+            0,
+            Target::Side(0),
+        );
+        want.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+        want.put(&[0x0F, 0x85, 0, 0, 0, 0]); // jne to the poll exit
+        assert_eq!(em.code, want.code);
+        // The rows a handler row is planned for, by what they leave behind.
+        let code = crate::opcode::OpArray::default();
+        let strlen = Inst {
+            c: 0x40,
+            ..Inst::plain(TOp::StrlenC)
+        };
+        let (class, m, step) = plan_row(&code, 0, &strlen).expect("a handler row");
+        assert_eq!(
+            (class, step, m.db, m.arith, m.inc),
+            (C_ROW, 1, 0x40, ROW_INT, false)
+        );
+        assert_eq!((m.sb, m.slot, m.sw, m.lit_c), (NO_DST, NO_DST, NO_DST, -1));
+        let test = Inst::plain(TOp::TypeCheckJmpC);
+        let (class, _, step) = plan_row(&code, 0, &test).expect("a handler row");
+        assert_eq!((class, step), (C_ROWBR, 2));
+        let cmp = Inst {
+            e: 7,
+            c: 0x50,
+            ..Inst::plain(TOp::NumBinT)
+        };
+        let (_, m, _) = plan_row(&code, 0, &cmp).expect("a handler row");
+        assert_eq!((m.db, m.arith), (0x50, ROW_BOOL));
+        assert!(plan_row(&code, 0, &Inst::plain(TOp::Jmp)).is_none());
+        // (A frameless call's row needs its op.)
+        assert!(plan_row(&code, 0, &Inst::plain(TOp::FramelessQ)).is_none());
     }
 
     /// What the rows that move an array rely on: the payload word of a

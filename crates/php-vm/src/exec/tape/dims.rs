@@ -33,7 +33,7 @@ use php_runtime::{ArrayKey, BinaryOp, Value};
 /// The kind of an operand, as stored in `k`: a compiled variable, a
 /// consumed temporary, a kept temporary, a literal, or none.
 const KIND_CV: u8 = 0;
-const KIND_TMP: u8 = 1;
+pub(super) const KIND_TMP: u8 = 1;
 const KIND_TMPKEEP: u8 = 2;
 const KIND_LIT: u8 = 3;
 const KIND_UNUSED: u8 = 4;
@@ -89,7 +89,7 @@ fn dim_kind(inst: &Inst) -> u8 {
 }
 
 /// The value operand's kind from `k`.
-fn val_kind(inst: &Inst) -> u8 {
+pub(super) fn val_kind(inst: &Inst) -> u8 {
     (inst.k >> 3) & 7
 }
 

@@ -322,69 +322,109 @@ pub(super) unsafe fn frameless_quick(frame: *mut Frame, inst: &Inst) -> Br {
     }
 }
 
+/// The operand of kind `kind` at `off` of a frameless call instruction,
+/// where it lies: `None` for an undefined variable and for a reference
+/// (the generic op warns, or reads through it).
+///
+/// # Safety
+/// `off` is an offset of that kind [`lower`] validated for the frame of
+/// `st`; the reference is not used past the next write to the slot.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::cast_ptr_alignment)] // a few loads; slot offsets
+unsafe fn q_arg<'a>(st: St, kind: u8, off: u32) -> Option<&'a Value> {
+    let v: &Value = match kind {
+        // SAFETY: a validated variable offset (a `CvSlot` is a transparent
+        // `Option<Value>`).
+        Q_CV => unsafe { &*st.cvs.add(off as usize).cast::<Option<Value>>() }.as_ref()?,
+        // SAFETY: a validated temporary offset.
+        Q_TMP => unsafe { &*st.tmps.add(off as usize).cast::<Value>() },
+        // SAFETY: a validated literal offset.
+        _ => unsafe { &*st.lits.add(off as usize).cast::<Value>() },
+    };
+    (!matches!(v, Value::Reference(_))).then_some(v)
+}
+
+/// Leaves a consumed temporary null, as its `Send` left it: what it held is
+/// released (a scalar owns nothing: no call for it).
+///
+/// # Safety
+/// As [`q_arg`]; nothing refers to the slot's value any more.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test and a store
+unsafe fn q_consume(st: St, kind: u8, off: u32) {
+    if kind == Q_TMP {
+        // SAFETY: a validated temporary offset.
+        let v = std::mem::take(unsafe { tmp_slot(st, off) });
+        if is_scalar(&v) {
+            std::mem::forget(v);
+        } else {
+            drop(v);
+        }
+    }
+}
+
 /// [`frameless_quick`] for any other shape: several arguments, or one in a
-/// temporary. The call site's cache was checked.
+/// temporary. The call site's cache was checked. Straight-line code per
+/// number of arguments: each operand is read where it lies, the result is
+/// computed, and only then are the consumed temporaries released and the
+/// result stored.
 ///
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-#[allow(clippy::cast_ptr_alignment)] // slot offsets from the slot vectors' bases
 unsafe fn frameless_quick_n(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     let dst = u32::try_from(inst.p as u64 & 0xffff_ffff).unwrap_or(NO_DST);
-    let count = usize::from(inst.k >> 6);
-    let kind = |i: usize| (inst.k >> (2 * i)) & 3;
-    let offs = [inst.a, inst.b, inst.d];
-    let null = Value::Null;
-    let mut args: [&Value; 3] = [&null; 3];
-    // Whether the result goes where a consumed argument lies.
-    let mut over_arg = false;
-    for (i, arg) in args.iter_mut().enumerate().take(count) {
-        let v: &Value = match kind(i) {
-            // SAFETY: a validated variable offset.
-            Q_CV => match unsafe { &*cv_slot(st, offs[i]) } {
-                Some(v) => v,
-                None => return Br::Decline,
-            },
-            Q_TMP => {
-                over_arg |= offs[i] == dst;
-                // SAFETY: a validated temporary offset.
-                unsafe { &*st.tmps.add(offs[i] as usize).cast::<Value>() }
-            }
-            // SAFETY: a validated literal offset.
-            _ => unsafe { &*st.lits.add(offs[i] as usize).cast::<Value>() },
-        };
-        if matches!(v, Value::Reference(_)) {
-            return Br::Decline;
-        }
-        *arg = v;
-    }
-    // A result slot holding a value to release (other than an argument the
-    // call consumes) is the generic op's.
+    let count = inst.k >> 6;
+    let (ka, kb, kc) = (inst.k & 3, (inst.k >> 2) & 3, (inst.k >> 4) & 3);
+    // A result slot holding a value to release is the generic op's, unless
+    // it is where an argument the call consumes lies.
+    let over_arg = (ka == Q_TMP && inst.a == dst)
+        || (count >= 2 && kb == Q_TMP && inst.b == dst)
+        || (count == 3 && kc == Q_TMP && inst.d == dst);
     // SAFETY: `dst` is the validated result field.
     if dst != NO_DST && !over_arg && !is_scalar(unsafe { tmp_slot(st, dst) }) {
         return Br::Decline;
     }
-    let result = if count == 1 {
-        crate::special::quick_eval(inst.e, args[0])
-    } else {
-        crate::special::quick_eval_n(inst.e, &args[..count])
+    // SAFETY (the operands below): validated offsets of their kinds; the
+    // references are dropped before the temporaries are consumed.
+    let Some(a) = (unsafe { q_arg(st, ka, inst.a) }) else {
+        return Br::Decline;
+    };
+    let result = match count {
+        1 => crate::special::quick_eval(inst.e, a),
+        2 => {
+            let Some(b) = (unsafe { q_arg(st, kb, inst.b) }) else {
+                return Br::Decline;
+            };
+            crate::special::quick_eval_2(inst.e, a, b)
+        }
+        _ => {
+            let (Some(b), Some(c)) = (unsafe { (q_arg(st, kb, inst.b), q_arg(st, kc, inst.d)) })
+            else {
+                return Br::Decline;
+            };
+            crate::special::quick_eval_3(inst.e, a, b, c)
+        }
     };
     let Some(r) = result else {
         return Br::Decline;
     };
-    // The arguments are not read past this point: the temporaries among
-    // them are released (a string or an array goes back to its owner's
-    // count; the jump polls for what a release may queue).
-    for (i, off) in offs.iter().enumerate().take(count) {
-        if kind(i) == Q_TMP {
-            // SAFETY: a validated temporary offset.
-            drop(std::mem::take(unsafe { tmp_slot(st, *off) }));
+    // The arguments are not read past this point (the jump polls for what
+    // a release may queue).
+    // SAFETY: as above.
+    unsafe {
+        q_consume(st, ka, inst.a);
+        if count >= 2 {
+            q_consume(st, kb, inst.b);
+        }
+        if count == 3 {
+            q_consume(st, kc, inst.d);
         }
     }
-    // SAFETY: as above; the slot holds a scalar (seen above, or the null a
-    // consumed argument left).
+    // SAFETY: the slot holds a scalar (seen above, or the null a consumed
+    // argument left).
     if unsafe { put_result(st, dst, r) } {
         Br::Jump
     } else {

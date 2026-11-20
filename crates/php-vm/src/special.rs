@@ -780,61 +780,84 @@ pub(crate) fn defers_like_php_src(lc: &[u8], argc: usize) -> bool {
     }
 }
 
+/// What `strpos()` returns for a search result.
+#[inline]
+fn quick_pos(found: Option<i64>) -> Value {
+    found.map_or(Value::Bool(false), Value::Int)
+}
+
+/// What `substr()` returns: `RETURN_STR_COPY(str)` for the whole string,
+/// else `RETURN_STRINGL_FAST` (the shared empty and one-byte strings).
+#[inline]
+fn quick_substr(s: &ZStr, offset: i64, length: Option<i64>) -> Value {
+    let part = php_stdstr::search::substr(s.as_bytes(), offset, length);
+    Value::Str(if part.len() == s.len() {
+        s.clone()
+    } else {
+        ZStr::init_fast(part)
+    })
+}
+
 /// The result of the call of the function with id `id` ([`quick_id_n`])
-/// with the two or three arguments `args` (one argument: [`quick_eval`]),
-/// as its handler computes it for arguments of
-/// the types it is declared with, shape test included ([`frameless_args`]
-/// for the id's class, of which this takes the common part): `None` when
-/// the call needs its handler (another type, an offset outside the
-/// haystack, a loose `in_array()`, numbers of mixed types for `max()` and
-/// `min()`).
-pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
+/// with the two arguments `a` and `b`, as its handler computes it for
+/// arguments of the types it is declared with, shape test included
+/// ([`frameless_args`] for the id's class, of which this takes the common
+/// part): `None` when the call needs its handler (another type, numbers of
+/// mixed types for `max()` and `min()`).
+pub(crate) fn quick_eval_2(id: u8, a: &Value, b: &Value) -> Option<Value> {
     use php_stdstr::search;
-    use Value::{Array, Bool, Float, Int, Null, Str};
-    let found = |r: Option<i64>| r.map_or(Bool(false), Int);
-    let part = |s: &ZStr, offset: i64, length: Option<i64>| {
-        // `RETURN_STR_COPY(str)` for the whole string, else
-        // `RETURN_STRINGL_FAST` (the shared empty and one-byte strings).
-        let r = search::substr(s.as_bytes(), offset, length);
-        Str(if r.len() == s.len() {
-            s.clone()
-        } else {
-            ZStr::init_fast(r)
-        })
-    };
-    Some(match (id, args) {
-        (QUICK_STRPOS, [Str(h), Str(n)]) => {
-            found(search::strpos(h.as_bytes(), n.as_bytes(), 0).ok()?)
+    use Value::{Bool, Float, Int, Str};
+    Some(match (id, a, b) {
+        (QUICK_STRPOS, Str(h), Str(n)) => {
+            quick_pos(search::strpos(h.as_bytes(), n.as_bytes(), 0).ok()?)
         }
-        // An offset outside the haystack is the handler's `ValueError`.
-        (QUICK_STRPOS, [Str(h), Str(n), Int(offset)]) => {
-            found(search::strpos(h.as_bytes(), n.as_bytes(), *offset).ok()?)
-        }
-        (QUICK_SUBSTR, [Str(s), Int(offset)] | [Str(s), Int(offset), Null]) => {
-            part(s, *offset, None)
-        }
-        (QUICK_SUBSTR, [Str(s), Int(offset), Int(length)]) => part(s, *offset, Some(*length)),
+        (QUICK_SUBSTR, Str(s), Int(offset)) => quick_substr(s, *offset, None),
         // `ZEND_FRAMELESS_FUNCTION(max, 2)` / `(min, 2)` of two ints or two
         // floats: `max` keeps the first of two equal values, `min` the
         // second, and a NaN on either side gives the second.
-        (QUICK_MAX, [Int(l), Int(r)]) => Int(if l >= r { *l } else { *r }),
-        (QUICK_MIN, [Int(l), Int(r)]) => Int(if l < r { *l } else { *r }),
-        (QUICK_MAX, [Float(l), Float(r)]) => Float(if l >= r { *l } else { *r }),
-        (QUICK_MIN, [Float(l), Float(r)]) => Float(if l < r { *l } else { *r }),
-        (QUICK_IN_ARRAY, [needle, Array(haystack), Bool(true)]) => {
-            Bool(in_array_identical(needle, haystack)?)
-        }
-        (QUICK_STR_CONTAINS, [Str(h), Str(n)]) => {
+        (QUICK_MAX, Int(l), Int(r)) => Int(if l >= r { *l } else { *r }),
+        (QUICK_MIN, Int(l), Int(r)) => Int(if l < r { *l } else { *r }),
+        (QUICK_MAX, Float(l), Float(r)) => Float(if l >= r { *l } else { *r }),
+        (QUICK_MIN, Float(l), Float(r)) => Float(if l < r { *l } else { *r }),
+        (QUICK_STR_CONTAINS, Str(h), Str(n)) => {
             Bool(search::str_contains(h.as_bytes(), n.as_bytes()))
         }
-        (QUICK_STR_STARTS, [Str(h), Str(n)]) => {
+        (QUICK_STR_STARTS, Str(h), Str(n)) => {
             Bool(search::str_starts_with(h.as_bytes(), n.as_bytes()))
         }
-        (QUICK_STR_ENDS, [Str(h), Str(n)]) => {
-            Bool(search::str_ends_with(h.as_bytes(), n.as_bytes()))
+        (QUICK_STR_ENDS, Str(h), Str(n)) => Bool(search::str_ends_with(h.as_bytes(), n.as_bytes())),
+        _ => return None,
+    })
+}
+
+/// [`quick_eval_2`] for three arguments: `None` as there, and for an offset
+/// outside the haystack (the handler's `ValueError`) and a loose
+/// `in_array()`.
+pub(crate) fn quick_eval_3(id: u8, first: &Value, second: &Value, third: &Value) -> Option<Value> {
+    use php_stdstr::search;
+    use Value::{Array, Bool, Int, Null, Str};
+    Some(match (id, first, second, third) {
+        (QUICK_STRPOS, Str(h), Str(n), Int(offset)) => {
+            quick_pos(search::strpos(h.as_bytes(), n.as_bytes(), *offset).ok()?)
+        }
+        (QUICK_SUBSTR, Str(s), Int(offset), Null) => quick_substr(s, *offset, None),
+        (QUICK_SUBSTR, Str(s), Int(offset), Int(length)) => quick_substr(s, *offset, Some(*length)),
+        (QUICK_IN_ARRAY, needle, Array(haystack), Bool(true)) => {
+            Bool(in_array_identical(needle, haystack)?)
         }
         _ => return None,
     })
+}
+
+/// [`quick_eval_2`] or [`quick_eval_3`] by the number of arguments (one
+/// argument: [`quick_eval`]): what the tests compare with the handlers.
+#[cfg(test)]
+pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
+    match args {
+        [a, b] => quick_eval_2(id, a, b),
+        [a, b, c] => quick_eval_3(id, a, b, c),
+        _ => None,
+    }
 }
 
 /// A strict `in_array()` of a null, bool, int, float or string needle: the

@@ -848,7 +848,14 @@ macro_rules! tape_ops {
                         return Out { ip, at: ip, why: WHY_EXT };
                     }
                     TOp::CallInit | TOp::CallSend => {
-                        return Out { ip, at: ip, why: WHY_CALL };
+                        // `new C` of a class without a constructor is no
+                        // call: the object, then the jump over the
+                        // constructor call's ops (with the jump's poll).
+                        if inst.k == calls::CALL_NEW && calls::new_plain(st.f, inst) {
+                            take_jump!(ip, inst, st, JIT, ctx);
+                        } else {
+                            return Out { ip, at: ip, why: WHY_CALL };
+                        }
                     }
                     TOp::VmOp => {
                         return Out { ip, at: ip, why: WHY_VM };
@@ -2209,6 +2216,83 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             None => DECLINED,
         },
         _ => DECLINED,
+    }
+}
+
+/// The address of the slot the read through the global scope at op `at`
+/// of frame `f` reads now, for a compiled loop that copies the value out
+/// itself (`jit::C_GREAD`): the main frame's variable or the global store's
+/// slot the run-time cache of an [`Op::FetchGlobal`] names
+/// (`Vm::fetch_global_hit`'s two cases), or the slot of a superglobal read
+/// as a whole (`Vm::fetch_place_fast`: its cached slot). 0 when the cache
+/// holds nothing for the op, the slot does not exist, or the op is no such
+/// read. The address holds while nothing adds a global variable or
+/// replaces the main frame's variables.
+pub(super) fn global_slot_addr(vm: &Vm, f: &Frame, at: usize) -> usize {
+    use crate::rtcache::GlobalSlot;
+    let store_slot = match f.code.ops.get(at) {
+        Some(&Op::FetchGlobal { place, .. }) => {
+            let cached = f
+                .code
+                .rt_cache
+                .globals
+                .try_borrow()
+                .ok()
+                .and_then(|c| c.get(place as usize).copied());
+            match cached {
+                Some(GlobalSlot::GlobalCv(cv)) => {
+                    return vm
+                        .frames
+                        .vec
+                        .first()
+                        .and_then(|main| main.cvs.get(cv as usize))
+                        .map_or(0, |slot| std::ptr::from_ref(slot) as usize);
+                }
+                Some(GlobalSlot::GlobalStore(idx)) => Some(idx),
+                _ => None,
+            }
+        }
+        Some(&Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            ..
+        }) => auto_global_of(&f.code, place)
+            .and_then(|i| vm.ext.auto_globals.cached_slots.get(i).copied().flatten()),
+        _ => None,
+    };
+    let Some(idx) = store_slot else {
+        return 0;
+    };
+    let Ok(globals) = vm.globals.try_borrow() else {
+        return 0;
+    };
+    globals
+        .slots
+        .get(idx as usize)
+        .map_or(0, |slot| std::ptr::from_ref(slot) as usize)
+}
+
+/// The registration index of the superglobal `place` names as a whole
+/// (`$_GET` is 0), as `Vm::fetch_place_fast` finds it; `None` for any
+/// other place.
+fn auto_global_of(code: &OpArray, place: u32) -> Option<usize> {
+    let p = code.places.get(place as usize)?;
+    if !p.segs.is_empty() {
+        return None;
+    }
+    let crate::opcode::PlaceBase::Global(Operand::Lit(lit)) = &p.base else {
+        return None;
+    };
+    let Value::Str(name) = code.literals.get(*lit as usize)? else {
+        return None;
+    };
+    let name = name.as_bytes();
+    if name == b"_GET" {
+        Some(0)
+    } else if name.first() == Some(&b'_') {
+        crate::auto_globals::index(name)
+    } else {
+        None
     }
 }
 

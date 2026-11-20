@@ -42,7 +42,7 @@
 //! built ([`materialize`]) and returns the frame to the pool, so the rest
 //! of the VM never sees a half-prepared frame.
 
-use super::{Inst, TOp};
+use super::{rel, Inst, TOp};
 use crate::call::{accepts_without_coercion, clone_value};
 use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction};
 use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
@@ -71,6 +71,21 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::CallInit)
             })
         }
+        // `new C` with nothing to evaluate before its constructor call
+        // (`skip`: the op after that call): the class literal in `a`, the
+        // result temporary in `b` and the jump to `skip` in `c`, for the
+        // core loop's own attempt (`new_plain`).
+        Op::New {
+            class: ClassSpec::Named(lit),
+            dst,
+            skip,
+        } if *skip != 0 => Some(Inst {
+            k: CALL_NEW,
+            a: *lit,
+            b: *dst,
+            c: rel(code, i, *skip)?,
+            ..plain(TOp::CallInit)
+        }),
         op if preparable(op) => Some(plain(TOp::CallInit)),
         // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
         // the VM at hand (`run_vm_op`).
@@ -120,6 +135,47 @@ fn auto_global_place(code: &OpArray, place: u32) -> bool {
 /// The mark (`k`) of a `CallInit` instruction whose call [`prepare_quick`]
 /// may take.
 pub(super) const CALL_QUICK: u8 = 1;
+/// The mark of a `CallInit` instruction that is a `new C` the core loop
+/// tries itself ([`new_plain`]).
+pub(super) const CALL_NEW: u8 = 2;
+
+/// `ZEND_NEW` of a class without a constructor, on the call site's class
+/// cache hit: the object (`props::new_plain`: its slots copied from the
+/// class's evaluated defaults) into the result temporary. There is no call
+/// to make, so the instruction then jumps over the constructor call's ops.
+/// `false`, nothing changed, for anything else: a cache miss, a class with
+/// a constructor or one `props::new_plain` leaves to `Vm::instantiate`
+/// (abstract, an enum, an internal class with a creation hook, ...) -
+/// `run_call` then decides as before.
+///
+/// # Safety
+/// `inst` is a [`CALL_NEW`] instruction [`lower`] built for `frame`, the
+/// current frame.
+#[inline(never)]
+pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(slot) = f.tmps.get_mut(inst.b as usize) else {
+        return false;
+    };
+    let cls = {
+        let Ok(cache) = f.code.class_cache.try_borrow() else {
+            return false;
+        };
+        match cache.get(inst.a as usize).and_then(std::rc::Weak::upgrade) {
+            Some(cls) => cls,
+            None => return false,
+        }
+    };
+    if cls.magic.construct.is_some() {
+        return false;
+    }
+    let Some(o) = crate::props::new_plain(&cls) else {
+        return false;
+    };
+    crate::exec::spec::put_tmp(slot, Value::Object(o));
+    true
+}
 
 /// The id and frameless class (`special::quick_id`) of the builtin the
 /// `InitFCall` at `i` names, when its call is `f(<expression>)`: one
