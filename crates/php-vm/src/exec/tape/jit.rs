@@ -422,9 +422,10 @@ const C_SPROPW: u16 = 25;
 /// else the interpreted row) storing a clean `Bool` into the
 /// destination temporary (see `plan_sprop_isset`).
 const C_SPROPISSET: u16 = 26;
-/// A constant or class constant the plan folded to an `Int`: the row
-/// stores that literal, guarded only when the op resolves the constant
-/// through the frame's scope (`self::`/`static::`) — see `plan_const`.
+/// A constant or class constant the plan folded to an `Int`, a `null` or
+/// a `Bool`: the row stores that value, guarded only when the op resolves
+/// the constant through the frame's scope (a class constant) — see
+/// `plan_const`.
 const C_CONSTI: u16 = 27;
 /// An array element read with an int offset (`$t = $cv[$i]`, or
 /// `$v = $cv[$i]` folded with the assignment after it): the row calls
@@ -538,6 +539,11 @@ const NULL_SRC: u8 = 0x40;
 const OPA_BITAND: u8 = 6;
 const OPA_BITOR: u8 = 7;
 const OPA_BITXOR: u8 = 8;
+/// What a folded constant is (`C_CONSTI`'s `JitMeta.arith`): an `Int`
+/// (`lit_a` its value), `null`, or a `Bool` (`lit_a` 0 or 1).
+const CONST_INT: u8 = 0;
+const CONST_NULL: u8 = 1;
+const CONST_BOOL: u8 = 2;
 /// The shifts of the generic numeric rows: `<<` and `>>` by a count in
 /// `0..=63` (any other count exits to the interpreted row, which gives
 /// the 0 or -1 of a too wide shift or throws for a negative one).
@@ -1651,23 +1657,34 @@ fn plan_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMet
         ),
         _ => return None,
     };
-    let php_runtime::Value::Int(v) = v else {
-        return None;
+    // The folded value: an int, or the `null`, `true` or `false` a
+    // constant is as often defined to (`define('DEBUG', false)`). Anything
+    // else (a float, a string, an array) is the interpreted row's.
+    let (kind, v) = match v {
+        php_runtime::Value::Int(v) => (CONST_INT, v),
+        php_runtime::Value::Null => (CONST_NULL, 0),
+        php_runtime::Value::Bool(b) => (CONST_BOOL, i64::from(b)),
+        _ => return None,
     };
     let mut m = JitMeta {
         class: C_CONSTI,
-        // The folded value itself.
+        // The folded value itself, and which kind of value it is.
         lit_a: v,
+        arith: kind,
         db: prop_dst(code, Some(dst))?,
         ..JitMeta::default()
     };
     match class {
-        // A plain named constant, or a class constant named by the op:
-        // in every case the frame's calling scope is what resolved the
-        // entry (access-checked per lookup for a named class constant,
-        // and an op array that needs a non-public one always runs in a
-        // frame scoped where it is accessible), so pin it.
-        None | Some(ClassSpec::Named(_)) => {
+        // A plain named constant: its value sits in this op array's own
+        // cache slot and is the same for every frame that runs it,
+        // whatever the scope; only a redefinition could change it, which
+        // the prologue's version guard covers. No guard of its own.
+        None => m.sg = false,
+        // A class constant named by the op: the frame's calling scope is
+        // what resolved the entry (access-checked per lookup, and an op
+        // array that needs a non-public one always runs in a frame scoped
+        // where it is accessible), so pin it.
+        Some(ClassSpec::Named(_)) => {
             m.sg = true;
             m.lit_b = f
                 .scope
@@ -2309,8 +2326,17 @@ fn plan(
         match class[j] {
             // A property or static-property read and a folded constant:
             // the destination temporary holds an `Int`.
-            C_PROP | C_SPROP | C_CONSTI => {
+            C_PROP | C_SPROP => {
                 set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, TmpKind::Int);
+            }
+            // A folded constant: what the constant is.
+            C_CONSTI => {
+                let kind = match meta[j].arith {
+                    CONST_NULL => TmpKind::Null,
+                    CONST_BOOL => TmpKind::Bool,
+                    _ => TmpKind::Int,
+                };
+                set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, kind);
             }
             // A write, an `op=` and a `++`/`--`: the result temporary (if
             // kept) is fully stored with the `Int`; a consumed `Tmp`
@@ -4209,14 +4235,29 @@ impl Emitter {
     /// at plan time, so there is no memory to re-read per iteration.
     fn emit_consti(&mut self, m: JitMeta, jo: Target) {
         self.emit_sprop_guards(m, jo);
-        match i32::try_from(m.lit_a) {
-            Ok(v) => self.store_imm_base(KT, m.db, v),
-            Err(_) => {
-                self.movabs(true, m.lit_a);
-                self.store_int_r9_base(KT, m.db);
+        match m.arith {
+            // `null`: a zero payload and the tag.
+            CONST_NULL => {
+                self.store_imm_base(KT, m.db, 0);
+                self.store_tag_base(KT, m.db, TAG_NULL);
+            }
+            // `true`/`false`: the value byte (`BOOL_BYTE`), then the tag.
+            CONST_BOOL => {
+                self.mov_ecx(u32::from(m.lit_a != 0));
+                self.store_cl_base(KT, m.db.wrapping_add(BOOL_BYTE));
+                self.store_tag_base(KT, m.db, TAG_BOOL);
+            }
+            _ => {
+                match i32::try_from(m.lit_a) {
+                    Ok(v) => self.store_imm_base(KT, m.db, v),
+                    Err(_) => {
+                        self.movabs(true, m.lit_a);
+                        self.store_int_r9_base(KT, m.db);
+                    }
+                }
+                self.store_tag_base(KT, m.db, TAG_INT);
             }
         }
-        self.store_tag_base(KT, m.db, TAG_INT);
     }
 }
 impl Emitter {

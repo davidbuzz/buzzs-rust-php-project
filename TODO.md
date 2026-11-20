@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 43/82 meet (measured 2026-11-20 JIT-on; FEATURE_GAP still says 37/82 — refresh after commit).
+Score: 48/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 17/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -19,14 +19,17 @@ Score: 43/82 meet (measured 2026-11-20 JIT-on; FEATURE_GAP still says 37/82 — 
       `$a[$i] op= v`) through helpers the trace calls, native `& | ^ << >>` and `NumBinC`.
       Open: string keys (hash_read, x_eq_hash_v, hash1/hash2), string offsets (x_eq_str_0),
       nested dims (matrix), float elements (heapsort), `isset`/`++` on an element, and an
-      inline packed read in place of the helper call.
+      inline packed read in place of the helper call. ary (1.59) and ary2 (1.92) compile now
+      and are still over: what is left is table growth and hash inserts in php-runtime.
 - [ ] JIT Step 3 — call-heavy tail: frameless recursion (ackermann 10.67, fib 6.43,
       fibo 6.39), closure inlining (ops:closure 4.15, ops:new_obj adjacent),
       native-call inlining (builtins 5.36, calls 5.09, int_func 2.15).
-- [ ] JIT Step 4 — `New` rows (new_obj 3.29, micro:new_Foo 2.15, objects 4.66),
-      elvis/ternary (`Step`/`JmpZC` rows: elvis micros 2.6–3.0, x_eq_f_q_f_* 2.06–3.60),
-      NULL-valued const fold (x_eq_TEST 2.41), and the two oddities that emit no
-      trace attempt at all (micro:self_cc_f 4.64, micro:x_eq_GLOBALS_v 2.60, x_eq__GET 3.83).
+- [ ] JIT Step 4 — `New` rows (new_obj 3.28, micro:new_Foo 2.12, objects 4.63),
+      elvis/ternary (`JmpZC` + `Step` rows: x_eq_f_q_f_a 3.49, x_eq_a_elvis_null 2.92,
+      x_eq_f_elvis_tmp 2.51, x_eq_f_q_f_tmp 1.94), `$this::CONST` (x_eq_Foo_cc_TEST 3.00: a
+      dynamic class operand), and the loops the tape never enters, so no trace is attempted:
+      `self::f()` (self_cc_f 4.64), `$GLOBALS['v']` (2.60), `$_GET` (3.80).
+      Done 2026-11-20: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
 - [ ] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
