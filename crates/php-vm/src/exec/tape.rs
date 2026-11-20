@@ -490,8 +490,10 @@ macro_rules! take_jump {
             };
         }
         // The trace JIT: a backward jump onto a tape instruction is a loop
-        // back edge, and the hook counts it and may run (or compile and
-        // run) the loop as machine code.  It returns the instruction to
+        // back edge (a jump of an instruction onto itself included: an
+        // empty `for` loop is one fused step-compare-jump instruction),
+        // and the hook counts it and may run (or compile and run) the
+        // loop as machine code.  It returns the instruction to
         // continue at, which is the target itself when the loop is not
         // hot yet or cannot be compiled.  `$jit` is `run_core`'s const
         // generic: a frame without a live context runs the instantation
@@ -499,7 +501,7 @@ macro_rules! take_jump {
         // test measurably reshapes `run_core`: +114M instructions on
         // `fib`).  `$ctx` is `run_core`'s context parameter: non-null
         // exactly when `$jit` is true.
-        if $jit && $ip < at {
+        if $jit && $ip <= at {
             // SAFETY: guaranteed by `$jit` and the test just made the
             // jump backward. (Reached from `run_core`'s `unsafe` block,
             // hence no `unsafe` here.)  `st` goes by VALUE: taking its
@@ -1458,7 +1460,21 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_tmp(op, ka, kb)?)
             }
         }
+        // Also the form the compiler fused with the `CmpJmp` after it (a
+        // rotated loop's step and condition, `for (...; $i < $n; $i = $i +
+        // 1)`): on the tape the step is this instruction, which covers the
+        // kept `AssignCv`, and the comparison runs as its own instruction
+        // right after. The `CmpJmp` stays in the op array (the loop is
+        // entered at it), so the two are exactly what the fused op stands
+        // for; left unlowered, the step left the core on every iteration.
         Op::BinAssignCv {
+            op: BinKind::Arith(op),
+            a,
+            b,
+            cv,
+            ..
+        }
+        | Op::BinAssignCvCmpJmp {
             op: BinKind::Arith(op),
             a,
             b,
@@ -1474,13 +1490,15 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_cv(op, ka, kb)?)
             }
         }
+        // As above for `$cv op= val` (`for (...; $k <= $n; $k += $i)`).
         Op::AssignOpCv {
             cv,
             op,
             val,
             dst: None,
             ..
-        } => {
+        }
+        | Op::AssignOpCvCmpJmp { cv, op, val, .. } => {
             let (kb, fb) = src(code, val)?;
             Inst {
                 a: cv_off(code, cv)?,

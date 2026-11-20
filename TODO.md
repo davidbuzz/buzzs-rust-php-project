@@ -14,9 +14,12 @@ Score: 43/82 meet (measured 2026-11-20 JIT-on; FEATURE_GAP still says 37/82 — 
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
       written at the `Int` payload offset (a `Bool`'s value is the byte after the tag).
       Sub-list: perf/TODO-jit-step1.md
-- [ ] JIT Step 2 — array/string dim reads (`FetchDimSC`/`FetchDimIC` rows): ~15 workloads
-      at 1.4–3.6 (dim_read 1.58, dim_write 1.43, hash_read 1.46, abs 1.56→tag?, x_eq_hash_v 1.50,
-      x_eq_str_0 2.36, ary/ary2/ary3, hash1/hash2, matrix, sieve, arrays, array_rw, strings).
+- [~] JIT Step 2 — array/string dim rows. Done 2026-11-20 (`24eca59c`): int-offset array
+      rows for int elements (`$t = $a[$i]`, the folded `$v = $a[$i]`, `$a[$i] = v`, `$a[] = v`,
+      `$a[$i] op= v`) through helpers the trace calls, native `& | ^ << >>` and `NumBinC`.
+      Open: string keys (hash_read, x_eq_hash_v, hash1/hash2), string offsets (x_eq_str_0),
+      nested dims (matrix), float elements (heapsort), `isset`/`++` on an element, and an
+      inline packed read in place of the helper call.
 - [ ] JIT Step 3 — call-heavy tail: frameless recursion (ackermann 10.67, fib 6.43,
       fibo 6.39), closure inlining (ops:closure 4.15, ops:new_obj adjacent),
       native-call inlining (builtins 5.36, calls 5.09, int_func 2.15).
@@ -24,8 +27,8 @@ Score: 43/82 meet (measured 2026-11-20 JIT-on; FEATURE_GAP still says 37/82 — 
       elvis/ternary (`Step`/`JmpZC` rows: elvis micros 2.6–3.0, x_eq_f_q_f_* 2.06–3.60),
       NULL-valued const fold (x_eq_TEST 2.41), and the two oddities that emit no
       trace attempt at all (micro:self_cc_f 4.64, micro:x_eq_GLOBALS_v 2.60, x_eq__GET 3.83).
-- [ ] JIT: decide + execute "make JIT default" policy (stock CLI here has
-      opcache.jit_buffer_size=0 → parity argument; revisit if C baseline changes).
+- [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
+      turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
 - [ ] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
       floats in traces (mandel 1.60, float_mul, float_math); property access inside
       inlined callee bodies; `self::`/`static::` scope guards for call inlining.
@@ -80,9 +83,10 @@ Score: 43/82 meet (measured 2026-11-20 JIT-on; FEATURE_GAP still says 37/82 — 
 - [ ] Refresh FEATURE_GAP.md scoreboard rows after JIT Step 1 commit (37/82 → 43/82;
       const/static-lookup row 3/12 → 9/12; property/const micro numbers).
 - [ ] Commit cadence: checkpoint the moment lib tests are green; never push (user rule).
-- [ ] JIT opt-in knob stays `BUZZS_JIT` (+ `BUZZS_JIT_DEBUG` dump); never `PHPRUST_*`.
-- [ ] JIT-on PHPT parity runs must stay green vs `phpt-baseline.txt` (3 failures only)
-      with `BUZZS_JIT=1` — run after every JIT step.
+- [ ] JIT knobs stay `BUZZS_*`, never `PHPRUST_*`: `BUZZS_JIT=0` (off), `BUZZS_JIT_DEBUG`
+      (dump), `BUZZS_JIT_HOT=<n>` (compile after n back edges instead of 20,000; for test runs).
+- [ ] PHPT runs exercise the JIT by default now; after every JIT step also run the set with
+      `--env BUZZS_JIT_HOT=100` (every loop compiled) and with `--env BUZZS_JIT=0`.
 
 ## Done recently (do not redo)
 - [x] Trace JIT base → call inlining → property read/write rows → three cached-property

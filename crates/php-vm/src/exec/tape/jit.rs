@@ -247,11 +247,35 @@ impl JitCtx {
 
 /// A backward jump onto instruction `close`'s target compiles the loop
 /// once `close` has been taken this many times.
-const HOT_LIMIT: i32 = 20_000;
+const HOT_LIMIT: i32 = 1_000;
+/// How many times a loop is planned before it is refused for good, when
+/// what refused it was a run-time cache that was not filled yet (a call
+/// or a property in a branch no iteration had taken): each refusal makes
+/// the next count eight times as long (1,000, then 9,000, then 73,000
+/// back edges). A refusal for the loop's shape is final at once.
+const MAX_ATTEMPTS: usize = 3;
+/// [`attempt`]'s "refused for now": worth planning again later.
+const REFUSED_FOR_NOW: usize = usize::MAX - 1;
+
+thread_local! {
+    /// Set by a planner that refuses for a cache miss ([`soft`]), read by
+    /// [`attempt`] after a refused plan.
+    static PLAN_SOFT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A planner's refusal for a run-time cache that holds no entry (yet) for
+/// what the row needs: the property, method or function cache of an op
+/// that has not run, a constant not fetched so far, an entry filled for
+/// another calling scope. Marks the refusal as worth another attempt and
+/// gives the `None` to return.
+fn soft<T>() -> Option<T> {
+    PLAN_SOFT.with(|s| s.set(true));
+    None
+}
 
 /// [`HOT_LIMIT`], or the count `BUZZS_JIT_HOT` names (read once): a test
-/// run sets it low so that every loop of a test suite is compiled, where
-/// the default leaves all but the longest ones interpreted.
+/// run sets it low so that even the shortest loops of a test suite are
+/// compiled.
 fn hot_limit() -> i32 {
     static HOT: OnceLock<i32> = OnceLock::new();
     *HOT.get_or_init(|| {
@@ -303,8 +327,9 @@ pub fn enabled() -> bool {
 /// JIT being on).
 pub(crate) fn has_loop_close(tape: &[Inst]) -> bool {
     tape.iter().any(|inst| {
+        // Onto an earlier instruction, or onto itself (an empty loop).
         #[allow(clippy::cast_possible_wrap)]
-        let backward = (inst.c as i32) < 0;
+        let backward = (inst.c as i32) <= 0;
         backward
             && (inst.op == TOp::Jmp
                 || inst
@@ -1055,8 +1080,12 @@ fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitM
         .prop_cache
         .try_borrow()
         .ok()?
-        .get(inst.a as usize)?
-        .clone();
+        .get(inst.a as usize)
+        .cloned()
+        .or_else(soft)?;
+    if e.class_addr == 0 {
+        return soft();
+    }
     if e.class_addr == 0 || e.flags & (PC_READ | PC_DYN) != PC_READ {
         return None;
     }
@@ -1071,7 +1100,10 @@ fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitM
         .scope
         .as_ref()
         .map_or(0, |s| Rc::as_ptr(s) as usize);
-    if e.scope_addr != scope || inst.b >= code.num_tmps {
+    if e.scope_addr != scope {
+        return soft();
+    }
+    if inst.b >= code.num_tmps {
         return None;
     }
     let (ka, sb) = if e.base == PROP_CACHE_THIS {
@@ -1135,8 +1167,12 @@ fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
         .prop_cache
         .try_borrow()
         .ok()?
-        .get(*place as usize)?
-        .clone();
+        .get(*place as usize)
+        .cloned()
+        .or_else(soft)?;
+    if e.class_addr == 0 {
+        return soft();
+    }
     if e.class_addr == 0 || e.flags & (PC_WRITE | PC_DYN) != PC_WRITE || e.accept != u32::MAX {
         return None;
     }
@@ -1152,7 +1188,7 @@ fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
         .as_ref()
         .map_or(0, |s| Rc::as_ptr(s) as usize);
     if e.scope_addr != scope {
-        return None;
+        return soft();
     }
     let (ka, sb) = if e.base == PROP_CACHE_THIS {
         (KTHIS, 0)
@@ -1215,8 +1251,12 @@ fn prop_common(st: &St, code: &crate::opcode::OpArray, inst: &Inst, want: u8) ->
         .prop_cache
         .try_borrow()
         .ok()?
-        .get(inst.a as usize)?
-        .clone();
+        .get(inst.a as usize)
+        .cloned()
+        .or_else(soft)?;
+    if e.class_addr == 0 {
+        return soft();
+    }
     if e.class_addr == 0 || e.flags & (want | PC_DYN) != want {
         return None;
     }
@@ -1232,7 +1272,7 @@ fn prop_common(st: &St, code: &crate::opcode::OpArray, inst: &Inst, want: u8) ->
         .as_ref()
         .map_or(0, |s| Rc::as_ptr(s) as usize);
     if e.scope_addr != scope {
-        return None;
+        return soft();
     }
     let (ka, sb) = if e.base == PROP_CACHE_THIS {
         (KTHIS, 0)
@@ -1433,7 +1473,8 @@ fn sprop_common(
         } else {
             Some(e.clone())
         }
-    })?;
+    })
+    .or_else(soft)?;
     PINNED_CELLS.with(|p| p.borrow_mut().push(e.cell.clone()));
     // `lit_a` is the cell's *absolute* address (its `RefCell` borrow
     // word at `REFCELL_BORROW`, the `Value` at `REFCELL_VALUE`); the
@@ -1573,11 +1614,14 @@ fn plan_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMet
     let (v, to, dst, class) = match code.ops.get(i) {
         // `fallback` is irrelevant on a `Direct` hit (the cached
         // namespace fallback is left to the interpreted row).
-        Some(Op::FetchConst { name, dst, .. }) => {
-            (crate::rtcache::const_hit_in(f, *name)?, None, *dst, None)
-        }
+        Some(Op::FetchConst { name, dst, .. }) => (
+            crate::rtcache::const_hit_in(f, *name).or_else(soft)?,
+            None,
+            *dst,
+            None,
+        ),
         Some(Op::FetchConstTo { name, dst, to, .. }) => (
-            crate::rtcache::const_hit_in(f, *name)?,
+            crate::rtcache::const_hit_in(f, *name).or_else(soft)?,
             Some(*to),
             *dst,
             None,
@@ -1589,7 +1633,7 @@ fn plan_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMet
             name: Operand::Lit(n),
             dst,
         }) => (
-            crate::rtcache::class_const_hit_in(f, class, *n)?,
+            crate::rtcache::class_const_hit_in(f, class, *n).or_else(soft)?,
             None,
             *dst,
             Some(class.clone()),
@@ -1600,7 +1644,7 @@ fn plan_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMet
             dst,
             to,
         }) => (
-            crate::rtcache::class_const_hit_in(f, class, *name)?,
+            crate::rtcache::class_const_hit_in(f, class, *name).or_else(soft)?,
             Some(*to),
             *dst,
             Some(class.clone()),
@@ -2024,8 +2068,10 @@ fn plan(
             return None;
         }};
     }
-    if head >= close || close - head + 1 > MAX_REGION {
-        rej!("empty or too big");
+    // `head == close` is a loop of one instruction: the fused
+    // step-compare-jump of an empty `for` loop, jumping onto itself.
+    if head > close || close - head + 1 > MAX_REGION {
+        rej!("not a loop or too big");
     }
     let len = close - head + 1;
     let mut class = vec![0u16; len];
@@ -2446,6 +2492,14 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             return None;
         }};
     }
+    // A refusal for a call cache that holds nothing for this site (yet):
+    // worth another attempt once the call has run (see `soft`).
+    macro_rules! rjs {
+        ($($a:tt)*) => {{
+            PLAN_SOFT.with(|s| s.set(true));
+            rj!($($a)*)
+        }};
+    }
     // An observed call runs the function's entry/exit hooks, which an
     // inlined call cannot.
     if OBSERVER_ON.load(Ordering::Relaxed) {
@@ -2549,12 +2603,12 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
-            None => rj!("no fcall cache slot for the name"),
-            Some(None) => rj!("fcall cache not filled"),
+            None => rjs!("no fcall cache slot for the name"),
+            Some(None) => rjs!("fcall cache not filled"),
             Some(Some(cell)) => match cell.get() {
                 Some(Func::User(uf)) => uf,
                 Some(Func::Builtin(_)) => rj!("callee is a builtin"),
-                None => rj!("cached callee is dead"),
+                None => rjs!("cached callee is dead"),
             },
         }
     } else if let Some((obj, lit)) = mcall {
@@ -2568,13 +2622,13 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         };
         let cache = code.method_cache.borrow();
         let Some(cached) = cache.get(init).and_then(|c| c.as_ref()) else {
-            rj!("method cache slot unfilled");
+            rjs!("method cache slot unfilled");
         };
         if cached.name_lit != Some(lit) {
-            rj!("method cache entry is for another name");
+            rjs!("method cache entry is for another name");
         }
         if cached.class_addr == 0 {
-            rj!("method cache entry has no class");
+            rjs!("method cache entry has no class");
         }
         // The entry answers one calling scope only: `prepare_method`
         // compares the frame's scope with it on every call, because
@@ -2589,7 +2643,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             .as_ref()
             .map_or(0, |s| Rc::as_ptr(s) as usize);
         if cached.scope_addr != scope {
-            rj!("method cache entry is for another calling scope");
+            rjs!("method cache entry is for another calling scope");
         }
         recv_scope = if scope == 0 {
             0
@@ -2598,7 +2652,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         };
         let cls = match cached.class.upgrade() {
             Some(c) => c,
-            None => rj!("cached receiver class is dead"),
+            None => rjs!("cached receiver class is dead"),
         };
         if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
             rj!("receiver class has a get_method hook");
@@ -2609,7 +2663,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         match cached.func.get() {
             Some(Func::User(uf)) => uf,
             Some(Func::Builtin(_)) => rj!("method is a builtin"),
-            None => rj!("cached method is dead"),
+            None => rjs!("cached method is dead"),
         }
     } else {
         // The static-call site's slot (past the literals, the
@@ -2622,7 +2676,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             .get(slot)
             .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get_call))
         {
-            None => rj!("static call cache slot unfilled or stale"),
+            None => rjs!("static call cache slot unfilled or stale"),
             Some((Func::User(uf), _, _)) => uf,
             Some((Func::Builtin(_), _, _)) => rj!("callee is a builtin"),
         }
@@ -2978,6 +3032,10 @@ fn jcc_for(mask: u8) -> Option<u8> {
 ///   `resume` once it is serviced.
 /// - `Disarm`: an assumption the trace was built on does not hold (an
 ///   entry guard): resume there and never enter this trace again.
+/// - `Replan`: what the trace pinned at plan time is stale (the function
+///   table or a run-time cache changed since: a declaration, an include,
+///   an autoloaded class): resume there, forget this trace and count the
+///   loop toward a new plan made from the caches as they are now.
 #[derive(Clone, Copy)]
 enum Target {
     Head,
@@ -2986,7 +3044,18 @@ enum Target {
     Side(usize),
     Poll(usize, usize),
     Disarm(usize),
+    Replan(usize),
     At(usize),
+}
+
+/// What sets a [`Target::Replan`] return apart from a `Disarm`'s
+/// `-(idx + 1)`: it is lower by this much (an instruction index is far
+/// below it).
+const REPLAN: i64 = 1 << 40;
+
+/// The return word of a [`Target::Replan`] exit resuming at `idx`.
+fn replan_word(idx: usize) -> i64 {
+    -(idx as i64 + 1) - REPLAN
 }
 
 /// The return word of a [`Target::Poll`] exit: the instruction to resume
@@ -3024,6 +3093,7 @@ struct Emitter {
     sides: HashMap<usize, usize>,
     polls: HashMap<(usize, usize), usize>,
     disms: HashMap<usize, usize>,
+    replans: HashMap<usize, usize>,
     fixups: Vec<(usize, Target)>,
     head_pos: usize,
     /// Counter for the synthetic forward labels the `isset`/`empty`
@@ -4272,6 +4342,7 @@ impl Emitter {
             sides: HashMap::new(),
             polls: HashMap::new(),
             disms: HashMap::new(),
+            replans: HashMap::new(),
             fixups: Vec::new(),
             head_pos: 0,
             synth: 0,
@@ -4348,7 +4419,11 @@ impl Emitter {
                     .unwrap_or(u32::MAX)
                     .to_le_bytes(),
             );
-            self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
+            // Stale, not wrong for good: the loop is planned again from
+            // the caches as they are now (a declaration, an include or an
+            // autoloaded class since the plan must not cost the loop its
+            // trace for the rest of the run).
+            self.jcc(0x85, Target::Replan(self.plan.head)); // jne
         }
         // The head: per-iteration interrupt poll and iteration cap,
         // both exiting at the head (the interpreter then runs one
@@ -4449,6 +4524,11 @@ impl Emitter {
                         .extend_from_slice(&((idx as i64 + 1).wrapping_neg()).to_le_bytes());
                     self.disms.insert(idx, at);
                 }
+                Target::Replan(idx) if !self.replans.contains_key(&idx) => {
+                    self.code.extend_from_slice(&[0x48, 0xB8]); // movabs rax, imm64
+                    self.code.extend_from_slice(&replan_word(idx).to_le_bytes());
+                    self.replans.insert(idx, at);
+                }
                 _ => continue,
             }
             self.code.push(0xC3); // ret
@@ -4461,6 +4541,7 @@ impl Emitter {
                 Target::Side(idx) => self.sides[&idx],
                 Target::Poll(resume, row) => self.polls[&(resume, row)],
                 Target::Disarm(idx) => self.disms[&idx],
+                Target::Replan(idx) => self.replans[&idx],
                 Target::At(p) => p,
             };
             let rel = abs as i64 - (pos + 4) as i64;
@@ -4622,13 +4703,22 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             );
         }
     }
+    PLAN_SOFT.with(|s| s.set(false));
     let mut p = match plan(st, code, tape, head, close) {
         Some(p) => p,
         None => {
+            let again = PLAN_SOFT.with(Cell::get);
             if debug_on() {
-                eprintln!("jit: region {head}..={close} rejected by plan");
+                eprintln!(
+                    "jit: region {head}..={close} rejected by plan{}",
+                    if again {
+                        " (a cache miss: may be planned again)"
+                    } else {
+                        ""
+                    }
+                );
             }
-            return usize::MAX;
+            return if again { REFUSED_FOR_NOW } else { usize::MAX };
         }
     };
     if debug_on() {
@@ -4718,7 +4808,7 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
 ///
 /// # Safety
 /// `at`/`target` point into the running tape described by `ctx`, with
-/// `target < at`, and `ctx.alive()`.
+/// `target <= at`, and `ctx.alive()`.
 // Not inlined: `take_jump!`'s pointer test already keeps the JIT-off
 // back edge at two instructions, and an inlined copy of this body at
 // every jump site in `run_core` costs the interpreted path registers
@@ -4740,7 +4830,9 @@ pub(super) unsafe fn back_edge(
     // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
     let cell = unsafe { &*ctx.jtr.get().add(idx) };
     let c = cell.load(Ordering::Relaxed);
-    if c != 0 {
+    // 0 and the small values (refused that many times, counting toward
+    // another attempt) are not code: `edge_count` below.
+    if c >= MAX_ATTEMPTS {
         if c == usize::MAX {
             return target;
         }
@@ -4786,6 +4878,22 @@ pub(super) unsafe fn back_edge(
                     .collect();
                 eprintln!("jit:   cvs after run: {d:?}");
             }
+        }
+        if r < -REPLAN {
+            // The version guard: what the plan pinned is stale. Forget
+            // the trace (its pages stay, as every trace's do, within the
+            // process's cap) and count the loop toward a new plan.
+            if debug_on() {
+                eprintln!(
+                    "jit: trace at {idx} is stale (the function table changed): planning again"
+                );
+            }
+            cell.store(0, Ordering::Release);
+            // SAFETY: the counters cover the whole tape, and the context
+            // is alive (tested above).
+            unsafe { (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed) };
+            let r = (-(r + REPLAN) - 1).clamp(0, (ctx.tlen - 1) as i64) as usize;
+            return unsafe { ctx.tbase.add(r) };
         }
         if r < 0 {
             if debug_on() {
@@ -4884,9 +4992,26 @@ unsafe fn edge_count(
     if n + 1 < hot_limit() {
         return target;
     }
-    let compiled = attempt(&st, ctx, head, idx);
+    let mut compiled = attempt(&st, ctx, head, idx);
     // SAFETY: as above.
     let cell = unsafe { &*ctx.jtr.get().add(idx) };
+    if compiled == REFUSED_FOR_NOW {
+        // The cell holds the refusals so far (below `MAX_ATTEMPTS`).
+        let tries = cell.load(Ordering::Relaxed) + 1;
+        if tries < MAX_ATTEMPTS {
+            cell.store(tries, Ordering::Release);
+            // Count again, eight times as long after each refusal.
+            let hot = hot_limit();
+            #[allow(clippy::cast_possible_truncation)] // below `MAX_ATTEMPTS`
+            let wait = hot.saturating_mul(8i32.saturating_pow(tries as u32));
+            // SAFETY: the counters cover the whole tape.
+            unsafe {
+                (*ctx.jcnt.get().add(idx)).store(hot.saturating_sub(wait), Ordering::Relaxed)
+            };
+            return target;
+        }
+        compiled = usize::MAX;
+    }
     cell.store(compiled, Ordering::Release);
     if compiled == usize::MAX {
         // The region can't be traced (and never could): if this tape has
@@ -5274,6 +5399,9 @@ mod layout_tests {
         assert!(!has_loop_close(&[]));
         assert!(!has_loop_close(&[forward, other]));
         assert!(has_loop_close(&[forward, other, backward]));
+        // An instruction that jumps onto itself: an empty loop.
+        let itself = Inst::plain(TOp::Jmp);
+        assert!(has_loop_close(&[forward, itself]));
     }
 
     /// The address of a `Value` as a helper's slot argument.
@@ -5510,6 +5638,9 @@ mod layout_tests {
             [0x48, 0xB8, 7, 0, 0, 0, 10, 0, 0, 0, 0x31, 0xD2, 0xC3]
         );
         assert_eq!(poll_word(7, 9), (10 << 32) | 7);
+        // A stale trace's return is told from a disarm's `-(idx + 1)`.
+        assert!(replan_word(0) < -REPLAN && replan_word(5) < replan_word(0));
+        assert_eq!(-(replan_word(5) + REPLAN) - 1, 5);
         // `Disarm`: `-(2 + 1)`.
         assert_eq!(
             c[60..71],

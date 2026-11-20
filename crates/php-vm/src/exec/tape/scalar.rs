@@ -51,7 +51,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         },
         // `$cv = a op b` (the `Bin` and the `AssignCv` after it): the
         // variable is in `d`.
-        Op::BinAssignCv { op, a, b, cv, .. } => {
+        // (and its form fused with the `CmpJmp` after it: see `lower_numeric`)
+        Op::BinAssignCv { op, a, b, cv, .. } | Op::BinAssignCvCmpJmp { op, a, b, cv, .. } => {
             let e = NUM_OPS.iter().position(|&o| o == op)?;
             let (ka, fa) = src(code, a)?;
             let (kb, fb) = src(code, b)?;
@@ -71,7 +72,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             val,
             dst: None,
             ..
-        } => {
+        }
+        | Op::AssignOpCvCmpJmp { cv, op, val, .. } => {
             let e = NUM_OPS.iter().position(|&o| o == BinKind::Arith(op))?;
             let (kb, fb) = src(code, val)?;
             Inst {
