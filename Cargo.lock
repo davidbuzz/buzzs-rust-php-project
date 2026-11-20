@@ -701,6 +701,7 @@ version = "0.1.0"
 dependencies = [
  "php-opcache",
  "php-runtime",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -1140,6 +1141,7 @@ name = "php-opcache"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "twox-hash",
 ]
 
 [[package]]

@@ -1939,4 +1939,46 @@ mod tests {
             code.ops
         );
     }
+
+    /// The block pass must not turn `T = BOOL_NOT(X); T = JMPZ_EX(T)` into
+    /// `JMPNZ_EX(X)`: the jump stores the tested value, so the result would
+    /// hold `X`'s truth where `!X` is expected and `!$a && !$b` would be
+    /// true for a truthy `$a`. Each negation has to survive.
+    #[test]
+    fn block_pass_keeps_the_negation_feeding_a_value_producing_jump() {
+        let unit = compile_src(
+            "<?php function foo($a, $b) { if (!$a && !$b) { return 1; } return 2; }",
+            1 << 4,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let foo = funcs
+            .iter()
+            .find(|f| f.name.as_bytes() == b"foo")
+            .expect("foo");
+        let mut seen = 0;
+        for (i, op) in foo.code.ops.iter().enumerate() {
+            let (Op::JmpZEx { a, .. } | Op::JmpNzEx { a, .. }) = op else {
+                continue;
+            };
+            seen += 1;
+            // The operand of a value-producing jump is still the negated
+            // temporary, defined by the opline before it.
+            assert!(
+                matches!(
+                    (i.checked_sub(1).map(|p| &foo.code.ops[p]), a),
+                    (
+                        Some(Op::Unary {
+                            op: crate::opcode::UnKind::Not,
+                            dst,
+                            ..
+                        }),
+                        Operand::Tmp(t)
+                    ) if dst == t
+                ),
+                "{:?}",
+                foo.code.ops
+            );
+        }
+        assert_eq!(seen, 1, "{:?}", foo.code.ops);
+    }
 }
