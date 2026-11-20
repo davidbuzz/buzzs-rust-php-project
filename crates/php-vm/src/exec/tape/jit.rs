@@ -589,6 +589,11 @@ const J_CMPS: u16 = 49;
 /// the plan knows to be no int for sure: decided by the operands' tags
 /// where it runs ([`Emitter::emit_assign_ops`]).
 const J_ASSIGN_OPS: u16 = 50;
+/// An array row ([`C_DIMR`], [`C_DIMW`], [`C_DIMOP`]) whose offset the plan
+/// knows to be no int (a variable the region left a string in, a
+/// temporary holding a value): run by the tape's own handler for the row,
+/// which looks a string key up ([`jit_row_dim_keyed`]).
+const C_DIMKEY: u16 = 51;
 
 /// Whether rows of class `c` may jump (their target is the row's `c`
 /// field, as for every tape instruction that jumps).
@@ -1305,6 +1310,77 @@ unsafe extern "C" fn jit_row_new(frame: *mut crate::vm::Frame, inst: *const Inst
     unsafe { super::calls::new_plain(frame, &*inst) }
 }
 
+/// The tape's concatenation into a temporary as a trace calls it
+/// ([`plan_row`]): `dims::concat_tmp` behind the helper convention, as
+/// [`jit_row_new`].
+///
+/// # Safety
+/// `frame` is the running frame and `inst` a `TOp::ConcatT` row of its
+/// tape.
+unsafe extern "C" fn jit_row_concat_tmp(frame: *mut crate::vm::Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe { super::dims::concat_tmp(frame, &*inst) }
+}
+
+/// The tape's `??` of a temporary as a trace calls it ([`plan_row`]):
+/// `scalar::coalesce_tmp` behind the helper convention, as
+/// [`jit_row_new`].
+///
+/// # Safety
+/// `frame` is the running frame and `inst` a `TOp::CoalesceT` row of its
+/// tape.
+unsafe extern "C" fn jit_row_coalesce_tmp(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+) -> super::Br {
+    // SAFETY: the caller's contract.
+    unsafe { super::scalar::coalesce_tmp(frame, &*inst) }
+}
+
+/// `$cv[key]` read, written or compound-written with a key that is no int,
+/// for a trace ([`C_DIMKEY`]): the tape's own handler for the row `inst`
+/// (the op at `at`) after its int paths, which looks a string key up and
+/// leaves anything else to the general op by declining; a read that
+/// raises nothing for a missing key (`FetchMode::Is`) gives null then
+/// (`dims::fetch_key_missing`). Returns 0 when the row is done, 1 when
+/// it was declined (nothing changed: the interpreter runs the row).
+///
+/// # Safety
+/// `frame` is the running frame and `inst` the array row at `at` of its
+/// tape.
+unsafe extern "C" fn jit_row_dim_keyed(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    at: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    let inst = unsafe { &*inst };
+    // SAFETY: the caller's contract, for each handler.
+    let done = match inst.op {
+        TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
+            let br = unsafe { super::dims::fetch_dim_key(frame, inst) };
+            br != super::Br::Decline || {
+                // SAFETY: the caller's contract; the handler's borrow of
+                // the frame has ended.
+                let f = unsafe { &mut *frame };
+                let quiet = matches!(
+                    f.code.ops.get(at as usize),
+                    Some(Op::FetchDimCv {
+                        mode: crate::opcode::FetchMode::Is,
+                        ..
+                    })
+                );
+                quiet && super::dims::fetch_key_missing(f, inst).is_some()
+            }
+        }
+        TOp::AssignDimIC | TOp::AssignDimC => unsafe { super::dims::assign_dim_key(frame, inst) },
+        TOp::AssignOpDimC => unsafe { super::dims::assign_op_dim(frame, inst) },
+        _ => false,
+    };
+    u32::from(!done)
+}
+
 /// The handler row of the tape's `new` instruction at `i`
 /// (`calls::CALL_NEW`: `calls::new_plain` makes the object, with the
 /// arguments its constructor only stores, and declines anything that
@@ -1405,6 +1481,29 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
                 m.sb = inst.a;
             }
             (C_ROW, super::scalar::move_tmp as *const (), 1)
+        }
+        // `a . b` into a temporary (its index in `p`): strings and ints.
+        // An operand that is a temporary (its index in `a` or `b`) is
+        // consumed.
+        TOp::ConcatT => {
+            let slot = |index: u32| index.checked_shl(SLOT_SHIFT);
+            (m.db, m.arith) = (slot(u32::try_from(inst.p).ok()?)?, ROW_VAL);
+            if super::dims::dim_kind(inst) == super::dims::KIND_TMP {
+                m.sb = slot(inst.a)?;
+            }
+            if super::dims::val_kind(inst) == super::dims::KIND_TMP {
+                m.slot = slot(inst.b)?;
+            }
+            m.inc = true;
+            (C_ROW, jit_row_concat_tmp as *const (), 1)
+        }
+        // `??` of a temporary (`a`): what it holds, unless null, moves
+        // into the result temporary (`b`) and the row jumps; the tested
+        // temporary is left null either way.
+        TOp::CoalesceT => {
+            m.mask = ROW_BR_RET;
+            (m.sb, m.db, m.arith) = (inst.a, inst.b, ROW_VAL);
+            (C_ROWBR, jit_row_coalesce_tmp as *const (), 1)
         }
         // `$cv .= value`: the variable (its index in `a`) is written, a
         // value temporary (its index in `p`) consumed.
@@ -1776,15 +1875,15 @@ fn add_class_guards(
         // A handler checks its operands, and declines a result temporary
         // that holds a value to release.
         C_ROW | C_ROWBR => true,
-        // A jump on a temporary takes a bool: checked by the row unless the
-        // plan knows it is one.
+        // A jump on a temporary takes a bool, or an int where the plan does
+        // not know what it holds (the row looks at the tag then).
         C_JMPZT | C_JMPNZT => {
             m.ca = ts.kind(inst.a) != TmpKind::Bool;
             true
         }
         // The handler checks its operands and releases what its temporary
         // held.
-        C_DIMSR => true,
+        C_DIMSR | C_DIMKEY => true,
         // A read through the global scope fully stores its temporary; the
         // variable of a folded assignment is looked at by the read itself
         // (it releases what the variable holds).
@@ -3780,8 +3879,14 @@ fn plan(
             // `Null` in is no `Int`: the helper would decline on every
             // iteration, so the region is not worth compiling. (The wider
             // write stores any scalar.)
+            // An offset that is no int is a key: the tape's own handler
+            // for the row looks it up ([`C_DIMKEY`]; it takes the frame).
             let m = &meta[j];
-            if non_int(m.kb, m.slot) || (class[j] != C_DIMR && !m.arr && non_int(m.sc, m.sw)) {
+            if non_int(m.kb, m.slot) || (m.kb == KT && ts.kind(m.slot) == TmpKind::Val) {
+                class[j] = C_DIMKEY;
+                meta[j].class = C_DIMKEY;
+                frame = true;
+            } else if class[j] != C_DIMR && !m.arr && non_int(m.sc, m.sw) {
                 rej!(format!("array row at {} has a non-int operand", head + j));
             }
         }
@@ -3884,9 +3989,17 @@ fn plan(
                 let b = tape[head + j].b;
                 ts.set(b, TmpKind::Unknown);
             }
+            // An operand temporary was read as an int (checked by the row
+            // where the plan did not know, and left as it is): an int
+            // from here on.
             J_ARITH_TMP | J_NUMBIN_T => {
-                let c = tape[head + j].c;
-                ts.set(c, TmpKind::Int);
+                let inst = &tape[head + j];
+                for (kind, off) in [(meta[j].ka, inst.a), (meta[j].kb, inst.b)] {
+                    if kind == KT {
+                        ts.set(off, TmpKind::Int);
+                    }
+                }
+                ts.set(inst.c, TmpKind::Int);
             }
             C_ABS => {
                 let c = tape[head + j].c;
@@ -3942,6 +4055,36 @@ fn plan(
             }
             // The handler left a value of no known kind.
             C_DIMSR => ts.set(meta[j].db, TmpKind::Unknown),
+            // A handler that may jump left the temporary it tested null,
+            // on both ways out.
+            C_ROWBR if meta[j].sb != NO_DST => ts.set(meta[j].sb, TmpKind::Unknown),
+            // The tape's handler released a key temporary, left a value of
+            // no known kind in a read's destination (a variable is then no
+            // int the trace knows of and may hold a value to release) and
+            // moved a write's consumed value temporary out.
+            C_DIMKEY => {
+                let m = meta[j];
+                if m.kb == KT {
+                    ts.set(m.slot, TmpKind::Unknown);
+                }
+                let read = matches!(
+                    tape[head + j].op,
+                    TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC
+                );
+                if !read {
+                    if m.consume {
+                        ts.set(m.sw, TmpKind::Unknown);
+                    }
+                } else if m.kc == KT {
+                    ts.set(m.db, TmpKind::Unknown);
+                } else {
+                    for list in [&mut counted, &mut cvbools, &mut ever_nonint] {
+                        if !list.contains(&m.db) {
+                            list.push(m.db);
+                        }
+                    }
+                }
+            }
             // What the handler stored (an int, a bool, or a value of any
             // type the temporary owns), the temporaries it consumed, and a
             // variable it wrote (no int the trace knows of afterwards).
@@ -4065,6 +4208,11 @@ fn plan(
                         TmpKind::Scalar
                     };
                     edge.set(tape[head + j].b, kind);
+                }
+                // A handler row's result, stored only when it jumps: a
+                // value of any type.
+                if class[j] == C_ROWBR && meta[j].db != NO_DST {
+                    edge.set(meta[j].db, TmpKind::Val);
                 }
                 incoming.push((y, edge));
             }
@@ -5517,6 +5665,20 @@ impl Emitter {
                 self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
                 self.jcc(0x85, Target::Poll(i + 1, i)); // jne
             }
+            // The tape's own handler for an array row with a key that is
+            // no int, then the poll.
+            C_DIMKEY => {
+                let row = self.row_arg(i);
+                self.emit_helper(
+                    jit_row_dim_keyed as *const () as usize,
+                    [HArg::Frame, row, HArg::Null],
+                    u32::try_from(i).unwrap_or(u32::MAX),
+                    Target::Side(i),
+                );
+                let next = i + self.plan.span[j] as usize;
+                self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                self.jcc(0x85, Target::Poll(next, i)); // jne
+            }
             C_GREAD => self.emit_gread(m, i),
             // The read's fast path through the helper, then the poll every
             // row that may release a value ends with.
@@ -5564,14 +5726,28 @@ impl Emitter {
                 self.jcc(0x84, Target::Side(i)); // je
                 self.jcc(0x87, self.jump_tgt(j)); // ja
             }
-            // A jump on a temporary: a bool (checked unless the plan knows),
+            // A jump on a temporary: a bool, or (where the plan does not
+            // know what it holds: an element read's result) a bool or an
+            // int by the tag, anything else being the interpreted row's;
             // read and left null as the interpreted row leaves it.
             C_JMPZT | C_JMPNZT => {
                 if m.ca {
+                    let (is_bool, tested) = (self.synth_label(), self.synth_label());
                     self.cmpb(KT, inst.a, TAG_BOOL);
+                    self.jcc(0x84, Target::Label(is_bool)); // je
+                    self.cmpb(KT, inst.a, TAG_INT);
                     self.jcc(0x85, Target::Side(i)); // jne
+                    self.load_int(KT, inst.a);
+                    self.put(&[0x31, 0xC9]); // xor ecx, ecx
+                    self.put(&[REX_W, 0x85, 0xC0]); // test rax, rax
+                    self.put(&[0x0F, 0x95, 0xC1]); // setne cl
+                    self.jmp(Target::Label(tested));
+                    self.set_label(is_bool);
+                    self.load_cl_base(KT, inst.a.wrapping_add(BOOL_BYTE));
+                    self.set_label(tested);
+                } else {
+                    self.load_cl_base(KT, inst.a.wrapping_add(BOOL_BYTE));
                 }
-                self.load_cl_base(KT, inst.a.wrapping_add(BOOL_BYTE));
                 self.store_imm_base(KT, inst.a, 0);
                 self.store_tag_base(KT, inst.a, TAG_NULL);
                 self.put(&[0x85, 0xC9]); // test ecx, ecx
@@ -8848,9 +9024,9 @@ mod layout_tests {
     }
 
     /// A jump on a temporary reads the bool's byte, leaves the temporary
-    /// null and jumps on the byte; one the plan knows nothing about is
-    /// checked first. A handler row is a helper call with the frame and
-    /// the row's address.
+    /// null and jumps on the byte; one the plan knows nothing about takes
+    /// a bool or an int by the tag (an int is tested against zero). A
+    /// handler row is a helper call with the frame and the row's address.
     #[test]
     fn rows_on_temporaries_and_through_handlers() {
         let row = |op: TOp| Inst {
@@ -8883,7 +9059,14 @@ mod layout_tests {
                 let mut want = emitter();
                 if checked {
                     want.cmpb(KT, 0x30, TAG_BOOL);
+                    want.put(&[0x0F, 0x84, 0, 0, 0, 0]); // je: a bool
+                    want.cmpb(KT, 0x30, TAG_INT);
                     want.put(&[0x0F, 0x85, 0, 0, 0, 0]); // jne out
+                    want.put(&[0x48, 0x8B, 0x86, 0x38, 0, 0, 0]); // mov rax, [rsi + 0x38]
+                    want.put(&[0x31, 0xC9]); // xor ecx, ecx
+                    want.put(&[0x48, 0x85, 0xC0]); // test rax, rax
+                    want.put(&[0x0F, 0x95, 0xC1]); // setne cl
+                    want.put(&[0xE9, 0, 0, 0, 0]); // jmp past the bool's read
                 }
                 want.put(&[0x0F, 0xB6, 0x8E, 0x31, 0, 0, 0]); // movzx ecx, byte [rsi + 0x31]
                 want.put(&[0x48, 0xC7, 0x86, 0x38, 0, 0, 0, 0, 0, 0, 0]); // mov qword [rsi + 0x38], 0

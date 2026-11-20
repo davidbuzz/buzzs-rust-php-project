@@ -850,6 +850,95 @@ pub(crate) fn stable_scalar_params(op_array: &OpArray, ctx: &OptContext<'_>) -> 
     stable_scalar
 }
 
+/// The variables that only ever hold an array of values without a
+/// destructor, built in place: every op naming one reads it as a plain
+/// operand, or stores a literal or a scalar-typed parameter the function
+/// never writes (`stable_scalar`) under an int or string literal key or by
+/// appending (`$v[k] = x`, `$v[] = x`). Not the bound variables, nor one a
+/// closure declared here captures. (A place of the variable that no such
+/// store names counts against it, whatever names it.)
+fn scalar_array_vars(
+    op_array: &OpArray,
+    ctx: &OptContext<'_>,
+    stable_scalar: &[bool],
+) -> Vec<bool> {
+    let num_cvs = op_array.cv_names.len();
+    let mut only = vec![true; num_cvs];
+    let mut rule_out = |cv: u32| {
+        if let Some(slot) = only.get_mut(cv as usize) {
+            *slot = false;
+        }
+    };
+    for cv in 0..bound_cv_prefix(op_array, ctx) {
+        rule_out(cv);
+    }
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            rule_out(u.parent_cv);
+        }
+    }
+    // Per place: the ops naming it, and how many of them are element
+    // stores of scalars.
+    let mut named = vec![(0u32, 0u32); op_array.places.len()];
+    for op in &op_array.ops {
+        let scalar_store = match op {
+            Op::Assign {
+                place,
+                val,
+                dst: None,
+            } => op_array.places.get(*place as usize).is_some_and(|p| {
+                let key_ok = match &p.segs[..] {
+                    [Seg::Append] => true,
+                    [Seg::Dim(Operand::Lit(l))] => matches!(
+                        op_array.literals.get(*l as usize),
+                        Some(Value::Int(_) | Value::Str(_))
+                    ),
+                    _ => false,
+                };
+                let val_ok = match val {
+                    Operand::Lit(_) => true,
+                    Operand::Cv(c) => stable_scalar.get(*c as usize).copied().unwrap_or(false),
+                    _ => false,
+                };
+                matches!(p.base, PlaceBase::Cv(_)) && key_ok && val_ok
+            }),
+            _ => false,
+        };
+        for_each_op_place(op, |p| {
+            if let Some((ops, stores)) = named.get_mut(p as usize) {
+                *ops += 1;
+                *stores += u32::from(scalar_store);
+            }
+        });
+        // Every mention that is not a plain operand read may write.
+        let mut mentioned = Vec::new();
+        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
+        let mut read = Vec::new();
+        for_each_operand_mut(&mut op.clone(), |operand| {
+            if let Operand::Cv(c) = operand {
+                read.push(*c);
+            }
+        });
+        for c in mentioned {
+            if let Some(i) = read.iter().position(|&r| r == c) {
+                read.swap_remove(i);
+            } else {
+                rule_out(c);
+            }
+        }
+    }
+    // A place of the variable is one such store's own, or counts against
+    // it.
+    for (place, &(ops, stores)) in op_array.places.iter().zip(&named) {
+        if let PlaceBase::Cv(cv) = place.base {
+            if (ops, stores) != (1, 1) {
+                rule_out(cv);
+            }
+        }
+    }
+    only
+}
+
 /// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
 pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     let num_cvs = op_array.cv_names.len();
@@ -922,14 +1011,22 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         ),
         _ => false,
     };
-    let no_dtor = |o: Operand| match o {
+    // A variable that only ever holds an array of such values has no
+    // destructor either; the op at `at` must find it assigned (reading
+    // another warns).
+    let scalar_arrays = scalar_array_vars(op_array, ctx, &stable_scalar);
+    let assigned = super::dce::Assigned::of(op_array, ctx);
+    let no_dtor = |at: usize, o: Operand| match o {
         Operand::Lit(_) => true,
-        Operand::Cv(c) => stable_scalar.get(c as usize).copied().unwrap_or(false),
+        Operand::Cv(c) => {
+            stable_scalar.get(c as usize).copied().unwrap_or(false)
+                || (scalar_arrays.get(c as usize).copied().unwrap_or(false) && assigned.at(at, c))
+        }
         Operand::Unused | Operand::Tmp(_) | Operand::TmpKeep(_) => false,
     };
     // (Before specialisation: `Assign` to a one-offset place of the
     // variable; `AssignDimCv` comes later.)
-    let pure_dim_write = |op: &Op| {
+    let pure_dim_write = |at: usize, op: &Op| {
         let Op::Assign {
             place,
             val,
@@ -943,7 +1040,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
                 (PlaceBase::Cv(cv), [seg]) => {
                     array_only.get(*cv as usize).copied().unwrap_or(false)
                         && dim_ok(seg)
-                        && no_dtor(*val)
+                        && no_dtor(at, *val)
                 }
                 _ => false,
             },
@@ -1012,7 +1109,12 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // by an op a pass folded away, as `$a += $b` once SCCP computed it)
     // reads nothing.
     let mut named = vec![false; op_array.places.len()];
-    for op in op_array.ops.iter().filter(|op| !pure_dim_write(op)) {
+    let impure = op_array
+        .ops
+        .iter()
+        .enumerate()
+        .filter(|(at, op)| !pure_dim_write(*at, op));
+    for (_, op) in impure {
         for_each_op_place(op, |p| {
             if let Some(slot) = named.get_mut(p as usize) {
                 *slot = true;
@@ -1169,7 +1271,12 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     let mut changed = false;
 
     // Eliminate assignments to unread variables
-    let pure_dim_writes: Vec<bool> = op_array.ops.iter().map(&pure_dim_write).collect();
+    let pure_dim_writes: Vec<bool> = op_array
+        .ops
+        .iter()
+        .enumerate()
+        .map(|(at, op)| pure_dim_write(at, op))
+        .collect();
     for (op, pure) in op_array.ops.iter_mut().zip(pure_dim_writes) {
         match op {
             Op::Assign { place, .. } if pure => {

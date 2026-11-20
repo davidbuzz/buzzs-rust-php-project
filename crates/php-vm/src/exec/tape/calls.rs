@@ -226,16 +226,6 @@ enum Arg<'a> {
 }
 
 impl Arg<'_> {
-    /// The value, as a store keeps it.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // once per store
-    fn value(self) -> Value {
-        match self {
-            Arg::Held(v) => clone_value(v),
-            Arg::Int(i) => Value::Int(i),
-        }
-    }
-
     /// Whether a parameter with the type bits `mask` takes it as it is
     /// (`enter`'s test).
     #[inline(always)]
@@ -291,40 +281,63 @@ impl NewSite {
     }
 
     /// The object: its slots copied from the class's defaults, then the
-    /// arguments stored, `arg` giving the value of a parameter. (A default
-    /// a store replaces is a scalar, or a value the class's table holds
-    /// too: nothing is freed.)
+    /// arguments (`args`, by parameter) stored. `None` is not reached (the
+    /// object is this VM's and nothing else holds its slots); nothing is
+    /// left behind then.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of `new_stored`
     fn build(
         &self,
         cls: &Rc<crate::class::Class>,
         defaults: &[Option<Value>],
-        arg: impl Fn(usize) -> Option<Value>,
+        args: &[Arg<'_>],
     ) -> Option<Obj> {
         let made = crate::object::new_object_from_defaults(Rc::clone(cls), defaults);
-        let data = crate::object::data(&made);
-        let Ok(mut held) = data.slots.try_borrow_mut() else {
-            // (Not reached: nothing else holds a new object's slots.)
-            crate::object::discard_rejected(made);
-            return None;
-        };
-        for step in self.steps() {
-            let (Some(cell), Some(v)) = (
-                held.get_mut(step.slot as usize),
-                arg(usize::from(step.param)),
-            ) else {
-                continue;
-            };
-            let old = cell.replace(v);
-            if old.is_none() {
-                data.set_slot_unset(step.slot as usize, false);
+        let stored = match made
+            .downcast_ref::<crate::object::ObjectData>()
+            .map(|data| data.slots.try_borrow_mut())
+        {
+            Some(Ok(mut held)) => {
+                for step in self.steps() {
+                    if let (Some(cell), Some(arg)) = (
+                        held.get_mut(step.slot as usize),
+                        args.get(usize::from(step.param)),
+                    ) {
+                        store_arg(cell, *arg);
+                    }
+                }
+                true
             }
-            crate::exec::discard_unrooted(old);
+            _ => false,
+        };
+        if stored {
+            Some(made)
+        } else {
+            crate::object::discard_rejected(made);
+            None
         }
-        drop(held);
-        Some(made)
     }
+}
+
+/// Stores `arg` in `cell`, a slot of an object just made from its class's
+/// defaults: a default that owns something (a string, an array the class's
+/// table holds too) is released, anything else written over. (No slot of
+/// a new object is marked unset: there is no such mark to clear.)
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per store
+fn store_arg(cell: &mut Option<Value>, arg: Arg<'_>) {
+    if !matches!(
+        cell,
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+    ) {
+        *cell = None;
+    }
+    let new = match arg {
+        Arg::Int(i) => Value::Int(i),
+        Arg::Held(v) => clone_value(v),
+    };
+    // What the slot holds now owns nothing.
+    std::mem::forget(cell.replace(new));
 }
 
 /// Where the arguments of the `new` instruction `inst` come from, and how
@@ -381,12 +394,15 @@ fn site_srcs(code: &OpArray, inst: &Inst) -> Option<([Src; MAX_ARGS], usize)> {
 #[inline(always)]
 #[allow(clippy::inline_always)] // once per argument
 fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
+    // A compiled variable first: the commonest argument.
+    if let Src::Cv(cv) = src {
+        return match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+            Value::Reference(_) => None,
+            v => Some(Arg::Held(v)),
+        };
+    }
     Some(match src {
         Src::Lit(lit) => Arg::Held(f.code.literals.get(lit as usize)?),
-        Src::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
-            Value::Reference(_) => return None,
-            v => Arg::Held(v),
-        },
         Src::Sum(kind, a, b) => {
             let (lhs, rhs) = (int_operand(f, a)?, int_operand(f, b)?);
             Arg::Int(match kind {
@@ -396,7 +412,7 @@ fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
                 _ => return None,
             })
         }
-        Src::None => return None,
+        Src::Cv(_) | Src::None => return None,
     })
 }
 
@@ -602,7 +618,7 @@ fn site_made(
     if site.typed && !site.takes(args) {
         return None;
     }
-    let made = site.build(cls, defaults, |p| args.get(p).copied().map(Arg::value))?;
+    let made = site.build(cls, defaults, args)?;
     for arg in args {
         if let Arg::Held(v) = arg {
             crate::gc::possible_root(v);
@@ -704,7 +720,11 @@ fn new_checked(
             };
         }
     }
-    let made = site.build(cls, defaults, |p| args.get(p).map(clone_value))?;
+    let mut views = [Arg::Int(0); MAX_ARGS];
+    for (view, v) in views.iter_mut().zip(args) {
+        *view = Arg::Held(v);
+    }
+    let made = site.build(cls, defaults, views.get(..args.len())?)?;
     for v in args {
         crate::gc::possible_root(v);
     }

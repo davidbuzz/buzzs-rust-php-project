@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
+Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -43,10 +43,18 @@ Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       or an array of floats (`jit_dim_get_wide`/`jit_dim_set_wide`), its comparisons
       floats (`J_CMPS`), and `$i = $j` / `--$l` with a used result are rows of its own:
       heapsort's inner loop compiles (2.35 -> 1.59).
+      Done 2026-11-21 (later): a trace runs `a . b` into a temporary, `??` of a
+      temporary and the element rows whose key is no int (a string in a variable or a
+      temporary) through the tape's own handlers (`C_DIMKEY`, `jit_row_dim_keyed`), a
+      read that raises nothing for a missing key gives null inside the trace
+      (`dims::fetch_key_missing`), and a jump on a temporary takes an int as well as a
+      bool: array_rw 1.19 -> 1.07 (meets the goal), and both loops of hash1 compile
+      (1.41 -> 1.40: what is left is the handlers' own cost).
       Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
-      defined at run time, a `global`) stay interpreted; hash1, hash2 and array_rw are
-      interpreted loops whose `foreach` step (150 instructions), string building and
-      handler frames still cost about one and a half times C's.
+      defined at run time, a `global`) stay interpreted; a `foreach` step is no trace
+      row yet (hash2's inner loop: 150 instructions a step, then a keyed `+=`), and
+      hash1 spends its time in `dechex()` with the string it makes (about 190) and in
+      the keyed handlers.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
@@ -102,7 +110,7 @@ Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       conditions jump straight to their outcome: mandel 0.78, mandel2 1.00, float_math
       0.84; a trace would still be several times faster); property access inside
       inlined callee bodies; `self::`/`static::` scope guards for call inlining.
-- [~] Objects (new_obj 1.55, new_Foo 1.39; objects meets the goal at 1.02). Done
+- [~] Objects (new_obj 1.52, new_Foo 1.39; objects meets the goal at 0.99). Done
       2026-11-21: `new C(...)` with a constructor that only assigns its parameters to
       properties (a
       promoted constructor is one) is one tape instruction without the call
@@ -116,8 +124,9 @@ Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       (`calls::NewSite`: the class, where each argument comes from, the slot and the
       type bits of each store) and a later `new` there reads the arguments where they
       are and stores them: `new_stored` 364 -> 254 instructions for `new R($i)`,
-      objects 1.21 -> 1.02, new_obj 1.76 -> 1.55.
-      Open, by the profile of new_obj (985 instructions an iteration against C's 635):
+      objects 1.21 -> 1.02, new_obj 1.76 -> 1.55; with the stores writing the slots
+      directly (`calls::store_arg`) objects 0.99, new_obj 1.52.
+      Open, by the profile of new_obj (964 instructions an iteration against C's 635):
       the possible-root bookkeeping of the new object (152), allocation (113 in
       `object::new_defaults`) and release (~270 across seven functions) against C's
       ~135 and ~130, and the three calls between the trace and `new_stored`.
@@ -128,8 +137,8 @@ Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 27 left in the targeted set of 13,935
-      tests on 2026-11-21): dce_004/005/008/009, sccp_002/005/010/011/012/017/019/026,
+- [ ] Optimizer/opcache dump failures (30 of 38; 25 left in the targeted set of 13,935
+      tests on 2026-11-21): dce_004/005, sccp_002/005/010/011/012/017/019/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2, preload_optimizer,
       array_map_foreach_optimization_007/008/013/014, named_parameter_new, gh18050,
       gh9164, jit/ignored_opcodes. Done 2026-11-21: opt/coalesce (`??`/`??=` of a local
@@ -137,12 +146,14 @@ Score: 76/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       goes when no later op names the variable), opt/dce_001 (a concatenation of
       scalar-typed parameters that nothing reads is dead, the concatenations it read
       with it) and opt/dce_007 (an array literal that nothing reads is dead when no
-      element can raise anything). What the open ones need: values of locally built
-      arrays and of objects that do not escape (the sccp set, dce_004/005/008),
+      element can raise anything), opt/dce_008 (a store of a locally built array of
+      scalars into an array nothing reads: `compact::scalar_array_vars`) and
+      opt/dce_009 (the loop of a `foreach` over an empty class constant, removed where
+      the constant is put in place for the dump). What the open ones need: values of
+      locally built arrays and of objects that do not escape (the sccp set,
+      dce_004/005; sccp_017/019 only the removal of the dead copy `$b = $a`),
       `JMP_NULL` on the variable itself with constants kept across calls (nullsafe),
-      named arguments of known callees as positional sends (named_parameter_new), and
-      the loop of a `foreach` over an empty class constant removed where the constant
-      is put in place for the dump (dce_009).
+      and named arguments of known callees as positional sends (named_parameter_new).
 - [x] Optimizer (2026-11-21): the block pass folded `!` into a jump that keeps its
       result (`T = BOOL_NOT X; D = JMPZ_EX T` became `D = JMPNZ_EX X`), so with
       `opcache.enable_cli=1` the code after `!$a && !$b` and `!$a || !$c` saw the

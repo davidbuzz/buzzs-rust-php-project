@@ -85,7 +85,7 @@ fn operand(kind: u8, idx: u32) -> Operand {
 }
 
 /// The offset operand's kind from `k`.
-fn dim_kind(inst: &Inst) -> u8 {
+pub(super) fn dim_kind(inst: &Inst) -> u8 {
     inst.k & 7
 }
 
@@ -610,6 +610,32 @@ fn fetch_key(f: &mut Frame, inst: &Inst) -> Option<Br> {
     } else {
         store_plain_into(f, inst.d, v)?
     };
+    release_key(f, kind, inst.b);
+    Some(br)
+}
+
+/// A read of `$cv[key]` into the row's temporary that raises nothing when
+/// the key is missing (`ZEND_FETCH_DIM_IS`, the operand of `??`; the
+/// caller knows the mode, the row does not): null, when the variable
+/// holds an array itself and that has no element under the string key
+/// (`zend_symtable_find`: a canonical integer string is the integer key),
+/// and the key temporary released as [`fetch_key`] releases it. `None`,
+/// nothing changed, for anything else.
+pub(super) fn fetch_key_missing(f: &mut Frame, inst: &Inst) -> Option<Br> {
+    if inst.d != NO_TO {
+        return None;
+    }
+    let kind = dim_kind(inst);
+    {
+        let key = key_str(f, kind, inst.b)?;
+        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+            return None;
+        };
+        if arr.get_sym_zstr(key).is_some() {
+            return None;
+        }
+    }
+    let br = store_into_tmp(f, inst.p, Value::Null)?;
     release_key(f, kind, inst.b);
     Some(br)
 }

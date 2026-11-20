@@ -833,13 +833,13 @@ impl Scalars {
 /// The compiled variables that certainly hold a value where an op reads
 /// them (php-src's type inference: no `MAY_BE_UNDEF`), as far as a look at
 /// the function's opening straight line tells.
-struct Assigned {
+pub(crate) struct Assigned {
     /// From which op on each variable is assigned (`usize::MAX`: unknown).
     from: Vec<usize>,
 }
 
 impl Assigned {
-    fn of(op_array: &OpArray, ctx: &super::OptContext<'_>) -> Self {
+    pub(crate) fn of(op_array: &OpArray, ctx: &super::OptContext<'_>) -> Self {
         let mut from = vec![usize::MAX; op_array.cv_names.len()];
         // An exception leaves a try block at any op, the assignment that
         // threw not made; `extract()` and the like unset by name.
@@ -882,10 +882,21 @@ impl Assigned {
             {
                 break;
             }
-            if let Op::AssignCv { cv, .. } = op {
-                if let Some(slot) = from.get_mut(*cv as usize) {
-                    *slot = (*slot).min(i + 1);
-                }
+            // `$v = x`, and `$v[k] = x` or `$v->p = x`, which leave `$v`
+            // assigned when they return.
+            let written = match op {
+                Op::AssignCv { cv, .. } => Some(*cv),
+                Op::Assign { place, .. } => match op_array.places.get(*place as usize) {
+                    Some(p) => match p.base {
+                        PlaceBase::Cv(cv) => Some(cv),
+                        _ => None,
+                    },
+                    None => None,
+                },
+                _ => None,
+            };
+            if let Some(slot) = written.and_then(|cv| from.get_mut(cv as usize)) {
+                *slot = (*slot).min(i + 1);
             }
         }
         // `unset($v)` anywhere: not known any more.
@@ -904,7 +915,7 @@ impl Assigned {
     }
 
     /// Whether `cv` certainly holds a value when the op at `at` reads it.
-    fn at(&self, at: usize, cv: u32) -> bool {
+    pub(crate) fn at(&self, at: usize, cv: u32) -> bool {
         self.from.get(cv as usize).is_some_and(|&from| from <= at)
     }
 }

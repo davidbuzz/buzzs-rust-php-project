@@ -689,6 +689,51 @@ fn dead_array_builds_are_dropped() {
     }
 }
 
+/// `opt/dce_009`: a `foreach` over a class constant that is an empty array
+/// leaves nothing; over one with elements it stays.
+#[test]
+fn foreach_over_an_empty_class_constant_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nclass Loop {\n    const VALUES = [];\n    const SOME = [1];\n\
+         public static function test2() {\n        foreach (self::VALUES as $x) {\n        }\n    }\n\
+         public static function kept() {\n        foreach (self::SOME as $x) {\n        }\n    }\n}\n",
+    );
+    let test2 = section_named(&out, "Loop::test2");
+    assert!(test2.contains("(lines=1, args=0, vars=0, tmps=0)"), "{out}");
+    assert!(test2.contains("0000 RETURN null"), "{out}");
+    assert!(
+        section_named(&out, "Loop::kept").contains("FE_RESET_R"),
+        "{out}"
+    );
+}
+
+/// `opt/dce_008`: a store of a locally built array of scalars into an
+/// array nothing reads goes; one of a value that may hold an object, or of
+/// a variable that may be unassigned, stays.
+#[test]
+fn dead_store_of_an_array_of_scalars_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction esc(int $x) {\n    $a[0] = $x;\n    $b[0] = $a;\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=1, vars=2, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ASSIGN_DIM CV1($a) int(0)\n0002 OP_DATA CV0($x)\n0003 RETURN CV1($a)\n"),
+        "{out}"
+    );
+    let kept = [
+        // An untyped parameter may hold an object.
+        "function esc($x) { $a[0] = $x; $b[0] = $a; return $a; }",
+        // `$a` may be unassigned where it is read.
+        "function esc(int $x) { if ($x) { $a[0] = $x; } $b[0] = $a; return $x; }",
+        // `$a` is assigned something else as well.
+        "function esc(int $x) { $a[0] = $x; $a = new stdClass; $b[0] = $a; return $x; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("ASSIGN_DIM CV2($b)"), "{body}: {out}");
+    }
+}
+
 /// Without the DFA bits, or without passes 6 and 7, nothing is dumped.
 #[test]
 fn ssa_dump_needs_the_dfa_pass() {

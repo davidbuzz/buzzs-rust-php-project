@@ -221,6 +221,9 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
     let lower::Lowered { mut lines, first_z } =
         lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
     passes::resolve_labels(&mut lines, &first_z);
+    if res.level & (super::PASS_6 | super::PASS_8) != 0 {
+        passes::drop_empty_foreach(&mut lines);
+    }
     let oa = &e.func.code;
     let shape = passes::FuncShape {
         is_main: e.is_main,

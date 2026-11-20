@@ -926,6 +926,50 @@ pub(crate) fn resolve_labels(lines: &mut [ZLine], first_z: &[u32]) {
     }
 }
 
+/// `FE_RESET_R` of an empty array constant (a class constant pass 1
+/// replaced by its value: the VM's own code still fetches it, see
+/// `lower.rs`): sccp.c takes only its jump, the loop it guards is
+/// unreachable, and dce.c removes the reset and the `FE_FREE` of its
+/// iterator (`opt/dce_009`). The oplines from the reset up to its target
+/// become NOPs when nothing outside them jumps between the two, and the
+/// `FE_FREE` at the target with them.
+pub(crate) fn drop_empty_foreach(lines: &mut [ZLine]) {
+    let label = |z: &Z| match z {
+        Z::ZLabel(t) => Some(*t as usize),
+        _ => None,
+    };
+    for i in 0..lines.len() {
+        let reset = &lines[i];
+        if reset.op != "FE_RESET_R"
+            || !matches!(&reset.op1, Z::Const(Value::Array(a)) if a.is_empty())
+        {
+            continue;
+        }
+        let (Some(iter), Some(end)) = (reset.res.tmp(), reset.targets().find_map(label)) else {
+            continue;
+        };
+        if end <= i || end > lines.len() {
+            continue;
+        }
+        let inside = |at: usize| at > i && at < end;
+        let entered = lines
+            .iter()
+            .enumerate()
+            .any(|(at, l)| !inside(at) && at != i && l.targets().filter_map(label).any(inside));
+        if entered {
+            continue;
+        }
+        for l in &mut lines[i..end] {
+            *l = ZLine::new("NOP");
+        }
+        if let Some(free) = lines.get_mut(end) {
+            if free.op == "FE_FREE" && free.op1.tmp() == Some(iter) {
+                *free = ZLine::new("NOP");
+            }
+        }
+    }
+}
+
 /// Removes NOPs, retargeting jumps to the next remaining opline; also
 /// returns the new index of each old one.
 pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
