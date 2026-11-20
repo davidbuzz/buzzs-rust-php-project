@@ -176,7 +176,25 @@ pub struct CallShape {
     /// The plain calls counted toward compiling it; afterwards, how many
     /// times in a row its native code declined a call.
     pub(crate) native_count: Cell<u32>,
+    /// The body as a list of `$this->property = $parameter` steps when it
+    /// is nothing else ([`UserFunction::ctor_fold`]), worked out on first
+    /// use.
+    fold: std::cell::OnceCell<Option<Box<[FoldStep]>>>,
 }
+
+/// One step of a constructor that only stores its parameters
+/// ([`UserFunction::ctor_fold`]): `$this-><property> = $<parameter>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoldStep {
+    /// The property's place in the function's op array: its entry of the
+    /// property cache says which slot of which class it is.
+    pub(crate) place: u32,
+    /// The parameter stored (its index, which is its compiled variable).
+    pub(crate) param: u32,
+}
+
+/// The most steps [`UserFunction::ctor_fold`] gives.
+pub(crate) const FOLD_STEPS: usize = 8;
 
 /// Passed-argument counts with a precomputed first op ([`CallShape`]):
 /// `0..=6`, as many as the pending call's inline argument buffer holds
@@ -229,6 +247,63 @@ impl UserFunction {
             Some(c) if self.call_shape.kind.get() > CallShape::NOT_PLAIN => c.get() as usize,
             _ => first_op_after_recv(&self.code, n) as usize,
         }
+    }
+
+    /// The steps of this function's body when the whole of it, called
+    /// with every declared parameter passed, stores parameters in
+    /// properties of `$this` and returns: `$this->a = $a; ...` and nothing
+    /// else (a promoted constructor parameter compiles to the same op).
+    /// Such a call needs no frame (`exec/tape/calls.rs`, `new_plain`): the
+    /// values go from the caller's operands into the object's slots.
+    /// `None` for any other body, for a declaration that makes no plain
+    /// call, and for more than [`FOLD_STEPS`] steps.
+    #[inline]
+    pub(crate) fn ctor_fold(&self) -> Option<&[FoldStep]> {
+        self.call_shape
+            .fold
+            .get_or_init(|| self.compute_fold())
+            .as_deref()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compute_fold(&self) -> Option<Box<[FoldStep]>> {
+        use crate::opcode::{Op, Operand, PlaceBase, Seg};
+        if self.call_shape() == CallShape::NOT_PLAIN
+            || !self.uses.is_empty()
+            || self.return_type.is_some()
+        {
+            return None;
+        }
+        let n = self.params.len();
+        let mut steps = Vec::new();
+        for op in self.code.ops.get(self.plain_first_op(n)..)? {
+            match op {
+                Op::Nop => {}
+                Op::AssignObjProp {
+                    place,
+                    val: Operand::Cv(cv),
+                    dst: None,
+                } if (*cv as usize) < n && steps.len() < FOLD_STEPS => {
+                    let p = self.code.places.get(*place as usize)?;
+                    if !matches!(
+                        (&p.base, p.segs.as_slice()),
+                        (PlaceBase::This, [Seg::Prop(Operand::Lit(_))])
+                    ) {
+                        return None;
+                    }
+                    steps.push(FoldStep {
+                        place: *place,
+                        param: *cv,
+                    });
+                }
+                Op::Return {
+                    val: Operand::Unused,
+                } => return Some(steps.into_boxed_slice()),
+                _ => return None,
+            }
+        }
+        None
     }
 
     #[cold]

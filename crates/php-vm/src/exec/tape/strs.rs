@@ -215,7 +215,9 @@ unsafe fn put_result(st: St, c: u32, v: Value) -> bool {
 /// # Safety
 /// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
-pub(super) unsafe fn strlen_cv(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn strlen_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: the caller's contract: `a` is a validated variable offset.
@@ -234,7 +236,9 @@ pub(super) unsafe fn strlen_cv(frame: *mut Frame, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn count_cv(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn count_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
@@ -269,7 +273,9 @@ pub(super) unsafe fn count_cv(frame: *mut Frame, inst: &Inst) -> bool {
 /// As [`strlen_cv`].
 #[inline(never)]
 #[allow(clippy::cast_ptr_alignment)] // a slot offset from the literal table's base
-pub(super) unsafe fn frameless_quick(frame: *mut Frame, inst: &Inst) -> Br {
+pub(super) unsafe extern "C" fn frameless_quick(frame: *mut Frame, inst: *const Inst) -> Br {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
         return Br::Decline;
     }
@@ -482,7 +488,9 @@ unsafe fn type_test(st: St, a: u32, mask: u8) -> Option<bool> {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn type_check_cv(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn type_check_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
@@ -499,7 +507,9 @@ pub(super) unsafe fn type_check_cv(frame: *mut Frame, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn type_check_jmp_cv(frame: *mut Frame, inst: &Inst) -> Br {
+pub(super) unsafe extern "C" fn type_check_jmp_cv(frame: *mut Frame, inst: *const Inst) -> Br {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
@@ -542,7 +552,9 @@ unsafe fn isset_test(st: St, a: u32, empty: bool) -> Option<bool> {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn isset_cv(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn isset_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
@@ -559,7 +571,9 @@ pub(super) unsafe fn isset_cv(frame: *mut Frame, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn isset_jmp_cv(frame: *mut Frame, inst: &Inst) -> Br {
+pub(super) unsafe extern "C" fn isset_jmp_cv(frame: *mut Frame, inst: *const Inst) -> Br {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.

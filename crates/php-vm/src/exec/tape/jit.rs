@@ -720,8 +720,8 @@ const SCALAR_SRC: u8 = 0x20;
 const VAL_SRC: u8 = 0x10;
 /// `JitMeta.mask` flag for a `J_ASSIGN_T` row of such a temporary into a
 /// variable that held a string, an object or a resource when the plan was
-/// made: the tape's own assignment runs (`scalar::assign_cv_any`, through
-/// [`row_assign_any`]), which releases whatever the variable holds.
+/// made: the tape's own assignment runs (`scalar::assign_cv_any`), which
+/// releases whatever the variable holds.
 const ANY_SRC: u8 = 0x08;
 
 const OPA_BITAND: u8 = 6;
@@ -1237,93 +1237,63 @@ fn cv_holds_other(st: &St, off: u32) -> bool {
         )
 }
 
-/// A tape handler as a trace calls it ([`Emitter::emit_helper`]'s helper
-/// signature): 0 when the row is done, 1 when it declined, nothing changed,
-/// and for a row that may jump 2 when it did.
-type RowFn = unsafe extern "C" fn(*mut crate::vm::Frame, *const Inst, *const u8, u32) -> u32;
+/// `JitMeta.mask` of a handler row whose handler answers with a
+/// [`super::Br`] (one that may jump); any other answers with a `bool`
+/// (done, or declined with nothing changed). See [`Emitter::emit_row`].
+const ROW_BR_RET: u8 = 1;
 
-/// The entry point of a handler that is done or declines.
-macro_rules! row_fn {
-    ($name:ident, $handler:path) => {
-        /// # Safety
-        /// `frame` is the frame the trace runs in, and `inst` a row of the
-        /// tape it was compiled from (the handler's own contract).
-        unsafe extern "C" fn $name(
-            frame: *mut crate::vm::Frame,
-            inst: *const Inst,
-            _unused: *const u8,
-            _word: u32,
-        ) -> u32 {
-            // SAFETY: the caller's contract.
-            u32::from(!unsafe { $handler(frame, &*inst) })
-        }
-    };
-}
-
-/// The entry point of a handler that may jump.
-macro_rules! row_fn_br {
-    ($name:ident, $handler:path) => {
-        /// # Safety
-        /// As the entry points of [`row_fn`].
-        unsafe extern "C" fn $name(
-            frame: *mut crate::vm::Frame,
-            inst: *const Inst,
-            _unused: *const u8,
-            _word: u32,
-        ) -> u32 {
-            // SAFETY: the caller's contract.
-            match unsafe { $handler(frame, &*inst) } {
-                super::Br::Fall => 0,
-                super::Br::Decline => 1,
-                super::Br::Jump => 2,
-            }
-        }
-    };
-}
-
-row_fn!(row_strlen, super::strs::strlen_cv);
-row_fn!(row_count, super::strs::count_cv);
-row_fn!(row_type_check, super::strs::type_check_cv);
-row_fn!(row_isset, super::strs::isset_cv);
-row_fn!(row_num_bin, super::scalar::num_bin_tmp);
-row_fn!(row_move, super::scalar::move_tmp);
-row_fn!(row_concat, super::dims::concat_cv);
-row_fn_br!(row_type_check_jmp, super::strs::type_check_jmp_cv);
-row_fn_br!(row_isset_jmp, super::strs::isset_jmp_cv);
-
-/// A frameless call answered without its handler: done, it jumps to the op
-/// after the call, which is where its row in a trace ends.
+/// The tape's `new` instruction as a trace calls it ([`plan_new`]):
+/// `calls::new_plain` behind the helper convention. (The handler keeps the
+/// tape's own convention: its call is one of `run_core`'s, whose shape is
+/// not to change for this.)
 ///
 /// # Safety
-/// As the entry points of [`row_fn`].
-unsafe extern "C" fn row_frameless(
-    frame: *mut crate::vm::Frame,
-    inst: *const Inst,
-    _unused: *const u8,
-    _word: u32,
-) -> u32 {
+/// `frame` is the running frame and `inst` a `calls::CALL_NEW` row of its
+/// tape.
+unsafe extern "C" fn jit_row_new(frame: *mut crate::vm::Frame, inst: *const Inst) -> bool {
     // SAFETY: the caller's contract.
-    u32::from(unsafe { super::strs::frameless_quick(frame, &*inst) } == super::Br::Decline)
+    unsafe { super::calls::new_plain(frame, &*inst) }
 }
 
-/// `$cv = TMP` of any value into a variable holding any value
-/// (`scalar::assign_cv_any`: the old value is released).
-///
-/// # Safety
-/// As the entry points of [`row_fn`]; `inst` is an `AssignT` row.
-unsafe extern "C" fn row_assign_any(
-    frame: *mut crate::vm::Frame,
-    inst: *const Inst,
-    _unused: *const u8,
-    _word: u32,
-) -> u32 {
-    // SAFETY: the caller's contract.
-    u32::from(!unsafe { super::scalar::assign_cv_any(frame, &*inst, true) })
+/// The handler row of the tape's `new` instruction at `i`
+/// (`calls::CALL_NEW`: `calls::new_plain` makes the object, with the
+/// arguments its constructor only stores, and declines anything that
+/// needs a call) and the instructions it covers: up to the one its jump
+/// goes to, past the constructor call. The object is a value the result
+/// temporary owns; the row polls afterwards (a possible root is recorded,
+/// which may make a collection due). `None` when the row has no such
+/// shape.
+fn plan_new(code: &crate::opcode::OpArray, tape: &[Inst], i: usize) -> Option<(JitMeta, usize)> {
+    let inst = tape.get(i)?;
+    if inst.b >= code.num_tmps {
+        return None;
+    }
+    let end = jump_target(tape, i);
+    if end <= i || end > tape.len() {
+        return None;
+    }
+    let handler = jit_row_new as *const ();
+    let m = JitMeta {
+        class: C_ROW,
+        ka: KI,
+        kb: KI,
+        db: inst.b.checked_shl(SLOT_SHIFT)?,
+        arith: ROW_VAL,
+        sb: NO_DST,
+        slot: NO_DST,
+        sw: NO_DST,
+        lit_c: -1,
+        inc: true,
+        lit_a: i64::try_from(handler as usize).ok()?,
+        ..JitMeta::default()
+    };
+    Some((m, end - i))
 }
 
 /// The handler row of the instruction at op `i`, for the rows the trace has
 /// no code of its own for, with the ops it covers: the handler's entry
-/// point in `lit_a`, whether the row polls afterwards in `inc` (it may
+/// point in `lit_a` (the tape's own handler, `extern "C"` for this: the
+/// frame and the row) and how it answers in `mask`, whether the row polls afterwards in `inc` (it may
 /// release a value or allocate), the result temporary in `db` and what it
 /// then holds in `arith`, the temporaries the handler consumes in `sb`,
 /// `slot` and `sw`, and a variable it writes in `lit_c` (-1: none).
@@ -1339,26 +1309,32 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
         lit_c: -1,
         ..JitMeta::default()
     };
-    let (class, handler, step): (u16, RowFn, usize) = match inst.op {
+    let (class, handler, step): (u16, *const (), usize) = match inst.op {
         // (Their result field is `u32::MAX` when unused: `NO_DST`.)
         TOp::StrlenC => {
             (m.db, m.arith) = (inst.c, ROW_INT);
-            (C_ROW, row_strlen, 1)
+            (C_ROW, super::strs::strlen_cv as *const (), 1)
         }
         TOp::CountC => {
             (m.db, m.arith) = (inst.c, ROW_INT);
-            (C_ROW, row_count, 1)
+            (C_ROW, super::strs::count_cv as *const (), 1)
         }
         TOp::TypeCheckC => {
             (m.db, m.arith) = (inst.c, ROW_BOOL);
-            (C_ROW, row_type_check, 1)
+            (C_ROW, super::strs::type_check_cv as *const (), 1)
         }
         TOp::IssetC => {
             (m.db, m.arith) = (inst.c, ROW_BOOL);
-            (C_ROW, row_isset, 1)
+            (C_ROW, super::strs::isset_cv as *const (), 1)
         }
-        TOp::TypeCheckJmpC => (C_ROWBR, row_type_check_jmp, 2),
-        TOp::IssetJmpC => (C_ROWBR, row_isset_jmp, 2),
+        TOp::TypeCheckJmpC => {
+            m.mask = ROW_BR_RET;
+            (C_ROWBR, super::strs::type_check_jmp_cv as *const (), 2)
+        }
+        TOp::IssetJmpC => {
+            m.mask = ROW_BR_RET;
+            (C_ROWBR, super::strs::isset_jmp_cv as *const (), 2)
+        }
         // The operators of two numbers the trace has no code for: the
         // comparisons (a bool), `<=>` (an int), `/` (an int or a float).
         // The handler reads its operands where they lie.
@@ -1369,7 +1345,7 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
                 13 => ROW_INT,
                 _ => ROW_VAL,
             };
-            (C_ROW, row_num_bin, 1)
+            (C_ROW, super::scalar::num_bin_tmp as *const (), 1)
         }
         // A literal that is no int, bool or null (a string, a float, an
         // array): a copy the temporary owns.
@@ -1378,7 +1354,7 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
             if inst.k == super::scalar::MOVE_TMP {
                 m.sb = inst.a;
             }
-            (C_ROW, row_move, 1)
+            (C_ROW, super::scalar::move_tmp as *const (), 1)
         }
         // `$cv .= value`: the variable (its index in `a`) is written, a
         // value temporary (its index in `p`) consumed.
@@ -1389,7 +1365,7 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
             }
             m.lit_c = i64::from(inst.a.checked_shl(SLOT_SHIFT)?);
             m.inc = true;
-            (C_ROW, row_concat, 1)
+            (C_ROW, super::dims::concat_cv as *const (), 1)
         }
         // The operands in `a`, `b` and `d` (their kinds two bits each in
         // `k`, 1: a temporary, consumed), the result in the low half of
@@ -1413,12 +1389,19 @@ fn plan_row(code: &crate::opcode::OpArray, i: usize, inst: &Inst) -> Option<(u16
             }
             [m.sb, m.slot, m.sw] = consumed;
             m.inc = true;
-            (C_ROW, row_frameless, 1 + fc.tail())
+            // Done, it jumps to the op after the call, which is where its
+            // row in a trace ends: only a decline is told apart.
+            m.mask = ROW_BR_RET;
+            (
+                C_ROW,
+                super::strs::frameless_quick as *const (),
+                1 + fc.tail(),
+            )
         }
         _ => return None,
     };
     m.class = class;
-    m.lit_a = i64::try_from(handler as *const () as usize).ok()?;
+    m.lit_a = i64::try_from(handler as usize).ok()?;
     Some((class, m, step))
 }
 
@@ -3134,12 +3117,18 @@ fn plan(
     let mut last = usize::MAX;
     while i <= close {
         let (c, m, step, call) = if tape[i].op == TOp::CallInit {
-            match plan_call(st, code, i) {
-                Some(cp) => {
-                    let span = cp.span;
-                    (C_CALL, JitMeta::default(), span, Some(cp))
-                }
-                None => rej!(format!("[{i}] call not inlinable")),
+            if tape[i].k == super::calls::CALL_NEW {
+                // The tape's own `new` instruction, through its handler.
+                let Some((m, step)) = plan_new(code, tape, i) else {
+                    rej!(format!("[{i}] new not a handler row"));
+                };
+                (C_ROW, m, step, None)
+            } else {
+                let Some(cp) = plan_call(st, code, i) else {
+                    rej!(format!("[{i}] call not inlinable"));
+                };
+                let span = cp.span;
+                (C_CALL, JitMeta::default(), span, Some(cp))
             }
         } else if matches!(tape[i].op, TOp::FetchObjProp | TOp::FetchObjPropTo) {
             // A property read never spans: the folded `AssignCv` of a
@@ -5107,10 +5096,10 @@ impl Emitter {
             // value or allocate.
             C_ROW => {
                 let row = self.row_arg(i);
-                self.emit_helper(
+                self.emit_row(
                     usize::try_from(m.lit_a).unwrap_or(0),
+                    m.mask == ROW_BR_RET,
                     [HArg::Frame, row, HArg::Null],
-                    0,
                     Target::Side(i),
                 );
                 if m.inc {
@@ -5119,7 +5108,8 @@ impl Emitter {
                     self.jcc(0x85, Target::Poll(next, i)); // jne
                 }
             }
-            // A handler that may jump: 1 declined, 2 jumped, 0 goes on.
+            // A handler that may jump (`Br`): 1 declined, 2 jumped, 0 goes
+            // on.
             C_ROWBR => {
                 let row = self.row_arg(i);
                 self.emit_helper_call(
@@ -5127,7 +5117,7 @@ impl Emitter {
                     [HArg::Frame, row, HArg::Null],
                     0,
                 );
-                self.put(&[0x83, 0xF8, 0x01]); // cmp eax, 1
+                self.put(&[0x3C, 0x01]); // cmp al, 1
                 self.jcc(0x84, Target::Side(i)); // je
                 self.jcc(0x87, self.jump_tgt(j)); // ja
             }
@@ -5153,10 +5143,11 @@ impl Emitter {
             // assignment, then its poll (the old value is released).
             J_ASSIGN_T if m.mask == ANY_SRC => {
                 let row = self.row_arg(i);
-                self.emit_helper(
-                    row_assign_any as *const () as usize,
-                    [HArg::Frame, row, HArg::Null],
-                    0,
+                // `scalar::assign_cv_any(frame, row, from_tmp: true)`.
+                self.emit_row(
+                    super::scalar::assign_cv_any as *const () as usize,
+                    false,
+                    [HArg::Frame, row, HArg::Abs(1)],
                     Target::Side(i),
                 );
                 self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
@@ -6394,6 +6385,21 @@ impl Emitter {
         self.emit_helper_call(helper, args, word);
         self.put(&[0x85, 0xC0]); // test eax, eax
         self.jcc(0x85, fail); // jnz: the helper declined
+    }
+
+    /// The call of a tape handler (`extern "C"`: the frame, the row, and a
+    /// third argument where it takes one) for a row it either does or
+    /// declines: `br` tells a handler that answers with a [`super::Br`]
+    /// (1: declined) from one that answers with a `bool` (false: declined).
+    /// The answer is a byte: only `al` is read.
+    fn emit_row(&mut self, handler: usize, br: bool, args: [HArg; 3], fail: Target) {
+        self.emit_helper_call(handler, args, 0);
+        if br {
+            self.put(&[0x3C, 0x01]); // cmp al, 1
+        } else {
+            self.put(&[0x84, 0xC0]); // test al, al
+        }
+        self.jcc(0x84, fail); // je / jz: the handler declined
     }
 
     /// The address of row `i` of the tape the trace is of, as a helper's
@@ -8221,10 +8227,10 @@ mod layout_tests {
         em.tbase = 0x7000;
         em.emit_instr(0);
         let mut want = emitter();
-        want.emit_helper(
+        want.emit_row(
             0x1234,
+            false,
             [HArg::Frame, HArg::Abs(0x7000), HArg::Null],
-            0,
             Target::Side(0),
         );
         want.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0

@@ -1321,3 +1321,58 @@ fn vm_ops_and_statics() {
     assert!(count(TOp::VmOp) >= 2, "$GLOBALS['g'], $_GET: {all:?}");
     assert_eq!(run(VM_OPS_AND_STATICS), "30 6\n20 abca 10\n124\n");
 }
+
+const NEW_WITH_ARGUMENTS: &str = r#"<?php
+class P { public $x; public $y; function __construct($x, $y) { $this->x = $x; $this->y = $y; } }
+function same($v) { return $v; }
+function run($n) {
+    for ($i = 0; $i < $n; $i++) { $p = new P($i, $i + 1); $q = new P(same($i), $i); }
+    return $p->x + $p->y + $q->x;
+}
+var_dump(run(20));
+"#;
+
+/// `new C(arguments)` whose arguments are variables, literals and sums of
+/// them is the tape's `new` instruction, jumping past the constructor's
+/// `DoCall` (`calls::new_plain` then runs a constructor that only stores
+/// its parameters without the call); a call among the arguments keeps the
+/// call instructions.
+#[test]
+fn new_with_arguments_at_hand_is_one_instruction() {
+    let arrays = op_arrays(NEW_WITH_ARGUMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = arrays
+        .iter()
+        .find(|c| {
+            c.ops
+                .iter()
+                .filter(|op| matches!(op, Op::New { .. }))
+                .count()
+                == 2
+        })
+        .expect("the function with the two `new`s");
+    let tape = check(code);
+    let news: Vec<usize> = (0..code.ops.len())
+        .filter(|&i| matches!(code.ops[i], Op::New { .. }))
+        .collect();
+    let first = &tape[news[0]];
+    assert_eq!(
+        (first.op, first.k, first.e),
+        (TOp::CallInit, super::calls::CALL_NEW, 1)
+    );
+    let end = target(&tape, news[0]);
+    assert!(matches!(code.ops[end - 1], Op::DoCall { dst: None }));
+    assert!(
+        code.ops[news[0] + 1..end - 1]
+            .iter()
+            .all(|op| matches!(op, Op::Send { .. } | Op::Bin { .. })),
+        "{:?}",
+        &code.ops[news[0]..end]
+    );
+    let second = &tape[news[1]];
+    assert_eq!(second.op, TOp::CallInit);
+    assert_ne!(second.k, super::calls::CALL_NEW);
+    assert_eq!(run(NEW_WITH_ARGUMENTS), "int(58)\n");
+}

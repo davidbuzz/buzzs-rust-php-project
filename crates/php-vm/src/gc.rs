@@ -914,6 +914,17 @@ pub(crate) fn released_ctor_this(o: &Obj) {
     root_obj(o);
 }
 
+/// [`released_ctor_this`] for a constructor that ran without a call
+/// (`exec/tape/calls.rs`, a constructor run as stores): the new object,
+/// which the result of `new` holds, becomes a possible root as the call's
+/// return makes it one. The call would hold a second handle while it is
+/// recorded; here there is none, so the count is not asked.
+pub(crate) fn root_ctor_result(o: &Obj) {
+    if !is_last_root(o) {
+        root_shared_obj(o);
+    }
+}
+
 /// The buffered object (`oflags::GC_BUFFERED`) with `handle` at `addr` is
 /// being freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`), and
 /// its slot is the next one reused.

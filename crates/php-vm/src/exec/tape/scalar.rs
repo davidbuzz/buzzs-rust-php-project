@@ -257,7 +257,9 @@ fn copy_of(v: &Value) -> Value {
 /// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 #[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
-pub(super) unsafe fn move_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn move_tmp(frame: *mut crate::vm::Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract.
     let st = unsafe { frame_st(frame) };
     // By raw pointer: the destination may be the source temporary.
@@ -468,20 +470,55 @@ pub(super) unsafe fn coalesce_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> 
 }
 
 /// `$cv = val` (`TOp::AssignT`, `TOp::AssignC`) when the value or the
-/// variable's old value is not a scalar: `hot::assign_cv_in`, which copies
-/// or moves any value and releases the old one, reached without the way
-/// through `hot::step`. `from_tmp` tells a temporary (`b`, consumed) from a
-/// compiled variable. The caller polls: a released value may queue a
-/// destructor.
+/// variable's old value is not a scalar. A string or a scalar over a
+/// string, a scalar or nothing is stored here (the value moved out of its
+/// temporary or copied from its variable, an old string released); any
+/// other pair is `hot::assign_cv_in`'s, which copies or moves any value
+/// and releases the old one, reached without the way through `hot::step`.
+/// `from_tmp` tells a temporary (`b`, consumed) from a compiled variable.
+/// The caller polls: a released value may queue a destructor.
 ///
 /// # Safety
 /// As [`move_tmp`].
 #[inline(never)]
-pub(super) unsafe fn assign_cv_any(
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe extern "C" fn assign_cv_any(
     frame: *mut crate::vm::Frame,
-    inst: &Inst,
+    inst: *const Inst,
     from_tmp: bool,
 ) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `a` is a validated variable offset.
+    let dst = unsafe { st.cvs.add(inst.a as usize).cast::<Option<Value>>() };
+    // SAFETY: `dst` points at a live slot.
+    if unsafe { &*dst }.as_ref().is_none_or(Value::is_plain) {
+        let v = if from_tmp {
+            // SAFETY: `b` is a validated temporary offset.
+            let from = unsafe { &mut *st.tmps.add(inst.b as usize).cast::<Value>() };
+            // Moved out: the temporary is consumed.
+            from.is_plain().then(|| std::mem::take(from))
+        } else {
+            // SAFETY: `b` is a validated variable offset.
+            match unsafe { &*st.cvs.add(inst.b as usize).cast::<Option<Value>>() } {
+                Some(Value::Str(s)) => Some(Value::Str(s.clone())),
+                Some(v) if is_scalar(v) => Some(copy_of(v)),
+                _ => None,
+            }
+        };
+        if let Some(v) = v {
+            // SAFETY: `dst` is valid for writes and holds nothing, a scalar
+            // or a string (seen above; the source's copy was made first).
+            let old = unsafe { std::ptr::replace(dst, Some(v)) };
+            match old {
+                Some(Value::Str(s)) => drop(s),
+                other => std::mem::forget(other),
+            }
+            return true;
+        }
+    }
     let from = inst.b >> SLOT_SHIFT;
     let val = if from_tmp {
         Operand::Tmp(from)
@@ -528,7 +565,12 @@ unsafe fn num_of_kind(st: St, kind: u8, x: u32) -> Option<Num> {
 /// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 #[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
-pub(super) unsafe fn num_bin_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn num_bin_tmp(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: the caller's contract.
     let st = unsafe { frame_st(frame) };
     // By raw pointer: the destination may be one of the operands.

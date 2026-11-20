@@ -519,7 +519,30 @@ pub(super) unsafe fn fetch_dim_int(frame: *mut Frame, inst: &Inst) -> Br {
         return br;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { fetch_int_any(frame, inst) }
+    unsafe { fetch_miss(frame, inst) }
+}
+
+/// Where a read goes on after its lean path missed: to the step for a
+/// string offset ([`fetch_dim_key`]) when the offset is one, else to the
+/// second int step ([`fetch_int_any`]), which a string key would only
+/// fail in.
+///
+/// A function of its own, and without a frame (a look at the offset and
+/// one of two tail calls): inlined into the lean handlers' tails it
+/// changed their code for every lean read too.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fetch_miss(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if key_str(unsafe { &*frame }, dim_kind(inst), inst.b).is_some() {
+        // SAFETY: as above.
+        unsafe { fetch_dim_key(frame, inst) }
+    } else {
+        // SAFETY: as above.
+        unsafe { fetch_int_any(frame, inst) }
+    }
 }
 
 /// `TOp::FetchDimIT`: [`fetch_packed_into_tmp`], else the wider read
@@ -534,7 +557,7 @@ pub(super) unsafe fn fetch_dim_tmp(frame: *mut Frame, inst: &Inst) -> Br {
         return br;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { fetch_int_any(frame, inst) }
+    unsafe { fetch_miss(frame, inst) }
 }
 
 /// The second step of a read with an int offset ([`fetch_int_wide`]), else
@@ -581,7 +604,7 @@ fn fetch_key(f: &mut Frame, inst: &Inst) -> Option<Br> {
     let v = {
         let key = key_str(f, kind, inst.b)?;
         match f.cvs.get(inst.a as usize)?.get()? {
-            Value::Array(arr) => elem_copy(arr.get_sym_zstr(key)?)?,
+            Value::Array(arr) => elem_copy(arr.sym_zstr_probe(key)?)?,
             Value::Reference(r) => match &*r.try_borrow()? {
                 Value::Array(arr) => elem_copy(arr.get_sym_zstr(key)?)?,
                 _ => return None,
@@ -1086,7 +1109,25 @@ pub(super) unsafe fn assign_dim_int(frame: *mut Frame, inst: &Inst) -> bool {
         return true;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
-    unsafe { assign_int_any(frame, inst) }
+    unsafe { assign_miss(frame, inst) }
+}
+
+/// Where a write goes on after its lean path missed, as a read's miss
+/// ([`fetch_miss`]): by the offset, to [`assign_dim_key`] or to
+/// [`assign_int_any`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn assign_miss(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if key_str(unsafe { &*frame }, dim_kind(inst), inst.b).is_some() {
+        // SAFETY: as above.
+        unsafe { assign_dim_key(frame, inst) }
+    } else {
+        // SAFETY: as above.
+        unsafe { assign_int_any(frame, inst) }
+    }
 }
 
 /// The second step of a write with an int offset ([`assign_int_wide`]),
@@ -1338,9 +1379,17 @@ fn assign_op_int(f: &mut Frame, inst: &Inst) -> Option<()> {
     fn element<'t>(tbl: &'t mut HashTable, key: &Value) -> Option<&'t mut Value> {
         match key {
             Value::Int(i) => tbl.get_int_mut(*i),
-            Value::Str(s) => tbl.get_sym_zstr_mut(s),
+            Value::Str(s) => str_element(tbl, s),
             _ => None,
         }
+    }
+    /// The element a string key names, the probe inlined
+    /// (`HashTable::sym_zstr_probe_mut`). A function of its own: inside
+    /// `element` the probe's registers were saved for an int key too (15
+    /// instructions an element, zend:ary3 without the JIT).
+    #[inline(never)]
+    fn str_element<'t>(tbl: &'t mut HashTable, s: &ZStr) -> Option<&'t mut Value> {
+        tbl.sym_zstr_probe_mut(s)
     }
     /// The variables `a` (to write) and `b` (to read) of `cvs`, when they
     /// are two: what `<[T]>::get_disjoint_mut` gives (Rust 1.86; the
@@ -1698,12 +1747,13 @@ fn fe_assign(f: &mut Frame, cv: u32, tmp: u32, v: Value) {
             debug_assert!(assigned);
         }
     } else if let Some(slot) = f.cvs.get(cv as usize) {
-        let old = slot.set(Some(v));
-        if matches!(
-            old,
-            None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
-        ) {
-            std::mem::forget(old);
+        match slot.set(Some(v)) {
+            // An old string by its own drop (one fewer handle, or freed).
+            Some(Value::Str(s)) => drop(s),
+            old @ (None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => {
+                std::mem::forget(old);
+            }
+            other => drop(other),
         }
     }
 }
@@ -1715,7 +1765,9 @@ fn fe_assign(f: &mut Frame, cv: u32, tmp: u32, v: Value) {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn concat_cv(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe extern "C" fn concat_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
     let val = operand(val_kind(inst), inst.p as u32);

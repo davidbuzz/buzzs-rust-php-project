@@ -32,10 +32,16 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       (heapsort 2.95 -> 2.21), hashes with int keys (ary2 1.48 -> 1.06 with the hot count
       by loop length) and string keys in variables and temporaries (hash1 1.97 -> 1.52,
       hash2 2.54 -> 1.66 with `foreach` on the tape, array_rw 1.81 -> 1.35).
+      Done 2026-11-21: the string-key steps make the probe themselves
+      (`HashTable::sym_zstr_probe`, no `memcmp` call for a long key) and a string key goes
+      straight to them after the lean int path missed (`dims::fetch_miss`,
+      `assign_miss`): hash1 1.52 -> 1.44, hash2 1.66 -> 1.53, array_rw 1.35 -> 1.22. An
+      int key that misses the lean path pays that look at the offset (heapsort 2.21 ->
+      2.35, ary and ary2 without the JIT 3% more).
       Open: heapsort needs floats in traces and the array rows of a trace to take a
       reference and float elements; hash1, hash2 and array_rw are interpreted loops whose
-      string-key probe (`find_zstr`, ~80 instructions) and handler frames still cost
-      about twice C's.
+      `foreach` step (150 instructions), string building and handler frames still cost
+      about one and a half times C's.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
@@ -53,11 +59,12 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       suite:strings 1.64 -> 1.34. Done 2026-11-20: those loops compile (a trace calls the
       tape's own handler for a row it has no code for: `jit::plan_row`), and calls of two
       or three arguments are straight-line code (`special::quick_eval_2`/`quick_eval_3`):
-      suite:builtins 1.55 -> 1.16, suite:strings 1.34 -> 1.18. Open: a handler call from a
-      trace costs ~22 instructions around the handler (callee-saved registers for the
-      trace's bases would make it ~8; `ops:strlen` is 1.08 compiled against 1.01
-      interpreted), and the interpreter's user-call protocol (memory note
-      `call-redesign-plan`).
+      suite:builtins 1.55 -> 1.16, suite:strings 1.34 -> 1.18. Done 2026-11-21: a trace
+      calls the handlers themselves (they are `extern "C"`; the shims between are gone):
+      ops:strlen 1.08 -> 0.97, ops:count 0.97 -> 0.88, suite:builtins 1.04. Open: a
+      handler call from a trace still saves and restores five registers around the
+      handler (callee-saved registers for the trace's bases would spare that), and the
+      interpreter's user-call protocol (memory note `call-redesign-plan`).
 - [~] JIT Step 4 — `New` rows (new_obj 3.27, micro:new_Foo 2.02, objects 4.64),
       elvis/ternary, `$this::CONST`, `$GLOBALS['v']`, `$_GET`. Done 2026-11-20: tape
       instructions for all of them (a ternary's arms, `?:`, `??`, non-scalar assignments,
@@ -76,8 +83,8 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       go into a table when the trace is entered): x_eq__GET 1.79 -> 0.27, x_eq_GLOBALS_v
       1.69 -> 0.25. `new` of a class without a constructor is a tape instruction
       (new_Foo 2.05 -> 1.71).
-      Open: object allocation and release themselves (objects 4.04, new_obj 3.29, new_Foo
-      1.71); strings and objects moved by a trace.
+      Open: object allocation and release themselves (see the Objects item below);
+      strings and objects moved by a trace.
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
@@ -87,11 +94,15 @@ Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       float_math 0.85; a trace would still be several times faster, and heapsort and
       suite:objects need it); property access inside inlined callee bodies;
       `self::`/`static::` scope guards for call inlining.
-- [ ] Objects (objects 3.99, new_obj 3.30, new_Foo 1.72): `new C(...)` with a
-      constructor that only assigns its parameters to properties as part of the `new`
-      row (the constructor call is ~1,200 of new_obj's 2,090 instructions); allocation
-      (`object::new_block` 172) and release (~290 across six functions) against C's
-      ~135 and ~130; the interpreter's user-call protocol for the method call.
+- [~] Objects (objects 2.64, new_obj 1.97, new_Foo 1.73). Done 2026-11-21: `new
+      C(...)` with a constructor that only assigns its parameters to properties (a
+      promoted constructor is one) is one tape instruction without the call
+      (`calls::new_stored`, from `UserFunction::ctor_fold`), which a trace calls: new_obj
+      3.30 -> 1.97 (1,249 instructions an iteration, C 635), objects 3.99 -> 2.64. Open:
+      allocation (`object::new_block` 172) and release (~370 with the assignment, across
+      eight functions) against C's ~135 and ~130, the possible-root bookkeeping of the
+      new object (152), and that instruction itself. For `objects` besides: the method
+      call `$p->len()`, whose `sqrt` and float `+=` a trace cannot take yet.
 - [ ] Memory allocator: profile per-allocation cost claim (~81→~30 ins) on release build;
       update FEATURE_GAP row % from estimate to measured.
 - [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout

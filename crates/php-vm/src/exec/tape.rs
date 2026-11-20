@@ -565,15 +565,18 @@ macro_rules! take_jump {
     }};
 }
 
-/// What a family handler that may jump decided.
+/// What a family handler that may jump decided. A trace calls such a
+/// handler itself and reads the answer as a byte (`jit::Emitter::emit_row`):
+/// the values are part of that contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum Br {
-    /// Its operands are not what it handles; nothing changed.
-    Decline,
     /// Done; execution goes on after the ops the instruction covers.
-    Fall,
+    Fall = 0,
+    /// Its operands are not what it handles; nothing changed.
+    Decline = 1,
     /// Done; execution goes on at the instruction's jump target.
-    Jump,
+    Jump = 2,
 }
 
 /// The arm of a `family` row in [`run_core`]: `$h` is the handler, `$n`

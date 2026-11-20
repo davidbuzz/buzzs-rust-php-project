@@ -386,9 +386,11 @@ fn hash_slot(table_size: u32, h: u64) -> usize {
 }
 
 /// Whether two key strings have the same bytes (`zend_string_equal_content`
-/// once the hashes matched): keys of up to 16 bytes, the common case,
-/// compare with two overlapping word loads per side instead of a `memcmp`
-/// call.
+/// once the hashes matched), without a call: keys of up to 16 bytes, the
+/// common case, compare with two overlapping word loads per side, longer
+/// ones eight bytes at a time and their last eight. (A `memcmp` call for
+/// the long keys made every probe loop that inlines this keep its state in
+/// callee-saved registers, pushed and popped around each lookup.)
 #[inline]
 fn same_bytes(a: &[u8], b: &[u8]) -> bool {
     let n = a.len();
@@ -406,7 +408,10 @@ fn same_bytes(a: &[u8], b: &[u8]) -> bool {
     if n < 4 {
         return a.iter().zip(b).all(|(x, y)| x == y);
     }
-    a == b
+    a.chunks_exact(8)
+        .zip(b.chunks_exact(8))
+        .all(|(x, y)| x == y)
+        && a.last_chunk::<8>() == b.last_chunk::<8>()
 }
 
 /// `_zend_hash_get_valid_pos` over one storage: the first live slot at or
@@ -701,6 +706,15 @@ impl HashData {
     /// bytes.
     #[inline]
     fn find_zstr(&self, ts: u32, key: &ZStr) -> Option<u32> {
+        self.probe_zstr(ts, key)
+    }
+
+    /// [`HashData::find_zstr`], always inlined: for a caller that is a
+    /// string-key path itself (the probe is its body, not a call out of
+    /// it).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
+    fn probe_zstr(&self, ts: u32, key: &ZStr) -> Option<u32> {
         let h = key.hash_value();
         let mut idx = self.head(ts, h);
         while idx != INVALID {
@@ -1596,7 +1610,7 @@ impl HashTable {
         }
         let ts = self.table_size;
         if let Store::Hash(d) = &mut self.store {
-            if let Some(idx) = d.find_zstr(ts, key) {
+            if let Some(idx) = d.probe_zstr(ts, key) {
                 if let Some(slot) = d.buckets.get_mut(idx as usize).and_then(|b| b.val.as_mut()) {
                     if !slot.is_plain() {
                         return Err(val);
@@ -1660,6 +1674,37 @@ impl HashTable {
             Some(i) => self.get_int(i),
             None => self.get_zstr(s),
         }
+    }
+
+    /// [`HashTable::get_sym_zstr`] with the probe inlined into the caller:
+    /// for an element fast path of the executor, whose body the lookup is.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
+    #[must_use]
+    pub fn sym_zstr_probe(&self, s: &ZStr) -> Option<&Value> {
+        if let Some(i) = numeric_key(s.as_bytes()) {
+            return self.get_int(i);
+        }
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        let idx = d.probe_zstr(self.table_size, s)?;
+        d.buckets.get(idx as usize)?.val.as_ref()
+    }
+
+    /// Mutable [`HashTable::sym_zstr_probe`].
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // as `sym_zstr_probe`
+    pub fn sym_zstr_probe_mut(&mut self, s: &ZStr) -> Option<&mut Value> {
+        if let Some(i) = numeric_key(s.as_bytes()) {
+            return self.get_int_mut(i);
+        }
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return None;
+        };
+        let idx = d.probe_zstr(ts, s)?;
+        d.buckets.get_mut(idx as usize)?.val.as_mut()
     }
 
     /// Mutable [`HashTable::get_sym_zstr`].
@@ -3503,6 +3548,27 @@ impl FromIterator<Value> for ZArray {
 
 #[cfg(test)]
 mod tests {
+    /// Keys compare by their bytes at every length around the size classes
+    /// of `same_bytes`, and differ when any one byte does.
+    #[test]
+    fn same_bytes_at_every_length() {
+        let base: Vec<u8> = (0u8..80)
+            .map(|i| i.wrapping_mul(37).wrapping_add(11))
+            .collect();
+        for n in 0..=base.len() {
+            let a = &base[..n];
+            // (Another allocation with the same bytes.)
+            let copy = a.to_vec();
+            assert!(super::same_bytes(a, &copy), "length {n}");
+            assert!(!super::same_bytes(a, &base[..n.saturating_sub(1)]) || n == 0);
+            for at in 0..n {
+                let mut b = a.to_vec();
+                b[at] ^= 0x40;
+                assert!(!super::same_bytes(a, &b), "length {n}, byte {at}");
+            }
+        }
+    }
+
     use super::*;
 
     /// `sort_ints` gives what `sort_by` gives with the int comparison, for

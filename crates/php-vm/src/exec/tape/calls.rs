@@ -44,10 +44,13 @@
 
 use super::{rel, Inst, TOp};
 use crate::call::{accepts_without_coercion, clone_value};
-use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction};
-use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
+use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction, FOLD_STEPS};
+use crate::opcode::{
+    ArgSrc, BinKind, ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase, PROP_CACHE_THIS,
+};
+use crate::place::propcache::{accepts, PC_DYN, PC_NO_SET, PC_WRITE};
 use crate::vm::{FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
-use php_runtime::Value;
+use php_runtime::{BinaryOp, Obj, Value};
 use std::rc::Rc;
 
 /// The most arguments a prepared call takes: the pending call's inline
@@ -84,6 +87,23 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             a: *lit,
             b: *dst,
             c: rel(code, i, *skip)?,
+            ..plain(TOp::CallInit)
+        }),
+        // `new C(arguments)` whose arguments are values at hand
+        // ([`new_args_end`]): as above, the jump going to the op after the
+        // constructor call, with `e` set and the op's own index in `d`
+        // (the handler reads the arguments from the ops after it).
+        Op::New {
+            class: ClassSpec::Named(lit),
+            dst,
+            skip: 0,
+        } if new_args_end(code, i).is_some() => Some(Inst {
+            k: CALL_NEW,
+            e: 1,
+            a: *lit,
+            b: *dst,
+            c: rel(code, i, new_args_end(code, i)?)?,
+            d: u32::try_from(i).ok()?,
             ..plain(TOp::CallInit)
         }),
         op if preparable(op) => Some(plain(TOp::CallInit)),
@@ -139,14 +159,76 @@ pub(super) const CALL_QUICK: u8 = 1;
 /// tries itself ([`new_plain`]).
 pub(super) const CALL_NEW: u8 = 2;
 
-/// `ZEND_NEW` of a class without a constructor, on the call site's class
-/// cache hit: the object (`props::new_plain`: its slots copied from the
-/// class's evaluated defaults) into the result temporary. There is no call
-/// to make, so the instruction then jumps over the constructor call's ops.
-/// `false`, nothing changed, for anything else: a cache miss, a class with
-/// a constructor or one `props::new_plain` leaves to `Vm::instantiate`
-/// (abstract, an enum, an internal class with a creation hook, ...) -
-/// `run_call` then decides as before.
+/// The most sums [`new_stored`] computes between the sends of one `new`.
+const NEW_SUMS: usize = 3;
+
+/// The op after the constructor call of the `New` at `i` when the tape's
+/// `new` instruction can stand for all of it ([`new_stored`]): every op up
+/// to the `DoCall` is a `Send` of a literal, of a compiled variable or of
+/// a sum computed here, or such a sum (`+`, `-` or `*` of variables and
+/// literals into a temporary that a later `Send` passes). `None` for any
+/// other argument list (a call, a ternary, a named or unpacked argument,
+/// more than [`MAX_ARGS`] arguments).
+fn new_args_end(code: &OpArray, i: usize) -> Option<u32> {
+    let plain = |o: &Operand| matches!(o, Operand::Lit(_) | Operand::Cv(_));
+    let mut sums = [u32::MAX; NEW_SUMS];
+    let mut sends = 0usize;
+    for (k, op) in code.ops.get(i + 1..)?.iter().enumerate() {
+        match op {
+            Op::Nop => {}
+            Op::Send { src } => {
+                match src {
+                    ArgSrc::Val(Operand::Lit(_) | Operand::Cv(_)) => {}
+                    ArgSrc::Place(pid) if place_cv(code, *pid).is_some() => {}
+                    // A sum made here, passed once.
+                    ArgSrc::Val(Operand::Tmp(t)) => {
+                        *sums.iter_mut().find(|s| **s == *t)? = u32::MAX;
+                    }
+                    _ => return None,
+                }
+                sends += 1;
+                if sends > MAX_ARGS {
+                    return None;
+                }
+            }
+            Op::Bin {
+                op: BinKind::Arith(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul),
+                a,
+                b,
+                dst,
+            } if plain(a) && plain(b) && *dst != u32::MAX => {
+                *sums.iter_mut().find(|s| **s == u32::MAX)? = *dst;
+            }
+            // The call, every sum passed.
+            Op::DoCall { dst: None } if sums.iter().all(|s| *s == u32::MAX) => {
+                return u32::try_from(i + k + 2).ok();
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `ZEND_NEW` on the call site's class cache hit, when nothing of it needs
+/// a call: the object into the result temporary, and the jump over the
+/// ops of the constructor call (the instruction's jump).
+///
+/// - A class without a constructor, `new C` without arguments: the object
+///   (`props::new_plain`: its slots copied from the class's evaluated
+///   defaults).
+/// - A class whose constructor only stores its parameters in properties
+///   ([`new_stored`]): the object with the arguments stored.
+///
+/// `false`, nothing changed, for anything else: a cache miss, any other
+/// constructor, arguments to a class without one, or a class
+/// `props::new_plain` leaves to `Vm::instantiate` (abstract, an enum, an
+/// internal class with a creation hook, ...) - `run_call` then decides as
+/// before. A trace calls this handler too (`jit::plan_new`).
+///
+/// The first case is the whole of this function, as it was before the
+/// second existed (its call is one of `run_core`'s, and `$x = new Foo()` in
+/// a loop is little more than it); the second lies behind a call
+/// ([`new_filled`]).
 ///
 /// # Safety
 /// `inst` is a [`CALL_NEW`] instruction [`lower`] built for `frame`, the
@@ -167,14 +249,292 @@ pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> boo
             None => return false,
         }
     };
-    if cls.magic.construct.is_some() {
-        return false;
+    if cls.magic.construct.is_some() || inst.e != 0 {
+        // SAFETY: the caller's contract; the borrows above have ended.
+        return unsafe { new_filled(frame, inst, cls) };
     }
     let Some(o) = crate::props::new_plain(&cls) else {
         return false;
     };
     crate::exec::spec::put_tmp(slot, Value::Object(o));
     true
+}
+
+/// [`new_plain`] for a class with a constructor, or with arguments: the
+/// object [`new_stored`] makes, into the result temporary.
+///
+/// # Safety
+/// As [`new_plain`].
+#[inline(never)]
+#[allow(clippy::needless_pass_by_value)] // the handle moves in: the call is the caller's last act
+unsafe fn new_filled(
+    frame: *mut crate::vm::Frame,
+    inst: &Inst,
+    cls: Rc<crate::class::Class>,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(o) = new_stored(f, inst, &cls) else {
+        return false;
+    };
+    match f.tmps.get_mut(inst.b as usize) {
+        Some(slot) => crate::exec::spec::put_tmp(slot, Value::Object(o)),
+        // (Not reached: `new_plain` found the slot.)
+        None => crate::object::discard_rejected(o),
+    }
+    true
+}
+
+/// The int operand `o` of a sum between the sends of a `new` is: a
+/// literal, or what a compiled variable holds itself.
+fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
+    let v = match o {
+        Operand::Lit(l) => f.code.literals.get(l as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+        _ => return None,
+    };
+    match v {
+        Value::Int(i) => Some(*i),
+        _ => None,
+    }
+}
+
+/// The object of `new C(arguments)` (the [`CALL_NEW`] instruction `inst` of
+/// frame `f`, `cls` its class) when the constructor only stores its
+/// parameters in properties ([`UserFunction::ctor_fold`]): made and
+/// filled without the call, as the call would have left it.
+///
+/// - The arguments are what the `Send`s after the op would pass
+///   ([`sent_args`]). Every declared parameter is passed, and no more; each
+///   has a type that takes its argument as it is (`enter`'s test).
+/// - Every store is checked before the object exists, as
+///   `spec::props::assign_hit` checks it: the constructor's own property
+///   cache entry for the place is filled for this class and the
+///   constructor's scope, allows a plain write of a declared property and
+///   takes the value as it is; the slot it names holds, in a new object,
+///   a default that is replaced or nothing that `__set()` could claim.
+///   (A first `new` of the class runs the call, which fills the entries.)
+/// - What the call's return would have recorded is recorded
+///   (`gc::frame_released`): each argument as a possible root, then the
+///   object itself, which `new`'s result still holds.
+///
+/// `None`, nothing done, for anything else: an observer, another
+/// constructor (not public, static, with other statements, with a
+/// parameter left to its default), a class `props::ctor_ref` refuses.
+#[inline(never)]
+fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
+    let mut args = NewArgs::new();
+    if inst.e != 0 {
+        sent_args(f, inst, &mut args)?;
+    }
+    let args = args.given();
+    let (func, scope) = crate::props::ctor_ref(cls)?;
+    let Func::User(uf) = func else {
+        return None;
+    };
+    if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let steps = uf.ctor_fold()?;
+    if args.len() != uf.params.len() {
+        return None;
+    }
+    if uf.call_shape() == CallShape::TYPED {
+        for (p, v) in uf.params.iter().zip(args) {
+            if p.ty
+                .as_ref()
+                .is_some_and(|ty| !ty.is_mixed() && !accepts_without_coercion(ty.mask, v))
+            {
+                return None;
+            }
+        }
+    }
+    let defaults = cls.defaults.try_borrow().ok()?;
+    let defaults = defaults.as_deref()?;
+    let class_addr = Rc::as_ptr(cls) as usize;
+    // Where each step stores, every check its store needs made first.
+    let mut slots = [0u32; FOLD_STEPS];
+    {
+        let cache = uf.code.prop_cache.try_borrow().ok()?;
+        for (step, at) in steps.iter().zip(&mut slots) {
+            let entry = cache.get(step.place as usize)?;
+            let v = args.get(step.param as usize)?;
+            let stored_class = matches!(
+                v,
+                Value::Object(held) if entry.ok_class_addr != 0
+                    && Rc::as_ptr(crate::object::class_of(held)) as usize == entry.ok_class_addr
+            );
+            if entry.class_addr != class_addr
+                || entry.scope_addr != scope
+                || entry.base != PROP_CACHE_THIS
+                || entry.flags & (PC_WRITE | PC_DYN) != PC_WRITE
+                || !(accepts(entry.accept, v) || stored_class)
+            {
+                return None;
+            }
+            match defaults.get(entry.slot as usize)? {
+                Some(Value::Reference(_)) => return None,
+                Some(_) => {}
+                // An undefined slot is filled when `__set()` cannot claim
+                // it: the class has none, or the property is typed (and,
+                // in a new object, never unset).
+                None if entry.flags & PC_NO_SET != 0 || entry.accept != u32::MAX => {}
+                None => return None,
+            }
+            *at = entry.slot;
+        }
+    }
+    let made = crate::object::new_object_from_defaults(Rc::clone(cls), defaults);
+    let data = crate::object::data(&made);
+    let Ok(mut held) = data.slots.try_borrow_mut() else {
+        // (Not reached: nothing else holds a new object's slots.)
+        crate::object::discard_rejected(made);
+        return None;
+    };
+    for (step, &slot) in steps.iter().zip(&slots) {
+        let (Some(cell), Some(v)) = (held.get_mut(slot as usize), args.get(step.param as usize))
+        else {
+            continue;
+        };
+        let old = cell.replace(clone_value(v));
+        if old.is_none() {
+            data.set_slot_unset(slot as usize, false);
+        }
+        // A default: a scalar, or a value the class's table holds too.
+        crate::exec::discard_unrooted(old);
+    }
+    drop(held);
+    for v in args {
+        crate::gc::possible_root(v);
+    }
+    crate::gc::root_ctor_result(&made);
+    Some(made)
+}
+
+/// The arguments the `Send`s after the `new` instruction `inst` of frame
+/// `f` would pass, into `args`: a copy of a literal or of a variable's
+/// value (dereferenced; an undefined variable declines, its send warns),
+/// or a sum computed between them (ints, no overflow: any other operand
+/// declines). `None`, nothing changed in the frame, when a send has no
+/// such value or there are more than [`MAX_ARGS`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `new_stored`
+fn sent_args(f: &crate::vm::Frame, inst: &Inst, args: &mut NewArgs) -> Option<()> {
+    let code = &*f.code;
+    let mut sums = [(u32::MAX, 0i64); NEW_SUMS];
+    let mut made = 0usize;
+    for op in code.ops.get(inst.d as usize + 1..)? {
+        match op {
+            Op::Nop => {}
+            Op::Send { src } => {
+                let v = match src {
+                    ArgSrc::Val(Operand::Lit(lit)) => {
+                        clone_value(code.literals.get(*lit as usize)?)
+                    }
+                    ArgSrc::Val(Operand::Cv(cv)) => cv_arg(f, *cv)?,
+                    ArgSrc::Place(pid) => cv_arg(f, place_cv(code, *pid)?)?,
+                    ArgSrc::Val(Operand::Tmp(tmp)) => {
+                        Value::Int(sums.iter().find(|s| s.0 == *tmp)?.1)
+                    }
+                    _ => return None,
+                };
+                args.push(v)?;
+            }
+            Op::Bin {
+                op: BinKind::Arith(kind),
+                a,
+                b,
+                dst,
+            } => {
+                let (lhs, rhs) = (int_operand(f, *a)?, int_operand(f, *b)?);
+                let sum = match kind {
+                    BinaryOp::Add => lhs.checked_add(rhs)?,
+                    BinaryOp::Sub => lhs.checked_sub(rhs)?,
+                    BinaryOp::Mul => lhs.checked_mul(rhs)?,
+                    _ => return None,
+                };
+                *sums.get_mut(made)? = (*dst, sum);
+                made += 1;
+            }
+            // The `DoCall`.
+            _ => break,
+        }
+    }
+    Some(())
+}
+
+/// The arguments [`new_stored`] collects: at most [`MAX_ARGS`] values, of
+/// which only those given may own something. They are released by a tag
+/// test each and nothing else of the array is ever dropped (an array of
+/// `Value`s has drop glue for every slot, and a store into one a
+/// `drop_in_place` call for what it replaces: about 150 instructions
+/// around one int argument).
+struct NewArgs {
+    vals: std::mem::ManuallyDrop<[Value; MAX_ARGS]>,
+    n: usize,
+}
+
+impl NewArgs {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the head of `new_stored`
+    fn new() -> Self {
+        NewArgs {
+            vals: std::mem::ManuallyDrop::new(std::array::from_fn(|_| Value::Null)),
+            n: 0,
+        }
+    }
+
+    /// Adds `v`; `None` (and `v` released) when there is no room.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per argument
+    fn push(&mut self, v: Value) -> Option<()> {
+        let slot = self.vals.get_mut(self.n)?;
+        // The slot holds the `Null` it started with.
+        std::mem::forget(std::mem::replace(slot, v));
+        self.n += 1;
+        Some(())
+    }
+
+    /// The arguments given so far.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn given(&self) -> &[Value] {
+        self.vals.get(..self.n).unwrap_or(&[])
+    }
+}
+
+impl Drop for NewArgs {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // every way out of `new_stored`
+    fn drop(&mut self) {
+        let n = self.n;
+        for v in self.vals.iter_mut().take(n) {
+            match std::mem::take(v) {
+                // A scalar owns nothing.
+                old @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+                    std::mem::forget(old);
+                }
+                other => drop(other),
+            }
+        }
+    }
+}
+
+/// [`cv_value`] where [`sent_args`] reads an argument: the copy of a
+/// scalar made in place.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument
+fn cv_arg(f: &crate::vm::Frame, cv: u32) -> Option<Value> {
+    Some(
+        match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+            Value::Null => Value::Null,
+            Value::Bool(b) => Value::Bool(*b),
+            Value::Int(i) => Value::Int(*i),
+            Value::Float(x) => Value::Float(*x),
+            Value::Reference(r) => r.get(),
+            v => v.clone(),
+        },
+    )
 }
 
 /// The id and frameless class (`special::quick_id`) of the builtin the

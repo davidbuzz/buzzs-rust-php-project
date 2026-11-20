@@ -114,6 +114,26 @@ pub(crate) fn ctor_call(cls: &Rc<Class>) -> Option<(crate::func::Func, Rc<Class>
     Some((ctor.func.clone(), scope))
 }
 
+/// [`ctor_call`] without the handles, for a caller that makes no call (a
+/// constructor run as stores, `exec/tape/calls.rs`): the constructor's
+/// function and the address of its declaring class (the scope its frame
+/// would have), under the same conditions.
+#[inline]
+pub(crate) fn ctor_ref(cls: &Rc<Class>) -> Option<(&crate::func::Func, usize)> {
+    if cls.flags & NOT_INSTANTIABLE != 0
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
+    {
+        return None;
+    }
+    let ctor = cls.magic.construct.as_ref()?;
+    if ctor.visibility() != flags::PUBLIC || ctor.is_static() || ctor.scope.strong_count() == 0 {
+        return None;
+    }
+    Some((&ctor.func, std::rc::Weak::as_ptr(&ctor.scope) as usize))
+}
+
 /// The object [`new_with_ctor`] creates for a class [`ctor_call`]
 /// accepted: its slots copied from `default_properties_table`. `None`,
 /// having created nothing, when the defaults are not evaluated yet.
