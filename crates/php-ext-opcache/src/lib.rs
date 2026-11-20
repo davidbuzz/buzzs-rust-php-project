@@ -884,28 +884,22 @@ fn opcache_compile_hook(
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename.as_bytes()));
     let realpath = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let real_str = realpath.to_string_lossy().into_owned();
-    // File cache entries are validated by the script's modification time.
-    // A script that is not a plain file (a `phar://` entry) has none here,
-    // so a stale entry could not be told apart: such scripts are neither
-    // stored in nor loaded from the file cache. (php-src stats them through
-    // the stream wrapper.)
-    let file_cache_dir = if std::fs::metadata(&realpath).is_ok() {
-        file_cache_dir
-    } else {
-        String::new()
-    };
 
     // A blacklisted script is compiled, never cached (`persistent_compile_file`).
     if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
         return vm.compile_source_default(src, filename, false, skip_shebang);
     }
 
-    let mtime_sec = std::fs::metadata(&realpath)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    // Cache entries are validated by the script's modification time. A
+    // script whose time cannot be determined is not stored in or loaded
+    // from the file cache, since a stale entry could not be told apart.
+    let mtime = script_timestamp(&realpath);
+    let file_cache_dir = if mtime.is_some() {
+        file_cache_dir
+    } else {
+        String::new()
+    };
+    let mtime_sec = mtime.unwrap_or(0);
     let now_sec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -1032,6 +1026,35 @@ fn store_in_file_cache(
     file_cache::write_file_cache(cache_dir, realpath, mtime_sec, &payload)
         .map(|_| ())
         .map_err(|(msg, _)| msg)
+}
+
+/// `zend_get_file_handle_timestamp`: the script's modification time in
+/// seconds. A plain file is stat'ed; a stream path (`phar://...`) is
+/// stat'ed through its wrapper's `url_stat` (`zend_get_stream_timestamp`),
+/// and a wrapper without `url_stat` gives the constant 1, as in php-src
+/// ("anything other than 0 is considered to be a valid timestamp").
+/// `None` when the script cannot be stat'ed.
+fn script_timestamp(path: &std::path::Path) -> Option<i64> {
+    use php_streams::wrapper::{locate, STREAM_LOCATE_WRAPPERS_ONLY, URL_STAT_QUIET};
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    let scheme = php_streams::wrapper::scheme_len(bytes);
+    let is_url = scheme > 1 && bytes[scheme..].starts_with(b"://");
+    if is_url && !bytes.starts_with(b"file://") {
+        let located = locate(bytes, STREAM_LOCATE_WRAPPERS_ONLY)?;
+        return match located.wrapper.url_stat(&located.path, URL_STAT_QUIET, None) {
+            None => Some(1),
+            Some(Ok(stat)) => Some(stat.mtime),
+            Some(Err(())) => None,
+        };
+    }
+    let plain = bytes.strip_prefix(b"file://").unwrap_or(bytes);
+    let modified = std::fs::metadata(std::ffi::OsStr::from_bytes(plain))
+        .ok()?
+        .modified()
+        .ok()?;
+    let secs = modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    i64::try_from(secs).ok()
 }
 
 /// Decodes a file cache entry (compiler fingerprint, then the bytecode
