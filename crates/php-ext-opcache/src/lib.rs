@@ -881,16 +881,40 @@ struct Probe {
     /// The script's key: its resolved path.
     realpath: std::path::PathBuf,
     real_str: String,
-    /// Modification time (`zend_get_file_handle_timestamp`), 0 if unknown.
-    mtime_sec: i64,
+    /// Modification time (`zend_get_file_handle_timestamp`), determined
+    /// on first use (see [`Probe::mtime`]).
+    mtime: std::cell::OnceCell<Option<i64>>,
     now_sec: i64,
-    /// `opcache.file_cache`, or empty when the file cache does not apply
-    /// to this script.
+    /// `opcache.file_cache`, empty when unset.
     file_cache_dir: String,
     file_cache_only: bool,
     /// `opcache.file_cache_read_only`: entries are only read, never
     /// written or removed.
     file_cache_read_only: bool,
+}
+
+impl Probe {
+    /// The script's modification time, `None` when it cannot be
+    /// determined. It is only looked up when needed: a hit in the
+    /// in-memory cache between revalidations (`opcache.revalidate_freq`)
+    /// costs no `stat`, as in `validate_timestamp_and_record`.
+    fn mtime(&self) -> Option<i64> {
+        *self.mtime.get_or_init(|| script_timestamp(&self.realpath))
+    }
+
+    /// The modification time to cache a freshly compiled script under,
+    /// as `opcache_compile_file` checks before compiling: `None` (compile
+    /// without caching) when the time cannot be determined or the file is
+    /// newer than `opcache.file_update_protection` seconds, as it may not
+    /// be written completely yet.
+    fn cacheable_mtime(&self, vm: &Vm) -> Option<i64> {
+        let mtime = self.mtime()?;
+        let update_prot = vm.ini_long("opcache.file_update_protection");
+        if update_prot > 0 && self.now_sec - update_prot < mtime {
+            return None;
+        }
+        Some(mtime)
+    }
 }
 
 thread_local! {
@@ -922,9 +946,9 @@ fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
 }
 
 /// `persistent_compile_file`'s checks: whether opcache handles `filename`
-/// at all, and under which key and timestamp. `None` when it is compiled
-/// without the cache (opcache off, blacklisted, or too new to cache under
-/// `opcache.file_update_protection`).
+/// at all, and under which key. `None` when it is compiled without the
+/// cache (opcache off or blacklisted). The script is not stat'ed here;
+/// see [`Probe::mtime`].
 fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     use std::os::unix::ffi::OsStrExt;
     let enable = vm.ini_bool("opcache.enable");
@@ -939,31 +963,17 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
         return None;
     }
-    // Cache entries are validated by the script's modification time. A
-    // script whose time cannot be determined is not stored in or loaded
-    // from the file cache, since a stale entry could not be told apart.
-    let mtime = script_timestamp(&realpath);
-    let file_cache_dir = if mtime.is_some() {
-        get_ini_string(vm, "opcache.file_cache")
-    } else {
-        String::new()
-    };
-    let mtime_sec = mtime.unwrap_or(0);
     let now_sec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0);
-    let update_prot = vm.ini_long("opcache.file_update_protection");
-    if update_prot > 0 && (now_sec - mtime_sec) < update_prot {
-        return None;
-    }
     Some(Probe {
         real_str: realpath.to_string_lossy().into_owned(),
         realpath,
-        mtime_sec,
+        mtime: std::cell::OnceCell::new(),
         now_sec,
-        file_cache_dir,
+        file_cache_dir: get_ini_string(vm, "opcache.file_cache"),
         file_cache_only,
         file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
     })
@@ -986,7 +996,7 @@ fn lookup(
             let mut cache = c.borrow_mut();
             match cache.get(
                 &p.real_str,
-                p.mtime_sec,
+                || p.mtime(),
                 validate_timestamps,
                 revalidate_freq,
                 p.now_sec,
@@ -1012,12 +1022,23 @@ fn lookup(
     if p.file_cache_dir.is_empty() {
         return Ok(None);
     }
+    // An entry is validated by the script's modification time, so with
+    // `validate_timestamps` a script whose time cannot be determined is
+    // not loaded (`zend_file_cache_script_load_ex`).
+    let expected_mtime = if validate_timestamps {
+        match p.mtime() {
+            Some(mtime) => mtime,
+            None => return Ok(None),
+        }
+    } else {
+        0
+    };
     let cache_dir = std::path::Path::new(&p.file_cache_dir);
     let consistency_checks = vm.ini_bool("opcache.file_cache_consistency_checks");
     match file_cache::read_file_cache(
         cache_dir,
         &p.realpath,
-        p.mtime_sec,
+        expected_mtime,
         validate_timestamps,
         consistency_checks,
         p.file_cache_read_only,
@@ -1031,7 +1052,7 @@ fn lookup(
                     GLOBAL_CACHE.with(|c| {
                         c.borrow_mut().insert(
                             p.real_str.clone(),
-                            p.mtime_sec,
+                            payload.mtime(),
                             payload.len(),
                             p.now_sec,
                             unit.clone(),
@@ -1091,8 +1112,15 @@ fn opcache_compile_hook(
         }
     }
 
-    // Cache miss: compile source. Like `persistent_compile_file`, compile
-    // with `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
+    // Cache miss. The time to cache the script under is taken before
+    // compiling (`opcache_compile_file`: otherwise a change during the
+    // compile would go unnoticed); a script that is not to be cached is
+    // compiled plainly.
+    let Some(mtime) = p.cacheable_mtime(vm) else {
+        return vm.compile_source_default(src, filename, false, skip_shebang);
+    };
+    // Like `persistent_compile_file`, compile with
+    // `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
     // depend on the functions other files happened to declare first.
     let res = vm.with_ignore_other_files(|vm| {
         vm.compile_source_default(src.clone(), filename, false, skip_shebang)
@@ -1110,7 +1138,7 @@ fn opcache_compile_hook(
             GLOBAL_CACHE.with(|c| {
                 c.borrow_mut().insert(
                     p.real_str.clone(),
-                    p.mtime_sec,
+                    mtime,
                     src.len() + 1024,
                     p.now_sec,
                     unit.clone(),
@@ -1120,8 +1148,7 @@ fn opcache_compile_hook(
         let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
         if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
             let cache_dir = std::path::Path::new(&p.file_cache_dir);
-            if let Err(msg) =
-                store_in_file_cache(cache_dir, &p.realpath, p.mtime_sec, fingerprint, unit)
+            if let Err(msg) = store_in_file_cache(cache_dir, &p.realpath, mtime, fingerprint, unit)
             {
                 accel_log_warning(vm, &format!("{msg}\n"));
             }
@@ -1242,7 +1269,7 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
         if !cache.is_cached(&key) {
             return None;
         }
-        match cache.get(&key, 0, false, 0, now_sec) {
+        match cache.get(&key, || None, false, 0, now_sec) {
             CacheLookup::Hit(unit) => Some(unit.clone()),
             _ => None,
         }

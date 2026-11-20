@@ -603,38 +603,45 @@ impl<T> ScriptCache<T> {
         }
     }
 
-    /// Looks up a script by path, performing timestamp revalidation if needed.
+    /// Looks up a script by path, revalidating its timestamp when due
+    /// (`validate_timestamp_and_record`): with `validate_timestamps`, a
+    /// script is checked on every lookup if `revalidate_freq` is 0, else
+    /// once `revalidate_freq` seconds have passed since its last check.
+    /// `current_mtime` is called only then, so a lookup between checks
+    /// costs no `stat`. An entry with timestamp 0 (preloaded) is never
+    /// checked. A script whose time changed, or cannot be determined, is
+    /// evicted ([`CacheLookup::Stale`]).
     pub fn get(
         &mut self,
         path: &str,
-        current_mtime: i64,
+        current_mtime: impl FnOnce() -> Option<i64>,
         validate_timestamps: bool,
         revalidate_freq: i64,
         now: i64,
     ) -> CacheLookup<'_, T> {
-        let is_stale = if let Some(entry) = self.scripts.get(path) {
-            validate_timestamps
-                && (now - entry.last_revalidate) >= revalidate_freq
-                && entry.timestamp != current_mtime
-        } else {
-            false
+        let Some(entry) = self.scripts.get(path) else {
+            self.misses += 1;
+            return CacheLookup::Miss;
         };
-        if is_stale {
+        let due = validate_timestamps
+            && entry.timestamp != 0
+            && (revalidate_freq == 0
+                || now > entry.last_revalidate.saturating_add(revalidate_freq));
+        if due && current_mtime() != Some(entry.timestamp) {
             self.scripts.remove(path);
             self.misses += 1;
             return CacheLookup::Stale;
         }
-        if let Some(entry) = self.scripts.get_mut(path) {
-            if validate_timestamps && (now - entry.last_revalidate) >= revalidate_freq {
-                entry.last_revalidate = now;
-            }
-            entry.hits += 1;
-            entry.last_used = now;
-            self.hits += 1;
-            return CacheLookup::Hit(&entry.unit);
+        let Some(entry) = self.scripts.get_mut(path) else {
+            return CacheLookup::Miss;
+        };
+        if due {
+            entry.last_revalidate = now;
         }
-        self.misses += 1;
-        CacheLookup::Miss
+        entry.hits += 1;
+        entry.last_used = now;
+        self.hits += 1;
+        CacheLookup::Hit(&entry.unit)
     }
 
     /// Inserts a newly compiled script into the cache.
@@ -890,6 +897,84 @@ mod tests {
         assert!(JitConfig::parse("2254").is_err());
         // Invalid: non-digit
         assert!(JitConfig::parse("abcd").is_err());
+    }
+
+    #[test]
+    fn lookups_stat_only_when_revalidation_is_due() {
+        let stats = std::cell::Cell::new(0);
+        let mtime = |m: i64| {
+            let stats = &stats;
+            move || {
+                stats.set(stats.get() + 1);
+                Some(m)
+            }
+        };
+        let mut cache: ScriptCache<u8> = ScriptCache::new(100);
+        assert!(matches!(
+            cache.get("/a.php", mtime(5), true, 2, 100),
+            CacheLookup::Miss
+        ));
+        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        // Within revalidate_freq (2 s): no stat, even if the file changed.
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 101),
+            CacheLookup::Hit(7)
+        ));
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 102),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 0);
+        // Due (now > last check + freq): stat, unchanged, checked again.
+        assert!(matches!(
+            cache.get("/a.php", mtime(5), true, 2, 103),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 1);
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 105),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 1);
+        // Due and changed: evicted.
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 106),
+            CacheLookup::Stale
+        ));
+        assert_eq!(stats.get(), 2);
+        assert!(!cache.is_cached("/a.php"));
+    }
+
+    #[test]
+    fn lookups_stat_every_time_without_revalidate_freq_and_never_without_validation() {
+        let stats = std::cell::Cell::new(0);
+        let unknown = || {
+            stats.set(stats.get() + 1);
+            None
+        };
+        let mut cache: ScriptCache<u8> = ScriptCache::new(100);
+        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        assert!(matches!(
+            cache.get("/a.php", || Some(5), true, 0, 100),
+            CacheLookup::Hit(7)
+        ));
+        assert!(matches!(
+            cache.get("/a.php", unknown, false, 0, 200),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 0);
+        // A script that can no longer be stat'ed is evicted.
+        assert!(matches!(
+            cache.get("/a.php", unknown, true, 0, 200),
+            CacheLookup::Stale
+        ));
+        assert_eq!(stats.get(), 1);
+        // Preloaded scripts (timestamp 0) are not checked.
+        cache.insert("/p.php".into(), 0, 1, 100, 8);
+        assert!(matches!(
+            cache.get("/p.php", || Some(9), true, 0, 300),
+            CacheLookup::Hit(8)
+        ));
     }
 
     #[test]

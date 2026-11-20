@@ -187,6 +187,15 @@ pub fn write_file_cache(
 pub struct Payload {
     bytes: Vec<u8>,
     start: usize,
+    mtime: i64,
+}
+
+impl Payload {
+    /// The script's modification time the entry was written for.
+    #[must_use]
+    pub fn mtime(&self) -> i64 {
+        self.mtime
+    }
 }
 
 impl std::ops::Deref for Payload {
@@ -272,6 +281,7 @@ pub fn read_file_cache(
     Ok(Some(Payload {
         bytes,
         start: HEADER_SIZE,
+        mtime,
     }))
 }
 
