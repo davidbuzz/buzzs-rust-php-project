@@ -130,6 +130,27 @@ const CLASS_FIELD: u32 = std::mem::offset_of!(crate::object::ObjectData, class) 
 /// `NonNull` handle) to `Rc::as_ptr`, the value: the inner box's two
 /// reference-count words. Pinned by `rc_inner_prefix_size` below.
 const RC_VALUE_OFFSET: u32 = 2 * std::mem::size_of::<usize>() as u32;
+/// A list's table as a trace reads an element of it in place
+/// ([`Emitter::emit_list_read`]), by byte offset from the handle word of a
+/// `Value::Array`: the word that says how the table holds its elements
+/// (`LIST_KIND`: [`LIST_PACKED`] for a list, bare values at their
+/// positions), the address of the first element and their count. The
+/// compiler lays the store and its vector out: the layout tests'
+/// `list_layout` pins all of it.
+#[allow(clippy::cast_possible_truncation)] // an offset inside a table
+const LIST_KIND: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::STORE_OFFSET as u32;
+const LIST_PACKED: i64 = i64::MIN + 1;
+const LIST_ELEMS: u32 = LIST_KIND + 16;
+const LIST_LEN: u32 = LIST_KIND + 24;
+/// A reference as a trace reads through it in place, by byte offset from
+/// the payload word of a `Value::Reference`: the cell's borrow word
+/// (negative while the value is being written) and the value. Pinned by
+/// the layout tests' `reference_layout`.
+#[allow(clippy::cast_possible_truncation)] // an offset inside a 32-byte box
+const REF_BORROW: u32 = php_runtime::PhpRef::CELL_OFFSET as u32;
+const REF_VALUE: u32 = REF_BORROW + 8;
+/// The tag of a `Value::Reference`.
+const TAG_REF: u8 = 8;
 /// Byte offset of an array's element count (a `u32`) from the handle word
 /// of a `Value::Array` (the `Rc` allocation: its two count words, then the
 /// table). The strong count is the word at the handle itself. Pinned by
@@ -5558,6 +5579,48 @@ impl Emitter {
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
+    /// `cmp qword [rax + off], imm8` (`48 83 B8 d32 ib`, the immediate
+    /// sign-extended).
+    fn cmpq_rax(&mut self, off: u32, imm: i8) {
+        self.put(&[REX_W, 0x83, 0xB8]);
+        self.put(&off.to_le_bytes());
+        self.put(&imm.to_le_bytes());
+    }
+
+    /// `cmp [rax + off], rcx` (`48 39 88 d32`: `39 /r` with `reg` =
+    /// `rcx`, `rm` = `rax`).
+    fn cmp_at_rax_rcx(&mut self, off: u32) {
+        self.put(&[REX_W, 0x39, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `cmp r9, [rax + off]` (`4C 3B 88 d32`: `3B /r` with `reg` = `r9`
+    /// through `REX.R`, `rm` = `rax`).
+    fn cmp_r9_at_rax(&mut self, off: u32) {
+        self.put(&[REX_W | REX_R, 0x3B, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `shl r9, imm8` (`49 C1 E1 ib`: `C1 /4` with `rm` = `r9` through
+    /// `REX.B`).
+    fn shl_r9(&mut self, by: u8) {
+        self.put(&[REX_W | REX_B, 0xC1, 0xE1, by]);
+    }
+
+    /// `add rax, r9` (`4C 01 C8`: `01 /r` with `reg` = `r9` through
+    /// `REX.R`, `rm` = `rax`).
+    fn add_rax_r9(&mut self) {
+        self.put(&[REX_W | REX_R, 0x01, 0xC8]);
+    }
+
+    /// `mov [base + off], rcx` (`48 89 /r` with `reg` = `rcx`): the first
+    /// word of a slot, its tag byte with the bytes after it
+    /// ([`Self::store_rcx_base`] writes the payload word).
+    fn store_rcx_first(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W, 0x89, Self::rm3(base, 1)]);
+        self.put(&off.to_le_bytes());
+    }
+
     /// `mov rcx, [rax + off]` (`48 8B 88 d32`): a word of the slot
     /// array already dereferenced into `rax`.
     fn movrcx_at_rax(&mut self, off: u32) {
@@ -7297,15 +7360,22 @@ impl Emitter {
     /// `Int` element and returns 0; anything else leaves the row to the
     /// interpreter, nothing changed.
     fn emit_dimr(&mut self, m: JitMeta, i: usize) {
-        // A variable holding a reference or an array of floats: the wider
+        // A variable holding a reference or an array of floats: the read
+        // in place where the element is a list's scalar, else the wider
         // helper, with the frame and the variable's index.
         if m.arr {
+            let (slow, done) = (self.synth_label(), self.synth_label());
+            if self.emit_list_read(m, slow, false) {
+                self.jmp(Target::Label(done));
+            }
+            self.set_label(slow);
             self.emit_helper(
                 jit_dim_get_wide as *const () as usize,
                 [HArg::Frame, Self::dim_arg(m), HArg::Slot(m.kc, m.db)],
                 (m.sb >> SLOT_SHIFT) | (u32::from(m.kc == KC) * DIM_WIDE_TO_CV),
                 Target::Side(i),
             );
+            self.set_label(done);
             return;
         }
         // `$v = $arr['key']` has a helper of its own.
@@ -7322,6 +7392,12 @@ impl Emitter {
             );
             return;
         }
+        // An int element of a list in place, else the helper.
+        let (slow, done) = (self.synth_label(), self.synth_label());
+        if !m.inc && self.emit_list_read(m, slow, true) {
+            self.jmp(Target::Label(done));
+        }
+        self.set_label(slow);
         self.emit_helper(
             jit_dim_get as *const () as usize,
             [
@@ -7332,6 +7408,81 @@ impl Emitter {
             u32::from(m.kc == KC) * DIM_GET_TO_CV + u32::from(m.inc) * DIM_GET_EXACT_KEY,
             Target::Side(i),
         );
+        self.set_label(done);
+    }
+
+    /// The element read of a `C_DIMR` row made in place, for the commonest
+    /// case: the offset is an int; the variable holds an array, or a
+    /// reference (not being written) to one; the table is a list and the
+    /// offset inside it; the element is a null, a bool, an int or a float
+    /// (`int_only`: an int, what the rows after an int read rely on); and
+    /// the destination holds a scalar, so nothing is released. The
+    /// element's two words are then copied. Any other case jumps to the
+    /// label `slow` with nothing changed, where the row's helper call
+    /// decides. `false`, nothing emitted, for an offset that is no slot
+    /// and no int literal.
+    ///
+    /// Uses `rax`, `rcx` and `r9` only. Nothing runs between the tests and
+    /// the copy, so the reference's borrow is not counted.
+    fn emit_list_read(&mut self, m: JitMeta, slow: usize, int_only: bool) -> bool {
+        let slow = Target::Label(slow);
+        match m.kb {
+            KC | KT => {
+                self.cmpb(m.kb, m.slot, TAG_INT);
+                self.jcc(0x85, slow); // jne
+                self.to_r9(m.kb, m.slot, 0);
+            }
+            KL => {
+                // SAFETY: a `KL` offset of an array row is the address of a
+                // literal of the op array the plan was made for
+                // (`plan_dim`), alive as long as the trace.
+                let lit = unsafe { &*(m.lit_b as *const php_runtime::Value) };
+                let php_runtime::Value::Int(at) = lit else {
+                    return false;
+                };
+                self.movabs(true, *at);
+            }
+            _ => return false,
+        }
+        let direct = self.synth_label();
+        // What the variable holds: an array, or a reference to one.
+        self.load_int(KC, m.sb);
+        self.cmpb(KC, m.sb, TAG_ARRAY);
+        self.jcc(0x84, Target::Label(direct)); // je
+        self.cmpb(KC, m.sb, TAG_REF);
+        self.jcc(0x85, slow); // jne
+        self.cmpq_rax(REF_BORROW, 0);
+        self.jcc(0x8C, slow); // jl: being written
+        self.cmpb_rax(REF_VALUE, TAG_ARRAY);
+        self.jcc(0x85, slow); // jne
+        self.mov_rax_rax(REF_VALUE + PAYLOAD);
+        self.set_label(direct);
+        // A list, and the offset inside it (unsigned: a negative one is
+        // outside as well).
+        self.movabs_rcx(LIST_PACKED);
+        self.cmp_at_rax_rcx(LIST_KIND);
+        self.jcc(0x85, slow); // jne
+        self.cmp_r9_at_rax(LIST_LEN);
+        self.jcc(0x83, slow); // jae
+        self.mov_rax_rax(LIST_ELEMS);
+        self.shl_r9(4);
+        self.add_rax_r9();
+        // The element (a hole's tag is above every value's).
+        if int_only {
+            self.cmpb_rax(0, TAG_INT);
+            self.jcc(0x85, slow); // jne
+        } else {
+            self.cmpb_rax(0, TAG_FLOAT);
+            self.jcc(0x87, slow); // ja
+        }
+        // The destination: a scalar is written over.
+        self.cmpb(m.kc, m.db, TAG_FLOAT);
+        self.jcc(0x87, slow); // ja
+        self.movrcx_at_rax(0);
+        self.mov_r9_rax(PAYLOAD);
+        self.store_rcx_first(m.kc, m.db);
+        self.store_int_r9_base(m.kc, m.db);
+        true
     }
 
     /// Emit one array element write (`C_DIMW`, [`jit_dim_set`]) or
@@ -9141,6 +9292,108 @@ mod layout_tests {
         assert!(plan_row(&code, 0, &Inst::plain(TOp::Jmp)).is_none());
         // (A frameless call's row needs its op.)
         assert!(plan_row(&code, 0, &Inst::plain(TOp::FramelessQ)).is_none());
+    }
+
+    /// What the element read in place relies on: from the handle of a
+    /// `Value::Array`, the word at `LIST_KIND` is `LIST_PACKED` for a list
+    /// and nothing else, the word at `LIST_ELEMS` the address of its first
+    /// element and the word at `LIST_LEN` their count; an element is a
+    /// 16-byte `Option<Value>` whose hole has a tag above every value's.
+    #[test]
+    fn list_layout() {
+        use php_runtime::{Value, ZArray};
+        // SAFETY (all reads below): a `Value` is a tag byte and a payload
+        // word (`value_layout`); the words read are inside the live
+        // array's allocation.
+        let word = |v: &Value, off: u32| unsafe {
+            let handle = std::ptr::read_unaligned(
+                std::ptr::from_ref(v)
+                    .cast::<u8>()
+                    .add(PAYLOAD as usize)
+                    .cast::<*const u8>(),
+            );
+            std::ptr::read_unaligned(handle.add(off as usize).cast::<i64>())
+        };
+        let address = |v: &Value| i64::try_from(std::ptr::from_ref(v) as usize).expect("fits");
+        for n in [1i64, 2, 3, 8, 9, 100] {
+            let a = ZArray::from_values((0..n).map(|i| {
+                if i % 2 == 0 {
+                    Value::Float(0.5)
+                } else {
+                    Value::Int(i)
+                }
+            }));
+            let first = address(a.get_packed(0).expect("a list"));
+            let slot = Value::Array(a.clone());
+            assert_eq!(word(&slot, LIST_KIND), LIST_PACKED, "{n} elements");
+            assert_eq!(word(&slot, LIST_ELEMS), first, "{n} elements");
+            assert_eq!(word(&slot, LIST_LEN), n, "{n} elements");
+            // The last element, where the read would find it.
+            let last = address(a.get_packed(n - 1).expect("in range"));
+            assert_eq!(last, first + 16 * (n - 1));
+        }
+        // No list: nothing allocated yet, a string key, an int key far
+        // from the positions.
+        let mut keyed = ZArray::new();
+        assert_ne!(word(&Value::Array(keyed.clone()), LIST_KIND), LIST_PACKED);
+        keyed.make_mut().insert(
+            php_runtime::ArrayKey::from_zstr(&php_runtime::ZStr::from("k")),
+            Value::Int(1),
+        );
+        assert_ne!(word(&Value::Array(keyed.clone()), LIST_KIND), LIST_PACKED);
+        let mut sparse = ZArray::new();
+        sparse
+            .make_mut()
+            .insert(php_runtime::ArrayKey::Int(1 << 40), Value::Int(1));
+        assert_ne!(word(&Value::Array(sparse), LIST_KIND), LIST_PACKED);
+        // A hole reads as `TAG_NONE`, above `TAG_FLOAT`.
+        let hole: Option<Value> = None;
+        assert!(unsafe { *std::ptr::from_ref(&hole).cast::<u8>() } > TAG_FLOAT);
+        assert_eq!(std::mem::size_of::<Option<Value>>(), 16);
+    }
+
+    /// What the read through a reference relies on: from the payload word
+    /// of a `Value::Reference`, the word at `REF_BORROW` counts the
+    /// readers and is negative while the value is being written, and the
+    /// value lies at `REF_VALUE`.
+    #[test]
+    fn reference_layout() {
+        use php_runtime::{PhpRef, Value};
+        let r = PhpRef::new(Value::Int(0x0102_0304_0506_0708));
+        let slot = Value::Reference(r.clone());
+        // SAFETY: as in `list_layout`; the box is alive.
+        let (tag, cell) = unsafe {
+            let words = std::ptr::from_ref(&slot).cast::<u8>();
+            (
+                *words,
+                std::ptr::read_unaligned(words.add(PAYLOAD as usize).cast::<*const u8>()),
+            )
+        };
+        assert_eq!(tag, TAG_REF);
+        let borrow =
+            || unsafe { std::ptr::read_unaligned(cell.add(REF_BORROW as usize).cast::<i64>()) };
+        let value_tag = || unsafe { *cell.add(REF_VALUE as usize) };
+        let payload = || unsafe {
+            std::ptr::read_unaligned(cell.add((REF_VALUE + PAYLOAD) as usize).cast::<i64>())
+        };
+        assert_eq!(borrow(), 0);
+        assert_eq!(value_tag(), TAG_INT);
+        assert_eq!(payload(), 0x0102_0304_0506_0708);
+        {
+            let reading = r.try_borrow().expect("free");
+            assert_eq!(borrow(), 1);
+            drop(reading);
+        }
+        {
+            let writing = r.try_borrow_mut().expect("free");
+            assert!(borrow() < 0);
+            drop(writing);
+        }
+        assert_eq!(borrow(), 0);
+        r.set(Value::Array(php_runtime::ZArray::from_values([
+            Value::Int(1),
+        ])));
+        assert_eq!(value_tag(), TAG_ARRAY);
     }
 
     /// What the rows that move an array rely on: the payload word of a

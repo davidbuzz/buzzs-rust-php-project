@@ -801,6 +801,13 @@ impl HashTable {
     /// together with the count words of the handle).
     pub const NUM_ELEMENTS_OFFSET: usize = std::mem::offset_of!(HashTable, num_elements);
 
+    /// The byte offset, inside a table, of what holds its elements (a
+    /// list's bare values or a hash's buckets and index): where machine
+    /// code that reads a list's element without a call starts from
+    /// (php-vm's trace JIT, whose layout test pins the words it reads
+    /// there).
+    pub const STORE_OFFSET: usize = std::mem::offset_of!(HashTable, store);
+
     /// Creates an empty table (`zend_new_array(0)`).
     #[must_use]
     pub fn new() -> Self {

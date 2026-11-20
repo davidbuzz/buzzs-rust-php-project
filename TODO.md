@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
+Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -51,8 +51,13 @@ Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       bool: array_rw 1.19 -> 1.07 (meets the goal), and both loops of hash1 compile
       (1.41 -> 1.40: what is left is the handlers' own cost).
       Then `jit_dim_get_wide` (a third of heapsort: 50 calls an outer iteration at 98
-      instructions) reads the element where it lies: heapsort 1.59 -> 1.48.
-      Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
+      instructions) reads the element where it lies: heapsort 1.59 -> 1.48; and the
+      trace reads a list's scalar element itself, without the call
+      (`Emitter::emit_list_read`, the layout pinned by `list_layout` and
+      `reference_layout`): heapsort 1.08 (meets the goal), dim_read 0.78 -> 0.32,
+      ary3 0.93 -> 0.61, ary2 0.90, ary 0.83, sieve 0.82.
+      Open: an element write is still a helper call (heapsort: nine an outer
+      iteration); heapsort's outer loop (a `return` inside it) and `gen_random` (constants
       defined at run time, a `global`) stay interpreted; a `foreach` step is no trace
       row yet (hash2's inner loop: 150 instructions a step, then a keyed `+=`), and
       hash1 spends its time in `dechex()` with the string it makes (about 190) and in
