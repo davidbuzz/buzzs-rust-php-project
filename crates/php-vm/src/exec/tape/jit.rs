@@ -653,6 +653,11 @@ struct CallPlan {
     /// every call: another scope may see another method of the same
     /// name, or none), so the emitted guard re-checks it.
     recv_scope: i64,
+    /// A closure call (`$f(...)`): the variable's slot and the handle
+    /// word of the closure object the plan inlined. The guard compares
+    /// the slot with it on every call (the object is kept alive in
+    /// [`PINNED_OBJS`], so the word can name no other closure).
+    callee_obj: Option<(u32, u64)>,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -1450,6 +1455,16 @@ thread_local! {
     /// the pinned *address* valid. Re-planning pushes extra clones: a
     /// handful of words against correctness, and traces are few.
     static PINNED_CELLS: RefCell<Vec<Rc<RefCell<php_runtime::Value>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// The keep-alive of every closure object a plan inlined a call of,
+    /// by its handle word: a trace's guard names that word for good, and
+    /// an object freed and another allocated at its address would pass
+    /// the guard with another body. Only closures that bind and capture
+    /// nothing are inlined, so nothing but the small object is kept.
+    static PINNED_OBJS: RefCell<Vec<(u64, php_runtime::Obj)>> =
         const { RefCell::new(Vec::new()) };
 }
 
@@ -2654,23 +2669,27 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // and for an instance call the site's receiver operand and method
     // name literal (the callee is cached at the site's own
     // `method_cache` slot, its class re-checked at run time).
-    let (name, mcall) = match code.ops.get(init)? {
+    let (name, mcall, dyncv) = match code.ops.get(init)? {
         Op::InitFCall {
             name,
             fallback: None,
             ..
-        } => (Some(*name), None),
+        } => (Some(*name), None, None),
         Op::InitStaticCall {
             class: crate::opcode::ClassSpec::Named(_),
             name: Operand::Lit(_),
-        } => (None, None),
+        } => (None, None, None),
         Op::InitMethodCall {
             obj: obj @ (Operand::Cv(_) | Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Unused),
             name: Operand::Lit(lit),
-        } => (None, Some((obj, *lit))),
+        } => (None, Some((obj, *lit)), None),
+        // `$f(...)`: a closure held by a compiled variable.
+        Op::InitDynCall {
+            callee: Operand::Cv(cv),
+        } => (None, None, Some(*cv)),
         _ => rj!(
-            "raw row is not a plain InitFCall, a Named/Lit InitStaticCall \
-             or a Cv/Tmp/Unused/Lit InitMethodCall"
+            "raw row is not a plain InitFCall, a Named/Lit InitStaticCall, \
+             a Cv/Tmp/Unused/Lit InitMethodCall or an InitDynCall of a variable"
         ),
     };
     let mut sends: Vec<Arg> = Vec::new();
@@ -2740,6 +2759,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // shape is checked here, mirroring `prepare_method`.
     let mut recv: Option<(u8, u32, u64)> = None;
     let mut recv_scope = 0i64;
+    let mut callee_obj: Option<(u32, u64)> = None;
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
@@ -2805,6 +2825,64 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             Some(Func::Builtin(_)) => rj!("method is a builtin"),
             None => rjs!("cached method is dead"),
         }
+    } else if let Some(cv) = dyncv {
+        // `$f(...)`: the closure the variable holds now, as
+        // `prepare_closure` takes it - a closure object of a user
+        // function, no `__call` trampoline - and besides that unbound
+        // and capturing nothing. The trace keeps the object alive for
+        // good (so that its address cannot come to name another closure),
+        // which must not keep a bound `$this` from its destructor; and a
+        // body with captured variables is not inlined anyway. The emitted
+        // guard re-checks on every call that the variable still holds
+        // this very object.
+        if cv as usize >= code.cv_names.len() || cv >= super::SLOT_LIMIT {
+            rj!("the called variable is out of range");
+        }
+        let off = cv << SLOT_SHIFT;
+        // SAFETY: the frame outlives the plan (the trace runs in it).
+        let f = unsafe { &*st.f };
+        let Some(php_runtime::Value::Object(o)) =
+            f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+        else {
+            rjs!("the called variable holds no object");
+        };
+        let data = crate::object::data(o);
+        if data.class.lc_name.as_bytes() != b"closure" {
+            rj!("the called variable holds no closure");
+        }
+        let Ok(internal) = data.internal.try_borrow() else {
+            rj!("the closure's data is borrowed");
+        };
+        let Some(d) = internal
+            .as_ref()
+            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())
+        else {
+            rj!("the closure has no data");
+        };
+        if d.magic_name.is_some()
+            || d.this.is_some()
+            || !d.vars.is_empty()
+            || d.partial_inner.is_some()
+        {
+            rj!("the closure is bound, captures variables or wraps another call");
+        }
+        let Func::User(callee) = &d.func else {
+            rj!("the closure is of a builtin");
+        };
+        let callee = Rc::clone(callee);
+        // The handle word the slot holds: what the guard compares.
+        // SAFETY: a validated variable offset of the running frame, whose
+        // slot holds an object (matched above).
+        let word =
+            unsafe { std::ptr::read_unaligned(st.cvs.add((off + PAYLOAD) as usize).cast::<u64>()) };
+        PINNED_OBJS.with(|p| {
+            let mut p = p.borrow_mut();
+            if !p.iter().any(|(w, _)| *w == word) {
+                p.push((word, o.clone()));
+            }
+        });
+        callee_obj = Some((off, word));
+        callee
     } else {
         // The static-call site's slot (past the literals, the
         // `prepare_static` formula): a resolved method whose declaring
@@ -3137,6 +3215,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         ret,
         recv,
         recv_scope,
+        callee_obj,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -3852,6 +3931,17 @@ impl Emitter {
                 self.cmp_rax_rcx();
             }
             self.jcc(0x85, Target::Side(cp.callove)); // jne: other scope
+        }
+        // A closure call: the variable must still hold the very closure
+        // object whose body the plan inlined (another closure, or none,
+        // leaves the call to the interpreter).
+        if let Some((off, word)) = cp.callee_obj {
+            self.cmpb(KC, off, TAG_OBJECT);
+            self.jcc(0x85, Target::Side(cp.callove)); // jne: no object
+            self.load_r9_at(KC, off.wrapping_add(PAYLOAD));
+            self.movabs_rax(word as i64);
+            self.cmp_rax_r9();
+            self.jcc(0x85, Target::Side(cp.callove)); // jne: another object
         }
         for (n, arg) in cp.sends.iter().enumerate() {
             if arg.kind == KSKIP {
