@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
+Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 23/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -122,7 +122,7 @@ Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       conditions jump straight to their outcome: mandel 0.78, mandel2 1.00, float_math
       0.84; a trace would still be several times faster); property access inside
       inlined callee bodies; `self::`/`static::` scope guards for call inlining.
-- [~] Objects (new_obj 1.52, new_Foo 1.39; objects meets the goal at 0.99). Done
+- [x] Objects (all three meet the goal: new_obj 1.07, new_Foo 0.97, objects 0.78). Done
       2026-11-21: `new C(...)` with a constructor that only assigns its parameters to
       properties (a
       promoted constructor is one) is one tape instruction without the call
@@ -138,10 +138,19 @@ Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       are and stores them: `new_stored` 364 -> 254 instructions for `new R($i)`,
       objects 1.21 -> 1.02, new_obj 1.76 -> 1.55; with the stores writing the slots
       directly (`calls::store_arg`) objects 0.99, new_obj 1.52.
-      Open, by the profile of new_obj (964 instructions an iteration against C's 635):
-      the possible-root bookkeeping of the new object (152), allocation (113 in
-      `object::new_defaults`) and release (~270 across seven functions) against C's
-      ~135 and ~130, and the three calls between the trace and `new_stored`.
+      What was left, by the profile of new_obj (964 instructions an iteration against
+      C's 635): the possible-root bookkeeping of the new object (152), allocation (113
+      in `object::new_defaults`) and release (~270 across seven functions) against C's
+      ~135 and ~130. Then `$v = new C(...)` over the last handle of a plain object of
+      `C` makes the new object in the old one's block (`object::reuse_for_new`: the
+      handle a new object would be given, the old one back on the free list after it,
+      the root entry moved to the slot the next root takes, memory use and its peak
+      as an allocation and a free leave them; `calls::new_over`, `site_over`,
+      `NEW_OVER`, `Emitter::emit_new_row`): new_Foo 1.39 -> 0.97, new_obj
+      1.52 -> 1.07, objects 0.99 -> 0.78, with and without the JIT (it is the tape's
+      own `new` instruction).
+      Open: an old object whose slots hold strings, arrays or objects is not made
+      over yet (its values would be released after the new object stands).
 - [ ] Memory allocator: profile per-allocation cost claim (~81→~30 ins) on release build;
       update FEATURE_GAP row % from estimate to measured.
 - [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout

@@ -903,10 +903,26 @@ macro_rules! tape_ops {
                         // `new C` of a class without a constructor is no
                         // call: the object, then the jump over the
                         // constructor call's ops (with the jump's poll).
-                        if inst.k == calls::CALL_NEW && calls::new_plain(st.f, inst) {
-                            take_jump!(ip, inst, st, JIT, ctx);
-                        } else {
+                        if inst.k != calls::CALL_NEW {
                             return Out { ip, at: ip, why: WHY_CALL };
+                        }
+                        match calls::new_plain(st.f, inst) {
+                            calls::NEW_MADE => take_jump!(ip, inst, st, JIT, ctx),
+                            // Made in the block of the object the assigned
+                            // variable held: the assignment the jump goes
+                            // to is done as well, so on past it, with the
+                            // jump's poll.
+                            calls::NEW_OVER => {
+                                let at = ip;
+                                #[allow(clippy::cast_possible_wrap)]
+                                {
+                                    ip = ip.byte_offset(inst.c as i32 as isize).add(1);
+                                }
+                                if crate::interrupt::safe_point_due() {
+                                    return Out { ip, at, why: WHY_POLL };
+                                }
+                            }
+                            _ => return Out { ip, at: ip, why: WHY_CALL },
                         }
                     }
                     TOp::VmOp => {

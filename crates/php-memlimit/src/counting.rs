@@ -1025,6 +1025,39 @@ impl<A> CountingAlloc<A> {
         true
     }
 
+    /// Accounts for a block of `layout` that would be allocated now and
+    /// freed right away, without the block: `true` when that leaves the
+    /// counts as they are and the peak where the allocation would have
+    /// put it. The owner thread asks, the block would come off its bin's
+    /// free list (no new run, no new chunk) and its bytes stay under the
+    /// soft threshold (no limit to check), as
+    /// [`alloc_fast`](Self::alloc_fast) tests them. `false`, nothing
+    /// recorded, otherwise. What a caller asks before it uses a block it
+    /// holds again instead of taking a new one and freeing the old
+    /// (php-vm's `new` over a variable's last object). Plain loads and
+    /// one store.
+    #[inline]
+    pub fn transient(&self, layout: Layout) -> bool {
+        let Some(bin) = heap::small_bin(layout) else {
+            return false;
+        };
+        if !self.is_owner() || !self.heap.has_free(bin) {
+            return false;
+        }
+        let new = self
+            .owned
+            .load(Relaxed)
+            .wrapping_add(layout.size())
+            .wrapping_add(self.shared.load(Relaxed));
+        if new > self.soft_raw.load(Relaxed) {
+            return false;
+        }
+        if new > self.peak.load(Relaxed) {
+            self.peak.store(new, Relaxed);
+        }
+        true
+    }
+
     /// [`admit`](Self::admit) past the soft threshold or for a huge block.
     #[cold]
     #[inline(never)]

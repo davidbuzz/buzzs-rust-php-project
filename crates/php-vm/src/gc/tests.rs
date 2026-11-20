@@ -549,6 +549,59 @@ fn live_registered_array_is_kept() {
     assert_eq!(a.len(), 1);
 }
 
+/// [`super::RootBuffer::rehome`] leaves what `insert_new` under the new
+/// handle followed by `remove` of the old entry leaves: the slots, the
+/// unused list and the index of two buffers with the same history agree.
+#[test]
+fn rehome_is_insert_then_remove() {
+    let sink = Sink::default();
+    let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let std_class = vm.find_class(b"stdClass").expect("stdClass");
+    let objs: Vec<php_runtime::Obj> = (0..6)
+        .map(|_| crate::object::new_object(std_class.clone(), Vec::new()))
+        .collect();
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
+    let state = |b: &super::RootBuffer| {
+        (
+            b.slots
+                .iter()
+                .map(|s| s.as_ref().map(|r| (r.handle, super::weak_addr(&r.weak))))
+                .collect::<Vec<_>>(),
+            b.unused.clone(),
+            b.num_roots,
+            b.by_handle.clone(),
+        )
+    };
+    let (mut one, mut two) = (super::RootBuffer::default(), super::RootBuffer::default());
+    for b in [&mut one, &mut two] {
+        for o in &objs {
+            b.push(o);
+        }
+        // Two freed slots: the last freed is the next one taken.
+        assert!(b.remove(objs[1].addr(), handle(&objs[1])));
+        assert!(b.remove(objs[4].addr(), handle(&objs[4])));
+    }
+    // The object in slot 2 goes on under another handle, twice (the
+    // second time into the slot it left).
+    let o = &objs[2];
+    let mut old = handle(o);
+    for new in [901u32, 902] {
+        one.insert_new(o, new);
+        assert!(one.remove(o.addr(), old));
+        assert!(two.rehome(o.addr(), old, new));
+        assert_eq!(state(&one), state(&two));
+        old = new;
+    }
+    // No freed slot: nothing changes.
+    let mut full = super::RootBuffer::default();
+    full.push(o);
+    let before = state(&full);
+    assert!(!full.rehome(o.addr(), handle(o), 903));
+    assert_eq!(state(&full), before);
+    // Not buffered under that handle.
+    assert!(!two.rehome(o.addr(), 5000, 904));
+}
+
 /// The root index (by object handle, php-src's `GC_INFO`) finds and
 /// forgets every buffered object, and an entry left behind by a freed
 /// object never matches the new object that reuses its handle.
@@ -560,7 +613,7 @@ fn root_index_finds_and_forgets_every_handle() {
     let objs: Vec<php_runtime::Obj> = (0..64)
         .map(|_| crate::object::new_object(std_class.clone(), Vec::new()))
         .collect();
-    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
     let mut b = super::RootBuffer::default();
     for (i, o) in objs.iter().enumerate() {
         assert_eq!(b.push(o), Some(i));
@@ -665,7 +718,7 @@ fn freeing_another_root_keeps_the_last_root() {
     let std_class = vm.find_class(b"stdClass").expect("stdClass");
     let a = crate::object::new_object(std_class.clone(), Vec::new());
     let b = crate::object::new_object(std_class, Vec::new());
-    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
     let mut buf = super::RootBuffer::default();
     assert_eq!(buf.push(&a), Some(0));
     assert_eq!(buf.push(&b), Some(1));

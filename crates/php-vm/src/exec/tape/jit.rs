@@ -1326,6 +1326,11 @@ fn cv_holds_other(st: &St, off: u32) -> bool {
 /// [`super::Br`] (one that may jump); any other answers with a `bool`
 /// (done, or declined with nothing changed). See [`Emitter::emit_row`].
 const ROW_BR_RET: u8 = 1;
+/// `JitMeta.mask` of the `new` row whose result the next row assigns to a
+/// variable: its handler answers with `calls::NEW_DECLINED`, `NEW_MADE`
+/// or `NEW_OVER` (the assignment done as well). See
+/// [`Emitter::emit_new_row`].
+const ROW_NEW_RET: u8 = 2;
 
 /// The tape's `new` instruction as a trace calls it ([`plan_new`]):
 /// `calls::new_plain` behind the helper convention. (The handler keeps the
@@ -1335,7 +1340,7 @@ const ROW_BR_RET: u8 = 1;
 /// # Safety
 /// `frame` is the running frame and `inst` a `calls::CALL_NEW` row of its
 /// tape.
-unsafe extern "C" fn jit_row_new(frame: *mut crate::vm::Frame, inst: *const Inst) -> bool {
+unsafe extern "C" fn jit_row_new(frame: *mut crate::vm::Frame, inst: *const Inst) -> u8 {
     // SAFETY: the caller's contract.
     unsafe { super::calls::new_plain(frame, &*inst) }
 }
@@ -1441,6 +1446,12 @@ fn plan_new(code: &crate::opcode::OpArray, tape: &[Inst], i: usize) -> Option<(J
         lit_c: -1,
         inc: true,
         lit_a: i64::try_from(handler as usize).ok()?,
+        // (The row after the jump is the assignment: `end + 1` is a row.)
+        mask: if super::calls::new_target(inst).is_some() && end + 1 < tape.len() {
+            ROW_NEW_RET
+        } else {
+            0
+        },
         ..JitMeta::default()
     };
     Some((m, end - i))
@@ -5816,6 +5827,7 @@ impl Emitter {
             }
             // The row's handler, then the poll of a row that may release a
             // value or allocate.
+            C_ROW if m.mask == ROW_NEW_RET => self.emit_new_row(m, i, j),
             C_ROW => {
                 let row = self.row_arg(i);
                 self.emit_row(
@@ -7183,6 +7195,40 @@ impl Emitter {
             self.put(&[0x84, 0xC0]); // test al, al
         }
         self.jcc(0x84, fail); // je / jz: the handler declined
+    }
+
+    /// The `new` row at `i` whose result the row after it assigns to a
+    /// variable ([`ROW_NEW_RET`]): its handler answers 0 (declined,
+    /// nothing changed), 1 (the object is in the result temporary: on to
+    /// the assignment) or 2 (the object was made in the block of the one
+    /// the variable held, which holds it: on past the assignment). Either
+    /// way on, the row's poll first (a possible root is recorded).
+    fn emit_new_row(&mut self, m: JitMeta, i: usize, j: usize) {
+        let row = self.row_arg(i);
+        self.emit_helper_call(
+            usize::try_from(m.lit_a).unwrap_or(0),
+            [HArg::Frame, row, HArg::Null],
+            0,
+        );
+        // The assignment's row, and the one after it.
+        let next = i + self.plan.span[j] as usize;
+        let past = if next < self.plan.close {
+            Target::Label(next + 1)
+        } else {
+            Target::Stub(next + 1)
+        };
+        let (over, made) = (self.synth_label(), self.synth_label());
+        self.put(&[0x3C, 0x01]); // cmp al, 1
+        self.jcc(0x82, Target::Side(i)); // jb: declined
+        self.jcc(0x87, Target::Label(over)); // ja: made over the variable's object
+        self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+        self.jcc(0x85, Target::Poll(next, i)); // jne
+        self.jmp(Target::Label(made));
+        self.set_label(over);
+        self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+        self.jcc(0x85, Target::Poll(next + 1, i)); // jne
+        self.jmp(past);
+        self.set_label(made);
     }
 
     /// The address of row `i` of the tape the trace is of, as a helper's

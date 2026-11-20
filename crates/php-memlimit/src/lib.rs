@@ -126,6 +126,13 @@ fn atol(s: &[u8]) -> i64 {
     }
 }
 
+/// [`CountingAlloc::transient`] on [`GLOBAL`].
+#[inline]
+#[must_use]
+pub fn transient(layout: std::alloc::Layout) -> bool {
+    GLOBAL.transient(layout)
+}
+
 /// `memory_get_peak_usage(false)` on [`GLOBAL`].
 pub fn peak() -> usize {
     GLOBAL.peak()

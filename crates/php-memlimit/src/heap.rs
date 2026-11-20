@@ -562,6 +562,15 @@ impl Heap {
         p
     }
 
+    /// Whether bin `bin`'s free list holds a block ([`pop`](Self::pop)
+    /// would give one).
+    #[inline]
+    pub(crate) fn has_free(&self, bin: usize) -> bool {
+        self.free
+            .get(bin)
+            .is_some_and(|head| !head.load(Relaxed).is_null())
+    }
+
     /// `zend_mm_free_small()` on the owner thread: pushes `p` onto bin
     /// `bin`'s free list. A load and two stores; no call.
     ///

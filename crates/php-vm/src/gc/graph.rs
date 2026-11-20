@@ -169,7 +169,7 @@ impl Graph {
 
     /// Adds a live object from the object store as a candidate root.
     pub fn add_object(&mut self, o: Obj) {
-        if self.obj_node(object::data(&o).handle).is_some() {
+        if self.obj_node(object::data(&o).handle.get()).is_some() {
             return;
         }
         let i = self.push_node(Handle::Obj(o), false);
@@ -183,7 +183,10 @@ impl Graph {
 
     /// Indexes object node `i` by its handle.
     fn set_obj_node(&mut self, i: u32) {
-        let Some(h) = self.nodes[i as usize].data().map(|d| d.handle as usize) else {
+        let Some(h) = self.nodes[i as usize]
+            .data()
+            .map(|d| d.handle.get() as usize)
+        else {
             return;
         };
         if self.obj_index.len() <= h {
@@ -227,7 +230,7 @@ impl Graph {
         // Objects of other `PhpObject` implementations hold nothing the
         // collector knows about: leaves.
         let d = o.downcast_ref::<ObjectData>()?;
-        if let Some(i) = self.obj_node(d.handle) {
+        if let Some(i) = self.obj_node(d.handle.get()) {
             self.nodes[i as usize].reached = true;
             return Some(i);
         }
@@ -268,7 +271,7 @@ impl Graph {
             self.nodes[t as usize].internal += 1;
             self.cond.push(CondEdge {
                 map,
-                key_handle: key.upgrade().map(|o| object::data(&o).handle),
+                key_handle: key.upgrade().map(|o| object::data(&o).handle.get()),
                 key: NONE,
                 value: t,
             });

@@ -38,6 +38,17 @@ const G_UNSET: u8 = 3;
 /// cloned that was already re-initialized (`IS_PROP_REINITABLE` cleared).
 const G_REINIT: u8 = 4;
 
+/// Whether `ZEND_NEW` of `cls` needs nothing from the VM once its default
+/// properties are evaluated ([`new_plain`]'s test of the class).
+#[inline]
+pub(crate) fn plain_new_class(cls: &Class) -> bool {
+    !(cls.flags & NOT_INSTANTIABLE != 0
+        || cls.magic.construct.is_some()
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator"))
+}
+
 /// `ZEND_NEW` of `cls` when it needs nothing from the VM: an
 /// instantiable class (not `Generator`) with no constructor, no internal
 /// hooks (`create_object`, `get_constructor`), not a `Throwable` (whose
@@ -48,12 +59,7 @@ const G_REINIT: u8 = 4;
 /// constructor call then run).
 #[inline]
 pub(crate) fn new_plain(cls: &Rc<Class>) -> Option<Obj> {
-    if cls.flags & NOT_INSTANTIABLE != 0
-        || cls.magic.construct.is_some()
-        || cls.hooks.is_some()
-        || cls.internal == InternalKind::Throwable
-        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
-    {
+    if !plain_new_class(cls) {
         return None;
     }
     let defaults = cls.defaults.try_borrow().ok()?;

@@ -42,7 +42,7 @@
 //! built ([`materialize`]) and returns the frame to the pool, so the rest
 //! of the VM never sees a half-prepared frame.
 
-use super::{rel, Inst, TOp};
+use super::{rel, Inst, TOp, SLOT_SHIFT};
 use crate::call::{accepts_without_coercion, clone_value};
 use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction, FOLD_STEPS};
 use crate::opcode::{
@@ -166,16 +166,58 @@ const NEW_SUMS: usize = 3;
 /// ([`NewSite`]); the ones past it make their checks every time.
 const NEW_SITES: usize = 256;
 
-/// Gives every [`CALL_NEW`] instruction of `tape` its site number in `p`:
-/// its index in the tape's `new_sites`.
+/// What [`new_plain`] answers the core loop and a trace: nothing done;
+/// the object in the result temporary; or the object made in the block of
+/// the one the assigned variable held ([`new_target`]), which holds it:
+/// the assignment the instruction's jump goes to is done as well.
+pub(super) const NEW_DECLINED: u8 = 0;
+/// See [`NEW_DECLINED`].
+pub(super) const NEW_MADE: u8 = 1;
+/// See [`NEW_DECLINED`].
+pub(super) const NEW_OVER: u8 = 2;
+
+/// Where a [`CALL_NEW`] instruction's `p` holds the variable its result
+/// is assigned to, plus one, above its site number.
+const NEW_TO_SHIFT: u32 = usize::BITS / 2;
+
+/// Gives every [`CALL_NEW`] instruction of `tape` its site number in `p`
+/// (its index in the tape's `new_sites`) and, above it, the variable the
+/// instruction its jump goes to assigns the result to ([`new_target`]).
 pub(super) fn number_new_sites(tape: &mut [Inst]) {
     let mut next = 0;
-    for inst in tape {
-        if inst.op == TOp::CallInit && inst.k == CALL_NEW {
-            inst.p = next;
+    for i in 0..tape.len() {
+        if tape[i].op == TOp::CallInit && tape[i].k == CALL_NEW {
+            let to = assigned_cv(tape, i).map_or(0, |cv| cv as usize + 1);
+            tape[i].p = next | (to << NEW_TO_SHIFT);
             next += 1;
         }
     }
+}
+
+/// The variable `$v` of `$v = new C(...)`: the instruction the jump of the
+/// [`CALL_NEW`] instruction at `i` goes to (past the constructor call)
+/// assigns the result temporary to it, the result unused otherwise.
+fn assigned_cv(tape: &[Inst], i: usize) -> Option<u32> {
+    let inst = tape.get(i)?;
+    #[allow(clippy::cast_possible_wrap)]
+    let off = i64::from(inst.c as i32) / i64::try_from(std::mem::size_of::<Inst>()).ok()?;
+    let at = usize::try_from(i64::try_from(i).ok()?.checked_add(off)?).ok()?;
+    let next = tape.get(at)?;
+    (at > i && next.op == TOp::AssignT && next.b >> SLOT_SHIFT == inst.b)
+        .then_some(next.a >> SLOT_SHIFT)
+}
+
+/// The site number of a [`CALL_NEW`] instruction.
+#[inline]
+fn site_no(inst: &Inst) -> usize {
+    inst.p & ((1 << NEW_TO_SHIFT) - 1)
+}
+
+/// The variable a [`CALL_NEW`] instruction's result is assigned to at
+/// once, when it is ([`number_new_sites`]).
+#[inline]
+pub(super) fn new_target(inst: &Inst) -> Option<u32> {
+    u32::try_from(inst.p >> NEW_TO_SHIFT).ok()?.checked_sub(1)
 }
 
 /// What the full checks of [`new_stored`] found out about a `new`
@@ -200,6 +242,11 @@ pub(super) struct NewSite {
     /// The builtin type bits each parameter's declared type takes as they
     /// are (`u32::MAX`: no type, or `mixed`).
     params: [u32; MAX_ARGS],
+    /// The variable the result is assigned to at once ([`new_target`]),
+    /// when the object may be made in the block of the one it holds
+    /// ([`site_over`]): no argument is read from that variable (it would
+    /// be the old object). `u32::MAX`: none.
+    over: u32,
     steps: [SiteStep; FOLD_STEPS],
 }
 
@@ -280,6 +327,21 @@ impl NewSite {
             })
     }
 
+    /// The constructor's stores: each argument (`args`, by parameter) into
+    /// its slot of `slots`, a new object's.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn store(&self, slots: &mut [Option<Value>], args: &[Arg<'_>]) {
+        for step in self.steps() {
+            if let (Some(cell), Some(arg)) = (
+                slots.get_mut(step.slot as usize),
+                args.get(usize::from(step.param)),
+            ) {
+                store_arg(cell, *arg);
+            }
+        }
+    }
+
     /// The object: its slots copied from the class's defaults, then the
     /// arguments (`args`, by parameter) stored. `None` is not reached (the
     /// object is this VM's and nothing else holds its slots); nothing is
@@ -298,14 +360,7 @@ impl NewSite {
             .map(|data| data.slots.try_borrow_mut())
         {
             Some(Ok(mut held)) => {
-                for step in self.steps() {
-                    if let (Some(cell), Some(arg)) = (
-                        held.get_mut(step.slot as usize),
-                        args.get(usize::from(step.param)),
-                    ) {
-                        store_arg(cell, *arg);
-                    }
-                }
+                self.store(&mut held, args);
                 true
             }
             _ => false,
@@ -334,6 +389,24 @@ fn store_arg(cell: &mut Option<Value>, arg: Arg<'_>) {
     }
     let new = match arg {
         Arg::Int(i) => Value::Int(i),
+        Arg::Held(v @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => {
+            // SAFETY: both are valid and distinct (an argument's place and
+            // an object's slot), 16 bytes each, and a `Some` has its
+            // value's layout (the tag is the value's own: the trace JIT's
+            // `value_layout` test pins it). A scalar owns nothing, so its
+            // bytes are its copy, and the slot holds nothing to release
+            // (cleared above). The two safe forms were measured first, at
+            // 55 and 45 instructions a store: the value rebuilt through a
+            // jump on its tag, then written tag, padding and payload apart.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    std::ptr::from_ref(v).cast::<u8>(),
+                    std::ptr::from_mut(cell).cast::<u8>(),
+                    std::mem::size_of::<Value>(),
+                );
+            }
+            return;
+        }
         Arg::Held(v) => clone_value(v),
     };
     // What the slot holds now owns nothing.
@@ -488,19 +561,22 @@ fn new_args_end(code: &OpArray, i: usize) -> Option<u32> {
 /// `inst` is a [`CALL_NEW`] instruction [`lower`] built for `frame`, the
 /// current frame.
 #[inline(never)]
-pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> u8 {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    let Some(slot) = f.tmps.get_mut(inst.b as usize) else {
-        return false;
-    };
+    if f.tmps.len() <= inst.b as usize {
+        return NEW_DECLINED;
+    }
+    if new_target(inst).is_some_and(|cv| new_over(f, inst, cv)) {
+        return NEW_OVER;
+    }
     let cls = {
         let Ok(cache) = f.code.class_cache.try_borrow() else {
-            return false;
+            return NEW_DECLINED;
         };
         match cache.get(inst.a as usize).and_then(std::rc::Weak::upgrade) {
             Some(cls) => cls,
-            None => return false,
+            None => return NEW_DECLINED,
         }
     };
     if cls.magic.construct.is_some() || inst.e != 0 {
@@ -508,9 +584,116 @@ pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> boo
         return unsafe { new_filled(frame, inst, cls) };
     }
     let Some(o) = crate::props::new_plain(&cls) else {
+        return NEW_DECLINED;
+    };
+    match f.tmps.get_mut(inst.b as usize) {
+        Some(slot) => crate::exec::spec::put_tmp(slot, Value::Object(o)),
+        // (Not reached: the slot was looked for above.)
+        None => crate::object::discard_rejected(o),
+    }
+    NEW_MADE
+}
+
+/// `$v = new C(...)` where `$v` (`cv`) holds the last handle of an object
+/// of the class the instruction's cache names: the new object made in
+/// that block (`object::reuse_for_new`, which says when nothing can
+/// tell), by the class the object itself holds (no handle of the class
+/// is taken). A class with a constructor, or arguments: when the
+/// constructor only stores them ([`site_over`]). `false`, nothing
+/// changed, otherwise ([`new_plain`] goes on as without).
+#[inline(never)]
+fn new_over(f: &crate::vm::Frame, inst: &Inst, cv: u32) -> bool {
+    let Some(Value::Object(held)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
         return false;
     };
-    crate::exec::spec::put_tmp(slot, Value::Object(o));
+    let Some(d) = held.downcast_ref::<crate::object::ObjectData>() else {
+        return false;
+    };
+    let cls = &d.class;
+    let named = f.code.class_cache.try_borrow().is_ok_and(|cache| {
+        cache
+            .get(inst.a as usize)
+            .is_some_and(|named| std::ptr::eq(std::rc::Weak::as_ptr(named), Rc::as_ptr(cls)))
+    });
+    // (The commonest reason not to: the old object lives on elsewhere.)
+    if !named || held.refcount() != 1 {
+        return false;
+    }
+    let Ok(defaults) = cls.defaults.try_borrow() else {
+        return false;
+    };
+    let Some(defaults) = defaults.as_deref() else {
+        return false;
+    };
+    if cls.magic.construct.is_some() || inst.e != 0 {
+        return !super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed)
+            && site_over(f, inst, cv, held, d, defaults);
+    }
+    if !crate::props::plain_new_class(cls) {
+        return false;
+    }
+    match crate::object::reuse_for_new(held, d, defaults, |_| {}) {
+        Some(made) => {
+            if made.buffered {
+                crate::gc::reused(held, d, made.old, true, false);
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`new_over`] for a class whose constructor only stores its parameters
+/// in properties, by the site's entry ([`NewSite`], when it is for this
+/// class and allows it: `NewSite::over`): the arguments are read where
+/// they are and checked as [`site_made`] checks them, the object is made
+/// in the block of `held` with them stored, and the possible roots are
+/// recorded in the order the call's return and the assignment would have
+/// (each argument, the new object, then the old one's entry gone).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `new_over`
+fn site_over(
+    f: &crate::vm::Frame,
+    inst: &Inst,
+    cv: u32,
+    held: &Obj,
+    d: &crate::object::ObjectData,
+    defaults: &[Option<Value>],
+) -> bool {
+    let Ok(sites) = f.code.tape.new_sites.try_borrow() else {
+        return false;
+    };
+    let Some(site) = sites.get(site_no(inst)) else {
+        return false;
+    };
+    if std::rc::Weak::as_ptr(&site.class) != Rc::as_ptr(&d.class) || site.over != cv {
+        return false;
+    }
+    let mut args = [Arg::Int(0); MAX_ARGS];
+    let n = usize::from(site.n);
+    for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
+        let Some(view) = arg_view(f, *src) else {
+            return false;
+        };
+        *arg = view;
+    }
+    let Some(args) = args.get(..n) else {
+        return false;
+    };
+    if site.typed && !site.takes(args) {
+        return false;
+    }
+    let Some(made) = crate::object::reuse_for_new(held, d, defaults, |slots| {
+        site.store(slots, args);
+    }) else {
+        return false;
+    };
+    for arg in args {
+        if let Arg::Held(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) = arg {
+            crate::gc::possible_root(v);
+        }
+    }
+    crate::gc::reused(held, d, made.old, made.buffered, true);
     true
 }
 
@@ -519,24 +702,26 @@ pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> boo
 ///
 /// # Safety
 /// As [`new_plain`].
-#[inline(never)]
-#[allow(clippy::needless_pass_by_value)] // the handle moves in: the call is the caller's last act
+// (Part of `new_plain`: one call less on the way to `new_stored`. The
+// handle moves in: the call is the caller's last act.)
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::needless_pass_by_value)]
 unsafe fn new_filled(
     frame: *mut crate::vm::Frame,
     inst: &Inst,
     cls: Rc<crate::class::Class>,
-) -> bool {
+) -> u8 {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
     let Some(o) = new_stored(f, inst, &cls) else {
-        return false;
+        return NEW_DECLINED;
     };
     match f.tmps.get_mut(inst.b as usize) {
         Some(slot) => crate::exec::spec::put_tmp(slot, Value::Object(o)),
         // (Not reached: `new_plain` found the slot.)
         None => crate::object::discard_rejected(o),
     }
-    true
+    NEW_MADE
 }
 
 /// The int operand `o` of a sum between the sends of a `new` is: a
@@ -605,7 +790,7 @@ fn site_made(
     defaults: &[Option<Value>],
 ) -> Option<Obj> {
     let sites = f.code.tape.new_sites.try_borrow().ok()?;
-    let site = sites.get(inst.p)?;
+    let site = sites.get(site_no(inst))?;
     if std::rc::Weak::as_ptr(&site.class) != Rc::as_ptr(cls) {
         return None;
     }
@@ -653,6 +838,7 @@ fn new_checked(
         return None;
     }
     let mut site = NewSite {
+        over: u32::MAX,
         class: Rc::downgrade(cls),
         n: u8::try_from(args.len()).ok()?,
         len: u8::try_from(fold.len()).ok()?,
@@ -729,13 +915,26 @@ fn new_checked(
         crate::gc::possible_root(v);
     }
     crate::gc::root_ctor_result(&made);
-    if !by_class && inst.p < NEW_SITES {
+    if !by_class && site_no(inst) < NEW_SITES {
         if let Some((srcs, n)) = site_srcs(&f.code, inst) {
             if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
                 if n == args.len() {
                     site.srcs = srcs;
-                    crate::rtcache::grow_slots(&mut sites, inst.p + 1, NewSite::default);
-                    if let Some(slot) = sites.get_mut(inst.p) {
+                    // (An argument read from the assigned variable would be
+                    // the old object.)
+                    site.over = new_target(inst)
+                        .filter(|cv| {
+                            !srcs.iter().take(n).any(|src| match src {
+                                Src::Cv(c) => c == cv,
+                                Src::Sum(_, a, b) => {
+                                    *a == Operand::Cv(*cv) || *b == Operand::Cv(*cv)
+                                }
+                                Src::Lit(_) | Src::None => false,
+                            })
+                        })
+                        .unwrap_or(u32::MAX);
+                    crate::rtcache::grow_slots(&mut sites, site_no(inst) + 1, NewSite::default);
+                    if let Some(slot) = sites.get_mut(site_no(inst)) {
                         *slot = site;
                     }
                 }

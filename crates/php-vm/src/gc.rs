@@ -285,7 +285,7 @@ impl RootBuffer {
     /// is buffered.
     #[cfg(test)]
     fn push(&mut self, o: &Obj) -> Option<usize> {
-        let handle = crate::object::data(o).handle;
+        let handle = crate::object::data(o).handle.get();
         if self.contains(handle, o.addr()) {
             return None;
         }
@@ -860,7 +860,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     // was never buffered (`oflags::GC_BUFFERED` clear, the case of every
     // fresh object) cannot be in the buffer, so the lookup is skipped.
     if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
-        && s.roots.contains(d.handle, o.addr())
+        && s.roots.contains(d.handle.get(), o.addr())
     {
         remember_root(o);
         return None;
@@ -870,7 +870,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
         // empty buffer).
         note_new_slot(s);
     }
-    let i = s.roots.insert_new(o, d.handle);
+    let i = s.roots.insert_new(o, d.handle.get());
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
     remember_root(o);
@@ -929,6 +929,84 @@ pub(crate) fn root_ctor_result(o: &Obj) {
     if !is_last_root(o) {
         root_shared_obj(o);
     }
+}
+
+impl RootBuffer {
+    /// [`RootBuffer::insert_new`] of the object at `addr` under the handle
+    /// `new`, then [`RootBuffer::remove`] of its entry under `old`, when
+    /// both are of one block (`new` made an object in the block of the
+    /// one it replaces): the entry moves to the slot the next root takes,
+    /// and the slot it leaves is the next one reused. `false`, nothing
+    /// changed, when the entry is not in this buffer or no freed slot
+    /// waits (the two steps are then made one by one).
+    fn rehome(&mut self, addr: usize, old: u32, new: u32) -> bool {
+        let Some(from) = self.slot_of(old, addr) else {
+            return false;
+        };
+        // The slot the next root takes: the last one freed, when it is
+        // still empty (`fetch` would pass over one that is not).
+        let Some(top) = self.unused.last_mut() else {
+            return false;
+        };
+        let to = *top;
+        if !matches!(self.slots.get(to), Some(None)) {
+            return false;
+        }
+        let moved = self.slots.get_mut(from).and_then(Option::take);
+        if let Some(slot) = self.slots.get_mut(to) {
+            *slot = moved.map(|root| Root {
+                handle: new,
+                ..root
+            });
+        }
+        // The slot it leaves is the next one reused.
+        *top = from;
+        self.clear_index(old, from);
+        self.set_index(new, to);
+        true
+    }
+}
+
+/// `new` made an object in the block of the one that had the handle `old`
+/// (`object::reuse_for_new`; `o`, whose data is `d`, has its new handle):
+/// what php-src's order
+/// of events leaves in the root buffer. The new object becomes a possible
+/// root when a constructor ran for it (`ctor`: `ZEND_CALL_RELEASE_THIS` at
+/// the constructor's return), in the slot the next root takes; then the
+/// old object's entry goes (`GC_REMOVE_FROM_BUFFER` of its free), its slot
+/// the next one reused. The two entries are of one block: the handle
+/// tells them apart.
+pub(crate) fn reused(o: &Obj, d: &ObjectData, old: u32, was_buffered: bool, ctor: bool) {
+    let mark = crate::object::oflags::GC_BUFFERED;
+    with_state(|s| {
+        let addr = o.addr();
+        let rooted = ctor && !s.protected;
+        if rooted && was_buffered && s.roots.rehome(addr, old, d.handle.get()) {
+            // Both steps in one: the entry moved (the mark stays).
+            remember_root(o);
+            return;
+        }
+        if rooted {
+            if !s.roots.has_unused() {
+                // May set the buffered roots aside (the new root then
+                // starts an empty buffer).
+                note_new_slot(s);
+            }
+            s.roots.insert_new(o, d.handle.get());
+        }
+        if was_buffered {
+            s.roots.remove(addr, old);
+            if let Some(f) = &mut s.frozen {
+                f.objs.remove(addr, old);
+            }
+        }
+        if rooted {
+            d.flags.set(d.flags.get() | mark);
+            remember_root(o);
+        } else {
+            d.flags.set(d.flags.get() & !mark);
+        }
+    });
 }
 
 /// The buffered object (`oflags::GC_BUFFERED`) with `handle` at `addr` is

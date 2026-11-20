@@ -468,7 +468,7 @@ fn clear_object(d: &ObjectData, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn
             states.extend(state.take());
         }
     }
-    crate::weakref::object_freed(d.handle);
+    crate::weakref::object_freed(d.handle.get());
 }
 
 /// `gc_remove_nested_data_from_buffer`: removes the garbage reachable from

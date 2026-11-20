@@ -70,8 +70,10 @@ pub mod oflags {
 /// The state of a PHP object: the fixed part of its allocation (the
 /// declared property slots follow it, see [`Slots`]).
 pub struct ObjectData {
-    /// Handle number (`spl_object_id`).
-    pub handle: u32,
+    /// Handle number (`spl_object_id`). A cell: `new` over a variable's
+    /// last object gives the block the handle a new object would get
+    /// ([`reuse_for_new`]).
+    pub handle: Cell<u32>,
     /// The class.
     pub class: Rc<Class>,
     /// Declared property slots (`None` = undefined/uninitialized), stored
@@ -129,7 +131,7 @@ impl ObjectData {
         UNSET_OVERFLOW
             .try_with(|m| {
                 m.borrow()
-                    .get(&self.handle)
+                    .get(&self.handle.get())
                     .and_then(|v| v.get(idx - UNSET_INLINE_SLOTS).copied())
                     .unwrap_or(false)
             })
@@ -155,7 +157,7 @@ impl ObjectData {
         let i = idx - UNSET_INLINE_SLOTS;
         let _ = UNSET_OVERFLOW.try_with(|m| {
             let mut m = m.borrow_mut();
-            let v = m.entry(self.handle).or_default();
+            let v = m.entry(self.handle.get()).or_default();
             if v.len() <= i {
                 v.resize(i + 1, false);
             }
@@ -173,10 +175,10 @@ impl ObjectData {
         if had_overflow || bits & UNSET_OVERFLOW_BIT != 0 {
             let _ = UNSET_OVERFLOW.try_with(|m| {
                 let mut m = m.borrow_mut();
-                let src = m.get(&from.handle).cloned();
+                let src = m.get(&from.handle.get()).cloned();
                 match src {
-                    Some(v) if bits & UNSET_OVERFLOW_BIT != 0 => m.insert(self.handle, v),
-                    _ => m.remove(&self.handle),
+                    Some(v) if bits & UNSET_OVERFLOW_BIT != 0 => m.insert(self.handle.get(), v),
+                    _ => m.remove(&self.handle.get()),
                 }
             });
         }
@@ -196,7 +198,7 @@ fn forget_unset_overflow(handle: u32) {
 
 impl fmt::Debug for ObjectData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Object({}#{})", self.class.name, self.handle)
+        write!(f, "Object({}#{})", self.class.name, self.handle.get())
     }
 }
 
@@ -444,7 +446,7 @@ pub(crate) struct ObjectBlock<const N: usize> {
 impl<const N: usize> PhpObject for ObjectBlock<N> {
     #[inline]
     fn handle(&self) -> u32 {
-        self.data.handle
+        self.data.handle.get()
     }
     fn class_name(&self) -> ZStr {
         display_name(&self.data.class.name)
@@ -674,7 +676,7 @@ fn owns_nothing(v: &Option<Value>) -> bool {
 /// `slots` (reached through the payload's own exclusive reference) and weak
 /// counts are touched: the cell is under the drop glue's exclusive borrow.
 fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
-    let handle = d.handle;
+    let handle = d.handle.get();
     let flags = d.flags.get();
     // The common free: no side tables, no dynamic properties or native
     // state, and only slots that own nothing. Nothing is released then
@@ -726,7 +728,7 @@ fn free_contents(d: &mut ObjectData, slots: &mut [Option<Value>], flags: u32) {
     let stale = if flags & oflags::STALE_PROPS == 0 {
         None
     } else {
-        crate::lazy::take_stale_slots(d.handle)
+        crate::lazy::take_stale_slots(d.handle.get())
     };
     for slot in slots {
         let v = slot.take();
@@ -763,6 +765,165 @@ fn release_store_slot(handle: u32, anchor: Option<u32>) {
             }
         }
     });
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// How many objects [`reuse_for_new`] made in a block at hand.
+    static REUSES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many objects `new` made in a block at hand on this thread
+/// ([`reuse_for_new`]): nothing a script can tell, so the tests of it ask
+/// here. Counted in debug builds only; 0 otherwise.
+#[must_use]
+pub fn reuse_count() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        REUSES.with(Cell::get)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+/// What [`reuse_for_new`] leaves to its caller: the handle the block
+/// had, and whether that object was buffered as a possible root
+/// (`gc::reused` then records what php-src's order of events leaves in
+/// the root buffer).
+pub(crate) struct Reused {
+    pub(crate) old: u32,
+    pub(crate) buffered: bool,
+}
+
+/// The bytes of an object's block before its slots: the two counts of its
+/// `Rc`, the cell's header and the fixed part.
+const BLOCK_BASE: usize = 2 * std::mem::size_of::<usize>()
+    + php_runtime::value::obj_payload_offset::<ObjectData>()
+    + std::mem::size_of::<ObjectData>();
+
+/// The most slots of an object [`reuse_for_new`] takes: up to here a
+/// block has room for exactly its slots (`create`'s exact size classes),
+/// so its size follows from their number.
+const REUSE_SLOTS: usize = 8;
+
+/// The block of an object with `n` slots, as the allocator was asked for
+/// it and will be told when the block is freed (the test
+/// `block_layout_is_the_allocation` compares it with a live object's).
+/// `None` past [`REUSE_SLOTS`].
+#[inline]
+fn block_layout(n: usize) -> Option<std::alloc::Layout> {
+    if n > REUSE_SLOTS {
+        return None;
+    }
+    std::alloc::Layout::from_size_align(
+        BLOCK_BASE + n * std::mem::size_of::<Option<Value>>(),
+        std::mem::align_of::<usize>(),
+    )
+    .ok()
+}
+
+/// `$v = new C(...)` where `o` (its data `d`), what `$v` holds, is the
+/// last handle of an object of `C` itself with nothing beside its
+/// declared slots: the new object is made in that block, which `$v` goes
+/// on holding, instead of making an object and freeing this one. Nothing
+/// a script can see differs:
+///
+/// - `o` is the last handle of an object of `C` (the caller's test: the
+///   class is the object's own, `d.class`), with nothing
+///   beside its declared slots (no dynamic properties, native state or
+///   lazy state), no slot unset or holding anything to release, no mark of
+///   a side table kept by its handle (`oflags`) other than a possible
+///   root's, and no weak handle but the store's and that root's (a
+///   `WeakReference` or a `WeakMap` key would see it die).
+/// - Its class has no destructor.
+/// - The store hands out and takes back handles the plain way (none
+///   waiting behind a queued destructor, reuse not suspended). In
+///   php-src's order, `zend_objects_store_put` of the new object then
+///   `zend_objects_store_del` of the old one: the block takes the next
+///   handle and the old one goes back on the free list after it.
+/// - A block of this size taken and freed would be an ordinary small
+///   allocation under the limit (`php_memlimit::transient`, which leaves
+///   the peak where that allocation would have put it).
+/// - When a root entry is involved (the new object becomes a possible
+///   root at its constructor's return, or the old one is buffered), the
+///   caller calls `gc::reused` with what is returned.
+///
+/// The slots are then the class's `defaults` and what `fill` stores (a
+/// constructor's stores). `None`, nothing changed, otherwise.
+#[inline(never)]
+pub(crate) fn reuse_for_new(
+    o: &Obj,
+    d: &ObjectData,
+    defaults: &[Option<Value>],
+    fill: impl FnOnce(&mut [Option<Value>]),
+) -> Option<Reused> {
+    let cls = &d.class;
+    let flags = d.flags.get();
+    let buffered = flags & oflags::GC_BUFFERED != 0;
+    let n = d.slots.len();
+    if flags & !oflags::GC_BUFFERED != 0
+        || d.unset_bits.get() != 0
+        || n != defaults.len()
+        || o.refcount() != 1
+        || Rc::weak_count(o.rc()) != 1 + usize::from(buffered)
+        || cls.has_destructor()
+        || crate::weakref::is_active()
+        || d.dynamic.try_borrow().map_or(true, |t| t.is_some())
+        || d.internal.try_borrow().map_or(true, |t| t.is_some())
+        || d.lazy.try_borrow().map_or(true, |t| t.is_some())
+    {
+        return None;
+    }
+    let mut slots = d.slots.try_borrow_mut().ok()?;
+    if !slots.iter().all(owns_nothing) {
+        return None;
+    }
+    let layout = block_layout(n)?;
+    let old = d.handle.get();
+    let new = STORE
+        .try_with(|s| {
+            let mut s = s.try_borrow_mut().ok()?;
+            let s = &mut *s;
+            let at = (old as usize).checked_sub(1)?;
+            if s.no_reuse
+                || !s.followers.is_empty()
+                || !matches!(s.objects.get(at), Some(Some(_)))
+                // (Asked last: it leaves the peak where the allocation
+                // of a new block would have.)
+                || !php_memlimit::transient(layout)
+            {
+                return None;
+            }
+            let new = s.take_handle();
+            // The weak handle moves with the block: the slot of a handle
+            // just taken holds nothing.
+            s.objects.swap(at, (new as usize).checked_sub(1)?);
+            // (`ObjectStore::grow` keeps room for every handle.)
+            s.free.push(old);
+            Some(new)
+        })
+        .ok()
+        .flatten()?;
+    d.handle.set(new);
+    for (slot, default) in slots.iter_mut().zip(defaults) {
+        if owns_nothing(default) {
+            // SAFETY: both are valid, aligned and distinct (the class's
+            // table and the object's slot). A value that owns nothing is
+            // its 16 bytes, so they are its copy; what the slot held owns
+            // nothing either (checked above), so no drop is skipped. (The
+            // safe form, `default.clone()`, was measured first: a jump on
+            // the tag for every slot, 22 instructions for an int.)
+            unsafe { ptr::copy_nonoverlapping(default, slot, 1) };
+        } else {
+            std::mem::forget(std::mem::replace(slot, default.clone()));
+        }
+    }
+    fill(&mut slots);
+    #[cfg(debug_assertions)]
+    REUSES.with(|c| c.set(c.get() + 1));
+    Some(Reused { old, buffered })
 }
 
 /// `object_properties_init`: the slots of a new object, copied from its
@@ -835,7 +996,7 @@ fn new_defaults<const N: usize>(class: Rc<Class>, defaults: &[Option<Value>; N])
                     }
                 }
                 ptr::addr_of_mut!((*block).data).write(ObjectData {
-                    handle,
+                    handle: Cell::new(handle),
                     class,
                     slots: Slots::new(NonNull::new_unchecked(inline), N),
                     dynamic: RefCell::new(None),
@@ -988,7 +1149,7 @@ fn new_block<const N: usize>(class: Rc<Class>, fill: Fill<'_>) -> Obj {
                     }
                 };
                 ptr::addr_of_mut!((*block).data).write(ObjectData {
-                    handle,
+                    handle: Cell::new(handle),
                     class,
                     slots: Slots::new(first, len),
                     dynamic: RefCell::new(None),
@@ -1217,7 +1378,7 @@ pub fn begin_stale_count(d: &ObjectData) -> bool {
     if f & (oflags::PROPS_TABLE | oflags::EMPTY_IND) != oflags::PROPS_TABLE {
         return false;
     }
-    STALE_COUNTS.with(|s| s.borrow_mut().push(d.handle));
+    STALE_COUNTS.with(|s| s.borrow_mut().push(d.handle.get()));
     true
 }
 
@@ -1226,7 +1387,7 @@ pub fn begin_stale_count(d: &ObjectData) -> bool {
 pub fn end_stale_count(d: &ObjectData) {
     let _ = STALE_COUNTS.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
-            if let Some(p) = s.iter().rposition(|&h| h == d.handle) {
+            if let Some(p) = s.iter().rposition(|&h| h == d.handle.get()) {
                 s.remove(p);
             }
         }
@@ -1374,7 +1535,7 @@ pub fn prop_order(d: &ObjectData) -> Option<Rc<PropOrder>> {
     if d.flags.get() & oflags::PROP_ORDER == 0 {
         return None;
     }
-    PROP_ORDERS.with(|m| m.borrow().get(&d.handle).cloned())
+    PROP_ORDERS.with(|m| m.borrow().get(&d.handle.get()).cloned())
 }
 
 /// Gives an object its own property order (`None` restores the default:
@@ -1385,7 +1546,7 @@ pub fn set_prop_order(d: &ObjectData, order: Option<PropOrder>) {
         None => {
             if d.flags.get() & oflags::PROP_ORDER != 0 {
                 d.flags.set(d.flags.get() & !oflags::PROP_ORDER);
-                let _ = PROP_ORDERS.try_with(|m| m.borrow_mut().remove(&d.handle));
+                let _ = PROP_ORDERS.try_with(|m| m.borrow_mut().remove(&d.handle.get()));
             }
         }
     }
@@ -1406,7 +1567,7 @@ pub fn forget_dynamic_prop_order(d: &ObjectData, key: &ArrayKey) {
         return;
     }
     PROP_ORDERS.with(|m| {
-        if let Some(order) = m.borrow_mut().get_mut(&d.handle) {
+        if let Some(order) = m.borrow_mut().get_mut(&d.handle.get()) {
             Rc::make_mut(order).dynamic.remove(key);
         }
     });
@@ -1416,10 +1577,10 @@ fn install_prop_order(d: &ObjectData, order: Rc<PropOrder>) {
     d.flags.set(d.flags.get() | oflags::PROP_ORDER);
     PROP_ORDERS.with(|m| {
         let mut m = m.borrow_mut();
-        if !m.contains_key(&d.handle) && m.len() >= PROP_ORDERS_PRUNE_AT.with(Cell::get) {
+        if !m.contains_key(&d.handle.get()) && m.len() >= PROP_ORDERS_PRUNE_AT.with(Cell::get) {
             prune_prop_orders(&mut m);
         }
-        m.insert(d.handle, order);
+        m.insert(d.handle.get(), order);
     });
 }
 
@@ -1508,6 +1669,28 @@ impl PropTableBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`block_layout`] is what the allocator was asked for an object of
+    /// that many slots: the layout of its `Rc`'s block, counts and cell.
+    #[test]
+    fn block_layout_is_the_allocation() {
+        let vm = crate::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let cls = vm.find_class(b"stdClass").expect("stdClass");
+        for n in 0..=REUSE_SLOTS {
+            let defaults = vec![Some(Value::Int(1)); n];
+            for o in [
+                new_object(cls.clone(), defaults.clone()),
+                new_object_from_defaults(cls.clone(), &defaults),
+            ] {
+                let cell = std::alloc::Layout::for_value::<dyn PhpObject>(&**o.rc());
+                let (block, _) = std::alloc::Layout::new::<[usize; 2]>()
+                    .extend(cell)
+                    .expect("a layout");
+                assert_eq!(block_layout(n), Some(block.pad_to_align()), "{n} slots");
+            }
+        }
+        assert_eq!(block_layout(REUSE_SLOTS + 1), None);
+    }
 
     fn key(s: &str) -> ArrayKey {
         ArrayKey::Str(ZStr::from(s))
