@@ -446,6 +446,8 @@ pub(crate) const J_NUMBIN_D: u16 = 31;
 /// temporary, when there is one; `PHP_INT_MIN`, whose magnitude is a
 /// float, is the interpreted row's. The row covers the op slot after it.
 const C_ABS: u16 = 32;
+/// `Nop` (a slot an op folded into its neighbour left behind): no code.
+const C_NOP: u16 = 33;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -816,6 +818,11 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
                 ..JitMeta::default()
             }
         }
+        TOp::Nop => JitMeta {
+            class: C_NOP,
+            kb: KI,
+            ..JitMeta::default()
+        },
         // `abs(x)`: the operand's kind in `inst.k`, the result temporary
         // in `inst.c` (`u32::MAX`: unused).
         TOp::AbsN => JitMeta {
@@ -1074,6 +1081,7 @@ fn add_class_guards(
         J_NUMBIN_D => {
             read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && keep_int(inst.d, guards)
         }
+        C_NOP => true,
         // `abs(x)`: the operand is read as an int; a result temporary is
         // fully stored.
         C_ABS => read(m.ka, inst.a, guards) && (inst.c == u32::MAX || fresh_dst(inst.c, guards)),
@@ -1864,6 +1872,8 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
                 lit_b,
                 kc,
                 db,
+                // `FetchDimSC`: a string literal that is no integer key.
+                inc: inst.op == TOp::FetchDimSC,
                 ..JitMeta::default()
             };
             Some((C_DIMR, m, step))
@@ -1910,6 +1920,12 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
     }
 }
 
+/// [`jit_dim_get`]'s `flags`: the destination is a compiled variable (not
+/// a temporary); the offset is a string literal that is no integer key,
+/// so it is looked up without the numeric-string test.
+const DIM_GET_TO_CV: u32 = 1;
+const DIM_GET_EXACT_KEY: u32 = 2;
+
 /// The `Int` in the slot at `p` - a temporary's or a literal's `Value`,
 /// or a compiled variable's `Option<Value>`: the same tag byte and
 /// payload word (the layout tests' `value_layout`) - or `None` when the
@@ -1929,7 +1945,7 @@ unsafe fn slot_int(p: *const u8) -> Option<i64> {
 /// at that key (a packed table or a hash), and the destination holds
 /// nothing whose
 /// release could do more than free a string - a temporary's plain value,
-/// or (`dst_cv != 0`) a compiled variable that is undefined or plain, the
+/// or (`flags` has [`DIM_GET_TO_CV`]) a compiled variable that is undefined or plain, the
 /// test the interpreter's own fast path makes (`dims.rs`
 /// `store_plain_into`). Returns 0 having stored the element; 1, nothing
 /// changed, for anything else (the interpreted row then decides: a
@@ -1937,13 +1953,13 @@ unsafe fn slot_int(p: *const u8) -> Option<i64> {
 ///
 /// # Safety
 /// The three pointers are slots of the running frame (or of its op
-/// array's literal table): `arr` and, with `dst_cv`, `dst` compiled
+/// array's literal table): `arr` and, with [`DIM_GET_TO_CV`], `dst` compiled
 /// variables, `dst` otherwise a temporary.
 unsafe extern "C" fn jit_dim_get(
     arr: *const crate::vm::CvSlot,
     idx: *const u8,
     dst: *mut u8,
-    dst_cv: u32,
+    flags: u32,
 ) -> u32 {
     use php_runtime::Value;
     // SAFETY: the caller's contract; the element is copied out before the
@@ -1961,6 +1977,9 @@ unsafe extern "C" fn jit_dim_get(
             // A slot holding a string is a `Value::Str` whatever kind of
             // slot it is (a variable's `Some` has its value's layout).
             TAG_STR => match &*idx.cast::<Value>() {
+                // A literal key the tape already found to be no integer
+                // key (`FetchDimSC`) is looked up as it is.
+                Value::Str(s) if flags & DIM_GET_EXACT_KEY != 0 => a.get_zstr(s),
                 Value::Str(s) => a.get_sym_zstr(s),
                 _ => None,
             },
@@ -1970,7 +1989,7 @@ unsafe extern "C" fn jit_dim_get(
             return 1;
         };
         let v = *v;
-        if dst_cv != 0 {
+        if flags & DIM_GET_TO_CV != 0 {
             let slot = &*dst.cast::<crate::vm::CvSlot>();
             if matches!(
                 slot.get(),
@@ -1978,13 +1997,21 @@ unsafe extern "C" fn jit_dim_get(
             ) {
                 return 1;
             }
-            drop(slot.set(Some(Value::Int(v))));
+            // What was there is nothing, a scalar (it owns nothing: no
+            // drop glue for it) or a string, which is released.
+            match slot.set(Some(Value::Int(v))) {
+                old @ Some(Value::Str(_)) => drop(old),
+                old => std::mem::forget(old),
+            }
         } else {
             let slot = &mut *dst.cast::<Value>();
             if !slot.is_plain() {
                 return 1;
             }
-            *slot = Value::Int(v);
+            match std::mem::replace(slot, Value::Int(v)) {
+                old @ Value::Str(_) => drop(old),
+                old => std::mem::forget(old),
+            }
         }
         0
     }
@@ -2036,7 +2063,10 @@ unsafe extern "C" fn jit_dim_set(
                     if !slot.is_plain() {
                         return 1;
                     }
-                    drop(std::mem::replace(slot, Value::Int(v)));
+                    match std::mem::replace(slot, Value::Int(v)) {
+                        old @ Value::Str(_) => drop(old),
+                        old => std::mem::forget(old),
+                    }
                 } else if let Err(v) = tbl.assign_packed_int(i, Value::Int(v)) {
                     // Not the next element of a packed table (which the
                     // call above appends in place): a new key of a hash,
@@ -3622,6 +3652,7 @@ impl Emitter {
                 }
                 self.store_tag_base(m.ka, inst.a, TAG_INT);
             }
+            C_NOP => {}
             // `abs(x)`: nothing to do for an unused result (the operand is
             // an int, and `abs` of one has no effect); else negate a
             // negative value, leaving `PHP_INT_MIN` (the one `neg`
@@ -4409,7 +4440,7 @@ impl Emitter {
                 Self::dim_arg(m),
                 HArg::Slot(m.kc, m.db),
             ],
-            u32::from(m.kc == KC),
+            u32::from(m.kc == KC) * DIM_GET_TO_CV + u32::from(m.inc) * DIM_GET_EXACT_KEY,
             Target::Side(i),
         );
     }
@@ -4758,6 +4789,8 @@ fn native_int_class(c: u16) -> bool {
             | J_ASSIGN_OP
             | J_NUMBIN_C
             | J_NUMBIN_D
+            | C_ABS
+            | C_NOP
     )
 }
 
@@ -4907,6 +4940,13 @@ fn native_effects(row: NRow, inst: &Inst, ncvs: usize) -> (Vec<usize>, Vec<usize
     let (mut reads, mut writes, mut kills) = (Vec::new(), Vec::new(), Vec::new());
     match row {
         NRow::Op(c, m) => match c {
+            C_NOP => {}
+            C_ABS => {
+                reads.extend(bit(m.ka, inst.a));
+                if inst.c != u32::MAX {
+                    writes.extend(bit(KT, inst.c));
+                }
+            }
             C_INC | C_DEC => reads.extend(bit(KC, inst.a)),
             C_ASSIGN_I | C_ASSIGN_L => writes.extend(bit(KC, inst.a)),
             // The source temporary is consumed (the row nulls it).
@@ -6317,6 +6357,20 @@ mod layout_tests {
         assert!(tmp_is(70));
         assert_eq!(unsafe { jit_dim_get(np, at(&key("gamma")), t, 0) }, 1);
         assert!(tmp_is(70));
+        // A key the tape knows to be no integer key is looked up as it is.
+        assert_eq!(
+            unsafe { jit_dim_get(np, at(&key("beta")), t, DIM_GET_EXACT_KEY) },
+            0
+        );
+        assert!(tmp_is(2));
+        // A string the destination holds is released, not leaked.
+        let text = CvSlot::new(Some(key("old")));
+        let tp = std::ptr::from_ref(&text).cast_mut().cast::<u8>();
+        assert_eq!(
+            unsafe { jit_dim_get(np, at(&key("beta")), tp, DIM_GET_TO_CV) },
+            0
+        );
+        assert!(matches!(text.get(), Some(Value::Int(2))));
         // No array in the variable at all.
         let none = CvSlot::new(None);
         let n = std::ptr::from_ref(&none).cast_mut();
