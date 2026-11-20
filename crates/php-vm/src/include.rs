@@ -777,6 +777,12 @@ impl Vm {
         }
     }
 
+    /// Whether the source filter may rewrite what is read from `path`; a
+    /// script cache must then not serve it.
+    fn source_filter_may_rewrite(&self, path: &ZStr) -> bool {
+        self.source_filter.is_some() && self.source_filter_probe.is_none_or(|probe| probe(path))
+    }
+
     fn resolve_include_path(&self, name: &[u8]) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt;
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
@@ -873,6 +879,32 @@ impl Vm {
                 crate::ext::IncludeOpen::NotHandled => {}
             }
         }
+        // A script cache is asked for an absolute name before the file is
+        // looked up, as `persistent_compile_file` finds a script by
+        // `accel_make_persistent_key` (the name itself) before opening it:
+        // a hit costs no `stat`. The script counts as included under the
+        // path it was compiled under. A name already included once is
+        // answered first, so `include_once` does not load it again.
+        // Only a normalized name is its own key; one with `.`/`..`
+        // segments is resolved below through the realpath cache.
+        let mut asked: Option<&[u8]> = None;
+        if is_normalized_absolute(name) {
+            if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+                && self.included_set.contains(&s)
+            {
+                self.set_tmp(dst, Value::Bool(true));
+                return Ok(false);
+            }
+            if !self.source_filter_may_rewrite(&s) {
+                if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
+                    if let Some(unit) = hook(self, &s)? {
+                        let path = unit.main.code.filename.clone();
+                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    }
+                    asked = Some(name);
+                }
+            }
+        }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
             if !name.is_empty() {
@@ -902,10 +934,9 @@ impl Vm {
             return Ok(false);
         }
         // A script cache serves the include without the file being read,
-        // unless the source filter may rewrite what would be read.
-        let filter_may_rewrite = self.source_filter.is_some()
-            && self.source_filter_probe.is_none_or(|probe| probe(&real_z));
-        if !filter_may_rewrite {
+        // unless the source filter may rewrite what would be read. It is
+        // not asked twice for the same path.
+        if asked != Some(real_z.as_bytes()) && !self.source_filter_may_rewrite(&real_z) {
             if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
                 if let Some(unit) = hook(self, &real_z)? {
                     if self.included_set.insert(real_z.clone()) {
@@ -1099,6 +1130,19 @@ impl Vm {
     }
 }
 
+/// Whether `name` is an absolute path without empty, `.` or `..`
+/// segments and without a trailing slash: such a name needs no resolving
+/// to serve as a script cache key (symbolic links aside, which a key may
+/// keep, as `accel_make_persistent_key` does).
+fn is_normalized_absolute(name: &[u8]) -> bool {
+    name.len() > 1
+        && name.first() == Some(&b'/')
+        && name.last() != Some(&b'/')
+        && name[1..]
+            .split(|&c| c == b'/')
+            .all(|seg| !seg.is_empty() && seg != b"." && seg != b"..")
+}
+
 /// The `opened_path` of a plain file found at `path` for inclusion: its
 /// real path, as `php_resolve_path()` (`tsrm_realpath`) resolves it before
 /// `_php_stream_fopen` opens it with `STREAM_ASSUME_REALPATH`, so `..`
@@ -1160,9 +1204,20 @@ impl CompiledUnit {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_uncacheable_stream_path, opened_path};
+    use super::{is_normalized_absolute, is_uncacheable_stream_path, opened_path};
     use crate::vm::Vm;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn only_normalized_absolute_names_are_their_own_cache_key() {
+        assert!(is_normalized_absolute(b"/app/vendor/autoload.php"));
+        assert!(!is_normalized_absolute(b"/"));
+        assert!(!is_normalized_absolute(b"app/a.php"));
+        assert!(!is_normalized_absolute(b"/app/vendor/composer/../a.php"));
+        assert!(!is_normalized_absolute(b"/app/./a.php"));
+        assert!(!is_normalized_absolute(b"/app//a.php"));
+        assert!(!is_normalized_absolute(b"/app/dir/"));
+    }
 
     #[test]
     fn stream_paths_other_than_file_and_phar_are_not_cacheable() {
