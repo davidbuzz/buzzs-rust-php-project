@@ -1070,6 +1070,45 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // string literal or absent (a float or null one warns).
     let scalar_arrays = scalar_array_vars(op_array, ctx, &stable_scalar);
     let assigned = super::dce::Assigned::of(op_array, ctx);
+    // The temporaries an array literal is built in (`InitArray` their only
+    // definition).
+    let mut tmp_defs = vec![0u32; op_array.num_tmps as usize];
+    super::dce::count_defs(op_array, &mut tmp_defs);
+    let array_tmp = |t: u32| {
+        tmp_defs.get(t as usize) == Some(&1)
+            && op_array
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::InitArray { dst } if *dst == t))
+    };
+    // A key that is, or may be, the largest int: an append after it
+    // throws ("the next element is already occupied").
+    let may_be_last_key = |k: &Operand| match k {
+        Operand::Lit(l) => match op_array.literals.get(*l as usize) {
+            Some(Value::Int(i)) => *i == i64::MAX,
+            Some(Value::Str(s)) => matches!(
+                php_runtime::ArrayKey::from_zstr(s),
+                php_runtime::ArrayKey::Int(i64::MAX)
+            ),
+            _ => true,
+        },
+        _ => true,
+    };
+    // Whether the array built in `t` has every key appended or fixed
+    // below the largest int.
+    let build_keeps_room = |t: u32| {
+        op_array.ops.iter().all(|op| match op {
+            Op::ArrayAdd { arr, key, .. } if *arr == t => {
+                key.as_ref().is_none_or(|k| !may_be_last_key(k))
+            }
+            other => super::array_build_tmp_mut(&mut other.clone()).is_none_or(|a| *a != t),
+        })
+    };
+    // The variables whose array always has room for an append: every
+    // assignment is a literal array without the largest int key or an
+    // array built in place with such keys, and every store names such a
+    // key (a copy of another variable's array is not looked into).
+    let mut has_room = vec![true; num_cvs];
     let mut array_only = vec![true; num_cvs];
     for op in &op_array.ops {
         let target = match op {
@@ -1090,9 +1129,36 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
                 if matches!(op_array.literals.get(l as usize), Some(Value::Array(_))));
             let array_var = matches!(val, Operand::Cv(c)
                 if scalar_arrays.get(c as usize).copied().unwrap_or(false));
-            if !lit_array && !array_var {
+            // (An array literal built in place is an array as well.)
+            let built = matches!(val, Operand::Tmp(t) if array_tmp(t));
+            let room = match val {
+                Operand::Lit(l) => matches!(op_array.literals.get(l as usize),
+                    Some(Value::Array(a)) if a.get_int(i64::MAX).is_none()),
+                Operand::Tmp(t) => built && build_keeps_room(t),
+                _ => false,
+            };
+            if !room {
+                if let Some(slot) = has_room.get_mut(cv as usize) {
+                    *slot = false;
+                }
+            }
+            if !lit_array && !array_var && !built {
                 if let Some(slot) = array_only.get_mut(cv as usize) {
                     *slot = false;
+                }
+            }
+        }
+    }
+    for op in &op_array.ops {
+        let Op::Assign { place, .. } = op else {
+            continue;
+        };
+        if let Some(p) = op_array.places.get(*place as usize) {
+            if let (PlaceBase::Cv(cv), [Seg::Dim(k)]) = (&p.base, &p.segs[..]) {
+                if may_be_last_key(k) {
+                    if let Some(slot) = has_room.get_mut(*cv as usize) {
+                        *slot = false;
+                    }
                 }
             }
         }
@@ -1130,8 +1196,15 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         match op_array.places.get(*place as usize) {
             Some(p) => match (&p.base, &p.segs[..]) {
                 (PlaceBase::Cv(cv), [seg]) => {
+                    // An append goes only with a constant value (sccp.c
+                    // keeps `ASSIGN_DIM ... NEXT` of a value it does not
+                    // know) and when it cannot throw.
+                    let append_ok = !matches!(seg, Seg::Append)
+                        || (matches!(val, Operand::Lit(_))
+                            && has_room.get(*cv as usize).copied().unwrap_or(false));
                     array_only.get(*cv as usize).copied().unwrap_or(false)
                         && dim_ok(seg)
+                        && append_ok
                         && no_dtor(at, *val)
                 }
                 _ => false,

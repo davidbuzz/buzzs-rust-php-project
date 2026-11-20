@@ -149,8 +149,8 @@ Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 23 left in the targeted set of 13,935
-      tests on 2026-11-21): dce_004/005, sccp_002/005/010/011/012/026,
+- [ ] Optimizer/opcache dump failures (30 of 38; 20 left in the targeted set of 13,935
+      tests on 2026-11-21): dce_005, sccp_010/011/012/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2, preload_optimizer,
       array_map_foreach_optimization_007/008/013/014, named_parameter_new, gh18050,
       gh9164, jit/ignored_opcodes. Done 2026-11-21: opt/coalesce (`??`/`??=` of a local
@@ -163,11 +163,23 @@ Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       opt/dce_009 (the loop of a `foreach` over an empty class constant, removed where
       the constant is put in place for the dump), opt/sccp_017 and opt/sccp_019 (the
       dead copy `$b = $a` of a locally built array of scalars and both arrays' element
-      stores). What the open ones need: an array literal with unknown elements as a
-      partly known value (sccp_002/005), a dead store chain in one straight line
-      (dce_004), objects that do not escape (sccp_010/011/012, dce_005), `JMP_NULL` on
-      the variable itself with constants kept across calls (nullsafe), and named
-      arguments of known callees as positional sends (named_parameter_new).
+      stores), opt/sccp_002 and opt/sccp_005 (an array literal with an element that
+      is no constant is a partly known array: `sccp::partial_array_builds`) and
+      opt/dce_004 (an array replaced before anything reads it goes with the stores
+      into it: `dce::remove_overwritten_arrays`). What the open ones need: objects
+      that do not escape (sccp_010/011/012, dce_005), a type narrowed by a type check
+      along a branch (sccp_026), `JMP_NULL` on the variable itself with constants
+      kept across calls (nullsafe), the SSA dump's types of `ASSIGN_DIM_OP`
+      (assign_dim_op_result_type), and named arguments of known callees as positional
+      sends (named_parameter_new).
+- [x] Optimizer (2026-11-21): two wrong results with the optimizer on. An unread
+      `$a[] = v` was dropped although it throws after the largest int key
+      (`$a = [PHP_INT_MAX => 5]; $a[] = 1;` lost its Error): it goes only with a
+      constant value and when no array of the variable can hold that key, as php-src
+      keeps `ASSIGN_DIM ... NEXT` of a value it does not know. And array constants
+      were compared with `===`, so `0.0` and `-0.0` in an element became one zero on
+      both paths (php-src GH-24063): `sccp::same_constant` compares floats by their
+      bits. Oracle scripts `extra_partarr.php` and `extra_negzero.php` cover both.
 - [x] Optimizer (2026-11-21): an array literal that may be the last holder of an object
       keeps its store. Pass 13 dropped `$a = [new D];` of an unread `$a` (and
       `$b = [$o]; $o = null;`), the temporary array was freed at once and D's

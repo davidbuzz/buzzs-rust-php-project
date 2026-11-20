@@ -54,9 +54,28 @@ fn meet_cv(a: CvLattice, b: CvLattice, literals: &mut Vec<Value>) -> CvLattice {
     }
 }
 
-/// The elements two array literals share, key and identical value
-/// (sccp.c `join_partial_arrays`), as an array literal; `None` unless both
-/// are arrays.
+/// Whether two constants are the same value to the propagation (sccp.c
+/// `sccp_values_differ`): as `===`, but `0.0` and `-0.0` are two values
+/// (`===` holds them equal, and a join that kept one of them for both
+/// paths gave the wrong sign on the other, GH-24063), in an array as well;
+/// arrays are the same with the same keys and the same values in the same
+/// order.
+fn same_constant(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|((ka, va), (kb, vb))| ka == kb && same_constant(va, vb))
+        }
+        _ => php_runtime::ops::is_identical(a, b).unwrap_or(false),
+    }
+}
+
+/// The elements two array literals share, key and same value
+/// ([`same_constant`]; sccp.c `join_partial_arrays`), as an array literal;
+/// `None` unless both are arrays.
 fn common_elements(literals: &mut Vec<Value>, l1: u32, l2: u32) -> Option<u32> {
     let (Some(Value::Array(a)), Some(Value::Array(b))) =
         (literals.get(l1 as usize), literals.get(l2 as usize))
@@ -66,9 +85,7 @@ fn common_elements(literals: &mut Vec<Value>, l1: u32, l2: u32) -> Option<u32> {
     let mut common = ZArray::new();
     let h = common.make_mut();
     for (k, v) in a.iter() {
-        if b.get(k)
-            .is_some_and(|w| php_runtime::ops::is_identical(v, w).unwrap_or(false))
-        {
+        if b.get(k).is_some_and(|w| same_constant(v, w)) {
             h.insert(k.clone(), v.clone());
         }
     }
@@ -409,14 +426,16 @@ fn cv_or_lit(operand: &Operand, cur_state: &[CvLattice]) -> Option<u32> {
     }
 }
 
-/// The literal index of an array equal (`===`) to `arr`, adding it when
-/// there is none, so the dataflow sees the same constant on every visit
-/// (a fresh index for an identical array would meet as overdefined).
+/// The literal index of an array that is the same constant as `arr`
+/// ([`same_constant`]), adding it when there is none, so the dataflow sees
+/// the same constant on every visit (a fresh index for the same array
+/// would meet as overdefined).
 fn add_or_find_array_literal(literals: &mut Vec<Value>, arr: ZArray) -> u32 {
     let val = Value::Array(arr);
-    if let Some(i) = literals.iter().position(|l| {
-        matches!(l, Value::Array(_)) && php_runtime::ops::is_identical(l, &val).unwrap_or(false)
-    }) {
+    if let Some(i) = literals
+        .iter()
+        .position(|l| matches!(l, Value::Array(_)) && same_constant(l, &val))
+    {
         return u32::try_from(i).unwrap_or(u32::MAX);
     }
     add_or_find_literal(literals, val)
@@ -635,6 +654,127 @@ fn partial_assign_dim(
             CvLattice::Partial(lit)
         },
     ))
+}
+
+/// Whether `op` reads, writes or adds to the temporary `t`.
+fn names_tmp(op: &Op, places: &[Place], t: u32) -> bool {
+    let is = |o: &Operand| matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
+    let mut op = op.clone();
+    let mut named = super::def_tmp(&op) == Some(t)
+        || super::array_build_tmp_mut(&mut op).is_some_and(|a| *a == t);
+    for_each_operand_mut(&mut op, |o| named |= is(o));
+    super::compact::for_each_op_place(&op, |p| {
+        if let Some(place) = places.get(p as usize) {
+            for_each_place_operand_mut(&mut place.clone(), |o| named |= is(o));
+        }
+    });
+    named
+}
+
+/// The array literals a variable is assigned as they are built (`$v = [1,
+/// 2, $x]`): by the op of each such assignment, the literal of the elements
+/// the build certainly gives. sccp.c evaluates `INIT_ARRAY` and
+/// `ADD_ARRAY_ELEMENT` on partial arrays the same way: an element whose
+/// value is not known makes its key unknown, and the variable holds an
+/// array either way. Only a build in one straight line (`leaders`: no jump
+/// into it or out of it) that goes to the variable at once, each element by
+/// value, appended or under an int or string literal key (another key type
+/// may deprecate; an append past `PHP_INT_MAX` throws). A build of
+/// constants alone is one literal before this runs
+/// ([`fold_const_array_builds`]).
+fn partial_array_builds(
+    op_array: &mut OpArray,
+    leaders: &[bool],
+) -> std::collections::HashMap<usize, u32> {
+    let mut built = std::collections::HashMap::new();
+    for start in 0..op_array.ops.len() {
+        let Op::InitArray { dst: tmp } = op_array.ops[start] else {
+            continue;
+        };
+        let mut arr = ZArray::new();
+        // The keys whose element is not known (a placeholder holds each
+        // one's position meanwhile).
+        let mut unknown: Vec<ArrayKey> = Vec::new();
+        let mut taken = None;
+        for at in start + 1..op_array.ops.len() {
+            if leaders.get(at).copied().unwrap_or(true) {
+                break;
+            }
+            match &op_array.ops[at] {
+                Op::ArrayAdd {
+                    arr: into,
+                    key,
+                    val,
+                } if *into == tmp => {
+                    let known = match val {
+                        Operand::Lit(lit) => op_array.literals.get(*lit as usize).cloned(),
+                        _ => None,
+                    };
+                    let is_known = known.is_some();
+                    let value = known.unwrap_or(Value::Null);
+                    let table = arr.make_mut();
+                    let at_key = match key {
+                        None => match table.push(value) {
+                            Ok(index) => ArrayKey::Int(index),
+                            Err(_) => break,
+                        },
+                        Some(Operand::Lit(lit)) => {
+                            let fixed = match op_array.literals.get(*lit as usize) {
+                                Some(Value::Int(n)) => ArrayKey::Int(*n),
+                                Some(Value::Str(s)) => ArrayKey::from_zstr(s),
+                                _ => break,
+                            };
+                            table.insert(fixed.clone(), value);
+                            fixed
+                        }
+                        Some(_) => break,
+                    };
+                    unknown.retain(|other| *other != at_key);
+                    if !is_known {
+                        unknown.push(at_key);
+                    }
+                }
+                Op::AssignCv {
+                    val: Operand::Tmp(from),
+                    dst: None,
+                    ..
+                } if *from == tmp => {
+                    taken = Some(at);
+                    break;
+                }
+                other => {
+                    if names_tmp(other, &op_array.places, tmp) {
+                        break;
+                    }
+                }
+            }
+        }
+        let Some(at) = taken else {
+            continue;
+        };
+        let table = arr.make_mut();
+        for key in &unknown {
+            table.remove(key);
+        }
+        built.insert(at, add_or_find_array_literal(&mut op_array.literals, arr));
+    }
+    built
+}
+
+/// After [`update_cv_state_for_op`] of the op at `at`: the variable an
+/// array build goes to there ([`partial_array_builds`]) holds its known
+/// elements.
+fn take_built(
+    built: &std::collections::HashMap<usize, u32>,
+    at: usize,
+    op: &Op,
+    cur_state: &mut [CvLattice],
+) {
+    if let (Some(&lit), Op::AssignCv { cv, .. }) = (built.get(&at), op) {
+        if let Some(slot) = cur_state.get_mut(*cv as usize) {
+            *slot = CvLattice::Partial(lit);
+        }
+    }
 }
 
 fn update_cv_state_for_op(
@@ -1706,6 +1846,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
 
     if !has_hazard && num_cvs > 0 && len > 0 {
         let leaders = super::block_pass::find_leaders(op_array);
+        let built = partial_array_builds(op_array, &leaders);
         let mut block_starts = Vec::new();
         for i in 0..len {
             if leaders[i] {
@@ -1795,6 +1936,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     &mut cur_state,
                     &mut op_array.literals,
                 );
+                take_built(&built, i, op, &mut cur_state);
             }
 
             out_state[b] = cur_state;
@@ -2386,6 +2528,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     &mut cur_state,
                     &mut op_array.literals,
                 );
+                take_built(&built, i, op, &mut cur_state);
             }
         }
 
@@ -2397,6 +2540,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     // 3. A literal store that propagation left unread (php-src's DCE
     // removes it with the dead SSA variable it defines).
     changed |= super::dce::remove_dead_entry_stores(op_array, ctx, refs_possible);
+    changed |= super::dce::remove_overwritten_arrays(op_array, ctx, refs_possible);
 
     changed
 }

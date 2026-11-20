@@ -10,7 +10,9 @@
 //! - Dead jump-to-next elimination.
 
 use super::{clear_def_tmp, def_tmp, for_each_operand_mut, for_each_place_operand_mut};
-use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, PlaceBase};
+use crate::opcode::{
+    BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, PlaceBase, Seg,
+};
 use php_runtime::{BinaryOp, Value};
 
 /// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
@@ -523,6 +525,238 @@ pub(crate) fn remove_dead_entry_stores(
         }
     }
     changed
+}
+
+/// Removes an array that a variable holds only until a whole assignment
+/// replaces it, with the element stores made into it meanwhile (`$a = [$x];
+/// $a[1] = $y; $a = $y;`, `opt/dce_004`): php-src's `dce.c` drops the
+/// `INIT_ARRAY` and the `ASSIGN_DIM`s of an array that does not escape and
+/// whose SSA variables nothing reads. As [`remove_dead_entry_stores`]: in
+/// the function's opening straight line, for a variable nothing named
+/// before (it holds nothing, so no destructor is delayed), not in top-level
+/// code, nor with references, dynamic variable access or a
+/// try/catch/finally. The array is a literal, or built in place from
+/// literals and scalar parameters the function never writes; each element
+/// store has an int or string literal key and such a value (nothing is
+/// raised, nothing with a destructor is held); and the next other mention
+/// of the variable is the assignment that replaces it without reading it.
+pub(crate) fn remove_overwritten_arrays(
+    op_array: &mut OpArray,
+    ctx: &super::OptContext<'_>,
+    refs_possible: bool,
+) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if ctx.is_main
+        || refs_possible
+        || num_cvs == 0
+        || !op_array.try_table.is_empty()
+        || super::compact::has_dynamic_var_access(op_array)
+    {
+        return false;
+    }
+    // Not a bound variable, nor one a closure declared here captures.
+    let mut pinned = vec![false; num_cvs];
+    for slot in pinned.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+        *slot = true;
+    }
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            if let Some(slot) = pinned.get_mut(u.parent_cv as usize) {
+                *slot = true;
+            }
+        }
+    }
+    let scalars = super::compact::stable_scalar_params(op_array, ctx);
+    let len = op_array.ops.len();
+    let mut is_target = vec![false; len + 1];
+    for op in &op_array.ops {
+        super::for_each_label_mut(&mut op.clone(), |l| {
+            if let Some(slot) = is_target.get_mut(*l as usize) {
+                *slot = true;
+            }
+        });
+    }
+
+    let mut dead: Vec<usize> = Vec::new();
+    let mut seen = vec![false; num_cvs];
+    for s in 0..len {
+        if is_target[s] {
+            break;
+        }
+        let op = &op_array.ops[s];
+        if let Op::AssignCv { cv, val, dst: None } = *op {
+            let c = cv as usize;
+            if c < num_cvs && !seen[c] && !pinned[c] {
+                let ops = inert_array_ops(op_array, &scalars, s, val).and_then(|mut ops| {
+                    ops.extend(stores_until_replaced(
+                        op_array, &scalars, &is_target, s, cv,
+                    )?);
+                    Some(ops)
+                });
+                if let Some(mut ops) = ops {
+                    ops.push(s);
+                    dead.append(&mut ops);
+                }
+            }
+        }
+        if leaves(op) {
+            break;
+        }
+        for c in mentioned_cvs(op_array, op) {
+            if let Some(slot) = seen.get_mut(c as usize) {
+                *slot = true;
+            }
+        }
+    }
+    for &at in &dead {
+        op_array.ops[at] = Op::Nop;
+    }
+    !dead.is_empty()
+}
+
+/// The variables an op names, its place's included.
+fn mentioned_cvs(op_array: &OpArray, op: &Op) -> Vec<u32> {
+    let mut cvs = Vec::new();
+    super::compact::for_each_cv_mut(&mut op.clone(), |c| cvs.push(*c));
+    super::compact::for_each_op_place(op, |p| {
+        if let Some(place) = op_array.places.get(p as usize) {
+            super::compact::for_each_place_cv_mut(&mut place.clone(), |c| cvs.push(*c));
+        }
+    });
+    cvs
+}
+
+/// Whether an op may go on anywhere but to the next op.
+fn leaves(op: &Op) -> bool {
+    let mut jumps = false;
+    super::for_each_label_mut(&mut op.clone(), |_| jumps = true);
+    jumps
+        || matches!(
+            op,
+            Op::Return { .. }
+                | Op::ReturnRef { .. }
+                | Op::ReturnByRefValue { .. }
+                | Op::Throw(_)
+                | Op::Rethrow
+                | Op::Exit(_)
+                | Op::FastRet { .. }
+        )
+}
+
+/// A literal, or a scalar parameter the function never writes (`scalars`,
+/// `compact::stable_scalar_params`): reading it raises nothing and it
+/// holds nothing with a destructor.
+fn plain_operand(scalars: &[bool], o: Operand) -> bool {
+    match o {
+        Operand::Lit(_) => true,
+        Operand::Cv(c) => scalars.get(c as usize) == Some(&true),
+        _ => false,
+    }
+}
+
+/// An int or string literal key other than the largest int (an append
+/// after that one throws).
+fn fixed_key(op_array: &OpArray, key: Operand) -> bool {
+    let Operand::Lit(l) = key else {
+        return false;
+    };
+    match op_array.literals.get(l as usize) {
+        Some(Value::Int(i)) => *i != i64::MAX,
+        Some(Value::Str(s)) => !matches!(
+            php_runtime::ArrayKey::from_zstr(s),
+            php_runtime::ArrayKey::Int(i64::MAX)
+        ),
+        _ => false,
+    }
+}
+
+/// The ops that make the array the store at `s` assigns (`val`), when it
+/// holds nothing with a destructor and is made raising nothing: none for a
+/// literal array; for one built in place, the build's, found going back
+/// from the store to its `InitArray` (the temporary's number may serve
+/// again later), every element appended or under a [`fixed_key`], its
+/// value a [`plain_operand`]. `None` for anything else.
+fn inert_array_ops(
+    op_array: &OpArray,
+    scalars: &[bool],
+    s: usize,
+    val: Operand,
+) -> Option<Vec<usize>> {
+    let t = match val {
+        Operand::Lit(l) => {
+            return matches!(op_array.literals.get(l as usize), Some(Value::Array(_)))
+                .then(Vec::new);
+        }
+        Operand::Tmp(t) => t,
+        _ => return None,
+    };
+    let mut ops = Vec::new();
+    for at in (0..s).rev() {
+        let op = &op_array.ops[at];
+        let mut copy = op.clone();
+        let mut named = def_tmp(op) == Some(t)
+            || super::array_build_tmp_mut(&mut copy).is_some_and(|a| *a == t);
+        for_each_operand_mut(&mut copy, |o| {
+            named |= matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
+        });
+        if !named {
+            continue;
+        }
+        ops.push(at);
+        match op {
+            Op::InitArray { .. } => return Some(ops),
+            Op::ArrayAdd { key, val, .. }
+                if plain_operand(scalars, *val) && key.is_none_or(|k| fixed_key(op_array, k)) => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The element stores into the array `cv` was assigned at `s`, when the
+/// next other mention of `cv` in the straight line is an assignment that
+/// replaces it without reading it: each store under a [`fixed_key`], its
+/// value a [`plain_operand`], its result unused. `None` when the array is
+/// read, or kept, first.
+fn stores_until_replaced(
+    op_array: &OpArray,
+    scalars: &[bool],
+    is_target: &[bool],
+    s: usize,
+    cv: u32,
+) -> Option<Vec<usize>> {
+    let mut stores = Vec::new();
+    for (j, next) in op_array.ops.iter().enumerate().skip(s + 1) {
+        if is_target.get(j).copied().unwrap_or(true) {
+            return None;
+        }
+        if !mentioned_cvs(op_array, next).contains(&cv) {
+            if leaves(next) {
+                return None;
+            }
+            continue;
+        }
+        return match next {
+            Op::AssignCv { cv: c, val, .. } if *c == cv && *val != Operand::Cv(cv) => Some(stores),
+            Op::Assign {
+                place,
+                val,
+                dst: None,
+            } => {
+                let store = op_array.places.get(*place as usize).is_some_and(|p| {
+                    p.base == PlaceBase::Cv(cv)
+                        && matches!(&p.segs[..], [Seg::Dim(k)] if fixed_key(op_array, *k))
+                });
+                if store && plain_operand(scalars, *val) {
+                    stores.push(j);
+                    continue;
+                }
+                None
+            }
+            _ => None,
+        };
+    }
+    None
 }
 
 /// The variables that may not lose a store: the bound ones (parameters,

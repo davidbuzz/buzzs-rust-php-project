@@ -734,6 +734,123 @@ fn dead_store_of_an_array_of_scalars_is_dropped() {
     }
 }
 
+/// `opt/sccp_005`, `opt/sccp_002`: an array literal with an element that
+/// is no constant is known in its other elements, and so is what a store
+/// under a literal key puts there; with every read a literal, the array
+/// goes. An element under a key the build does not fix, or one a later
+/// element replaces, is not known.
+#[test]
+fn array_literal_with_a_variable_is_partly_known() {
+    let out =
+        dump_optimized("<?php\nfunction foo(int $x) {\n    $a = [1,2,$x];\n    echo $a[1];\n}\n");
+    assert!(out.contains("(lines=3, args=1, vars=1, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ECHO string(\"2\")\n0002 RETURN null\n"),
+        "{out}"
+    );
+    let out = dump_optimized(
+        "<?php\nfunction foo(int $x) {\n    $a = [$x];\n    $i = 1;\n    $c = $i < 2;\n    if ($c) {\n        $k = 2 * $i;\n        $a[$k] = $i;\n        echo $a[$k];\n    }\n    echo $a[2];\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=1, vars=1, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ECHO string(\"1\")\n0002 ECHO string(\"1\")\n0003 RETURN null\n"),
+        "{out}"
+    );
+    let kept = [
+        // The element read is the one that is not known.
+        "function foo(int $x) { $a = [1, 2, $x]; echo $a[2]; }",
+        // A key that is no literal may be any key.
+        "function foo(int $x) { $a = [1, $x => 5, 3]; echo $a[0]; }",
+        // The known element is replaced by one that is not.
+        "function foo(int $x) { $a = [1 => 7, 1 => $x]; echo $a[1]; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("FETCH_DIM_R"), "{body}: {out}");
+    }
+    // A later literal under the key of an unknown element is known again.
+    let out =
+        dump_optimized("<?php\nfunction foo(int $x) { $a = [1 => $x, 1 => 7]; echo $a[1]; }\n");
+    assert!(out.contains("ECHO string(\"7\")"), "{out}");
+}
+
+/// What goes with an array nothing reads: an append only with a constant
+/// value and room for it. php-src keeps `ASSIGN_DIM ... NEXT` of a value it
+/// does not know, and the append after the largest int key throws.
+#[test]
+fn unread_append_stays_unless_constant_and_safe() {
+    for (body, kept) in [
+        ("$a = [$x]; $a[] = 1;", false),
+        ("$a = [1, 2]; $a[] = $x;", true),
+        ("$a = [9223372036854775807 => 5]; $a[] = 1;", true),
+        ("$a[5] = $x; $a[] = 1;", false),
+        ("$a = []; $a[] = $x;", true),
+        ("$a = [1, 2]; $a[] = 3;", false),
+        ("$a = [9223372036854775807 => $x]; $a[] = 1;", true),
+        ("$a = [1]; $a[9223372036854775807] = $x; $a[] = 1;", true),
+        ("$a = [1]; $a['9223372036854775807'] = $x; $a[] = 1;", true),
+    ] {
+        let out = dump_optimized(&format!(
+            "<?php
+function f(int $x) {{ {body} }}
+"
+        ));
+        assert_eq!(out.contains("ASSIGN_DIM"), kept, "{body}: {out}");
+    }
+}
+
+/// GH-24063: `0.0` and `-0.0` are identical (`===`) but two constants: a
+/// join of the two knows no element, whichever way the arrays were made.
+#[test]
+fn signed_zeros_are_two_constants() {
+    for body in [
+        "function f(float $n) { if ($n < 0) { $a['k'] = -0.0; } else { $a['k'] = 0.0; } return $a['k']; }",
+        "function f(float $n) { if ($n < 0) { $a = [1, -0.0]; } else { $a = [1, 0.0]; } return $a[1]; }",
+        "function f(float $n, $x) { $a = ['x' => $x]; if ($n < 0) { $a['k'] = -0.0; } else { $a['k'] = 0.0; } return $a['k']; }",
+        "function f(float $n) { $a = [5]; if ($n < 0) { $a[1] = [-0.0, 2]; } else { $a[1] = [0.0, 2]; } return $a[1][0]; }",
+    ] {
+        let out = dump_optimized(&format!("<?php
+{body}
+"));
+        assert!(out.contains("FETCH_DIM_R"), "{body}: {out}");
+    }
+    // The same zero on both paths is one constant.
+    let out = dump_optimized(
+        "<?php
+function f(float $n) { if ($n < 0) { $a = [1, -0.0]; } else { $a = [2, -0.0]; } return $a[1]; }
+",
+    );
+    assert!(out.contains("RETURN float(-0)"), "{out}");
+}
+
+/// `opt/dce_004`: an array a variable holds only until the next assignment
+/// replaces it goes, with the element stores into it; one that is read
+/// first, holds a value that may be an object, or is replaced on one path
+/// only, stays.
+#[test]
+fn array_replaced_before_it_is_read_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction foo(int $x, int $y) {\n    $a = [$x];\n    $a[1] = $y;\n    $a = $y;\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=2, vars=3, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0002 CV2($a) = QM_ASSIGN CV1($y)\n0003 RETURN CV2($a)\n"),
+        "{out}"
+    );
+    let kept = [
+        // Read before it is replaced.
+        "function foo(int $x, int $y) { $a = [$x]; $a[1] = $y; $b = count($a); $a = $y; return $a + $b; }",
+        // An untyped parameter may hold an object.
+        "function foo($x, int $y) { $a = [$x]; $a[1] = $y; $a = $y; return $a; }",
+        // Replaced on one path only.
+        "function foo(int $x, int $y) { $a = [$x]; $a[1] = $y; if ($x) { $a = $y; } return $a; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+    }
+}
+
 /// `opt/sccp_017`, `opt/sccp_019`: once the read of a known element is a
 /// literal, the copy of the locally built array and both arrays' element
 /// stores go; a copy of a variable that may be unassigned (the read warns)
