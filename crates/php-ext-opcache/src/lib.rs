@@ -7,7 +7,7 @@
 
 use php_opcache::blacklist::Blacklist;
 use php_opcache::file_cache;
-use php_opcache::{CacheLookup, PreloadStats, ScriptCache};
+use php_opcache::{CacheLookup, InsertRefused, PreloadStats, ScriptCache};
 pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
@@ -272,7 +272,48 @@ fn check_startup_ini(vm: &mut Vm) {
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
     }
     check_startup_shm(vm);
+    configure_cache(vm);
     JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+}
+
+/// Sizes the in-memory cache as `zend_accel_init_shm` does: as many
+/// scripts as the hash table for `opcache.max_accelerated_files` holds,
+/// in `opcache.memory_consumption` (less the 1 MiB that
+/// `opcache_get_status()` counts as used without any script).
+fn configure_cache(vm: &Vm) {
+    const MIB: usize = 1024 * 1024;
+    let files = usize::try_from(vm.ini_long("opcache.max_accelerated_files")).unwrap_or(0);
+    let memory = usize::try_from(vm.ini_long("opcache.memory_consumption")).unwrap_or(0);
+    let limit = memory.saturating_mul(MIB).saturating_sub(MIB);
+    GLOBAL_CACHE.with(|c| c.borrow_mut().configure(files, limit));
+}
+
+/// `cache_script_in_shared_memory`: stores a compiled script in the
+/// in-memory cache, logging as php-src does when it does not fit. A
+/// script that is not stored is still run, only compiled again next time.
+fn cache_in_memory(
+    vm: &mut Vm,
+    path: &str,
+    mtime: i64,
+    memory: usize,
+    now: i64,
+    unit: &Rc<php_vm::compiler::CompiledUnit>,
+) {
+    let stored = GLOBAL_CACHE.with(|c| {
+        c.borrow_mut()
+            .insert(path.to_owned(), mtime, memory, now, unit.clone())
+    });
+    match stored {
+        Ok(()) => vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{path}'")),
+        Err(InsertRefused::Full) => {}
+        Err(InsertRefused::HashFull) => {
+            vm_accel_log(vm, AccelLog::Debug, "No more entries in hash table!");
+        }
+        Err(InsertRefused::OutOfMemory { size, free }) => accel_log_warning(
+            vm,
+            &format!("Not enough free shared space to allocate {size} bytes ({free} bytes free)"),
+        ),
+    }
 }
 
 /// `JIT_G(enabled)` after start-up: `zend_jit_config` on the configured
@@ -1049,15 +1090,14 @@ fn lookup(
                     vm.emit_compile_warnings(&unit, filename)?;
                 }
                 if !p.file_cache_only {
-                    GLOBAL_CACHE.with(|c| {
-                        c.borrow_mut().insert(
-                            p.real_str.clone(),
-                            payload.mtime(),
-                            payload.len(),
-                            p.now_sec,
-                            unit.clone(),
-                        );
-                    });
+                    cache_in_memory(
+                        vm,
+                        &p.real_str,
+                        payload.mtime(),
+                        payload.len(),
+                        p.now_sec,
+                        &unit,
+                    );
                 }
                 return Ok(Some(unit));
             }
@@ -1129,21 +1169,7 @@ fn opcache_compile_hook(
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
         vm.call_registered_optimizer_passes();
         if !p.file_cache_only {
-            // `cache_script_in_shared_memory()`.
-            vm_accel_log(
-                vm,
-                AccelLog::Info,
-                &format!("Cached script '{}'", p.real_str),
-            );
-            GLOBAL_CACHE.with(|c| {
-                c.borrow_mut().insert(
-                    p.real_str.clone(),
-                    mtime,
-                    src.len() + 1024,
-                    p.now_sec,
-                    unit.clone(),
-                );
-            });
+            cache_in_memory(vm, &p.real_str, mtime, src.len() + 1024, p.now_sec, unit);
         }
         let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
         if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
@@ -1330,7 +1356,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .insert(ZStr::from("opcache_enabled"), Value::Bool(true));
         status
             .make_mut()
-            .insert(ZStr::from("cache_full"), Value::Bool(false));
+            .insert(ZStr::from("cache_full"), Value::Bool(cache.full));
         status
             .make_mut()
             .insert(ZStr::from("restart_pending"), Value::Bool(false));
@@ -1390,9 +1416,10 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ZStr::from("num_cached_keys"),
             Value::Int(num_scripts as i64),
         );
-        stats
-            .make_mut()
-            .insert(ZStr::from("max_cached_keys"), Value::Int(16229));
+        stats.make_mut().insert(
+            ZStr::from("max_cached_keys"),
+            Value::Int(i64::try_from(cache.max_cached_keys).unwrap_or(i64::MAX)),
+        );
         stats
             .make_mut()
             .insert(ZStr::from("hits"), Value::Int(cache.hits as i64));
@@ -1719,10 +1746,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let file_cache_only = vm.ini_bool("opcache.file_cache_only");
             if !file_cache_only {
                 let real_str = realpath.to_string_lossy().into_owned();
-                GLOBAL_CACHE.with(|c| {
-                    c.borrow_mut()
-                        .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit);
-                });
+                cache_in_memory(vm, &real_str, mtime_sec, src.len() + 1024, now_sec, &unit);
             }
             Ok(Value::Bool(true))
         }
