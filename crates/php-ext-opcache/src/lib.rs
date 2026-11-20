@@ -318,6 +318,14 @@ fn check_startup_shm(vm: &Vm) {
     if !is_opcache_enabled(vm) {
         return;
     }
+    if vm.ini_bool("opcache.file_cache_read_only")
+        && get_ini_string(vm, "opcache.file_cache").is_empty()
+    {
+        accel_fatal(
+            vm,
+            "opcache.file_cache_read_only is set without a proper setting of opcache.file_cache",
+        );
+    }
     if vm.ini_bool("opcache.file_cache_only") {
         if get_ini_string(vm, "opcache.file_cache").is_empty() {
             accel_fatal(
@@ -527,6 +535,12 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         None,
         Access::SYSTEM,
         ModifyHandler::None,
+    ))
+    .ini(d(
+        "opcache.file_cache_read_only",
+        Some("0"),
+        Access::SYSTEM,
+        ModifyHandler::Bool,
     ))
     .ini(d(
         "opcache.file_cache_only",
@@ -874,6 +888,9 @@ struct Probe {
     /// to this script.
     file_cache_dir: String,
     file_cache_only: bool,
+    /// `opcache.file_cache_read_only`: entries are only read, never
+    /// written or removed.
+    file_cache_read_only: bool,
 }
 
 thread_local! {
@@ -948,6 +965,7 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
         now_sec,
         file_cache_dir,
         file_cache_only,
+        file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
     })
 }
 
@@ -1002,6 +1020,7 @@ fn lookup(
         p.mtime_sec,
         validate_timestamps,
         consistency_checks,
+        p.file_cache_read_only,
     ) {
         Ok(Some(payload)) => {
             if let Some(unit) = load_cached_unit(vm, &payload, fingerprint, filename) {
@@ -1098,8 +1117,8 @@ fn opcache_compile_hook(
                 );
             });
         }
-        if let (false, Some(fingerprint)) = (p.file_cache_dir.is_empty(), vm.compile_fingerprint())
-        {
+        let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
+        if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
             let cache_dir = std::path::Path::new(&p.file_cache_dir);
             if let Err(msg) =
                 store_in_file_cache(cache_dir, &p.realpath, p.mtime_sec, fingerprint, unit)
@@ -1658,7 +1677,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         CompileOutcome::Ok(unit) => {
             let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
             ensure_system_id(vm);
-            if !file_cache_dir.is_empty() {
+            if !file_cache_dir.is_empty() && !vm.ini_bool("opcache.file_cache_read_only") {
                 if let Some(fingerprint) = vm.compile_fingerprint() {
                     // The write error is not reported here, as before.
                     let _ = store_in_file_cache(
@@ -1704,7 +1723,8 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
 
     ensure_system_id(vm);
-    if !file_cache_dir.is_empty() {
+    // `zend_file_cache_invalidate` leaves a read-only cache alone.
+    if !file_cache_dir.is_empty() && !vm.ini_bool("opcache.file_cache_read_only") {
         let cache_dir = std::path::Path::new(&file_cache_dir);
         file_cache::invalidate_file_cache(cache_dir, &realpath);
     }
@@ -1839,6 +1859,10 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     dirs.make_mut().insert(
         ZStr::from("opcache.file_cache"),
         Value::Str(ZStr::from(get_ini_string(vm, "opcache.file_cache"))),
+    );
+    dirs.make_mut().insert(
+        ZStr::from("opcache.file_cache_read_only"),
+        Value::Bool(vm.ini_bool("opcache.file_cache_read_only")),
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.file_cache_only"),

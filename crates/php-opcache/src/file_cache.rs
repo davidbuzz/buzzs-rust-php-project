@@ -112,7 +112,17 @@ fn strerror(e: &std::io::Error) -> String {
     }
 }
 
+/// Numbers the temporary files of one process, so threads writing the
+/// same entry do not share one.
+static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Writes a script's payload to the file cache.
+///
+/// The entry is written to a temporary file next to it and renamed into
+/// place, so a process reading the entry sees either the old or the new
+/// file, never a partly written one. `zend_file_cache_script_store` gets
+/// the same from `O_EXCL` and `flock`, but it never replaces an existing
+/// entry; here an entry left by other compiler settings must be replaced.
 pub fn write_file_cache(
     cache_dir: &Path,
     script_path: &Path,
@@ -140,7 +150,32 @@ pub fn write_file_cache(
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     bytes.extend_from_slice(payload);
 
-    match std::fs::write(&bin_path, &bytes) {
+    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp_name = bin_path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    temp_name.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let temp_path = bin_path.with_file_name(temp_name);
+
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!(
+                "opcache cannot create file '{}', {}",
+                bin_path.display(),
+                strerror(&e)
+            );
+            return Err((msg, e));
+        }
+    };
+    let written = std::io::Write::write_all(&mut file, &bytes);
+    drop(file);
+    match written.and_then(|()| std::fs::rename(&temp_path, &bin_path)) {
         Ok(()) => Ok(bin_path),
         Err(e) => {
             let msg = format!(
@@ -148,7 +183,7 @@ pub fn write_file_cache(
                 bin_path.display(),
                 strerror(&e)
             );
-            let _ = std::fs::remove_file(&bin_path);
+            let _ = std::fs::remove_file(&temp_path);
             Err((msg, e))
         }
     }
@@ -156,61 +191,71 @@ pub fn write_file_cache(
 
 /// Reads a script's payload from the file cache.
 /// Returns `Ok(Some(payload))` on cache hit, `Ok(None)` on cache miss or stale,
-/// and `Err(msg)` on corrupted file.
+/// and `Err(msg)` on a corrupted file. A stale or corrupted entry is
+/// removed unless the cache is read-only (`opcache.file_cache_read_only`).
 pub fn read_file_cache(
     cache_dir: &Path,
     script_path: &Path,
     expected_mtime: i64,
     validate_timestamps: bool,
     consistency_checks: bool,
+    read_only: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     let bin_path = get_bin_path(cache_dir, script_path);
-    let bytes = match std::fs::read(&bin_path) {
-        Ok(b) => b,
-        Err(_) => return Ok(None),
+    let Ok(bytes) = std::fs::read(&bin_path) else {
+        return Ok(None);
+    };
+    let discard = || {
+        if !read_only {
+            let _ = std::fs::remove_file(&bin_path);
+        }
+    };
+    let corrupted = |what: &str| {
+        discard();
+        Err(format!(
+            "opcache cannot read from file '{}' ({what})",
+            bin_path.display()
+        ))
     };
 
-    if bytes.len() < HEADER_SIZE {
-        let _ = std::fs::remove_file(&bin_path);
-        return Err(format!(
-            "opcache cannot read from file '{}' (info)",
-            bin_path.display()
-        ));
+    let Some(header) = bytes.get(..HEADER_SIZE) else {
+        return corrupted("info");
+    };
+    if &header[0..8] != MAGIC {
+        return corrupted("wrong header");
+    }
+    if &header[8..40] != system_id().as_bytes() {
+        return corrupted("wrong \"system_id\"");
     }
 
-    if &bytes[0..8] != MAGIC {
-        let _ = std::fs::remove_file(&bin_path);
-        return Err(format!(
-            "opcache cannot read from file '{}' (wrong header)",
-            bin_path.display()
-        ));
-    }
-
-    if &bytes[8..40] != system_id().as_bytes() {
-        let _ = std::fs::remove_file(&bin_path);
-        return Err(format!(
-            "opcache cannot read from file '{}' (wrong \"system_id\")",
-            bin_path.display()
-        ));
-    }
-
-    let mtime = i64::from_le_bytes(bytes[40..48].try_into().unwrap());
+    let field = |range: std::ops::Range<usize>| {
+        let mut buf = [0_u8; 8];
+        buf[..range.len()].copy_from_slice(&header[range]);
+        buf
+    };
+    let mtime = i64::from_le_bytes(field(40..48));
     if validate_timestamps && mtime != expected_mtime {
-        let _ = std::fs::remove_file(&bin_path);
+        discard();
         return Ok(None);
     }
 
-    let checksum = u32::from_le_bytes(bytes[48..52].try_into().unwrap());
-    let payload_len = u64::from_le_bytes(bytes[52..60].try_into().unwrap()) as usize;
-    if bytes.len() < HEADER_SIZE + payload_len {
-        let _ = std::fs::remove_file(&bin_path);
-        return Ok(None);
-    }
-
-    let payload = &bytes[HEADER_SIZE..HEADER_SIZE + payload_len];
-    if consistency_checks && adler32(payload) != checksum {
-        let _ = std::fs::remove_file(&bin_path);
-        return Ok(None);
+    let checksum = u32::try_from(u64::from_le_bytes(field(48..52))).unwrap_or(u32::MAX);
+    let payload = usize::try_from(u64::from_le_bytes(field(52..60)))
+        .ok()
+        .and_then(|len| bytes.get(HEADER_SIZE..)?.get(..len));
+    let Some(payload) = payload else {
+        return corrupted("mem");
+    };
+    if consistency_checks {
+        let actual = adler32(payload);
+        if actual != checksum {
+            discard();
+            // Sic: php-src writes "excepted".
+            return Err(format!(
+                "corrupted file '{}' excepted checksum: 0x{checksum:08x} actual checksum: 0x{actual:08x}",
+                bin_path.display()
+            ));
+        }
     }
 
     Ok(Some(payload.to_vec()))
@@ -252,7 +297,80 @@ pub fn is_script_cached_in_file_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::{adler32, compute_system_id};
+    use super::{adler32, compute_system_id, get_bin_path, read_file_cache, write_file_cache};
+    use std::path::{Path, PathBuf};
+
+    /// A fresh, empty cache directory for one test.
+    fn cache_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("buzz-file-cache-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create cache dir");
+        dir
+    }
+
+    fn read(dir: &Path, read_only: bool) -> Result<Option<Vec<u8>>, String> {
+        read_file_cache(dir, Path::new("/app/a.php"), 7, true, true, read_only)
+    }
+
+    #[test]
+    fn write_renames_into_place_and_leaves_no_temporary_file() {
+        let dir = cache_dir("write");
+        let script = Path::new("/app/a.php");
+        let bin = write_file_cache(&dir, script, 7, b"first").expect("write");
+        assert_eq!(read(&dir, false), Ok(Some(b"first".to_vec())));
+        // An existing entry is replaced.
+        write_file_cache(&dir, script, 7, b"second").expect("rewrite");
+        assert_eq!(read(&dir, false), Ok(Some(b"second".to_vec())));
+        let names: Vec<_> = std::fs::read_dir(bin.parent().expect("parent"))
+            .expect("list")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(names, [bin.file_name().expect("name").to_os_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn truncated_entry_is_reported_and_removed_unless_read_only() {
+        let dir = cache_dir("truncated");
+        let bin = write_file_cache(&dir, Path::new("/app/a.php"), 7, b"payload").expect("write");
+        let full = std::fs::read(&bin).expect("read back");
+        std::fs::write(&bin, &full[..full.len() - 2]).expect("truncate");
+
+        let err = read(&dir, true).expect_err("truncated");
+        assert!(err.ends_with("(mem)"), "{err}");
+        assert!(bin.exists(), "read-only keeps the entry");
+
+        let err = read(&dir, false).expect_err("truncated");
+        assert!(err.ends_with("(mem)"), "{err}");
+        assert!(!bin.exists(), "a writable cache drops the entry");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checksum_mismatch_is_reported_like_php_src() {
+        let dir = cache_dir("checksum");
+        let bin = write_file_cache(&dir, Path::new("/app/a.php"), 7, b"payload").expect("write");
+        let mut bytes = std::fs::read(&bin).expect("read back");
+        *bytes.last_mut().expect("payload byte") ^= 1;
+        std::fs::write(&bin, &bytes).expect("corrupt");
+        let err = read(&dir, false).expect_err("corrupted");
+        assert!(err.starts_with("corrupted file '"), "{err}");
+        assert!(err.contains("excepted checksum: 0x"), "{err}");
+        assert!(!bin.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_entry_is_a_miss() {
+        let dir = cache_dir("stale");
+        write_file_cache(&dir, Path::new("/app/a.php"), 6, b"old").expect("write");
+        assert_eq!(read(&dir, true), Ok(None));
+        assert!(get_bin_path(&dir, Path::new("/app/a.php")).exists());
+        assert_eq!(read(&dir, false), Ok(None));
+        assert!(!get_bin_path(&dir, Path::new("/app/a.php")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The reduction after every byte, as `zend_adler32` defines the sum.
     fn adler32_per_byte(data: &[u8]) -> u32 {
