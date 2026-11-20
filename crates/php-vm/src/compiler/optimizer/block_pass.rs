@@ -400,50 +400,10 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     changed = true;
                 }
 
-                (
-                    Op::Unary {
-                        op: UnKind::Not,
-                        a,
-                        dst: t1,
-                    },
-                    Op::JmpZEx {
-                        a: Operand::Tmp(t2),
-                        dst: d,
-                        target,
-                    },
-                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
-                    let new_jmp = Op::JmpNzEx {
-                        a: *a,
-                        dst: *d,
-                        target: *target,
-                    };
-                    op_array.ops[next_i] = new_jmp;
-                    op_array.ops[i] = Op::Nop;
-                    changed = true;
-                }
-
-                (
-                    Op::Unary {
-                        op: UnKind::Not,
-                        a,
-                        dst: t1,
-                    },
-                    Op::JmpNzEx {
-                        a: Operand::Tmp(t2),
-                        dst: d,
-                        target,
-                    },
-                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
-                    let new_jmp = Op::JmpZEx {
-                        a: *a,
-                        dst: *d,
-                        target: *target,
-                    };
-                    op_array.ops[next_i] = new_jmp;
-                    op_array.ops[i] = Op::Nop;
-                    changed = true;
-                }
-
+                // (`!` in front of `JMPZ_EX`/`JMPNZ_EX` stays: the jump keeps
+                // its condition as its result, which would be `(bool) X`
+                // where every reader expects `!X`. php-src folds `BOOL_NOT`
+                // only into the jumps without a result.)
                 (
                     Op::Move {
                         src: Operand::Lit(l),

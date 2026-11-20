@@ -503,6 +503,17 @@ fn single_dim_store<'a>(op: &Op, places: &'a [Place]) -> Option<(u32, &'a Operan
 /// container of a one-dimension store, which [`partial_assign_dim`]
 /// handles: only ops this analysis understands keep a CV undefined.
 fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
+    // `COALESCE` reads its variable without a warning and leaves it as it
+    // is.
+    if matches!(
+        op,
+        Op::Coalesce {
+            a: Operand::Cv(_),
+            ..
+        }
+    ) {
+        return;
+    }
     let own = single_dim_store(op, places).map(|(cv, _)| cv);
     let mut named = Vec::new();
     let mut op = op.clone();
@@ -516,6 +527,54 @@ fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
             }
         }
     }
+}
+
+/// Whether a `COALESCE` of `a` always goes on to the next op, its result
+/// not written: the operand is a variable no path has assigned (`state`
+/// at the op), or null (sccp.c `sccp_mark_feasible_successors`: successor
+/// 1 for a null operand).
+fn coalesce_falls_through(a: Operand, state: &[CvLattice], literals: &[Value]) -> bool {
+    let null = |l: u32| matches!(literals.get(l as usize), Some(Value::Null));
+    match a {
+        Operand::Cv(cv) => match state.get(cv as usize) {
+            Some(CvLattice::Undef) => true,
+            Some(CvLattice::Const(l)) => null(*l),
+            _ => false,
+        },
+        Operand::Lit(l) => null(l),
+        _ => false,
+    }
+}
+
+/// Gives the result of each `COALESCE` at `at` a temporary of its own
+/// when another op writes or reads the one it has. These ops read a
+/// variable no path has assigned: they go on to the next op without
+/// writing their result, and php-src keeps them, the variable being no
+/// constant operand (opt/coalesce: `T1 = COALESCE CV0($test) 0001`). With
+/// the result apart, the temporary has the one definition the other path
+/// makes, which the propagation of temporaries then follows.
+fn own_coalesce_results(op_array: &mut OpArray, at: &[usize]) -> bool {
+    let mut changed = false;
+    for &i in at {
+        let Some(&Op::Coalesce { dst, .. }) = op_array.ops.get(i) else {
+            continue;
+        };
+        let n = op_array.num_tmps as usize;
+        let (mut uses, mut defs) = (vec![0u32; n], vec![0u32; n]);
+        super::count_tmp_uses(op_array, &mut uses);
+        super::dce::count_defs(op_array, &mut defs);
+        let alone = uses.get(dst as usize) == Some(&0) && defs.get(dst as usize) == Some(&1);
+        if alone {
+            continue;
+        }
+        let fresh = op_array.num_tmps;
+        op_array.num_tmps += 1;
+        if let Some(Op::Coalesce { dst, .. }) = op_array.ops.get_mut(i) {
+            *dst = fresh;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `$cv[k] = v` with a known integer or string key on a CV that is
@@ -1878,6 +1937,13 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             }
                         }
                     }
+                    Op::Coalesce { a, .. }
+                        if coalesce_falls_through(*a, &out_state[b], &op_array.literals) =>
+                    {
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
+                    }
                     Op::CmpJmp { target: t, .. }
                     | Op::JmpZEx { target: t, .. }
                     | Op::JmpNzEx { target: t, .. }
@@ -1973,6 +2039,10 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         }
 
         // Apply constant CVs across all reachable blocks
+        let mut unassigned_coalesces = Vec::new();
+        // The stores of a literal into a variable no path has assigned
+        // (it holds nothing a store could release).
+        let mut first_stores = Vec::new();
         for b in 0..num_blocks {
             if !block_reachable[b] {
                 continue;
@@ -1983,6 +2053,24 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
 
             for i in b_start..b_end {
                 let op = &mut op_array.ops[i];
+                if let Op::Coalesce {
+                    a: Operand::Cv(cv), ..
+                } = op
+                {
+                    if cur_state.get(*cv as usize) == Some(&CvLattice::Undef) {
+                        unassigned_coalesces.push(i);
+                    }
+                }
+                if let Op::AssignCv {
+                    cv,
+                    val: Operand::Lit(_),
+                    dst: None,
+                } = op
+                {
+                    if cur_state.get(*cv as usize) == Some(&CvLattice::Undef) {
+                        first_stores.push((i, *cv));
+                    }
+                }
                 let is_call = matches!(
                     op,
                     Op::DoCall { .. }
@@ -2301,6 +2389,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             }
         }
 
+        changed |= own_coalesce_results(op_array, &unassigned_coalesces);
+        changed |= super::dce::drop_unread_first_stores(op_array, ctx, &first_stores);
         changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
     }
 

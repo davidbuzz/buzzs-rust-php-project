@@ -162,6 +162,244 @@ pub(super) const CALL_NEW: u8 = 2;
 /// The most sums [`new_stored`] computes between the sends of one `new`.
 const NEW_SUMS: usize = 3;
 
+/// The most `new` instructions of one tape with a site entry
+/// ([`NewSite`]); the ones past it make their checks every time.
+const NEW_SITES: usize = 256;
+
+/// Gives every [`CALL_NEW`] instruction of `tape` its site number in `p`:
+/// its index in the tape's `new_sites`.
+pub(super) fn number_new_sites(tape: &mut [Inst]) {
+    let mut next = 0;
+    for inst in tape {
+        if inst.op == TOp::CallInit && inst.k == CALL_NEW {
+            inst.p = next;
+            next += 1;
+        }
+    }
+}
+
+/// What the full checks of [`new_stored`] found out about a `new`
+/// instruction, kept for the next `new` there (`Tape::new_sites`): what
+/// depends on the instruction alone (where its arguments come from) and
+/// what depends on the class alone. A class's constructor, its slots and
+/// what its properties take do not change.
+#[derive(Default)]
+pub(super) struct NewSite {
+    /// The class (none yet: `Weak::new()`). The handle pins the class's
+    /// address, so an equal address is this class.
+    class: std::rc::Weak<crate::class::Class>,
+    /// The arguments passed, which are the constructor's parameters.
+    n: u8,
+    /// The stores (`steps[..len]`).
+    len: u8,
+    /// A parameter or a property stored to has a type: the arguments'
+    /// types are tested (`params`, the steps' `accept`).
+    typed: bool,
+    /// Where each argument comes from.
+    srcs: [Src; MAX_ARGS],
+    /// The builtin type bits each parameter's declared type takes as they
+    /// are (`u32::MAX`: no type, or `mixed`).
+    params: [u32; MAX_ARGS],
+    steps: [SiteStep; FOLD_STEPS],
+}
+
+/// Where an argument of a `new` comes from: what the `Send`s after the
+/// instruction pass ([`sent_args`] reads the same ops every time).
+#[derive(Clone, Copy, Default)]
+enum Src {
+    #[default]
+    None,
+    /// A literal of the op array.
+    Lit(u32),
+    /// What a compiled variable holds.
+    Cv(u32),
+    /// `a + b`, `a - b` or `a * b` of literals and compiled variables.
+    Sum(BinaryOp, Operand, Operand),
+}
+
+/// An argument of a `new`, read where it is: a value the frame or the op
+/// array holds, or a sum just computed. Nothing is owned.
+#[derive(Clone, Copy)]
+enum Arg<'a> {
+    Held(&'a Value),
+    Int(i64),
+}
+
+impl Arg<'_> {
+    /// The value, as a store keeps it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per store
+    fn value(self) -> Value {
+        match self {
+            Arg::Held(v) => clone_value(v),
+            Arg::Int(i) => Value::Int(i),
+        }
+    }
+
+    /// Whether a parameter with the type bits `mask` takes it as it is
+    /// (`enter`'s test).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn passes(self, mask: u32) -> bool {
+        match self {
+            Arg::Held(v) => accepts_without_coercion(mask, v),
+            Arg::Int(_) => mask & crate::types::mask::LONG != 0,
+        }
+    }
+
+    /// Whether a property accepting the type bits `accept` takes it as it
+    /// is (`propcache::accepts`).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn fits(self, accept: u32) -> bool {
+        match self {
+            Arg::Held(v) => accepts(accept, v),
+            Arg::Int(_) => accept & crate::types::mask::LONG != 0,
+        }
+    }
+}
+
+/// One store of a [`NewSite`]: the parameter, the slot it goes to and the
+/// builtin type bits the property takes as they are (`u32::MAX`: untyped).
+#[derive(Clone, Copy, Default)]
+struct SiteStep {
+    param: u8,
+    slot: u32,
+    accept: u32,
+}
+
+impl NewSite {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn steps(&self) -> &[SiteStep] {
+        self.steps.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+
+    /// Whether every parameter's type takes its argument as it is and
+    /// every property the argument stored in it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn takes(&self, args: &[Arg<'_>]) -> bool {
+        self.params
+            .iter()
+            .zip(args)
+            .all(|(mask, a)| *mask == u32::MAX || a.passes(*mask))
+            && self.steps().iter().all(|s| {
+                args.get(usize::from(s.param))
+                    .is_some_and(|a| a.fits(s.accept))
+            })
+    }
+
+    /// The object: its slots copied from the class's defaults, then the
+    /// arguments stored, `arg` giving the value of a parameter. (A default
+    /// a store replaces is a scalar, or a value the class's table holds
+    /// too: nothing is freed.)
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `new_stored`
+    fn build(
+        &self,
+        cls: &Rc<crate::class::Class>,
+        defaults: &[Option<Value>],
+        arg: impl Fn(usize) -> Option<Value>,
+    ) -> Option<Obj> {
+        let made = crate::object::new_object_from_defaults(Rc::clone(cls), defaults);
+        let data = crate::object::data(&made);
+        let Ok(mut held) = data.slots.try_borrow_mut() else {
+            // (Not reached: nothing else holds a new object's slots.)
+            crate::object::discard_rejected(made);
+            return None;
+        };
+        for step in self.steps() {
+            let (Some(cell), Some(v)) = (
+                held.get_mut(step.slot as usize),
+                arg(usize::from(step.param)),
+            ) else {
+                continue;
+            };
+            let old = cell.replace(v);
+            if old.is_none() {
+                data.set_slot_unset(step.slot as usize, false);
+            }
+            crate::exec::discard_unrooted(old);
+        }
+        drop(held);
+        Some(made)
+    }
+}
+
+/// Where the arguments of the `new` instruction `inst` come from, and how
+/// many there are: [`sent_args`]'s reading of the ops after it, kept as
+/// what to read. `None` for anything [`sent_args`] would not read the
+/// same way at every `new` (a sum no send passes, another operator).
+fn site_srcs(code: &OpArray, inst: &Inst) -> Option<([Src; MAX_ARGS], usize)> {
+    let mut srcs = [Src::None; MAX_ARGS];
+    let mut n = 0usize;
+    if inst.e == 0 {
+        return Some((srcs, n));
+    }
+    let mut sums = [(u32::MAX, Src::None); NEW_SUMS];
+    let mut made = 0usize;
+    for op in code.ops.get(inst.d as usize + 1..)? {
+        match op {
+            Op::Nop => {}
+            Op::Send { src } => {
+                let from = match src {
+                    ArgSrc::Val(Operand::Lit(lit)) => Src::Lit(*lit),
+                    ArgSrc::Val(Operand::Cv(cv)) => Src::Cv(*cv),
+                    ArgSrc::Place(pid) => Src::Cv(place_cv(code, *pid)?),
+                    ArgSrc::Val(Operand::Tmp(tmp)) => {
+                        let sum = sums.iter_mut().find(|s| s.0 == *tmp)?;
+                        sum.0 = u32::MAX;
+                        sum.1
+                    }
+                    _ => return None,
+                };
+                *srcs.get_mut(n)? = from;
+                n += 1;
+            }
+            Op::Bin {
+                op: BinKind::Arith(kind @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)),
+                a,
+                b,
+                dst,
+            } => {
+                *sums.get_mut(made)? = (*dst, Src::Sum(*kind, *a, *b));
+                made += 1;
+            }
+            // The `DoCall`.
+            _ => break,
+        }
+    }
+    // Every sum was passed.
+    sums.iter().all(|s| s.0 == u32::MAX).then_some((srcs, n))
+}
+
+/// The argument `src` names, read in frame `f`. `None` for what
+/// [`sent_args`] declines (an undefined variable, a sum of anything but
+/// ints, an overflow) and for a variable held by reference, whose value
+/// [`sent_args`] copies out.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument
+fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
+    Some(match src {
+        Src::Lit(lit) => Arg::Held(f.code.literals.get(lit as usize)?),
+        Src::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+            Value::Reference(_) => return None,
+            v => Arg::Held(v),
+        },
+        Src::Sum(kind, a, b) => {
+            let (lhs, rhs) = (int_operand(f, a)?, int_operand(f, b)?);
+            Arg::Int(match kind {
+                BinaryOp::Add => lhs.checked_add(rhs)?,
+                BinaryOp::Sub => lhs.checked_sub(rhs)?,
+                BinaryOp::Mul => lhs.checked_mul(rhs)?,
+                _ => return None,
+            })
+        }
+        Src::None => return None,
+    })
+}
+
 /// The op after the constructor call of the `New` at `i` when the tape's
 /// `new` instruction can stand for all of it ([`new_stored`]): every op up
 /// to the `DoCall` is a `Send` of a literal, of a compiled variable or of
@@ -314,6 +552,10 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 ///   takes the value as it is; the slot it names holds, in a new object,
 ///   a default that is replaced or nothing that `__set()` could claim.
 ///   (A first `new` of the class runs the call, which fills the entries.)
+///   What of this depends on the class alone, and where the arguments come
+///   from, is found out once per `new` instruction and class ([`NewSite`],
+///   filled by [`new_checked`]); [`site_made`] then reads the arguments
+///   where they are and stores them.
 /// - What the call's return would have recorded is recorded
 ///   (`gc::frame_released`): each argument as a possible root, then the
 ///   object itself, which `new`'s result still holds.
@@ -323,6 +565,64 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 /// parameter left to its default), a class `props::ctor_ref` refuses.
 #[inline(never)]
 fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
+    if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let defaults = cls.defaults.try_borrow().ok()?;
+    let defaults = defaults.as_deref()?;
+    // The site's entry when it is for this class (what depends on the class
+    // and on the instruction was found out when it was filled), else the
+    // full checks.
+    site_made(f, inst, cls, defaults).or_else(|| new_checked(f, inst, cls, defaults))
+}
+
+/// The object of a `new` whose site entry ([`NewSite`]) is for `cls`, when
+/// the arguments are where the entry says and have types the parameters
+/// and the properties take as they are. `None`, nothing done, otherwise
+/// ([`new_checked`] then decides).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `new_stored`
+fn site_made(
+    f: &crate::vm::Frame,
+    inst: &Inst,
+    cls: &Rc<crate::class::Class>,
+    defaults: &[Option<Value>],
+) -> Option<Obj> {
+    let sites = f.code.tape.new_sites.try_borrow().ok()?;
+    let site = sites.get(inst.p)?;
+    if std::rc::Weak::as_ptr(&site.class) != Rc::as_ptr(cls) {
+        return None;
+    }
+    let mut args = [Arg::Int(0); MAX_ARGS];
+    let n = usize::from(site.n);
+    for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
+        *arg = arg_view(f, *src)?;
+    }
+    let args = args.get(..n)?;
+    if site.typed && !site.takes(args) {
+        return None;
+    }
+    let made = site.build(cls, defaults, |p| args.get(p).copied().map(Arg::value))?;
+    for arg in args {
+        if let Arg::Held(v) = arg {
+            crate::gc::possible_root(v);
+        }
+    }
+    crate::gc::root_ctor_result(&made);
+    Some(made)
+}
+
+/// [`new_stored`]'s full checks, the object when they pass, and the site's
+/// entry for the next `new` there (kept only when it answers for every
+/// argument its type bits take: not when a value passed for being of the
+/// class a class-typed property accepted last).
+#[inline(never)]
+fn new_checked(
+    f: &crate::vm::Frame,
+    inst: &Inst,
+    cls: &Rc<crate::class::Class>,
+    defaults: &[Option<Value>],
+) -> Option<Obj> {
     let mut args = NewArgs::new();
     if inst.e != 0 {
         sent_args(f, inst, &mut args)?;
@@ -332,45 +632,60 @@ fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) 
     let Func::User(uf) = func else {
         return None;
     };
-    if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
-        return None;
-    }
-    let steps = uf.ctor_fold()?;
+    let fold = uf.ctor_fold()?;
     if args.len() != uf.params.len() {
         return None;
     }
+    let mut site = NewSite {
+        class: Rc::downgrade(cls),
+        n: u8::try_from(args.len()).ok()?,
+        len: u8::try_from(fold.len()).ok()?,
+        ..NewSite::default()
+    };
+    site.params.fill(u32::MAX);
     if uf.call_shape() == CallShape::TYPED {
-        for (p, v) in uf.params.iter().zip(args) {
-            if p.ty
-                .as_ref()
-                .is_some_and(|ty| !ty.is_mixed() && !accepts_without_coercion(ty.mask, v))
-            {
-                return None;
+        for (mask, p) in site.params.iter_mut().zip(&uf.params) {
+            if let Some(ty) = p.ty.as_ref().filter(|ty| !ty.is_mixed()) {
+                *mask = ty.mask;
+                site.typed = true;
             }
         }
     }
-    let defaults = cls.defaults.try_borrow().ok()?;
-    let defaults = defaults.as_deref()?;
+    let params_take = site
+        .params
+        .iter()
+        .zip(args)
+        .all(|(mask, v)| *mask == u32::MAX || accepts_without_coercion(*mask, v));
+    if !params_take {
+        return None;
+    }
     let class_addr = Rc::as_ptr(cls) as usize;
-    // Where each step stores, every check its store needs made first.
-    let mut slots = [0u32; FOLD_STEPS];
+    // A value passed for being of the class a class-typed property
+    // accepted last: the entry would not answer for it.
+    let mut by_class = false;
     {
         let cache = uf.code.prop_cache.try_borrow().ok()?;
-        for (step, at) in steps.iter().zip(&mut slots) {
+        for (step, at) in fold.iter().zip(&mut site.steps) {
             let entry = cache.get(step.place as usize)?;
             let v = args.get(step.param as usize)?;
-            let stored_class = matches!(
-                v,
-                Value::Object(held) if entry.ok_class_addr != 0
-                    && Rc::as_ptr(crate::object::class_of(held)) as usize == entry.ok_class_addr
-            );
             if entry.class_addr != class_addr
                 || entry.scope_addr != scope
                 || entry.base != PROP_CACHE_THIS
                 || entry.flags & (PC_WRITE | PC_DYN) != PC_WRITE
-                || !(accepts(entry.accept, v) || stored_class)
             {
                 return None;
+            }
+            if !accepts(entry.accept, v) {
+                let stored_class = matches!(
+                    v,
+                    Value::Object(held) if entry.ok_class_addr != 0
+                        && Rc::as_ptr(crate::object::class_of(held)) as usize
+                            == entry.ok_class_addr
+                );
+                if !stored_class {
+                    return None;
+                }
+                by_class = true;
             }
             match defaults.get(entry.slot as usize)? {
                 Some(Value::Reference(_)) => return None,
@@ -381,33 +696,32 @@ fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) 
                 None if entry.flags & PC_NO_SET != 0 || entry.accept != u32::MAX => {}
                 None => return None,
             }
-            *at = entry.slot;
+            site.typed |= entry.accept != u32::MAX;
+            *at = SiteStep {
+                param: u8::try_from(step.param).ok()?,
+                slot: entry.slot,
+                accept: entry.accept,
+            };
         }
     }
-    let made = crate::object::new_object_from_defaults(Rc::clone(cls), defaults);
-    let data = crate::object::data(&made);
-    let Ok(mut held) = data.slots.try_borrow_mut() else {
-        // (Not reached: nothing else holds a new object's slots.)
-        crate::object::discard_rejected(made);
-        return None;
-    };
-    for (step, &slot) in steps.iter().zip(&slots) {
-        let (Some(cell), Some(v)) = (held.get_mut(slot as usize), args.get(step.param as usize))
-        else {
-            continue;
-        };
-        let old = cell.replace(clone_value(v));
-        if old.is_none() {
-            data.set_slot_unset(slot as usize, false);
-        }
-        // A default: a scalar, or a value the class's table holds too.
-        crate::exec::discard_unrooted(old);
-    }
-    drop(held);
+    let made = site.build(cls, defaults, |p| args.get(p).map(clone_value))?;
     for v in args {
         crate::gc::possible_root(v);
     }
     crate::gc::root_ctor_result(&made);
+    if !by_class && inst.p < NEW_SITES {
+        if let Some((srcs, n)) = site_srcs(&f.code, inst) {
+            if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
+                if n == args.len() {
+                    site.srcs = srcs;
+                    crate::rtcache::grow_slots(&mut sites, inst.p + 1, NewSite::default);
+                    if let Some(slot) = sites.get_mut(inst.p) {
+                        *slot = site;
+                    }
+                }
+            }
+        }
+    }
     Some(made)
 }
 

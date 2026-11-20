@@ -1959,6 +1959,35 @@ impl Compiler<'_> {
         line: u32,
     ) -> CResult<Option<Operand>> {
         if op == AB::Coalesce {
+            // A plain local is read as `??` reads it, `ZEND_COALESCE` of
+            // the CV itself (`zend_compile_assign_coalesce` compiles the
+            // variable for `BP_VAR_IS`, which is the CV operand), and
+            // written as `=` writes it.
+            if let ExprKind::Var(VarName::Name(id)) = &target.kind {
+                if id.name != b"this" && id.name != b"GLOBALS" && !is_superglobal(&id.name) {
+                    self.note_cv_write(&id.name);
+                    let cv = self.cv(&id.name);
+                    let t = self.tmp();
+                    let j = self.emit(Op::Coalesce {
+                        a: Operand::Cv(cv),
+                        dst: t,
+                        target: 0,
+                    });
+                    let v = self.compile_expr(value)?;
+                    self.f().line = line;
+                    self.emit(Op::AssignCv {
+                        cv,
+                        val: v,
+                        dst: Some(t),
+                    });
+                    self.patch_here(j);
+                    if need {
+                        return Ok(Some(Operand::Tmp(t)));
+                    }
+                    self.free(Operand::Tmp(t));
+                    return Ok(None);
+                }
+            }
             let p = self.compile_write_place(target)?;
             let temps = place_tmps(&p);
             let mut pk = p.clone();

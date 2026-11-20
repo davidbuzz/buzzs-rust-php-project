@@ -803,37 +803,12 @@ fn operand_is_inert(op_array: &OpArray, tmp_def: &[usize], mut val: Operand) -> 
     false
 }
 
-/// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
-pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
-    let num_cvs = op_array.cv_names.len();
-    if num_cvs == 0 || has_dynamic_var_access(op_array) {
-        return false;
-    }
-
-    // Parameters and closure `use` bindings cannot be removed: a write to a
-    // by-reference one is seen by the caller or the enclosing scope
-    // (`use (&$v) { $v = 0; }`, jit/assign_dim_op_006).
-    let num_param_cvs = bound_cv_prefix(op_array, ctx);
-
-    let mut read_counts = vec![0u32; num_cvs];
-
-    // Mark parameter CVs as read
-    for i in 0..(num_param_cvs as usize).min(num_cvs) {
-        read_counts[i] += 1;
-    }
-
-    // Mark closure captures as read
-    for f in op_array.decls.functions.borrow().iter() {
-        for u in &f.uses {
-            if (u.parent_cv as usize) < num_cvs {
-                read_counts[u.parent_cv as usize] += 1;
-            }
-        }
-    }
-
-    // The scalar-typed parameters the function never writes (only the
-    // `RECV` binds them): their value has no destructor.
-    let mut stable_scalar = vec![false; num_cvs];
+/// The scalar-typed parameters the function never writes (only the `RECV`
+/// binds them), by compiled variable: each holds a null, a bool, a number
+/// or a string for the whole call. (Not meaningful with dynamic variable
+/// access, which the callers rule out.)
+pub(crate) fn stable_scalar_params(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<bool> {
+    let mut stable_scalar = vec![false; op_array.cv_names.len()];
     for &cv in ctx.scalar_params {
         if let Some(slot) = stable_scalar.get_mut(cv as usize) {
             *slot = true;
@@ -872,6 +847,39 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             }
         }
     }
+    stable_scalar
+}
+
+/// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
+pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if num_cvs == 0 || has_dynamic_var_access(op_array) {
+        return false;
+    }
+
+    // Parameters and closure `use` bindings cannot be removed: a write to a
+    // by-reference one is seen by the caller or the enclosing scope
+    // (`use (&$v) { $v = 0; }`, jit/assign_dim_op_006).
+    let num_param_cvs = bound_cv_prefix(op_array, ctx);
+
+    let mut read_counts = vec![0u32; num_cvs];
+
+    // Mark parameter CVs as read
+    for i in 0..(num_param_cvs as usize).min(num_cvs) {
+        read_counts[i] += 1;
+    }
+
+    // Mark closure captures as read
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            if (u.parent_cv as usize) < num_cvs {
+                read_counts[u.parent_cv as usize] += 1;
+            }
+        }
+    }
+
+    // Their value has no destructor.
+    let stable_scalar = stable_scalar_params(op_array, ctx);
     // `$cv[k] = v` with an offset and a value that have no destructor (a
     // literal, a stable scalar parameter): a write of the variable, not a
     // read, which goes with it when nothing else reads the variable

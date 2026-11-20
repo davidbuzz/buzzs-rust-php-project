@@ -119,6 +119,11 @@ pub(crate) struct Tape {
     jit_tr: std::sync::atomic::AtomicPtr<AtomicUsize>,
     /// A trace from this tape has proved useful (see [`Tape::jit_good`]).
     jit_good: std::sync::atomic::AtomicBool,
+    /// What `calls::new_stored` found out about each `new` instruction that
+    /// ran a constructor as stores, by the instruction's site number
+    /// (`Inst.p`): see [`calls::NewSite`]. Grown outside the counted heap,
+    /// like the op array's other run-time caches.
+    new_sites: std::cell::RefCell<Vec<calls::NewSite>>,
 }
 
 impl Tape {
@@ -189,6 +194,14 @@ impl Drop for Tape {
     fn drop(&mut self) {
         if let Some(buf) = self.insts.take() {
             php_memlimit::persistent(|| drop(buf));
+        }
+        let sites = self.new_sites.get_mut();
+        if sites.capacity() != 0 {
+            // The class handles go as the counted memory they pin, the
+            // buffer as it came.
+            sites.clear();
+            let sites = std::mem::take(sites);
+            php_memlimit::persistent(|| drop(sites));
         }
     }
 }
@@ -1650,6 +1663,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         }));
     }
     tape.push(Inst::plain(TOp::Exit));
+    calls::number_new_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a
     // specialised instruction when the tape also runs what follows it.

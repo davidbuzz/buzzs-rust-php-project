@@ -184,7 +184,7 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
             }
         }
         if (level & PASS_14) != 0 {
-            changed |= dce::run_dce(op_array);
+            changed |= dce::run_dce(op_array, ctx);
             if (level & PASS_6) != 0 && !ctx.is_main {
                 changed |= block_pass::remove_unused_const_statics(op_array, ctx.bound_cv_prefix());
             }
@@ -1938,6 +1938,33 @@ mod tests {
                         ..
                     }
                 )
+            )),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// `!$a && !$b` and `!$a || !$b`: a jump that keeps its result tests
+    /// the negation itself, never the variable (its result would be
+    /// `(bool) $a` where the code after it expects `!$a`).
+    #[test]
+    fn negation_stays_in_front_of_a_jump_that_keeps_its_result() {
+        let unit = compile_src(
+            "<?php function m($a, $b, $c) { $r = 0; if (!$a && !$b) { $r |= 1; } \
+             if (!$a || !$c) { $r |= 2; } $x = !$a && !$b; $y = !$a || !$c; return [$r, $x, $y]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"m"));
+        assert!(
+            !code.ops.iter().any(|op| matches!(
+                op,
+                Op::JmpZEx {
+                    a: Operand::Cv(_),
+                    ..
+                } | Op::JmpNzEx {
+                    a: Operand::Cv(_),
+                    ..
+                }
             )),
             "{:?}",
             code.ops

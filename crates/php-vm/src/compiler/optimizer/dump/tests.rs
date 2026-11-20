@@ -45,6 +45,32 @@ fn dump(src: &str) -> String {
     .expect("utf-8")
 }
 
+/// [`dump`] of `src` compiled at the level it is dumped at, as `include.rs`
+/// compiles a script opcache dumps: the optimizer has run on the code.
+fn dump_optimized(src: &str) -> String {
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8")
+}
+
 #[test]
 fn floats_print_like_printf_g() {
     assert_eq!(fmt_g(4.0), "4");
@@ -574,6 +600,93 @@ BB0:
 0004 RETURN #5.T3 [long] RANGE[0..2]
 ";
     assert_eq!(String::from_utf8(out).expect("utf-8"), expected);
+}
+
+/// `opt/coalesce`: `??` and `??=` of a local nothing has assigned go on to
+/// the next op, which is also where the op (kept: its operand is no
+/// constant) jumps; the variable's first store goes with its last reader.
+#[test]
+fn coalesce_of_an_unassigned_local_goes_on() {
+    let out = dump_optimized(
+        "<?php\nfunction a() {\n    $test = $test ?? true;\n    return $test;\n}\n\
+         function b() {\n    $test ??= true;\n    return $test;\n}\n\
+         function h($x) {\n    if ($x) { echo 1; }\n    $test = $test ?? true;\n    return $test;\n}\n\
+         function p($p) {\n    $x = $p ?? true;\n    return $x;\n}\n\
+         function q($c) {\n    $v = $v ?? 1;\n    if ($c) { $v = 2; }\n    return $v;\n}\n",
+    );
+    let folded = "0000 T1 = COALESCE CV0($test) 0001\n0001 RETURN bool(true)\n";
+    assert_eq!(out.matches(folded).count(), 2, "{out}");
+    assert!(
+        out.contains("0003 T2 = COALESCE CV1($test) 0004\n0004 RETURN bool(true)\n"),
+        "{out}"
+    );
+    // A parameter may hold anything: both paths stay.
+    assert!(
+        out.contains("0001 T2 = COALESCE CV0($p) 0003\n0002 T2 = QM_ASSIGN bool(true)\n"),
+        "{out}"
+    );
+    // A store that a later op reads stays.
+    assert!(out.contains("CV1($v) = QM_ASSIGN int(1)\n"), "{out}");
+}
+
+/// `opt/dce_001`: concatenations of scalar-typed parameters that nothing
+/// reads go, the inner ones with the outer one; an operand that may be an
+/// array or an object keeps its concatenation (it may warn or call
+/// `__toString()`).
+#[test]
+fn dead_concatenations_of_scalars_are_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction foo(string $s1, string $s2, string $s3, string $s4) {\n\
+         $x = ($s1 . $s2) . ($s3 . $s4);\n    $x = 0;\n    return $x;\n}\n",
+    );
+    assert!(out.contains("(lines=5, args=4, vars=4, tmps=0)"), "{out}");
+    assert!(out.contains("0004 RETURN int(0)\n"), "{out}");
+    let kept = [
+        // No declared type.
+        "function foo($s1, string $s2) { $x = $s1 . $s2; $x = 0; return $x; }",
+        // A type that takes an array.
+        "function foo(array|string $s1, string $s2) { $x = $s1 . $s2; $x = 0; return $x; }",
+        // A parameter the function assigns.
+        "function foo(string $s1, string $s2) { $s1 = [$s2]; $x = $s1 . $s2; $x = 0; return $x; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("CONCAT"), "{body}: {out}");
+    }
+}
+
+/// `opt/dce_007`: an array literal that nothing reads goes when building
+/// it can raise nothing; a key after which an append fails, a variable
+/// that may be unassigned (reading it warns) or a key that is no literal
+/// keeps it.
+#[test]
+fn dead_array_builds_are_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction esc($x) {\n    $a = [$x];\n    $b = [$a];\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=3, args=1, vars=2, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 CV1($a) = INIT_ARRAY 1 (packed) CV0($x) NEXT\n0002 RETURN CV1($a)\n"),
+        "{out}"
+    );
+    let out = dump_optimized(
+        "<?php\nfunction f($x) { $b = ['k' => $x, 2 => 1, $x, 'z' => $x]; return $x; }\n",
+    );
+    assert!(!out.contains("INIT_ARRAY"), "{out}");
+    let kept = [
+        // The append after the largest int key throws.
+        "function f($x) { $b = [9223372036854775807 => $x, $x]; return $x; }",
+        // `$u` may be unassigned.
+        "function f($x) { if ($x) { $u = 1; } $b = [$u]; return $x; }",
+        // The key is a variable.
+        "function f($x) { $b = [$x => 1]; return $x; }",
+        // `$x` is unset on the way.
+        "function f($x) { unset($x); $b = [$x]; return 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+    }
 }
 
 /// Without the DFA bits, or without passes 6 and 7, nothing is dumped.
