@@ -50,6 +50,8 @@ Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       (`dims::fetch_key_missing`), and a jump on a temporary takes an int as well as a
       bool: array_rw 1.19 -> 1.07 (meets the goal), and both loops of hash1 compile
       (1.41 -> 1.40: what is left is the handlers' own cost).
+      Then `jit_dim_get_wide` (a third of heapsort: 50 calls an outer iteration at 98
+      instructions) reads the element where it lies: heapsort 1.59 -> 1.48.
       Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
       defined at run time, a `global`) stay interpreted; a `foreach` step is no trace
       row yet (hash2's inner loop: 150 instructions a step, then a keyed `+=`), and
@@ -137,8 +139,8 @@ Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 25 left in the targeted set of 13,935
-      tests on 2026-11-21): dce_004/005, sccp_002/005/010/011/012/017/019/026,
+- [ ] Optimizer/opcache dump failures (30 of 38; 23 left in the targeted set of 13,935
+      tests on 2026-11-21): dce_004/005, sccp_002/005/010/011/012/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2, preload_optimizer,
       array_map_foreach_optimization_007/008/013/014, named_parameter_new, gh18050,
       gh9164, jit/ignored_opcodes. Done 2026-11-21: opt/coalesce (`??`/`??=` of a local
@@ -149,11 +151,19 @@ Score: 77/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       element can raise anything), opt/dce_008 (a store of a locally built array of
       scalars into an array nothing reads: `compact::scalar_array_vars`) and
       opt/dce_009 (the loop of a `foreach` over an empty class constant, removed where
-      the constant is put in place for the dump). What the open ones need: values of
-      locally built arrays and of objects that do not escape (the sccp set,
-      dce_004/005; sccp_017/019 only the removal of the dead copy `$b = $a`),
-      `JMP_NULL` on the variable itself with constants kept across calls (nullsafe),
-      and named arguments of known callees as positional sends (named_parameter_new).
+      the constant is put in place for the dump), opt/sccp_017 and opt/sccp_019 (the
+      dead copy `$b = $a` of a locally built array of scalars and both arrays' element
+      stores). What the open ones need: an array literal with unknown elements as a
+      partly known value (sccp_002/005), a dead store chain in one straight line
+      (dce_004), objects that do not escape (sccp_010/011/012, dce_005), `JMP_NULL` on
+      the variable itself with constants kept across calls (nullsafe), and named
+      arguments of known callees as positional sends (named_parameter_new).
+- [x] Optimizer (2026-11-21): an array literal that may be the last holder of an object
+      keeps its store. Pass 13 dropped `$a = [new D];` of an unread `$a` (and
+      `$b = [$o]; $o = null;`), the temporary array was freed at once and D's
+      destructor ran before the rest of the function; PHP keeps it to the end, with
+      and without its optimizer. `compact::build_is_inert` looks at what the array is
+      built from. No PHPT covers it.
 - [x] Optimizer (2026-11-21): the block pass folded `!` into a jump that keeps its
       result (`T = BOOL_NOT X; D = JMPZ_EX T` became `D = JMPNZ_EX X`), so with
       `opcache.enable_cli=1` the code after `!$a && !$b` and `!$a || !$c` saw the

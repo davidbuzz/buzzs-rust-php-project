@@ -793,7 +793,7 @@ pub(super) fn int_elem_copy(f: &Frame, cv: u32, i: i64) -> Option<Value> {
 /// at here), else by its key (`HashTable::get_int`, out of line).
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of the second step's body
-fn int_elem(arr: &ZArray, i: i64) -> Option<&Value> {
+pub(super) fn int_elem(arr: &ZArray, i: i64) -> Option<&Value> {
     match arr.get_packed(i) {
         Some(v) => Some(v),
         None => arr.get_int(i),

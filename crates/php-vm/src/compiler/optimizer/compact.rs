@@ -747,7 +747,6 @@ fn result_is_inert(op: &Op) -> bool {
         Op::Bin { .. }
         | Op::Unary { .. }
         | Op::Rope { .. }
-        | Op::InitArray { .. }
         | Op::Isset { .. }
         | Op::Empty { .. }
         | Op::InstanceOf { .. }
@@ -777,8 +776,16 @@ fn result_is_inert(op: &Op) -> bool {
 /// True when an operand's value provably needs no destructor at an
 /// arbitrary time: a literal, or a temporary whose single defining
 /// instruction is inert.  `Move` chains are followed; anything ambiguous
-/// counts as possibly an object.
-fn operand_is_inert(op_array: &OpArray, tmp_def: &[usize], mut val: Operand) -> bool {
+/// counts as possibly an object. An array literal is as inert as what it
+/// is built from ([`build_is_inert`]); `kept` says whether a variable
+/// read by the op at an index keeps what it holds until the function
+/// ends.
+fn operand_is_inert(
+    op_array: &OpArray,
+    tmp_def: &[usize],
+    kept: &dyn Fn(usize, u32) -> bool,
+    mut val: Operand,
+) -> bool {
     for _ in 0..32 {
         match val {
             Operand::Lit(_) => return true,
@@ -789,6 +796,9 @@ fn operand_is_inert(op_array: &OpArray, tmp_def: &[usize], mut val: Operand) -> 
                     None => return false,
                 };
                 let op = &op_array.ops[d];
+                if let Op::InitArray { dst } = op {
+                    return build_is_inert(op_array, tmp_def, kept, *dst);
+                }
                 if result_is_inert(op) {
                     return true;
                 }
@@ -803,6 +813,117 @@ fn operand_is_inert(op_array: &OpArray, tmp_def: &[usize], mut val: Operand) -> 
     false
 }
 
+/// Whether the array literal built in temporary `t` is never the last
+/// holder of something with a destructor: every element is a literal, a
+/// value that is inert itself, or a variable that keeps what it holds
+/// until the function ends (`kept`). Dropping the array's only store
+/// frees it at once, and with it an object nothing else holds: PHP keeps
+/// `$a = [new D];` to the end of the function. An element added by
+/// reference or unpacked from a value is not looked into.
+fn build_is_inert(
+    op_array: &OpArray,
+    tmp_def: &[usize],
+    kept: &dyn Fn(usize, u32) -> bool,
+    t: u32,
+) -> bool {
+    op_array.ops.iter().enumerate().all(|(at, op)| match op {
+        Op::ArrayAdd { arr, val, .. } if *arr == t => match val {
+            Operand::Cv(c) => kept(at, *c),
+            other => operand_is_inert(op_array, tmp_def, kept, *other),
+        },
+        Op::ArrayAddRef { arr, .. } | Op::ArrayUnpack { arr, .. } => *arr != t,
+        _ => true,
+    })
+}
+
+/// The variables among `start` that the function never writes: every op
+/// naming one reads it as a plain operand, and no place has it as its
+/// base. (Not meaningful with dynamic variable access, which the callers
+/// rule out.)
+fn never_written(op_array: &OpArray, mut stable: Vec<bool>) -> Vec<bool> {
+    for op in &op_array.ops {
+        if matches!(
+            op,
+            Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
+        ) {
+            continue;
+        }
+        // Every mention that is not a plain operand read may write.
+        let mut mentioned = Vec::new();
+        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
+        let mut read = Vec::new();
+        for_each_operand_mut(&mut op.clone(), |operand| {
+            if let Operand::Cv(c) = operand {
+                read.push(*c);
+            }
+        });
+        for c in mentioned {
+            if let Some(i) = read.iter().position(|&r| r == c) {
+                read.swap_remove(i);
+            } else if let Some(slot) = stable.get_mut(c as usize) {
+                *slot = false;
+            }
+        }
+    }
+    for place in &op_array.places {
+        if let PlaceBase::Cv(cv) = place.base {
+            if let Some(slot) = stable.get_mut(cv as usize) {
+                *slot = false;
+            }
+        }
+    }
+    stable
+}
+
+/// The locals with a single assignment (`$v = x`) that nothing else writes:
+/// every other op naming one reads it as a plain operand, and no place has
+/// it as its base. Such a variable holds that value from its assignment to
+/// the end of the function.
+fn single_assignments(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<bool> {
+    let num_cvs = op_array.cv_names.len();
+    let mut assigns = vec![0u32; num_cvs];
+    let mut other = vec![false; num_cvs];
+    for slot in other
+        .iter_mut()
+        .take(bound_cv_prefix(op_array, ctx) as usize)
+    {
+        *slot = true;
+    }
+    for op in &op_array.ops {
+        let mut mentioned = Vec::new();
+        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
+        let mut read = Vec::new();
+        for_each_operand_mut(&mut op.clone(), |operand| {
+            if let Operand::Cv(c) = operand {
+                read.push(*c);
+            }
+        });
+        for c in mentioned {
+            if let Some(i) = read.iter().position(|&r| r == c) {
+                read.swap_remove(i);
+            } else if matches!(op, Op::AssignCv { cv, .. } if *cv == c) {
+                if let Some(n) = assigns.get_mut(c as usize) {
+                    *n += 1;
+                }
+            } else if let Some(slot) = other.get_mut(c as usize) {
+                *slot = true;
+            }
+        }
+    }
+    for place in &op_array.places {
+        if let PlaceBase::Cv(cv) = place.base {
+            if let Some(slot) = other.get_mut(cv as usize) {
+                *slot = true;
+            }
+        }
+    }
+    assigns
+        .iter()
+        .zip(&other)
+        .map(|(&n, &written)| n == 1 && !written)
+        .collect()
+}
+
 /// The scalar-typed parameters the function never writes (only the `RECV`
 /// binds them), by compiled variable: each holds a null, a bool, a number
 /// or a string for the whole call. (Not meaningful with dynamic variable
@@ -814,40 +935,7 @@ pub(crate) fn stable_scalar_params(op_array: &OpArray, ctx: &OptContext<'_>) -> 
             *slot = true;
         }
     }
-    for op in &op_array.ops {
-        if matches!(
-            op,
-            Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
-        ) {
-            continue;
-        }
-        // Every mention that is not a plain operand read may write.
-        let mut mentioned = Vec::new();
-        let mut op_clone = op.clone();
-        for_each_cv_mut(&mut op_clone, |c| mentioned.push(*c));
-        let mut read = Vec::new();
-        let mut op_clone = op.clone();
-        for_each_operand_mut(&mut op_clone, |operand| {
-            if let Operand::Cv(c) = operand {
-                read.push(*c);
-            }
-        });
-        for c in mentioned {
-            if let Some(i) = read.iter().position(|&r| r == c) {
-                read.swap_remove(i);
-            } else if let Some(slot) = stable_scalar.get_mut(c as usize) {
-                *slot = false;
-            }
-        }
-    }
-    for place in &op_array.places {
-        if let PlaceBase::Cv(cv) = place.base {
-            if let Some(slot) = stable_scalar.get_mut(cv as usize) {
-                *slot = false;
-            }
-        }
-    }
-    stable_scalar
+    never_written(op_array, stable_scalar)
 }
 
 /// The variables that only ever hold an array of values without a
@@ -928,10 +1016,11 @@ fn scalar_array_vars(
         }
     }
     // A place of the variable is one such store's own, or counts against
-    // it.
+    // it; one no op names any more (left behind by a read a pass folded
+    // away) reads nothing.
     for (place, &(ops, stores)) in op_array.places.iter().zip(&named) {
         if let PlaceBase::Cv(cv) = place.base {
-            if (ops, stores) != (1, 1) {
+            if ops != 0 && (ops, stores) != (1, 1) {
                 rule_out(cv);
             }
         }
@@ -975,9 +1064,12 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // (php-src's dce.c drops an ASSIGN_DIM of a variable that does not
     // escape and an OP_DATA without MAY_HAVE_DTOR).
     // The write must also do just that: the variable holds an array or
-    // nothing (every assignment of it is a literal array: a scalar or a
-    // string in it makes the write throw or warn), and the offset is an
-    // int or string literal or absent (a float or null one warns).
+    // nothing (every assignment of it is a literal array, or a variable
+    // that only ever holds an array of scalars: a scalar or a string in
+    // it makes the write throw or warn), and the offset is an int or
+    // string literal or absent (a float or null one warns).
+    let scalar_arrays = scalar_array_vars(op_array, ctx, &stable_scalar);
+    let assigned = super::dce::Assigned::of(op_array, ctx);
     let mut array_only = vec![true; num_cvs];
     for op in &op_array.ops {
         let target = match op {
@@ -996,7 +1088,9 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         if let Some((cv, val)) = target {
             let lit_array = matches!(val, Operand::Lit(l)
                 if matches!(op_array.literals.get(l as usize), Some(Value::Array(_))));
-            if !lit_array {
+            let array_var = matches!(val, Operand::Cv(c)
+                if scalar_arrays.get(c as usize).copied().unwrap_or(false));
+            if !lit_array && !array_var {
                 if let Some(slot) = array_only.get_mut(cv as usize) {
                     *slot = false;
                 }
@@ -1014,8 +1108,6 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // A variable that only ever holds an array of such values has no
     // destructor either; the op at `at` must find it assigned (reading
     // another warns).
-    let scalar_arrays = scalar_array_vars(op_array, ctx, &stable_scalar);
-    let assigned = super::dce::Assigned::of(op_array, ctx);
     let no_dtor = |at: usize, o: Operand| match o {
         Operand::Lit(_) => true,
         Operand::Cv(c) => {
@@ -1239,6 +1331,25 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             }
         }
     }
+    // A variable keeps what it holds until the function ends when nothing
+    // writes it after the read at `at`: a bound variable the function
+    // never writes, one that only ever holds scalars or arrays of scalars
+    // (nothing to keep), or a local with one assignment, made before `at`.
+    let mut bound = vec![false; num_cvs];
+    for &(cv, by_ref) in ctx.bound_cvs {
+        if let (false, Some(slot)) = (by_ref, bound.get_mut(cv as usize)) {
+            *slot = true;
+        }
+    }
+    let unwritten = never_written(op_array, bound);
+    let assigned_once = single_assignments(op_array, ctx);
+    let kept = |at: usize, c: u32| {
+        let is = |set: &[bool]| set.get(c as usize).copied().unwrap_or(false);
+        is(&stable_scalar)
+            || is(&scalar_arrays)
+            || is(&unwritten)
+            || (is(&assigned_once) && assigned.at(at, c))
+    };
     let mut may_hold_object = vec![false; num_cvs];
     for op in &op_array.ops {
         let target = match op {
@@ -1255,7 +1366,11 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             _ => None,
         };
         if let Some((cv, val)) = target {
-            if !operand_is_inert(op_array, &tmp_def, val) {
+            // (A scalar parameter, or an array of scalars built in place.)
+            let inert_var = matches!(val, Operand::Cv(c)
+                if stable_scalar.get(c as usize).copied().unwrap_or(false)
+                    || scalar_arrays.get(c as usize).copied().unwrap_or(false));
+            if !inert_var && !operand_is_inert(op_array, &tmp_def, &kept, val) {
                 if let Some(m) = may_hold_object.get_mut(cv as usize) {
                     *m = true;
                 }
@@ -1277,7 +1392,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         .enumerate()
         .map(|(at, op)| pure_dim_write(at, op))
         .collect();
-    for (op, pure) in op_array.ops.iter_mut().zip(pure_dim_writes) {
+    for (at, (op, pure)) in op_array.ops.iter_mut().zip(pure_dim_writes).enumerate() {
         match op {
             Op::Assign { place, .. } if pure => {
                 let cv = match op_array.places.get(*place as usize).map(|p| &p.base) {
@@ -1291,7 +1406,15 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             }
             // Reading a CV can raise "Undefined variable" (ZEND_ASSIGN with a CV
             // operand), so an assignment of one is kept even when its target is
-            // never read.
+            // never read, unless the variable is certainly assigned there.
+            Op::AssignCv {
+                cv,
+                val: Operand::Cv(src),
+                dst: None,
+            } if assigned.at(at, *src) && removable(*cv) => {
+                *op = Op::Nop;
+                changed = true;
+            }
             Op::AssignCv { cv, val, dst } => {
                 if !matches!(val, Operand::Cv(_)) && removable(*cv) {
                     *op = match dst {

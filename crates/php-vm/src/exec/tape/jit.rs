@@ -3018,12 +3018,12 @@ const DIM_WIDE_TO_CV: u32 = 1 << 31;
 
 /// `C_DIMR`'s helper for a variable the plan found holding a reference, or
 /// an array of floats (`JitMeta.arr`): `$dst = $cv[$idx]` for an `Int`
-/// offset, the array held directly or through a reference
-/// (`dims::int_elem_copy`, the tape's own second step: a list by position,
-/// a hash by key), when the element is null, a bool, an int or a float and
-/// the destination holds nothing whose release could do more than free a
-/// string ([`jit_dim_get`]'s test). Returns 0 having stored the element;
-/// 1, nothing changed, for anything else.
+/// offset, the array held directly or through a reference (the element
+/// the tape's own second step finds, `dims::int_elem`: a list's by
+/// position, a hash's by key), when the element is null, a bool, an int or
+/// a float and the destination holds nothing whose release could do more
+/// than free a string ([`jit_dim_get`]'s test). Returns 0 having stored
+/// the element; 1, nothing changed, for anything else.
 ///
 /// # Safety
 /// `frame` is the running frame, `idx` a slot of it or a literal of its op
@@ -3038,43 +3038,63 @@ unsafe extern "C" fn jit_dim_get_wide(
     word: u32,
 ) -> u32 {
     use php_runtime::Value;
-    // SAFETY: the caller's contract; the element is copied out (and the
-    // frame no longer looked at) before the destination is written.
+    // SAFETY: the caller's contract. The element is looked at where it
+    // lies and its bytes are taken out (a null, a bool, an int or a float
+    // owns nothing: its 16 bytes are the value, in a temporary and in a
+    // variable's `Some` alike, the layout tests' `value_layout`) before
+    // the destination, another slot of the frame, is written; the
+    // reference's borrow has ended by then.
     unsafe {
         let Some(i) = slot_int(idx) else {
             return 1;
         };
-        let Some(v) = super::dims::int_elem_copy(&*frame, word & DIM_WIDE_CV, i) else {
-            return 1;
-        };
-        if !matches!(
-            v,
-            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-        ) {
-            return 1;
-        }
-        if word & DIM_WIDE_TO_CV != 0 {
-            let slot = &*dst.cast::<crate::vm::CvSlot>();
-            if matches!(
-                slot.get(),
-                Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
+        let v = {
+            let f = &*frame;
+            let Some(held) = f
+                .cvs
+                .get((word & DIM_WIDE_CV) as usize)
+                .and_then(crate::vm::CvSlot::get)
+            else {
+                return 1;
+            };
+            let through;
+            let arr = match held {
+                Value::Array(arr) => arr,
+                Value::Reference(r) => {
+                    let Some(inner) = r.try_borrow() else {
+                        return 1;
+                    };
+                    through = inner;
+                    match &*through {
+                        Value::Array(arr) => arr,
+                        _ => return 1,
+                    }
+                }
+                _ => return 1,
+            };
+            let Some(elem) = super::dims::int_elem(arr, i) else {
+                return 1;
+            };
+            if !matches!(
+                elem,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
             ) {
                 return 1;
             }
-            match slot.set(Some(v)) {
-                old @ Some(Value::Str(_)) => drop(old),
-                old => std::mem::forget(old),
+            std::ptr::read(elem)
+        };
+        // What the destination holds, by its tag: a scalar (or nothing, in
+        // a variable) is written over, a string released first.
+        match *dst {
+            TAG_NULL | TAG_BOOL | TAG_INT | TAG_FLOAT => {}
+            TAG_NONE if word & DIM_WIDE_TO_CV != 0 => {}
+            TAG_STR if word & DIM_WIDE_TO_CV != 0 => {
+                drop((*dst.cast::<crate::vm::CvSlot>()).set(None));
             }
-        } else {
-            let slot = &mut *dst.cast::<Value>();
-            if !slot.is_plain() {
-                return 1;
-            }
-            match std::mem::replace(slot, v) {
-                old @ Value::Str(_) => drop(old),
-                old => std::mem::forget(old),
-            }
+            TAG_STR => drop(std::mem::replace(&mut *dst.cast::<Value>(), Value::Null)),
+            _ => return 1,
         }
+        std::ptr::write(dst.cast::<Value>(), v);
         0
     }
 }

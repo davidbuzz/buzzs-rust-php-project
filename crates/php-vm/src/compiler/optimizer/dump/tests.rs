@@ -734,6 +734,67 @@ fn dead_store_of_an_array_of_scalars_is_dropped() {
     }
 }
 
+/// `opt/sccp_017`, `opt/sccp_019`: once the read of a known element is a
+/// literal, the copy of the locally built array and both arrays' element
+/// stores go; a copy of a variable that may be unassigned (the read warns)
+/// or may hold an object stays.
+#[test]
+fn dead_copies_of_an_array_of_scalars_are_dropped() {
+    for body in [
+        "$a[0] = 5; $a[1] = $x; $b = $a; return $b[0];",
+        "$a[0] = 5; $a[1] = $x; $b = $a; $b[0] = 42; return $a[0];",
+    ] {
+        let out = dump_optimized(&format!("<?php\nfunction foo(int $x) {{ {body} }}\n"));
+        assert!(
+            out.contains("(lines=2, args=1, vars=1, tmps=0)"),
+            "{body}: {out}"
+        );
+        assert!(out.contains("0001 RETURN int(5)\n"), "{body}: {out}");
+    }
+    let kept = [
+        // `$a` may be unassigned where it is copied.
+        "function foo(int $x) { if ($x) { $a[0] = 5; } $b = $a; return $x; }",
+        // An untyped parameter may hold an object.
+        "function foo($x) { $a[0] = $x; $b = $a; return 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("CV2($b)"), "{body}: {out}");
+    }
+}
+
+/// An array literal that may be the last holder of an object keeps its
+/// store, even into a variable nothing reads (the object lives to the end
+/// of the function in PHP); one built from variables that keep their
+/// values to the end does not.
+#[test]
+fn array_literal_holding_an_object_keeps_its_store() {
+    let kept = [
+        // The array is the object's only holder.
+        "function f() { $a = [new stdClass]; echo 1; }",
+        // `$o` gives its handle up before the end.
+        "function f($o) { $b = [$o]; $o = null; echo 1; }",
+        "function f() { $o = new stdClass; $b = ['k' => $o]; unset($o); echo 1; }",
+        // An array of such an array.
+        "function f() { $a = [new stdClass]; $b = [$a]; $a = null; echo 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+        assert!(!out.contains("FREE"), "{body}: {out}");
+    }
+    let dropped = [
+        // A parameter the function never writes keeps its value.
+        "function f($x) { $b = [$x]; echo 1; }",
+        // So does a local assigned once, before.
+        "function f($x) { $a = [$x]; $b = [$a]; return $a; }",
+    ];
+    for body in dropped {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(!out.contains("($b)"), "{body}: {out}");
+    }
+}
+
 /// Without the DFA bits, or without passes 6 and 7, nothing is dumped.
 #[test]
 fn ssa_dump_needs_the_dfa_pass() {
