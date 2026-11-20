@@ -700,10 +700,16 @@ pub(super) fn enter(
 
 /// `ZEND_DO_UCALL` of the prepared call when the function's whole body
 /// runs as machine code ([`super::jit::native_call`]: a pure int function,
-/// its recursion included): a plain call by name that passes every
-/// declared parameter an int. The result goes to `dst` and the readied
-/// frame, which is never entered, back to its empty state (the arguments
-/// were ints: nothing to release). `false`, nothing changed, when it does
+/// its recursion included): a call that passes every declared parameter
+/// an int. A call by name, of a method (static or not) or of a closure
+/// alike: such a body reads no `$this`, no scope and no bound variable
+/// (a function with `use`s is never compiled whole), so nothing it could
+/// observe differs between them; a constructor's call is left alone (its
+/// `new` has more to do). The result goes to `dst` and the readied frame,
+/// which is never entered, back to its empty state: the arguments were
+/// ints, and what a method's or a closure's prepare put there (`$this`,
+/// the scopes, the closure) is released as the call's return would
+/// release it. `false`, nothing changed, when it does
 /// not apply or the native code declined (an overflow, a recursion deeper
 /// than its stack budget, a pending safe point): [`enter`] then makes the
 /// call as usual.
@@ -712,7 +718,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
         return false;
     };
     // One load for every function that is not compiled whole.
-    if uf.call_shape.native.get() == super::jit::NATIVE_REFUSED || !prep.fcall {
+    if uf.call_shape.native.get() == super::jit::NATIVE_REFUSED || prep.ctor {
         return false;
     }
     let n = prep.n;
@@ -745,6 +751,12 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
             // An int owns nothing.
             std::mem::forget(slot.as_mut().take());
         }
+    }
+    if !prep.fcall {
+        frame.this = None;
+        frame.scope = None;
+        frame.called = None;
+        frame.closure = None;
     }
     if let Some(slot) = dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
         crate::exec::spec::put_tmp(slot, Value::Int(r));
