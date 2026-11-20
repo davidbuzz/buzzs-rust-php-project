@@ -661,6 +661,14 @@ struct CallPlan {
     /// With `callee_obj`: a handle on that closure object, pinned when
     /// the trace is placed.
     callee_pin: Option<php_runtime::Obj>,
+    /// A `self::name()`, `parent::name()` or `static::name()` call: what
+    /// the site's `method_cache` entry was resolved for, re-checked on
+    /// every compiled call. The calling scope as the raw `Frame::scope`
+    /// field word (the class `self` and `parent` name follows from it);
+    /// for `static::` the raw `Frame::called` field word as well; and
+    /// whether the method is an instance one, which needs a `$this` (an
+    /// object of the scope's class, whenever the frame has one).
+    rel: Option<(i64, Option<i64>, bool)>,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -2349,7 +2357,10 @@ fn plan(
         || class.contains(&C_SPROPW)
         || class.contains(&C_SPROPISSET)
         || class.contains(&C_CONSTI)
-        || calls.iter().flatten().any(|cp| cp.recv.is_some());
+        || calls
+            .iter()
+            .flatten()
+            .any(|cp| cp.recv.is_some() || cp.rel.is_some());
     let mut guards: Vec<Guard> = Vec::new();
     // Temporary offsets fully stored by an earlier row of the region (in
     // program order), by what the store left there: an `Int` (`defs`:
@@ -2683,28 +2694,35 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // and for an instance call the site's receiver operand and method
     // name literal (the callee is cached at the site's own
     // `method_cache` slot, its class re-checked at run time).
-    let (name, mcall, dyncv) = match code.ops.get(init)? {
+    let (name, mcall, dyncv, relsel) = match code.ops.get(init)? {
         Op::InitFCall {
             name,
             fallback: None,
             ..
-        } => (Some(*name), None, None),
+        } => (Some(*name), None, None, None),
         Op::InitStaticCall {
             class: crate::opcode::ClassSpec::Named(_),
             name: Operand::Lit(_),
-        } => (None, None, None),
+        } => (None, None, None, None),
+        // `self::name()`, `parent::name()`, `static::name()`: resolved by
+        // the op's own slot of the method cache.
+        Op::InitStaticCall {
+            class:
+                spec @ (crate::opcode::ClassSpec::SelfClass
+                | crate::opcode::ClassSpec::Parent
+                | crate::opcode::ClassSpec::Static),
+            name: Operand::Lit(lit),
+        } => (None, None, None, Some((spec, *lit))),
         Op::InitMethodCall {
             obj: obj @ (Operand::Cv(_) | Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Unused),
             name: Operand::Lit(lit),
-        } => (None, Some((obj, *lit)), None),
+        } => (None, Some((obj, *lit)), None, None),
         // `$f(...)`: a closure held by a compiled variable.
         Op::InitDynCall {
             callee: Operand::Cv(cv),
-        } => (None, None, Some(*cv)),
-        _ => rj!(
-            "raw row is not a plain InitFCall, a Named/Lit InitStaticCall, \
-             a Cv/Tmp/Unused/Lit InitMethodCall or an InitDynCall of a variable"
-        ),
+        } => (None, None, Some(*cv), None),
+        _ => rj!("raw row is not a plain InitFCall, a Lit InitStaticCall, \
+             a Cv/Tmp/Unused/Lit InitMethodCall or an InitDynCall of a variable"),
     };
     let mut sends: Vec<Arg> = Vec::new();
     let mut ci = init + 1;
@@ -2775,6 +2793,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let mut recv_scope = 0i64;
     let mut callee_obj: Option<(u32, u64)> = None;
     let mut callee_pin: Option<php_runtime::Obj> = None;
+    let mut rel: Option<(i64, Option<i64>, bool)> = None;
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
@@ -2896,6 +2915,69 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         callee_pin = Some(o.clone());
         callee_obj = Some((off, word));
         callee
+    } else if let Some((spec, lit)) = relsel {
+        // The hit `calls::prepare_relative_static` takes: the op's slot of
+        // the method cache holds the class the spec resolves to in this
+        // frame, the frame's calling scope and the method. The emitted
+        // guard pins what that resolution depends on for every later
+        // frame: the scope (`self` and `parent` follow from it), and for
+        // `static::` the called scope.
+        // SAFETY: the frame outlives the plan (the trace runs in it).
+        let f = unsafe { &*st.f };
+        let Some(cls) = crate::call::relative_spec_class(f, spec) else {
+            rj!("the frame has no class for the relative spec");
+        };
+        let scope = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let cache = code.method_cache.borrow();
+        let Some(cached) = cache.get(init).and_then(|c| c.as_ref()) else {
+            rjs!("method cache slot unfilled");
+        };
+        if cached.class_addr != Rc::as_ptr(cls) as usize
+            || cached.scope_addr != scope
+            || cached.name_lit != Some(lit)
+        {
+            rjs!("method cache entry is for another class, scope or name");
+        }
+        if cached
+            .method_scope
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .is_none()
+        {
+            rjs!("cached method scope is dead");
+        }
+        let word = |addr: usize| {
+            if addr == 0 {
+                0
+            } else {
+                addr as i64 - i64::from(RC_VALUE_OFFSET)
+            }
+        };
+        let is_static_spec = matches!(spec, crate::opcode::ClassSpec::Static);
+        let called = is_static_spec.then(|| word(Rc::as_ptr(cls) as usize));
+        // An instance method called this way takes the frame's `$this`,
+        // which must be an object of the resolved class: with the scope
+        // pinned that holds for `self` and `parent` whenever there is a
+        // `$this` at all. `static::` of an instance method is left to the
+        // interpreter.
+        let needs_this = !cached.is_static;
+        if needs_this {
+            if is_static_spec {
+                rj!("static:: call of an instance method");
+            }
+            let Some(this) = f.this.as_ref() else {
+                rj!("instance method called statically without $this");
+            };
+            if !crate::object::class_of(this).is_subclass_of(cls) {
+                rj!("$this is not of the resolved class");
+            }
+        }
+        rel = Some((word(scope), called, needs_this));
+        match cached.func.get() {
+            Some(Func::User(uf)) => uf,
+            Some(Func::Builtin(_)) => rj!("method is a builtin"),
+            None => rjs!("cached method is dead"),
+        }
     } else {
         // The static-call site's slot (past the literals, the
         // `prepare_static` formula): a resolved method whose declaring
@@ -3230,6 +3312,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         recv_scope,
         callee_obj,
         callee_pin,
+        rel,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -3900,6 +3983,20 @@ impl Emitter {
         }
     }
 
+    /// A frame field (`r10` + `field`) must hold the word `want` (0: must
+    /// be null), else leave through `fail`: the calling scope or called
+    /// scope a plan resolved something for.
+    fn emit_frame_word_guard(&mut self, field: u32, want: i64, fail: Target) {
+        self.load_rax_frame(field);
+        if want == 0 {
+            self.test_rax();
+        } else {
+            self.movabs_rcx(want);
+            self.cmp_rax_rcx();
+        }
+        self.jcc(0x85, fail); // jne
+    }
+
     /// Emit an inlined call: the arguments into the callee's parameter
     /// slots (scratch offsets `base + 0, 16, ...`), the callee's rows
     /// (already based at `cp.base`), then the result into the caller's
@@ -3948,6 +4045,20 @@ impl Emitter {
                 self.cmp_rax_rcx();
             }
             self.jcc(0x85, Target::Side(cp.callove)); // jne: other scope
+        }
+        // A `self::`, `parent::` or `static::` call: the frame's calling
+        // scope (and called scope, for `static::`) the plan resolved the
+        // method for, and a `$this` for an instance method.
+        if let Some((scope, called, needs_this)) = cp.rel {
+            self.emit_frame_word_guard(SCOPE_FIELD, scope, Target::Side(cp.callove));
+            if let Some(called) = called {
+                self.emit_frame_word_guard(CALLED_FIELD, called, Target::Side(cp.callove));
+            }
+            if needs_this {
+                self.load_r9_frame(THIS_FIELD);
+                self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+                self.jcc(0x84, Target::Side(cp.callove)); // je: no `$this`
+            }
         }
         // A closure call: the variable must still hold the very closure
         // object whose body the plan inlined (another closure, or none,
@@ -5737,8 +5848,15 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             } else {
                 " <-- not whitelisted"
             };
+            // A row the tape has no instruction for: the op it stands for.
+            let raw = match (inst.op, code.ops.get(d0 + i)) {
+                (TOp::Exit | TOp::Step | TOp::Ext | TOp::CallInit | TOp::CallSend, Some(op)) => {
+                    format!(" = {op:?}")
+                }
+                _ => String::new(),
+            };
             eprintln!(
-                "jit:   [{}] {:?} a={} b={} c={} e={} k={}{}",
+                "jit:   [{}] {:?} a={} b={} c={} e={} k={}{}{}",
                 d0 + i,
                 inst.op,
                 inst.a,
@@ -5746,7 +5864,8 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
                 inst.c,
                 inst.e,
                 inst.k,
-                note
+                note,
+                raw
             );
         }
     }

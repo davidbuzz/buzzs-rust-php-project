@@ -3344,10 +3344,88 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
 /// with one argument, so the frameless call needs no handler, argument
 /// buffers or signature for them.
 ///
-/// The names are matched most frequent first; a name that is not one of
-/// them (an alias, say) falls back to the handler.
+/// The names are matched most frequent first ([`float_fn_id`]); a name
+/// that is not one of them (an alias, say) falls back to the handler.
 #[inline]
 pub(crate) fn float_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    float_fn_eval(float_fn_id(name)?, val)
+}
+
+/// The functions [`float_builtin_eval`] evaluates, by the id
+/// [`float_fn_id`] gives their names: what a caller that resolved the name
+/// once (a tape instruction) carries instead of it.
+pub(crate) mod ff {
+    pub(crate) const SQRT: u8 = 0;
+    pub(crate) const SIN: u8 = 1;
+    pub(crate) const COS: u8 = 2;
+    pub(crate) const FLOOR: u8 = 3;
+    pub(crate) const CEIL: u8 = 4;
+    pub(crate) const ROUND: u8 = 5;
+    pub(crate) const EXP: u8 = 6;
+    pub(crate) const TAN: u8 = 7;
+    pub(crate) const ATAN: u8 = 8;
+    pub(crate) const LOG: u8 = 9;
+    pub(crate) const LOG10: u8 = 10;
+    pub(crate) const ASIN: u8 = 11;
+    pub(crate) const ACOS: u8 = 12;
+    pub(crate) const SINH: u8 = 13;
+    pub(crate) const COSH: u8 = 14;
+    pub(crate) const TANH: u8 = 15;
+    pub(crate) const ASINH: u8 = 16;
+    pub(crate) const ACOSH: u8 = 17;
+    pub(crate) const ATANH: u8 = 18;
+    pub(crate) const EXPM1: u8 = 19;
+    pub(crate) const LOG1P: u8 = 20;
+    pub(crate) const DEG2RAD: u8 = 21;
+    pub(crate) const RAD2DEG: u8 = 22;
+    pub(crate) const IS_NAN: u8 = 23;
+    pub(crate) const IS_FINITE: u8 = 24;
+    pub(crate) const IS_INFINITE: u8 = 25;
+    /// One more than the largest id.
+    pub(crate) const COUNT: u8 = 26;
+}
+
+/// The id ([`ff`]) of the function of [`float_builtin_eval`] named `name`
+/// (lower case); `None` for any other name.
+#[inline]
+pub(crate) fn float_fn_id(name: &[u8]) -> Option<u8> {
+    Some(match name {
+        b"sqrt" => ff::SQRT,
+        b"sin" => ff::SIN,
+        b"cos" => ff::COS,
+        b"floor" => ff::FLOOR,
+        b"ceil" => ff::CEIL,
+        b"round" => ff::ROUND,
+        b"exp" => ff::EXP,
+        b"tan" => ff::TAN,
+        b"atan" => ff::ATAN,
+        // `log()` without a base: `log(num)`.
+        b"log" => ff::LOG,
+        b"log10" => ff::LOG10,
+        b"asin" => ff::ASIN,
+        b"acos" => ff::ACOS,
+        b"sinh" => ff::SINH,
+        b"cosh" => ff::COSH,
+        b"tanh" => ff::TANH,
+        b"asinh" => ff::ASINH,
+        b"acosh" => ff::ACOSH,
+        b"atanh" => ff::ATANH,
+        b"expm1" => ff::EXPM1,
+        b"log1p" => ff::LOG1P,
+        b"deg2rad" => ff::DEG2RAD,
+        b"rad2deg" => ff::RAD2DEG,
+        b"is_nan" => ff::IS_NAN,
+        b"is_finite" => ff::IS_FINITE,
+        b"is_infinite" => ff::IS_INFINITE,
+        _ => return None,
+    })
+}
+
+/// [`float_builtin_eval`] of the function with id `id` ([`ff`]); `None`
+/// for an id that names none and for an argument that is neither an int
+/// nor a float.
+#[inline]
+pub(crate) fn float_fn_eval(id: u8, val: &Value) -> Option<Value> {
     use php_stdstr::math as m;
     let x = match val {
         Value::Float(f) => *f,
@@ -3357,41 +3435,40 @@ pub(crate) fn float_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
             // `math::round_long(num, 0)`).
             #[allow(clippy::cast_precision_loss)]
             let f = *i as f64;
-            if matches!(name, b"floor" | b"ceil" | b"round") {
+            if matches!(id, ff::FLOOR | ff::CEIL | ff::ROUND) {
                 return Some(Value::Float(f));
             }
             f
         }
         _ => return None,
     };
-    let r = match name {
-        b"sqrt" => x.sqrt(),
-        b"sin" => x.sin(),
-        b"cos" => x.cos(),
-        b"floor" => x.floor(),
-        b"ceil" => x.ceil(),
-        b"round" => php_support::fmt::php_round(x, 0, php_support::fmt::RoundingMode::HalfUp),
-        b"exp" => x.exp(),
-        b"tan" => x.tan(),
-        b"atan" => x.atan(),
-        // `log()` without a base: `log(num)`.
-        b"log" => x.ln(),
-        b"log10" => x.log10(),
-        b"asin" => x.asin(),
-        b"acos" => x.acos(),
-        b"sinh" => x.sinh(),
-        b"cosh" => x.cosh(),
-        b"tanh" => x.tanh(),
-        b"asinh" => m::asinh(x),
-        b"acosh" => m::acosh(x),
-        b"atanh" => m::atanh(x),
-        b"expm1" => x.exp_m1(),
-        b"log1p" => x.ln_1p(),
-        b"deg2rad" => m::deg2rad(x),
-        b"rad2deg" => m::rad2deg(x),
-        b"is_nan" => return Some(Value::Bool(x.is_nan())),
-        b"is_finite" => return Some(Value::Bool(x.is_finite())),
-        b"is_infinite" => return Some(Value::Bool(x.is_infinite())),
+    let r = match id {
+        ff::SQRT => x.sqrt(),
+        ff::SIN => x.sin(),
+        ff::COS => x.cos(),
+        ff::FLOOR => x.floor(),
+        ff::CEIL => x.ceil(),
+        ff::ROUND => php_support::fmt::php_round(x, 0, php_support::fmt::RoundingMode::HalfUp),
+        ff::EXP => x.exp(),
+        ff::TAN => x.tan(),
+        ff::ATAN => x.atan(),
+        ff::LOG => x.ln(),
+        ff::LOG10 => x.log10(),
+        ff::ASIN => x.asin(),
+        ff::ACOS => x.acos(),
+        ff::SINH => x.sinh(),
+        ff::COSH => x.cosh(),
+        ff::TANH => x.tanh(),
+        ff::ASINH => m::asinh(x),
+        ff::ACOSH => m::acosh(x),
+        ff::ATANH => m::atanh(x),
+        ff::EXPM1 => x.exp_m1(),
+        ff::LOG1P => x.ln_1p(),
+        ff::DEG2RAD => m::deg2rad(x),
+        ff::RAD2DEG => m::rad2deg(x),
+        ff::IS_NAN => return Some(Value::Bool(x.is_nan())),
+        ff::IS_FINITE => return Some(Value::Bool(x.is_finite())),
+        ff::IS_INFINITE => return Some(Value::Bool(x.is_infinite())),
         _ => return None,
     };
     Some(Value::Float(r))
@@ -5001,7 +5078,7 @@ fn push_closure_user_call_in(calls: &mut Vec<PendingCall>, o: &Obj) -> bool {
 /// resolves it); `None` for any other spec, or when the frame has no such
 /// class.
 #[inline]
-fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Class>> {
+pub(crate) fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Class>> {
     match spec {
         ClassSpec::SelfClass => f.scope.as_ref(),
         ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref(),

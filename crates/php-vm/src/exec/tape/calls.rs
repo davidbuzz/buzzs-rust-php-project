@@ -26,7 +26,9 @@
 //! cache, [`send`] writes each argument into the argument buffer of the
 //! pooled frame above the current one (the builtin's call frame, which
 //! backtraces read), and [`call_native`] pushes that frame, runs the
-//! handler and pops it, all in the tape loop. Calls the generic builtin
+//! handler and pops it, all in the tape loop; a function with a frameless
+//! class runs without the frame when its arguments allow it
+//! (`ZEND_FRAMELESS_ICALL_n`, `Vm::frameless_icall_prepared`). Calls the generic builtin
 //! call would treat specially (an argument it would coerce or reject, a
 //! function with a by-reference parameter, a deprecated or `#[\NoDiscard]`
 //! one, an observer) take the generic path.
@@ -43,7 +45,7 @@
 use super::{Inst, TOp};
 use crate::call::{accepts_without_coercion, clone_value};
 use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction};
-use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, PlaceBase};
+use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::{FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::Value;
 use std::rc::Rc;
@@ -58,6 +60,19 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     match code.ops.get(i)? {
         op if preparable(op) => Some(plain(TOp::CallInit)),
+        // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
+        // the VM at hand, as a call's start is (`run_call`).
+        Op::FramelessICall(_) => Some(plain(TOp::CallInit)),
+        // A read of a superglobal (`$_GET`) or of a global variable by
+        // name (`$GLOBALS['name']`): resolved through the VM's global
+        // scope, so run there as well (`Vm::fetch_place_fast`,
+        // `Vm::fetch_global_fast`).
+        Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            ..
+        } if auto_global_place(code, *place) => Some(plain(TOp::CallInit)),
+        Op::FetchGlobal { .. } => Some(plain(TOp::CallInit)),
         // Only an argument of a call one of those started can go to a
         // prepared call; the others keep the generic `Send`, without the
         // detour.
@@ -67,6 +82,26 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             Some(plain(TOp::CallSend))
         }
         _ => None,
+    }
+}
+
+/// Whether `place` is a variable named by a literal starting with an
+/// underscore, read as a whole: what `Vm::fetch_place_fast` looks up among
+/// the superglobals (any other name is not one, and its read stays the
+/// generic op's).
+fn auto_global_place(code: &OpArray, place: u32) -> bool {
+    let Some(p) = code.places.get(place as usize) else {
+        return false;
+    };
+    if !p.segs.is_empty() {
+        return false;
+    }
+    match &p.base {
+        PlaceBase::Global(Operand::Lit(lit)) => matches!(
+            code.literals.get(*lit as usize),
+            Some(Value::Str(name)) if name.as_bytes().first() == Some(&b'_')
+        ),
+        _ => false,
     }
 }
 
@@ -81,7 +116,10 @@ fn preparable(op: &Op) -> bool {
                 ..
             }
             | Op::InitStaticCall {
-                class: ClassSpec::Named(_),
+                class: ClassSpec::Named(_)
+                    | ClassSpec::SelfClass
+                    | ClassSpec::Parent
+                    | ClassSpec::Static,
                 name: Operand::Lit(_),
             }
             | Op::InitDynCall {
@@ -405,6 +443,91 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     ready_frame(frame, &uf);
     frame.scope = scope;
     frame.called = called_class;
+    Some(Prepared {
+        limit: uf.params.len().min(MAX_ARGS),
+        callee: Callee::User(uf),
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: false,
+        ctor: false,
+    })
+}
+
+/// `ZEND_INIT_STATIC_METHOD_CALL` of `self::name()`, `parent::name()` or
+/// `static::name()` (`Op::InitStaticCall` with such a spec and the method
+/// name literal `lit`) at `at` in the current frame: on the hit
+/// `Vm::init_relative_static_call_cached` takes (the op's own slot of the
+/// method cache holds the class the spec resolves to, the calling scope
+/// and the method), when the method is a user function whose declaration
+/// makes a plain call, the pooled frame above the current one is readied
+/// for it as that hit sets the call up: a static method with the frame's
+/// called scope when that is a subclass of the resolved class (the three
+/// specs forward it), else the class; an instance method with the frame's
+/// `$this` when its class is one. `None`, having changed nothing,
+/// otherwise (a miss, and an instance method without such a `$this`: the
+/// generic op raises the error).
+pub(super) fn prepare_relative_static(
+    vm: &mut Vm,
+    spec: &ClassSpec,
+    lit: u32,
+    at: usize,
+) -> Option<Prepared> {
+    if vm.observer.enabled {
+        return None;
+    }
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return None;
+    };
+    if caller.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cls = crate::call::relative_spec_class(caller, spec)?;
+    let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let (uf, scope, is_static) = {
+        let cache = caller.code.method_cache.borrow();
+        let cached = cache.get(at)?.as_ref()?;
+        if cached.class_addr != Rc::as_ptr(cls) as usize
+            || cached.scope_addr != scope_addr
+            || cached.name_lit != Some(lit)
+        {
+            return None;
+        }
+        let Some(Func::User(uf)) = cached.func.get() else {
+            return None;
+        };
+        let scope = cached
+            .method_scope
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)?;
+        (uf, scope, cached.is_static)
+    };
+    if uf.call_shape() == CallShape::NOT_PLAIN {
+        return None;
+    }
+    let (this, late_bound) = if is_static {
+        let late_bound = match caller.called.as_ref() {
+            Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
+            _ => Rc::clone(cls),
+        };
+        (None, late_bound)
+    } else {
+        let this = caller.this.as_ref()?;
+        let late_bound = crate::object::class_of(this);
+        if !late_bound.is_subclass_of(cls) {
+            return None;
+        }
+        (Some(this.clone()), Rc::clone(late_bound))
+    };
+    ready_frame(frame, &uf);
+    frame.this = this;
+    frame.scope = Some(scope);
+    frame.called = Some(late_bound);
     Some(Prepared {
         limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
@@ -797,6 +920,13 @@ pub(super) fn call_native(
     let Callee::Native(b, kind) = &prep.callee else {
         return Err(prep);
     };
+    // `ZEND_FRAMELESS_ICALL_n`: a function with a frameless class, called
+    // on the caller's frame when its arguments allow it.
+    if b.flags & flags::FRAMELESS != 0 {
+        if let Some(r) = vm.frameless_icall_prepared(b, prep.n, prep.calls_len, dst, caller_ip) {
+            return Ok(r);
+        }
+    }
     let n = prep.n;
     let live = vm.frames.live;
     {

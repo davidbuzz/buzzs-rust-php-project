@@ -73,7 +73,7 @@
 
 use super::hot::{self, DECLINED, LEFT, NO_SAFE_POINT, SWITCHED};
 use super::Num;
-use crate::opcode::{BinKind, ClassSpec, Op, OpArray, Operand};
+use crate::opcode::{BinKind, ClassSpec, FetchMode, Op, OpArray, Operand};
 use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value};
 use std::cell::OnceCell;
@@ -936,7 +936,18 @@ macro_rules! tape_ops {
                         if !matches!(&*s, Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
-                            return step_out(ip);
+                            // A string, an array or an object on either
+                            // side: copied and released out of line, then
+                            // the poll every releasing op ends with.
+                            if !scalar::assign_cv_any(st.f, inst, false) {
+                                return step_out(ip);
+                            }
+                            let at = ip;
+                            ip = ip.add(1);
+                            if crate::interrupt::safe_point_due() {
+                                return Out { ip, at, why: WHY_POLL };
+                            }
+                            continue;
                         }
                         // The destination is undefined or a scalar: nothing
                         // to release. `copy`, not `copy_nonoverlapping`:
@@ -950,7 +961,16 @@ macro_rules! tape_ops {
                         if !is_scalar(&*s)
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
-                            return step_out(ip);
+                            // As in `AssignC`.
+                            if !scalar::assign_cv_any(st.f, inst, true) {
+                                return step_out(ip);
+                            }
+                            let at = ip;
+                            ip = ip.add(1);
+                            if crate::interrupt::safe_point_due() {
+                                return Out { ip, at, why: WHY_POLL };
+                            }
+                            continue;
                         }
                         std::ptr::write(d, Some(std::ptr::read(s)));
                         // The temporary is consumed (`std::mem::take` in
@@ -1197,6 +1217,9 @@ tape_ops! {
         NumBinC = (scalar::num_bin_cv, 2, plain_f),
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
         AbsN = (scalar::abs_num, 2, plain_f),
+        MoveT = (scalar::move_tmp, 1, plain_f),
+        JmpSetC = (scalar::jmp_set_cv, 1, branch_f),
+        CoalesceC = (scalar::coalesce_cv, 1, branch_f),
 
         // ---- end of scalar ----
         //
@@ -1227,6 +1250,8 @@ tape_ops! {
         AssignOpObjProp = (props::prop_in, 1, poll_f),
         IncDecObjProp = (props::prop_in, 1, poll_f),
         IssetObjProp = (props::prop_in, 1, poll_f),
+        ThisConst = (props::this_const, 2, poll_f),
+        ThisConstTo = (props::this_const_to, 2, branch_poll_f),
 
         // ---- end of props ----
         //
@@ -1239,6 +1264,7 @@ tape_ops! {
         TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch_f),
         IssetC = (strs::isset_cv, 1, plain_f),
         IssetJmpC = (strs::isset_jmp_cv, 2, branch_f),
+        FramelessQ = (strs::frameless_quick, 3, poll_f),
 
         // ---- end of strs ----
         //
@@ -1891,7 +1917,26 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             vm.push_simple_ucall(dst, at + 1)
                         }
                     },
-                    None => vm.push_simple_ucall(dst, at + 1),
+                    // `ZEND_FRAMELESS_ICALL_n` of a pending call the tape
+                    // did not prepare (one started while another was
+                    // being prepared): in place, as `Vm::op_do_call` runs
+                    // it, and the caller goes on as after a builtin's call
+                    // above.
+                    None => match frameless_pending(vm, dst, at + 1) {
+                        Some(Ok(())) => {
+                            fresh = false;
+                            if crate::interrupt::safe_point_due() {
+                                return ((at + 1) | switched, at);
+                            }
+                            ip = at + 1;
+                            continue 'frames;
+                        }
+                        Some(Err(t)) => {
+                            vm.tape_throw = Some(t);
+                            return (at | switched, hot::THREW);
+                        }
+                        None => vm.push_simple_ucall(dst, at + 1),
+                    },
                 }
             }
             Some(&Op::Return { val }) => {
@@ -1918,6 +1963,33 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         ip = f.ip;
         code = Rc::as_ptr(&f.code);
     }
+}
+
+/// `ZEND_FRAMELESS_ICALL_n` of the current frame's newest pending call
+/// (`Vm::frameless_icall_in_place`), its result stored in `dst`; the
+/// frame's resume point is `caller_ip` (`SAVE_OPLINE()`, which
+/// `Vm::run` stores before its own generic `DoCall`). `None`, the call
+/// untouched, when it is not a frameless one.
+#[inline(never)]
+fn frameless_pending(
+    vm: &mut Vm,
+    dst: Option<u32>,
+    caller_ip: usize,
+) -> Option<crate::vm::VmResult<()>> {
+    let frame = vm.frames.last_mut()?;
+    if !matches!(
+        frame.calls.last().map(|c| &c.func),
+        Some(crate::func::Func::Builtin(b)) if b.flags & crate::func::flags::FRAMELESS != 0
+    ) {
+        return None;
+    }
+    frame.ip = caller_ip;
+    let r = vm.frameless_icall_in_place(dst)?;
+    Some(r.map(|v| {
+        if let Some(d) = dst {
+            vm.set_tmp(d, v);
+        }
+    }))
 }
 
 /// Turns a prepared call back into the generic pending call
@@ -1993,10 +2065,17 @@ fn run_call(
                 None => {}
             }
         }
-        Some(&Op::InitStaticCall { .. }) => {
+        Some(Op::InitStaticCall { class, name }) => {
             flush(vm, prep);
-            // Not a hot op: else the generic op in `Vm::run`.
-            return match calls::prepare_static(vm, at) {
+            // `Class::name()` by the call site's cache; `self::`,
+            // `parent::` and `static::` by the op's slot of the method
+            // cache. Not a hot op: else the generic op in `Vm::run`.
+            let call = match (class, name) {
+                (ClassSpec::Named(_), _) => calls::prepare_static(vm, at),
+                (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
+                _ => None,
+            };
+            return match call {
                 Some(call) => send_and_enter(vm, prep, call, ops, at),
                 None => DECLINED,
             };
@@ -2023,6 +2102,58 @@ fn run_call(
                 }
             }
             flush(vm, prep);
+        }
+        // A superglobal or a global variable by name, on the hits
+        // `Vm::run`'s own arms take (into the temporary, or straight into
+        // the variable of the `AssignCv` folded behind a `FetchGlobal`,
+        // which is then skipped); declined, the generic op in `Vm::run`.
+        // Neither runs user code nor looks at the frame stack: a call
+        // being prepared stays as it is.
+        Some(&Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            dst,
+        }) => {
+            return match vm.fetch_place_fast(place) {
+                Some(v) => {
+                    vm.set_tmp(dst, v);
+                    at + 1
+                }
+                None => DECLINED,
+            };
+        }
+        Some(&Op::FetchGlobal {
+            place,
+            dst,
+            to,
+            mode,
+        }) => {
+            return match vm.fetch_global_fast(place, mode) {
+                Some(v) => {
+                    if vm.store_fetched(dst, to, v) {
+                        at + 2
+                    } else {
+                        at + 1
+                    }
+                }
+                None => DECLINED,
+            };
+        }
+        // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`, as
+        // `Vm::run`'s arm runs it), past the `Nop`s of the call ops it
+        // replaced; declined, the generic op in `Vm::run`. The interrupt
+        // check after the handler is a safe point: a call being prepared
+        // becomes the pending call first.
+        Some(Op::FramelessICall(fc)) => {
+            flush(vm, prep);
+            return match vm.frameless_icall_op(fc, at + 1) {
+                Some(Ok(())) => at + usize::from(fc.argc) + 2,
+                Some(Err(t)) => {
+                    vm.tape_throw = Some(t);
+                    at | CALL_THREW
+                }
+                None => DECLINED,
+            };
         }
         _ => {}
     }

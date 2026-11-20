@@ -71,8 +71,8 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         // The call instructions also take ops `Vm::run` runs itself
-        // (`InitMethodCall`).
-        if inst.op != TOp::CallInit {
+        // (`InitMethodCall`, a frameless call).
+        if !matches!(inst.op, TOp::CallInit | TOp::FramelessQ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
         // An unspecialised hot op is handed to the old fast path that
@@ -1090,4 +1090,102 @@ fn binary_operators_into_variables() {
     assert!(all.contains(&TOp::NumBinC), "{all:?}");
     assert!(all.contains(&TOp::NumAssignOpC), "{all:?}");
     assert_eq!(run(BINARY_OPERATORS_INTO_VARIABLES), "7 0 false\n1,7\n");
+}
+
+const FRAMELESS_CALLS: &str = r#"<?php
+function f($x, $s) {
+    $r = [];
+    for ($i = 1; $i <= 3; $i++) {
+        $r[] = sqrt($x); $r[] = abs($i - 2); $r[] = floor(2.5); $r[] = ord($s); $r[] = chr(64 + $i);
+        $r[] = strpos($s . 'xyz', 'y'); $r[] = substr('hello', $i); $r[] = max($i, 2);
+        $r[] = abs(PHP_INT_MIN); $r[] = sqrt("16"); sin($x);
+        try { $r[] = intdiv($x, $i - 2); } catch (DivisionByZeroError $e) { $r[] = $e->getLine(); }
+        $x++;
+    }
+    return implode("|", $r);
+}
+echo f(4, "a"), "\n";
+"#;
+
+/// Frameless calls stay on the tape: a one-argument call whose result
+/// needs no handler is one instruction ([`TOp::FramelessQ`], which leaves
+/// an argument it does not cover to the handler: `sqrt("16")`), any other
+/// one runs with the VM at hand (a call instruction), and a call whose
+/// arguments are computed first is prepared and made without its frame.
+/// An error a handler raises comes out with the call's line.
+#[test]
+fn frameless_calls() {
+    let arrays = op_arrays(FRAMELESS_CALLS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = &arrays[1];
+    let tape = check(code);
+    let quick = |name: &str| {
+        code.ops.iter().zip(tape.iter()).any(|(op, inst)| {
+            matches!(op, Op::FramelessICall(fc)
+                if matches!(&code.literals[fc.name as usize],
+                    php_runtime::Value::Str(lc) if lc.as_bytes() == name.as_bytes()))
+                && inst.op == TOp::FramelessQ
+        })
+    };
+    assert!(quick("sqrt"), "sqrt($x)");
+    assert!(quick("floor"), "floor(2.5)");
+    assert!(quick("ord"), "ord($s)");
+    assert!(quick("sin"), "sin($x), unused");
+    // `substr('hello', $i)` and `max($i, 2)`: two arguments.
+    let fused = code
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, inst)| matches!(op, Op::FramelessICall(_)) && inst.op == TOp::CallInit)
+        .count();
+    assert!(fused >= 2, "{fused}");
+    assert_eq!(
+        run(FRAMELESS_CALLS),
+        "2|1|2|97|A|2|ello|2|9.2233720368548E+18|4|-4|2.2360679774998|0|2|97|B|2|llo|2|9.2233720368548E+18|4|8|2.4494897427832|1|2|97|C|2|lo|3|9.2233720368548E+18|4|6\n"
+    );
+}
+
+const MOVES_AND_ASSIGNMENTS: &str = r#"<?php
+function f($a, $s, $n) {
+    $r = []; $f = false; $z = null;
+    for ($i = 0; $i < 3; $i++) {
+        $x = $f ?: $i + 1; $r[] = $x;
+        $x = $s ?: 'none'; $r[] = $x;
+        $x = $z ?? $a; $r[] = count($x);
+        $x = $s ?? 'd'; $r[] = $x;
+        $x = $i ? $a : $s; $r[] = is_array($x) ? 'arr' : $x;
+        $x = $i > 1 ? 'big' : $n; $r[] = $x;
+        $y = $a; $y[] = $i; $r[] = count($y);
+        $t = "v$i"; $u = $t; $r[] = $u;
+    }
+    return implode(",", $r) . ' ' . count($a);
+}
+echo f([1, 2], "str", 7), "\n";
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "d", $this->n, " "; } }
+function g() { for ($i = 0; $i < 3; $i++) { $o = new D($i); echo "i$i "; } echo "end "; }
+g(); echo "\n";
+"#;
+
+/// A ternary's arms, `?:` and `??` are instructions of their own
+/// ([`TOp::MoveT`], [`TOp::JmpSetC`], [`TOp::CoalesceC`]) for values of
+/// every type, and an assignment of a string, an array or an object stays
+/// on the tape: the old value is released when it is overwritten (an
+/// object's destructor runs before the next statement).
+#[test]
+fn moves_and_assignments() {
+    let arrays = op_arrays(MOVES_AND_ASSIGNMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert!(count(TOp::MoveT) >= 6, "{}", count(TOp::MoveT));
+    assert_eq!(count(TOp::JmpSetC), 2, "$f ?: ..., $s ?: ...");
+    assert_eq!(count(TOp::CoalesceC), 2, "$z ?? ..., $s ?? ...");
+    assert_eq!(
+        run(MOVES_AND_ASSIGNMENTS),
+        "1,str,2,str,str,7,3,v0,2,str,2,str,arr,7,3,v1,3,str,2,str,arr,big,3,v2 2\ni0 d0 i1 d1 i2 end d2 \n"
+    );
 }

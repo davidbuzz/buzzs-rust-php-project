@@ -645,6 +645,61 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
     }
 }
 
+/// [`quick_id`] of `abs()`: the ids of the math functions
+/// ([`crate::call::ff`]) are below these.
+pub(crate) const QUICK_ABS: u8 = 0x40;
+/// [`quick_id`] of `ord()`.
+pub(crate) const QUICK_ORD: u8 = 0x41;
+/// [`quick_id`] of `chr()`.
+pub(crate) const QUICK_CHR: u8 = 0x42;
+const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
+
+/// The id of the builtin named `lc` (lower case) when its one-argument
+/// call needs no handler ([`frameless_inline`]), with its frameless class:
+/// what a tape instruction carries in place of the name (`exec/tape/strs.rs`).
+/// `None` for every other function.
+pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
+    let class = frameless_flags(lc) >> flags::FRAMELESS_SHIFT;
+    let id = match class {
+        fl::ABS => QUICK_ABS,
+        fl::ORD => QUICK_ORD,
+        fl::CHR => QUICK_CHR,
+        fl::FLOAT | fl::LOG | fl::ROUND => crate::call::float_fn_id(lc)?,
+        _ => return None,
+    };
+    Some((id, class))
+}
+
+/// Whether the flags of a builtin name frameless class `class` and nothing
+/// a call must report first: the test [`Vm::frameless_icall_op`] makes of
+/// its call site's cached function.
+#[inline]
+pub(crate) fn frameless_class_is(func_flags: u32, class: u32) -> bool {
+    func_flags & (flags::FRAMELESS | flags::DEPRECATED | flags::NODISCARD)
+        == class << flags::FRAMELESS_SHIFT
+}
+
+/// [`frameless_inline`] of the function with id `id` ([`quick_id`]) for
+/// the argument `v`, shape test included ([`frameless_args`] of one
+/// argument for the id's class): the result, or `None` when the call
+/// needs its handler (another type, `abs(PHP_INT_MIN)`, an `ord()` of a
+/// string that is not one byte, a `chr()` outside 0..=255).
+#[inline]
+pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
+    match (id, v) {
+        (QUICK_ABS, Value::Int(i)) if *i != i64::MIN => Some(Value::Int(i.abs())),
+        (QUICK_ABS, Value::Float(x)) => Some(Value::Float(x.abs())),
+        (QUICK_ORD, Value::Str(s)) if s.len() == 1 => {
+            s.as_bytes().first().map(|&c| Value::Int(i64::from(c)))
+        }
+        (QUICK_CHR, Value::Int(c)) => u8::try_from(*c)
+            .ok()
+            .map(|c| Value::Str(ZStr::from_byte(c))),
+        (QUICK_ABS | QUICK_ORD | QUICK_CHR, _) => None,
+        (id, v) => crate::call::float_fn_eval(id, v),
+    }
+}
+
 impl Vm {
     /// `ZEND_FRAMELESS_ICALL_n` / `ZEND_DO_ICALL` of the pending call when it
     /// is a [`frameless_call`] whose arguments are all in the call's inline
@@ -820,6 +875,141 @@ impl Vm {
             self.put_arg_vec(args);
         }
         Some(r)
+    }
+}
+
+impl Vm {
+    /// `ZEND_FRAMELESS_ICALL_n` of a call the tape prepared
+    /// (`exec/tape/calls.rs`): builtin `b` has a frameless class and its
+    /// `n` arguments were sent into the argument buffer of the pooled frame
+    /// above the current one. When they have shapes [`frameless_args`]
+    /// accepts, the handler runs on the caller's frame with the arguments
+    /// moved out of that buffer (which is left empty, as a pooled frame's
+    /// is): no frame is pushed. Each step is the one
+    /// [`Vm::frameless_icall_op`] takes for the same call, in the same
+    /// order: `caller_ip` saved as the resume point (`SAVE_OPLINE()`), the
+    /// inline result or the handler with the declared defaults of omitted
+    /// parameters, the interrupt check, the buffers back to their pools,
+    /// the result stored in `dst`.
+    ///
+    /// Returns `None`, having changed nothing, for any other call (the
+    /// tape then makes it with the builtin's frame). `calls_len` is the
+    /// number of pending calls the caller had when the call was prepared:
+    /// the call is its newest.
+    pub(crate) fn frameless_icall_prepared(
+        &mut self,
+        b: &Rc<Builtin>,
+        n: usize,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let live = self.frames.live;
+        let (callers, pool) = self.frames.vec.split_at_mut(live);
+        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+            return None;
+        };
+        if caller.calls.len() != calls_len
+            || frame.args.len() != n
+            || !frameless_args(class, &frame.args)
+        {
+            return None;
+        }
+        caller.ip = caller_ip;
+        let quick = if n == 1 {
+            frameless_inline(b.name.as_bytes(), class, frame.args[0].as_ref())
+        } else {
+            None
+        };
+        if let Some(v) = quick {
+            // The argument: a number or a string (no side effect).
+            frame.args.clear();
+            if let Err(e) = self.check_interrupt() {
+                return Some(Err(e));
+            }
+            self.put_call_result(dst, v);
+            return Some(Ok(()));
+        }
+        // The declared defaults of omitted trailing parameters, read as
+        // in [`Vm::frameless_icall_in_place`].
+        let sig = b.signature();
+        let (nparams, required) = (sig.params.len(), sig.required as usize);
+        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        values.reserve(nparams.max(n));
+        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        passed.reserve(nparams.max(n));
+        for arg in self.frames.vec[live].args.drain(..) {
+            values.push(arg.unwrap_or_default());
+            passed.push(true);
+        }
+        self.pending_call_dst = dst;
+        if self.magic_call_name.is_some() {
+            self.magic_call_name = None;
+        }
+        while values.len() < nparams {
+            let i = values.len();
+            if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
+                values.push(crate::call::clone_value(d));
+                passed.push(false);
+                continue;
+            }
+            match self.builtin_default(b, i) {
+                Some(d) if i >= required => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        let handler = b.handler;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(b)),
+        };
+        let mut r = handler(self, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args {
+            values,
+            passed,
+            named,
+            ..
+        } = args;
+        forget_unallocated(named);
+        self.put_val_vec(values);
+        self.put_bool_vec(passed);
+        Some(r.map(|v| self.put_call_result(dst, v)))
+    }
+
+    /// Stores a call's result in its temporary, or releases it when the
+    /// result is unused (a scalar without the out-of-line drop call).
+    #[inline]
+    fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
+        match dst {
+            Some(d) => self.set_tmp(d, v),
+            None => {
+                if matches!(
+                    v,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    std::mem::forget(v);
+                } else {
+                    drop(v);
+                }
+            }
+        }
     }
 }
 
@@ -1106,6 +1296,102 @@ mod tests {
         ));
         // Not one of the evaluated names: the handler runs.
         assert!(frameless_inline(b"sqrtx", fl::FLOAT, Some(&Value::Int(4))).is_none());
+    }
+
+    /// The tape's form of the inline results: `quick_eval` by id gives
+    /// what `frameless_inline` gives by name for every argument
+    /// `frameless_args` accepts, and nothing for any other.
+    #[test]
+    fn quick_results_are_the_inline_results() {
+        use super::{frameless_class_is, quick_eval, quick_id};
+        let names = [
+            "abs",
+            "ord",
+            "chr",
+            "sqrt",
+            "sin",
+            "cos",
+            "floor",
+            "ceil",
+            "round",
+            "exp",
+            "tan",
+            "atan",
+            "log",
+            "log10",
+            "asin",
+            "acos",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "expm1",
+            "log1p",
+            "deg2rad",
+            "rad2deg",
+            "is_nan",
+            "is_finite",
+            "is_infinite",
+        ];
+        let args = [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(0),
+            Value::Int(-7),
+            Value::Int(65),
+            Value::Int(255),
+            Value::Int(256),
+            Value::Int(i64::MIN),
+            Value::Int(i64::MAX),
+            Value::Float(0.5),
+            Value::Float(-2.5),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::Str(ZStr::from("")),
+            Value::Str(ZStr::from("a")),
+            Value::Str(ZStr::from("ab")),
+            Value::Str(ZStr::from("16")),
+        ];
+        let mut ids = Vec::new();
+        for name in names {
+            let (id, class) = quick_id(name.as_bytes()).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(
+                class << crate::func::flags::FRAMELESS_SHIFT,
+                frameless_flags(name.as_bytes()),
+                "{name}"
+            );
+            assert!(!ids.contains(&id), "{name}: id {id} twice");
+            ids.push(id);
+            for v in &args {
+                let sent = [Some(v.clone())];
+                let inline = if frameless_args(class, &sent) {
+                    frameless_inline(name.as_bytes(), class, Some(v))
+                } else {
+                    None
+                };
+                assert_eq!(
+                    format!("{:?}", quick_eval(id, v)),
+                    format!("{inline:?}"),
+                    "{name}({v:?})"
+                );
+            }
+        }
+        // Functions whose call needs its handler have no id.
+        for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
+            assert!(quick_id(name.as_bytes()).is_none(), "{name}");
+        }
+        assert!(quick_eval(0x7f, &Value::Int(1)).is_none());
+        // The class test of the call site's cached function.
+        let abs = frameless_flags(b"abs");
+        assert!(frameless_class_is(abs, fl::ABS));
+        assert!(!frameless_class_is(abs, fl::ORD));
+        assert!(!frameless_class_is(
+            abs | crate::func::flags::DEPRECATED,
+            fl::ABS
+        ));
+        assert!(!frameless_class_is(0, fl::ABS));
     }
 
     #[test]
