@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 54/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 18/82 with `BUZZS_JIT=0`).
+Score: 55/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 18/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -26,8 +26,8 @@ Score: 54/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Open: calls a trace cannot inline - a method whose body touches a
-      property (suite:calls 4.61), closures (ops:closure 4.27), builtins (builtins 5.36,
-      int_func 1.99) - and the interpreter's own call protocol (~950 instructions per call
+      property (suite:calls 3.91), builtins (builtins 5.36, int_func 1.99), `self::f()`
+      (4.64) - and the interpreter's own call protocol (~950 instructions per call
       against C's ~190, memory note `call-redesign-plan`).
 - [ ] JIT Step 4 — `New` rows (new_obj 3.28, micro:new_Foo 2.12, objects 4.63),
       elvis/ternary (`JmpZC` + `Step` rows: x_eq_f_q_f_a 3.49, x_eq_a_elvis_null 2.92,
