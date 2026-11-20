@@ -658,6 +658,9 @@ struct CallPlan {
     /// the slot with it on every call (the object is kept alive in
     /// [`PINNED_OBJS`], so the word can name no other closure).
     callee_obj: Option<(u32, u64)>,
+    /// With `callee_obj`: a handle on that closure object, pinned when
+    /// the trace is placed.
+    callee_pin: Option<php_runtime::Obj>,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -1519,7 +1522,9 @@ fn sprop_common(
         }
     })
     .or_else(soft)?;
-    PINNED_CELLS.with(|p| p.borrow_mut().push(e.cell.clone()));
+    // (Outside the counted heap: a plan must not show in
+    // `memory_get_usage()`.)
+    php_memlimit::persistent(|| PINNED_CELLS.with(|p| p.borrow_mut().push(e.cell.clone())));
     // `lit_a` is the cell's *absolute* address (its `RefCell` borrow
     // word at `REFCELL_BORROW`, the `Value` at `REFCELL_VALUE`); the
     // guard words are the raw `Rc` field words, `RC_VALUE_OFFSET`
@@ -1772,6 +1777,15 @@ fn plan_ext(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<(u16, Ji
             | Op::FetchClassConst { .. }
             | Op::FetchClassConstTo { .. },
         ) => plan_const(st, code, i)?,
+        // `func_num_args();` with its result unused: the op stores
+        // nothing and has no other effect, so the row is no code. (With a
+        // result it reads the frame's argument count: the interpreted
+        // row's, for now.)
+        Some(Op::FuncNumArgs { dst: None }) => JitMeta {
+            class: C_NOP,
+            kb: KI,
+            ..JitMeta::default()
+        },
         _ => return None,
     };
     Some((m.class, m))
@@ -2760,6 +2774,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let mut recv: Option<(u8, u32, u64)> = None;
     let mut recv_scope = 0i64;
     let mut callee_obj: Option<(u32, u64)> = None;
+    let mut callee_pin: Option<php_runtime::Obj> = None;
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
@@ -2875,12 +2890,10 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         // slot holds an object (matched above).
         let word =
             unsafe { std::ptr::read_unaligned(st.cvs.add((off + PAYLOAD) as usize).cast::<u64>()) };
-        PINNED_OBJS.with(|p| {
-            let mut p = p.borrow_mut();
-            if !p.iter().any(|(w, _)| *w == word) {
-                p.push((word, o.clone()));
-            }
-        });
+        // The handle travels with the plan and is only pinned once the
+        // trace exists (`attempt`): a refused plan keeps nothing alive
+        // and allocates nothing that outlives it.
+        callee_pin = Some(o.clone());
         callee_obj = Some((off, word));
         callee
     } else {
@@ -3216,6 +3229,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         recv,
         recv_scope,
         callee_obj,
+        callee_pin,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -3318,6 +3332,9 @@ struct Emitter {
     /// Counter for the synthetic forward labels the `isset`/`empty`
     /// tag dispatch registers (see [`Emitter::synth_label`]).
     synth: usize,
+    /// The closure objects the emitted guards name by handle word: kept
+    /// alive ([`PINNED_OBJS`]) once the code is placed.
+    pins: Vec<(u64, php_runtime::Obj)>,
 }
 
 /// REX.W (0x40) plus the ModRM-reg field's high bit (0x04) plus the
@@ -3936,6 +3953,9 @@ impl Emitter {
         // object whose body the plan inlined (another closure, or none,
         // leaves the call to the interpreter).
         if let Some((off, word)) = cp.callee_obj {
+            if let Some(o) = &cp.callee_pin {
+                self.pins.push((word, o.clone()));
+            }
             self.cmpb(KC, off, TAG_OBJECT);
             self.jcc(0x85, Target::Side(cp.callove)); // jne: no object
             self.load_r9_at(KC, off.wrapping_add(PAYLOAD));
@@ -4631,6 +4651,7 @@ impl Emitter {
             fixups: Vec::new(),
             head_pos: 0,
             synth: 0,
+            pins: Vec::new(),
         }
     }
 
@@ -5815,6 +5836,22 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
     match place(&em.code) {
         Some(p) => {
             TRACES.fetch_add(1, Ordering::Relaxed);
+            // The closures the trace names stay alive as long as it does
+            // (for good). Kept outside the counted heap, like the tape:
+            // compiling a loop must not show in `memory_get_usage()`.
+            let pins = std::mem::take(&mut em.pins);
+            if !pins.is_empty() {
+                php_memlimit::persistent(|| {
+                    PINNED_OBJS.with(|all| {
+                        let mut all = all.borrow_mut();
+                        for (word, o) in pins {
+                            if !all.iter().any(|(w, _)| *w == word) {
+                                all.push((word, o));
+                            }
+                        }
+                    });
+                });
+            }
             p as usize
         }
         None => usize::MAX,
