@@ -56,8 +56,13 @@ Score: 78/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       (`Emitter::emit_list_read`, the layout pinned by `list_layout` and
       `reference_layout`): heapsort 1.08 (meets the goal), dim_read 0.78 -> 0.32,
       ary3 0.93 -> 0.61, ary2 0.90, ary 0.83, sieve 0.82.
-      Open: an element write is still a helper call (heapsort: nine an outer
-      iteration); heapsort's outer loop (a `return` inside it) and `gen_random` (constants
+      Then the write in place (`Emitter::emit_list_write`: a scalar over a list's
+      scalar element, or as the list's next element with room in the allocation; the
+      layout pinned by `unshared_table_counts` and `list_append_layout`): heapsort
+      0.97, sieve 0.82 -> 0.47, dim_write 0.82 -> 0.31, ary 0.83 -> 0.72, ary2
+      0.90 -> 0.78 (with the overwrite alone the last two lost 9%: every write of theirs
+      adds an element).
+      Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
       defined at run time, a `global`) stay interpreted; a `foreach` step is no trace
       row yet (hash2's inner loop: 150 instructions a step, then a keyed `+=`), and
       hash1 spends its time in `dechex()` with the string it makes (about 190) and in

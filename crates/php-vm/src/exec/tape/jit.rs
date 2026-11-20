@@ -142,6 +142,15 @@ const LIST_KIND: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::STORE_OFFSET as
 const LIST_PACKED: i64 = i64::MIN + 1;
 const LIST_ELEMS: u32 = LIST_KIND + 16;
 const LIST_LEN: u32 = LIST_KIND + 24;
+/// What an append to a list in place reads and writes besides: the room of
+/// the allocation (the word between the kind and the address), the table's
+/// size and its next free int key. Pinned by the layout tests'
+/// `list_append_layout`, with [`ARRAY_COUNT`].
+const LIST_CAP: u32 = LIST_KIND + 8;
+#[allow(clippy::cast_possible_truncation)] // an offset inside a table
+const TABLE_SIZE: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::TABLE_SIZE_OFFSET as u32;
+#[allow(clippy::cast_possible_truncation)] // an offset inside a table
+const TABLE_NEXT: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::NEXT_FREE_OFFSET as u32;
 /// A reference as a trace reads through it in place, by byte offset from
 /// the payload word of a `Value::Reference`: the cell's borrow word
 /// (negative while the value is being written) and the value. Pinned by
@@ -5613,6 +5622,31 @@ impl Emitter {
         self.put(&[REX_W | REX_R, 0x01, 0xC8]);
     }
 
+    /// `mov ecx, [rax + off]` (`8B 88 d32`, no REX: a 32-bit word,
+    /// zero-extended through `rcx`).
+    fn mov_ecx_at_rax(&mut self, off: u32) {
+        self.put(&[0x8B, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `cmp r9, rcx` (`49 39 C9`: `39 /r` with `reg` = `rcx`, `rm` = `r9`
+    /// through `REX.B`).
+    fn cmp_r9_rcx(&mut self) {
+        self.put(&[REX_W | REX_B, 0x39, 0xC9]);
+    }
+
+    /// `lea rcx, [r9 + 1]` (`49 8D 49 01`: `8D /r` with `reg` = `rcx`,
+    /// `rm` = `r9` through `REX.B` and an 8-bit displacement).
+    fn lea_rcx_r9_next(&mut self) {
+        self.put(&[REX_W | REX_B, 0x8D, 0x49, 0x01]);
+    }
+
+    /// `inc dword [rax + off]` (`FF 80 d32`: `FF /0`, no REX).
+    fn incl_at_rax(&mut self, off: u32) {
+        self.put(&[0xFF, 0x80]);
+        self.put(&off.to_le_bytes());
+    }
+
     /// `mov [base + off], rcx` (`48 89 /r` with `reg` = `rcx`): the first
     /// word of a slot, its tag byte with the bytes after it
     /// ([`Self::store_rcx_base`] writes the payload word).
@@ -7411,6 +7445,137 @@ impl Emitter {
         self.set_label(done);
     }
 
+    /// The element write of a `C_DIMW` row made in place, for the commonest
+    /// cases: the offset is an int; the variable holds an array, or a
+    /// reference to one that nothing is reading or writing; the table is
+    /// this handle's alone (no separation) and a list; the value is a
+    /// null, a bool, an int or a float (`int_only`: an int). Then either
+    /// the offset is inside the list and the element there such a scalar
+    /// (nothing to release; a hole would change the count): the value's
+    /// two words are copied over the element's. Or the offset is the
+    /// list's length, with room in the allocation and in the table's
+    /// size: the words are written behind the last element, and the
+    /// length, the next free key and the element count go up
+    /// (`HashTable::set_int_plain`'s append). Both end with a jump to the
+    /// label `done`. Any other case jumps to the label `slow` with nothing
+    /// changed, where the row's helper call decides. Nothing is emitted
+    /// for an append without an offset, an offset that is no slot and no
+    /// int literal, or a literal value that is no such scalar.
+    ///
+    /// Uses `rax`, `rcx` and `r9` only, as [`Self::emit_list_read`].
+    fn emit_list_write(&mut self, m: JitMeta, slow: usize, done: usize, int_only: bool) {
+        use php_runtime::Value;
+        let slow = Target::Label(slow);
+        // A literal value: its two words, known here.
+        let lit_words = if m.sc == KL {
+            // SAFETY: a `KL` value of an array row is the address of a
+            // literal of the op array the plan was made for (`plan_dim`).
+            match unsafe { &*(m.lit_c as *const Value) } {
+                Value::Int(v) => Some((i64::from(TAG_INT), *v)),
+                Value::Float(x) if !int_only => {
+                    Some((i64::from(TAG_FLOAT), i64::from_ne_bytes(x.to_ne_bytes())))
+                }
+                Value::Null if !int_only => Some((i64::from(TAG_NULL), 0)),
+                Value::Bool(b) if !int_only => {
+                    Some((i64::from(TAG_BOOL) | (i64::from(*b) << (8 * BOOL_BYTE)), 0))
+                }
+                _ => return,
+            }
+        } else if m.sc == KC || m.sc == KT {
+            None
+        } else {
+            return;
+        };
+        match m.kb {
+            KC | KT => {
+                self.cmpb(m.kb, m.slot, TAG_INT);
+                self.jcc(0x85, slow); // jne
+                self.to_r9(m.kb, m.slot, 0);
+            }
+            KL => {
+                // SAFETY: as above, for the offset.
+                let Value::Int(at) = (unsafe { &*(m.lit_b as *const Value) }) else {
+                    return;
+                };
+                self.movabs(true, *at);
+            }
+            _ => return,
+        }
+        // The value in its slot: a scalar.
+        if lit_words.is_none() {
+            if int_only {
+                self.cmpb(m.sc, m.sw, TAG_INT);
+                self.jcc(0x85, slow); // jne
+            } else {
+                self.cmpb(m.sc, m.sw, TAG_FLOAT);
+                self.jcc(0x87, slow); // ja
+            }
+        }
+        let (direct, store, append) = (self.synth_label(), self.synth_label(), self.synth_label());
+        // What the variable holds: an array, or a reference to one that
+        // nothing has borrowed.
+        self.load_int(KC, m.sb);
+        self.cmpb(KC, m.sb, TAG_ARRAY);
+        self.jcc(0x84, Target::Label(direct)); // je
+        self.cmpb(KC, m.sb, TAG_REF);
+        self.jcc(0x85, slow); // jne
+        self.cmpq_rax(REF_BORROW, 0);
+        self.jcc(0x85, slow); // jne
+        self.cmpb_rax(REF_VALUE, TAG_ARRAY);
+        self.jcc(0x85, slow); // jne
+        self.mov_rax_rax(REF_VALUE + PAYLOAD);
+        self.set_label(direct);
+        // A list.
+        self.movabs_rcx(LIST_PACKED);
+        self.cmp_at_rax_rcx(LIST_KIND);
+        self.jcc(0x85, slow); // jne
+                              // The table is this handle's alone: one strong handle, and the
+                              // one weak count the strong ones hold together.
+        self.cmpq_rax(0, 1);
+        self.jcc(0x85, slow); // jne
+        self.cmpq_rax(8, 1);
+        self.jcc(0x85, slow); // jne
+                              // The offset inside the list, or at its end.
+        self.cmp_r9_at_rax(LIST_LEN);
+        self.jcc(0x83, Target::Label(append)); // jae
+        self.mov_rax_rax(LIST_ELEMS);
+        self.shl_r9(4);
+        self.add_rax_r9();
+        // The element: a scalar is written over.
+        self.cmpb_rax(0, TAG_FLOAT);
+        self.jcc(0x87, slow); // ja
+        self.set_label(store);
+        if let Some((first, second)) = lit_words {
+            self.movabs_rcx(first);
+            self.movabs(true, second);
+        } else {
+            self.movrcx_at(m.sc, m.sw);
+            self.to_r9(m.sc, m.sw, 0);
+        }
+        self.store_rcx_at_rax(0);
+        self.store_r9_at_rax(PAYLOAD);
+        self.jmp(Target::Label(done));
+        // The list's next element (the flags are the length test's: past
+        // the end is the helper's): room in the allocation and in the
+        // table's size, then the counts, and the store above behind the
+        // last element.
+        self.set_label(append);
+        self.jcc(0x85, slow); // jne
+        self.cmp_r9_at_rax(LIST_CAP);
+        self.jcc(0x83, slow); // jae
+        self.mov_ecx_at_rax(TABLE_SIZE);
+        self.cmp_r9_rcx();
+        self.jcc(0x83, slow); // jae
+        self.lea_rcx_r9_next();
+        self.store_rcx_at_rax(LIST_LEN);
+        self.store_rcx_at_rax(TABLE_NEXT);
+        self.incl_at_rax(ARRAY_COUNT);
+        self.mov_rax_rax(LIST_ELEMS);
+        self.shl_r9(4);
+        self.add_rax_r9();
+        self.jmp(Target::Label(store));
+    }
+
     /// The element read of a `C_DIMR` row made in place, for the commonest
     /// case: the offset is an int; the variable holds an array, or a
     /// reference (not being written) to one; the table is a list and the
@@ -7498,6 +7663,13 @@ impl Emitter {
         } else {
             HArg::Slot(m.sc, m.sw)
         };
+        // A plain write of a scalar into a list in place (it ends at
+        // `done`), else the helper.
+        let (slow, done) = (self.synth_label(), self.synth_label());
+        if helper == jit_dim_set as *const () as usize {
+            self.emit_list_write(m, slow, done, !m.arr);
+        }
+        self.set_label(slow);
         if m.arr {
             // (As in `emit_dimr`.)
             self.emit_helper(
@@ -7514,6 +7686,7 @@ impl Emitter {
                 Target::Side(i),
             );
         }
+        self.set_label(done);
         if m.consume {
             self.store_imm_base(KT, m.sw, 0);
             self.store_tag_base(KT, m.sw, TAG_NULL);
@@ -9350,6 +9523,149 @@ mod layout_tests {
         let hole: Option<Value> = None;
         assert!(unsafe { *std::ptr::from_ref(&hole).cast::<u8>() } > TAG_FLOAT);
         assert_eq!(std::mem::size_of::<Option<Value>>(), 16);
+    }
+
+    /// What the element write in place relies on: the handle of a
+    /// `Value::Array` starts with its strong count and its weak count,
+    /// both 1 while this handle is the table's only one (`Rc::get_mut`'s
+    /// test, `ZArray::get_mut_unshared`).
+    #[test]
+    fn unshared_table_counts() {
+        use php_runtime::{Value, ZArray};
+        let mut a = ZArray::from_values([Value::Int(7), Value::Int(8)]);
+        let slot = Value::Array(a.clone());
+        // SAFETY: as in `list_layout`.
+        let counts = |v: &Value| unsafe {
+            let handle = std::ptr::read_unaligned(
+                std::ptr::from_ref(v)
+                    .cast::<u8>()
+                    .add(PAYLOAD as usize)
+                    .cast::<*const u64>(),
+            );
+            (
+                std::ptr::read_unaligned(handle),
+                std::ptr::read_unaligned(handle.add(1)),
+            )
+        };
+        assert_eq!(counts(&slot), (2, 1));
+        assert!(a.get_mut_unshared().is_none());
+        drop(slot);
+        let slot = Value::Array(a);
+        assert_eq!(counts(&slot), (1, 1));
+        let Value::Array(mut alone) = slot else {
+            unreachable!()
+        };
+        assert!(alone.get_mut_unshared().is_some());
+        let weak = alone.downgrade();
+        assert_eq!(counts(&Value::Array(alone.clone())).1, 2);
+        drop(weak);
+    }
+
+    /// What the append in place relies on: from the handle of a
+    /// `Value::Array` holding a list, the word at `LIST_CAP` is the room
+    /// of its allocation in elements, the 32-bit words at `TABLE_SIZE` and
+    /// `ARRAY_COUNT` the table's size and its element count, the word at
+    /// `TABLE_NEXT` the next free int key; and an append made the way the
+    /// trace makes it (the element's words behind the last one, the three
+    /// counts one up) leaves the table `HashTable::set_int_plain` leaves.
+    #[test]
+    fn list_append_layout() {
+        use php_runtime::{Value, ZArray};
+        // SAFETY (all reads and writes below): as in `list_layout`; the
+        // words are inside the live table's allocation, the element
+        // written is inside the list's (the room was just tested), and
+        // the table has no other handle.
+        let handle = |v: &Value| unsafe {
+            std::ptr::read_unaligned(
+                std::ptr::from_ref(v)
+                    .cast::<u8>()
+                    .add(PAYLOAD as usize)
+                    .cast::<*mut u8>(),
+            )
+        };
+        let word = |v: &Value, off: u32| unsafe {
+            std::ptr::read_unaligned(handle(v).add(off as usize).cast::<i64>())
+        };
+        let half = |v: &Value, off: u32| unsafe {
+            std::ptr::read_unaligned(handle(v).add(off as usize).cast::<u32>())
+        };
+        for n in [1i64, 3, 8, 9, 100] {
+            let mut a = ZArray::from_values((0..n).map(Value::Int));
+            // Room for one more, the way the interpreter makes it.
+            a.make_mut()
+                .set_int_plain(n, Value::Int(-1))
+                .expect("appended");
+            let n = n + 1;
+            let (room, size) = {
+                let t = a.make_mut();
+                (t.packed_capacity().expect("a list"), t.table_size())
+            };
+            let slot = Value::Array(a);
+            assert_eq!(word(&slot, LIST_CAP), i64::try_from(room).expect("fits"));
+            assert_eq!(half(&slot, TABLE_SIZE), size);
+            assert_eq!(i64::from(half(&slot, ARRAY_COUNT)), n);
+            assert_eq!(word(&slot, TABLE_NEXT), n);
+            assert_eq!(word(&slot, LIST_LEN), n);
+            if n >= i64::try_from(room).expect("fits") || n >= i64::from(size) {
+                continue;
+            }
+            // The trace's append of `2.5` at offset `n`.
+            unsafe {
+                let h = handle(&slot);
+                let elems = std::ptr::read_unaligned(h.add(LIST_ELEMS as usize).cast::<*mut u8>());
+                let at = elems.add(16 * usize::try_from(n).expect("fits"));
+                std::ptr::write_unaligned(at.cast::<i64>(), i64::from(TAG_FLOAT));
+                std::ptr::write_unaligned(
+                    at.add(PAYLOAD as usize).cast::<i64>(),
+                    i64::from_ne_bytes(2.5f64.to_ne_bytes()),
+                );
+                std::ptr::write_unaligned(h.add(LIST_LEN as usize).cast::<i64>(), n + 1);
+                std::ptr::write_unaligned(h.add(TABLE_NEXT as usize).cast::<i64>(), n + 1);
+                let count = h.add(ARRAY_COUNT as usize);
+                std::ptr::write_unaligned(
+                    count.cast::<u32>(),
+                    std::ptr::read_unaligned(count.cast::<u32>()) + 1,
+                );
+            }
+            let Value::Array(mut made) = slot else {
+                unreachable!()
+            };
+            let mut same = ZArray::from_values((0..n - 1).map(Value::Int));
+            same.make_mut()
+                .set_int_plain(n - 1, Value::Int(-1))
+                .expect("appended");
+            same.make_mut()
+                .set_int_plain(n, Value::Float(2.5))
+                .expect("appended");
+            assert_eq!(made.len(), same.len(), "{n} elements");
+            assert!(made.is_list() && made.is_without_holes());
+            assert_eq!(made.next_free_element(), same.next_free_element());
+            assert!(
+                matches!(made.get_packed(n), Some(Value::Float(x)) if x.to_bits() == 2.5f64.to_bits())
+            );
+            assert!(matches!(made.get_packed(n - 1), Some(Value::Int(-1))));
+            // And it goes on as a list.
+            made.make_mut().push(Value::Int(5)).expect("appended");
+            assert!(matches!(made.get_packed(n + 1), Some(Value::Int(5))));
+        }
+    }
+
+    /// The instructions of the append in place
+    /// ([`Emitter::emit_list_write`]).
+    #[test]
+    fn list_append_encodings() {
+        let mut em = emitter();
+        em.mov_ecx_at_rax(0x24);
+        assert_eq!(em.code, vec![0x8B, 0x88, 0x24, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        em.cmp_r9_rcx();
+        assert_eq!(em.code, vec![0x49, 0x39, 0xC9]);
+        em.code.clear();
+        em.lea_rcx_r9_next();
+        assert_eq!(em.code, vec![0x49, 0x8D, 0x49, 0x01]);
+        em.code.clear();
+        em.incl_at_rax(0x20);
+        assert_eq!(em.code, vec![0xFF, 0x80, 0x20, 0x00, 0x00, 0x00]);
     }
 
     /// What the read through a reference relies on: from the payload word

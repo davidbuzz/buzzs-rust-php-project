@@ -808,6 +808,26 @@ impl HashTable {
     /// there).
     pub const STORE_OFFSET: usize = std::mem::offset_of!(HashTable, store);
 
+    /// The byte offsets of the table size (`nTableSize`, a `u32`) and of
+    /// the next free int key (`nNextFreeElement`, an `i64`) inside a
+    /// table: with the element count, what machine code that appends to a
+    /// list without a call reads and writes (php-vm's trace JIT, whose
+    /// layout test pins them).
+    pub const TABLE_SIZE_OFFSET: usize = std::mem::offset_of!(HashTable, table_size);
+    /// See [`HashTable::TABLE_SIZE_OFFSET`].
+    pub const NEXT_FREE_OFFSET: usize = std::mem::offset_of!(HashTable, next_free);
+
+    /// The room of a list's allocation, in elements; `None` for a table
+    /// that is no list. (For the layout test of the code that appends to
+    /// a list without a call.)
+    #[must_use]
+    pub fn packed_capacity(&self) -> Option<usize> {
+        match &self.store {
+            Store::Packed(v) => Some(v.capacity()),
+            Store::Uninit | Store::Hash(_) => None,
+        }
+    }
+
     /// Creates an empty table (`zend_new_array(0)`).
     #[must_use]
     pub fn new() -> Self {
