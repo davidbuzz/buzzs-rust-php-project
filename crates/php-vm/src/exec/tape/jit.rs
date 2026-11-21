@@ -812,6 +812,15 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 _ => None,
             }
         };
+        let statik = |place: u32| -> Option<typed::Ty> {
+            let (cell, _) = crate::rtcache::static_place_cell_in(frame, place)?;
+            let held = cell.try_borrow().ok()?;
+            match &*held {
+                Value::Int(_) => Some(typed::Ty::Int),
+                Value::Float(_) => Some(typed::Ty::Float),
+                _ => None,
+            }
+        };
         let slow = |at: usize| {
             MISSES.with(|m| m.borrow().get(&(block as usize, at)).copied()) >= Some(MISS_LIMIT)
         };
@@ -831,6 +840,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             snapshot: &snapshot,
             element: &element,
             keyed: &keyed,
+            statik: &statik,
             each: &each,
             builtin: &builtin,
             property: &property,
@@ -989,15 +999,18 @@ fn each_end(tape: &[Inst], ops: &[Op], i: usize) -> Option<usize> {
     }
 }
 
-/// The step of a `foreach` at op `at`, as `run_tape` runs it
-/// (`hot::step_ext`: the next element of an array iterated by value into
-/// its temporaries, and the assignments to the loop's variables that
-/// follow when they are plain). Returns the op to go on at (after the
-/// assignments it made, or the loop's end), or `hot::DECLINED`, nothing
-/// changed, for any other iterator.
+/// The op at `at`, one without a tape instruction, as `run_tape` runs it
+/// (`hot::step_ext`). For the step of a `foreach`: the next element of an
+/// array iterated by value into its temporaries, and the assignments to
+/// the loop's variables that follow when they are plain; returns the op
+/// to go on at (after the assignments it made, or the loop's end), or
+/// `hot::DECLINED`, nothing changed, for any other iterator. For a static
+/// property's read or write: the cache hit, or `hot::DECLINED`.
 ///
 /// # Safety
-/// `f` is the current frame and `at` an `Op::FeFetch` of its op array.
+/// `f` is the current frame and `at` an op of its op array that
+/// `hot::step_ext` runs (an `Op::FeFetch`, `FetchStaticProp`,
+/// `AssignStaticProp`).
 pub(super) unsafe extern "C" fn fe_fetch(f: *mut Frame, at: usize) -> usize {
     // SAFETY: the caller's contract. The op array outlives the op: a hot
     // op neither pops the frame nor replaces its code (`run_tape`).

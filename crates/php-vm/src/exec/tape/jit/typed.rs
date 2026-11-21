@@ -346,6 +346,12 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             ..
         }
         | Op::FetchClassConstTo { .. }
+        // A static property, through the interpreter's cached fast path.
+        | Op::FetchStaticProp {
+            mode: crate::opcode::FetchMode::Read,
+            ..
+        }
+        | Op::AssignStaticProp { dst: None, .. }
         | Op::Return { .. } => true,
         _ => false,
     }
@@ -571,6 +577,22 @@ enum Plan {
         /// The temporaries the element went through.
         consumed: [Option<SlotRef>; 2],
     },
+    /// An op without a tape instruction that the interpreter's own fast
+    /// path runs on the frame alone (`hot::step_ext`: a static property's
+    /// read or write on a cache hit). It goes on at `next` when the op
+    /// did as expected (a read's number is then in `result`, read back
+    /// behind a test of its type); it is the interpreter's op when the
+    /// fast path declined, having changed nothing, and the first tier's
+    /// from where it got to otherwise (a read that went into its
+    /// temporary, not into the variable of the `AssignCv` after it).
+    Ext {
+        result: Option<(SlotRef, Ty)>,
+        /// The temporary the op consumes (left null by it).
+        consume: Option<SlotRef>,
+        /// The instruction after the op itself.
+        after: usize,
+        next: usize,
+    },
     /// `++`/`--`; with `copy`, the new value (or with `true` the old one)
     /// also goes to a temporary.
     Step {
@@ -712,7 +734,11 @@ impl Plan {
             | Plan::AbsInt { dst, .. }
             | Plan::Const { dst, .. }
             | Plan::Copy { dst, .. } => dst.tmp,
-            Plan::IncCmp { .. } | Plan::Step { .. } | Plan::Call(_) | Plan::Each { .. } => false,
+            Plan::IncCmp { .. }
+            | Plan::Step { .. }
+            | Plan::Call(_)
+            | Plan::Each { .. }
+            | Plan::Ext { .. } => false,
         }
     }
 
@@ -730,6 +756,7 @@ impl Plan {
             | Plan::Assign2 { next, .. } => [Some(next), None],
             Plan::Call(call) => [call.fall, call.jump],
             Plan::Each { end, full, .. } => [Some(full), Some(end)],
+            Plan::Ext { next, .. } => [Some(next), None],
             Plan::Int2 { next, .. }
             | Plan::Conv { next, .. }
             | Plan::Math { next, .. }
@@ -816,6 +843,16 @@ impl Plan {
                 st.insert(value.0, num(value.1));
                 if let Some(key) = key {
                     st.insert(key, Ty::Int);
+                }
+            }
+            Plan::Ext {
+                result, consume, ..
+            } => {
+                if let Some(tmp) = consume {
+                    st.insert(tmp, Ty::Plain);
+                }
+                if let Some((slot, ty)) = result {
+                    st.insert(slot, ty);
                 }
             }
             Plan::Call(call) => {
@@ -928,6 +965,9 @@ pub(super) struct Seen<'a> {
     /// The type of the number under the key a string literal (by index)
     /// is, in the array a compiled variable (by index) holds.
     pub(super) keyed: &'a dyn Fn(u32, u32) -> Option<Ty>,
+    /// The type of the number the static property of a place (by index)
+    /// holds, on a hit of its run-time cache.
+    pub(super) statik: &'a dyn Fn(u32) -> Option<Ty>,
     /// Whether the numbers a `foreach` iterator (by index) yields are
     /// floats, and whether its keys are ints; `None` when it is not over
     /// an array of numbers.
@@ -1813,6 +1853,67 @@ impl Analysis<'_> {
             | &Op::FetchClassConstTo { to, .. } => {
                 let next = (i + 2 < self.tape.len()).then_some(i + 2)?;
                 self.constant(st, i, cv(to.checked_mul(SLOT_U32)?)?, next)
+            }
+            // `A::$p` read: a number now, into the variable of the
+            // `AssignCv` folded into the read, or into its temporary.
+            &Op::FetchStaticProp {
+                place,
+                dst,
+                to,
+                mode: crate::opcode::FetchMode::Read,
+            } => {
+                if (self.seen.slow)(i) {
+                    return None;
+                }
+                let ty = match (self.seen.statik)(place)? {
+                    ty @ (Ty::Int | Ty::Float) => ty,
+                    Ty::Bool | Ty::Plain => return None,
+                };
+                let (slot, next) = match to {
+                    Some(to) => (cv(to.checked_mul(SLOT_U32)?)?, i + 2),
+                    None => (temp(dst)?, i + 1),
+                };
+                self.ty(st, slot)?;
+                // (With `to`, the temporary is written when the variable
+                // cannot take the value: it too must own nothing.)
+                self.ty(st, temp(dst)?)?;
+                (next < self.tape.len()).then_some(Plan::Ext {
+                    result: Some((slot, ty)),
+                    consume: None,
+                    after: i + 1,
+                    next,
+                })
+            }
+            // `A::$p = val` as a statement, over a number.
+            &Op::AssignStaticProp {
+                place,
+                val,
+                dst: None,
+            } => {
+                if (self.seen.slow)(i) {
+                    return None;
+                }
+                (self.seen.statik)(place)?;
+                let consume = match val {
+                    Operand::Tmp(t) => {
+                        let slot = temp(t)?;
+                        self.ty(st, slot)?;
+                        Some(slot)
+                    }
+                    Operand::Cv(c) => {
+                        // Read where it is: any scalar the frame shows.
+                        self.ty(st, cv(c.checked_mul(SLOT_U32)?)?)?;
+                        None
+                    }
+                    Operand::Lit(_) => None,
+                    _ => return None,
+                };
+                Some(Plan::Ext {
+                    result: None,
+                    consume,
+                    after: next,
+                    next,
+                })
             }
             Op::Return { .. } => Some(Plan::Leave),
             // `abs()` as its own op: over the two ops that were its
@@ -3647,6 +3748,54 @@ impl Emit<'_, '_> {
                     self.read_back(key, Ty::Int, full)?;
                 }
                 self.go(i, full, repeat)?;
+            }
+            Plan::Ext {
+                result,
+                after,
+                next,
+                ..
+            } => {
+                #[allow(clippy::cast_possible_wrap)]
+                let callee = self
+                    .b
+                    .ins()
+                    .iconst(types::I64, super::fe_fetch as super::Step as usize as i64);
+                let at = self.b.ins().iconst(types::I64, i64::try_from(i).ok()?);
+                let made = self
+                    .b
+                    .ins()
+                    .call_indirect(self.handler_sig, callee, &[self.frame, at]);
+                let got = *self.b.inst_results(made).first()?;
+                // Declined (`hot::DECLINED`, all ones): nothing changed,
+                // the interpreter's op; counted, so that a loop whose
+                // property stops being one for the fast path is given up
+                // (`super::missed`).
+                let [declined, done, as_planned, other] =
+                    std::array::from_fn(|_| self.b.create_block());
+                for cold in [declined, other] {
+                    self.b.set_cold_block(cold);
+                }
+                let refused = self.b.ins().icmp_imm(IntCC::Equal, got, -1);
+                self.b.ins().brif(refused, declined, &[], done, &[]);
+                self.b.switch_to_block(declined);
+                self.ret(i, WHY_MISS);
+                self.b.switch_to_block(done);
+                let whole = self
+                    .b
+                    .ins()
+                    .icmp_imm(IntCC::Equal, got, i64::try_from(next).ok()?);
+                self.b.ins().brif(whole, as_planned, &[], other, &[]);
+                // Done, but not into the variable: the first tier's from
+                // the `AssignCv`.
+                self.b.switch_to_block(other);
+                self.ret(after, WHY_GENERIC);
+                self.b.switch_to_block(as_planned);
+                // The poll `run_tape` makes after the op.
+                self.poll(i, next)?;
+                if let Some((slot, ty)) = result {
+                    self.read_back(slot, ty, next)?;
+                }
+                self.go(i, next, repeat)?;
             }
             Plan::Truth {
                 value,

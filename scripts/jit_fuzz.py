@@ -35,6 +35,7 @@ RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o-
 CONSTS = ['KI', 'KF', 'KB', 'KS', 'P::CI', 'P::CF', 'P::CB', 'PHP_INT_SIZE', 'M_PI']
 PROPS = ['$o->x', '$o->f', '$o->n', '$o->u']
 # Elements under string keys (the local `$z`).
+STATICS = ['P::$sx', 'P::$sf', 'P::$st']
 KEYED = ["$z['k']", "$z['f']", "$z['s']", "$z['none']"]
 
 
@@ -82,7 +83,7 @@ class Gen:
         if k < 0.96:
             return self.pick(PROPS)
         if k < 0.98:
-            return self.pick(CONSTS + KEYED)
+            return self.pick(CONSTS + KEYED + STATICS)
         return self.pick(OTHERS)
 
     def expr(self, d=0):
@@ -137,6 +138,8 @@ class Gen:
                               f'{self.pick(PROPS)} {self.pick(["+", "-", "*"])}= {self.atom()};',
                               f'{self.pick(PROPS)} = {self.atom()};', f'{self.pick(PROPS)}{self.pick(["++", "--"])};',
                               f'{v} = {self.pick(KEYED)};', f'{v} = {self.pick(KEYED[:2])};',
+                              f'{v} = {self.pick(STATICS)};', f'{self.pick(STATICS)} = {self.atom()};',
+                              f'{self.pick(STATICS[:2])} = {v};', f'{v} = {self.pick(STATICS[:2])};',
                               f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
                               f'$o->f = {self.expr()};', '$o->x++;', f'$o->x = {self.atom()};',
@@ -233,7 +236,8 @@ class Gen:
         out = ['<?php']
         out.append("const KI = 3; const KF = 1.5; const KB = true; const KS = '7';")
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
-                   'public int $n = 1; public int|float $u = 2; function __construct($x) { $this->x = $x; } }')
+                   'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
+                   'function __construct($x) { $this->x = $x; } }')
         out += [self.function(f) for f in fns]
         out.append('function show($v) { if (is_float($v)) { return is_nan($v) ? "NAN" : sprintf("%.17g", $v); } '
                    'if (is_array($v)) { $o = []; foreach ($v as $k => $e) { $o[] = $k . "=>" . show($e); } '

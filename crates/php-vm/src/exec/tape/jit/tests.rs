@@ -1114,3 +1114,22 @@ $b = ['k' => 3]; var_dump(g($b, 30), $b, f(['j' => 1, 'k' => 4], 8), f(['1' => 5
 ",
     );
 }
+
+#[test]
+fn typed_loops_read_and_write_static_properties() {
+    typed_at_least(
+        "<?php class F { static $a = 1; static $f = 0.5; } $s = 0; $t = 0.0; for ($i = 0; $i < 40; $i++) { $x = F::$a; $s += $x; F::$a = $i; $t += F::$f; F::$f = $t * 0.5; } var_dump($s, $t, F::$a, F::$f);",
+        1,
+    );
+    three(
+        r"<?php
+class S { static $n = 0; static int $typed = 0; static ?int $maybe = null; static $any = 1; protected static $hidden = 2;
+  static function run($k) { $t = 0; for ($i = 0; $i < $k; $i++) { $v = self::$n; $t += $v; self::$n = $v + 1; self::$typed = $i; $w = static::$hidden; $t += $w; } return $t; }
+  static function turn($k) { $t = 0; for ($i = 0; $i < $k; $i++) { $v = self::$any; if ($i == 9) { self::$any = 2.5; } if ($i == 13) { self::$any = 'str'; } if ($i == 15) { self::$any = [1]; } if ($i == 17) { self::$any = 4; } $t += is_array($v) ? 100 : (int)$v; self::$any = self::$any; } return $t; } }
+class T extends S { protected static $hidden = 10; }
+function refs($k) { $r = &S::$n; $t = 0; for ($i = 0; $i < $k; $i++) { $v = S::$n; $t += $v; $r++; S::$n = $v + 2; } return [$t, $r]; }
+function bad($k) { $t = 0; for ($i = 0; $i < $k; $i++) { try { S::$typed = $i < 12 ? $i : 'x'; } catch (TypeError $e) { $t++; } $v = S::$typed; $t += $v; } return $t; }
+var_export([S::run(40), T::run(40), S::turn(30), refs(30), bad(30), S::$n, S::$typed, S::$any]);
+",
+    );
+}
