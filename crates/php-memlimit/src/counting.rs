@@ -77,6 +77,14 @@ const HANDLED: u8 = 3;
 /// Sentinel for "no limit" in the `limit` and threshold atomics.
 const UNLIMITED: usize = usize::MAX;
 
+/// Whether a block of `size` bytes is a large block of more than half the
+/// pages a chunk hands out (`ZEND_MM_PAGES - ZEND_MM_FIRST_PAGE` = 511):
+/// two of them never share a chunk.
+#[inline]
+fn is_big(size: usize) -> bool {
+    size > 255 * crate::limit::PAGE_SIZE && size <= MAX_LARGE_SIZE
+}
+
 /// Increments a statistics counter with a plain load/store instead of a
 /// locked read-modify-write: concurrent bumps from several threads may be
 /// lost (the counts are informational), but the operation stays sound and
@@ -332,6 +340,14 @@ pub struct CountingAlloc<A> {
     /// the request (VM structures) do not count, like the rest of the
     /// baseline.
     huge_base: AtomicUsize,
+    /// Live counted large blocks of more than half a chunk's pages
+    /// ([`is_big`]): no two of them fit in one chunk, so Zend has at least
+    /// that many chunks.
+    big: AtomicUsize,
+    /// [`big`](Self::big) at the baseline.
+    big_base: AtomicUsize,
+    /// Of the [forgiven](Self::forgiven) allocations, the big ones.
+    forgiven_big: AtomicUsize,
     hard_handler: OnceLock<HardLimitHandler>,
     in_hard_handler: AtomicBool,
     /// Called when a violation becomes pending.
@@ -386,6 +402,9 @@ impl<A> CountingAlloc<A> {
             forgiven_huge: AtomicUsize::new(0),
             huge: AtomicUsize::new(0),
             huge_base: AtomicUsize::new(0),
+            big: AtomicUsize::new(0),
+            big_base: AtomicUsize::new(0),
+            forgiven_big: AtomicUsize::new(0),
             hard_handler: OnceLock::new(),
             in_hard_handler: AtomicBool::new(false),
             pending_hook: OnceLock::new(),
@@ -524,6 +543,7 @@ impl<A> CountingAlloc<A> {
         let now = self.raw_usage();
         self.baseline.store(now, Relaxed);
         self.huge_base.store(self.huge.load(Relaxed), Relaxed);
+        self.big_base.store(self.big.load(Relaxed), Relaxed);
         self.peak.store(now, Relaxed);
         self.update_thresholds();
     }
@@ -757,14 +777,28 @@ impl<A> CountingAlloc<A> {
 
     /// Whether `bytes` more would still fit under the soft limit.
     pub fn would_fit(&self, bytes: usize) -> bool {
-        self.limit()
-            .is_none_or(|l| self.limit_allows(self.usage(), bytes, bytes > MAX_LARGE_SIZE, l))
+        self.limit().is_none_or(|l| {
+            self.limit_allows(
+                self.usage(),
+                bytes,
+                bytes > MAX_LARGE_SIZE,
+                is_big(bytes),
+                l,
+            )
+        })
     }
 
     /// Whether `size` more bytes at reported usage `usage` (not counting
     /// them) pass `zend_mm_check_limit` under `limit` (see
     /// [`zend_limit_allows`]; exact bytes in [tracked mode](Self::set_tracked)).
-    fn limit_allows(&self, usage: usize, size: usize, huge_request: bool, limit: usize) -> bool {
+    fn limit_allows(
+        &self,
+        usage: usize,
+        size: usize,
+        huge_request: bool,
+        big_request: bool,
+        limit: usize,
+    ) -> bool {
         let usage = usage.saturating_sub(self.forgiven.load(Relaxed));
         if self.is_tracked() {
             return usage.saturating_add(size) <= limit;
@@ -773,6 +807,18 @@ impl<A> CountingAlloc<A> {
             .request_huge()
             .saturating_sub(self.forgiven_huge.load(Relaxed));
         let small = usage.saturating_sub(huge);
+        // A block of more than half a chunk's pages needs a chunk no other
+        // such block uses (`zend_mm_alloc_pages` finds no room for it
+        // next to one): Zend has at least one chunk per big block.
+        if big_request && !huge_request {
+            let chunks = self
+                .request_big()
+                .saturating_add(1)
+                .saturating_mul(crate::limit::CHUNK_SIZE);
+            if chunks.saturating_add(huge) > limit {
+                return false;
+            }
+        }
         // A realloc growing into a huge block is checked as a huge request.
         let size_class = if huge_request && size <= MAX_LARGE_SIZE {
             MAX_LARGE_SIZE + 1
@@ -981,10 +1027,10 @@ impl<A> CountingAlloc<A> {
     ///
     /// `owner` is [`is_owner`](Self::is_owner), computed once by the caller.
     #[inline]
-    fn admit(&self, size: usize, huge: bool, owner: bool) -> Admit {
+    fn admit(&self, size: usize, huge: bool, big: bool, owner: bool) -> Admit {
         let new = self.add_live_as(size, owner);
-        if new > self.soft_raw.load(Relaxed) || huge {
-            return self.admit_slow(new, size, huge);
+        if new > self.soft_raw.load(Relaxed) || huge || big {
+            return self.admit_slow(new, size, huge, big);
         }
         self.raise_peak(new, owner);
         Admit::Counted
@@ -1061,14 +1107,14 @@ impl<A> CountingAlloc<A> {
     /// [`admit`](Self::admit) past the soft threshold or for a huge block.
     #[cold]
     #[inline(never)]
-    fn admit_slow(&self, new: usize, size: usize, huge: bool) -> Admit {
+    fn admit_slow(&self, new: usize, size: usize, huge: bool, big: bool) -> Admit {
         if size > MAX_LARGE_SIZE && in_uncounted_scope() {
             if let Some(slot) = self.claim_uncounted_slot() {
                 self.release(size);
                 return Admit::Uncounted(slot);
             }
         }
-        if !self.admit_over_soft(new, size, huge) {
+        if !self.admit_over_soft(new, size, huge, big) {
             self.release(size);
             return Admit::Refused;
         }
@@ -1081,7 +1127,7 @@ impl<A> CountingAlloc<A> {
 
     #[cold]
     #[inline(never)]
-    fn admit_over_soft(&self, new: usize, size: usize, huge: bool) -> bool {
+    fn admit_over_soft(&self, new: usize, size: usize, huge: bool, big: bool) -> bool {
         let in_handler = self.in_hard_handler.load(Relaxed);
         if new > self.hard_raw.load(Relaxed) && !in_handler {
             if let Some(handler) = self.hard_handler.get() {
@@ -1103,7 +1149,7 @@ impl<A> CountingAlloc<A> {
             return true;
         }
         let before = self.reported(new).saturating_sub(size);
-        if self.limit_allows(before, size, huge, limit) {
+        if self.limit_allows(before, size, huge, big, limit) {
             return true;
         }
         let recorded = self.record(OverLimit { limit, tried: size });
@@ -1115,6 +1161,9 @@ impl<A> CountingAlloc<A> {
             self.forgiven.fetch_add(size, Relaxed);
             if huge {
                 self.forgiven_huge.fetch_add(size, Relaxed);
+            }
+            if big && !huge {
+                self.forgiven_big.fetch_add(1, Relaxed);
             }
             self.update_thresholds();
         }
@@ -1134,6 +1183,26 @@ impl<A> CountingAlloc<A> {
                 .fetch_update(Relaxed, Relaxed, |h| Some(h.saturating_sub(sub - add)));
         }
         self.update_thresholds();
+    }
+
+    /// Live big large blocks ([`is_big`]) allocated since the baseline,
+    /// the forgiven ones left out.
+    fn request_big(&self) -> usize {
+        self.big
+            .load(Relaxed)
+            .saturating_sub(self.big_base.load(Relaxed))
+            .saturating_sub(self.forgiven_big.load(Relaxed))
+    }
+
+    /// Big-block bookkeeping: `add` and `sub` live blocks.
+    fn big_change(&self, add: usize, sub: usize) {
+        if add > sub {
+            self.big.fetch_add(add - sub, Relaxed);
+        } else if sub > add {
+            let _ = self
+                .big
+                .fetch_update(Relaxed, Relaxed, |b| Some(b.saturating_sub(sub - add)));
+        }
     }
 
     /// Live huge-block bytes allocated since the baseline.
@@ -1454,6 +1523,9 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                     // `dealloc` only consults the registry for huge sizes.
                     self.free_uncounted_slot(slot);
                     self.count_granted(new_size);
+                    if is_big(new_size) {
+                        self.big_change(1, 0);
+                    }
                 }
                 return p;
             }
@@ -1469,6 +1541,9 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                     bump(&self.reallocs);
                     if old_size > MAX_LARGE_SIZE {
                         self.huge_change(0, old_size);
+                    }
+                    if is_big(old_size) {
+                        self.big_change(0, 1);
                     }
                 }
                 return p;
@@ -1495,7 +1570,8 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         let old_size = layout.size();
         if new_size > old_size {
             let grow = new_size - old_size;
-            match self.admit(grow, new_size > MAX_LARGE_SIZE, owner) {
+            let becomes_big = is_big(new_size) && !is_big(old_size);
+            match self.admit(grow, new_size > MAX_LARGE_SIZE, becomes_big, owner) {
                 Admit::Counted => {}
                 Admit::Refused => return ptr::null_mut(),
                 Admit::Observed => {
@@ -1530,8 +1606,8 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         }
     }
 
-    /// Huge-block bookkeeping after a counted realloc from `old_size` to
-    /// `new_size` bytes.
+    /// Huge- and big-block bookkeeping after a counted realloc from
+    /// `old_size` to `new_size` bytes.
     #[inline]
     fn huge_realloc(&self, old_size: usize, new_size: usize) {
         let old_huge = old_size > MAX_LARGE_SIZE;
@@ -1541,6 +1617,10 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                 if new_huge { new_size } else { 0 },
                 if old_huge { old_size } else { 0 },
             );
+        }
+        let (old_big, new_big) = (is_big(old_size), is_big(new_size));
+        if old_big != new_big {
+            self.big_change(usize::from(new_big), usize::from(old_big));
         }
     }
 
@@ -1647,10 +1727,12 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     pub fn request_end(&self) {
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
+        self.forgiven_big.store(0, Relaxed);
         self.force_limit(None);
         self.clear();
         self.baseline.store(0, Relaxed);
         self.huge_base.store(0, Relaxed);
+        self.big_base.store(0, Relaxed);
         self.reset_peak();
         self.update_thresholds();
         // Also while observed (ownership parked, see `observe`): the
@@ -1764,8 +1846,9 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     #[inline(never)]
     unsafe fn alloc_general(&self, layout: Layout, zeroed: bool) -> *mut u8 {
         let huge = layout.size() > MAX_LARGE_SIZE;
+        let big = is_big(layout.size());
         let owner = self.is_owner();
-        match self.admit(layout.size(), huge, owner) {
+        match self.admit(layout.size(), huge, big, owner) {
             Admit::Counted => {}
             Admit::Refused => return ptr::null_mut(),
             // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
@@ -1787,6 +1870,9 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             bump(&self.allocs);
             if huge {
                 self.huge_change(layout.size(), 0);
+            }
+            if big {
+                self.big_change(1, 0);
             }
         }
         p
@@ -1818,6 +1904,9 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             }
             if size > MAX_LARGE_SIZE {
                 self.huge_change(0, size);
+            }
+            if is_big(size) {
+                self.big_change(0, 1);
             }
         }
         bump(&self.frees);
