@@ -26,30 +26,18 @@ Last updated 22 Nov 2026.
   still holds counts measured from C PHP 8.3.
 - **Rust tests**: `cargo test --workspace` 4,980 passed, 122 ignored (21 Nov; the run's two
   failures fixed and rechecked).
+- **Web servers**: end-to-end tests pass (22 Nov): nginx 1.24 -> FastCGI -> `php-cgi`
+  (`crates/php-cli/tests/fastcgi.rs`, with a protocol test against `php-cgi -b`) and
+  mod_php in Apache 2.4.58 (`crates/php-sapi-apache2/tests/apache_e2e.rs`: `apache2 -M`
+  lists `php_module`, PHP through `http://127.0.0.1:<port>/`). PHPT `sapi/cgi` and
+  `sapi/cli`: 135 of 135 run pass.
 
-## A. In flight (22 Nov)
+## A. Next (22 Nov)
 
-- [~] Evidence run (owner, started 00:50): `./run-all-tests.sh` = release build,
-  `cargo test --workspace --release`, the full PHPT run on the release `php`,
-  `timing.py` against `/usr/bin/php8.5`; commits `22-NOV-2026.full-test-run.log`.
-- [~] Branch `e2e-web` (worktree `/tmp/claude-1000/wt-e2e`), edited only, to be merged
-  after the evidence run, then one build and the checks below:
-  - FastCGI in `php-cgi` (ref: main/fastcgi.c): `-b <addr:port>|<port>|<path>`, a
-    listening socket on standard input, keep-alive, `GET_VALUES`,
-    `PHP_FCGI_MAX_REQUESTS`, `PHP_FCGI_CHILDREN`, `FCGI_WEB_SERVER_ADDRS`,
-    `fastcgi.logging`.
-  - End-to-end tests: `crates/php-cli/tests/fastcgi.rs` (the protocol against
-    `php-cgi -b`; nginx 1.24 passing `*.php` to `php-cgi` over a Unix socket) and
-    `crates/php-sapi-apache2/tests/apache_e2e.rs` (mod_php in the system apache2:
-    `apache2 -M` lists `php_module`, PHP through `http://127.0.0.1:<port>/` URLs).
-  - The C reference `/usr/bin/php` -> `/usr/bin/php8.5` in tests, scripts and docs.
-  - Removed: TAPE_FASTER_MOSTLY.md, perf/RELEASE_BENCH_2026-11-04.md,
-    perf/NOTE-jit-2026-11-16.md, perf/TODO-jit-step1.md, the root copy of
-    REVIEW-tape-series-2026-11-13.md, crates/php-ext-pcre/PROPOSALS.md.
-  - Then: `cargo fmt`, `clippy --all-targets` and `cargo test` of php-cli,
-    php-cli-server, php-sapi-apache2 and php-vm; the tests that run the reference and
-    now run 8.5 (php-pcntl, php-posix, php-sockets, php-sysv, php-session, php-mysqlnd,
-    phpt-runner); PHPT `sapi/cgi`.
+- [ ] Evidence run `./run-all-tests.sh` (release build, `cargo test --workspace
+  --release`, the full PHPT run on the release `php`, `timing.py` against
+  `/usr/bin/php8.5`; it commits `<DD-MON-YYYY>.full-test-run.log`). The owner stopped the
+  22 Nov 00:50 run during its Rust tests; run it again once the items below are done.
 - [ ] Re-derive the 8.3 data with 8.5.12 (owner, 22 Nov): regenerate the oracle fixtures
   recorded from 8.3 (php-hash vectors, php-ctype/php-json/php-filter `oracle.txt`,
   php-filter HTML/Unicode tables, php-sodium, php-fileinfo, php-support fmt/ini cases,
@@ -104,11 +92,13 @@ candidates for `perf/bench` and for work.
 
 ## C. Conformance and features
 
-- [ ] apache2handler (FEATURE_GAP 75%): the row's "Missing" list dates from 3 Nov; output
-  start, the header callback, implicit flush, abort polling, the CPU timer and upload
-  progress were implemented on 6-7 Nov (`19de417e`, `29f444d5`). Run
-  `cargo test -p php-sapi-apache2 --test httpd -- --ignored --test-threads=1`, then
-  update the row.
+- [ ] apache2handler (FEATURE_GAP 75%): the full end-to-end test
+  (`cargo test -p php-sapi-apache2 --test httpd -- --ignored --test-threads=1`, 22 Nov)
+  fails 4 checks: `virtual('/hello.php')` prints nothing (the sub-request re-enters
+  `request::run`, whose `PERSISTENT_VM.borrow_mut()` panics "RefCell already borrowed"
+  in the child); session upload progress is `NULL`; the `max_execution_time` fatal of
+  `slow/loop.php` is not in the error log; a `HEAD` response's body holds the header
+  text (perhaps curl's `-I` output rather than the module). Fix them, then raise the row.
 - [ ] `php -S` (CLI built-in web server row): its "Missing" note (session cookies, the
   header callback when output sends the headers, the "output started at" location, the
   `ignore_user_abort` bailout) dates from 3 Nov, and every run `sapi/cli` test passes;
@@ -126,15 +116,6 @@ candidates for `perf/bench` and for work.
 
 ## D. Housekeeping
 
-- [ ] FEATURE_GAP's "Remaining"/"Missing" notes still name tests that pass in the 21 Nov
-  full run: Fibers (destructors_004 & co.), Attributes (005_objects, `#[\NoDiscard]`),
-  ext/session (bug79031 & co.), ext/sodium (sensitive_parameter, sodium_error_001),
-  zend_test (gh17899, observer_preload, optimizer_register_pass), ext/uri
-  (`zend/internal_api_*`), mysqli_result_references, ext/fileinfo (libmagic
-  descriptions); the `.phpt` runner row says CGI sections are not done and the
-  Superglobals row calls CGI request parsing out of scope (php-cgi exists since 10 Nov);
-  the Strings row says `ZStr` has no cached UTF-8 validity flag (it has:
-  `is_valid_utf8()`/`mark_valid_utf8()`). Prune them against the full run.
 - [ ] Contribution policy (FEATURE_GAP 0%): CONTRIBUTING.md, code of conduct, security
   policy, before taking external contributions.
 - [ ] Update this file after each evidence run.
