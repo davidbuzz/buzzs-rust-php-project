@@ -3,8 +3,15 @@
 David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust whose goal is
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
 than the classic C impl. Passing tests: 100% of the in-scope tests that run (21,844: 21,829
-pass, 15 expected failures; 21 Nov 2026). Speed: total runtime 0.53x the C implementation on
+pass, 15 expected failures; 21 Nov 2026). 
+
+Speed: total runtime 0.53x the C implementation on
 identical inputs, both at their defaults (`perf/bench/timing.py`), every input faster.
+
+|  | C PHP 8.3 (`/usr/bin/php`) | Ours (release build of `d3380559`) | Ratio |
+| --- | --- | --- | --- |
+| Total wall-clock | 3.517 s | 1.847 s | **0.53×** |
+| Total CPU (user + system) | 3.493 s | 1.835 s | 0.53× |
 
 The original PHP is written in C. This project ports it to idiomatic, best-practice Rust
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
@@ -61,14 +68,28 @@ For multiple affected crates, combine their `-p` selectors in one command.
 
 ## Performance
 
-The goal is to be as fast as, or faster than, the C implementation on every workload. It is
-measured per workload: each one may cost at most 1.10x the C implementation's measured
-user-space instruction count (the goal recorded in `perf/bench/goal.tsv`, checked by
-`scripts/acceptance.sh`). **17 of the 82 workloads meet the criterion** (release build of
-`3abd4d3f`, 16 Nov 2026): best are `zend:simplecall` at 0.67x, `ops:empty_loop` at 0.73x and
-`ops:int_add` at 0.74x. The other 65 are slower than C PHP, from 1.28x on
-`micro:self_cc_x_eq_0` to 10.39x on `zend:ackermann`, with user function calls at 5.41x.
-The performance work is in progress.
+The deliverable is one number: run the C implementation and this one side by side on
+identical inputs, each with its default configuration, and the total runtime of ours must be
+at most 1.10x the total runtime of C. C's CLI default has opcache loaded but disabled
+(`opcache.enable_cli=0`) and no JIT; ours runs with its own trace JIT on (`BUZZS_JIT=0` turns
+it off).
+
+```sh
+cargo build --release -p php-cli
+python3 perf/bench/timing.py target/release/php     # against /usr/bin/php
+```
+
+`perf/bench/timing.py` runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
+and the `perf/bench/<op>.php` loops under both binaries, alternately on the same cores, takes
+the fastest of 5 rounds per input and compares the totals. **Met** (release build of
+`d3380559`, 21 Nov 2026): ours 1.847 s against C's 3.517 s, **0.53x** wall-clock (0.53x CPU
+time). Every one of the 31 inputs is faster, from 0.32x (`suite/calls.php`) to 0.98x
+(`suite/float_math.php`).
+
+`scripts/acceptance.sh` is the per-workload guide: it builds a release binary and counts the
+user-space instructions of 82 workloads against the counts recorded for C in
+`perf/bench/goal.tsv` (each may cost at most 1.10x). All 82 are within it with the JIT on
+(25 with `BUZZS_JIT=0`). `perf/README.md` explains the instruction-count method.
 
 ## Reference source
 
