@@ -122,8 +122,7 @@ below were measured against — `0c7255dc521` ("Merge branch 'PHP-8.6'", 2 Nov 2
 `scripts/fetch-phpt-tests.sh --verify` checks an existing checkout against that pin. Moving to
 a newer php-src means editing the pin and re-baselining.
 
-`/usr/bin/php` (PHP 8.3.6) is used as an oracle by the library test suites. Where 8.3 and
-php-src master differ, the port follows master.
+`/usr/bin/php8.5` (PHP 8.5.12) is used as an oracle by the library test suites. Where 8.5 and php-src master differ, the port follows master.
 
 ## License
 
