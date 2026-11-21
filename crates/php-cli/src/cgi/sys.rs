@@ -1,8 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! The operating-system calls of FastCGI mode that the standard library
-//! has no safe form for (ref: main/fastcgi.c `fcgi_init()`,
-//! `fcgi_setup_signals()`, `php_pollfd_for_ms()`; sapi/cgi/cgi_main.c
+//! The operating-system calls of `FastCGI` mode that the standard library
+//! has no safe form for (ref: `main/fastcgi.c` `fcgi_init()`,
+//! `fcgi_setup_signals()`, `php_pollfd_for_ms()`; `sapi/cgi/cgi_main.c`
 //! the `PHP_FCGI_CHILDREN` pre-fork loop and `fastcgi_cleanup()`).
 //!
 //! This is the FFI module of `php-cgi`: every `unsafe` block below is a
@@ -33,7 +33,7 @@ fn errno() -> i32 {
 
 /// `fcgi_init()` on Unix: standard input is a socket that is not
 /// connected (`getpeername()` fails with `ENOTCONN`), i.e. a listening
-/// socket a web server passed to us (mod_fcgid, spawn-fcgi).
+/// socket a web server passed to us (`mod_fcgid`, spawn-fcgi).
 pub fn stdin_is_listening_socket() -> bool {
     // SAFETY: `sockaddr_storage` is plain old data; zeroed is a valid
     // value, and getpeername writes at most `len` bytes into it.

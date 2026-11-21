@@ -4,7 +4,7 @@
 //! `cgi.fix_pathinfo` translation of `SCRIPT_FILENAME`, `PATH_INFO`,
 //! `PATH_TRANSLATED` and `SCRIPT_NAME`), `is_valid_path()`, the `PHP_SELF`
 //! rule of `sapi_cgi_register_variables()`, the CGI detection and the
-//! query-string guard of `main()` (ref: sapi/cgi/cgi_main.c).
+//! query-string guard of `main()` (ref: `sapi/cgi/cgi_main.c`).
 //!
 //! The environment is modelled as an ordered list so that the translation
 //! is a pure function; [`Env::changes`] records the `CGI_PUTENV()` calls
@@ -204,7 +204,7 @@ fn last_slash(pt: &[u8]) -> Option<usize> {
 }
 
 /// `init_request_info()`: `env` is the process environment of a CGI
-/// request, or the environment of a FastCGI request (`CGI_GETENV` and
+/// request, or the environment of a `FastCGI` request (`CGI_GETENV` and
 /// `CGI_PUTENV` then use `request->env`).
 #[allow(clippy::too_many_lines)]
 pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> RequestInfo {
@@ -501,8 +501,8 @@ mod tests {
         )
     }
 
-    /// What run-tests.php passes: SCRIPT_FILENAME = PATH_TRANSLATED = the
-    /// test file, no SCRIPT_NAME (so `PHP_SELF` is empty, as the oracle
+    /// What run-tests.php passes: `SCRIPT_FILENAME` = `PATH_TRANSLATED` = the
+    /// test file, no `SCRIPT_NAME` (so `PHP_SELF` is empty, as the oracle
     /// prints).
     #[test]
     fn run_tests_environment() {
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(php_self(None, None, true), b"");
     }
 
-    /// `/info.php/test`: PATH_INFO is split off the script path.
+    /// `/info.php/test`: `PATH_INFO` is split off the script path.
     #[test]
     fn path_info_split() {
         let mut e = env(&[

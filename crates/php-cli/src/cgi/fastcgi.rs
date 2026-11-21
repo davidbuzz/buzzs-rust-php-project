@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! FastCGI for `php-cgi` (ref: main/fastcgi.c): the listening socket
+//! `FastCGI` for `php-cgi` (ref: `main/fastcgi.c`): the listening socket
 //! (`-b <address:port>|<port>|<path>`, or one a web server passes as
 //! standard input), the record protocol (`BEGIN_REQUEST`, `PARAMS`,
 //! `STDIN` in; `STDOUT`, `STDERR`, `END_REQUEST` out), `GET_VALUES`
@@ -491,7 +491,8 @@ impl Connection {
     }
 
     /// Whether the web server asked to keep the connection (`req->keep`).
-    pub fn keep(&self) -> bool {
+    #[cfg(test)]
+    fn keep(&self) -> bool {
         self.keep.get()
     }
 
@@ -574,13 +575,11 @@ impl Connection {
                     self.keep.set(false);
                     return Incoming::Failed;
                 }
-                match self.read_header() {
-                    Some(h) => hdr = h,
-                    None => {
-                        self.keep.set(false);
-                        return Incoming::Failed;
-                    }
-                }
+                let Some(h) = self.read_header() else {
+                    self.keep.set(false);
+                    return Incoming::Failed;
+                };
+                hdr = h;
             }
             Incoming::Request(env)
         } else if hdr.kind == GET_VALUES {
@@ -783,7 +782,7 @@ impl FastCgiStreams for Connection {
     }
 }
 
-/// The FastCGI side of `main()`: the listening socket and what
+/// The `FastCGI` side of `main()`: the listening socket and what
 /// `fcgi_accept_request()` needs.
 #[derive(Debug)]
 pub struct Server {
@@ -932,7 +931,10 @@ mod tests {
         assert!(is_allowed(Some(&list), Some(mapped)));
         assert!(!is_allowed(Some(&list), Some(other)));
         assert!(is_allowed(None, Some(other)));
-        assert!(is_allowed(Some(&[]), None), "Unix sockets are always allowed");
+        assert!(
+            is_allowed(Some(&[]), None),
+            "Unix sockets are always allowed"
+        );
         assert!(!is_allowed(Some(&[]), Some(v4)));
         assert_eq!(client_ip(Some(mapped)), "10.0.0.2");
     }

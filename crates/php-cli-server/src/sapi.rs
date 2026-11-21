@@ -111,7 +111,7 @@ pub struct RequestCtx {
     pub router_declined: Cell<bool>,
     /// Set when the request runs under the CGI SAPI (`php-cgi`).
     pub cgi: Option<CgiInfo>,
-    /// The FastCGI connection a `php-cgi` request writes to instead of
+    /// The `FastCGI` connection a `php-cgi` request writes to instead of
     /// standard output and standard error.
     pub fcgi: Option<Rc<dyn FastCgiStreams>>,
     /// The exit status of the request's `Vm::shutdown`.
@@ -135,7 +135,7 @@ pub struct CgiInfo {
     pub rfc2616_headers: Cell<bool>,
     /// `cgi.nph`.
     pub nph: Cell<bool>,
-    /// The FastCGI request's environment (`request->env`: its `PARAMS`
+    /// The `FastCGI` request's environment (`request->env`: its `PARAMS`
     /// after `init_request_info()`), in the order the names were first
     /// set; `fcgi_loadenv()` visits them newest first. `None` for a plain
     /// CGI request, whose environment is the process environment.
@@ -143,7 +143,7 @@ pub struct CgiInfo {
 }
 
 impl CgiInfo {
-    /// `fcgi_getenv(request, name)`: `name` in the FastCGI environment.
+    /// `fcgi_getenv(request, name)`: `name` in the `FastCGI` environment.
     pub fn fcgi_getenv(&self, name: &[u8]) -> Option<&[u8]> {
         self.fcgi_env
             .as_ref()?
@@ -153,7 +153,7 @@ impl CgiInfo {
     }
 }
 
-/// The streams of a request `php-cgi` read from a FastCGI connection
+/// The streams of a request `php-cgi` read from a `FastCGI` connection
 /// (`fcgi_write()` of `main/fastcgi.c`): the response goes out as
 /// `FCGI_STDOUT` records and log messages as `FCGI_STDERR` records.
 pub trait FastCgiStreams: std::fmt::Debug {
@@ -242,7 +242,7 @@ impl RequestCtx {
     }
 
     /// This CGI request's output and log messages go to `streams` (a
-    /// FastCGI connection).
+    /// `FastCGI` connection).
     #[must_use]
     pub fn with_fastcgi(mut self, streams: Rc<dyn FastCgiStreams>) -> Self {
         self.fcgi = Some(streams);
@@ -633,7 +633,7 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     setcookie_common(vm, a, true)
 }
 
-/// `flush()`: `sapi_cli_server_flush` sends the headers; under FastCGI
+/// `flush()`: `sapi_cli_server_flush` sends the headers; under `FastCGI`
 /// `sapi_fcgi_flush` also sends the buffered records.
 #[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -688,7 +688,7 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// `sapi_cgi_log_message()`: the message and a newline on stderr, or
-/// in an `FCGI_STDERR` record under FastCGI with `fastcgi.logging`.
+/// in an `FCGI_STDERR` record under `FastCGI` with `fastcgi.logging`.
 fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ty = if a.has(1) { a.int(1) } else { 0 };
     if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
@@ -714,7 +714,7 @@ fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-/// `getenv()` under the CGI SAPI. For a FastCGI request a name is looked
+/// `getenv()` under the CGI SAPI. For a `FastCGI` request a name is looked
 /// up in the request's environment before the process environment
 /// (`sapi_fcgi_getenv`, unless `$local_only`), and without a name the
 /// result is the process environment plus the request's environment
@@ -1127,6 +1127,11 @@ fn run_request_inner(
     ctx.refresh_facts(vm);
 
     // php_cli_server_request_startup() + php_request_startup()
+    // The streams layer's per-request state (the `php://input` body it
+    // caches, per-request wrapper and filter registrations, the stat
+    // cache) starts empty: a php-cgi FastCGI process serves many
+    // requests on this thread.
+    php_streams::state::reset_request();
     let auth = crate::vars::auth_data(ctx.request.header(b"authorization"));
     let ob = vm.ini.get_long("output_buffering");
     let implicit_flush = vm.ini.get_bool("implicit_flush");
@@ -1226,34 +1231,34 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
         (src.clone(), b"Standard input code".to_vec())
     } else {
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&path));
-        match std::fs::read(p)
+        let Some(src) = std::fs::read(p)
             .ok()
             .filter(|_| !path.is_empty() && p.is_file())
-        {
-            Some(src) => {
-                if !cgi.no_chdir {
-                    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
-                        let _ = std::env::set_current_dir(dir);
-                    }
-                }
-                (src, path.clone())
-            }
-            None => {
-                let denied = std::fs::File::open(p)
-                    .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
-                    && !path.is_empty();
-                let (code, msg): (i32, &[u8]) = if denied {
-                    (403, &b"Access denied.\n"[..])
-                } else {
-                    (404, &b"No input file specified.\n"[..])
-                };
-                let _ = ctx.header_op(HeaderOp::SetStatus(code));
-                vm.output(msg);
-                finish(vm, ctx, Ok(()));
+        else {
+            let denied = std::fs::File::open(p)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+                && !path.is_empty();
+            let (code, msg): (i32, &[u8]) = if denied {
+                (403, &b"Access denied.\n"[..])
+            } else {
+                (404, &b"No input file specified.\n"[..])
+            };
+            let _ = ctx.header_op(HeaderOp::SetStatus(code));
+            vm.output(msg);
+            finish(vm, ctx, Ok(()));
+            // CGI ends with FAILURE; `FastCGI` goes on to the next request
+            // (`goto fastcgi_request_done`) with `EG(exit_status)` as is.
+            if cgi.fcgi_env.is_none() {
                 ctx.exit_status.set(255);
-                return;
+            }
+            return;
+        };
+        if !cgi.no_chdir {
+            if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                let _ = std::env::set_current_dir(dir);
             }
         }
+        (src, path.clone())
     };
     let r = execute_script(vm, &src, &shown);
     finish(vm, ctx, r);

@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! `php-cgi` as a FastCGI server (ref: main/fastcgi.c, sapi/cgi/cgi_main.c).
+//! `php-cgi` as a `FastCGI` server (ref: `main/fastcgi.c`, `sapi/cgi/cgi_main.c`).
 //!
 //! `php_cgi_speaks_fastcgi` talks the protocol to `php-cgi -b` directly.
 //! `nginx_runs_php_through_fastcgi` is the end-to-end test: a real nginx
@@ -143,15 +143,11 @@ struct FcgiResponse {
 
 impl FcgiResponse {
     fn body(&self) -> &str {
-        self.stdout
-            .split_once("\r\n\r\n")
-            .map_or("", |(_, b)| b)
+        self.stdout.split_once("\r\n\r\n").map_or("", |(_, b)| b)
     }
 
     fn head(&self) -> &str {
-        self.stdout
-            .split_once("\r\n\r\n")
-            .map_or("", |(h, _)| h)
+        self.stdout.split_once("\r\n\r\n").map_or("", |(h, _)| h)
     }
 }
 
@@ -237,7 +233,10 @@ fn php_cgi_speaks_fastcgi() {
         .spawn()
         .unwrap();
     let addr = format!("127.0.0.1:{port}");
-    wait_for(&mut child, "php-cgi -b", || TcpStream::connect(&addr).is_ok()).unwrap();
+    wait_for(&mut child, "php-cgi -b", || {
+        TcpStream::connect(&addr).is_ok()
+    })
+    .unwrap();
     let mut proc = Proc(child);
     let script = script.to_str().unwrap();
     let base = [
@@ -256,7 +255,10 @@ fn php_cgi_speaks_fastcgi() {
     let r1 = fcgi(&mut s, 1, true, &params, b"");
     assert!(r1.ended, "{r1:?}");
     assert!(r1.head().contains("X-E2E: fastcgi"), "{r1:?}");
-    assert!(r1.head().contains("Content-type: text/html; charset=UTF-8"), "{r1:?}");
+    assert!(
+        r1.head().contains("Content-type: text/html; charset=UTF-8"),
+        "{r1:?}"
+    );
     let b1 = r1.body();
     assert_eq!(field(b1, "sapi"), "cgi-fcgi");
     assert_eq!(field(b1, "version"), php_version());
@@ -264,7 +266,10 @@ fn php_cgi_speaks_fastcgi() {
     assert_eq!(field(b1, "role"), "RESPONDER");
     assert_eq!(field(b1, "getenv"), "HTTP/1.1");
     assert_eq!(field(b1, "sum"), "55");
-    assert_eq!(r1.stderr, "e2e-log-line\n", "error_log() goes out as FCGI_STDERR");
+    assert_eq!(
+        r1.stderr, "e2e-log-line\n",
+        "error_log() goes out as FCGI_STDERR"
+    );
 
     let body = b"a=1&b=two";
     let mut params = base.to_vec();
@@ -314,7 +319,10 @@ fn php_cgi_speaks_fastcgi() {
         if let Some(st) = proc.0.try_wait().unwrap() {
             break st;
         }
-        assert!(Instant::now() < deadline, "php-cgi did not exit after 3 requests");
+        assert!(
+            Instant::now() < deadline,
+            "php-cgi did not exit after 3 requests"
+        );
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(status.success(), "{status}");
@@ -472,10 +480,15 @@ fn nginx_runs_php_through_fastcgi() {
     };
 
     // nginx accepts the configuration that routes *.php to FastCGI.
-    let t = Command::new(&nginx).args(nginx_args(&["-t"])).output().unwrap();
+    let t = Command::new(&nginx)
+        .args(nginx_args(&["-t"]))
+        .output()
+        .unwrap();
     let t_err = String::from_utf8_lossy(&t.stderr).into_owned();
     assert!(
-        t.status.success() && t_err.contains("syntax is ok") && t_err.contains("test is successful"),
+        t.status.success()
+            && t_err.contains("syntax is ok")
+            && t_err.contains("test is successful"),
         "nginx -t: {t_err}"
     );
 
@@ -489,7 +502,10 @@ fn nginx_runs_php_through_fastcgi() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    wait_for(&mut php, "php-cgi -b", || UnixStream::connect(&socket).is_ok()).unwrap();
+    wait_for(&mut php, "php-cgi -b", || {
+        UnixStream::connect(&socket).is_ok()
+    })
+    .unwrap();
     let _php = Proc(php);
 
     let mut web = Command::new(&nginx)
@@ -514,7 +530,11 @@ fn nginx_runs_php_through_fastcgi() {
     assert!(r.header("Server").starts_with("nginx/"), "{r:?}");
     assert_eq!(r.header("X-Powered-By"), format!("PHP/{v}"), "{r:?}");
     assert_eq!(r.header("X-E2E"), "fastcgi", "{r:?}");
-    assert_eq!(r.header("Content-Type"), "text/html; charset=UTF-8", "{r:?}");
+    assert_eq!(
+        r.header("Content-Type"),
+        "text/html; charset=UTF-8",
+        "{r:?}"
+    );
     let b = &r.body;
     assert_eq!(field(b, "sapi"), "cgi-fcgi", "{b}");
     assert_eq!(field(b, "version"), v, "{b}");

@@ -929,6 +929,11 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
 /// `php-ext-streams` sets them up).
 fn install_input_hook() {
     use php_ext_streams::bridge::with_vm;
+    // The streams layer's per-request state (the `php://input` body it
+    // caches, per-request wrapper and filter registrations, the stat
+    // cache) starts empty: a prefork child serves many requests on this
+    // thread.
+    php_streams::state::reset_request();
     php_streams::state::set_hooks(php_streams::state::Hooks {
         output: Some(Box::new(|data: &[u8]| {
             let data = data.to_vec();

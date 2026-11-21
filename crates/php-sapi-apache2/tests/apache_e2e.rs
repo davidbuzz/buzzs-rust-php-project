@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! End to end: mod_php in a real Apache httpd (ref: sapi/apache2handler).
+//! End to end: `mod_php` in a real Apache httpd (ref: sapi/apache2handler).
 //!
 //! The module this build made (`libphprust_apache2.so`) is loaded into
 //! the system `apache2` with a configuration of its own (prefork MPM, a
@@ -193,6 +193,7 @@ fn curl(url: &str, extra: &[&str]) -> HttpResponse {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn apache_loads_mod_php_and_runs_php() {
     let Some(httpd) = apache2() else {
         eprintln!("SKIPPED apache_loads_mod_php_and_runs_php: no /usr/sbin/apache2 (set APACHE2)");
@@ -271,7 +272,11 @@ fn apache_loads_mod_php_and_runs_php() {
     assert!(r.header("Server").contains(&format!("PHP/{v}")), "{r:?}");
     assert_eq!(r.header("X-Powered-By"), format!("PHP/{v}"), "{r:?}");
     assert_eq!(r.header("X-E2E"), "mod_php", "{r:?}");
-    assert_eq!(r.header("Content-Type"), "text/html; charset=UTF-8", "{r:?}");
+    assert_eq!(
+        r.header("Content-Type"),
+        "text/html; charset=UTF-8",
+        "{r:?}"
+    );
     let b = &r.body;
     assert_eq!(field(b, "sapi"), "apache2handler", "{b}");
     assert_eq!(field(b, "version"), v, "{b}");
@@ -284,7 +289,10 @@ fn apache_loads_mod_php_and_runs_php() {
     assert_eq!(field(b, "sum"), "55", "{b}");
 
     // A form POST.
-    let r = curl(&format!("http://127.0.0.1:{port}/e2e.php"), &["--data", "a=1&b=two"]);
+    let r = curl(
+        &format!("http://127.0.0.1:{port}/e2e.php"),
+        &["--data", "a=1&b=two"],
+    );
     assert_eq!(r.status, "HTTP/1.1 200 OK", "{r:?}");
     assert_eq!(field(&r.body, "method"), "POST", "{r:?}");
     assert_eq!(field(&r.body, "post"), r#"{"a":"1","b":"two"}"#, "{r:?}");

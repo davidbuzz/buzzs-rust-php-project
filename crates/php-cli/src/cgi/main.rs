@@ -1,10 +1,10 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! The `php-cgi` binary: the CGI/1.1 and FastCGI SAPI (ref:
-//! sapi/cgi/cgi_main.c, main/fastcgi.c).
+//! The `php-cgi` binary: the CGI/1.1 and `FastCGI` SAPI (ref:
+//! `sapi/cgi/cgi_main.c`, `main/fastcgi.c`).
 //!
-//! FastCGI: `-b <address:port>|<port>|<path>` listens on a TCP or Unix
-//! socket, and a listening socket passed as standard input (mod_fcgid,
+//! `FastCGI`: `-b <address:port>|<port>|<path>` listens on a TCP or Unix
+//! socket, and a listening socket passed as standard input (`mod_fcgid`,
 //! spawn-fcgi) is used as it is. `PHP_FCGI_MAX_REQUESTS` (default 500),
 //! `PHP_FCGI_CHILDREN` (pre-forked children), `FCGI_WEB_SERVER_ADDRS`
 //! and `fastcgi.logging` behave as in php-src; `PHP_FCGI_BACKLOG` is
@@ -30,6 +30,7 @@ mod env;
 #[allow(dead_code)]
 #[path = "../extensions.rs"]
 mod extensions;
+mod fastcgi;
 #[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
@@ -38,7 +39,6 @@ mod getopt;
 mod memcap;
 #[path = "../startup.rs"]
 mod startup;
-mod fastcgi;
 mod sys;
 
 use config::Config;
@@ -436,7 +436,14 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         None
     };
     if let Some((listener, allowed)) = listener {
-        finish(fastcgi_main(&cfg, argv, &argv0, skip_getopt, listener, allowed));
+        finish(fastcgi_main(
+            &cfg,
+            argv,
+            &argv0,
+            skip_getopt,
+            listener,
+            allowed,
+        ));
     }
 
     // Second pass: help and invalid options.
@@ -515,10 +522,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
             // Standard input when no file is named ("Standard input code").
             let path = match info.path_translated.clone() {
                 Some(p) => p,
-                None => match stdin_to_temp() {
-                    Some(p) => p,
-                    None => Vec::new(),
-                },
+                None => stdin_to_temp().unwrap_or_default(),
             };
             let mut code = if cl.behavior == Behavior::Highlight {
                 b"<?php highlight_file('".to_vec()
@@ -615,7 +619,7 @@ fn request_settings(cfg: &Config) -> env::Settings {
     }
 }
 
-/// The FastCGI part of `main()`: `PHP_FCGI_MAX_REQUESTS`,
+/// The `FastCGI` part of `main()`: `PHP_FCGI_MAX_REQUESTS`,
 /// `PHP_FCGI_CHILDREN` (pre-forked children, each replaced when it
 /// exits), the second option pass, then requests until the limit, a
 /// shutdown signal or a failed `accept()`. Returns the exit status.
@@ -682,7 +686,7 @@ fn fastcgi_main(
     exit_status
 }
 
-/// One FastCGI request: `init_request_info()` on its environment, the
+/// One `FastCGI` request: `init_request_info()` on its environment, the
 /// body from its `STDIN` stream, the script with output and log messages
 /// as records, then `fcgi_finish_request()` (before the VM is torn down,
 /// as `sapi_cgi_deactivate()` ends the request in request shutdown).

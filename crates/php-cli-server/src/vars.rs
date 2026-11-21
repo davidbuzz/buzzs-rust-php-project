@@ -175,7 +175,7 @@ fn register(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray, cookie: 
 }
 
 /// `php_register_variable_safe()` into `$_SERVER`-like `track` (the
-/// FastCGI environment as `cgi_php_load_env_var()` registers it).
+/// `FastCGI` environment as `cgi_php_load_env_var()` registers it).
 pub(crate) fn register_server_var(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray) {
     register(vm, name, value, track, false);
 }
@@ -734,7 +734,13 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         // cgi_php_import_environment_variables(): then a FastCGI
         // request's environment, newest name first (`fcgi_loadenv()`).
         for (k, v) in cgi.fcgi_env.iter().flatten().rev() {
-            register(vm, k, Value::Str(ZStr::from(v.as_slice())), &mut server, false);
+            register(
+                vm,
+                k,
+                Value::Str(ZStr::from(v.as_slice())),
+                &mut server,
+                false,
+            );
         }
         let self_ = Value::Str(ZStr::from(cgi.php_self.as_slice()));
         register(vm, b"PHP_SELF", self_, &mut server, false);
