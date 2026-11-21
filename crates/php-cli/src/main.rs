@@ -806,6 +806,12 @@ fn run_snippet(
     let mut request_argv = vec![b"Standard input code".to_vec()];
     request_argv.extend_from_slice(args);
     vm.set_cli_args("Standard input code", args);
+    // php_cli.c: without a script file, `path_translated` is `php_self`.
+    vm.request_info = php_sapi::RequestInfo {
+        path_translated: Some(b"Standard input code".to_vec()),
+        argv: request_argv.clone(),
+        ..php_sapi::RequestInfo::default()
+    };
     sapi::register_variables(
         &mut vm,
         &sapi::Request {
@@ -914,6 +920,12 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
                 Err(status) => return status,
             };
             vm.set_cli_args(&lossy(&php_self), &request_argv[1..]);
+            // php_cli.c: the script's realpath, else `php_self`.
+            vm.request_info = php_sapi::RequestInfo {
+                path_translated: Some(real_path(&php_self)),
+                argv: request_argv.clone(),
+                ..php_sapi::RequestInfo::default()
+            };
             sapi::register_variables(
                 &mut vm,
                 &sapi::Request {
