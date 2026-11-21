@@ -133,6 +133,218 @@ pub struct OptContext<'a> {
     /// by (`zend_try_inline_call`): the functions of the file compiled so
     /// far that only return a literal. `None`: no call is inlined.
     pub inline: Option<Inliner<'a>>,
+    /// Whether the class of this lower-case name (a top-level class of the
+    /// file compiled so far) makes objects that do nothing visible when
+    /// made, written or freed ([`fold_local_objects`]). `None`: only
+    /// `stdClass` is known to.
+    pub plain_class: Option<ClassCheck<'a>>,
+}
+
+/// [`OptContext::plain_class`].
+#[derive(Clone, Copy)]
+pub struct ClassCheck<'a>(pub &'a ClassFn<'a>);
+
+/// The test of a [`ClassCheck`].
+pub type ClassFn<'a> = dyn Fn(&[u8]) -> bool + 'a;
+
+impl std::fmt::Debug for ClassCheck<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClassCheck")
+    }
+}
+
+/// A local object [`fold_local_objects`] may fold: the variable, and the
+/// ops of `new C` (the `New`, its constructor call, the assignment).
+struct LocalObject {
+    cv: u32,
+    new_at: usize,
+    call_at: usize,
+    assign_at: usize,
+}
+
+/// The local objects of `op_array` that never escape: `New` of a plain
+/// class without arguments, its `DoCall`, `AssignCv` into a variable no
+/// other op defines, and every other op naming that variable a read,
+/// write, `op=` or `++`/`--` of one constant-named property of it.
+fn local_objects(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<LocalObject> {
+    let plain = |lc: &[u8]| lc == b"stdclass" || ctx.plain_class.is_some_and(|ClassCheck(f)| f(lc));
+    let mut out = Vec::new();
+    for (i, op) in op_array.ops.iter().enumerate() {
+        let Op::New {
+            class: ClassSpec::Named(lit),
+            dst: t,
+            skip,
+        } = op
+        else {
+            continue;
+        };
+        let named = matches!(
+            op_array.literals.get(*lit as usize),
+            Some(Value::Str(name)) if plain(&name.as_bytes().to_ascii_lowercase())
+        );
+        if !named || *skip as usize != i + 2 {
+            continue;
+        }
+        let (Some(Op::DoCall { dst: None }), Some(&Op::AssignCv { cv, val, dst: None })) =
+            (op_array.ops.get(i + 1), op_array.ops.get(i + 2))
+        else {
+            continue;
+        };
+        if val != Operand::Tmp(*t) || cv < ctx.bound_cv_prefix() {
+            continue;
+        }
+        if only_through_props(op_array, cv, i + 2) {
+            out.push(LocalObject {
+                cv,
+                new_at: i,
+                call_at: i + 1,
+                assign_at: i + 2,
+            });
+        }
+    }
+    out
+}
+
+/// Whether every op but the one at `def` names `cv` only as the base of
+/// a constant-named property it reads, writes, compounds or increments.
+fn only_through_props(op_array: &OpArray, cv: u32, def: usize) -> bool {
+    let prop_place = |p: u32| {
+        op_array.places.get(p as usize).is_some_and(|pl| {
+            matches!(pl.base, PlaceBase::Cv(c) if c == cv)
+                && matches!(
+                    pl.segs.as_slice(),
+                    [Seg::Prop(Operand::Lit(l))]
+                        if matches!(op_array.literals.get(*l as usize), Some(Value::Str(_)))
+                )
+        })
+    };
+    for (j, op) in op_array.ops.iter().enumerate() {
+        if j == def {
+            continue;
+        }
+        let through_prop = match op {
+            Op::Assign { place, val, .. } | Op::AssignOp { place, val, .. } => {
+                prop_place(*place) && !matches!(val, Operand::Cv(c) if *c == cv)
+            }
+            Op::IncDec { place, .. }
+            | Op::Fetch {
+                place,
+                mode: crate::opcode::FetchMode::Read,
+                ..
+            } => prop_place(*place),
+            _ => false,
+        };
+        if through_prop {
+            continue;
+        }
+        let mut named = false;
+        let mut copy = op.clone();
+        compact::for_each_cv_mut(&mut copy, |c| named |= *c == cv);
+        compact::for_each_op_place(op, |p| {
+            if let Some(pl) = op_array.places.get(p as usize) {
+                let mut pl = pl.clone();
+                compact::for_each_place_cv_mut(&mut pl, |c| named |= *c == cv);
+            }
+        });
+        if named {
+            return false;
+        }
+    }
+    true
+}
+
+/// The fields of `op_array` the passes read and write, without its
+/// run-time caches: a copy to optimize on trial.
+fn trial_copy(op_array: &OpArray) -> OpArray {
+    OpArray {
+        ops: op_array.ops.clone(),
+        lines: op_array.lines.clone(),
+        literals: op_array.literals.clone(),
+        places: op_array.places.clone(),
+        cv_names: op_array.cv_names.clone(),
+        num_tmps: op_array.num_tmps,
+        num_iters: op_array.num_iters,
+        num_finally: op_array.num_finally,
+        num_statics: op_array.num_statics,
+        static_vars: op_array.static_vars.clone(),
+        try_table: op_array.try_table.clone(),
+        live_tmps: op_array.live_tmps.clone(),
+        filename: op_array.filename.clone(),
+        strict_types: op_array.strict_types,
+        decls: op_array.decls.clone(),
+        ..OpArray::default()
+    }
+}
+
+/// php-src's partial objects and the DCE of non-escaping ones, through the
+/// array analysis: see [`LocalObject`]. The optimizer rounds run on a copy
+/// in which each such object is a local array; the copy is taken when no
+/// op names any of those variables any more.
+fn fold_local_objects(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
+    if ctx.is_main
+        || ctx.has_ref_binding()
+        || !op_array.try_table.is_empty()
+        || compact::has_dynamic_var_access(op_array)
+    {
+        return;
+    }
+    let objects = local_objects(op_array, ctx);
+    if objects.is_empty() {
+        return;
+    }
+    let mut trial = trial_copy(op_array);
+    let empty = add_or_find_literal(
+        &mut trial.literals,
+        Value::Array(php_runtime::ZArray::new()),
+    );
+    for o in &objects {
+        trial.ops[o.new_at] = Op::Nop;
+        trial.ops[o.call_at] = Op::Nop;
+        trial.ops[o.assign_at] = Op::AssignCv {
+            cv: o.cv,
+            val: Operand::Lit(empty),
+            dst: None,
+        };
+        for pl in &mut trial.places {
+            if matches!(pl.base, PlaceBase::Cv(c) if c == o.cv) {
+                if let [Seg::Prop(name)] = pl.segs.as_slice() {
+                    pl.segs = vec![Seg::Dim(*name)];
+                }
+            }
+        }
+    }
+    optimize_rounds(&mut trial, level, ctx);
+    let still_named = trial.ops.iter().any(|op| {
+        let mut named = false;
+        let mut copy = op.clone();
+        compact::for_each_cv_mut(&mut copy, |c| {
+            named |= objects.iter().any(|o| o.cv == *c);
+        });
+        compact::for_each_op_place(op, |p| {
+            if let Some(pl) = trial.places.get(p as usize) {
+                let mut pl = pl.clone();
+                compact::for_each_place_cv_mut(&mut pl, |c| {
+                    named |= objects.iter().any(|o| o.cv == *c);
+                });
+            }
+        });
+        named
+    });
+    if still_named {
+        return;
+    }
+    op_array.ops = trial.ops;
+    op_array.lines = trial.lines;
+    op_array.literals = trial.literals;
+    op_array.places = trial.places;
+    op_array.cv_names = trial.cv_names;
+    op_array.num_tmps = trial.num_tmps;
+    op_array.num_iters = trial.num_iters;
+    op_array.num_finally = trial.num_finally;
+    op_array.num_statics = trial.num_statics;
+    op_array.static_vars = trial.static_vars;
+    op_array.try_table = trial.try_table;
+    op_array.live_tmps = trial.live_tmps;
 }
 
 /// [`OptContext::inline`]: (name, arguments sent, result used) to the
@@ -277,6 +489,19 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
     if (level & PASS_16) != 0 {
         inline_literal_calls(op_array, ctx);
     }
+    optimize_rounds(op_array, level, ctx);
+    // Objects that never escape, as SCCP's partial objects and DCE see them.
+    if (level & (PASS_6 | PASS_8)) != 0 && (level & PASS_14) != 0 {
+        fold_local_objects(op_array, level, ctx);
+    }
+    // (The tail of the rounds' function: specialisation.)
+    finish_optimized(op_array);
+}
+
+/// The optimizer's rounds: constant folding, jump threading, SCCP, the
+/// block pass and dead code elimination feed each other until a fixed
+/// point or the round limit.
+fn optimize_rounds(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
     // Iterative optimization loop: constant folding, jump threading, SCCP,
     // block-pass, and dead code elimination feed each other until a fixed
     // point or iteration limit is reached.
@@ -345,7 +570,11 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
     if (level & PASS_11) != 0 {
         compact::compact_literals(op_array);
     }
+}
 
+/// What follows the rounds: handler specialisation over the optimized
+/// instructions.
+fn finish_optimized(op_array: &mut OpArray) {
     // Re-run handler specialisation over the optimized instructions
     specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
 }
@@ -365,6 +594,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
                 verifies_return: false,
                 known: None,
                 inline: None,
+                plain_class: None,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }

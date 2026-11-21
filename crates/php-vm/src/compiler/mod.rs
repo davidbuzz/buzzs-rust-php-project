@@ -1129,6 +1129,19 @@ impl Compiler<'_> {
                 let f = own.or_else(|| declared.and_then(|t| t.preloaded(lc)))?;
                 optimizer::dump::literal_return_value(&f, sent, false, used)
             };
+            // The top-level classes of this file compiled so far whose
+            // objects do nothing visible when made, written or freed.
+            let (unit_classes, hoisted_classes) = (&self.decls.classes, &self.hoisted_classes);
+            let plain_class = |lc: &[u8]| {
+                let Ok(table) = unit_classes.try_borrow() else {
+                    return false;
+                };
+                hoisted_classes
+                    .iter()
+                    .filter_map(|&k| table.get(k as usize))
+                    .find(|c| c.name.as_bytes().eq_ignore_ascii_case(lc))
+                    .is_some_and(|c| plain_object_class(c))
+            };
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
@@ -1141,6 +1154,7 @@ impl Compiler<'_> {
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
                 known: Some(&known),
                 inline: Some(optimizer::Inliner(&inline)),
+                plain_class: Some(optimizer::ClassCheck(&plain_class)),
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);
@@ -1528,6 +1542,39 @@ fn intern_array_strings(a: &mut php_runtime::ZArray) {
             _ => {}
         }
     }
+}
+
+/// Whether objects of the class `c` do nothing visible when made,
+/// written through dynamic properties or freed: a plain `class` with no
+/// parent, interface or trait, no constructor, destructor or property
+/// magic, no declared property, and dynamic properties allowed
+/// (`#[AllowDynamicProperties]`).
+fn plain_object_class(c: &ClassDecl) -> bool {
+    use crate::class::cflags;
+    const MAGIC: &[&[u8]] = &[
+        b"__construct",
+        b"__destruct",
+        b"__get",
+        b"__set",
+        b"__isset",
+        b"__unset",
+    ];
+    c.kind == crate::class::ClassKind::Class
+        && c.flags & (cflags::ABSTRACT | cflags::READONLY | cflags::ANON) == 0
+        && c.parent.is_none()
+        && c.interfaces.is_empty()
+        && c.traits.is_empty()
+        && c.props.is_empty()
+        && !c.methods.iter().any(|m| {
+            MAGIC
+                .iter()
+                .any(|n| m.name.as_bytes().eq_ignore_ascii_case(n))
+        })
+        && c.attributes.iter().any(|a| {
+            a.name
+                .as_bytes()
+                .eq_ignore_ascii_case(b"AllowDynamicProperties")
+        })
 }
 
 /// Records in [`OpArray::static_vars`] the constant initializers that the

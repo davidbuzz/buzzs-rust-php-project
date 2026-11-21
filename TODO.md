@@ -194,13 +194,13 @@ Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       the general steps of `fe_fetch_into` for an array or object value.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 14 left in the targeted set of 13,935
-      tests on 2026-11-21): dce_005, sccp_010/011/012/026,
+- [ ] Optimizer/opcache dump failures (30 of 38; 11 left in the targeted set of 13,935
+      tests on 2026-11-21): sccp_012/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2,
       array_map_foreach_optimization_008/013 (the dumps of the closures php-src
       compiles for a partial application), named_parameter_new (named arguments to
       a constructor known at compile time as positional sends, and the return type
-      check of `new self` dropped). Done 2026-11-21: array_map_foreach_optimization_007
+      check of `new self` dropped). Done 2026-11-21: dce_005, sccp_010, sccp_011 (an object that never escapes, of a class whose objects do nothing visible, is folded like a local array: `optimizer::fold_local_objects`), array_map_foreach_optimization_007
       and _014 (`array_map()` of a partial application is a loop; a `foreach` over an
       int-keyed list result keeps no live ranges), gh9164 (a script index shared by forked processes:
       `php_opcache::shared_index`), jit/ignored_opcodes and preload_optimizer (a call of
