@@ -60,6 +60,19 @@ Per-crate checks, as required before any work is declared done:
 cargo fmt && cargo clippy --all-targets -p <crate> && cargo test -p <crate>
 ```
 
+The full run, recorded as evidence in git, is one command:
+
+```sh
+./run-all-tests.sh               # add --no-commit to write the log without committing it
+```
+
+It builds the whole workspace in release mode, runs `cargo test --workspace --release`, the
+full in-scope PHPT suite on the release `php` (every PASS/FAIL line, a diff for each failure,
+checked against `phpt-baseline.txt`) and `perf/bench/timing.py` against `/usr/bin/php`. All of
+the output goes to `<DD-MON-YYYY>.full-test-run.log` in the repository root, ending in a summary
+of the four phases, and the script commits that file locally (it never pushes).
+`16-NOV-2026.full-test-run.log` is an earlier run in the same layout, without the timing phase.
+
 Use these incremental dev-profile builds for correctness checks and scoped PHPT
 runs. Reserve `--release` for performance measurements: the release profile uses
 thin LTO and one codegen unit, which makes rebuilding test executables expensive.
