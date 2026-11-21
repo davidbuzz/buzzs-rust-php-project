@@ -3,7 +3,7 @@
 //! SPL callables (`iterator_apply()`, the callback filter iterators,
 //! `ArrayObject::uasort()`): resolved once, in the calling scope, with the
 //! callable deprecations raised there (`Z_PARAM_FUNC`), and called through
-//! that resolution. Expected output from php-src (`/usr/bin/php`).
+//! that resolution. Expected output from php-src (`/usr/bin/php8.5`).
 
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;

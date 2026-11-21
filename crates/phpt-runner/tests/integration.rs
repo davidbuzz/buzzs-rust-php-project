@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Integration tests: the section parser and EXPECTF matcher against fixtures, and end-to-end
-//! runs of the `phpt-runner` binary with the reference `/usr/bin/php` (skipped when absent).
+//! runs of the `phpt-runner` binary with the reference `/usr/bin/php8.5` (skipped when absent).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,7 +14,7 @@ use phpt_runner::phpt::{ExpectKind, TestFile};
 use phpt_runner::report::JsonReport;
 use phpt_runner::result::Status;
 
-const REFERENCE_PHP: &str = "/usr/bin/php";
+const REFERENCE_PHP: &str = "/usr/bin/php8.5";
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run")
@@ -28,7 +28,7 @@ fn reference_php() -> Option<&'static str> {
     Path::new(REFERENCE_PHP).is_file().then_some(REFERENCE_PHP)
 }
 
-const REFERENCE_PHP_CGI: &str = "/usr/bin/php-cgi";
+const REFERENCE_PHP_CGI: &str = "/usr/bin/php-cgi8.5";
 
 fn reference_php_cgi() -> Option<&'static str> {
     Path::new(REFERENCE_PHP_CGI)

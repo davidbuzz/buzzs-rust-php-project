@@ -992,7 +992,7 @@ mod tests {
 
     /// `(string)` at `precision=14` and `5` where the shortest digits are
     /// longer than the precision (rounded from them, or by the exact
-    /// formatter near a half). Expectations from `/usr/bin/php -n`.
+    /// formatter near a half). Expectations from `/usr/bin/php8.5 -n`.
     #[test]
     fn precision_rounding_of_long_shortest_digits() {
         let cases: [(f64, &str, &str); 9] = [
@@ -1117,7 +1117,7 @@ mod tests {
     }
 
     /// Shortest-digit ties round to even like `zend_dtoa` mode 0.
-    /// Expectations from `/usr/bin/php -n`.
+    /// Expectations from `/usr/bin/php8.5 -n`.
     #[test]
     #[allow(clippy::excessive_precision)]
     fn shortest_ties_round_to_even() {

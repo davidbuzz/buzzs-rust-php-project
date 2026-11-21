@@ -279,7 +279,7 @@ fn oracle() {
 }
 
 #[test]
-#[ignore = "runs /usr/bin/php to rebuild the fixture"]
+#[ignore = "runs /usr/bin/php8.5 to rebuild the fixture"]
 fn regenerate_fixture() {
     regenerate("scanf", &cases());
 }

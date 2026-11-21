@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Stream-level tests; expected values were taken from `/usr/bin/php`.
+//! Stream-level tests; expected values were taken from `/usr/bin/php8.5`.
 
 use super::*;
 use crate::memory::{memory_create, temp_create};

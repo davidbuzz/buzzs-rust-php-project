@@ -1302,7 +1302,7 @@ fn scalar_sort_separates_a_shared_array() {
 /// Int pairs compare inline in `sort_table` (`zend_compare`'s long/long
 /// case); ties keep their original order, `arsort`/`rsort` reverse the
 /// comparison but not the tie-break, and mixed values take the generic
-/// comparison. Expected orders from `/usr/bin/php -n`.
+/// comparison. Expected orders from `/usr/bin/php8.5 -n`.
 #[test]
 fn int_sorts_compare_inline_and_stay_stable() {
     let mut ctx = Ctx::new();

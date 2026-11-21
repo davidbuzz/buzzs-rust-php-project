@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate php-date's oracle tables (tests/data/*.tsv) using /usr/bin/php.
+"""Regenerate php-date's oracle tables (tests/data/*.tsv) using /usr/bin/php8.5.
 
 Usage (from the repository root):
 

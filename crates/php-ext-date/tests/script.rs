@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `date` extension.
-//! Expected outputs come from `/usr/bin/php` (`date.timezone=UTC`), except
+//! Expected outputs come from `/usr/bin/php8.5` (`date.timezone=UTC`), except
 //! `sun` whose `sunrise`/`sunset` follow php-src master (upper-limb
 //! refraction of -35/60 degrees, changed after 8.3).
 

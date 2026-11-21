@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of type-declaration coercion (expected output from
-//! `/usr/bin/php -n`, paths normalised to `t.php`).
+//! `/usr/bin/php8.5 -n`, paths normalised to `t.php`).
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -882,7 +882,7 @@ fn class_refs_are_computed_once_per_declaration() {
 /// the references held by them, also for an alias registered after the
 /// declaration. A name absent from the table never matches, and the
 /// diagnostics keep the declared names (expected output from
-/// `/usr/bin/php -n`).
+/// `/usr/bin/php8.5 -n`).
 #[test]
 fn class_alias_types_accept_the_aliased_class() {
     let src = r#"<?php

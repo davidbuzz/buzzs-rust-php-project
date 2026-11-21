@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php` by
+//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php8.5` by
 //! `tests/oracle/gen_oracle.php`: every `ctype_*` function over all bytes,
 //! integers and other types, plus every call made by `ext/ctype/tests/*.phpt`.
 
@@ -71,10 +71,10 @@ fn oracle() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Regenerates the fixture with `/usr/bin/php`:
+/// Regenerates the fixture with `/usr/bin/php8.5`:
 /// `cargo test -p php-ctype -- --ignored regenerate_oracle`.
 #[test]
-#[ignore = "needs /usr/bin/php and modules/php-src"]
+#[ignore = "needs /usr/bin/php8.5 and modules/php-src"]
 fn regenerate_oracle() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle/gen_oracle.php");
     let status = std::process::Command::new("php")

@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Prepared statements: parameter binding/encoding, long data, cursors,
-//! multiple result sets, errors — compared with `/usr/bin/php`.
+//! multiple result sets, errors — compared with `/usr/bin/php8.5`.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

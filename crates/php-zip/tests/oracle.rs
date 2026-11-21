@@ -3,7 +3,7 @@
 //! Oracle-driven scenario tests.
 //!
 //! Every `tests/oracle/scenarios/*.jsonl` file is a list of JSON-array
-//! commands. `tests/oracle/runner.php` executes them with `/usr/bin/php`
+//! commands. `tests/oracle/runner.php` executes them with `/usr/bin/php8.5`
 //! (PHP 8.3 with ext/zip on the same system libzip) and the transcripts are
 //! cached in `tests/oracle/expected/*.out`; this file interprets the same
 //! commands against the php-zip API and must print identical transcripts.
@@ -107,9 +107,9 @@ echo json_encode($o, JSON_PRETTY_PRINT), "\n";
 "#;
 
 #[test]
-#[ignore = "regenerates the oracle cache with /usr/bin/php"]
+#[ignore = "regenerates the oracle cache with /usr/bin/php8.5"]
 fn regenerate() {
-    let out = Command::new("/usr/bin/php")
+    let out = Command::new("/usr/bin/php8.5")
         .args(["-d", "memory_limit=1G", "-r", REFLECT])
         .output()
         .unwrap();
@@ -123,7 +123,7 @@ fn regenerate() {
             continue;
         }
         let dir = workdir(&name, "php");
-        let out = Command::new("/usr/bin/php")
+        let out = Command::new("/usr/bin/php8.5")
             .args([
                 "-d",
                 "memory_limit=1G",

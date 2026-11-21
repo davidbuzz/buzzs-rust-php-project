@@ -1,6 +1,6 @@
 <?php
 // Helpers for generating CJK oracle fixtures with the C implementation of
-// mbstring (`/usr/bin/php`). Fixture scripts `require` this file and call
+// mbstring (`/usr/bin/php8.5`). Fixture scripts `require` this file and call
 // conv()/check(); output goes to stdout, redirect it into a `.tsv` file.
 // Replayed by `codecs::cjk::testutil::replay_oracle`.
 //

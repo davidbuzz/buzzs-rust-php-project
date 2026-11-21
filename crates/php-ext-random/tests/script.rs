@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `random` extension.
-//! Expected values come from php-src (`/usr/bin/php`).
+//! Expected values come from php-src (`/usr/bin/php8.5`).
 
 const EXT: php_ext_random::Random = php_ext_random::Random;
 

@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php` by
+//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php8.5` by
 //! `tests/oracle/gen_oracle.php` (hand-written cases plus every
 //! `json_encode`/`json_decode`/`json_validate` call made by
 //! `ext/json/tests/*.phpt` whose arguments can be rebuilt from `serialize()`).

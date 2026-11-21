@@ -4,7 +4,7 @@
 //! `ZEND_STRLEN`, `ZEND_TYPE_CHECK`, `ZEND_CAST`, `ZEND_GET_TYPE`,
 //! `ZEND_DEFINED`, `ZEND_IN_ARRAY`, `ZEND_ARRAY_KEY_EXISTS`) or constants
 //! (`chr()`, `ord()`): same results as the calls, and no builtin frame
-//! (expected outputs from `/usr/bin/php -n`; the null-key deprecation of
+//! (expected outputs from `/usr/bin/php8.5 -n`; the null-key deprecation of
 //! `array_key_exists()`, the float-key owner check and the `chr()`/`ord()`
 //! range and length deprecations follow php-src master).
 use php_runtime::{Value, ZStr};

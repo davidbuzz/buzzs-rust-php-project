@@ -1470,7 +1470,7 @@ mod tests {
     }
 
     /// The one-argument math functions run without their handlers, with
-    /// the handlers' results (`/usr/bin/php -n`: `var_dump()` of each).
+    /// the handlers' results (`/usr/bin/php8.5 -n`: `var_dump()` of each).
     #[test]
     #[allow(clippy::float_cmp)]
     fn inline_math_results_are_the_handlers() {
@@ -1975,7 +1975,7 @@ for ($i = 0; $i < 3; $i++) {
     /// results of `abs()`, `ord()` and `chr()`, and arguments taken from
     /// variables, literals and temporaries, which the calls release (the
     /// variables are reused afterwards). Expected output from
-    /// `/usr/bin/php -n`.
+    /// `/usr/bin/php8.5 -n`.
     #[test]
     fn frameless_calls_in_place_match_the_handlers() {
         use std::cell::RefCell;
@@ -2020,7 +2020,7 @@ echo f("a"), " ", $s, "\n";
     /// place, and declined ones (a reference, a coerced or invalid
     /// argument, an undefined variable, a `ValueError`) run as the call
     /// ops they replaced, with the builtin's frame in the trace. Expected
-    /// output from `/usr/bin/php -n`.
+    /// output from `/usr/bin/php8.5 -n`.
     #[test]
     fn fused_frameless_calls_match_the_call_ops() {
         use std::cell::RefCell;

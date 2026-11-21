@@ -3,7 +3,7 @@
 //! Shared helpers for the oracle fixture tests.
 //!
 //! Fixtures live in `tests/fixtures/*.txt` and are produced by the PHP
-//! scripts in `tests/gen/` run with `/usr/bin/php` (see the ignored
+//! scripts in `tests/gen/` run with `/usr/bin/php8.5` (see the ignored
 //! `regenerate_fixtures` test in `tests/regenerate.rs`).
 
 #![allow(dead_code)]

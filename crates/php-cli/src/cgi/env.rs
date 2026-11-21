@@ -33,6 +33,11 @@ impl Env {
         Env::new(std::env::vars_os().map(|(k, v)| (k.into_vec(), v.into_vec())))
     }
 
+    /// Every variable, in the order the names were first set.
+    pub fn vars(&self) -> &[(Vec<u8>, Vec<u8>)] {
+        &self.vars
+    }
+
     /// `getenv(name)`.
     pub fn get(&self, name: &str) -> Option<Vec<u8>> {
         self.vars
@@ -198,7 +203,9 @@ fn last_slash(pt: &[u8]) -> Option<usize> {
         .or_else(|| pt.iter().rposition(|&c| c == b'\\'))
 }
 
-/// `init_request_info()` for a non-FastCGI request.
+/// `init_request_info()`: `env` is the process environment of a CGI
+/// request, or the environment of a FastCGI request (`CGI_GETENV` and
+/// `CGI_PUTENV` then use `request->env`).
 #[allow(clippy::too_many_lines)]
 pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> RequestInfo {
     let mut info = RequestInfo::default();

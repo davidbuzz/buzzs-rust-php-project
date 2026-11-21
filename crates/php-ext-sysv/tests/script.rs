@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the four System V IPC
 //! extensions, on private (`IPC_PRIVATE`) IPC objects.  Expected outputs
-//! come from `/usr/bin/php`.
+//! come from `/usr/bin/php8.5`.
 
 use std::cell::RefCell;
 use std::io::Write;

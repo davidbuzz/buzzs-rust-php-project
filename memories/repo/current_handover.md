@@ -57,7 +57,7 @@ function statics, not the Main frame's CVs).
 4. Update this handover file with final results.
 
 ## Rules (from CLAUDE.md / copilot-instructions)
-- Oracle `/usr/bin/php` ALWAYS with `-d memory_limit=1G`.
+- Oracle `/usr/bin/php8.5` ALWAYS with `-d memory_limit=1G`.
 - One build/test at a time; cargo capped at 6 jobs; never `-j` override.
 - `modules/php-src/` read-only; never edit workspace Cargo.toml.
 - Background long runs; don't block turns.

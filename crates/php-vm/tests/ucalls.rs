@@ -3,7 +3,7 @@
 //! The user-call path: arguments bound into CVs when the frame is pushed
 //! (`i_init_func_execute_data`), `RECV` skipping and in-place verification,
 //! the `ZEND_INIT_METHOD_CALL` run-time cache and closure variable binding.
-//! Expected outputs are php-src's (`/usr/bin/php -n`).
+//! Expected outputs are php-src's (`/usr/bin/php8.5 -n`).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::fmt::Write as _;
@@ -40,7 +40,7 @@ fn run(source: &str) -> String {
 }
 
 /// What `arguments_bound_at_frame_push_match_recv_semantics` prints in
-/// php-src (`/usr/bin/php -n`).
+/// php-src (`/usr/bin/php8.5 -n`).
 const BOUND_ARGS_EXPECTED: &str = concat!(
     r#"1:a:1:{i:0;i:1;}:a:3:{i:0;i:1;i:1;i:2;i:2;a:1:{i:0;i:3;}}
 2:a:2:{i:0;i:1;i:1;i:5;}:a:3:{i:0;i:1;i:1;i:5;i:2;a:1:{i:0;i:3;}}
@@ -157,7 +157,7 @@ echo rec(50), "\n";
 }
 
 /// What `return_releases_in_zend_leave_helper_order` prints in php-src
-/// (`/usr/bin/php -n`).
+/// (`/usr/bin/php8.5 -n`).
 const LEAVE_ORDER_EXPECTED: &str = r#"in f
 d:arg-a
 d:cv-b
@@ -289,7 +289,7 @@ echo "end\n";
 }
 
 /// What `unpacking_sends_each_element_as_the_iterator_yields_it` prints in
-/// php-src (`/usr/bin/php -n`).
+/// php-src (`/usr/bin/php8.5 -n`).
 const UNPACK_ORDER_EXPECTED: &str = r#"a
 
 Warning: Cannot pass by-reference argument 1 of byref() by unpacking a Traversable, passing by-value instead in t.php on line 5
@@ -494,7 +494,7 @@ try {{ $objs[1]->q($objs[2]); }} catch (Error $e) {{ echo $e->getMessage(), "\n"
 /// variables, methods, static methods, closures with bound variables and
 /// `$this`, first-class callables, type and count errors, generators,
 /// destructor order of released frames, and calls from internal code.
-/// Expected output is php-src's (`/usr/bin/php -n`).
+/// Expected output is php-src's (`/usr/bin/php8.5 -n`).
 #[test]
 fn in_place_calls_and_returns_match_the_general_path() {
     // The bare test VM has no ext/standard or ext/json: `lst()` builds
@@ -592,7 +592,7 @@ destruct 1
 /// `void`/nullable returns, implicit returns with and without a return
 /// type, return-type coercion; and namespaced call
 /// sites with a global fallback (`init_fcall_fast` declines them).
-/// Expected output is php-src's (`/usr/bin/php -n`).
+/// Expected output is php-src's (`/usr/bin/php8.5 -n`).
 #[test]
 fn sends_and_returns_outside_the_in_place_paths() {
     let source = r#"<?php
@@ -658,7 +658,7 @@ NS\nullable_noret(): Return value must be of type ?int, none returned
 /// frame (strings, numbers) or copying it (arrays, references), and storing
 /// the result straight into the caller's temporary: used, discarded,
 /// reused in a loop and passed on as an argument. Expected output is
-/// php-src's (`/usr/bin/php -n`).
+/// php-src's (`/usr/bin/php8.5 -n`).
 #[test]
 fn returned_variables_move_into_the_callers_result() {
     let source = r#"<?php
@@ -689,7 +689,7 @@ var_dump(s(1) === "1!");
 /// variables, then the caller's result slot): destructor timing of a
 /// local object, of a returned object kept and replaced, deep recursion
 /// that grows and trims the frame pool, and nested calls as arguments.
-/// Expected output is php-src's (`/usr/bin/php -n`).
+/// Expected output is php-src's (`/usr/bin/php8.5 -n`).
 #[test]
 fn frames_released_in_place_on_return_keep_destructor_order() {
     let source = r#"<?php
@@ -759,7 +759,7 @@ echo d(4), "\n";
 /// no longer turns down: calls of such closures (direct, with defaults,
 /// typed, with a static variable, extra arguments, a backtrace line,
 /// through `array_map`, recursive, with bound variables) behave as on the
-/// general path. Expected output is php-src's (`/usr/bin/php -n`, the same
+/// general path. Expected output is php-src's (`/usr/bin/php8.5 -n`, the same
 /// with `/usr/bin/php8.5 -n`); the bare test VM has no `array_sum()`, so a
 /// loop sums `array_map()`'s results (on the same line: the backtrace line
 /// above is part of the output).
@@ -804,7 +804,7 @@ echo rec(4), "\n";
 /// passed-argument count (`UserFunction::plain_first_op`) instead of the
 /// per-call `RECV` walk: every count from none to all six inline
 /// arguments, with defaults computed by `RECV_INIT` code, starts where the
-/// walk started. Expected output is php-src's (`/usr/bin/php -n`); the
+/// walk started. Expected output is php-src's (`/usr/bin/php8.5 -n`); the
 /// bare test VM has no ext/json, so the array default is printed by hand
 /// as `json_encode()` prints it.
 #[test]

@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `tsrm_realpath()` and realpath cache tests (behaviour checked against
-//! `/usr/bin/php`: `realpath()`, `realpath_cache_get()`, `clearstatcache()`).
+//! `/usr/bin/php8.5`: `realpath()`, `realpath_cache_get()`, `clearstatcache()`).
 
 use super::*;
 use crate::test_util::TempDir;

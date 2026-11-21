@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Every column type through the text and binary protocols, with and
 //! without `MYSQLI_OPT_INT_AND_FLOAT_NATIVE`, plus field metadata —
-//! compared with `/usr/bin/php`'s mysqli on the same server.
+//! compared with `/usr/bin/php8.5`'s mysqli on the same server.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

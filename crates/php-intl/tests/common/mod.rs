@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared fixture reader for the oracle tests.  Fixtures are produced by
-//! `tests/oracle/*.php` run under `/usr/bin/php` (ICU 74.2) — see
+//! `tests/oracle/*.php` run under `/usr/bin/php8.5` (ICU 74.2) — see
 //! `regenerate_fixtures` in `tests/oracle_regen.rs`.
 #![allow(dead_code, clippy::cast_precision_loss)]
 

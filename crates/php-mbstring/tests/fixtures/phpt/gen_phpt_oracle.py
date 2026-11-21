@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record every mb_* call made by php-src's ext/mbstring .phpt tests.
 
-Each test's FILE section is run under /usr/bin/php (8.3, with mbstring) with
+Each test's FILE section is run under /usr/bin/php8.5 (with mbstring) with
 `mb_xxx(` rewritten to logging wrappers (prelude.php). The log
 (`calls.tsv`) holds, per test, a `#TEST name` line, `#INI key=value` lines
 from the --INI-- section, then one line per call:
@@ -22,7 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parents[4] / "modules" / "php-src"
 TESTS = SRC / "ext/mbstring/tests"
-PHP = "/usr/bin/php"
+PHP = "/usr/bin/php8.5"
 SKIP_FUNCS = re.compile(r"mb_(ereg|eregi|split|regex_set_options|parse_str|send_mail|output_handler)")
 
 

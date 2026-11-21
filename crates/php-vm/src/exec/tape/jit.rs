@@ -4,10 +4,13 @@
 //!
 //! The tape removed the per-op decode of `Op`; its remaining cost is
 //! per-op `match` dispatch, and measurements put a taped loop step at
-//! about 40 instructions against php-src's 17
-//! (`perf/NOTE-jit-2026-11-16.md` has the numbers, and why intercepting
-//! the ops one by one is a dead end). The way to the 17 is to stop
-//! interpreting: compile the loop.
+//! about 40 instructions against php-src's 17. Running the ops natively
+//! one at a time does not close that gap (tried and measured on
+//! 16 Nov 2026, never committed): every op still enters and leaves
+//! through the interpreter, about 10-12 instructions per transition, so
+//! the one arithmetic loop it sped up went from 40 to 28 instructions per
+//! iteration and a loop calling `strlen()` doubled to 84. The way to the
+//! 17 is to stop interpreting: compile the loop.
 //!
 //! # The trace
 //!

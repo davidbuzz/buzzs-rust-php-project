@@ -17,7 +17,7 @@
 //! ```
 //!
 //! Arguments may be `hex:`-encoded. `regenerate_fixtures` (ignored; needs
-//! `/usr/bin/php`) stores PHP's archive, the build time and PHP's listing
+//! `/usr/bin/php8.5`) stores PHP's archive, the build time and PHP's listing
 //! under `tests/fixtures/<case>/`. The regular tests then check that
 //! (a) our reader lists PHP's archive exactly like PHP does, and
 //! (b) our writer, replaying the recipe at the same clock time, produces
@@ -88,7 +88,7 @@ fn final_is_data(lines: &[String]) -> bool {
 }
 
 fn php(args: &[&str]) -> std::process::Output {
-    Command::new("/usr/bin/php")
+    Command::new("/usr/bin/php8.5")
         .args(["-d", "memory_limit=1G"])
         .args(args)
         .output()
@@ -430,7 +430,7 @@ fn scratch(case: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "regenerates fixtures with /usr/bin/php"]
+#[ignore = "regenerates fixtures with /usr/bin/php8.5"]
 fn regenerate_fixtures() {
     for (case, lines) in recipes() {
         let dir = case_dir(&case);
@@ -542,7 +542,7 @@ fn writes_archives_byte_identical_to_php() {
 }
 
 #[test]
-#[ignore = "runs /usr/bin/php on archives written by this crate"]
+#[ignore = "runs /usr/bin/php8.5 on archives written by this crate"]
 fn php_reads_our_archives() {
     php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
     php_phar::sys::set_entry_time_override(Some(0));
@@ -592,7 +592,7 @@ fn php_src_archives() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "regenerates php-src archive listings with /usr/bin/php"]
+#[ignore = "regenerates php-src archive listings with /usr/bin/php8.5"]
 fn regenerate_php_src_listings() {
     let o = Command::new("git")
         .args(["-C", php_src_tests().to_str().unwrap(), "ls-files", "."])
@@ -834,7 +834,7 @@ fn corrupt_kind(name: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "regenerates corruption listings with /usr/bin/php"]
+#[ignore = "regenerates corruption listings with /usr/bin/php8.5"]
 fn regenerate_corruptions() {
     let dir = corrupt_dir();
     let _ = std::fs::remove_dir_all(&dir);

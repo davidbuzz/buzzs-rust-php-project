@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared helpers for the live tests: connection parameters (`MYSQL_TEST`_*),
 //! graceful skipping when the server is down, an oracle runner for
-//! `/usr/bin/php` (mysqli) and a value renderer both sides agree on.
+//! `/usr/bin/php8.5` (mysqli) and a value renderer both sides agree on.
 #![allow(dead_code)]
 
 use std::process::Command;
@@ -59,9 +59,9 @@ pub fn connect() -> Option<Connection> {
     connect_flags(0)
 }
 
-/// Whether the oracle `/usr/bin/php` with mysqli is available.
+/// Whether the oracle `/usr/bin/php8.5` with mysqli is available.
 pub fn have_php() -> bool {
-    Command::new("/usr/bin/php")
+    Command::new("/usr/bin/php8.5")
         .args([
             "-d",
             "memory_limit=1G",
@@ -95,7 +95,7 @@ function conn($flags = 0) {
 /// Runs a PHP snippet (after the prelude) with the oracle and returns stdout.
 pub fn php(code: &str) -> String {
     let script = format!("{PHP_PRELUDE}\n{code}");
-    let out = Command::new("/usr/bin/php")
+    let out = Command::new("/usr/bin/php8.5")
         .args([
             "-d",
             "memory_limit=1G",

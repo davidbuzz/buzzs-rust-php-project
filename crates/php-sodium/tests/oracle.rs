@@ -837,7 +837,7 @@ fn matches_php() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
-/// Every constant `/usr/bin/php` registers for ext/sodium, in order.
+/// Every constant `/usr/bin/php8.5` registers for ext/sodium, in order.
 #[test]
 fn constants_match_php() {
     use php_sodium::consts;

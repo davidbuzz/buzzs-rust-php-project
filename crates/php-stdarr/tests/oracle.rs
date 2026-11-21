@@ -876,7 +876,7 @@ fn oracle_cases() {
 
 /// Regenerates `tests/data/oracle.txt` with the installed `php`.
 #[test]
-#[ignore = "needs /usr/bin/php; rewrites the fixture"]
+#[ignore = "needs /usr/bin/php8.5; rewrites the fixture"]
 fn regenerate_oracle() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
     let out = std::process::Command::new("php")

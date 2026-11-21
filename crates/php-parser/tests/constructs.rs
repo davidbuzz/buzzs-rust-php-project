@@ -315,7 +315,7 @@ fn ours(code: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs /usr/bin/php; regenerates tests/fixtures/construct_exports.tsv"]
+#[ignore = "needs /usr/bin/php8.5; regenerates tests/fixtures/construct_exports.tsv"]
 fn regenerate() {
     use std::process::Command;
     let tmp =

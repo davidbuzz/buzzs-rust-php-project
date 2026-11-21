@@ -4,7 +4,7 @@
 # (Zend/bench.php tests, Zend/micro_bench.php sections, perf/bench/suite/*.php,
 # perf/bench/*.php micro-ops) for our php and compares each count against the
 # recorded goal — the instruction counts measured for the C implementation
-# (/usr/bin/php) in perf/bench/goal.tsv. Fails when any workload exceeds
+# (/usr/bin/php8.5) in perf/bench/goal.tsv. Fails when any workload exceeds
 # 1.10x its goal.
 #
 # Usage: scripts/acceptance.sh [acceptance.py options: --record | --filter RX]

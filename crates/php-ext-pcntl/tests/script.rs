@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `pcntl` extension
 //! (and `posix` for `posix_kill()`).  Expected outputs come from
-//! `/usr/bin/php`.
+//! `/usr/bin/php8.5`.
 
 use std::cell::RefCell;
 use std::io::Write;

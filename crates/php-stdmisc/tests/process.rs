@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `proc_open` / `exec` round trips with real child processes (expectations
 //! hand-ported from `ext/standard/tests/general_functions/proc_open*.phpt`,
-//! `exec*.phpt` and checked against /usr/bin/php).
+//! `exec*.phpt` and checked against /usr/bin/php8.5).
 
 use std::fs::File;
 use std::io::{Read, Write};
