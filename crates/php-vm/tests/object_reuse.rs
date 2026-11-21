@@ -3,7 +3,7 @@
 //! `$v = new C(...)` over the last handle of a plain object of `C`: the
 //! object is made in the old one's block (`object::reuse_check`), and a
 //! script sees what making an object and freeing the old one gives.
-//! Expected outputs are `/usr/bin/php -n` (8.3, same as master here). The
+//! Expected outputs are php-src's (`/usr/bin/php8.5 -n`, the same as master here). The
 //! request allocator is installed: the reuse asks it whether a block taken
 //! and freed would leave nothing behind.
 
@@ -31,7 +31,8 @@ impl Write for Sink {
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Runs `source` as `t.php` (including shutdown); its output and how many
-/// objects were made in a block at hand meanwhile.
+/// objects were made in a block at hand meanwhile (always 0 in a release
+/// build, where `object::reuse_count()` does not count).
 fn run(source: &str) -> (String, u64) {
     let _serial = SERIAL
         .lock()
@@ -67,7 +68,11 @@ echo plain(8), "\n", ctor(8), "\n";
     // The first object of each loop is made the plain way (nothing to
     // make it in), and so is the one whose `new` finds out what its
     // constructor does; the others in the block at hand.
-    assert!(reused >= 12, "{reused} objects made in a block at hand");
+    // `reuse_count()` counts in debug builds only (0 in release).
+    assert!(
+        !cfg!(debug_assertions) || reused >= 12,
+        "{reused} objects made in a block at hand"
+    );
 }
 
 /// What keeps the old object from being the new one's block: another
@@ -122,7 +127,11 @@ function f($n) {
 echo f(8);
 "#);
     assert_eq!(out, "1,1,1,1,2,2,2,2,1");
-    assert!(reused >= 4, "{reused} objects made in a block at hand");
+    // `reuse_count()` counts in debug builds only (0 in release).
+    assert!(
+        !cfg!(debug_assertions) || reused >= 4,
+        "{reused} objects made in a block at hand"
+    );
 }
 
 /// Memory use and its peak do not move once the loop is under way.
@@ -139,5 +148,9 @@ function f($n) {
 echo f(50);
 "#);
     assert_eq!(out, "0,0");
-    assert!(reused >= 40, "{reused} objects made in a block at hand");
+    // `reuse_count()` counts in debug builds only (0 in release).
+    assert!(
+        !cfg!(debug_assertions) || reused >= 40,
+        "{reused} objects made in a block at hand"
+    );
 }

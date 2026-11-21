@@ -2,16 +2,19 @@
 
 David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust whose goal is
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
-than the classic C impl. Passing tests: 100% of the in-scope tests that run (21,844: 21,829
-pass, 15 expected failures; 21 Nov 2026). 
+than the classic C impl. Passing tests: 21,842 of the 21,843 in-scope tests that run
+(21,827 pass, 15 expected failures; the one failure, ext/openssl's
+`stream_server_reneg_limit`, failed in the parallel run and passes on its own). Recorded in
+[22-NOV-2026.full-test-run.log](22-NOV-2026.full-test-run.log) with the build, the Rust tests
+and the timing below.
 
-Speed: total runtime 0.53x the C implementation on
-identical inputs, both at their defaults (`perf/bench/timing.py`), every input faster.
+Speed: total runtime 0.49x the C implementation (PHP 8.5.12) on identical inputs, both at
+their defaults (`perf/bench/timing.py`), every input faster.
 
-|  | C PHP 8.3 (`/usr/bin/php`) | Ours (release build of `d3380559`) | Ratio |
+|  | C PHP 8.5.12 (`/usr/bin/php8.5`) | Ours (release build of `725007d4`) | Ratio |
 | --- | --- | --- | --- |
-| Total wall-clock | 3.517 s | 1.847 s | **0.53×** |
-| Total CPU (user + system) | 3.493 s | 1.835 s | 0.53× |
+| Total wall-clock | 3.330 s | 1.637 s | **0.49×** |
+| Total CPU (user + system) | 3.319 s | 1.628 s | 0.49× |
 
 The original PHP is written in C. This project ports it to idiomatic, best-practice Rust
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
@@ -71,7 +74,8 @@ full in-scope PHPT suite on the release `php` (every PASS/FAIL line, a diff for 
 checked against `phpt-baseline.txt`) and `perf/bench/timing.py` against `/usr/bin/php8.5`. All of
 the output goes to `<DD-MON-YYYY>.full-test-run.log` in the repository root, ending in a summary
 of the four phases, and the script commits that file locally (it never pushes).
-`16-NOV-2026.full-test-run.log` is an earlier run in the same layout, without the timing phase.
+The latest is `22-NOV-2026.full-test-run.log`; `16-NOV-2026.full-test-run.log` is an earlier
+run in the same layout, without the timing phase.
 
 Use these incremental dev-profile builds for correctness checks and scoped PHPT
 runs. Reserve `--release` for performance measurements: the release profile uses
@@ -96,14 +100,16 @@ so `target/release/php`, the binary `scripts/acceptance.sh` measures too; give a
 argument to measure that one instead), then runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
 and the `perf/bench/<op>.php` loops under both binaries, alternately on the same cores, takes
 the fastest of 5 rounds per input and compares the totals. **Met** (release build of
-`d3380559`, 21 Nov 2026): ours 1.847 s against C's 3.517 s, **0.53x** wall-clock (0.53x CPU
-time). Every one of the 31 inputs is faster, from 0.32x (`suite/calls.php`) to 0.98x
-(`suite/float_math.php`).
+`725007d4` against PHP 8.5.12, 22 Nov 2026, PHASE 4 of `22-NOV-2026.full-test-run.log`): ours
+1.637 s against C's 3.330 s, **0.49x** wall-clock (0.49x CPU time). Every one of the 31 inputs
+is faster, from 0.33x (`suite/calls.php`) to 0.95x (`suite/builtins.php`).
 
 `scripts/acceptance.sh` is the per-workload guide: it builds a release binary and counts the
 user-space instructions of 82 workloads against the counts recorded for C in
-`perf/bench/goal.tsv` (each may cost at most 1.10x). All 82 are within it with the JIT on
-(25 with `BUZZS_JIT=0`). `perf/README.md` explains the instruction-count method.
+`perf/bench/goal.tsv` (each may cost at most 1.10x), recorded from `/usr/bin/php8.5`
+(PHP 8.5.12) on 22 Nov 2026. 80 of the 82 are within it with the JIT on; `suite:builtins`
+(1.15x) and `zend:hash1` (1.12x) are over, where 8.5 is 9% and 3% cheaper than the 8.3
+the earlier goal came from. `perf/README.md` explains the instruction-count method.
 
 ## Reference source
 

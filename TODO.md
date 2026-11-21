@@ -11,22 +11,22 @@ Last updated 22 Nov 2026.
 ## Where things stand
 
 - **The deliverable** (README): the total runtime of ours on identical inputs, both at
-  their defaults, is at most 1.10x C's, measured by `perf/bench/timing.py`. Last measured
-  21 Nov (release build of `d3380559`, against C PHP 8.3.6): **0.53x** wall-clock (1.847 s
-  against 3.517 s), every one of the 31 inputs faster (0.32x `suite/calls.php` to 0.98x
-  `suite/float_math.php`). The reference is now `/usr/bin/php8.5` (PHP 8.5.12); the first
-  measurement against it is PHASE 4 of today's `./run-all-tests.sh`.
-- **Conformance**: full in-scope PHPT run of 21 Nov (debug binary, `1ffce758`, and again
-  on `d3380559`): **0 failures**. Of 21,844 tests run, 21,829 pass, 11 are XFAIL and 4 WARN
-  (XFAIL tests that pass); 1,086 skip for host reasons (Windows-only, 32-bit-only, PDO
-  drivers that are not installed, bundled-GD and older-library variants, online tests,
-  readline, FPM); 1,134 are out of scope (`phpt-scope.txt`).
+  their defaults, is at most 1.10x C's, measured by `perf/bench/timing.py`. Measured
+  22 Nov in the evidence run (`22-NOV-2026.full-test-run.log`, release build of `725007d4`)
+  against `/usr/bin/php8.5` (PHP 8.5.12): **0.49x** wall-clock (1.637 s against 3.330 s),
+  every one of the 31 inputs faster (0.33x `suite/calls.php` to 0.95x
+  `suite/builtins.php`).
+- **Conformance** (the same run, release binary): of 21,843 in-scope tests run, 21,827
+  pass, 11 are XFAIL and 4 WARN, 1 fails (see C); 1,087 skip for host reasons
+  (Windows-only, 32-bit-only, PDO drivers that are not installed, bundled-GD and
+  older-library variants, online tests, readline, FPM); 1,134 are out of scope.
 - **Per-workload guide**: `scripts/acceptance.sh` against the goal re-recorded from
   `/usr/bin/php8.5` (22 Nov, release build of `3fa1dfd7`, JIT on): 80/82 workloads within
   1.10x; over: `suite:builtins` 1.15, `zend:hash1` 1.12 (`zend:hash2` 1.09). Against the
   8.3 goal all 82 were within (21 Nov): 8.5 is 9% and 3% cheaper on those two.
-- **Rust tests**: `cargo test --workspace` 4,980 passed, 122 ignored (21 Nov; the run's two
-  failures fixed and rechecked).
+- **Rust tests** (the same run, `cargo test --workspace --release`): 4,991 passed, 122
+  ignored, 3 failed: `php-vm/tests/object_reuse.rs` asserted a count that only debug
+  builds keep (fixed after the run: the count is checked in debug builds only).
 - **Web servers**: end-to-end tests pass (22 Nov): nginx 1.24 -> FastCGI -> `php-cgi`
   (`crates/php-cli/tests/fastcgi.rs`, with a protocol test against `php-cgi -b`) and
   mod_php in Apache 2.4.58 (`crates/php-sapi-apache2/tests/apache_e2e.rs`: `apache2 -M`
@@ -36,18 +36,13 @@ Last updated 22 Nov 2026.
 
 ## A. Next (22 Nov)
 
-- [ ] Evidence run `./run-all-tests.sh` (release build, `cargo test --workspace
-  --release`, the full PHPT run on the release `php`, `timing.py` against
-  `/usr/bin/php8.5`; it commits `<DD-MON-YYYY>.full-test-run.log`). The owner stopped the
-  22 Nov 00:50 run during its Rust tests; run it again once the items below are done.
-- [ ] Re-derive the 8.3 data with 8.5.12 (owner, 22 Nov): regenerate the oracle fixtures
-  recorded from 8.3 (php-hash vectors, php-ctype/php-json/php-filter `oracle.txt`,
-  php-filter HTML/Unicode tables, php-sodium, php-fileinfo, php-support fmt/ini cases,
+- [~] Re-derive the 8.3 data with 8.5.12 (owner, 22 Nov). Done: php-hash vectors, php-filter
+  HTML/Unicode tables, php-ctype/php-json/php-filter `oracle.txt` (only filter's differed;
+  its replay now matches 8.5 on every record). To do: the other oracle fixtures recorded
+  from 8.3 (php-sodium, php-fileinfo, php-support fmt/ini cases,
   php-intl constants, php-mbstring and the php-stdstr/stdarr/stdmisc fixtures) with
   `/usr/bin/php8.5`, re-check the "(8.3)" expected outputs in the php-vm tests, and fix
   toward 8.5/master whatever then differs. About 70 lines still name 8.3 or 8.3.6.
-- [ ] README and FEATURE_GAP numbers from today's evidence run (timing against 8.5.12,
-  cargo test, PHPT), replacing the 8.3.6 figures (owner, 22 Nov).
 
 ## B. Performance beyond the benchmark inputs
 
@@ -94,6 +89,11 @@ candidates for `perf/bench` and for work.
   measured at the default, JIT on.
 
 ## C. Conformance and features
+
+- [ ] `ext/openssl/tests/stream_server_reneg_limit.phpt` failed in the 22 Nov full run (its
+  `CertificateGenerator` could not sign the CSR, then the server timed out) and passes on
+  its own (3 of 3) and in the 21 Nov run: find what it shares with a test that runs beside
+  it.
 
 - [ ] `php -S` (CLI built-in web server row): its "Missing" note (session cookies, the
   header callback when output sends the headers, the "output started at" location, the
