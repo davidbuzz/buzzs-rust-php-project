@@ -3800,8 +3800,8 @@ impl FreshState {
 
 thread_local! {
     /// Kept links by declaration address.
-    static LINKED: RefCell<crate::builtins::fasthash::FastMap<usize, LinkedEntry>> =
-        RefCell::new(crate::builtins::fasthash::FastMap::default());
+    static LINKED: RefCell<rustc_hash::FxHashMap<usize, LinkedEntry>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
     /// The lookups of the link being recorded, when one is.
     static LOOKUP_LOG: RefCell<Option<Vec<(ZStr, usize)>>> = const { RefCell::new(None) };
     /// Whether [`LOOKUP_LOG`] records (read on every class lookup).

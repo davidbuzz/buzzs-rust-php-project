@@ -32,15 +32,14 @@ use php_runtime::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
 use std::rc::{Rc, Weak};
 
-/// A map keyed by object handle: [`crate::class::FxHasher`] (a multiply
+/// A map keyed by object handle: [`rustc_hash::FxBuildHasher`] (a multiply
 /// per key) instead of `SipHash`, which is ~100 instructions a lookup.
 /// Handles are not chosen by scripts, so the hash needs no protection
 /// against collisions; [`object_freed`] looks two of these up for every
 /// object freed once any weak reference or map exists.
-type HandleMap<V> = HashMap<u32, V, BuildHasherDefault<crate::class::FxHasher>>;
+type HandleMap<V> = HashMap<u32, V, rustc_hash::FxBuildHasher>;
 
 const PUB: u32 = flags::PUBLIC;
 
