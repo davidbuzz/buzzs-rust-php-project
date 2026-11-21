@@ -29,7 +29,8 @@ Last updated 22 Nov 2026.
 - **Web servers**: end-to-end tests pass (22 Nov): nginx 1.24 -> FastCGI -> `php-cgi`
   (`crates/php-cli/tests/fastcgi.rs`, with a protocol test against `php-cgi -b`) and
   mod_php in Apache 2.4.58 (`crates/php-sapi-apache2/tests/apache_e2e.rs`: `apache2 -M`
-  lists `php_module`, PHP through `http://127.0.0.1:<port>/`). PHPT `sapi/cgi` and
+  lists `php_module`, PHP through `http://127.0.0.1:<port>/`; the full mod_php test
+  `--test httpd -- --ignored` passes every check). PHPT `sapi/cgi` and
   `sapi/cli`: 135 of 135 run pass.
 
 ## A. Next (22 Nov)
@@ -92,13 +93,6 @@ candidates for `perf/bench` and for work.
 
 ## C. Conformance and features
 
-- [ ] apache2handler (FEATURE_GAP 75%): the full end-to-end test
-  (`cargo test -p php-sapi-apache2 --test httpd -- --ignored --test-threads=1`, 22 Nov)
-  fails 4 checks: `virtual('/hello.php')` prints nothing (the sub-request re-enters
-  `request::run`, whose `PERSISTENT_VM.borrow_mut()` panics "RefCell already borrowed"
-  in the child); session upload progress is `NULL`; the `max_execution_time` fatal of
-  `slow/loop.php` is not in the error log; a `HEAD` response's body holds the header
-  text (perhaps curl's `-I` output rather than the module). Fix them, then raise the row.
 - [ ] `php -S` (CLI built-in web server row): its "Missing" note (session cookies, the
   header callback when output sends the headers, the "output started at" location, the
   `ignore_user_abort` bailout) dates from 3 Nov, and every run `sapi/cli` test passes;
