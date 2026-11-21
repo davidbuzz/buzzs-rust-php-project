@@ -31,11 +31,15 @@ PHP_SRC_DESC='php-src master, PHP-8.6 merged'
 # against a full clone at this revision: the 23,792 `.phpt` files match one for one,
 # none missing and none extra. `**` is needed for `ext/intl/uchar/tests/`, which sits
 # two levels below `ext/`.
+# Plus php-src's two benchmark scripts, inputs of `perf/bench/timing.py` and
+# `scripts/acceptance.sh`.
 SPARSE_PATHS=(
     '/tests/'
     '/Zend/tests/'
     '/ext/**/tests/'
     '/sapi/**/tests/'
+    '/Zend/bench.php'
+    '/Zend/micro_bench.php'
 )
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
