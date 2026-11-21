@@ -321,11 +321,83 @@ fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
     }
 }
 
+/// The internal functions php-src's function info types as returning
+/// arrays with int keys only (`MAY_BE_ARRAY_KEY_LONG` without
+/// `MAY_BE_ARRAY_KEY_STRING`, or packed: `zend_func_infos.h`,
+/// `zend_range_info`).
+const INT_KEYED_RESULTS: &[&[u8]] = &[
+    b"range",
+    b"array_fill",
+    b"array_keys",
+    b"array_values",
+    b"array_rand",
+    b"explode",
+    b"str_getcsv",
+    b"str_split",
+    b"str_word_count",
+    b"count_chars",
+    b"sscanf",
+    b"file",
+    b"scandir",
+    b"glob",
+    b"fgetcsv",
+    b"fscanf",
+    b"func_get_args",
+    b"get_included_files",
+    b"get_declared_classes",
+    b"get_declared_interfaces",
+    b"get_declared_traits",
+    b"get_loaded_extensions",
+    b"debug_backtrace",
+    b"headers_list",
+    b"hash_algos",
+    b"hash_hmac_algos",
+    b"mb_split",
+    b"mb_list_encodings",
+    b"stream_get_wrappers",
+    b"stream_get_transports",
+    b"stream_get_filters",
+    b"timezone_identifiers_list",
+    b"gzfile",
+    b"sys_getloadavg",
+    b"ob_list_handlers",
+    b"gethostbynamel",
+    b"dns_get_record",
+];
+
 /// The key types of iterators over literal arrays (`FE_RESET_R` of a
-/// constant), by iterator temporary.
+/// constant) and over the results of the internal functions in
+/// [`INT_KEYED_RESULTS`], by iterator temporary.
 fn literal_iter_keys(lines: &[ZLine]) -> HashMap<u32, u32> {
     let mut m = HashMap::new();
+    // The temporaries those functions' calls left their results in.
+    let mut int_keyed: Vec<u32> = Vec::new();
+    let mut calls: Vec<Option<Vec<u8>>> = Vec::new();
     for l in lines {
+        if is_init_call(l.op) {
+            calls.push(match (&l.op, &l.op2) {
+                (&"INIT_FCALL", Z::Const(Value::Str(name))) => {
+                    Some(name.as_bytes().to_ascii_lowercase())
+                }
+                _ => None,
+            });
+        } else if is_do_call(l.op) {
+            let name = calls.pop().flatten();
+            if let (Some(t), "DO_ICALL", Some(name)) = (l.res.tmp(), l.op, name) {
+                if INT_KEYED_RESULTS.contains(&name.as_slice()) {
+                    int_keyed.push(t);
+                }
+            }
+        } else if l.op == "CALLABLE_CONVERT" || l.op == "CALLABLE_CONVERT_PARTIAL" {
+            calls.pop();
+        }
+        if matches!(l.op, "FE_RESET_R" | "FE_RESET_RW") {
+            if let (Some(t), Z::Tmp(src)) = (l.res.tmp(), &l.op1) {
+                if int_keyed.contains(src) {
+                    m.insert(t, ty::LONG | ty::NULL);
+                }
+            }
+        }
         if let (Some(t), Z::Const(Value::Array(a))) = (l.res.tmp(), &l.op1) {
             let mut k = 0;
             for (key, _) in a.iter() {

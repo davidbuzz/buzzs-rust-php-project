@@ -2662,14 +2662,23 @@ impl Compiler<'_> {
         }
         // Cheap shape checks first: nothing is emitted for a callback the
         // optimisation does not cover.
-        match &callback.kind {
-            ExprKind::Call { args, .. } if args.is_first_class_callable() => {}
+        let pfa = match &callback.kind {
+            ExprKind::Call { args, callee, .. } => {
+                // `zend_is_pipe_optimizable_callable_name`.
+                if matches!(&**callee, Callee::Name(n) if n.name.eq_ignore_ascii_case(b"assert")) {
+                    return Ok(None);
+                }
+                args
+            }
             ExprKind::StaticCall {
                 name: MemberName::Ident(_),
                 args,
                 ..
-            } if args.is_first_class_callable() => {}
+            } => args,
             _ => return Ok(None),
+        };
+        if !partial_applies(pfa) {
+            return Ok(None);
         }
         let mark = self.fref().ops.len();
         let num_tmps = self.fref().num_tmps;
@@ -2754,9 +2763,36 @@ impl Compiler<'_> {
                 self.emit(Op::InitStaticCall { class, name });
             }
         }
-        self.emit(Op::Send {
-            src: ArgSrc::Val(Operand::Tmp(val)),
-        });
+        // `zend_partial_apply`: the element where the placeholder stands,
+        // the literals where they stand.
+        for a in &pfa.args {
+            let elem = ArgSrc::Val(Operand::Tmp(val));
+            match &a.kind {
+                ArgKind::Placeholder | ArgKind::VariadicPlaceholder => {
+                    self.emit(Op::Send { src: elem });
+                }
+                ArgKind::NamedPlaceholder(id) => {
+                    let name = self.lit_str(&id.name);
+                    self.emit(Op::SendNamed { name, src: elem });
+                }
+                ArgKind::Positional(e) => {
+                    let lit = self.compile_expr(e)?;
+                    self.emit(Op::Send {
+                        src: ArgSrc::Val(lit),
+                    });
+                }
+                ArgKind::Named { name, value } => {
+                    let n = self.lit_str(&name.name);
+                    let lit = self.compile_expr(value)?;
+                    self.emit(Op::SendNamed {
+                        name: n,
+                        src: ArgSrc::Val(lit),
+                    });
+                }
+                // (Refused by `partial_applies`.)
+                ArgKind::Unpack(_) => {}
+            }
+        }
         let ret = self.tmp();
         self.emit(Op::DoCall { dst: Some(ret) });
         self.emit(Op::ArrayAdd {
@@ -2774,7 +2810,40 @@ impl Compiler<'_> {
         }
         Ok(Some(Operand::Tmp(result)))
     }
+}
 
+/// Whether the arguments `args` of `array_map()`'s callback make a partial
+/// application the loop can call directly (`zend_compile_func_array_map`
+/// with `zend_partial_apply`): exactly one placeholder (`?`, `name: ?` or
+/// `...`), every other argument an integer, float or string literal, and no
+/// variadic placeholder together with named arguments.
+fn partial_applies(args: &ArgList) -> bool {
+    let mut placeholders = 0;
+    let mut variadic = false;
+    let mut named = false;
+    for a in &args.args {
+        match &a.kind {
+            ArgKind::Placeholder | ArgKind::NamedPlaceholder(_) => placeholders += 1,
+            ArgKind::VariadicPlaceholder => {
+                placeholders += 1;
+                variadic = true;
+            }
+            ArgKind::Positional(e) | ArgKind::Named { value: e, .. } => {
+                if !matches!(
+                    e.kind,
+                    ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
+                ) {
+                    return false;
+                }
+                named |= matches!(a.kind, ArgKind::Named { .. });
+            }
+            ArgKind::Unpack(_) => return false,
+        }
+    }
+    placeholders == 1 && !(variadic && named)
+}
+
+impl Compiler<'_> {
     /// An operand of [`Self::compile_array_map_foreach`]'s loop: a literal
     /// as is; anything else in a temporary (`ZEND_QM_ASSIGN` of a
     /// variable) that every iteration reads without consuming.
