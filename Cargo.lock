@@ -417,6 +417,7 @@ dependencies = [
  "php-parser",
  "php-runtime",
  "php-sapi",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
