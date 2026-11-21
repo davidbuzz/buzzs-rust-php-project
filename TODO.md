@@ -128,8 +128,7 @@ Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
-- [~] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
-      floats in traces. Done 2026-11-21: comparisons and `+=`/`-=`/`*=` of floats are
+- [~] JIT follow-ons: floats in traces. Done 2026-11-21: comparisons and `+=`/`-=`/`*=` of floats are
       compiled (by the operands' tags: `J_CMPS`, `J_ASSIGN_OPS`), and a math builtin may
       end an inlined method (`KQUICK`). Open: float arithmetic into a temporary or
       another variable (`$a * $b` of floats, a float literal operand) still leaves a
