@@ -310,6 +310,54 @@ pub(crate) struct FuncShape {
     pub bound: Vec<(u32, bool)>,
     /// `ZEND_TYPE_PURE_MASK` of the declared return type, if any.
     pub ret: Option<u32>,
+    /// The lower-case classes of the declared return type that the
+    /// optimizer resolves ([`ret_classes`]).
+    pub ret_classes: Vec<Vec<u8>>,
+    /// The lower-case name of the class scope.
+    pub scope: Option<Vec<u8>>,
+}
+
+/// The classes of the union return type `t` that
+/// `zend_optimizer_get_class_entry` finds (`known`), lower-case: `self`
+/// is the scope (`zend_compile_single_typename`). An intersection type
+/// gives none.
+pub(crate) fn ret_classes(
+    t: Option<&crate::types::TypeDecl>,
+    scope: Option<&[u8]>,
+    known: &dyn Fn(&[u8]) -> bool,
+) -> Vec<Vec<u8>> {
+    let Some(t) = t.filter(|t| t.intersections.is_empty()) else {
+        return Vec::new();
+    };
+    t.classes
+        .iter()
+        .filter_map(|c| {
+            let lc = c.as_bytes().to_ascii_lowercase();
+            match lc.as_slice() {
+                b"self" => scope.map(<[u8]>::to_vec),
+                b"parent" | b"static" => None,
+                _ => (scope == Some(lc.as_slice()) || known(&lc)).then_some(lc),
+            }
+        })
+        .collect()
+}
+
+/// The lower-case class of the object `NEW` made temporary `t` with, when
+/// the last definition of `t` before line `i` is that `NEW`
+/// (`zend_optimizer_get_class_entry_from_op1`).
+fn new_class(lines: &[ZLine], i: usize, t: u32, scope: Option<&[u8]>) -> Option<Vec<u8>> {
+    let l = lines[..i].iter().rev().find(|l| l.res.tmp() == Some(t))?;
+    if l.op != "NEW" {
+        return None;
+    }
+    match &l.op1 {
+        Z::Const(Value::Str(s)) => {
+            let lc = s.as_bytes().to_ascii_lowercase();
+            Some(lc.strip_prefix(b"\\").map_or(lc.clone(), <[u8]>::to_vec))
+        }
+        Z::Text(x) if x.starts_with("(self)") => scope.map(<[u8]>::to_vec),
+        _ => None,
+    }
 }
 
 fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
@@ -830,7 +878,17 @@ pub(crate) fn dfa(lines: &mut [ZLine], types: &Types, shape: &FuncShape) {
                                 _ => false,
                             }
                     });
-                if returned && t & !allowed == 0 {
+                // `can_elide_list_type`: an object of a class the return
+                // type names.
+                let of_class = || {
+                    t & !allowed == ty::OBJECT
+                        && match &l.op1 {
+                            Z::Tmp(x) => new_class(lines, i, *x, shape.scope.as_deref())
+                                .is_some_and(|c| shape.ret_classes.contains(&c)),
+                            _ => false,
+                        }
+                };
+                if returned && (t & !allowed == 0 || of_class()) {
                     lines[i] = ZLine::new("NOP");
                 }
             }

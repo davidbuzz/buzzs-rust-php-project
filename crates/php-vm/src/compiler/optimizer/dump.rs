@@ -244,6 +244,10 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
             .as_ref()
             .filter(|_| e.func.flags & flags::RETURN_REF == 0)
             .map(passes::pure_type),
+        ret_classes: passes::ret_classes(e.func.return_type.as_ref(), e.scope.as_deref(), &|lc| {
+            res.class_decl(lc).is_some()
+        }),
+        scope: e.scope.clone(),
     };
     let level = res.level;
     let types = passes::infer(&lines, &shape);
@@ -851,7 +855,7 @@ fn format_op(out: &mut String, op: &Op, op_array: &OpArray) {
             format_operand(out, a, op_array);
             let _ = write!(out, " {target:04}");
         }
-        Op::JmpNull { a, dst, target } => {
+        Op::JmpNull { a, dst, target, .. } => {
             let _ = write!(out, "T{dst} = JMP_NULL ");
             format_operand(out, a, op_array);
             let _ = write!(out, " {target:04}");

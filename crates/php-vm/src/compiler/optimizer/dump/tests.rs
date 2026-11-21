@@ -932,3 +932,120 @@ fn ssa_dump_needs_the_dfa_pass() {
     )
     .is_empty());
 }
+
+/// `zend_emit_jmp_null()` on the variable itself and
+/// `zend_short_circuiting_commit()`: every `JMP_NULL` of a chain writes the
+/// result of its last instruction, which under `isset()` is the
+/// `ISSET_ISEMPTY_PROP_OBJ` (and the jump gives `false`).
+#[test]
+fn nullsafe_jumps_write_the_chain_result() {
+    let out = dump("<?php\nfunction f($o) { return isset($o?->next?->foo); }\n");
+    let s = section(&out, "f:");
+    assert!(
+        s.contains(
+            "0001 T1 = JMP_NULL CV0($o) 0005\n\
+             0002 T2 = FETCH_OBJ_IS CV0($o) string(\"next\")\n\
+             0003 T1 = JMP_NULL T2 0005\n\
+             0004 T1 = ISSET_ISEMPTY_PROP_OBJ (isset) T2 string(\"foo\")\n\
+             0005 RETURN T1\n"
+        ),
+        "{s}"
+    );
+    let out = dump("<?php\nfunction f($o) { return $o?->foo; }\n");
+    let s = section(&out, "f:");
+    assert!(
+        s.contains(
+            "0001 T1 = JMP_NULL CV0($o) 0003\n\
+             0002 T1 = FETCH_OBJ_R CV0($o) string(\"foo\")\n\
+             0003 RETURN T1\n"
+        ),
+        "{s}"
+    );
+}
+
+/// A chain on a variable known to be null is skipped: the use reads the
+/// value it gives (`sccp.c`'s `ZEND_JMP_NULL` result and edge).
+#[test]
+fn known_null_chains_fold() {
+    let out = dump_optimized(
+        "<?php\nfunction f() { $n = null; return $n?->m()->foo; }\n\
+         function g() { $n = null; return empty($n?->foo); }\n",
+    );
+    let has = |f: &str, line: &str| section(&out, f).lines().any(|l| l == line);
+    assert!(has("f:", "0000 RETURN null"), "{out}");
+    assert!(has("g:", "0000 RETURN bool(true)"), "{out}");
+}
+
+/// `place_essa_pis()`: the fall-through edge of a `JMP_NULL` of a CV
+/// narrows the variable to non-null, so the fetch reads an object.
+#[test]
+fn jmp_null_places_a_pi_on_the_fall_through_edge() {
+    let src = "<?php\nclass T { public int $p; }\nfunction f(?T $t) { var_dump($t?->p); }\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let out = String::from_utf8(super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        super::DUMP_BEFORE_DFA_PASS,
+    ))
+    .expect("utf-8");
+    assert!(
+        out.contains(
+            " = Pi<BB0>(#1.CV0($t) [null, object (instanceof T)] & TYPE [ref, bool, long, \
+             double, string, array of [any, ref], object, resource])\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("[null] = JMP_NULL"), "{out}");
+}
+
+/// `zend_compile_args_ex` with a known function: named arguments in order
+/// are positional; one out of order stays named (with the parameter's
+/// send mode), the `INIT_*` count is the positional ones, and
+/// `CHECK_UNDEF_ARGS` precedes the call.
+#[test]
+fn named_arguments_resolve_against_a_known_function() {
+    let out = dump(
+        "<?php\nfunction f($a, $b = 2, &$c = null) { return $a; }\n\
+         function t1() { return f(a: 1); }\n\
+         function t2() { return f(b: 5, a: 1); }\n\
+         function t3($v) { return f(1, c: $v); }\n\
+         function t4() { return unknown_fn(a: 1); }\n",
+    );
+    let s = section(&out, "t1:");
+    assert!(
+        s.contains("0000 INIT_FCALL 1 ") && s.contains("0001 SEND_VAL int(1) 1\n"),
+        "{s}"
+    );
+    let s = section(&out, "t2:");
+    assert!(
+        s.contains("0000 INIT_FCALL 0 ")
+            && s.contains(
+                "0001 SEND_VAL int(5) string(\"b\")\n\
+                 0002 SEND_VAL int(1) string(\"a\")\n\
+                 0003 CHECK_UNDEF_ARGS\n"
+            ),
+        "{s}"
+    );
+    let s = section(&out, "t3:");
+    assert!(
+        s.contains("0001 INIT_FCALL 1 ")
+            && s.contains("0003 SEND_REF CV0($v) string(\"c\")\n0004 CHECK_UNDEF_ARGS\n"),
+        "{s}"
+    );
+    let s = section(&out, "t4:");
+    assert!(
+        s.contains(
+            "0000 INIT_FCALL_BY_NAME 0 string(\"unknown_fn\")\n\
+             0001 SEND_VAL_EX int(1) string(\"a\")\n\
+             0002 CHECK_UNDEF_ARGS\n"
+        ),
+        "{s}"
+    );
+}

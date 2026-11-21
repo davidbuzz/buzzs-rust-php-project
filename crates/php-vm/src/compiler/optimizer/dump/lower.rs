@@ -18,7 +18,7 @@ use crate::compiler::{FunctionInfo, FunctionTable};
 use crate::func::UserFunction;
 use crate::opcode::{
     ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, IncludeKind,
-    MatchKey, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
+    MatchKey, NullChain, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use crate::types::TypeDecl;
 use php_runtime::{BinaryOp, Value, ZStr};
@@ -166,7 +166,9 @@ impl Resolver<'_> {
             }
             return None;
         }
-        self.table.find(lc).filter(|i| i.internal).map(|info| {
+        // A user function of the same file declared when the code runs
+        // (a partial application's script) counts as well.
+        self.table.find(lc).map(|info| {
             let (flags, ret) = (self.internal)(lc);
             Known {
                 info,
@@ -179,7 +181,7 @@ impl Resolver<'_> {
 
     /// The script class declared under lower-case name `lc`, when only one
     /// class of the script has that name.
-    fn class_decl(&self, lc: &[u8]) -> Option<&Rc<ClassDecl>> {
+    pub(crate) fn class_decl(&self, lc: &[u8]) -> Option<&Rc<ClassDecl>> {
         if self.ambiguous.iter().any(|a| a == lc) {
             return None;
         }
@@ -448,6 +450,37 @@ struct Call {
     /// The `INIT_*` opline of a call to a known function that is not a
     /// prototype, which `zend_try_inline_call` may replace.
     inline: Option<usize>,
+    /// The parameter names of the known function (its variadic one
+    /// excluded), which named arguments resolve against
+    /// (`zend_get_arg_num`).
+    names: Option<Vec<ZStr>>,
+    /// The positional arguments sent so far (`arg_count`).
+    count: u32,
+    /// A named argument out of order, or an unpacking: some parameter
+    /// may be missing (`may_have_undef`, `ZEND_CHECK_UNDEF_ARGS`).
+    undef: bool,
+}
+
+/// `zend_compile_args_ex` for one argument of `call`: a named argument
+/// passed in order is positional, one out of order stays named (and a
+/// parameter may go missing). The argument's number when the called
+/// function is known (or the argument is positional), and its name.
+fn resolve_arg(call: &mut Call, name: Option<Value>) -> (Option<u32>, Option<Value>) {
+    let Some(Value::Str(nm)) = &name else {
+        call.count += 1;
+        return (Some(call.count), name);
+    };
+    let at = call
+        .names
+        .as_ref()
+        .and_then(|ps| ps.iter().position(|p| p == nm))
+        .and_then(|p| u32::try_from(p + 1).ok());
+    if !call.undef && at == Some(call.count + 1) {
+        call.count += 1;
+        return (at, None);
+    }
+    call.undef = true;
+    (at, name)
 }
 
 /// A fetch mode of a container chain.
@@ -640,6 +673,28 @@ impl<'a> Lower<'a> {
             .unwrap_or(Value::Null)
     }
 
+    /// The parameter names of a known function (its variadic one
+    /// excluded): a user function's, or those of the internal function
+    /// `internal_lc`.
+    fn param_names(&self, known: Option<Known>, internal_lc: Option<&[u8]>) -> Option<Vec<ZStr>> {
+        let k = known?;
+        let mut names: Vec<ZStr> = match k.user {
+            Some(u) => self
+                .res
+                .funcs
+                .get(u)?
+                .params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect(),
+            None => self.res.table.param_names(internal_lc?)?,
+        };
+        if k.info.variadic {
+            names.pop();
+        }
+        Some(names)
+    }
+
     fn lit_bytes(&self, l: u32) -> Vec<u8> {
         match self.oa.literals.get(l as usize) {
             Some(Value::Str(s)) => s.as_bytes().to_vec(),
@@ -777,12 +832,29 @@ impl<'a> Lower<'a> {
     }
 
     /// Scans the arguments of the call started at op `i`: the number of
-    /// arguments, and whether every one is a plain positional value or
-    /// variable (what a frameless call can take).
-    fn scan_call(&self, i: usize) -> (u32, bool) {
+    /// positional arguments (named ones in order count when the called
+    /// function's parameter `names` are known), and whether every one is
+    /// a plain positional value or variable (what a frameless call can
+    /// take).
+    fn scan_call(&self, i: usize, names: Option<&[ZStr]>) -> (u32, bool) {
         let mut depth = 0u32;
         let mut n = 0u32;
         let mut simple = true;
+        let mut names = names;
+        let mut undef = false;
+        // `zend_compile_args_ex`: a named argument passed in order is a
+        // positional one.
+        let resolve_named = |nm: &[u8], n: &mut u32, undef: &mut bool, names: Option<&[ZStr]>| {
+            let in_order = !*undef
+                && names
+                    .and_then(|ps| ps.get(*n as usize))
+                    .is_some_and(|p| p.as_bytes() == nm);
+            if in_order {
+                *n += 1;
+            } else {
+                *undef = true;
+            }
+        };
         for op in self.ops.iter().skip(i + 1) {
             match generic(op) {
                 Op::InitFCall { .. }
@@ -810,11 +882,23 @@ impl<'a> Lower<'a> {
                         }
                     }
                 }
-                Op::SendNamed { .. } | Op::SendPlaceholder { .. } if depth == 0 => {
+                Op::SendNamed { name, .. }
+                | Op::SendPlaceholder {
+                    name: Some(name), ..
+                } if depth == 0 => {
+                    simple = false;
+                    let nm = self.lit_bytes(name);
+                    resolve_named(&nm, &mut n, &mut undef, names);
+                }
+                Op::SendPlaceholder { name: None } if depth == 0 => {
                     n += 1;
                     simple = false;
                 }
-                Op::SendUnpack { .. } if depth == 0 => simple = false,
+                Op::SendUnpack { .. } if depth == 0 => {
+                    simple = false;
+                    names = None;
+                    undef = true;
+                }
                 _ => {}
             }
         }
@@ -910,9 +994,21 @@ impl<'a> Lower<'a> {
                 let a = self.z(a);
                 self.push(ZLine::new("COALESCE").t(*dst).a(a).b(Z::Label(*target)));
             }
-            Op::JmpNull { a, dst, target } => {
+            Op::JmpNull {
+                a,
+                dst,
+                target,
+                chain,
+            } => {
                 let a = self.z(a);
-                self.push(ZLine::new("JMP_NULL").t(*dst).a(a).b(Z::Label(*target)));
+                let mut l = ZLine::new("JMP_NULL").t(*dst).a(a).b(Z::Label(*target));
+                // `ZEND_SHORT_CIRCUITING_CHAIN_*`.
+                l.xv = match chain {
+                    NullChain::Expr | NullChain::Quiet => 0,
+                    NullChain::Isset => 1,
+                    NullChain::Empty => 2,
+                };
+                self.push(l);
             }
             Op::AssignCv { cv, val, dst } => {
                 let v = self.z(val);
@@ -1007,7 +1103,7 @@ impl<'a> Lower<'a> {
             } => self.lower_init_fcall(i, *name, *fallback, *display),
             Op::InitDynCall { callee } => {
                 let c = self.copy_kept(callee);
-                let (n, _) = self.scan_call(i);
+                let (n, _) = self.scan_call(i, None);
                 self.push(ZLine::new("INIT_DYNAMIC_CALL").x(format!(" {n}")).b(c));
                 self.calls.push(Call {
                     kind: CallKind::Dynamic,
@@ -1016,6 +1112,9 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitMethodCall { obj, name } => {
@@ -1024,7 +1123,6 @@ impl<'a> Lower<'a> {
                     _ => self.z(obj),
                 };
                 let nm = self.z(name);
-                let (n, _) = self.scan_call(i);
                 // `zend_optimizer_get_called_func`: a closure's op array has
                 // no scope there.
                 let closure = self.func.flags & crate::func::flags::CLOSURE != 0;
@@ -1036,6 +1134,8 @@ impl<'a> Lower<'a> {
                     _ => None,
                 };
                 let known = found.map(|(k, _, _)| k);
+                let names = self.param_names(known, None);
+                let (n, _) = self.scan_call(i, names.as_deref());
                 // `zend_optimizer_get_called_func`: a method that no child
                 // class can override (private, final, or of a final class)
                 // is not a prototype, so its calls may be inlined.
@@ -1055,11 +1155,13 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: fixed.then_some(init_at),
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitStaticCall { class, name } => {
                 let nm = self.z(name);
-                let (n, _) = self.scan_call(i);
                 let class_lc = match class {
                     ClassSpec::Named(l) => Some(self.lit_bytes(*l).to_ascii_lowercase()),
                     ClassSpec::SelfClass => self.scope.clone(),
@@ -1089,6 +1191,8 @@ impl<'a> Lower<'a> {
                             .is_some_and(|d| d.flags & crate::class::cflags::TRAIT == 0)
                 });
                 let fixed = resolved && known.is_some_and(|k| k.user.is_some());
+                let names = self.param_names(known, None);
+                let (n, _) = self.scan_call(i, names.as_deref());
                 let c = self.class_z(class, " (exception)");
                 let init_at = self.lines.len();
                 self.push(
@@ -1104,10 +1208,13 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: fixed.then_some(init_at),
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitParentHook { prop, set } => {
-                let (n, _) = self.scan_call(i);
+                let (n, _) = self.scan_call(i, None);
                 let p = Z::Const(self.lit(*prop));
                 self.push(
                     ZLine::new("INIT_PARENT_PROPERTY_HOOK_CALL")
@@ -1122,14 +1229,34 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::New { class, dst, .. } => {
-                let (n, _) = self.scan_call(i);
+                // `zend_compile_new`: the constructor of a class the
+                // compiler knows, the script's or an internal one.
+                let mut internal = None;
                 let known = match class {
                     ClassSpec::Named(l) => {
                         let lc = self.lit_bytes(*l).to_ascii_lowercase();
-                        self.res.method(&lc, b"__construct").map(|(k, _, _)| k)
+                        let lc = lc.strip_prefix(b"\\").unwrap_or(&lc).to_vec();
+                        match self.res.method(&lc, b"__construct") {
+                            Some((k, _, _)) => Some(k),
+                            None if self.res.class_decl(&lc).is_none() => {
+                                self.res.table.internal_ctor(&lc).map(|(info, names)| {
+                                    internal = Some(names);
+                                    Known {
+                                        info,
+                                        user: None,
+                                        flags: 0,
+                                        ret: 0,
+                                    }
+                                })
+                            }
+                            None => None,
+                        }
                     }
                     ClassSpec::SelfClass => self
                         .scope
@@ -1138,6 +1265,14 @@ impl<'a> Lower<'a> {
                         .map(|(k, _, _)| k),
                     _ => None,
                 };
+                let names = internal.or_else(|| self.param_names(known, None));
+                let names = names.map(|mut v| {
+                    if known.is_some_and(|k| k.info.variadic) {
+                        v.pop();
+                    }
+                    v
+                });
+                let (n, _) = self.scan_call(i, names.as_deref());
                 let c = self.class_z(class, " (exception)");
                 self.push(ZLine::new("NEW").t(*dst).x(format!(" {n}")).a(c));
                 self.calls.push(Call {
@@ -1147,6 +1282,9 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::Send { src } => self.lower_send(src, None),
@@ -1158,17 +1296,23 @@ impl<'a> Lower<'a> {
                 let s = self.z(src);
                 if let Some(c) = self.calls.last_mut() {
                     c.frameless = None;
+                    c.names = None;
+                    c.undef = true;
                 }
                 self.push(ZLine::new("SEND_UNPACK").a(s));
             }
             Op::SendPlaceholder { name } => {
-                let sent = self.calls.last_mut().map_or(1, |c| {
-                    c.sent += 1;
-                    c.sent
-                });
+                let name = (*name).map(|n| self.lit(n));
+                let (num, name) = match self.calls.last_mut() {
+                    Some(c) => {
+                        c.sent += 1;
+                        resolve_arg(c, name)
+                    }
+                    None => (Some(1), name),
+                };
                 let b = match name {
-                    Some(n) => Z::Const(self.lit(*n)),
-                    None => Z::Num(sent),
+                    Some(n) => Z::Const(n),
+                    None => Z::Num(num.unwrap_or(0)),
                 };
                 self.push(ZLine::new("SEND_PLACEHOLDER").b(b));
             }
@@ -1407,7 +1551,13 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("CLONE").t(*dst).a(a));
             }
             Op::FuncNumArgs { dst } => self.push(ZLine::new("FUNC_NUM_ARGS").ot(*dst)),
-            Op::FuncGetArgs { dst } => self.push(ZLine::new("FUNC_GET_ARGS").ot(*dst)),
+            Op::FuncGetArgs { dst, skip } => {
+                let mut l = ZLine::new("FUNC_GET_ARGS").ot(*dst);
+                if let Some(n) = skip {
+                    l = l.a(Z::Const(Value::Int(i64::from(*n))));
+                }
+                self.push(l);
+            }
             Op::Strlen { a, dst } => {
                 let a = self.z(a);
                 self.push(ZLine::new("STRLEN").ot(*dst).a(a));
@@ -2269,9 +2419,10 @@ impl Lower<'_> {
 
     fn lower_init_fcall(&mut self, i: usize, name: u32, fallback: Option<u32>, display: u32) {
         let lc = self.lit_bytes(name);
-        let (n, simple) = self.scan_call(i);
         let line = self.oa.line(i);
         let known = self.res.function(&lc, line);
+        let names = self.param_names(known, Some(&lc));
+        let (n, simple) = self.scan_call(i, names.as_deref());
         let frameless = match known {
             Some(k) if fallback.is_none() && k.user.is_none() && simple && n <= 3 => {
                 let ok = crate::compiler::frameless_arities(&lc)
@@ -2290,6 +2441,9 @@ impl Lower<'_> {
                 args: Vec::new(),
                 sent: 0,
                 inline: None,
+                names,
+                count: 0,
+                undef: false,
             });
             return;
         }
@@ -2326,16 +2480,20 @@ impl Lower<'_> {
             args: Vec::new(),
             sent: 0,
             inline: (kind == CallKind::FCall && user).then_some(init_at),
+            names,
+            count: 0,
+            undef: false,
         });
     }
 
     fn lower_send(&mut self, src: &ArgSrc, name: Option<Value>) {
-        let (known, frameless, argn) = match self.calls.last_mut() {
+        let (known, frameless, argn, name) = match self.calls.last_mut() {
             Some(c) => {
                 c.sent += 1;
-                (c.known, c.frameless.is_some(), c.sent)
+                let (num, name) = resolve_arg(c, name);
+                (c.known, c.frameless.is_some(), num, name)
             }
-            None => (None, false, 1),
+            None => (None, false, Some(1), name),
         };
         if frameless {
             let z = match src {
@@ -2352,12 +2510,12 @@ impl Lower<'_> {
         }
         let pos = match &name {
             Some(n) => Z::Const(n.clone()),
-            None => Z::Num(argn),
+            None => Z::Num(argn.unwrap_or(0)),
         };
-        let by_ref = if name.is_some() {
-            None
-        } else {
-            known.map(|k| k.info.sends_by_ref(argn as usize - 1))
+        // The send mode of a known function's parameter `arg_num`.
+        let by_ref = match (known, argn) {
+            (Some(k), Some(a)) => Some(k.info.sends_by_ref(a as usize - 1)),
+            _ => None,
         };
         match src {
             ArgSrc::Val(o) => {
@@ -2448,6 +2606,9 @@ impl Lower<'_> {
             self.push(ZLine::new("DO_FCALL").ot(dst));
             return;
         };
+        if call.undef {
+            self.push(ZLine::new("CHECK_UNDEF_ARGS"));
+        }
         if let Some((name, n)) = call.frameless {
             let op = match n {
                 0 => "FRAMELESS_ICALL_0",
@@ -2468,7 +2629,7 @@ impl Lower<'_> {
             }
             return;
         }
-        if self.try_inline(&call, dst) {
+        if !call.undef && self.try_inline(&call, dst) {
             return;
         }
         // `zend_get_call_op`: deprecated functions, and `#[\NoDiscard]` ones
@@ -2482,7 +2643,7 @@ impl Lower<'_> {
                 "DO_FCALL_BY_NAME"
             }
             (CallKind::FCall, Some(k)) => {
-                if k.user.is_some() {
+                if k.user.is_some() || !k.info.internal {
                     "DO_UCALL"
                 } else {
                     "DO_ICALL"

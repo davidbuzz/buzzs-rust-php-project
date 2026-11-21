@@ -471,6 +471,16 @@ impl Vm {
 
     /// The arguments of frame `idx` (current values for user functions),
     /// as `func_get_args()` sees them.
+    /// The arguments of `args` (a [`Vm::frame_args`] list) after the
+    /// first `skip` (`ZEND_FUNC_GET_ARGS` with a constant `op1`).
+    pub(crate) fn frame_args_after(args: &ZArray, skip: usize) -> ZArray {
+        let mut t = HashTable::new();
+        for (_, v) in args.iter().skip(skip) {
+            let _ = t.push(v.clone());
+        }
+        ZArray::from_table(t)
+    }
+
     pub(crate) fn frame_args(&self, idx: usize) -> ZArray {
         let mut t = HashTable::new();
         for (k, v, _) in self.frame_arg_list(idx) {

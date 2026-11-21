@@ -1367,19 +1367,20 @@ impl Compiler<'_> {
                     if let Some(op) = op {
                         self.free(op);
                     }
-                } else {
+                } else if let Some(t) = op.and_then(|op| self.last_result(op)) {
+                    self.finish_short_circuit(jumps, t);
+                    self.free(Operand::Tmp(t));
+                } else if let Some(op) = op {
                     let dst = self.tmp();
-                    if let Some(op) = op {
-                        self.emit(Op::Move { src: op, dst });
-                    }
-                    let here = self.here();
-                    for j in jumps {
-                        if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
-                            *d = dst;
-                            *target = here;
-                        }
-                    }
+                    self.emit(Op::Move { src: op, dst });
+                    self.finish_short_circuit(jumps, dst);
                     self.free(Operand::Tmp(dst));
+                } else {
+                    // `zend_do_free()` elides the unused call result
+                    // (`zend_op_may_elide_result`): the jumps write a
+                    // temporary nothing reads.
+                    let dst = self.tmp();
+                    self.finish_short_circuit(jumps, dst);
                 }
             }
             ExprKind::VoidCast(inner) => {

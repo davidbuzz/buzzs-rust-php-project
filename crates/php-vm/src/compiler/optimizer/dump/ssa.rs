@@ -133,14 +133,73 @@ struct SsaOp {
     result_def: Option<u32>,
 }
 
-/// A phi node (`zend_ssa_phi` without pi constraints).
+/// A phi node, or an e-SSA pi with a type constraint (`zend_ssa_phi`).
 #[derive(Clone, Debug)]
 struct Phi {
     /// The variable slot (a CV, or `ncv + T`).
     var: usize,
     ssa: u32,
-    /// By predecessor.
+    /// By predecessor (a pi's are all its one source).
     sources: Vec<Option<u32>>,
+    /// `pi`: the predecessor block of a pi.
+    pi: Option<usize>,
+    /// A pi's `constraint.type.type_mask`.
+    mask: u32,
+    /// The SSA number is handed out (a pi's by its predecessor).
+    named: bool,
+}
+
+impl Phi {
+    /// A phi of variable slot `var` in a block with `preds` predecessors.
+    fn new(var: usize, preds: usize) -> Self {
+        Phi {
+            var,
+            ssa: 0,
+            sources: vec![None; preds],
+            pi: None,
+            mask: 0,
+            named: false,
+        }
+    }
+}
+
+/// `pi_not_type_mask(pi, MAY_BE_NULL)`.
+const PI_NOT_NULL: u32 = t::REF | ((t::ANY & !t::NULL) | t::KEY_ANY | t::OF_ANY | t::OF_REF);
+
+/// `dominates()`: block `a` dominates block `b`.
+fn dominates(cfg: &Cfg, a: usize, mut b: usize) -> bool {
+    let level = |x: usize| cfg.blocks[x].level.unwrap_or(0);
+    while level(b) > level(a) {
+        match cfg.blocks[b].idom {
+            Some(d) => b = d,
+            None => break,
+        }
+    }
+    a == b
+}
+
+/// `needs_pi()`.
+fn needs_pi(cfg: &Cfg, live_in: &[Vec<bool>], from: usize, to: usize, var: usize) -> bool {
+    if !live_in[to][var] {
+        return false;
+    }
+    let fb = &cfg.blocks[from];
+    if fb.succ[0] == fb.succ[1] {
+        return false;
+    }
+    let tb = &cfg.blocks[to];
+    if tb.preds.len() == 1 {
+        return true;
+    }
+    let other = if fb.succ[0] == to {
+        fb.succ[1]
+    } else {
+        fb.succ[0]
+    };
+    // `dominates_other_predecessors()`.
+    !tb.preds
+        .iter()
+        .all(|&p| p == from || dominates(cfg, other, p))
 }
 
 /// The SSA form of one op array.
@@ -403,6 +462,10 @@ fn shape_of(e: &Entry) -> passes::FuncShape {
             .as_ref()
             .filter(|_| e.func.flags & flags::RETURN_REF == 0)
             .map(passes::pure_type),
+        ret_classes: passes::ret_classes(e.func.return_type.as_ref(), e.scope.as_deref(), &|_| {
+            false
+        }),
+        scope: e.scope.clone(),
     }
 }
 
@@ -826,6 +889,36 @@ fn place_phis(f: &Func<'_, '_>, lines: &[ZLine], cfg: &Cfg) -> Vec<Vec<Phi>> {
         }
     }
     let mut phi = vec![vec![false; nv]; nb];
+    // `place_essa_pis()`: a `JMP_NULL` of a CV narrows it to non-null on
+    // the fall-through edge. (Its comparison and type-check pis are not
+    // modelled.)
+    let mut pis: Vec<Vec<Phi>> = vec![Vec::new(); nb];
+    for j in 0..nb {
+        let bj = &cfg.blocks[j];
+        if bj.flags & BB_REACHABLE == 0 || bj.len == 0 || bj.succ.len() != 2 {
+            continue;
+        }
+        let l = &lines[bj.start + bj.len - 1];
+        let Z::Cv(c) = l.op1 else {
+            continue;
+        };
+        let var = c as usize;
+        if l.op != "JMP_NULL" || var >= nv {
+            continue;
+        }
+        let to = bj.succ[1];
+        if !needs_pi(cfg, &live_in, j, to, var) {
+            continue;
+        }
+        let mut pi = Phi::new(var, cfg.blocks[to].preds.len());
+        pi.pi = Some(j);
+        pi.mask = PI_NOT_NULL;
+        pis[to].insert(0, pi);
+        def[to][var] = true;
+        if cfg.blocks[to].preds.len() > 1 {
+            phi[to][var] = true;
+        }
+    }
     loop {
         let mut changed = false;
         for j in 0..nb {
@@ -858,21 +951,22 @@ fn place_phis(f: &Func<'_, '_>, lines: &[ZLine], cfg: &Cfg) -> Vec<Vec<Phi>> {
             break;
         }
     }
-    (0..nb)
-        .map(|j| {
-            if cfg.blocks[j].flags & BB_REACHABLE == 0 {
-                return Vec::new();
-            }
+    // Pis come first, then the phis.
+    let mut out = Vec::with_capacity(nb);
+    for (j, list) in pis.into_iter().enumerate() {
+        if cfg.blocks[j].flags & BB_REACHABLE == 0 {
+            out.push(Vec::new());
+            continue;
+        }
+        let mut list = list;
+        list.extend(
             (0..nv)
                 .filter(|&v| phi[j][v])
-                .map(|v| Phi {
-                    var: v,
-                    ssa: 0,
-                    sources: vec![None; cfg.blocks[j].preds.len()],
-                })
-                .collect()
-        })
-        .collect()
+                .map(|v| Phi::new(v, cfg.blocks[j].preds.len())),
+        );
+        out.push(list);
+    }
+    out
 }
 
 /// `zend_ssa_rename`: walks the dominator tree in preorder, handing out
@@ -919,9 +1013,11 @@ fn rename_block(
     num: &mut dyn FnMut(Site) -> u32,
 ) {
     for p in &mut phis[b] {
-        let s = num(Site::Phi(b, p.var));
-        p.ssa = s;
-        var[p.var] = Some(s);
+        if !p.named {
+            p.ssa = num(Site::Phi(b, p.var));
+            p.named = true;
+        }
+        var[p.var] = Some(p.ssa);
     }
     let block = &cfg.blocks[b];
     for k in block.start..block.start + block.len {
@@ -930,10 +1026,36 @@ fn rename_block(
         }
     }
     for &s in &block.succ {
-        if let Some(j) = cfg.blocks[s].preds.iter().position(|&p| p == b) {
-            for p in &mut phis[s] {
-                if let Some(src) = p.sources.get_mut(j) {
+        let j = cfg.blocks[s].preds.iter().position(|&p| p == b);
+        for p in &mut phis[s] {
+            if p.pi == Some(b) {
+                // The pi of this edge takes its number here.
+                for src in &mut p.sources {
                     *src = var[p.var];
+                }
+                if !p.named {
+                    p.ssa = num(Site::Phi(s, p.var));
+                    p.named = true;
+                }
+            } else if p.pi.is_none() {
+                if let Some(src) = j.and_then(|j| p.sources.get_mut(j)) {
+                    *src = var[p.var];
+                }
+            }
+        }
+        // A phi of the same variable reads the pi on this edge.
+        let Some(j) = j else {
+            continue;
+        };
+        let edge_pis: Vec<(usize, u32)> = phis[s]
+            .iter()
+            .filter(|p| p.pi == Some(b))
+            .map(|p| (p.var, p.ssa))
+            .collect();
+        for (v, d) in edge_pis {
+            for q in phis[s].iter_mut().filter(|q| q.pi.is_none() && q.var == v) {
+                if let Some(src) = q.sources.get_mut(j) {
+                    *src = Some(d);
                 }
             }
         }
@@ -1050,6 +1172,7 @@ fn remap(
         };
         by_var.entry(v).or_default().push(i);
     }
+    let post_block = |pb: usize| (0..post_cfg.blocks.len()).find(|&b| pre_block(b) == Some(pb));
     let mut phis: Vec<Vec<Phi>> = (0..post_cfg.blocks.len())
         .map(|b| {
             let n = post_cfg.blocks[b].preds.len();
@@ -1057,10 +1180,13 @@ fn remap(
                 .and_then(|pb| pre_ssa.phis.get(pb))
                 .map(|ps| {
                     ps.iter()
-                        .map(|p| Phi {
-                            var: p.var,
-                            ssa: 0,
-                            sources: vec![None; n],
+                        .filter_map(|p| {
+                            let mut q = Phi::new(p.var, n);
+                            if let Some(from) = p.pi {
+                                q.pi = Some(post_block(from)?);
+                                q.mask = p.mask;
+                            }
+                            Some(q)
                         })
                         .collect()
                 })
@@ -1642,6 +1768,25 @@ fn range_and(a: i64, b: i64, c: i64, d: i64) -> (i64, i64) {
 /// The type of a phi: the union of its sources, with their class when
 /// they agree.
 fn phi_type(p: &Phi, vars: &[Info]) -> (u32, Option<Ce>) {
+    if p.pi.is_some() {
+        // The source narrowed by the constraint.
+        let Some(info) = p
+            .sources
+            .first()
+            .copied()
+            .flatten()
+            .and_then(|s| vars.get(s as usize))
+        else {
+            return (0, None);
+        };
+        let ty = info.ty & p.mask;
+        let ce = if ty & t::REF == 0 && ty & t::OBJECT != 0 {
+            info.ce.clone()
+        } else {
+            None
+        };
+        return (ty, ce);
+    }
     let mut ty = 0;
     let mut ce: Option<Option<Ce>> = None;
     for s in p.sources.iter().flatten() {
@@ -1893,6 +2038,15 @@ fn op_type(
             }
             (ty, ce)
         }
+        // `ZEND_SHORT_CIRCUITING_CHAIN_*`.
+        "JMP_NULL" if is_result => (
+            match l.xv {
+                1 => t::FALSE,
+                2 => t::TRUE,
+                _ => t::NULL,
+            },
+            None,
+        ),
         "QM_ASSIGN" | "JMP_SET" | "COALESCE" | "COPY_TMP" if is_result => {
             let mut ty = t1 & !(t::UNDEF | t::REF);
             if t1 & t::UNDEF != 0 {
@@ -2527,6 +2681,22 @@ fn write_block_header(
     for p in ssa.phis.get(b).into_iter().flatten() {
         out.extend_from_slice(b"     ");
         write_ssa(out, f, an, Some(p.ssa), b'X', p.var);
+        if let Some(from) = p.pi {
+            // `zend_dump_type_constraint()`.
+            out.extend_from_slice(format!(" = Pi<BB{from}>(").as_bytes());
+            write_ssa(
+                out,
+                f,
+                an,
+                p.sources.first().copied().flatten(),
+                b'X',
+                p.var,
+            );
+            out.extend_from_slice(b" & TYPE");
+            write_type(out, p.mask, None);
+            out.extend_from_slice(b")\n");
+            continue;
+        }
         out.extend_from_slice(b" = Phi(");
         for (j, src) in p.sources.iter().enumerate() {
             if j > 0 {

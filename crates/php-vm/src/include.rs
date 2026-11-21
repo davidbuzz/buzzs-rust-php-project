@@ -62,6 +62,49 @@ fn is_uncacheable_stream_path(name: &[u8]) -> bool {
         && !name.starts_with(b"phar://")
 }
 
+/// `CG(function_table)` and `CG(class_table)` as the optimizer's dump
+/// sees them while compiling a script.
+struct DumpTable<'a> {
+    functions: &'a crate::class::NameMap<crate::func::Func>,
+    classes: &'a crate::class::NameMap<Rc<crate::class::Class>>,
+    /// The file being compiled: user functions of other files are not
+    /// looked at (`ZEND_COMPILE_IGNORE_OTHER_FILES`).
+    filename: &'a ZStr,
+}
+
+impl compiler::FunctionTable for DumpTable<'_> {
+    fn find(&self, lcname: &[u8]) -> Option<compiler::FunctionInfo> {
+        match self.functions.get(lcname)? {
+            crate::func::Func::User(u) if u.code.filename != *self.filename => None,
+            f => Some(compiler::FunctionInfo::of(f)),
+        }
+    }
+
+    fn param_names(&self, lcname: &[u8]) -> Option<Vec<ZStr>> {
+        let f = self.functions.get(lcname)?;
+        Some(f.params().iter().map(|p| p.name.clone()).collect())
+    }
+
+    fn internal_ctor(&self, class_lc: &[u8]) -> Option<(compiler::FunctionInfo, Vec<ZStr>)> {
+        use crate::func::flags;
+        let c = self.classes.get(class_lc)?;
+        // A user class, or one whose `get_constructor` is its own.
+        if c.decl.is_some()
+            || c.hooks
+                .as_ref()
+                .is_some_and(|h| h.get_constructor.is_some())
+        {
+            return None;
+        }
+        let m = c.methods.get(&b"__construct"[..])?;
+        if m.flags & (flags::PRIVATE | flags::PROTECTED) != 0 {
+            return None;
+        }
+        let names = m.func.params().iter().map(|p| p.name.clone()).collect();
+        Some((compiler::FunctionInfo::of(&m.func), names))
+    }
+}
+
 impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
@@ -284,16 +327,7 @@ impl Vm {
         // `opcache.opt_debug_level` & `ZEND_DUMP_AFTER_OPTIMIZER`: opcache
         // dumps each script it compiles (`zend_optimize_script`); eval'd
         // code is not cached.
-        let dump_src = (!is_eval
-            && self.ini.get_bool("opcache.enable")
-            && (self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
-            && self.ini.get_long("opcache.opt_debug_level")
-                & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
-                    | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
-                    | compiler::optimizer::dump::DUMP_AFTER_DFA_PASS)
-                != 0)
-            .then(|| src.clone());
+        let dump_src = (!is_eval && self.opcache_dumps()).then(|| src.clone());
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
         // it compiles. The compiler sees the function table as it stands
@@ -360,49 +394,77 @@ impl Vm {
         // compile warnings (php-src dumps from the optimizer, which runs
         // when the script is cached).
         if let Some(src) = dump_src {
-            let level =
-                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
-                    .unwrap_or(0);
-            let functions = &self.functions;
-            let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
-            let internal = |lc: &[u8]| match functions.get(lc) {
-                Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
-                _ => (0, None),
-            };
-            let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
-            let debug = self.ini.get_long("opcache.opt_debug_level");
-            // The DFA pass dumps each op array while it optimizes them,
-            // before `zend_optimize_script` dumps the result.
-            let mut out = compiler::optimizer::dump::dump_unit_dfa(
-                &unit, &table, &internal, level, end, debug,
-            );
-            if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
-                if Vm::is_preloading() {
-                    // Written with the `$PRELOAD$` script when the preload
-                    // ends (`Vm::finish_preload`).
-                    compiler::optimizer::dump::keep_preload_dump(
-                        &unit,
-                        &table,
-                        &internal,
-                        level,
-                        end,
-                        "after optimizer",
-                    );
-                } else {
-                    out.extend(compiler::optimizer::dump::dump_unit(
-                        &unit,
-                        &table,
-                        &internal,
-                        level,
-                        end,
-                        "after optimizer",
-                    ));
-                }
-            }
-            self.flush_stdout();
-            let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
+            self.opcache_dump(&unit, &src, halt_compiler_offset, filename);
         }
         Ok(CompileOutcome::Ok(unit))
+    }
+
+    /// `opcache.opt_debug_level` asks for the op arrays of the scripts
+    /// opcache optimizes (`ZEND_DUMP_AFTER_OPTIMIZER` and the DFA bits).
+    pub(crate) fn opcache_dumps(&self) -> bool {
+        self.ini.get_bool("opcache.enable")
+            && (self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+            && self.ini.get_long("opcache.opt_debug_level")
+                & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                    | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
+                    | compiler::optimizer::dump::DUMP_AFTER_DFA_PASS)
+                != 0
+    }
+
+    /// Writes the optimizer's dump of `unit`, compiled from `src` of file
+    /// `filename`, to stderr (`zend_optimize_script` when opcache caches
+    /// the script).
+    pub(crate) fn opcache_dump(
+        &mut self,
+        unit: &CompiledUnit,
+        src: &[u8],
+        halt_compiler_offset: Option<usize>,
+        filename: &ZStr,
+    ) {
+        let level = u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+            .unwrap_or(0);
+        let functions = &self.functions;
+        let table = DumpTable {
+            functions,
+            classes: &self.classes,
+            filename,
+        };
+        let internal = |lc: &[u8]| match functions.get(lc) {
+            Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
+            _ => (0, None),
+        };
+        let end = compiler::optimizer::dump::main_line_end(src, halt_compiler_offset);
+        let debug = self.ini.get_long("opcache.opt_debug_level");
+        // The DFA pass dumps each op array while it optimizes them,
+        // before `zend_optimize_script` dumps the result.
+        let mut out =
+            compiler::optimizer::dump::dump_unit_dfa(unit, &table, &internal, level, end, debug);
+        if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
+            if Vm::is_preloading() {
+                // Written with the `$PRELOAD$` script when the preload
+                // ends (`Vm::finish_preload`).
+                compiler::optimizer::dump::keep_preload_dump(
+                    unit,
+                    &table,
+                    &internal,
+                    level,
+                    end,
+                    "after optimizer",
+                );
+            } else {
+                out.extend(compiler::optimizer::dump::dump_unit(
+                    unit,
+                    &table,
+                    &internal,
+                    level,
+                    end,
+                    "after optimizer",
+                ));
+            }
+        }
+        self.flush_stdout();
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
     }
 
     /// Emits the diagnostics recorded while compiling a file

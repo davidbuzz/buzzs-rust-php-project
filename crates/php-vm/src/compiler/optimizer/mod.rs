@@ -926,7 +926,7 @@ pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
         | Op::YieldByRefValue { dst, .. }
         | Op::YieldFrom { dst, .. }
         | Op::FuncNumArgs { dst }
-        | Op::FuncGetArgs { dst }
+        | Op::FuncGetArgs { dst, .. }
         | Op::Strlen { dst, .. }
         | Op::Count { dst, .. }
         | Op::TypeCheck { dst, .. }
@@ -962,7 +962,7 @@ pub(crate) fn clear_def_tmp(op: &mut Op) -> bool {
         | Op::YieldByRefValue { dst, .. }
         | Op::YieldFrom { dst, .. }
         | Op::FuncNumArgs { dst }
-        | Op::FuncGetArgs { dst }
+        | Op::FuncGetArgs { dst, .. }
         | Op::Strlen { dst, .. }
         | Op::Count { dst, .. }
         | Op::TypeCheck { dst, .. }

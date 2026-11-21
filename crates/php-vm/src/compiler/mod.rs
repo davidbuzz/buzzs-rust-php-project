@@ -146,6 +146,7 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "array_key_exists",
     "chr",
     "ord",
+    "array_slice",
 ];
 
 /// The internal functions with `@frameless-function` handlers in php-src
@@ -591,6 +592,19 @@ pub trait FunctionTable {
     /// functions of other files only when they are preloaded
     /// (`zend_optimizer_get_called_func`).
     fn preloaded(&self, _lcname: &[u8]) -> Option<Rc<UserFunction>> {
+        None
+    }
+
+    /// The parameter names of the function `lcname`, which named
+    /// arguments resolve against (`zend_get_arg_num`).
+    fn param_names(&self, _lcname: &[u8]) -> Option<Vec<ZStr>> {
+        None
+    }
+
+    /// The constructor `zend_compile_new` knows for the internal class
+    /// `class_lc` (`ce->constructor` with the standard `get_constructor`):
+    /// its send modes and parameter names.
+    fn internal_ctor(&self, _class_lc: &[u8]) -> Option<(FunctionInfo, Vec<ZStr>)> {
         None
     }
 }

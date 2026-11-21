@@ -1673,10 +1673,18 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::JmpNull { a, dst, target } => {
+                    Op::JmpNull {
+                        a,
+                        dst,
+                        target,
+                        chain,
+                    } => {
                         let v = match a {
                             Operand::Cv(cv) => match self.read_cv_defined(*cv) {
                                 Some(v) => v,
+                                // `ZEND_JMP_NULL_BP_VAR_IS`, `isset()`
+                                // and `empty()` read quietly.
+                                None if !chain.warns() => Value::Null,
                                 None => self.read(*a)?,
                             },
                             o => self.read(*o)?,
@@ -1685,7 +1693,7 @@ impl Vm {
                             if let Operand::TmpKeep(t) = a {
                                 self.set_tmp(*t, Value::Null);
                             }
-                            self.set_tmp(*dst, Value::Null);
+                            self.set_tmp(*dst, chain.value());
                             ip = *target as usize;
                         }
                         Flow::Next
@@ -2174,9 +2182,12 @@ impl Vm {
                         self.set_dst(*dst, Value::Int(i64::try_from(n).unwrap_or(i64::MAX)));
                         Flow::Next
                     }
-                    Op::FuncGetArgs { dst } => {
+                    Op::FuncGetArgs { dst, skip } => {
                         let idx = self.frames.len() - 1;
-                        let args = self.frame_args(idx);
+                        let mut args = self.frame_args(idx);
+                        if let Some(n) = *skip {
+                            args = Vm::frame_args_after(&args, n as usize);
+                        }
                         self.set_dst(*dst, Value::Array(args));
                         Flow::Next
                     }

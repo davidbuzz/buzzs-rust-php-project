@@ -13,7 +13,7 @@ use crate::ast::{
 use crate::func::flags;
 use crate::opcode::{
     type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Label,
-    MatchKey, MatchTable, Op, Operand, Place, PlaceBase, Seg, UnKind,
+    MatchKey, MatchTable, NullChain, Op, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 
@@ -112,19 +112,60 @@ impl Compiler<'_> {
         if jumps.is_empty() {
             return Ok(op);
         }
+        // `zend_short_circuiting_commit()`: the jumps write the result of
+        // the chain's last instruction.
+        if let Some(t) = self.last_result(op) {
+            self.finish_short_circuit(jumps, t);
+            return Ok(op);
+        }
         let dst = self.tmp();
         self.emit(Op::Move { src: op, dst });
         self.finish_short_circuit(jumps, dst);
         Ok(Operand::Tmp(dst))
     }
 
+    /// The temporary `op` names when the last instruction emitted defines
+    /// it.
+    pub(crate) fn last_result(&mut self, op: Operand) -> Option<u32> {
+        let Operand::Tmp(t) = op else {
+            return None;
+        };
+        let last = self.f().ops.last()?;
+        (super::optimizer::def_tmp(last) == Some(t)).then_some(t)
+    }
+
     pub(crate) fn finish_short_circuit(&mut self, jumps: Vec<usize>, dst: u32) {
+        self.commit_short_circuit(jumps, dst, None);
+    }
+
+    /// Points the chain's jumps past its last instruction, writing `dst`,
+    /// as `isset()` / `empty()` when `chain` says so.
+    fn commit_short_circuit(&mut self, jumps: Vec<usize>, dst: u32, chain: Option<NullChain>) {
         let here = self.here();
         for j in jumps {
-            if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
+            if let Op::JmpNull {
+                dst: d,
+                target,
+                chain: c,
+                ..
+            } = &mut self.f().ops[j]
+            {
                 *d = dst;
                 *target = here;
+                if let Some(chain) = chain {
+                    *c = chain;
+                }
             }
+        }
+    }
+
+    /// The short-circuit kind of a `JMP_NULL` emitted now
+    /// (`ZEND_JMP_NULL_BP_VAR_IS` in a quiet fetch).
+    fn null_chain(&mut self) -> NullChain {
+        if self.f().sc_quiet {
+            NullChain::Quiet
+        } else {
+            NullChain::Expr
         }
     }
 
@@ -494,19 +535,7 @@ impl Compiler<'_> {
                     let (p, jumps) = self.compile_is_place(inner)?;
                     let pid = self.place(p);
                     self.emit(Op::Empty { place: pid, dst: t });
-                    if !jumps.is_empty() {
-                        let skip = self.emit(Op::Jmp(0));
-                        let tt = self.lit(Value::Bool(true));
-                        let here = self.here();
-                        for j in jumps {
-                            if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
-                                *d = t;
-                                *target = here;
-                            }
-                        }
-                        self.emit(Op::Move { src: tt, dst: t });
-                        self.patch_here(skip);
-                    }
+                    self.commit_short_circuit(jumps, t, Some(NullChain::Empty));
                 } else {
                     let a = self.compile_expr(inner)?;
                     self.emit(Op::Unary {
@@ -1185,42 +1214,33 @@ impl Compiler<'_> {
             } => {
                 let mut p = self.compile_place_base(object)?;
                 if *nullsafe {
-                    let quiet = self.f().sc_quiet;
-                    let mode = if quiet {
+                    let chain = self.null_chain();
+                    let mode = if chain == NullChain::Quiet {
                         FetchMode::Is
                     } else {
                         FetchMode::Read
                     };
-                    let v = if p.segs.is_empty() {
-                        match p.base {
-                            PlaceBase::Value(op) => op,
-                            PlaceBase::Cv(cv) if !quiet => {
-                                let t = self.tmp();
-                                self.emit(Op::Move {
-                                    src: Operand::Cv(cv),
-                                    dst: t,
-                                });
-                                Operand::Tmp(t)
-                            }
-                            base => self.fetch_place(
-                                Place {
-                                    base,
-                                    segs: Vec::new(),
-                                },
-                                mode,
-                            ),
+                    // `zend_emit_jmp_null()` on the variable itself, which
+                    // the property fetch then reads again.
+                    let (v, base) = match p.base {
+                        PlaceBase::Value(op) if p.segs.is_empty() => (op, PlaceBase::Value(op)),
+                        PlaceBase::Cv(cv) if p.segs.is_empty() => {
+                            (Operand::Cv(cv), PlaceBase::Cv(cv))
                         }
-                    } else {
-                        self.fetch_place(p, mode)
+                        _ => {
+                            let v = self.fetch_place(p, mode);
+                            (v, PlaceBase::Value(v))
+                        }
                     };
                     let j = self.emit(Op::JmpNull {
                         a: Compiler::keep(v),
                         dst: 0,
                         target: 0,
+                        chain,
                     });
                     self.f().sc_jumps.push(j);
                     p = Place {
-                        base: PlaceBase::Value(v),
+                        base,
                         segs: Vec::new(),
                     };
                 }
@@ -1423,19 +1443,7 @@ impl Compiler<'_> {
         let (p, jumps) = self.compile_is_place(v)?;
         let pid = self.place(p);
         self.emit(Op::Isset { place: pid, dst: t });
-        if !jumps.is_empty() {
-            let skip = self.emit(Op::Jmp(0));
-            let here = self.here();
-            for j in jumps {
-                if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
-                    *d = t;
-                    *target = here;
-                }
-            }
-            let f = self.lit(Value::Bool(false));
-            self.emit(Op::Move { src: f, dst: t });
-            self.patch_here(skip);
-        }
+        self.commit_short_circuit(jumps, t, Some(NullChain::Isset));
         Ok(Operand::Tmp(t))
     }
 
@@ -2229,10 +2237,12 @@ impl Compiler<'_> {
                 } else {
                     let o = self.compile_chain(object)?;
                     if *nullsafe {
+                        let chain = self.null_chain();
                         let j = self.emit(Op::JmpNull {
                             a: Compiler::keep(o),
                             dst: 0,
                             target: 0,
+                            chain,
                         });
                         self.f().sc_jumps.push(j);
                     }
@@ -2918,6 +2928,32 @@ impl Compiler<'_> {
             b"chr" | b"ord" if fb.is_none() && only_positional && positional.len() == 1 => {
                 Ok(self.fold_chr_ord(&lc, positional[0]))
             }
+            // zend_compile_func_array_slice: `array_slice(func_get_args(), n)`
+            // inside a function, `n` a non-negative int literal.
+            b"array_slice"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 2
+                    && !self.f().func_name.is_empty()
+                    && self.special_builtin_enabled(b"array_slice") =>
+            {
+                let ExprKind::Int(n) = positional[1].kind else {
+                    return Ok(None);
+                };
+                let (Ok(skip), true) = (u32::try_from(n), self.is_func_get_args(positional[0]))
+                else {
+                    return Ok(None);
+                };
+                self.f().line = line;
+                let dst = need.then(|| self.tmp());
+                self.emit(Op::FuncGetArgs {
+                    dst,
+                    skip: Some(skip),
+                });
+                Ok(Some(
+                    dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+                ))
+            }
             // Without `array_key_exists` registered as an internal function,
             // only the float-key lifetime case finishes a pending call.
             b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
@@ -2991,7 +3027,7 @@ impl Compiler<'_> {
                 if lc.as_slice() == b"func_num_args" {
                     self.emit(Op::FuncNumArgs { dst });
                 } else {
-                    self.emit(Op::FuncGetArgs { dst });
+                    self.emit(Op::FuncGetArgs { dst, skip: None });
                 }
                 Ok(Some(
                     dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
@@ -3144,6 +3180,19 @@ impl Compiler<'_> {
         Ok(Some(
             dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
         ))
+    }
+
+    /// Whether `e` is a call `func_get_args()` without arguments whose name
+    /// resolves to the global function (`zend_resolve_function_name`).
+    fn is_func_get_args(&self, e: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let ast::Callee::Name(n) = &**callee else {
+            return false;
+        };
+        let (resolved, fb) = self.resolve_function_name(n);
+        fb.is_none() && args.args.is_empty() && resolved.eq_ignore_ascii_case(b"func_get_args")
     }
 
     /// Whether `lc` is currently registered as an internal function
@@ -3918,5 +3967,66 @@ mod match_tests {
             optimizer::DEFAULT_OPTIMIZATION_LEVEL,
         );
         assert!(match_op(&code).is_none(), "{:?}", code.ops);
+    }
+}
+
+#[cfg(test)]
+mod special_call_tests {
+    //! `zend_try_compile_special_func`: calls compiled to opcodes.
+    use crate::compiler::{compile, special_builtin_bit, CompileOptions};
+    use crate::opcode::Op;
+    use std::rc::Rc;
+
+    /// The ops of the first declared function, with `array_slice` an
+    /// internal function or not.
+    fn function_ops(src: &str, builtin: bool) -> Vec<Op> {
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+        let opts = CompileOptions {
+            filename: "t.php".into(),
+            special_builtins: if builtin {
+                special_builtin_bit(b"array_slice").unwrap_or(0)
+            } else {
+                0
+            },
+            ..CompileOptions::default()
+        };
+        let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+        let found = unit.decls.functions.borrow()[0].code.ops.clone();
+        found
+    }
+
+    fn skips(ops: &[Op]) -> Vec<Option<u32>> {
+        ops.iter()
+            .filter_map(|op| match op {
+                Op::FuncGetArgs { skip, .. } => Some(*skip),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `zend_compile_func_array_slice`: `array_slice(func_get_args(), n)`
+    /// with a non-negative literal `n` is `FUNC_GET_ARGS n`; other forms
+    /// stay calls.
+    #[test]
+    fn array_slice_of_func_get_args_is_one_opcode() {
+        let src = "<?php function f() { return array_slice(func_get_args(), 2); }";
+        assert_eq!(skips(&function_ops(src, true)), vec![Some(2)]);
+        let fq = "<?php function f() { return \\array_slice(\\func_get_args(), 0); }";
+        assert_eq!(skips(&function_ops(fq, true)), vec![Some(0)]);
+        // Not registered as an internal function: a call of `array_slice`.
+        assert_eq!(skips(&function_ops(src, false)), vec![None]);
+        for other in [
+            "<?php function f() { $n = 1; return array_slice(func_get_args(), $n); }",
+            "<?php function f() { return array_slice(func_get_args(), 1, 1); }",
+            "<?php namespace N; function f() { return \\array_slice(func_get_args(), 1); }",
+        ] {
+            assert!(
+                skips(&function_ops(other, true))
+                    .iter()
+                    .all(Option::is_none),
+                "{other}"
+            );
+        }
     }
 }

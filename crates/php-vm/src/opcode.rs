@@ -122,6 +122,39 @@ pub enum BinKind {
     Spaceship,
 }
 
+/// What a nullsafe chain short-circuited by [`Op::JmpNull`] evaluates
+/// to (`ZEND_SHORT_CIRCUITING_CHAIN_*` in the op's `extended_value`, with
+/// `ZEND_JMP_NULL_BP_VAR_IS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NullChain {
+    /// `null`; an undefined variable warns.
+    Expr,
+    /// `null`, read quietly (the operand of `??`).
+    Quiet,
+    /// `false` (`isset()`).
+    Isset,
+    /// `true` (`empty()`).
+    Empty,
+}
+
+impl NullChain {
+    /// The chain's value when it short-circuits.
+    #[must_use]
+    pub fn value(self) -> Value {
+        match self {
+            NullChain::Expr | NullChain::Quiet => Value::Null,
+            NullChain::Isset => Value::Bool(false),
+            NullChain::Empty => Value::Bool(true),
+        }
+    }
+
+    /// Whether an undefined variable operand warns.
+    #[must_use]
+    pub fn warns(self) -> bool {
+        self == NullChain::Expr
+    }
+}
+
 /// Unary operations of [`Op::Unary`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnKind {
@@ -430,8 +463,14 @@ pub enum Op {
     JmpSet { a: Operand, dst: u32, target: Label },
     /// `??`: if not null, `dst = a` and jump.
     Coalesce { a: Operand, dst: u32, target: Label },
-    /// Nullsafe: if null, `dst = null` and jump.
-    JmpNull { a: Operand, dst: u32, target: Label },
+    /// Nullsafe: if null, `dst` = what the short-circuited chain gives
+    /// and jump.
+    JmpNull {
+        a: Operand,
+        dst: u32,
+        target: Label,
+        chain: NullChain,
+    },
 
     /// `$cv = val`.
     AssignCv {
@@ -643,8 +682,10 @@ pub enum Op {
     /// `func_num_args()` called by name, without arguments, in a function
     /// body (`ZEND_FUNC_NUM_ARGS`): no call frame, no observer frame.
     FuncNumArgs { dst: Option<u32> },
-    /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`).
-    FuncGetArgs { dst: Option<u32> },
+    /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`); with `skip`,
+    /// `array_slice(func_get_args(), skip)` (`zend_compile_func_array_slice`:
+    /// the arguments after the first `skip`).
+    FuncGetArgs { dst: Option<u32>, skip: Option<u32> },
     /// `strlen($x)` (`ZEND_STRLEN`, `zend_compile_func_strlen`): no call
     /// frame; weak-mode coercion and the `TypeError` happen in place.
     Strlen { a: Operand, dst: Option<u32> },

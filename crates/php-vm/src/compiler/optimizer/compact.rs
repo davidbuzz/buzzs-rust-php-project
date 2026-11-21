@@ -237,7 +237,7 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             | Op::YieldByRefValue { dst, .. }
             | Op::YieldFrom { dst, .. }
             | Op::FuncNumArgs { dst }
-            | Op::FuncGetArgs { dst }
+            | Op::FuncGetArgs { dst, .. }
             | Op::Strlen { dst, .. }
             | Op::Count { dst, .. }
             | Op::TypeCheck { dst, .. }
