@@ -112,7 +112,7 @@ struct Ce {
     instanceof: bool,
 }
 
-/// `zend_ssa_var_info` plus `zend_ssa_var.no_val`.
+/// `zend_ssa_var_info` plus `zend_ssa_var.no_val` and `escape_state`.
 #[derive(Clone, Default, Debug)]
 struct Info {
     ty: u32,
@@ -120,6 +120,8 @@ struct Info {
     /// `has_range` and `range`.
     range: Option<Range>,
     no_val: bool,
+    /// `ESCAPE_STATE_NO_ESCAPE` ([`escape_analysis`]).
+    no_esc: bool,
 }
 
 /// `zend_ssa_op`.
@@ -1353,7 +1355,359 @@ fn analyze(f: &Func<'_, '_>, lines: &[ZLine], cfg: &Cfg, ssa: &Ssa) -> Analysis 
         }
     }
     let ret = return_info(f, lines, cfg, ssa, &vars);
+    escape_analysis(f, lines, ssa, &def_at, &mut vars);
     Analysis { vars, ret }
+}
+
+/// `ESCAPE_STATE_*`.
+const ESC_UNKNOWN: u8 = 0;
+const ESC_NONE: u8 = 1;
+const ESC_GLOBAL: u8 = 3;
+
+/// The type of an opline's `op1` (`OP1_INFO()`).
+fn op1_info(lines: &[ZLine], ssa: &Ssa, vars: &[Info], k: usize) -> u32 {
+    op_type_of(&lines[k].op1, ssa.ops[k].op1_use, vars)
+}
+
+/// `is_allocation_def`: the definition of `var` by opline `k` makes a
+/// new array (`NEW` of an object is left to escape).
+fn is_allocation_def(lines: &[ZLine], ssa: &Ssa, vars: &[Info], k: usize, var: u32) -> bool {
+    let (l, op) = (&lines[k], &ssa.ops[k]);
+    if op.result_def == Some(var) {
+        return match l.op {
+            "INIT_ARRAY" => true,
+            "QM_ASSIGN" => {
+                matches!(l.op1, Z::Const(Value::Array(_)))
+                    || (matches!(l.op1, Z::Cv(_)) && op1_info(lines, ssa, vars, k) & t::ARRAY != 0)
+            }
+            "ASSIGN" => matches!(l.op1, Z::Cv(_)) && op1_info(lines, ssa, vars, k) & t::ARRAY != 0,
+            _ => false,
+        };
+    }
+    if op.op1_def == Some(var) {
+        return match l.op {
+            "ASSIGN" => {
+                matches!(l.op2, Z::Const(Value::Array(_)))
+                    || (matches!(l.op2, Z::Cv(_))
+                        && op_type_of(&l.op2, op.op2_use, vars) & t::ARRAY != 0)
+            }
+            "ASSIGN_DIM" => op1_info(lines, ssa, vars, k) & (t::UNDEF | t::NULL | t::FALSE) != 0,
+            _ => false,
+        };
+    }
+    false
+}
+
+/// `is_local_def`.
+fn is_local_def(l: &ZLine, op: &SsaOp, var: u32) -> bool {
+    if op.result_def == Some(var) {
+        return matches!(
+            l.op,
+            "INIT_ARRAY" | "ADD_ARRAY_ELEMENT" | "QM_ASSIGN" | "ASSIGN"
+        );
+    }
+    op.op1_def == Some(var)
+        && matches!(
+            l.op,
+            "ASSIGN"
+                | "ASSIGN_DIM"
+                | "ASSIGN_OBJ"
+                | "ASSIGN_OBJ_REF"
+                | "ASSIGN_DIM_OP"
+                | "ASSIGN_OBJ_OP"
+                | "PRE_INC_OBJ"
+                | "PRE_DEC_OBJ"
+                | "POST_INC_OBJ"
+                | "POST_DEC_OBJ"
+        )
+}
+
+/// `is_escape_use`: opline `k` lets the value of `var` escape. An object
+/// may implement `ArrayAccess` (`may_be_array_access` without the class).
+fn is_escape_use(lines: &[ZLine], ssa: &Ssa, vars: &[Info], k: usize, var: u32) -> bool {
+    let (l, op) = (&lines[k], &ssa.ops[k]);
+    let info = |u: Option<u32>| {
+        u.and_then(|u| vars.get(u as usize))
+            .map_or(t::UNKNOWN, |x| x.ty)
+    };
+    if op.op1_use == Some(var) {
+        let t1 = op1_info(lines, ssa, vars, k);
+        match l.op {
+            "ASSIGN"
+            | "ISSET_ISEMPTY_PROP_OBJ"
+            | "FETCH_OBJ_R"
+            | "FETCH_OBJ_IS"
+            | "ASSIGN_OBJ_OP"
+            | "ASSIGN_STATIC_PROP_OP"
+            | "ASSIGN_OBJ"
+            | "PRE_INC_OBJ"
+            | "PRE_DEC_OBJ"
+            | "POST_INC_OBJ"
+            | "POST_DEC_OBJ" => {}
+            "QM_ASSIGN" => {
+                if matches!(l.op1, Z::Cv(_)) && t1 & t::OBJECT != 0 {
+                    return true;
+                }
+            }
+            "ISSET_ISEMPTY_DIM_OBJ"
+            | "FETCH_DIM_R"
+            | "FETCH_DIM_IS"
+            | "ASSIGN_DIM_OP"
+            | "ASSIGN_DIM" => {
+                if info(op.op1_use) & t::OBJECT != 0 {
+                    return true;
+                }
+            }
+            "INIT_ARRAY" | "ADD_ARRAY_ELEMENT" => {
+                if l.ext.contains("(ref)") || t1 & t::OBJECT != 0 {
+                    return true;
+                }
+            }
+            "OP_DATA" => {
+                let Some(prev) = k.checked_sub(1) else {
+                    return true;
+                };
+                if !matches!(lines[prev].op, "ASSIGN_DIM" | "ASSIGN_OBJ") || t1 & t::OBJECT != 0 {
+                    return true;
+                }
+                // An assignment into a structure that escapes.
+                if !matches!(lines[prev].op1, Z::Cv(_))
+                    || op1_info(lines, ssa, vars, prev) & t::REF != 0
+                {
+                    return true;
+                }
+            }
+            _ => return true,
+        }
+    }
+    if op.op2_use == Some(var) {
+        if l.op != "ASSIGN" {
+            return true;
+        }
+        if !matches!(l.op1, Z::Cv(_)) || op1_info(lines, ssa, vars, k) & t::REF != 0 {
+            return true;
+        }
+        if (matches!(l.op2, Z::Cv(_)) || !matches!(l.res, Z::Unused))
+            && info(op.op2_use) & t::OBJECT != 0
+        {
+            return true;
+        }
+    }
+    if op.result_use == Some(var)
+        && !matches!(
+            l.op,
+            "ASSIGN" | "QM_ASSIGN" | "INIT_ARRAY" | "ADD_ARRAY_ELEMENT"
+        )
+    {
+        return true;
+    }
+    false
+}
+
+/// `zend_ssa_escape_analysis`: the arrays a function makes that nothing
+/// outside it can see get `no_esc` (printed `NOESC`). Equi-escape sets are
+/// built with a union-find over the definitions, allocations mark their
+/// set, escaping uses and the enclosing structure of a stored element
+/// spread the escape.
+fn escape_analysis(
+    f: &Func<'_, '_>,
+    lines: &[ZLine],
+    ssa: &Ssa,
+    def_at: &[DefAt],
+    vars: &mut [Info],
+) {
+    /// `union_find_root` (with path halving).
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let n = vars.len();
+    let ncv = f.ncv.min(n);
+    let def_op = |i: usize| match def_at[i] {
+        DefAt::Op(k) => Some(k),
+        _ => None,
+    };
+    let array_like = |i: usize| vars[i].ty & (t::ARRAY | t::OBJECT) != 0;
+    let any_allocation = (ncv..n).any(|i| {
+        def_op(i).is_some_and(|k| {
+            array_like(i) && is_allocation_def(lines, ssa, vars, k, u32::try_from(i).unwrap_or(0))
+        })
+    });
+    if !any_allocation {
+        return;
+    }
+    // 1. Equi-escape sets (`zend_build_equi_escape_sets`).
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut size = vec![1usize; n];
+    let mut unite = |parent: &mut Vec<usize>, a: Option<u32>, b: Option<u32>| {
+        let (Some(a), Some(b)) = (a, b) else {
+            return;
+        };
+        let (a, b) = (a as usize, b as usize);
+        if a >= n || b >= n {
+            return;
+        }
+        let (r1, r2) = (root(parent, a), root(parent, b));
+        if r1 != r2 {
+            if size[r1] < size[r2] {
+                parent[r1] = r2;
+                size[r2] += size[r1];
+            } else {
+                parent[r2] = r1;
+                size[r1] += size[r2];
+            }
+        }
+    };
+    for (b, ps) in ssa.phis.iter().enumerate() {
+        let _ = b;
+        for p in ps {
+            let srcs: &[Option<u32>] = if p.pi.is_some() {
+                &p.sources[..p.sources.len().min(1)]
+            } else {
+                &p.sources
+            };
+            for s in srcs {
+                unite(&mut parent, Some(p.ssa), *s);
+            }
+        }
+    }
+    for (k, op) in ssa.ops.iter().enumerate() {
+        let name = lines[k].op;
+        if op.op1_def.is_some() {
+            if name == "ASSIGN" {
+                unite(&mut parent, op.op1_def, op.op2_use);
+            } else {
+                unite(&mut parent, op.op1_def, op.op1_use);
+            }
+        }
+        unite(&mut parent, op.op2_def, op.op2_use);
+        if op.result_def.is_some() {
+            if name == "QM_ASSIGN" {
+                unite(&mut parent, op.result_def, op.op1_use);
+            } else {
+                unite(&mut parent, op.result_def, op.result_use);
+            }
+            if name == "ASSIGN" {
+                unite(&mut parent, op.result_def, op.op2_use);
+                unite(&mut parent, op.result_def, op.op1_def);
+            }
+        }
+    }
+    let ees: Vec<usize> = (0..n).map(|i| root(&mut parent, i)).collect();
+    // 2. Allocations.
+    let mut state = vec![ESC_UNKNOWN; n];
+    let mut live = 0i64;
+    for (i, &r) in ees.iter().enumerate().skip(ncv) {
+        if state[r] > ESC_NONE {
+            continue;
+        }
+        let Some(k) = def_op(i) else {
+            continue;
+        };
+        if !array_like(i) {
+            continue;
+        }
+        let var = u32::try_from(i).unwrap_or(0);
+        if !is_local_def(&lines[k], &ssa.ops[k], var) {
+            if state[r] == ESC_NONE {
+                live -= 1;
+            }
+            state[r] = ESC_GLOBAL;
+        } else if state[r] == ESC_UNKNOWN && is_allocation_def(lines, ssa, vars, k, var) {
+            state[r] = ESC_NONE;
+            live += 1;
+        }
+    }
+    // The oplines using each variable (`FOREACH_USE`).
+    let mut uses: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (k, op) in ssa.ops.iter().enumerate() {
+        for u in [op.op1_use, op.op2_use, op.result_use]
+            .into_iter()
+            .flatten()
+        {
+            let u = u as usize;
+            if u < n && uses[u].last() != Some(&k) {
+                uses[u].push(k);
+            }
+        }
+    }
+    // 3. Escaping uses.
+    if live > 0 {
+        'vars: for i in 0..n {
+            let r = ees[i];
+            if state[r] != ESC_NONE {
+                continue;
+            }
+            let var = u32::try_from(i).unwrap_or(0);
+            for &k in &uses[i] {
+                if is_escape_use(lines, ssa, vars, k, var) {
+                    state[r] = ESC_GLOBAL;
+                    live -= 1;
+                    if live == 0 {
+                        break 'vars;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    // 4. An element stored into a structure escapes with it.
+    if live > 0 {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..n {
+                let r = ees[i];
+                if state[r] != ESC_NONE {
+                    continue;
+                }
+                let var = Some(u32::try_from(i).unwrap_or(0));
+                for &k in &uses[i] {
+                    let op = &ssa.ops[k];
+                    let enclosing = if lines[k].op == "OP_DATA"
+                        && k > 0
+                        && matches!(
+                            lines[k - 1].op,
+                            "ASSIGN_DIM" | "ASSIGN_OBJ" | "ASSIGN_OBJ_REF"
+                        )
+                        && op.op1_use == var
+                    {
+                        ssa.ops[k - 1].op1_use
+                    } else if matches!(lines[k].op, "INIT_ARRAY" | "ADD_ARRAY_ELEMENT")
+                        && op.op1_use == var
+                    {
+                        op.result_def
+                    } else {
+                        None
+                    };
+                    let Some(e) = enclosing.map(|e| e as usize).filter(|&e| e < n) else {
+                        continue;
+                    };
+                    let er = ees[e];
+                    if state[er] == ESC_UNKNOWN || state[er] > state[r] {
+                        state[r] = if state[er] == ESC_UNKNOWN {
+                            ESC_GLOBAL
+                        } else {
+                            state[er]
+                        };
+                        if state[r] == ESC_GLOBAL {
+                            live -= 1;
+                            changed = live != 0;
+                            break;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    // 5. Every variable of a set.
+    for i in 0..n {
+        vars[i].no_esc = state[ees[i]] == ESC_NONE;
+    }
 }
 
 /// The range of an operand (`OP1_HAS_RANGE` and friends).
@@ -1808,6 +2162,96 @@ fn phi_type(p: &Phi, vars: &[Info]) -> (u32, Option<Ce>) {
     (ty, ce.flatten())
 }
 
+/// `MAY_BE_HASH_ONLY`.
+fn hash_only(t: u32) -> bool {
+    t & (t::NUMERIC_HASH | t::STRING_HASH) != 0 && t & (t::PACKED | t::EMPTY) == 0
+}
+
+/// `assign_dim_array_result_type`: the key and element bits an array of
+/// type `arr` gets when `value` is stored under a key of type `dim`
+/// (`append`: no key; `dim_const`: a literal key).
+fn dim_array_type(arr: u32, dim: u32, value: u32, append: bool, dim_const: bool) -> u32 {
+    let mut tmp = 0;
+    let mut value = value;
+    let long_key = |tmp: &mut u32| {
+        if arr & (t::UNDEF | t::NULL | t::FALSE) != 0 {
+            *tmp |= t::PACKED;
+        }
+        *tmp |= if hash_only(arr) {
+            t::NUMERIC_HASH
+        } else {
+            t::KEY_LONG
+        };
+    };
+    if value & (t::ANY | t::UNDEF) != 0 {
+        if value & t::UNDEF != 0 {
+            value |= t::NULL;
+        }
+        if append {
+            long_key(&mut tmp);
+        } else {
+            if dim & (t::LONG | t::FALSE | t::TRUE | t::RESOURCE | t::DOUBLE) != 0 {
+                long_key(&mut tmp);
+            }
+            if dim & t::STRING != 0 {
+                tmp |= t::KEY_STRING;
+                if !dim_const {
+                    long_key(&mut tmp);
+                }
+            }
+            if dim & (t::UNDEF | t::NULL) != 0 {
+                tmp |= t::KEY_STRING;
+            }
+            if tmp & t::KEY_STRING != 0 && arr & t::PACKED != 0 {
+                tmp |= t::NUMERIC_HASH;
+            }
+        }
+    }
+    if tmp & t::KEY_ANY != 0 {
+        tmp |= (value & t::ANY) << t::OF_SHIFT;
+    }
+    tmp & !t::EMPTY
+}
+
+/// `assign_dim_result_type`: the container after the store.
+fn assign_dim_result_type(arr: u32, dim: u32, value: u32, append: bool, dim_const: bool) -> u32 {
+    let mut tmp = arr;
+    if arr & (t::UNDEF | t::NULL | t::FALSE) != 0 {
+        tmp &= !(t::UNDEF | t::NULL | t::FALSE);
+        tmp |= t::ARRAY;
+    }
+    if tmp & t::ARRAY != 0 {
+        tmp |= dim_array_type(arr, dim, value, append, dim_const);
+    }
+    tmp
+}
+
+/// `zend_array_element_type(t1, op_type, 1, 0)`: the element a write
+/// fetches.
+fn array_element_type(t1: u32) -> u32 {
+    let mut tmp = 0;
+    if t1 & t::OBJECT != 0 {
+        tmp |= t::ANY | t::REF | t::KEY_ANY | t::OF_ANY | t::OF_REF | t::INDIRECT;
+    }
+    if t1 & t::ARRAY != 0 {
+        tmp |= t::NULL | ((t1 & t::OF_ANY) >> t::OF_SHIFT);
+        if tmp & t::ARRAY != 0 {
+            tmp |= t::KEY_ANY | t::OF_ANY | t::OF_REF;
+        }
+        if tmp & (t::STRING | t::ARRAY | t::OBJECT | t::RESOURCE) != 0 && t1 & t::OF_REF != 0 {
+            tmp |= t::REF;
+        }
+        tmp |= t::INDIRECT;
+    }
+    if t1 & t::STRING != 0 {
+        tmp |= t::STRING | t::NULL;
+    }
+    if t1 & (t::UNDEF | t::NULL | t::FALSE) != 0 {
+        tmp |= t::NULL | t::INDIRECT;
+    }
+    tmp
+}
+
 /// `binary_op_result_type`.
 fn binary_type(op: &str, t1: u32, t2: u32, result: Option<Range>, level: u32) -> u32 {
     let ty = |x: u32| (x & t::ANY) | if x & t::UNDEF != 0 { t::NULL } else { 0 };
@@ -2085,6 +2529,65 @@ fn op_type(
                 ty |= t::REF;
             }
             (ty, None)
+        }
+        // `ZEND_INIT_ARRAY` / `ZEND_ADD_ARRAY_ELEMENT`: the array with
+        // the element added (`assign_dim_array_result_type`).
+        "INIT_ARRAY" | "ADD_ARRAY_ELEMENT" if is_result => {
+            let arr = if l.op == "INIT_ARRAY" {
+                0
+            } else {
+                op.result_use
+                    .and_then(|u| vars.get(u as usize))
+                    .map_or(0, |x| x.ty)
+            };
+            let mut ty = t::ARRAY | arr;
+            let no_value = matches!(l.op1, Z::Unused);
+            if l.op == "INIT_ARRAY" && no_value {
+                ty |= t::EMPTY;
+            }
+            let append = matches!(&l.op2, Z::Text(s) if s == "NEXT") || matches!(l.op2, Z::Unused);
+            let key_ok = t2
+                & (t::UNDEF
+                    | t::NULL
+                    | t::FALSE
+                    | t::TRUE
+                    | t::LONG
+                    | t::DOUBLE
+                    | t::RESOURCE
+                    | t::STRING)
+                != 0;
+            if !no_value && (append || key_ok) {
+                ty |= dim_array_type(arr, t2, t1, append, l.op2.is_const());
+                if l.ext.contains("(ref)") {
+                    ty |= t::OF_ANY | t::OF_REF;
+                }
+            }
+            (ty, None)
+        }
+        // `ZEND_ASSIGN_DIM_OP`: the element combined with `OP_DATA`; the
+        // container gets the result as its element.
+        "ASSIGN_DIM_OP" if is_result || op.op1_def == vv => {
+            let name = assign_op_name(&l.ext).unwrap_or("");
+            let data = lines.get(k + 1).map_or(t::UNKNOWN, |d| {
+                op_type_of(&d.op1, ssa.ops[k + 1].op1_use, vars)
+            });
+            let mut tmp = if t1 & t::OF_REF != 0 { t::REF } else { 0 };
+            tmp |= binary_type(name, array_element_type(t1), data, None, level);
+            let append = matches!(&l.op2, Z::Text(s) if s == "NEXT") || matches!(l.op2, Z::Unused);
+            if op.op1_def == vv {
+                let ty = assign_dim_result_type(t1, t2, tmp, append, l.op2.is_const());
+                return (ty, ce_of(op.op1_use));
+            }
+            if append || t2 & (t::ARRAY | t::OBJECT) != 0 {
+                tmp |= t::NULL;
+            }
+            if t1 & (t::ANY & !(t::NULL | t::FALSE | t::STRING | t::ARRAY)) != 0 {
+                tmp |= t::NULL;
+            }
+            if tmp & t::REF != 0 {
+                tmp |= t::ANY;
+            }
+            (tmp, None)
         }
         "SPACESHIP" | "STRLEN" | "COUNT" | "FUNC_NUM_ARGS" => (t::LONG, None),
         "IS_EQUAL"
@@ -2480,6 +2983,9 @@ fn write_ssa(
     if let Some(info) = n.and_then(|n| an.vars.get(n as usize)) {
         if info.no_val {
             out.extend_from_slice(b" NOVAL");
+        }
+        if info.no_esc {
+            out.extend_from_slice(b" NOESC");
         }
         write_type(out, info.ty, info.ce.as_ref());
         if let Some(r) = info.range {

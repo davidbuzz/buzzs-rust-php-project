@@ -1049,3 +1049,38 @@ fn named_arguments_resolve_against_a_known_function() {
         "{s}"
     );
 }
+
+/// `zend_ssa_escape_analysis`: an array only a local variable holds does
+/// not escape (`NOESC`, with the types `assign_dim_array_result_type`
+/// gives it); a returned one does.
+#[test]
+fn local_arrays_do_not_escape() {
+    let src = "<?php\nfunction f(int $p, int $k) { $a = [$p]; $r = ($a[$k] += 1); return $r; }\n\
+               function g(int $p) { $a = [$p]; return $a; }\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let out = String::from_utf8(super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        super::DUMP_AFTER_DFA_PASS,
+    ))
+    .expect("utf-8");
+    let f = section(&out, "f:");
+    assert!(
+        f.contains("NOESC [[packed, hash] array [long] of [long]] = INIT_ARRAY 1 (packed)"),
+        "{f}"
+    );
+    assert!(
+        f.contains("NOVAL NOESC [[packed, hash] array [long] of [long, double]]"),
+        "{f}"
+    );
+    assert!(f.contains("; return  [long, double]"), "{f}");
+    let g = section(&out, "g:");
+    assert!(g.contains("INIT_ARRAY") && !g.contains("NOESC"), "{g}");
+}
