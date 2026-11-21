@@ -2792,7 +2792,241 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     // removes it with the dead SSA variable it defines).
     changed |= super::dce::remove_dead_entry_stores(op_array, ctx, refs_possible);
     changed |= super::dce::remove_overwritten_arrays(op_array, ctx, refs_possible);
+    if !refs_possible {
+        changed |= narrow_type_checks(op_array);
+    }
 
+    changed
+}
+
+/// The types a variable may have in [`narrow_type_checks`]: the
+/// [`type_mask`] bits, and [`MAYBE_UNDEF`].
+const ANY_TYPE: u16 = 0xFF;
+/// The variable may be unassigned (reading it warns).
+const MAYBE_UNDEF: u16 = 0x100;
+
+/// The variables `op` may write: its variable fields (an assignment's
+/// target, `RECV`, ...) and the base of a place it does not only read.
+fn written_cvs(op: &Op, places: &[Place]) -> Vec<u32> {
+    let mut reads = Vec::new();
+    super::for_each_operand_mut(&mut op.clone(), |o| {
+        if let Operand::Cv(c) = o {
+            reads.push(*c);
+        }
+    });
+    let mut out = Vec::new();
+    super::compact::for_each_cv_mut(&mut op.clone(), |c| {
+        if let Some(at) = reads.iter().position(|r| r == c) {
+            reads.swap_remove(at);
+        } else {
+            out.push(*c);
+        }
+    });
+    let reads_place = matches!(
+        op,
+        Op::Fetch {
+            mode: FetchMode::Read | FetchMode::Is,
+            ..
+        } | Op::Isset { .. }
+            | Op::Empty { .. }
+    );
+    if !reads_place {
+        super::compact::for_each_op_place(op, |p| {
+            if let Some(PlaceBase::Cv(c)) = places.get(p as usize).map(|pl| &pl.base) {
+                out.push(*c);
+            }
+        });
+    }
+    out
+}
+
+/// What a variable's type is known to be on each edge out of a block that
+/// ends in the jump on its `TYPE_CHECK` (`place_essa_pis`' type
+/// constraints): the edge and the types kept. `is_null()` of an
+/// unassigned variable is true; `is_resource()` of a closed resource is
+/// false, so that type is never ruled out.
+fn type_check_edges(ops: &[Op], start: usize, end: usize) -> Option<(usize, u32, u16, u16)> {
+    let last = (start..end).rev().find(|&i| !matches!(ops[i], Op::Nop))?;
+    let prev = (start..last).rev().find(|&i| !matches!(ops[i], Op::Nop))?;
+    let Op::TypeCheck {
+        a: Operand::Cv(c),
+        mask,
+        dst: Some(t),
+    } = ops[prev]
+    else {
+        return None;
+    };
+    let mask = u16::from(mask);
+    let on_true = mask
+        | if mask & u16::from(type_mask::NULL) != 0 {
+            MAYBE_UNDEF
+        } else {
+            0
+        };
+    let on_false = (ANY_TYPE & !mask)
+        | (mask & u16::from(type_mask::RESOURCE))
+        | if mask & u16::from(type_mask::NULL) == 0 {
+            MAYBE_UNDEF
+        } else {
+            0
+        };
+    match ops[last] {
+        Op::JmpZ(Operand::Tmp(x), _)
+        | Op::JmpZEx {
+            a: Operand::Tmp(x), ..
+        } if x == t => Some((last, c, on_true, on_false)),
+        Op::JmpNz(Operand::Tmp(x), _)
+        | Op::JmpNzEx {
+            a: Operand::Tmp(x), ..
+        } if x == t => Some((last, c, on_false, on_true)),
+        _ => None,
+    }
+}
+
+/// SCCP's `ZEND_TYPE_CHECK` over the types the type checks of the branches
+/// leading to it leave (e-SSA pi nodes with type constraints): a check
+/// whose answer those types decide, of a variable that is surely assigned,
+/// is that constant (`!is_string($v) || is_object($v)`: on the right side
+/// `$v` is a string, `is_object($v)` is false; `opt/sccp_026`). Functions
+/// with try blocks or variables reached by name are left alone.
+#[allow(clippy::too_many_lines)]
+fn narrow_type_checks(op_array: &mut OpArray) -> bool {
+    let ncv = op_array.cv_names.len();
+    let len = op_array.ops.len();
+    if ncv == 0
+        || !op_array.try_table.is_empty()
+        || super::compact::has_dynamic_var_access(op_array)
+        || !op_array.ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::TypeCheck {
+                    a: Operand::Cv(_),
+                    ..
+                }
+            )
+        })
+    {
+        return false;
+    }
+    let leaders = super::block_pass::find_leaders(op_array);
+    let starts: Vec<usize> = (0..len).filter(|&i| leaders[i]).chain([len]).collect();
+    let nb = starts.len() - 1;
+    let mut block_of = vec![0usize; len + 1];
+    for b in 0..nb {
+        block_of[starts[b]..starts[b + 1]].fill(b);
+    }
+    block_of[len] = nb;
+    let transfer = |ops: &[Op], places: &[Place], i: usize, st: &mut [u16]| {
+        for c in written_cvs(&ops[i], places) {
+            if let Some(slot) = st.get_mut(c as usize) {
+                *slot = ANY_TYPE;
+            }
+        }
+    };
+    let mut state: Vec<Option<Vec<u16>>> = vec![None; nb];
+    state[0] = Some(vec![ANY_TYPE | MAYBE_UNDEF; ncv]);
+    let mut work = vec![0usize];
+    while let Some(b) = work.pop() {
+        let Some(mut st) = state[b].clone() else {
+            continue;
+        };
+        let (start, end) = (starts[b], starts[b + 1]);
+        for i in start..end {
+            transfer(&op_array.ops, &op_array.places, i, &mut st);
+        }
+        let last = (start..end)
+            .rev()
+            .find(|&i| !matches!(op_array.ops[i], Op::Nop));
+        let mut succ: Vec<(usize, Option<(u32, u16)>)> = Vec::new();
+        let edges = type_check_edges(&op_array.ops, start, end);
+        if let Some(l) = last {
+            let mut op = op_array.ops[l].clone();
+            super::for_each_label_mut(&mut op, |t| {
+                let narrowed = edges.map(|(_, c, _, on_target)| (c, on_target));
+                succ.push((block_of[(*t as usize).min(len)], narrowed));
+            });
+            let ends_flow = matches!(
+                op_array.ops[l],
+                Op::Jmp(_)
+                    | Op::Return { .. }
+                    | Op::ReturnRef { .. }
+                    | Op::ReturnByRefValue { .. }
+                    | Op::Throw(_)
+                    | Op::Rethrow
+                    | Op::Exit(_)
+                    | Op::FastRet { .. }
+            );
+            if !ends_flow {
+                let narrowed = edges.map(|(_, c, on_follow, _)| (c, on_follow));
+                succ.push((b + 1, narrowed));
+            }
+        } else {
+            succ.push((b + 1, None));
+        }
+        for (s, narrowed) in succ {
+            if s >= nb {
+                continue;
+            }
+            let mut out = st.clone();
+            if let Some((c, keep)) = narrowed {
+                if let Some(slot) = out.get_mut(c as usize) {
+                    *slot &= keep;
+                }
+            }
+            let merged = match &state[s] {
+                None => out,
+                Some(old) => old.iter().zip(&out).map(|(a, b)| a | b).collect(),
+            };
+            if state[s].as_ref() != Some(&merged) {
+                state[s] = Some(merged);
+                work.push(s);
+            }
+        }
+    }
+    let mut changed = false;
+    for b in 0..nb {
+        let Some(mut st) = state[b].clone() else {
+            continue;
+        };
+        for i in starts[b]..starts[b + 1] {
+            if let Op::TypeCheck {
+                a: Operand::Cv(c),
+                mask,
+                dst,
+            } = op_array.ops[i]
+            {
+                let known = st
+                    .get(c as usize)
+                    .copied()
+                    .unwrap_or(ANY_TYPE | MAYBE_UNDEF);
+                let mask = u16::from(mask);
+                let resource = u16::from(type_mask::RESOURCE);
+                let answer = if known & MAYBE_UNDEF != 0 {
+                    None
+                } else if known & mask == 0 {
+                    Some(false)
+                } else if known & !mask == 0 && known & resource == 0 {
+                    Some(true)
+                } else {
+                    None
+                };
+                if let Some(v) = answer {
+                    op_array.ops[i] = match dst {
+                        Some(t) => Op::Move {
+                            src: Operand::Lit(super::add_or_find_literal(
+                                &mut op_array.literals,
+                                Value::Bool(v),
+                            )),
+                            dst: t,
+                        },
+                        None => Op::Nop,
+                    };
+                    changed = true;
+                }
+            }
+            transfer(&op_array.ops, &op_array.places, i, &mut st);
+        }
+    }
     changed
 }
 

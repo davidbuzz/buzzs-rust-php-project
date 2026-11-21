@@ -1182,7 +1182,7 @@ impl Compiler<'_> {
             // Without the optimizer, whose own passes send jumps on as
             // opcache's do and whose dump shows php-src's ops.
             if self.opts.optimization_level == 0 {
-                specialise::thread_short_circuits(&mut op_array.ops);
+                let _ = specialise::thread_short_circuits(&mut op_array.ops);
             }
             specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
             specialise::fuse_frameless_calls(&mut op_array);

@@ -116,8 +116,10 @@ fn result_leads_to(ops: &[Op], mut at: u32, mut tmp: u32, mut value: bool) -> Op
 /// A comparison in front of such a jump is then a smart branch
 /// ([`specialise`]'s `CmpJmp`). The op count, every other op, the lines
 /// and the live ranges stay (a result that is no longer stored was not
-/// stored on the fall-through path before either).
-pub(crate) fn thread_short_circuits(ops: &mut [Op]) {
+/// stored on the fall-through path before either). Returns whether any
+/// jump changed.
+pub(crate) fn thread_short_circuits(ops: &mut [Op]) -> bool {
+    let mut changed = false;
     // From the last op to the first: the test a jump is sent through has
     // then been sent on itself.
     for i in (0..ops.len()).rev() {
@@ -132,6 +134,7 @@ pub(crate) fn thread_short_circuits(ops: &mut [Op]) {
         };
         if let Some(op) = sent {
             ops[i] = op;
+            changed = true;
         }
     }
     if !ops.iter().any(|op| {
@@ -143,7 +146,7 @@ pub(crate) fn thread_short_circuits(ops: &mut [Op]) {
             }
         )
     }) {
-        return;
+        return changed;
     }
     // The ops a jump lands on now.
     let mut landed = vec![false; ops.len() + 1];
@@ -179,7 +182,9 @@ pub(crate) fn thread_short_circuits(ops: &mut [Op]) {
             Op::JmpZ(a, to)
         };
         ops[at] = Op::Nop;
+        changed = true;
     }
+    changed
 }
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.

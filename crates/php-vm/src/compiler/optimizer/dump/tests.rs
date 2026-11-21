@@ -1121,3 +1121,56 @@ fn block_pass_keeps_only_live_blocks() {
     assert!(out.contains("0011 FAST_RET T5\nEXCEPTION TABLE:"), "{out}");
     assert!(!out.contains("RETURN"), "{out}");
 }
+
+/// The block pass sends an `||` / `&&` chain's jumps where their results
+/// lead, and SCCP knows a variable's type on the edges of a jump on its
+/// `TYPE_CHECK`: on the right side of `!is_string($v) || ...` `$v` is a
+/// string, `is_object($v)` is false and the call behind it is dead
+/// (`opt/sccp_026`).
+#[test]
+fn type_checks_narrow_on_their_edges() {
+    let src = "<?php\nfunction t($var) {\n    if (!is_string($var) || (is_object($var) && !method_exists($var, '__toString'))) {\n        return;\n    }\n    var_dump($username);\n}\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        // `is_string()` & co. are registered builtins: `TYPE_CHECK`.
+        special_builtins: u32::MAX,
+        ..CompileOptions::default()
+    };
+    // `method_exists()` takes its arguments by value: the variable cannot
+    // become a reference there.
+    let table = |lc: &[u8]| {
+        matches!(lc, b"method_exists" | b"var_dump").then_some(FunctionInfo {
+            internal: true,
+            required: 1,
+            num_params: 2,
+            variadic: lc == b"var_dump",
+            by_ref: 0,
+        })
+    };
+    let unit =
+        crate::compiler::compile_with_functions(&program, Rc::from(src.as_bytes()), opts, &table)
+            .expect("compile");
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    let s = section(&out, "t:");
+    assert!(
+        s.contains(
+            "0001 T2 = TYPE_CHECK (string) CV0($var)\n0002 JMPZ T2 0004\n0003 JMP 0005\n0004 RETURN null\n"
+        ),
+        "{s}"
+    );
+    assert!(!s.contains("method_exists"), "{s}");
+}

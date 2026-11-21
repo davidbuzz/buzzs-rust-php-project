@@ -670,6 +670,11 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
         }
     }
 
+    // `zend_jmp_optimization`, after the blocks' own rules: an `&&` / `||`
+    // whose result only feeds a test jumps where that test goes (`T =
+    // JMPZ_EX(X, L1), L1: JMPZ(T, L2)`), and a `BOOL` / `BOOL_NOT` into a
+    // jump is that jump.
+    changed |= crate::compiler::specialise::thread_short_circuits(&mut op_array.ops);
     changed
 }
 
