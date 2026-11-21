@@ -562,10 +562,24 @@ fn virtual_(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // php_output_end_all(); php_header();
     php_support::output::end_all(vm);
     php_header(vm);
+    let _ = crate::request::take_subrequest();
     if rr.run() != 0 {
         drop(rr);
         lookup_warning(vm, "request execution failed", &uri)?;
         return Ok(Value::Bool(false));
+    }
+    // A PHP script's sub-request runs here, in this request, as an
+    // include (`zend_execute_script(ZEND_INCLUDE)` in `php_handler()`).
+    if let Some((file, highlight)) = crate::request::take_subrequest() {
+        let path = String::from_utf8_lossy(&file).into_owned();
+        if highlight {
+            vm.call_function(
+                "highlight_file",
+                vec![Value::Str(ZStr::from(file.as_slice()))],
+            )?;
+        } else {
+            vm.include_file(&path)?;
+        }
     }
     Ok(Value::Bool(true))
 }

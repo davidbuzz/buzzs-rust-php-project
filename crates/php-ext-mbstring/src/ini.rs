@@ -147,7 +147,7 @@ fn raw(vm: &Vm, name: &str) -> Option<Vec<u8>> {
 /// stays `NULL`).
 fn on_modify(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<bool> {
     let value = match vm.ini_modify_stage() {
-        IniStage::Runtime => Some(value.to_vec()),
+        IniStage::Runtime | IniStage::Activate | IniStage::Htaccess => Some(value.to_vec()),
         IniStage::Restore => raw(vm, name),
     };
     // OnUpdateDefaultCharset (main/main.c) rejects a header-breaking value

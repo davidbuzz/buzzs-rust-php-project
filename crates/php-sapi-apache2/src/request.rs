@@ -241,6 +241,30 @@ thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
     static PERSISTENT_VM: RefCell<Option<Vm>> = const { RefCell::new(None) };
     static ACTIVE_VM: Cell<*mut Vm> = const { Cell::new(std::ptr::null_mut()) };
+    /// The script of a sub-request (`virtual()`) made while a PHP script
+    /// runs, and whether to highlight it: [`run`] records it for
+    /// `virtual()` to run.
+    static SUBREQUEST: RefCell<Option<(Vec<u8>, bool)>> = const { RefCell::new(None) };
+}
+
+/// `php_handler()` with a parent request: while this thread runs a PHP
+/// script, a sub-request (`virtual()`) for a PHP script does not start a
+/// request of its own. php-src runs the script in the current request as
+/// an include (`zend_execute_script(ZEND_INCLUDE)`, the current
+/// superglobals, output in order); the script is recorded here and
+/// `virtual()`, which holds the VM, runs it when the sub-request returns.
+fn defer_subrequest(backend: &dyn Backend, params: &RunParams) -> bool {
+    if ACTIVE_VM.with(|c| c.get().is_null()) {
+        return false;
+    }
+    let filename = backend.str_field(StrField::Filename).unwrap_or_default();
+    SUBREQUEST.with(|s| *s.borrow_mut() = Some((filename, params.highlight)));
+    true
+}
+
+/// The sub-request script [`defer_subrequest`] recorded, if any.
+pub(crate) fn take_subrequest() -> Option<(Vec<u8>, bool)> {
+    SUBREQUEST.with(|s| s.borrow_mut().take())
 }
 
 pub(crate) fn with_active_vm<R>(f: impl FnOnce(&mut Vm) -> R) -> Option<R> {
@@ -680,8 +704,22 @@ pub fn apply_dir_config(vm: &mut Vm, entries: &[crate::backend::DirEntry]) {
         } else {
             Stage::Activate
         };
-        vm.ini
+        let accepted = vm
+            .ini
             .alter(&e.name, &e.value, access, stage, false, &mut sink);
+        // `zend_alter_ini_entry_ex()` runs the entry's on-modify handler
+        // too: an extension that keeps its own copy of its directives
+        // (ext/session: `session.save_path`, `session.upload_progress.*`)
+        // must see the per-directory value. It restores its copy at
+        // request shutdown, as the registry does.
+        if accepted {
+            let hook_stage = if e.htaccess {
+                php_vm::ext::IniStage::Htaccess
+            } else {
+                php_vm::ext::IniStage::Activate
+            };
+            let _ = vm.run_ini_modify_hook(&e.name, &e.value, hook_stage);
+        }
     }
     sync_cached_ini(vm);
 }
@@ -779,7 +817,11 @@ fn php_single_quoted(s: &[u8]) -> Vec<u8> {
 /// Runs one request on the current thread (`php_handler()` from
 /// `php_apache_request_ctor()` to `php_apache_request_dtor()`), maintaining
 /// a persistent VM per worker thread and resetting state between requests.
+#[allow(clippy::too_many_lines)]
 pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
+    if defer_subrequest(&*backend, params) {
+        return;
+    }
     let _ = php_memlimit::bind_to_current_thread();
     let ctx = Rc::new(RequestCtx::new(backend, params.timer.clone()));
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));

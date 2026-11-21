@@ -34,6 +34,7 @@ mod upload;
 mod urlscan;
 
 use php_runtime::{ArrayKey, PropertyPurpose, RuntimeContext, Value};
+use php_session::SessionHost;
 use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::object::class_of;
 use php_vm::Vm;
@@ -96,6 +97,10 @@ fn request_startup(vm: &mut Vm) {
     set_phase(Phase::RequestStartup);
     let err = with_host(vm, |h| {
         let r = php_session::request_startup(h);
+        // `PG(modules_activated)`: request startup has completed. Until the
+        // request ends, a later `request_parse_body()` must not report to
+        // the session's upload progress.
+        h.session().set_modules_activated(true);
         let late = h.state().take_exception();
         r.err().or(late)
     });

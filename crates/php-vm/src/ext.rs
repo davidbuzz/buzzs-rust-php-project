@@ -367,6 +367,11 @@ pub enum IniStage {
     Runtime,
     /// `ini_restore()` / request end (`ZEND_INI_STAGE_DEACTIVATE`).
     Restore,
+    /// Per-directory configuration applied at request start, e.g. `mod_php`'s
+    /// `php_value` in `<Directory>` (`ZEND_INI_STAGE_ACTIVATE`).
+    Activate,
+    /// The same from an `.htaccess` file (`ZEND_INI_STAGE_HTACCESS`).
+    Htaccess,
 }
 
 /// A native extension module.
@@ -844,6 +849,22 @@ impl Vm {
     /// The stage of the running `ini_on_modify` handler.
     pub fn ini_modify_stage(&self) -> IniStage {
         self.ini_stage
+    }
+
+    /// Runs the `ini_on_modify` hook of `name` at `stage` (what
+    /// [`Vm::ini_modify_stage`] then reports), as `zend_alter_ini_entry_ex()`
+    /// runs a directive's on-modify handler; `None` when it has none.
+    pub fn run_ini_modify_hook(
+        &mut self,
+        name: &str,
+        value: &[u8],
+        stage: IniStage,
+    ) -> Option<VmResult<bool>> {
+        let hook = self.ini_modify_hooks.get(name).copied()?;
+        self.ini_stage = stage;
+        let r = hook(self, value);
+        self.ini_stage = IniStage::Runtime;
+        Some(r)
     }
 
     /// Where output started (`php_output_get_start_filename/lineno`),
