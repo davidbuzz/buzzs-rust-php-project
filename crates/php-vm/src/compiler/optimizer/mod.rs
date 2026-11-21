@@ -269,6 +269,7 @@ fn trial_copy(op_array: &OpArray) -> OpArray {
         static_vars: op_array.static_vars.clone(),
         try_table: op_array.try_table.clone(),
         live_tmps: op_array.live_tmps.clone(),
+        dropped_tmps: op_array.dropped_tmps.clone(),
         filename: op_array.filename.clone(),
         strict_types: op_array.strict_types,
         decls: op_array.decls.clone(),
@@ -345,6 +346,7 @@ fn fold_local_objects(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) 
     op_array.static_vars = trial.static_vars;
     op_array.try_table = trial.try_table;
     op_array.live_tmps = trial.live_tmps;
+    op_array.dropped_tmps = trial.dropped_tmps;
 }
 
 /// [`OptContext::inline`]: (name, arguments sent, result used) to the

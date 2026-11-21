@@ -105,6 +105,10 @@ pub(crate) struct ZLine {
     /// The type bits of a call's result when the callee is known
     /// (`zend_func_info` / its declared return type).
     pub ret: Option<u32>,
+    /// Temporaries `zend_compile` allocated before this line that the
+    /// numbering counts here: one a pass dropped, the `finally` call
+    /// variable of a `try` starting here.
+    pub pre: Vec<u32>,
 }
 
 impl ZLine {
@@ -126,6 +130,7 @@ impl ZLine {
             free_on_return: false,
             stack: None,
             ret: None,
+            pre: Vec::new(),
         }
     }
 

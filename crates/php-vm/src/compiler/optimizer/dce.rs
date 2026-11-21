@@ -15,14 +15,19 @@ use crate::opcode::{
 };
 use php_runtime::{BinaryOp, Value};
 
-/// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
-pub(crate) fn run_dce(op_array: &mut OpArray, ctx: &super::OptContext<'_>) -> bool {
+/// Removes the blocks nothing reaches (`zend_cfg_remark_reachable_blocks`
+/// and the assembly of `zend_optimize_cfg`, also run by the block pass):
+/// from the entry through the jumps and the exception paths, and the code
+/// after an unconditional terminator in a live block. Declarations stay.
+// The jump arms are kept apart around the guarded `FeReset` arm, whose
+// place among them decides which applies.
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
+pub(crate) fn drop_unreachable(op_array: &mut OpArray) -> bool {
     let mut changed = false;
     let len = op_array.ops.len();
     if len == 0 {
         return false;
     }
-    let num_tmps = op_array.num_tmps as usize;
 
     // 1. CFG basic block reachability
     let leaders = super::block_pass::find_leaders(op_array);
@@ -44,132 +49,176 @@ pub(crate) fn run_dce(op_array: &mut OpArray, ctx: &super::OptContext<'_>) -> bo
     inst_to_block[len] = num_blocks;
 
     let mut reachable = vec![false; num_blocks];
-    let mut worklist = Vec::new();
+    let mut worklist = vec![0];
     reachable[0] = true;
-    worklist.push(0);
+    loop {
+        while let Some(b) = worklist.pop() {
+            let b_start = block_starts[b];
+            let b_end = block_starts[b + 1];
 
-    while let Some(b) = worklist.pop() {
-        let b_start = block_starts[b];
-        let b_end = block_starts[b + 1];
+            // Find last non-Nop instruction in block b
+            let last_idx = (b_start..b_end)
+                .rev()
+                .find(|&i| !matches!(op_array.ops[i], Op::Nop));
+            let mut successors = Vec::new();
 
-        // Find last non-Nop instruction in block b
-        let last_idx = (b_start..b_end)
-            .rev()
-            .find(|&i| !matches!(op_array.ops[i], Op::Nop));
-        let mut successors = Vec::new();
-
-        if let Some(idx) = last_idx {
-            let op = &op_array.ops[idx];
-            match op {
-                Op::Jmp(t) => {
-                    if (*t as usize) < len {
-                        successors.push(inst_to_block[*t as usize]);
+            if let Some(idx) = last_idx {
+                let op = &op_array.ops[idx];
+                match op {
+                    Op::Jmp(t) => {
+                        if (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
                     }
-                }
-                Op::Return { .. }
-                | Op::ReturnRef { .. }
-                | Op::ReturnByRefValue { .. }
-                | Op::Throw(_)
-                | Op::Rethrow
-                | Op::Exit(_)
-                | Op::FastRet { .. } => {
-                    // Unconditional terminators: no successors
-                }
-                Op::JmpZ(_, t)
-                | Op::JmpNz(_, t)
-                | Op::CmpJmp { target: t, .. }
-                | Op::BinAssignCvJmp { target: t, .. }
-                | Op::AssignOpCvJmp { target: t, .. }
-                | Op::JmpZEx { target: t, .. }
-                | Op::JmpNzEx { target: t, .. }
-                | Op::JmpSet { target: t, .. }
-                | Op::Coalesce { target: t, .. }
-                | Op::JmpNull { target: t, .. } => {
-                    if (*t as usize) < len {
-                        successors.push(inst_to_block[*t as usize]);
+                    Op::Return { .. }
+                    | Op::ReturnRef { .. }
+                    | Op::ReturnByRefValue { .. }
+                    | Op::Throw(_)
+                    | Op::Rethrow
+                    | Op::Exit(_)
+                    | Op::FastRet { .. } => {
+                        // Unconditional terminators: no successors
                     }
-                    if b + 1 < num_blocks {
-                        successors.push(b + 1);
+                    Op::JmpZ(_, t)
+                    | Op::JmpNz(_, t)
+                    | Op::CmpJmp { target: t, .. }
+                    | Op::BinAssignCvJmp { target: t, .. }
+                    | Op::AssignOpCvJmp { target: t, .. }
+                    | Op::JmpZEx { target: t, .. }
+                    | Op::JmpNzEx { target: t, .. }
+                    | Op::JmpSet { target: t, .. }
+                    | Op::Coalesce { target: t, .. }
+                    | Op::JmpNull { target: t, .. } => {
+                        if (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
                     }
-                }
-                // A foreach over an empty literal array goes straight to
-                // its end: sccp.c marks only the `FE_RESET` target
-                // feasible (opt/dce_009).
-                // By reference the literal is the place's base value.
-                Op::FeReset {
-                    subject,
-                    place,
-                    end: t,
-                    ..
-                } if foreach_over_empty_lit(op_array, *subject, *place) => {
-                    if (*t as usize) < len {
-                        successors.push(inst_to_block[*t as usize]);
+                    // A foreach over an empty literal array goes straight to
+                    // its end: sccp.c marks only the `FE_RESET` target
+                    // feasible (opt/dce_009).
+                    // By reference the literal is the place's base value.
+                    Op::FeReset {
+                        subject,
+                        place,
+                        end: t,
+                        ..
+                    } if foreach_over_empty_lit(op_array, *subject, *place) => {
+                        if (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
                     }
-                }
-                Op::FastCall { target: t, .. }
-                | Op::Catch { next: t, .. }
-                | Op::FeReset { end: t, .. }
-                | Op::FeFetch { end: t, .. }
-                | Op::FeFreeOnReturn { loop_at: t, .. }
-                | Op::AssertCheck { skip: t, .. }
-                | Op::BindStatic { skip: t, .. }
-                | Op::RecvInit { skip: t, .. } => {
-                    if (*t as usize) < len {
-                        successors.push(inst_to_block[*t as usize]);
+                    Op::FastCall { target: t, .. }
+                    | Op::Catch { next: t, .. }
+                    | Op::FeReset { end: t, .. }
+                    | Op::FeFetch { end: t, .. }
+                    | Op::FeFreeOnReturn { loop_at: t, .. }
+                    | Op::AssertCheck { skip: t, .. }
+                    | Op::BindStatic { skip: t, .. }
+                    | Op::RecvInit { skip: t, .. } => {
+                        if (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
                     }
-                    if b + 1 < num_blocks {
-                        successors.push(b + 1);
+                    Op::Match { table, .. } => {
+                        // No fall-through: every table target and the default.
+                        for t in table.labels() {
+                            if (t as usize) < len {
+                                successors.push(inst_to_block[t as usize]);
+                            }
+                        }
                     }
-                }
-                Op::Match { table, .. } => {
-                    // No fall-through: every table target and the default.
-                    for t in table.labels() {
-                        if (t as usize) < len {
-                            successors.push(inst_to_block[t as usize]);
+                    Op::New { skip: t, .. } => {
+                        if *t != 0 && (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
+                    }
+                    _ => {
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
                         }
                     }
                 }
-                Op::New { skip: t, .. } => {
-                    if *t != 0 && (*t as usize) < len {
-                        successors.push(inst_to_block[*t as usize]);
-                    }
-                    if b + 1 < num_blocks {
-                        successors.push(b + 1);
-                    }
-                }
-                _ => {
-                    if b + 1 < num_blocks {
-                        successors.push(b + 1);
-                    }
+            } else if b + 1 < num_blocks {
+                successors.push(b + 1);
+            }
+
+            for succ in successors {
+                if succ < num_blocks && !reachable[succ] {
+                    reachable[succ] = true;
+                    worklist.push(succ);
                 }
             }
-        } else if b + 1 < num_blocks {
-            successors.push(b + 1);
         }
-
-        // Check try_table entries overlapping block b
-        for entry in &op_array.try_table {
-            let try_start = entry.try_start as usize;
-            let try_end = entry.try_end as usize;
-            if b_start < try_end && b_end > try_start {
+        // The exception paths (`zend_mark_reachable_blocks`): a try block
+        // whose first block is dead starts at its first live one; with none
+        // but a live block before the finally block, the try block is empty
+        // and starts at the catch blocks, which become live. The catch blocks,
+        // the finally block and the end of a live try block are live.
+        let block_at = |at: u32| inst_to_block[(at as usize).min(len)];
+        let mut more = false;
+        for j in 0..op_array.try_table.len() {
+            let entry = op_array.try_table[j].clone();
+            let mut try_start = entry.try_start;
+            if !reachable.get(block_at(try_start)).copied().unwrap_or(false) {
                 if let Some(cs) = entry.catch_start {
-                    if (cs as usize) < len {
-                        successors.push(inst_to_block[cs as usize]);
+                    if let Some(live) = (block_at(try_start)..block_at(cs)).find(|&x| reachable[x])
+                    {
+                        try_start = u32::try_from(block_starts[live]).unwrap_or(try_start);
                     }
                 }
-                if let Some((_, f_start, _)) = entry.finally {
-                    if (f_start as usize) < len {
-                        successors.push(inst_to_block[f_start as usize]);
+                if !reachable.get(block_at(try_start)).copied().unwrap_or(false) {
+                    if let Some((_, fs, _)) = entry.finally {
+                        if let Some(live) =
+                            (block_at(try_start)..block_at(fs)).find(|&x| reachable[x])
+                        {
+                            try_start = entry.catch_start.unwrap_or_else(|| {
+                                u32::try_from(block_starts[live]).unwrap_or(try_start)
+                            });
+                            let tb = block_at(try_start);
+                            if tb < num_blocks && !reachable[tb] {
+                                reachable[tb] = true;
+                                worklist.push(tb);
+                                more = true;
+                            }
+                        }
+                    }
+                }
+                if try_start != entry.try_start {
+                    op_array.try_table[j].try_start = try_start;
+                    changed = true;
+                }
+            }
+            if reachable.get(block_at(try_start)).copied().unwrap_or(false) {
+                let mut live = Vec::new();
+                if let Some(cs) = entry.catch_start {
+                    live.push(cs);
+                }
+                if let Some((_, fs, fe)) = entry.finally {
+                    live.push(fs);
+                    // `finally_end`: the `FAST_RET`.
+                    live.push(fe.saturating_sub(1));
+                }
+                for at in live {
+                    let x = block_at(at);
+                    if x < num_blocks && !reachable[x] {
+                        reachable[x] = true;
+                        worklist.push(x);
+                        more = true;
                     }
                 }
             }
         }
-
-        for succ in successors {
-            if succ < num_blocks && !reachable[succ] {
-                reachable[succ] = true;
-                worklist.push(succ);
-            }
+        if !more {
+            break;
         }
     }
 
@@ -217,6 +266,19 @@ pub(crate) fn run_dce(op_array: &mut OpArray, ctx: &super::OptContext<'_>) -> bo
             }
         }
     }
+
+    changed
+}
+
+/// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
+pub(crate) fn run_dce(op_array: &mut OpArray, ctx: &super::OptContext<'_>) -> bool {
+    let len = op_array.ops.len();
+    if len == 0 {
+        return false;
+    }
+    let num_tmps = op_array.num_tmps as usize;
+
+    let mut changed = drop_unreachable(op_array);
 
     changed |= drop_empty_foreach(op_array);
     changed |= drop_param_check_vars(op_array);

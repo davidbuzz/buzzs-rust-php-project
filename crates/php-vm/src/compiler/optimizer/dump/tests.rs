@@ -1084,3 +1084,40 @@ fn local_arrays_do_not_escape() {
     let g = section(&out, "g:");
     assert!(g.contains("INIT_ARRAY") && !g.contains("NOESC"), "{g}");
 }
+
+/// The block pass assembles the live blocks only (`zend_optimize_cfg`,
+/// `zend_mark_reachable_blocks`): after an endless loop in a `try` the
+/// `FAST_CALL` and the return go, while the `finally` block and its
+/// `FAST_RET` stay live through the exception path. Without pass 9 the
+/// temporaries keep `zend_compile`'s numbers: the `BOOL_NOT` folded into
+/// the jump and the `finally` variable allocated where the `try` starts.
+#[test]
+fn block_pass_keeps_only_live_blocks() {
+    let src = "<?php\nif (!isset($badvar)) {\n    throw new Exception(\"a\");\n}\n\
+               try {\n    while (true) { }\n} finally {\n    throw new Exception(\"b\");\n}\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::PASS_5;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    assert!(out.contains("0001 JMPNZ T1 0006\n0002 T3 = NEW 1"), "{out}");
+    assert!(out.contains("0006 JMP 0006\n0007 T6 = NEW 1"), "{out}");
+    assert!(out.contains("0011 FAST_RET T5\nEXCEPTION TABLE:"), "{out}");
+    assert!(!out.contains("RETURN"), "{out}");
+}

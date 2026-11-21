@@ -600,6 +600,8 @@ pub(crate) struct Lower<'a> {
     next_tmp: u32,
     /// Temporaries replaced by another operand.
     alias: HashMap<u32, Z>,
+    /// Temporaries for the next line's [`ZLine::pre`].
+    pre: Vec<u32>,
     calls: Vec<Call>,
     /// The temporary of each foreach iterator slot.
     iters: HashMap<u32, u32>,
@@ -643,6 +645,7 @@ impl<'a> Lower<'a> {
             lines: Vec::new(),
             next_tmp: oa.num_tmps,
             alias: HashMap::new(),
+            pre: Vec::new(),
             calls: Vec::new(),
             iters: HashMap::new(),
             skip: vec![false; oa.ops.len()],
@@ -661,8 +664,34 @@ impl<'a> Lower<'a> {
         t
     }
 
-    fn push(&mut self, l: ZLine) {
+    fn push(&mut self, mut l: ZLine) {
+        if !self.pre.is_empty() {
+            l.pre = std::mem::take(&mut self.pre);
+        }
         self.lines.push(l);
+    }
+
+    /// The temporaries php-src allocated at op `i` that no line of ours
+    /// names there: the result of an instruction a pass dropped, and the
+    /// `finally` call variable of a `try` starting at `i`
+    /// (`zend_compile_try` allocates it before the body).
+    fn note_allocations(&mut self, i: usize) {
+        let at = u32::try_from(i).unwrap_or(u32::MAX);
+        if self.oa.dropped_tmps.contains(&at) {
+            let t = self.tmp();
+            self.pre.push(t);
+        }
+        let fins: Vec<u32> = self
+            .oa
+            .try_table
+            .iter()
+            .filter(|e| e.try_start == at)
+            .filter_map(|e| e.finally.map(|(fin, _, _)| fin))
+            .collect();
+        for fin in fins {
+            let t = self.fin_tmp(fin);
+            self.pre.push(t);
+        }
     }
 
     fn lit(&self, l: u32) -> Value {
@@ -761,6 +790,7 @@ impl<'a> Lower<'a> {
         let mut bound = self.func.uses.is_empty();
         for i in 0..n {
             first_z.push(u32::try_from(self.lines.len()).unwrap_or(u32::MAX));
+            self.note_allocations(i);
             if self.skip[i] {
                 continue;
             }

@@ -1088,6 +1088,7 @@ impl Compiler<'_> {
             static_vars: f.static_vars,
             try_table: try_table.into_iter().map(|(e, _)| e).collect(),
             live_tmps: f.live_tmps,
+            dropped_tmps: Vec::new(),
             filename: self.filename.clone(),
             strict_types: self.strict_types,
             decls: f.decls.unwrap_or_else(|| self.empty_decls.clone()),

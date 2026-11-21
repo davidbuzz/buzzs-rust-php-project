@@ -44,6 +44,11 @@ pub(crate) fn remove_nops(op_array: &mut OpArray) -> bool {
     }
 
     // 2. Remap try table regions
+    for at in &mut op_array.dropped_tmps {
+        if (*at as usize) < remap.len() {
+            *at = remap[*at as usize];
+        }
+    }
     for entry in &mut op_array.try_table {
         if (entry.try_start as usize) < remap.len() {
             entry.try_start = remap[entry.try_start as usize];

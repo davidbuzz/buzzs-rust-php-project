@@ -1495,6 +1495,11 @@ pub struct OpArray {
     /// the op array first runs there (`exec/tape.rs`). `ops` must not
     /// change once it exists.
     pub(crate) tape: crate::exec::tape::Tape,
+    /// The instructions an optimizer pass dropped while their result
+    /// temporary keeps its number in php-src (a `BOOL_NOT` the block pass
+    /// folds into a jump): without pass 9 the dump counts them where they
+    /// stood.
+    pub dropped_tmps: Vec<u32>,
 }
 
 /// [`PropCacheEntry::base`] of a `$this->name` place.

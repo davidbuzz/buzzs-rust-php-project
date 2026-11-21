@@ -1118,7 +1118,20 @@ pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
             *z = Z::ZLabel(new_idx[(t as usize).min(n)]);
         }
     };
-    let mut out: Vec<ZLine> = lines.into_iter().filter(|l| !l.is_nop()).collect();
+    // A dropped line's early temporaries go to the next line kept.
+    let mut carried: Vec<u32> = Vec::new();
+    let mut out: Vec<ZLine> = Vec::with_capacity(n);
+    for mut l in lines {
+        if l.is_nop() {
+            carried.append(&mut l.pre);
+            continue;
+        }
+        if !carried.is_empty() {
+            carried.append(&mut l.pre);
+            l.pre = std::mem::take(&mut carried);
+        }
+        out.push(l);
+    }
     for l in &mut out {
         for z in l.label_slots_mut() {
             map(z);
@@ -1327,6 +1340,12 @@ pub(crate) fn number_tmps(lines: &mut [ZLine]) -> u32 {
     let mut map: HashMap<u32, u32> = HashMap::new();
     let mut next: u32 = 0;
     for l in lines.iter() {
+        for &t in &l.pre {
+            map.entry(t).or_insert_with(|| {
+                next += 1;
+                next - 1
+            });
+        }
         for z in [&l.res, &l.op1, &l.op2] {
             if let Some(t) = z.tmp() {
                 map.entry(t).or_insert_with(|| {

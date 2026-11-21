@@ -249,6 +249,8 @@ fn read_literal(op: &mut Op, t: u32, lit: u32) -> bool {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool {
     let mut changed = fold_null_jumps(op_array);
+    // `zend_optimize_cfg` assembles the live blocks only.
+    changed |= super::dce::drop_unreachable(op_array);
     let leaders = find_leaders(op_array);
     let len = op_array.ops.len();
     if len == 0 {
@@ -491,6 +493,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpNz(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -505,6 +510,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpZ(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -519,6 +527,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpZ(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -533,6 +544,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpNz(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 

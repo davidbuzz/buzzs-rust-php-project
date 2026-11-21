@@ -187,6 +187,7 @@ impl ImageBuilder {
             static_vars: original.static_vars.clone(),
             try_table: original.try_table.clone(),
             live_tmps: original.live_tmps.clone(),
+            dropped_tmps: original.dropped_tmps.clone(),
             filename: original.filename.clone(),
             strict_types: original.strict_types,
             decls: self.table(&original.decls),
