@@ -18,7 +18,7 @@ binary the fastest round counts (other load on the box only adds time); the
 totals are the sums. Both wall-clock and CPU time (user + system, from
 wait4) are reported; the verdict is on wall-clock.
 
-usage: python3 perf/bench/timing.py [<candidate-php>] [--ref PHP] [--filter RX] [--rounds N]
+usage: python3 perf/bench/timing.py [<candidate-php>] [--ref PHP (default /usr/bin/php8.5)] [--filter RX] [--rounds N]
                                     [--no-build]
   Without <candidate-php>, it first builds the release `php` from this checkout
   (`cargo build --release -p php-cli`, so target/release/php, or CARGO_TARGET_DIR
@@ -85,7 +85,7 @@ def build_release():
 def main():
     args = sys.argv[1:]
     cand = None
-    ref = '/usr/bin/php'
+    ref = '/usr/bin/php8.5'
     filt = None
     build = True
     rounds = int(os.environ.get('ROUNDS', '5'))

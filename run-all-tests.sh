@@ -10,8 +10,9 @@
 #   PHASE 3  the full in-scope php-src PHPT run on the release php: every
 #            PASS/FAIL line, a diff for each failure, checked against
 #            phpt-baseline.txt
-#   PHASE 4  python3 perf/bench/timing.py --no-build: total runtime of ours
-#            against /usr/bin/php on identical inputs (the deliverable)
+#   PHASE 4  python3 perf/bench/timing.py --no-build --ref /usr/bin/php8.5:
+#            total runtime of ours against the C implementation on identical
+#            inputs (the deliverable)
 #   SUMMARY  the numbers of the four phases (also the commit message)
 #
 # usage: ./run-all-tests.sh [--no-commit]
@@ -46,6 +47,16 @@ ncpu=$(nproc --all)
 cores="$((ncpu - 3))-$((ncpu - 1))"
 work=$(mktemp -d /tmp/full-test-run.XXXXXX) || exit 2
 trap 'rm -rf "$work" 2>/dev/null' EXIT
+
+# The C implementation every comparison is made against (PHASE 4 and the
+# header): PHP 8.5, the release closest to the php-src master this project
+# follows (the unversioned `php` is whichever version the system's
+# alternatives point at).
+ref=/usr/bin/php8.5
+if ! ref_version=$("$ref" -d memory_limit=1G -r 'echo PHP_VERSION;' 2>&1); then
+    echo "run-all-tests.sh: the C reference $ref does not run: $ref_version" >&2
+    exit 2
+fi
 
 # The php-src test copy is not committed (see scripts/fetch-phpt-tests.sh).
 # Check it exists and is at the revision phpt-baseline.txt is written against
@@ -90,7 +101,7 @@ main() {
     echo "host: $(uname -a)  cpus: $ncpu"
     echo "rustc: $(rustc --version)  cargo: $(cargo --version)"
     echo "php-src tests: ${pin#modules/php-src: }"
-    echo "C reference: /usr/bin/php $(/usr/bin/php -d memory_limit=1G -r 'echo PHP_VERSION;')"
+    echo "C reference: $ref $ref_version"
     echo "started: $(date -Is)"
     echo "=================================================================="
 
@@ -142,7 +153,7 @@ main() {
     echo
     echo "### PHASE 4: runtime against the C implementation (the deliverable: the"
     echo "### total runtime of ours <= 1.10 x C's on identical inputs, both at defaults)"
-    run timing python3 perf/bench/timing.py --no-build
+    run timing python3 perf/bench/timing.py --no-build --ref "$ref"
     rc_time=$?
     echo "timing exit code: $rc_time"
 
@@ -175,7 +186,7 @@ if [ "$commit" -eq 1 ] && [ -f "$work/rc" ]; then
         echo "Produced by ./run-all-tests.sh: cargo build and cargo test of the whole"
         echo "workspace (release), the full in-scope PHPT run on the release php"
         echo "(every PASS/FAIL line and failure diffs, php-src ${pin#modules/php-src: at }),"
-        echo "and perf/bench/timing.py against /usr/bin/php. cargo test: $tests."
+        echo "and perf/bench/timing.py against $ref ($ref_version). cargo test: $tests."
         echo "Exit codes: cargo test $rc_test, PHPT $rc_phpt, timing $rc_time."
         echo
         cat "$sum"
