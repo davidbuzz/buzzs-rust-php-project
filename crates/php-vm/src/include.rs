@@ -299,7 +299,13 @@ impl Vm {
         // it compiles. The compiler sees the function table as it stands
         // (`CG(function_table)`), for the `fbc` of calls by name.
         let functions = &self.functions;
-        let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+        let table = compiler::TableWithPreloaded(
+            |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of),
+            |lc: &[u8]| match functions.get(lc) {
+                Some(crate::func::Func::User(u)) if Vm::is_preloaded_name(lc) => Some(u.clone()),
+                _ => None,
+            },
+        );
         let (compiled, kept) = if program.multibyte {
             let unit = compiler::compile_with_functions(&program, src, opts, &table);
             (unit, Some(program))
@@ -371,14 +377,27 @@ impl Vm {
                 &unit, &table, &internal, level, end, debug,
             );
             if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
-                out.extend(compiler::optimizer::dump::dump_unit(
-                    &unit,
-                    &table,
-                    &internal,
-                    level,
-                    end,
-                    "after optimizer",
-                ));
+                if Vm::is_preloading() {
+                    // Written with the `$PRELOAD$` script when the preload
+                    // ends (`Vm::finish_preload`).
+                    compiler::optimizer::dump::keep_preload_dump(
+                        &unit,
+                        &table,
+                        &internal,
+                        level,
+                        end,
+                        "after optimizer",
+                    );
+                } else {
+                    out.extend(compiler::optimizer::dump::dump_unit(
+                        &unit,
+                        &table,
+                        &internal,
+                        level,
+                        end,
+                        "after optimizer",
+                    ));
+                }
             }
             self.flush_stdout();
             let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);

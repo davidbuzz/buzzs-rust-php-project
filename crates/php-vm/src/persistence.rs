@@ -308,6 +308,17 @@ impl Vm {
         PRELOADING.with(Cell::get)
     }
 
+    /// Whether the lower-case name `lc` is a function preloading made
+    /// persistent for the running request.
+    #[must_use]
+    pub(crate) fn is_preloaded_name(lc: &[u8]) -> bool {
+        PRELOADED.with(|p| {
+            p.borrow()
+                .as_ref()
+                .is_some_and(|p| p.functions.iter().any(|f| f.as_bytes() == lc))
+        })
+    }
+
     /// What preloading made persistent for the running request, if the
     /// request was started from a preload image.
     #[must_use]
@@ -581,6 +592,14 @@ impl Vm {
             self.preload_link();
         }
         PRELOADING.with(|p| p.set(false));
+        // `opcache.opt_debug_level`: the `$PRELOAD$` script and the
+        // preloaded files, as `accel_preload()` optimizes them.
+        if !failed && status == 0 {
+            let out = crate::compiler::optimizer::dump::flush_preload_dumps("after optimizer");
+            if !out.is_empty() {
+                let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
+            }
+        }
         // `php_request_shutdown()` leaves per-thread request state behind
         // (a fatal error disables destructors, headers are marked sent with
         // the startup file's output position); the next request starts

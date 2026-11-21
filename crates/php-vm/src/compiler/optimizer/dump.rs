@@ -81,6 +81,8 @@ pub(crate) fn note_reduced_to_literal(code: &OpArray) {
     });
 }
 
+pub(crate) use lower::literal_return_value;
+
 /// Whether `code` was reduced to a literal return by the VM's optimizer
 /// ([`note_reduced_to_literal`]).
 fn reduced_to_literal(code: &OpArray) -> bool {
@@ -589,6 +591,22 @@ pub fn dump_unit(
     main_line_end: u32,
     msg: &str,
 ) -> Vec<u8> {
+    let (main, rest) = dump_unit_parts(unit, functions, internal, level, main_line_end, msg);
+    let mut out = main;
+    out.extend(rest);
+    out
+}
+
+/// [`dump_unit`] in two parts: the main code's dump, and those of the other
+/// op arrays.
+fn dump_unit_parts(
+    unit: &CompiledUnit,
+    functions: &dyn FunctionTable,
+    internal: &InternalInfo<'_>,
+    level: u32,
+    main_line_end: u32,
+    msg: &str,
+) -> (Vec<u8>, Vec<u8>) {
     let entries = collect(unit);
     let mut fn_index: HashMap<Vec<u8>, (usize, Rc<UserFunction>)> = HashMap::new();
     {
@@ -627,9 +645,57 @@ pub fn dump_unit(
         funcs: entries.iter().map(|e| e.func.clone()).collect(),
     };
     let done: Vec<Done> = entries.iter().map(|e| finish(e, &res)).collect();
-    let mut out = Vec::new();
+    let (mut main, mut rest) = (Vec::new(), Vec::new());
     for (e, d) in entries.iter().zip(&done) {
-        write_entry(&mut out, e, d, &done, msg, main_line_end);
+        let out = if e.is_main { &mut main } else { &mut rest };
+        write_entry(out, e, d, &done, msg, main_line_end);
+    }
+    (main, rest)
+}
+
+/// What the dump knows of an internal function: its flags and return type.
+pub type InternalInfo<'a> = dyn Fn(&[u8]) -> (u32, Option<crate::types::TypeDecl>) + 'a;
+
+thread_local! {
+    /// The dumps of the files compiled while preloading: each file's main
+    /// code and its other op arrays apart ([`keep_preload_dump`]).
+    static PRELOAD_DUMPS: std::cell::RefCell<Vec<(Vec<u8>, Vec<u8>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`dump_unit`] of a file compiled while preloading, kept for
+/// [`flush_preload_dumps`].
+pub fn keep_preload_dump(
+    unit: &CompiledUnit,
+    functions: &dyn FunctionTable,
+    internal: &InternalInfo<'_>,
+    level: u32,
+    main_line_end: u32,
+    msg: &str,
+) {
+    let parts = dump_unit_parts(unit, functions, internal, level, main_line_end, msg);
+    PRELOAD_DUMPS.with(|d| d.borrow_mut().push(parts));
+}
+
+/// The dumps [`keep_preload_dump`] kept, in the order `accel_preload()`
+/// optimizes them: the `$PRELOAD$` script (an empty main and the preloaded
+/// functions and methods), then each preloaded file's main code. Empty when
+/// none was kept.
+#[must_use]
+pub fn flush_preload_dumps(msg: &str) -> Vec<u8> {
+    let kept = PRELOAD_DUMPS.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    if kept.is_empty() {
+        return Vec::new();
+    }
+    let mut out = format!(
+        "\n$_main:\n     ; (lines=1, args=0, vars=0, tmps=0)\n     ; ({msg})\n     ; $PRELOAD$:0-0\n0000 RETURN null\n"
+    )
+    .into_bytes();
+    for (_, rest) in &kept {
+        out.extend_from_slice(rest);
+    }
+    for (main, _) in &kept {
+        out.extend_from_slice(main);
     }
     out
 }

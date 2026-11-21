@@ -128,6 +128,112 @@ pub struct OptContext<'a> {
     /// and the finalized top-level functions of the same file
     /// (`zend_optimizer_get_called_func`). `None`: no callee is known.
     pub known: Option<&'a dyn super::FunctionTable>,
+    /// The constant a call of the function a compiled name names (lower
+    /// case) with this many arguments, its result read or not, is replaced
+    /// by (`zend_try_inline_call`): the functions of the file compiled so
+    /// far that only return a literal. `None`: no call is inlined.
+    pub inline: Option<Inliner<'a>>,
+}
+
+/// [`OptContext::inline`]: (name, arguments sent, result used) to the
+/// literal the call is.
+#[derive(Clone, Copy)]
+pub struct Inliner<'a>(pub &'a InlineFn<'a>);
+
+/// The lookup of an [`Inliner`].
+pub type InlineFn<'a> = dyn Fn(&[u8], u32, bool) -> Option<Value> + 'a;
+
+impl std::fmt::Debug for Inliner<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Inliner")
+    }
+}
+
+/// `zend_try_inline_call` on the calls of `op_array`: a straight-line call
+/// (`InitFCall` of a name resolved at compile time, `Send`s of literals and
+/// temporaries, `DoCall`) of a function [`OptContext::inline`] knows the
+/// literal of becomes that literal: the `InitFCall` and the literal sends
+/// go, a sent temporary is freed (`zend_delete_call_instructions`), the
+/// `DoCall` stores the literal into its result (`QM_ASSIGN`) or goes. A
+/// call with any other argument stays.
+fn inline_literal_calls(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
+    let Some(Inliner(inline)) = ctx.inline else {
+        return false;
+    };
+    let mut changed = false;
+    let mut i = 0;
+    while i < op_array.ops.len() {
+        let Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } = op_array.ops[i]
+        else {
+            i += 1;
+            continue;
+        };
+        // The call's ops: sends of literals and temporaries, the
+        // temporaries' own computation, no other call.
+        let mut sends = Vec::new();
+        let mut end = None;
+        for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+            match op {
+                Op::Send {
+                    src: ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_)),
+                } => sends.push(j),
+                Op::DoCall { dst } => {
+                    end = Some((j, *dst));
+                    break;
+                }
+                Op::Nop | Op::Bin { .. } | Op::Unary { .. } | Op::Cast { .. } | Op::Move { .. } => {
+                }
+                _ => break,
+            }
+        }
+        let Some((at, dst)) = end else {
+            i += 1;
+            continue;
+        };
+        let value = match op_array.literals.get(name as usize) {
+            Some(Value::Str(lc)) => {
+                let sent = u32::try_from(sends.len()).unwrap_or(u32::MAX);
+                inline(lc.as_bytes(), sent, dst.is_some())
+            }
+            _ => None,
+        };
+        // A static's initializer keeps its call: a value folded into it
+        // would make the static one initialised at compile time
+        // (`refresh_static_inits`), which reflection shows (it runs once).
+        let into_static = dst.is_some_and(|d| {
+            op_array
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::InitStatic { val: Operand::Tmp(t), .. } if *t == d))
+        });
+        let (Some(value), false) = (value, into_static) else {
+            i += 1;
+            continue;
+        };
+        op_array.ops[i] = Op::Nop;
+        for j in sends {
+            op_array.ops[j] = match op_array.ops[j] {
+                Op::Send {
+                    src: ArgSrc::Val(Operand::Tmp(t)),
+                } => Op::Free(Operand::Tmp(t)),
+                _ => Op::Nop,
+            };
+        }
+        op_array.ops[at] = match dst {
+            Some(d) => Op::Move {
+                src: Operand::Lit(add_or_find_literal(&mut op_array.literals, value)),
+                dst: d,
+            },
+            None => Op::Nop,
+        };
+        changed = true;
+        i = at + 1;
+    }
+    changed
 }
 
 impl std::fmt::Debug for dyn super::FunctionTable + '_ {
@@ -166,6 +272,11 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
         return;
     }
 
+    // `zend_optimize_func_calls`' inlining (pass 4 in php-src's order,
+    // before constant propagation reads the results).
+    if (level & PASS_16) != 0 {
+        inline_literal_calls(op_array, ctx);
+    }
     // Iterative optimization loop: constant folding, jump threading, SCCP,
     // block-pass, and dead code elimination feed each other until a fixed
     // point or iteration limit is reached.
@@ -253,6 +364,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
                 sapi_name: None,
                 verifies_return: false,
                 known: None,
+                inline: None,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
@@ -853,6 +965,67 @@ mod tests {
         assert_eq!(run(strings(&["x", "y"]), Some(Operand::Cv(2))), None);
     }
 
+    /// `zend_try_inline_call`: a straight-line call of a function the
+    /// context knows the literal of becomes that literal; a call with a
+    /// variable argument, or of another function, stays.
+    #[test]
+    fn calls_of_literal_functions_are_their_literal() {
+        use crate::opcode::ArgSrc;
+        use php_runtime::ZStr;
+        let call = |args: Vec<ArgSrc>, dst: Option<u32>| {
+            let mut ops = vec![Op::InitFCall {
+                name: 0,
+                fallback: None,
+                display: 0,
+            }];
+            ops.extend(args.into_iter().map(|src| Op::Send { src }));
+            ops.push(Op::DoCall { dst });
+            ops.push(Op::Return {
+                val: Operand::Unused,
+            });
+            OpArray {
+                ops,
+                literals: vec![Value::Str(ZStr::from("foo")), Value::Int(1)],
+                cv_names: vec![ZStr::from("v")],
+                num_tmps: 2,
+                ..OpArray::default()
+            }
+        };
+        let known = |name: &[u8], sent: u32, _used: bool| {
+            (name == b"foo" && sent <= 1).then_some(Value::Int(42))
+        };
+        let ctx = OptContext {
+            inline: Some(Inliner(&known)),
+            ..OptContext::default()
+        };
+        // `T0 = foo(1)`: the literal into T0.
+        let mut code = call(vec![ArgSrc::Val(Operand::Lit(1))], Some(0));
+        assert!(inline_literal_calls(&mut code, &ctx));
+        assert!(matches!(code.ops[0], Op::Nop));
+        assert!(matches!(code.ops[1], Op::Nop));
+        assert!(
+            matches!(code.ops[2], Op::Move { src: Operand::Lit(l), dst: 0 }
+                if matches!(code.literals[l as usize], Value::Int(42)))
+        );
+        // `foo(T1);`: the temporary freed, no result.
+        let mut code = call(vec![ArgSrc::Val(Operand::Tmp(1))], None);
+        assert!(inline_literal_calls(&mut code, &ctx));
+        assert!(matches!(code.ops[1], Op::Free(Operand::Tmp(1))));
+        assert!(matches!(code.ops[2], Op::Nop));
+        // A variable argument, two arguments, another name: the call stays.
+        for args in [
+            vec![ArgSrc::Place(0)],
+            vec![ArgSrc::Val(Operand::Lit(1)), ArgSrc::Val(Operand::Lit(1))],
+        ] {
+            let mut code = call(args, Some(0));
+            assert!(!inline_literal_calls(&mut code, &ctx));
+            assert!(matches!(code.ops[0], Op::InitFCall { .. }));
+        }
+        let mut code = call(Vec::new(), Some(0));
+        code.literals[0] = Value::Str(ZStr::from("bar"));
+        assert!(!inline_literal_calls(&mut code, &ctx));
+    }
+
     /// Pass 13 keeps an assignment whose variable is only read through an
     /// opcode it has no explicit rule for (here the argument of a call):
     /// `$c = $a = $b; var_dump($c);` once lost `$c` (opcache `jit/assign_020`).
@@ -1202,7 +1375,8 @@ mod tests {
     #[test]
     fn void_cast_keeps_call_result() {
         let unit = compile_src(
-            "<?php function t() { return 1; } function u() { (void)t(); }",
+            // (`t` is no literal return, which a call would be inlined as.)
+            "<?php function t() { echo 1; return 1; } function u() { (void)t(); }",
             DEFAULT_OPTIMIZATION_LEVEL,
         );
         let funcs = unit.main.code.decls.functions.borrow();

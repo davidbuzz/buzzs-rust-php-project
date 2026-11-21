@@ -291,7 +291,7 @@ impl Resolver<'_> {
     /// `zend_try_inline_call`: the constant a call of the dumped user
     /// function `user` with `sent` arguments is replaced by, when its
     /// code is nothing but `return <literal>;` after receiving its
-    /// arguments.
+    /// arguments ([`literal_return_value`]).
     pub(crate) fn inline_value(
         &self,
         user: usize,
@@ -299,76 +299,10 @@ impl Resolver<'_> {
         static_call: bool,
         result_used: bool,
     ) -> Option<Value> {
-        use crate::func::flags;
-        use crate::types::mask as m;
-        let f = self.funcs.get(user)?;
-        let no_discard = if result_used { 0 } else { flags::NODISCARD };
-        if self.level & crate::compiler::optimizer::PASS_16 == 0
-            || f.flags
-                & (flags::ABSTRACT
-                    | flags::DEPRECATED
-                    | flags::VARIADIC
-                    | flags::RETURN_REF
-                    | flags::NO_BODY
-                    | no_discard)
-                != 0
-            || f.is_generator()
-            || f.is_closure()
-            || sent < f.required
-            || (static_call && f.flags & flags::STATIC == 0)
-            || f.params
-                .iter()
-                .any(|p| p.by_ref || p.variadic || p.ty.is_some())
-            || !f.code.static_vars.is_empty()
-            || f.code.num_statics != 0
-            || super::reduced_to_literal(&f.code)
-        {
+        if self.level & crate::compiler::optimizer::PASS_16 == 0 {
             return None;
         }
-        // Missing optional arguments take their defaults, which must not
-        // be constant expressions.
-        if f.params
-            .iter()
-            .skip(sent as usize)
-            .any(|p| !matches!(p.default_expr, Some(crate::class::ConstExpr::Value(_))))
-        {
-            return None;
-        }
-        let mut body = f.code.ops.iter().map(generic).filter(|op| {
-            !matches!(
-                op,
-                Op::Nop | Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
-            )
-        });
-        let v = match body.next()? {
-            Op::Return {
-                val: Operand::Lit(l),
-            } => f.code.literals.get(l as usize)?.clone(),
-            Op::Return {
-                val: Operand::Unused,
-            } => Value::Null,
-            _ => return None,
-        };
-        // A literal of another type than the declared return type is
-        // checked first (`zend_emit_return_type_check`).
-        if let Some(rt) = &f.return_type {
-            let mixed =
-                rt.classes.is_empty() && rt.intersections.is_empty() && rt.mask & m::ANY == m::ANY;
-            let bit = match &v {
-                Value::Null => m::NULL | m::VOID,
-                Value::Bool(false) => m::FALSE,
-                Value::Bool(true) => m::TRUE,
-                Value::Int(_) => m::LONG,
-                Value::Float(_) => m::DOUBLE,
-                Value::Str(_) => m::STRING,
-                Value::Array(_) => m::ARRAY,
-                _ => 0,
-            };
-            if !mixed && rt.mask & bit == 0 {
-                return None;
-            }
-        }
-        Some(v)
+        literal_return_value(self.funcs.get(user)?, sent, static_call, result_used)
     }
 
     /// A method of a script class.
@@ -389,6 +323,91 @@ impl Resolver<'_> {
             decl.flags,
         ))
     }
+}
+
+/// `zend_try_inline_call`: the constant a call of the user function `f`
+/// with `sent` arguments is replaced by, when its code is nothing but
+/// `return <literal>;` after receiving its arguments (the code it was
+/// compiled to, not what its own optimizer made of it): not abstract,
+/// deprecated, `#[\NoDiscard]` with the result unused, variadic, by
+/// reference, a generator or a closure; every required argument passed, no
+/// by-reference or typed parameter, no static variable, a missing optional
+/// argument's default a literal; a literal its return type takes.
+/// `static_call`: the call is `C::f()`; `result_used`: its result is read.
+pub(crate) fn literal_return_value(
+    f: &UserFunction,
+    sent: u32,
+    static_call: bool,
+    result_used: bool,
+) -> Option<Value> {
+    use crate::func::flags;
+    use crate::types::mask as m;
+    let no_discard = if result_used { 0 } else { flags::NODISCARD };
+    if f.flags
+        & (flags::ABSTRACT
+            | flags::DEPRECATED
+            | flags::VARIADIC
+            | flags::RETURN_REF
+            | flags::NO_BODY
+            | no_discard)
+        != 0
+        || f.is_generator()
+        || f.is_closure()
+        || sent < f.required
+        || (static_call && f.flags & flags::STATIC == 0)
+        || f.params
+            .iter()
+            .any(|p| p.by_ref || p.variadic || p.ty.is_some())
+        || !f.code.static_vars.is_empty()
+        || f.code.num_statics != 0
+        || super::reduced_to_literal(&f.code)
+    {
+        return None;
+    }
+    // Missing optional arguments take their defaults, which must not
+    // be constant expressions.
+    if f.params
+        .iter()
+        .skip(sent as usize)
+        .any(|p| !matches!(p.default_expr, Some(crate::class::ConstExpr::Value(_))))
+    {
+        return None;
+    }
+    let mut body = f.code.ops.iter().map(generic).filter(|op| {
+        !matches!(
+            op,
+            Op::Nop | Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
+        )
+    });
+    let v = match body.next()? {
+        Op::Return {
+            val: Operand::Lit(l),
+        } => f.code.literals.get(l as usize)?.clone(),
+        Op::Return {
+            val: Operand::Unused,
+        } => Value::Null,
+        _ => return None,
+    };
+    // A literal of another type than the declared return type is
+    // checked first (`zend_emit_return_type_check`).
+    if let Some(rt) = &f.return_type {
+        let mixed =
+            rt.classes.is_empty() && rt.intersections.is_empty() && rt.mask & m::ANY == m::ANY;
+        let bit = match &v {
+            Value::Null => m::NULL | m::VOID,
+            Value::Bool(false) => m::FALSE,
+            Value::Bool(true) => m::TRUE,
+            Value::Int(_) => m::LONG,
+            Value::Float(_) => m::DOUBLE,
+            Value::Str(_) => m::STRING,
+            Value::Array(_) => m::ARRAY,
+            _ => 0,
+        };
+        if !mixed && rt.mask & bit == 0 {
+            return None;
+        }
+    }
+    Some(v)
 }
 
 /// The lowered form of one op array.

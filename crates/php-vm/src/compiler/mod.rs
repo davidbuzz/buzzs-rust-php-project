@@ -585,6 +585,38 @@ impl FunctionInfo {
 pub trait FunctionTable {
     /// The function `lcname`, if one is declared.
     fn find(&self, lcname: &[u8]) -> Option<FunctionInfo>;
+
+    /// The preloaded user function `lcname` (`ZEND_ACC_PRELOADED`), whose
+    /// code the optimizer may look into: opcache's optimizer takes
+    /// functions of other files only when they are preloaded
+    /// (`zend_optimizer_get_called_func`).
+    fn preloaded(&self, _lcname: &[u8]) -> Option<Rc<UserFunction>> {
+        None
+    }
+}
+
+/// A [`FunctionTable`] of two lookups: the declared functions, and the
+/// preloaded user functions among them.
+pub struct TableWithPreloaded<F, P>(pub F, pub P);
+
+impl<F, P> std::fmt::Debug for TableWithPreloaded<F, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TableWithPreloaded")
+    }
+}
+
+impl<F, P> FunctionTable for TableWithPreloaded<F, P>
+where
+    F: Fn(&[u8]) -> Option<FunctionInfo>,
+    P: Fn(&[u8]) -> Option<Rc<UserFunction>>,
+{
+    fn find(&self, lcname: &[u8]) -> Option<FunctionInfo> {
+        (self.0)(lcname)
+    }
+
+    fn preloaded(&self, lcname: &[u8]) -> Option<Rc<UserFunction>> {
+        (self.1)(lcname)
+    }
 }
 
 impl<F: Fn(&[u8]) -> Option<FunctionInfo>> FunctionTable for F {
@@ -1055,7 +1087,9 @@ impl Compiler<'_> {
         // Optimizer passes run when opcache.optimization_level is nonzero
         // and no user opcode handlers are hooked.
         let mut reduced_to_literal = false;
-        if self.opts.optimization_level != 0 && self.opts.user_opcodes.is_empty() {
+        // (php-src's optimizer runs whatever user opcode handlers are set;
+        // only the handler specialisation below stays off with them.)
+        if self.opts.optimization_level != 0 {
             let raw_literal = optimizer::dump::returns_literal(&op_array);
             // Top-level code's CVs are the global symbol table: other
             // functions reach them through `global`/`$GLOBALS` and included
@@ -1078,6 +1112,23 @@ impl Compiler<'_> {
                         .filter(|info| info.internal)
                 })
             };
+            // The functions of this file compiled so far that only return
+            // a literal: their calls are that literal (`zend_try_inline_call`;
+            // a top-level function is declared before the file runs).
+            let (unit_functions, hoisted) = (&self.decls.functions, &self.hoisted_functions);
+            let inline = |lc: &[u8], sent: u32, used: bool| {
+                let own = {
+                    let table = unit_functions.try_borrow().ok()?;
+                    hoisted
+                        .iter()
+                        .filter_map(|&k| table.get(k as usize))
+                        .find(|f| f.name.as_bytes().eq_ignore_ascii_case(lc))
+                        .cloned()
+                };
+                // Else a preloaded function (one of another file).
+                let f = own.or_else(|| declared.and_then(|t| t.preloaded(lc)))?;
+                optimizer::dump::literal_return_value(&f, sent, false, used)
+            };
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
@@ -1089,6 +1140,7 @@ impl Compiler<'_> {
                     .and_then(|c| c.get(b"PHP_SAPI")),
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
                 known: Some(&known),
+                inline: Some(optimizer::Inliner(&inline)),
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);
