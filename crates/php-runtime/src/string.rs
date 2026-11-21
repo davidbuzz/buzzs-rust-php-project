@@ -312,6 +312,14 @@ static CHARS: [StaticHeader; 256] = {
 /// The result always has its most significant bit set, so it is never zero.
 #[must_use]
 pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
+    hash_bytes(bytes)
+}
+
+/// [`zend_hash_bytes`] itself, always in line: also for [`ZStr::hash_now`],
+/// which must not call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // see above
+fn hash_bytes(bytes: &[u8]) -> u64 {
     #[inline]
     fn step(hash: u64, b: u8) -> u64 {
         hash.wrapping_mul(33).wrapping_add(u64::from(b))
@@ -446,6 +454,26 @@ fn alloc_block(inline_cap: usize) -> NonNull<Header> {
 #[inline(never)]
 unsafe fn free_block(block: NonNull<Header>) {
     // SAFETY: the caller guarantees the block is live.
+    let meta = unsafe { block.as_ref().meta.get() };
+    if meta & (PERMANENT | INTERNED | EXTERNAL) != 0 {
+        // SAFETY: the caller's contract, passed on.
+        return unsafe { free_block_special(block) };
+    }
+    // SAFETY: the block was allocated by `alloc_block` with this capacity
+    // (or reallocated to that layout by `ZStr::extend_unique`).
+    unsafe { alloc::dealloc(block.as_ptr().cast::<u8>(), block_layout(meta & CAP_MASK)) };
+}
+
+/// [`free_block`] of a block that is permanent (kept), interned (it leaves
+/// the intern table first) or external (its `Vec` buffer goes with it):
+/// out of line, so that the ordinary free saves no register for them.
+///
+/// # Safety
+/// As [`free_block`].
+#[cold]
+#[inline(never)]
+unsafe fn free_block_special(block: NonNull<Header>) {
+    // SAFETY: the caller guarantees the block is live.
     let (data, len, meta) = unsafe {
         let h = block.as_ref();
         (h.ptr, h.len, h.meta.get())
@@ -491,6 +519,38 @@ impl ZStr {
     #[must_use]
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
         Self::from_vec(bytes.into())
+    }
+
+    /// A new string of `len` bytes, the `i`-th of them `byte_at(i)`: one
+    /// exactly sized allocation written where the bytes stay
+    /// (`zend_string_alloc` and a loop over `ZSTR_VAL`, as php-src's number
+    /// formatters build their results), with no buffer in between.
+    #[inline]
+    #[must_use]
+    pub fn from_fn(len: usize, mut byte_at: impl FnMut(usize) -> u8) -> Self {
+        if len > CAP_MASK {
+            capacity_overflow();
+        }
+        let block = alloc_block(len);
+        // SAFETY: `block` is a fresh allocation of `HEADER + len` bytes,
+        // aligned for `Header`; the inline area starts right after the
+        // header and has room for exactly `len` bytes, each written once
+        // before the header that makes them readable. (Should `byte_at`
+        // panic, the block is leaked, never read.)
+        unsafe {
+            let data = block.as_ptr().cast::<u8>().add(HEADER);
+            for i in 0..len {
+                data.add(i).write(byte_at(i));
+            }
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len,
+                meta: Cell::new(len),
+            });
+        }
+        ZStr(block)
     }
 
     /// A string holding a copy of `bytes`, in one allocation.
@@ -1177,6 +1237,32 @@ impl ZStr {
             return h;
         }
         self.compute_hash()
+    }
+
+    /// The cached hash once it has been computed ([`ZStr::hash_value`]
+    /// without its first-use call, for code that must not call).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load and a test in a lean probe
+    #[must_use]
+    pub fn known_hash(&self) -> Option<u64> {
+        let h = self.header().hash.get();
+        (h != 0).then_some(h)
+    }
+
+    /// [`ZStr::hash_value`] whose first computation happens here, not
+    /// behind a call: for a lean caller hashing a string that was just
+    /// built (a key made for one lookup).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the point of it
+    #[must_use]
+    pub fn hash_now(&self) -> u64 {
+        let h = self.header().hash.get();
+        if h != 0 {
+            return h;
+        }
+        let h = hash_bytes(self.as_bytes());
+        self.header().hash.set(h);
+        h
     }
 
     /// The first [`ZStr::hash_value`] of a string: hashes the bytes and

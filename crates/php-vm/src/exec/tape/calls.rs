@@ -120,6 +120,14 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..
         } if auto_global_place(code, *place) => Some(plain(TOp::VmOp)),
         Op::FetchGlobal { .. } => Some(plain(TOp::VmOp)),
+        // An element of an object's property (`$o->p[k]` read, written,
+        // compounded, incremented, tested): the property cache hits of
+        // `exec/spec/props.rs`, which need the VM.
+        Op::FetchObjPropDim { .. }
+        | Op::AssignObjPropDim { .. }
+        | Op::AssignOpObjPropDim { .. }
+        | Op::IncDecObjPropDim { .. }
+        | Op::IssetObjPropDim { .. } => Some(plain(TOp::VmOp)),
         // Only an argument of a call one of those started can go to a
         // prepared call; the others keep the generic `Send`, without the
         // detour.
@@ -824,16 +832,18 @@ fn new_checked(
     cls: &Rc<crate::class::Class>,
     defaults: &[Option<Value>],
 ) -> Option<Obj> {
-    let mut args = NewArgs::new();
-    if inst.e != 0 {
-        sent_args(f, inst, &mut args)?;
-    }
-    let args = args.given();
+    // The constructor first: one with a body of its own is the commonest
+    // reason to leave, and its answer is kept (`ctor_fold`).
     let (func, scope) = crate::props::ctor_ref(cls)?;
     let Func::User(uf) = func else {
         return None;
     };
     let fold = uf.ctor_fold()?;
+    let mut args = NewArgs::new();
+    if inst.e != 0 {
+        sent_args(f, inst, &mut args)?;
+    }
+    let args = args.given();
     if args.len() != uf.params.len() {
         return None;
     }

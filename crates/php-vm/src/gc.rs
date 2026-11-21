@@ -688,8 +688,11 @@ fn released_array(a: &php_runtime::ZArray) {
     if !with_state(|s| !s.protected).unwrap_or(false) {
         return;
     }
-    let mut pending: Vec<&php_runtime::ZArray> = vec![a];
-    while let Some(arr) = pending.pop() {
+    // The unshared arrays found inside that are still to walk: none in a
+    // table of scalars and strings, for which nothing is allocated.
+    let mut pending: Vec<&php_runtime::ZArray> = Vec::new();
+    let mut arr = a;
+    loop {
         // Only the elements that can be or hold a root: a table of scalars
         // and strings costs a tag test an element.
         arr.for_each_counted(|v| match v {
@@ -699,6 +702,10 @@ fn released_array(a: &php_runtime::ZArray) {
             Value::Object(_) | Value::Reference(_) => possible_root(v),
             _ => {}
         });
+        let Some(next) = pending.pop() else {
+            break;
+        };
+        arr = next;
     }
 }
 

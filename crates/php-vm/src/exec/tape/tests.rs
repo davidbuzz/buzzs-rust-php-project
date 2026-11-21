@@ -74,9 +74,16 @@ fn check(code: &OpArray) -> Box<[Inst]> {
         // (`InitMethodCall`), and so do the instructions of the ops the
         // tape runs with the VM at hand (a frameless call, a read through
         // the global scope).
+        // An array literal's ops are `Vm::run`'s too, and its table and
+        // elements instructions.
         if !matches!(
             inst.op,
-            TOp::CallInit | TOp::VmOp | TOp::FramelessQ | TOp::IncDecStatic
+            TOp::CallInit
+                | TOp::VmOp
+                | TOp::FramelessQ
+                | TOp::IncDecStatic
+                | TOp::InitArrayT
+                | TOp::ArrayAddT
         ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
@@ -277,6 +284,211 @@ var_dump(f(5, [1, 2, 3, 4]));
 }
 "
     );
+}
+
+const ARRAY_LITERALS: &str = r#"<?php
+function f($a, $b) {
+    $list = [$a, $b, $a . $b, 7];
+    $map = ['x' => $a, 'y' => $b, 5 => $a, '6' => $b, 'x' => $b];
+    $k = 'dyn';
+    $mixed = [$a, $k => $b, false => $b, true => $a];
+    return [$list, $map, $mixed, [[$a], ['n' => [$b]]]];
+}
+function g($a) {
+    $r = &$a;
+    $u = [$a, $r, $undef];
+    try { $o = [PHP_INT_MAX => 1, $a]; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    return $u;
+}
+for ($i = 0; $i < 3; $i++) { $r = f($i, "s$i"); }
+var_dump($r, g(4));
+"#;
+
+const ARRAY_LITERALS_OUT: &str = r#"
+Warning: Undefined variable $undef in t.php on line 11
+Cannot add element to the array as the next element is already occupied
+array(4) {
+  [0]=>
+  array(4) {
+    [0]=>
+    int(2)
+    [1]=>
+    string(2) "s2"
+    [2]=>
+    string(3) "2s2"
+    [3]=>
+    int(7)
+  }
+  [1]=>
+  array(4) {
+    ["x"]=>
+    string(2) "s2"
+    ["y"]=>
+    string(2) "s2"
+    [5]=>
+    int(2)
+    [6]=>
+    string(2) "s2"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(2) "s2"
+    ["dyn"]=>
+    string(2) "s2"
+    [1]=>
+    int(2)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+    [1]=>
+    array(1) {
+      ["n"]=>
+      array(1) {
+        [0]=>
+        string(2) "s2"
+      }
+    }
+  }
+}
+array(3) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(4)
+  [2]=>
+  NULL
+}
+"#;
+
+/// An array literal with an element that is no constant: its table and
+/// each element with no key or a string/int literal key are instructions;
+/// an element with any other key stays the generic op. The results are the
+/// generic ops' (keys given twice, an integer in digits, references, an
+/// undefined variable, the next index after `PHP_INT_MAX`).
+#[test]
+fn array_literals_are_instructions() {
+    let src = ARRAY_LITERALS;
+    let arrays = op_arrays(src);
+    let code = &arrays[1];
+    let tape = check(code);
+    let (mut inits, mut adds, mut generic) = (0, 0, 0);
+    for (i, op) in code.ops.iter().enumerate() {
+        match op {
+            Op::InitArray { .. } => {
+                assert_eq!(tape[i].op, TOp::InitArrayT, "op {i}: {op:?}");
+                inits += 1;
+            }
+            Op::ArrayAdd {
+                key: None | Some(crate::opcode::Operand::Lit(_)),
+                ..
+            } if tape[i].op == TOp::ArrayAddT => adds += 1,
+            Op::ArrayAdd { key, .. } => {
+                assert!(key.is_some(), "op {i}: {op:?}");
+                assert_ne!(tape[i].op, TOp::ArrayAddT, "op {i}: {op:?}");
+                generic += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(inits >= 7, "{inits} literals");
+    assert!(adds >= 14, "{adds} elements as instructions");
+    // `$k => $b` at least: the generic op converts the key.
+    assert!(generic >= 1, "{generic} generic elements");
+    assert_eq!(run(src), ARRAY_LITERALS_OUT);
+}
+
+const LEAN_FOREACH: &str = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "d{$this->n} "; } }
+function kv($n) {
+    $list = []; $hash = [];
+    for ($i = 0; $i < $n; $i++) { $list[] = $i * 2; $hash["k$i"] = $i; $hash[$i + 100] = "s$i"; }
+    $s = 0; $ks = '';
+    foreach ($list as $i => $v) { $s += $i * $v; }
+    foreach ($hash as $k => $v) { $ks = $k; if (is_int($v)) { $s += $v; } else { $s += strlen($v); } }
+    foreach ($list as $v) { $s += $v; }
+    unset($hash['k1'], $list[1]);
+    foreach ($hash as $k => $v) { $s += is_int($v) ? 1 : 2; }
+    foreach ($list as $k => $v) { $s += $k; }
+    foreach ([1.5, true, null, 'x', [1], new D(7)] as $k => $v) { $s += $k; }
+    echo $s, ' ', $ks, ' ', $i, ' ', $k, "\n";
+}
+function vars($n) {
+    $a = ['x' => 1, 'y' => 2, 'z' => 3];
+    for ($r = 0; $r < $n; $r++) {
+        $v = [1, 2]; $k = new D(100 + $r % 2);
+        foreach ($a as $k => $v) { }
+        $x = 5; $v = &$x; $kk = 'q'; $k = &$kk;
+        foreach ($a as $k => $v) { }
+        unset($v, $k);
+        foreach ($a as $same => $same) { }
+        $v = 'long string value ' . $r; $k = 'key ' . $r;
+        foreach ($a as $k => $v) { }
+    }
+    echo "| $x $kk $same $k $v\n";
+}
+function sums($n) {
+    $h = []; $w = [];
+    for ($i = 0; $i < 40; $i++) { $h["foo_$i"] = 0; $h["a-key-that-is-longer-than-sixteen-bytes-$i"] = 0; $h[$i] = 0; $h["-$i"] = 0; $w["foo_$i"] = $i; }
+    for ($r = 0; $r < $n; $r++) {
+        foreach ($w as $k => $v) { $h[$k] += $v; $h[$k] -= 1; $h[$k] *= 1; $h[$k] |= 1; $h[$k] &= 0xffff; $h[$k] ^= 2; $h[$k] += 3; }
+        $k = "a-key-that-is-longer-than-sixteen-bytes-" . ($r % 40); $one = 1;
+        $h[$k] += $one;
+        $d = (string)($r % 40); $h[$d] += $one;
+        $m = '-' . ($r % 40); $h[$m] += $one;
+        $i = $r % 40; $h[$i] += $one;
+    }
+    $t = 0; foreach ($h as $v) { $t += $v; }
+    $b = $h; $k = 'foo_7'; $h[$k] += 1000; $big = PHP_INT_MAX; $h[$k] += $big;
+    $f = ['f' => 1.5, 's' => '5']; $k2 = 'f'; $f[$k2] += $one; $k2 = 's'; $f[$k2] += $one;
+    echo $t, ' ', $b['foo_7'], ' ', $h[3], ' ', count($h), ' ';
+    var_dump($h['foo_7'], $f);
+}
+foreach ([3, 50] as $n) { kv($n); vars($n); sums($n); }
+"#;
+
+const LEAN_FOREACH_OUT: &str = r#"50 102 2 5
+d7 d100 d101 d100 | 3 z z z 3
+68108 24 0 160 float(9.223372036854776E+18)
+array(2) {
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  int(6)
+}
+86053 149 49 5
+d7 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 | 3 z z z 3
+107736 400 4 160 float(9.223372036854778E+18)
+array(2) {
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  int(6)
+}
+"#;
+
+/// The lean paths of the `foreach` step and of `$a[$key] op= $int`: what
+/// they take and what they leave to the general code gives the generic
+/// ops' results (lists and hashes, holes, string and other values, loop
+/// variables that hold arrays, objects and references, keys that are
+/// integers in digits, shared tables, overflow, missing keys).
+#[test]
+fn lean_foreach_steps_and_keyed_compound_writes() {
+    let src = LEAN_FOREACH;
+    let out = run(src);
+    assert_eq!(out, LEAN_FOREACH_OUT);
+    let arrays = op_arrays(src);
+    let steps = arrays
+        .iter()
+        .flat_map(|code| check(code).into_vec())
+        .filter(|inst| matches!(inst.op, TOp::FeFetchV | TOp::FeFetchKV))
+        .count();
+    assert!(steps >= 8, "{steps} fused foreach steps");
 }
 
 /// Ops with no specialised form keep their place: hot ones are `Step`,

@@ -649,19 +649,17 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
 /// `dechex()` of `num` as its handler builds it
 /// (`_php_math_longtobase(num, 16)`: the number read as unsigned, in
 /// lower-case digits), without the handler's argument and result vectors.
+#[inline(never)] // inside `quick_eval`, every `sqrt()` and `abs()` saved its registers
 fn dechex_str(num: i64) -> ZStr {
-    let mut value = u64::from_ne_bytes(num.to_ne_bytes());
-    let mut buf = [0u8; 16];
-    let mut at = buf.len();
-    loop {
-        at -= 1;
-        buf[at] = b"0123456789abcdef"[usize::from((value & 15) as u8)];
-        value >>= 4;
-        if value == 0 {
-            break;
-        }
-    }
-    ZStr::from(&buf[at..])
+    let value = u64::from_ne_bytes(num.to_ne_bytes());
+    // A digit for every four bits up to the highest one set, one for 0
+    // (`_php_math_longtobase_pwr2`'s length from `zend_ulong_nlz`).
+    let digits = (67 - (value | 1).leading_zeros()) / 4;
+    ZStr::from_fn(digits as usize, |i| {
+        // `i` counts from the first digit, the highest.
+        let shift = 4 * (digits - 1).saturating_sub(u32::try_from(i).unwrap_or(u32::MAX));
+        b"0123456789abcdef"[usize::from(((value >> shift) & 15) as u8)]
+    })
 }
 
 /// [`quick_id`] of `abs()`: the ids of the math functions

@@ -1323,6 +1323,8 @@ tape_ops! {
         ConcatT = (dims::concat_tmp, 1, poll_f),
         RopeT = (dims::rope_tmp, 1, poll_f),
         CastStrT = (dims::cast_str_tmp, 1, poll_f),
+        InitArrayT = (dims::init_array, 1, poll_f),
+        ArrayAddT = (dims::array_add, 1, poll_f),
         FeFetchA = (dims::fe_fetch, 1, branch_poll_f),
         FeFetchV = (dims::fe_fetch_v, 2, branch_poll_f),
         FeFetchKV = (dims::fe_fetch_kv, 3, branch_poll_f),
@@ -2274,6 +2276,69 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         }) => match vm.fetch_place_fast(place) {
             Some(v) => {
                 vm.set_tmp(dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // An element of an object's property, on a property cache hit
+        // (`Vm::run`'s own arms for these ops): a read into its temporary
+        // or the variable of the `AssignCv` folded behind it (then
+        // skipped), a write, a compound write, `++`/`--`, `isset`/`empty`.
+        Some(&Op::FetchObjPropDim {
+            place,
+            dim,
+            dst,
+            to,
+            mode,
+        }) => match vm.fetch_obj_prop_dim_fast(place, dim, dst, to, mode) {
+            Some(stored) => at + 1 + usize::from(stored),
+            None => DECLINED,
+        },
+        Some(&Op::AssignObjPropDim {
+            place,
+            dim,
+            val,
+            dst,
+        }) => {
+            if vm.assign_obj_prop_dim_fast(place, dim, val, dst) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::AssignOpObjPropDim {
+            place,
+            dim,
+            op,
+            val,
+            dst,
+        }) => {
+            if vm.assign_op_obj_prop_dim_fast(place, dim, op, val, dst) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::IncDecObjPropDim {
+            place,
+            dim,
+            kind,
+            dst,
+        }) => match vm.incdec_obj_prop_dim_fast(place, dim, kind) {
+            Some(r) => {
+                vm.set_dst(dst, r);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        Some(&Op::IssetObjPropDim {
+            place,
+            dim,
+            dst,
+            empty,
+        }) => match vm.isset_obj_prop_dim_fast(place, dim, empty) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
                 at + 1
             }
             None => DECLINED,

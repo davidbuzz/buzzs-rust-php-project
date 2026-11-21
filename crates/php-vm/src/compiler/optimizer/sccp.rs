@@ -656,6 +656,108 @@ fn partial_assign_dim(
     ))
 }
 
+/// `in_array($needle, $haystack[, $strict])` at `i` (its `InitFCall`)
+/// whose haystack is a known array and whose `strict` argument, if there
+/// is one, a known value: the call becomes `ZEND_IN_ARRAY` over the set of
+/// the array's values, where its `DoCall` stood (`zend_dfa_optimize_calls`
+/// of php-src's DFA pass). As there, the set is the values as keys:
+/// strings and ints for a strict search; for a loose one strings only,
+/// none of them an integer in digits (`ZEND_HANDLE_NUMERIC`: its loose
+/// comparison with a number is no byte comparison). The call is
+/// straight-line (only `Nop`s between its steps), each argument a value or
+/// a plain variable (which `in_array()` takes by value); the function is
+/// the global one, resolved at compile time and not disabled. `false`,
+/// nothing changed, for anything else.
+fn in_array_call(op_array: &mut OpArray, i: usize, state: &[CvLattice]) -> bool {
+    let Some(Op::InitFCall {
+        name,
+        fallback: None,
+        ..
+    }) = op_array.ops.get(i)
+    else {
+        return false;
+    };
+    let named = matches!(
+        op_array.literals.get(*name as usize),
+        Some(Value::Str(f)) if f.as_bytes().eq_ignore_ascii_case(b"in_array")
+    );
+    if !named || super::is_disabled_function(b"in_array") {
+        return false;
+    }
+    let mut args = Vec::new();
+    let mut call = None;
+    for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+        match op {
+            Op::Nop => {}
+            Op::Send { src } if args.len() < 3 => {
+                let arg = match src {
+                    ArgSrc::Val(arg) => *arg,
+                    // A variable: the function takes it by value.
+                    ArgSrc::Place(place) => match plain_cv(&op_array.places, *place) {
+                        Some(cv) => Operand::Cv(cv),
+                        None => break,
+                    },
+                    _ => break,
+                };
+                args.push((j, arg));
+            }
+            Op::DoCall { dst } => {
+                call = Some((j, *dst));
+                break;
+            }
+            _ => break,
+        }
+    }
+    let (Some((at, dst)), [(_, needle), (_, haystack), rest @ ..]) = (call, &args[..]) else {
+        return false;
+    };
+    let literal = |o: &Operand| op_array.literals.get(cv_or_lit(o, state)? as usize);
+    let strict = match rest {
+        [] => false,
+        [(_, flag)] => match literal(flag).and_then(const_truthiness) {
+            Some(strict) => strict,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let Some(Value::Array(haystack)) = literal(haystack) else {
+        return false;
+    };
+    let mut set = php_runtime::HashTable::with_capacity(haystack.len());
+    for v in haystack.values() {
+        let key = match v {
+            Value::Str(s) if strict => ArrayKey::Str(s.clone()),
+            Value::Str(s) => match ArrayKey::from_zstr(s) {
+                key @ ArrayKey::Str(_) => key,
+                ArrayKey::Int(_) => return false,
+            },
+            Value::Int(n) if strict => ArrayKey::Int(*n),
+            _ => return false,
+        };
+        // A value listed twice is one key (`zend_hash_add` fails quietly).
+        let _ = set.add(key, Value::Bool(true));
+    }
+    let Ok(set_lit) = u32::try_from(op_array.literals.len()) else {
+        return false;
+    };
+    let needle = *needle;
+    let steps: Vec<usize> = args.iter().map(|(j, _)| *j).collect();
+    op_array
+        .literals
+        .push(Value::Array(ZArray::from_table(set)));
+    op_array.ops[i] = Op::Nop;
+    for j in steps {
+        op_array.ops[j] = Op::Nop;
+    }
+    op_array.ops[at] = Op::InArray {
+        a: needle,
+        set: set_lit,
+        strict,
+        dst,
+    };
+    true
+}
+
 /// Whether `op` reads, writes or adds to the temporary `t`.
 fn names_tmp(op: &Op, places: &[Place], t: u32) -> bool {
     let is = |o: &Operand| matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
@@ -1134,9 +1236,6 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
         | Op::BindStatic { .. }
         | Op::InitStatic { .. }
         | Op::FeReset { place: Some(_), .. }
-        | Op::Send {
-            src: ArgSrc::Place(_),
-        }
         | Op::SendNamed {
             src: ArgSrc::Place(_),
             ..
@@ -1148,12 +1247,63 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
         _ => false,
     });
     ref_op
+        || place_sends_may_bind(op_array, ctx)
         || op_array.places.iter().any(|place| {
             matches!(
                 place.base,
                 PlaceBase::VarVar(_) | PlaceBase::Global(_) | PlaceBase::GlobalsArray
             )
         })
+}
+
+/// Whether a variable sent as a place (`f($v)`, `f($a[0])`) may be bound
+/// by reference: its callee is not known when the code is compiled
+/// ([`OptContext::known`]), or takes that argument by reference. Any other
+/// such send only reads (php-src's `SEND_VAR`, where an unknown callee
+/// makes it `SEND_VAR_EX` and a by-reference parameter `SEND_REF`).
+fn place_sends_may_bind(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
+    // The calls being prepared, innermost last: the callee when known,
+    // and how many arguments it was sent.
+    let mut calls: Vec<(Option<crate::compiler::FunctionInfo>, usize)> = Vec::new();
+    for op in &op_array.ops {
+        match op {
+            Op::InitFCall { name, fallback, .. } => {
+                let callee = match (fallback, op_array.literals.get(*name as usize)) {
+                    (None, Some(Value::Str(lc))) => {
+                        ctx.known.and_then(|known| known.find(lc.as_bytes()))
+                    }
+                    _ => None,
+                };
+                calls.push((callee, 0));
+            }
+            Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. } => calls.push((None, 0)),
+            Op::Send { src } => {
+                let Some((callee, sent)) = calls.last_mut() else {
+                    return true;
+                };
+                if matches!(src, ArgSrc::Place(_))
+                    && callee.is_none_or(|info| info.sends_by_ref(*sent))
+                {
+                    return true;
+                }
+                *sent += 1;
+            }
+            Op::SendPlaceholder { .. } => {
+                if let Some((_, sent)) = calls.last_mut() {
+                    *sent += 1;
+                }
+            }
+            Op::DoCall { .. } | Op::CallableConvert { .. } | Op::CallablePartial { .. } => {
+                calls.pop();
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The CV an op names as a dynamic class (`$o instanceof $c`, `new $c`,
@@ -1847,6 +1997,10 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     if !has_hazard && num_cvs > 0 && len > 0 {
         let leaders = super::block_pass::find_leaders(op_array);
         let built = partial_array_builds(op_array, &leaders);
+        // Whether a call may change a variable: none is a reference here
+        // (`has_hazard`), so only by name (`compact()`, `extract()`, a
+        // variable variable, an include).
+        let calls_reach_cvs = super::compact::has_dynamic_var_access(op_array);
         let mut block_starts = Vec::new();
         for i in 0..len {
             if leaders[i] {
@@ -1925,7 +2079,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         | Op::InitStaticCall { .. }
                 );
                 if is_call {
-                    cur_state.fill(CvLattice::Bottom);
+                    if calls_reach_cvs {
+                        cur_state.fill(CvLattice::Bottom);
+                    }
                     continue;
                 }
 
@@ -2194,6 +2350,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             let mut cur_state = in_state[b].clone();
 
             for i in b_start..b_end {
+                // `in_array()` of a known array: `ZEND_IN_ARRAY`.
+                changed |= in_array_call(op_array, i, &cur_state);
                 let op = &mut op_array.ops[i];
                 if let Op::Coalesce {
                     a: Operand::Cv(cv), ..
@@ -2222,7 +2380,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         | Op::InitStaticCall { .. }
                 );
                 if is_call {
-                    cur_state.fill(CvLattice::Bottom);
+                    if calls_reach_cvs {
+                        cur_state.fill(CvLattice::Bottom);
+                    }
                     continue;
                 }
 

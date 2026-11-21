@@ -62,11 +62,23 @@ Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       0.97, sieve 0.82 -> 0.47, dim_write 0.82 -> 0.31, ary 0.83 -> 0.72, ary2
       0.90 -> 0.78 (with the overwrite alone the last two lost 9%: every write of theirs
       adds an element).
-      Open: heapsort's outer loop (a `return` inside it) and `gen_random` (constants
-      defined at run time, a `global`) stay interpreted; a `foreach` step is no trace
-      row yet (hash2's inner loop: 150 instructions a step, then a keyed `+=`), and
-      hash1 spends its time in `dechex()` with the string it makes (about 190) and in
-      the keyed handlers.
+      Done 2026-11-21 (the tape's own handlers, lean paths that make no call, each
+      in front of the handler it was): the step of a `foreach` over plain values
+      (`dims::fe_step_plain`: 158 -> about 90 instructions a step), `$a[$key] += $int`
+      with a string key (`assign_op_str`, `HashTable::lean_zstr_probe_mut`: 195 ->
+      about 120), the read and the write of an element under a string key that was
+      just built (`fetch_str_lean`, `assign_str_lean`: the key hashed in line, the
+      temporary's string moved into a new bucket), and `dechex()` writing its digits
+      into the string it returns (`ZStr::from_fn`): hash2 1.53 -> 1.19, hash1
+      1.40 -> 1.22. Both still miss.
+      Open: hash2 needs about 20 more instructions off an iteration, hash1 about 60:
+      `frameless_quick` (75 around `dechex()`, 27 of them the call site's cache
+      test), the key's free (57), the trace's call through `jit_row_dim_keyed` (25).
+      With the JIT off ary3 lost 13% (the lean `+=` path's test stands before every
+      int-key `+=`; a frameless function that looks at the key's type first would cost
+      about 8). heapsort's outer loop (a `return` inside it) and `gen_random`
+      (constants defined at run time, a `global`) stay interpreted; a `foreach` step
+      is no trace row yet.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
@@ -156,13 +168,35 @@ Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout
       items (one-alloc objects, reference size, 8B hash index) — design pass.
 - [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
+- [ ] Shapes the 82 workloads do not cover, measured 2026-11-21 (instructions a loop
+      iteration, ours against the C implementation's; candidates for `perf/bench`):
+      a generator's `send()` 4,581 / 510 and a `foreach` over a generator 2,643 / 450;
+      a method whose body writes `$this->items[$k]` and returns `$this` 2,498 / 479;
+      `new B(...)` with a constructor body 3,129 / 1,235; `['id' => $i, 'name' => 'x',
+      'n' => $i]` 1,858 / 559 and `[$i, $i]` 1,029 / 404 (were 3,039 and 1,585: array
+      literals were `Vm::run` ops, now `InitArrayT`/`ArrayAddT` rows); a `foreach` over
+      an array of arrays 370 / 158; `new S("abc", $i)` with a constructor of plain
+      stores 1,450 / 742 (the old object holds a string, so its block is not made
+      over); `strtoupper()`/`strpos()`/`str_contains()` 3,251 / 1,717; a `foreach`
+      over a list of strings 181 / 140 and with keys over a hash 174 / 141 (were 241
+      and 217). What is known of the causes: every return that is not a scalar out of
+      a variable or temporary of an untyped function is `call.rs::return_generic`
+      (`return;`, a constructor's end, `return $this`, strings, arrays, typed
+      returns); `calls::new_over` and the site check fail on every `new` of a class
+      whose constructor has a body; `strs::frameless_quick_n` costs about 165 around
+      a two- or three-argument builtin, and `strtoupper()` & co. are handler calls;
+      the general steps of `fe_fetch_into` for an array or object value.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 20 left in the targeted set of 13,935
+- [ ] Optimizer/opcache dump failures (30 of 38; 19 left in the targeted set of 13,935
       tests on 2026-11-21): dce_005, sccp_010/011/012/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2, preload_optimizer,
-      array_map_foreach_optimization_007/008/013/014, named_parameter_new, gh18050,
-      gh9164, jit/ignored_opcodes. Done 2026-11-21: opt/coalesce (`??`/`??=` of a local
+      array_map_foreach_optimization_007/008/013/014, named_parameter_new,
+      gh9164, jit/ignored_opcodes. Done 2026-11-21: gh18050 (`in_array()` of a
+      variable holding a known array is `ZEND_IN_ARRAY`: a variable sent by value to
+      a function known at compile time no longer switches the propagation of
+      variables off, `OptContext::known`, and a known variable stays known across a
+      call that cannot reach it by name), opt/coalesce (`??`/`??=` of a local
       nothing has assigned goes on to the next op, and the first store of a literal
       goes when no later op names the variable), opt/dce_001 (a concatenation of
       scalar-typed parameters that nothing reads is dead, the concatenations it read

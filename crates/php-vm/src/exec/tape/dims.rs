@@ -475,6 +475,45 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 (None, _) => unfused,
             }
         }
+        // An array literal with an element that is no constant: the
+        // result temporary's index in `p`.
+        Op::InitArray { dst } => {
+            dst_off(code, dst)?;
+            Inst {
+                p: dst as usize,
+                ..plain(TOp::InitArrayT)
+            }
+        }
+        // One element of an array literal (`ZEND_ADD_ARRAY_ELEMENT`, and
+        // `ZEND_INIT_ARRAY` for the first): the literal's temporary in
+        // `a`, the value's kind in `k` and its index in `p`, and in the
+        // low half of `e` whether it has a key, a string or int literal
+        // (its index in `b`); any other key is the generic op's. For the
+        // element that makes the table: the number of the literal's
+        // elements in `d` and, in the high half of `e`, what their keys
+        // are.
+        Op::ArrayAdd { arr, key, val } => {
+            dst_off(code, arr)?;
+            let (vk, vi) = val_operand(code, val)?;
+            let (e, b) = match key {
+                None => (ADD_NEXT, 0),
+                Some(Operand::Lit(l)) => match code.literals.get(l as usize)? {
+                    Value::Str(_) | Value::Int(_) => (ADD_KEYED, l),
+                    _ => return None,
+                },
+                Some(_) => return None,
+            };
+            let (count, keys) = literal_shape(code, i, arr);
+            Inst {
+                a: arr,
+                b,
+                d: count,
+                e: e | (keys << KEYS_SHIFT),
+                k: vk << 3,
+                p: vi as usize,
+                ..plain(TOp::ArrayAddT)
+            }
+        }
         Op::ConcatCv { cv, val, dst, .. } => {
             let (vk, vi) = val_operand(code, val)?;
             Inst {
@@ -573,6 +612,93 @@ unsafe fn fetch_int_any(frame: *mut Frame, inst: &Inst) -> Br {
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn fetch_dim_key(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if fetch_str_lean(unsafe { &mut *frame }, inst) {
+        return Br::Fall;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { fetch_dim_key_any(frame, inst) }
+}
+
+/// The commonest `$cv[$key]` read with a string key, without a call until
+/// the key is released: the key in a consumed temporary or a variable,
+/// surely no integer in digits (`ArrayKey::surely_str`) and hashed here
+/// when it was just built, the array held directly, its table a hash that
+/// has the key, the element a plain value (a scalar or a string) copied
+/// into the result temporary, which holds a scalar. The string of a
+/// consumed key temporary is released (`FREE_OP2`). `false`, nothing
+/// changed, for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `fetch_dim_key`
+fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
+    if inst.d != NO_TO
+        || !matches!(
+            f.tmps.get(inst.p),
+            Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+        )
+    {
+        return false;
+    }
+    let kind = dim_kind(inst);
+    let key = match kind {
+        KIND_TMP => f.tmps.get(inst.b as usize),
+        KIND_CV => f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+        _ => return false,
+    };
+    let Some(Value::Str(key)) = key else {
+        return false;
+    };
+    if !ArrayKey::surely_str(key.as_bytes()) {
+        return false;
+    }
+    let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
+        return false;
+    };
+    let Some(found) = arr.lean_find(key, key.hash_now()) else {
+        return false;
+    };
+    if !found.is_plain() {
+        return false;
+    }
+    let Some(slot) = f.tmps.get_mut(inst.p) else {
+        return false;
+    };
+    // The slot holds a scalar (seen above): nothing to release.
+    if let Value::Str(s) = found {
+        std::mem::forget(std::mem::replace(slot, Value::Str(s.clone())));
+    } else {
+        // SAFETY: `found` is a scalar (plain and no string) in the array's
+        // table, `slot` a temporary of the frame: both valid for 16 bytes
+        // and distinct. A scalar owns nothing, so its bytes are its copy,
+        // and the slot holds nothing to release. The safe form was
+        // measured first: the value rebuilt through a jump on its tag left
+        // zend:hash1 at 1.26 times the C count.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                std::ptr::from_ref(found).cast::<u8>(),
+                std::ptr::from_mut(slot).cast::<u8>(),
+                std::mem::size_of::<Value>(),
+            );
+        }
+    }
+    if kind == KIND_TMP {
+        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+            if let Value::Str(key) = std::mem::take(slot) {
+                drop(key);
+            }
+        }
+    }
+    true
+}
+
+/// [`fetch_dim_key`] past its lean path: a read with a string offset
+/// ([`fetch_key`]), else the general read ([`fetch_dim`]).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fetch_dim_key_any(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if let Some(br) = fetch_key(unsafe { &mut *frame }, inst) {
         return br;
@@ -1158,6 +1284,95 @@ unsafe fn assign_int_any(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(never)]
 pub(super) unsafe fn assign_dim_key(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
+    if assign_str_lean(unsafe { &mut *frame }, inst) {
+        return true;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { assign_dim_key_any(frame, inst) }
+}
+
+/// The commonest `$cv[$key] = value` with a string key, without a call
+/// until a key is released: the key in a consumed temporary, surely no
+/// integer in digits and hashed here when it was just built, the value a
+/// scalar in a variable or a literal, the table the variable holds
+/// directly and alone, a hash. The element is a scalar written over, or a
+/// new bucket in a table with room, which takes the temporary's string
+/// itself (`zend_hash_update` adds a handle and `FREE_OP2` releases the
+/// temporary's: one string either way). `false`, nothing changed, for
+/// anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `assign_dim_key`
+fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
+    if dim_kind(inst) != KIND_TMP || f.symtab_attached {
+        return false;
+    }
+    let Some(Value::Str(key)) = f.tmps.get(inst.b as usize) else {
+        return false;
+    };
+    if !ArrayKey::surely_str(key.as_bytes()) {
+        return false;
+    }
+    let v = match val_kind(inst) {
+        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_LIT => f.code.literals.get(inst.p),
+        _ => return false,
+    };
+    let v = match v {
+        Some(Value::Int(i)) => Value::Int(*i),
+        Some(Value::Float(x)) => Value::Float(*x),
+        Some(Value::Bool(b)) => Value::Bool(*b),
+        Some(Value::Null) => Value::Null,
+        _ => return false,
+    };
+    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) else {
+        return false;
+    };
+    let Some(table) = arr.get_mut_unshared() else {
+        return false;
+    };
+    let h = key.hash_now();
+    if let Some(el) = table.lean_find_mut(key, h) {
+        if !matches!(
+            el,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            return false;
+        }
+        // A scalar over a scalar: nothing to release.
+        std::mem::forget(std::mem::replace(el, v));
+        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+            if let Value::Str(key) = std::mem::take(slot) {
+                drop(key);
+            }
+        }
+        return true;
+    }
+    // A new key: the temporary's string moves into the bucket.
+    let Some(slot) = f.tmps.get_mut(inst.b as usize) else {
+        return false;
+    };
+    let Value::Str(key) = std::mem::take(slot) else {
+        return false;
+    };
+    match table.lean_append(key, h, v) {
+        Ok(()) => true,
+        Err((key, _scalar)) => {
+            // The slot holds the `Null` `take` left (nothing to release).
+            std::mem::forget(std::mem::replace(slot, Value::Str(key)));
+            false
+        }
+    }
+}
+
+/// [`assign_dim_key`] past its lean path: a write with a string offset
+/// ([`assign_key`]), else the general write ([`assign_dim`]).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn assign_dim_key_any(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_key(unsafe { &mut *frame }, inst).is_some() {
         return true;
     }
@@ -1344,14 +1559,92 @@ pub(super) unsafe fn assign_dims(frame: *mut Frame, inst: &Inst) -> bool {
     assign_dims_cv_in(f, inst.a, inst.d, val)
 }
 
-/// `Op::AssignOpDimCv`: `$cv[dim] op= val`: [`assign_op_int`], else the
+/// `Op::AssignOpDimCv`: `$cv[dim] op= val`: `+=` with a string key in a
+/// variable first ([`assign_op_str`]), else [`assign_op_dim_any`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if assign_op_str(unsafe { &mut *frame }, inst) {
+        return true;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { assign_op_dim_any(frame, inst) }
+}
+
+/// `$cv[$key] += value` where the variable `$key` holds a string: the
+/// value an int in a variable or a literal, the table the variable `$cv`
+/// holds directly and alone, the element an int found by a probe that
+/// makes no call (`HashTable::lean_zstr_probe_mut`: not a key that may be
+/// an integer in digits), and no overflow. Nothing here calls, so a miss
+/// costs its tests alone (an int key leaves at the test of the key's
+/// tag). `false`, nothing changed, for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `assign_op_dim`
+fn assign_op_str(f: &mut Frame, inst: &Inst) -> bool {
+    if inst.e != 0 || dim_kind(inst) != KIND_CV || f.symtab_attached {
+        return false;
+    }
+    if !matches!(
+        f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+        Some(Value::Str(_))
+    ) {
+        return false;
+    }
+    let y = match val_kind(inst) {
+        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_LIT => f.code.literals.get(inst.p),
+        _ => return false,
+    };
+    let Some(&Value::Int(y)) = y else {
+        return false;
+    };
+    let Some((arr, key)) = two_slots_mut(&mut f.cvs, inst.a as usize, inst.b as usize) else {
+        return false;
+    };
+    let (Some(Value::Array(arr)), Some(Value::Str(key))) = (arr.as_mut(), key.get()) else {
+        return false;
+    };
+    let Some(table) = arr.get_mut_unshared() else {
+        return false;
+    };
+    let Some(Value::Int(x)) = table.lean_zstr_probe_mut(key) else {
+        return false;
+    };
+    match x.checked_add(y) {
+        Some(sum) => {
+            *x = sum;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Two variables of `cvs` at once, when they are two: what
+/// `<[T]>::get_disjoint_mut` gives (Rust 1.86; the workspace states 1.85).
+#[inline(always)]
+#[allow(clippy::inline_always)] // as a call such a helper cost 17 instructions
+fn two_slots_mut(cvs: &mut [CvSlot], a: usize, b: usize) -> Option<(&mut CvSlot, &mut CvSlot)> {
+    if a < b {
+        let (lo, hi) = cvs.split_at_mut_checked(b)?;
+        Some((lo.get_mut(a)?, hi.first_mut()?))
+    } else {
+        let (lo, hi) = cvs.split_at_mut_checked(a)?;
+        Some((hi.first_mut()?, lo.get_mut(b)?))
+    }
+}
+
+/// [`assign_op_dim`] past its lean path: [`assign_op_int`], else the
 /// general compound write ([`assign_op_dim_general`]), as
 /// [`fetch_dim_int`].
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
-pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
+unsafe fn assign_op_dim_any(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_op_int(unsafe { &mut *frame }, inst).is_some() {
         return true;
@@ -1630,6 +1923,196 @@ pub(super) unsafe fn cast_str_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     true
 }
 
+/// The high half of [`Inst::e`] of a [`TOp::ArrayAddT`] says what the keys
+/// of its literal are.
+const KEYS_SHIFT: u8 = 4;
+/// No element of the literal has a key (a list: its storage is made with
+/// the table).
+const KEYS_NONE: u8 = 0;
+/// A key is a string that is no integer in digits
+/// (`ZEND_ARRAY_NOT_PACKED`: a hash from the start).
+const KEYS_STRING: u8 = 1;
+/// Keys, none of them such a string: the first element decides the
+/// storage, as in an uninitialised table of php-src.
+const KEYS_OTHER: u8 = 2;
+
+/// The low half of [`Inst::e`] of a [`TOp::ArrayAddT`]: the element takes
+/// the next index.
+const ADD_NEXT: u8 = 0;
+/// The element has a string or int literal key.
+const ADD_KEYED: u8 = 1;
+
+/// How far [`literal_shape`] looks for the elements of a literal.
+const LITERAL_SCAN: usize = 4096;
+
+/// The number of elements of the array literal that the op at `i` adds an
+/// element to (in the temporary `dst`), and what their keys are
+/// ([`KEYS_NONE`], [`KEYS_STRING`], [`KEYS_OTHER`]): the size and the
+/// `ZEND_ARRAY_NOT_PACKED` flag `zend_compile_array` gives `ZEND_INIT_ARRAY`.
+/// The elements are the adds to `dst` after the `InitArray` that started
+/// the literal, up to the next literal started in that temporary. `(0,
+/// KEYS_OTHER)`, a table that takes its shape from its first element, when
+/// the start is not within [`LITERAL_SCAN`] ops.
+fn literal_shape(code: &OpArray, i: usize, dst: u32) -> (u32, u8) {
+    let Some(start) = code
+        .ops
+        .get(..i)
+        .and_then(|before| {
+            before
+                .iter()
+                .rev()
+                .take(LITERAL_SCAN)
+                .position(|op| matches!(op, Op::InitArray { dst: d } if *d == dst))
+        })
+        .map(|back| i - 1 - back)
+    else {
+        return (0, KEYS_OTHER);
+    };
+    let (mut count, mut keys) = (0u32, KEYS_NONE);
+    for op in code.ops.iter().skip(start + 1).take(LITERAL_SCAN) {
+        let key = match op {
+            Op::InitArray { dst: other } if *other == dst => break,
+            Op::ArrayAdd { arr, key, .. } | Op::ArrayAddRef { arr, key, .. } if *arr == dst => key,
+            _ => continue,
+        };
+        count = count.saturating_add(1);
+        let string = matches!(
+            key,
+            Some(Operand::Lit(l)) if matches!(
+                code.literals.get(*l as usize),
+                Some(Value::Str(s)) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_))
+            )
+        );
+        if string {
+            keys = KEYS_STRING;
+        } else if key.is_some() && keys == KEYS_NONE {
+            keys = KEYS_OTHER;
+        }
+    }
+    (count, keys)
+}
+
+/// `Op::InitArray`: the shared empty table in the result temporary, as
+/// the generic op puts it there (the first element makes the literal's own
+/// table: [`array_add`]). Replaces what the temporary held, so it polls.
+/// Declines only a temporary out of range.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn init_array(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let Some(slot) = f.tmps.get_mut(inst.p) else {
+        return false;
+    };
+    put_tmp(slot, Value::Array(ZArray::new()));
+    true
+}
+
+/// `Op::ArrayAdd` (`ZEND_ADD_ARRAY_ELEMENT`; `ZEND_INIT_ARRAY` for the
+/// first element): the value, read where it lies (a variable's or a
+/// literal's copied, a temporary's moved), added to the literal's table
+/// under the next index or its string/int literal key (a string with
+/// symbol-table semantics), as `Vm::array_literal_add` does. The first
+/// element finds the untouched shared table `InitArray` left and makes the
+/// literal's own in its place, sized for all the elements
+/// (`zend_new_array(size)`) with the storage that element brings in
+/// php-src: a list's when no element has a key, a hash's when a key is a
+/// string, else what the element itself needs. A value replaced under a
+/// key given twice is released, so it polls. Declines, nothing changed: a
+/// table that is neither that one nor the temporary's alone, an undefined
+/// variable (the generic op warns), a reference, and a next index that is
+/// taken (the generic op throws).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn array_add(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let first = match f.tmps.get_mut(inst.a as usize) {
+        Some(Value::Array(arr)) => {
+            if arr.get_mut_unshared().is_some() {
+                false
+            } else if arr.is_untouched() {
+                true
+            } else {
+                return false;
+            }
+        }
+        _ => return false,
+    };
+    let key = if inst.e & ((1 << KEYS_SHIFT) - 1) == ADD_NEXT {
+        None
+    } else {
+        Some(match lits.get(inst.b as usize) {
+            Some(Value::Str(s)) => ArrayKey::from_zstr(s),
+            Some(Value::Int(i)) => ArrayKey::Int(*i),
+            _ => return false,
+        })
+    };
+    let kind = val_kind(inst);
+    let v = match kind {
+        KIND_CV => match f.cvs.get(inst.p).and_then(CvSlot::get) {
+            None | Some(Value::Reference(_)) => return false,
+            Some(v) => v.clone(),
+        },
+        KIND_TMP => match f.tmps.get_mut(inst.p) {
+            None | Some(Value::Reference(_)) => return false,
+            Some(slot) => std::mem::take(slot),
+        },
+        KIND_TMPKEEP => match f.tmps.get(inst.p) {
+            None | Some(Value::Reference(_)) => return false,
+            Some(v) => v.clone(),
+        },
+        KIND_LIT => match lits.get(inst.p) {
+            Some(v) => v.clone(),
+            None => return false,
+        },
+        _ => return false,
+    };
+    let added = match f.tmps.get_mut(inst.a as usize) {
+        Some(Value::Array(arr)) => {
+            if first {
+                let size = inst.d as usize;
+                let table = match inst.e >> KEYS_SHIFT {
+                    KEYS_NONE => HashTable::with_capacity_packed(size),
+                    KEYS_STRING => HashTable::with_capacity_mixed(size),
+                    _ => HashTable::with_capacity(size),
+                };
+                *arr = ZArray::from_table(table);
+            }
+            match (arr.get_mut_unshared(), key) {
+                (Some(table), None) => table.push(v).map(|_| ()),
+                (Some(table), Some(key)) => {
+                    drop(table.insert(key, v));
+                    Ok(())
+                }
+                (None, _) => Err(v),
+            }
+        }
+        _ => Err(v),
+    };
+    match added {
+        Ok(()) => true,
+        // Not added: a value taken from its temporary goes back there for
+        // the generic op.
+        Err(v) => {
+            if kind == KIND_TMP {
+                if let Some(slot) = f.tmps.get_mut(inst.p) {
+                    *slot = v;
+                }
+            }
+            false
+        }
+    }
+}
+
 /// `Op::FeFetch` of a by-value `foreach` over an array (`ZEND_FE_FETCH_R`
 /// on `IS_ARRAY`: `fe_fetch_array_in`): the next element's value and key
 /// in their temporaries and the fall through to the assignments of the
@@ -1659,6 +2142,21 @@ pub(super) unsafe fn fe_fetch(frame: *mut Frame, inst: &Inst) -> Br {
 #[inline(never)]
 pub(super) unsafe fn fe_fetch_v(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: as in `fetch_dim`.
+    if fe_step_plain(unsafe { &mut *frame }, inst, false) {
+        return Br::Fall;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { fe_fetch_v_any(frame, inst) }
+}
+
+/// [`fe_fetch_v`] past its lean path.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fe_fetch_v_any(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: as in `fetch_dim`.
     fe_fetch_into(unsafe { &mut *frame }, inst, false)
 }
 
@@ -1669,7 +2167,118 @@ pub(super) unsafe fn fe_fetch_v(frame: *mut Frame, inst: &Inst) -> Br {
 #[inline(never)]
 pub(super) unsafe fn fe_fetch_kv(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: as in `fetch_dim`.
+    if fe_step_plain(unsafe { &mut *frame }, inst, true) {
+        return Br::Fall;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { fe_fetch_kv_any(frame, inst) }
+}
+
+/// [`fe_fetch_kv`] past its lean path.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fe_fetch_kv_any(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: as in `fetch_dim`.
     fe_fetch_into(unsafe { &mut *frame }, inst, true)
+}
+
+/// The commonest step of a `foreach` over an array, as [`fe_fetch_into`]
+/// makes it but without its general steps and without a call: the element
+/// at exactly the iterator's position (no hole before it, not the end), a
+/// plain value (a scalar or a string), and loop variables that hold
+/// nothing or a plain value. The value and the key are stored, the strings
+/// the variables held released, the iterator moved on. `false`, nothing
+/// changed, for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of the two handlers
+fn fe_step_plain(f: &mut Frame, inst: &Inst, with_key: bool) -> bool {
+    /// Whether a loop variable holds nothing or a plain value: what the
+    /// step replaces with no more than the release of a string.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // two tag tests
+    fn plain_cell(cell: Option<&Value>) -> bool {
+        matches!(
+            cell,
+            None | Some(
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
+        )
+    }
+    /// Releases what such a variable held: a string by its own drop (one
+    /// handle fewer, or freed), nothing for anything else.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a tag test
+    fn release_plain(old: Option<Value>) {
+        match old {
+            Some(Value::Str(s)) => drop(s),
+            // Nothing, or a scalar: it owns nothing.
+            other => std::mem::forget(other),
+        }
+    }
+    if f.symtab_attached {
+        return false;
+    }
+    let (to, key_to) = if with_key {
+        let Some((to, key_to)) = two_slots_mut(&mut f.cvs, inst.b as usize, inst.d as usize) else {
+            return false;
+        };
+        (to.as_mut(), Some(key_to.as_mut()))
+    } else {
+        let Some(to) = f.cvs.get_mut(inst.b as usize) else {
+            return false;
+        };
+        (to.as_mut(), None)
+    };
+    if !plain_cell(to.as_ref()) || key_to.as_ref().is_some_and(|k| !plain_cell(k.as_ref())) {
+        return false;
+    }
+    let Some(Some(ForeachIter::Array { arr, pos })) = f.iters.get_mut(inst.a as usize) else {
+        return false;
+    };
+    let at = *pos;
+    let Some((v, key)) = arr.entry_at(at) else {
+        return false;
+    };
+    if !v.is_plain() {
+        return false;
+    }
+    *pos = at + 1;
+    let old_key = key_to.map(|key_to| {
+        key_to.replace(match key {
+            Some(ArrayKey::Str(s)) => Value::Str(s.clone()),
+            Some(ArrayKey::Int(i)) => Value::Int(*i),
+            None => Value::Int(i64::from(at)),
+        })
+    });
+    let old = if let Value::Str(s) = v {
+        to.replace(Value::Str(s.clone()))
+    } else {
+        let old = to.take();
+        // SAFETY: `v` is a scalar (plain and no string: seen above) in the
+        // iterator's table, `to` a variable of the frame: both valid for
+        // 16 bytes and distinct. A scalar owns nothing, so its bytes are
+        // its copy; the slot holds nothing (taken above), and a `Some` has
+        // its value's layout (the tag is the value's own: the trace JIT's
+        // `value_layout` test pins it). The safe form was measured first:
+        // the value rebuilt through a jump on its tag and stored tag and
+        // payload apart left zend:hash2 at 1.23 times the C count.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                std::ptr::from_ref(v).cast::<u8>(),
+                std::ptr::from_mut(to).cast::<u8>(),
+                std::mem::size_of::<Value>(),
+            );
+        }
+        old
+    };
+    release_plain(old);
+    if let Some(old_key) = old_key {
+        release_plain(old_key);
+    }
+    true
 }
 
 /// The step of a by-value `foreach` over an array together with the

@@ -83,6 +83,24 @@ impl ArrayKey {
         }
     }
 
+    /// Whether `bytes` are surely no integer in digits, so a string key as
+    /// they are (`ZEND_HANDLE_NUMERIC_STR` leaves them alone), decided
+    /// without a call: empty, a first byte that is neither a digit nor
+    /// `-`, or a later byte that is no digit. `false` only says that
+    /// [`ArrayKey::from_bytes`] must look.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a few byte tests in a lean handler
+    #[must_use]
+    pub fn surely_str(bytes: &[u8]) -> bool {
+        match bytes.split_first() {
+            None => true,
+            Some((first, rest)) => {
+                (!first.is_ascii_digit() && *first != b'-')
+                    || rest.iter().any(|b| !b.is_ascii_digit())
+            }
+        }
+    }
+
     /// The hash used for bucket placement (`h`): the integer itself or the
     /// string's PHP hash.
     #[inline]
@@ -393,6 +411,15 @@ fn hash_slot(table_size: u32, h: u64) -> usize {
 /// callee-saved registers, pushed and popped around each lookup.)
 #[inline]
 fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    bytes_eq(a, b)
+}
+
+/// [`same_bytes`] itself, always in line: the comparison of the lean
+/// probes, which must not call (as a call it cost each of them six saved
+/// registers and its state kept on the stack).
+#[inline(always)]
+#[allow(clippy::inline_always)] // see above
+fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     let n = a.len();
     if n != b.len() {
         return false;
@@ -650,6 +677,27 @@ impl HashData {
         idx
     }
 
+    /// The bucket of the string key `key`, whose hash is `h`, found
+    /// without a call (a bucket key whose hash is unknown is not looked
+    /// at: every key of a table was hashed to be placed).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of the lean lookups
+    fn lean_probe(&self, ts: u32, key: &ZStr, h: u64) -> Option<u32> {
+        let mut idx = self.head(ts, h);
+        while idx != INVALID {
+            let b = self.buckets.get(idx as usize)?;
+            if let ArrayKey::Str(k) = &b.key {
+                if ZStr::ptr_eq(k, key)
+                    || (k.known_hash() == Some(h) && bytes_eq(k.as_bytes(), key.as_bytes()))
+                {
+                    return Some(idx);
+                }
+            }
+            idx = b.next;
+        }
+        None
+    }
+
     /// The first bucket of `h`'s chain (`HT_HASH(ht, nIndex)`).
     #[inline]
     fn head(&self, ts: u32, h: u64) -> u32 {
@@ -842,6 +890,27 @@ impl HashTable {
         let mut t = Self::with_capacity(n);
         t.real_init_mixed();
         t
+    }
+
+    /// Creates an empty list sized for `n` elements with its storage in
+    /// place (`zend_new_array(n)` + `zend_hash_real_init_packed`, what
+    /// `ZEND_INIT_ARRAY` and its first element without a key make): appends
+    /// below the table size take [`HashTable::push`]'s short path from the
+    /// first one on.
+    #[must_use]
+    pub fn with_capacity_packed(n: usize) -> Self {
+        let mut t = Self::with_capacity(n);
+        t.real_init_packed();
+        t
+    }
+
+    /// Whether nothing was ever stored in the table (`zend_new_array`'s
+    /// state: `HASH_FLAG_UNINITIALIZED`, no next index taken): the shared
+    /// empty table of a literal being built is one.
+    #[inline]
+    #[must_use]
+    pub fn is_untouched(&self) -> bool {
+        matches!(self.store, Store::Uninit) && self.next_free == i64::MIN
     }
 
     /// Creates an empty table sized for `n` elements (`zend_new_array(n)`):
@@ -1103,10 +1172,10 @@ impl HashTable {
             self.rehash();
         } else if self.table_size < HT_MAX_SIZE {
             self.table_size += self.table_size;
-            if let Store::Hash(d) = &mut self.store {
-                d.index = new_index(self.table_size);
-            }
             self.reserve_table();
+            // The table is full, so not empty: `rehash` links the chains
+            // (`HashData::relink`), which makes the index of the new size
+            // (filled once: making it here filled it twice).
             self.rehash();
         }
     }
@@ -1734,6 +1803,94 @@ impl HashTable {
         d.buckets.get_mut(idx as usize)?.val.as_mut()
     }
 
+    /// The element a string key names in a hash, for a lean caller that
+    /// leaves every other case to a general path: `None` not only when
+    /// there is no such element, but also for a key whose first byte is a
+    /// digit or `-` (it may be an integer in digits), a key whose hash is
+    /// not computed yet, and a table that is no hash. It makes no call, so
+    /// a caller that makes none either saves no register around it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_zstr_probe_mut(&mut self, key: &ZStr) -> Option<&mut Value> {
+        let first = *key.as_bytes().first()?;
+        if first.is_ascii_digit() || first == b'-' {
+            return None;
+        }
+        let h = key.known_hash()?;
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return None;
+        };
+        let mut idx = d.head(ts, h);
+        while idx != INVALID {
+            let b = d.buckets.get(idx as usize)?;
+            if let ArrayKey::Str(k) = &b.key {
+                if ZStr::ptr_eq(k, key)
+                    || (k.known_hash() == Some(h) && bytes_eq(k.as_bytes(), key.as_bytes()))
+                {
+                    return d.buckets.get_mut(idx as usize)?.val.as_mut();
+                }
+            }
+            idx = b.next;
+        }
+        None
+    }
+
+    /// The element under the string key `key` (whose hash is `h`, and
+    /// which is no integer in digits: [`ArrayKey::surely_str`]) of a hash,
+    /// found without a call; `None` also for a table that is no hash.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    #[must_use]
+    pub fn lean_find(&self, key: &ZStr, h: u64) -> Option<&Value> {
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        let idx = d.lean_probe(self.table_size, key, h)?;
+        d.buckets.get(idx as usize)?.val.as_ref()
+    }
+
+    /// Mutable [`HashTable::lean_find`].
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_find_mut(&mut self, key: &ZStr, h: u64) -> Option<&mut Value> {
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return None;
+        };
+        let idx = d.lean_probe(ts, key, h)?;
+        d.buckets.get_mut(idx as usize)?.val.as_mut()
+    }
+
+    /// Adds the element `val` under the string key `key` (whose hash is
+    /// `h`), which the caller found absent ([`HashTable::lean_find`]), to
+    /// a hash with room for it, without a call: the tail of
+    /// `_zend_hash_add_or_update_i` for a table that neither grows nor
+    /// changes its kind.
+    ///
+    /// # Errors
+    /// Gives the key and the value back, nothing changed, for a table that
+    /// is no hash or is full: the general insert's.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_append(&mut self, key: ZStr, h: u64, val: Value) -> Result<(), (ZStr, Value)> {
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return Err((key, val));
+        };
+        let used = d.buckets.len();
+        if used >= ts as usize || used == d.buckets.capacity() {
+            return Err((key, val));
+        }
+        let Some(slot) = d.index.get_mut(hash_slot(ts, h)) else {
+            return Err((key, val));
+        };
+        let head = std::mem::replace(slot, to_u32(used));
+        d.buckets.push(Bucket::new(ArrayKey::Str(key), val, head));
+        self.num_elements += 1;
+        Ok(())
+    }
+
     /// Mutable [`HashTable::get_sym_zstr`].
     #[inline]
     pub fn get_sym_zstr_mut(&mut self, s: &ZStr) -> Option<&mut Value> {
@@ -2085,6 +2242,25 @@ impl HashTable {
                     .as_ref()
                     .map(|x| (to_u32(start + i), x, b.key.to_value()))
             })
+    }
+
+    /// The value at exactly position `pos` and its key, both borrowed: the
+    /// key of a bucket, or `None` in a list, whose key is the position.
+    /// The element a `foreach` step takes when no hole lies before it;
+    /// `None` for a hole and at the end ([`HashTable::fe_fetch_with_key`]
+    /// has those).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    #[must_use]
+    pub fn entry_at(&self, pos: u32) -> Option<(&Value, Option<&ArrayKey>)> {
+        match &self.store {
+            Store::Hash(d) => {
+                let b = d.buckets.get(pos as usize)?;
+                Some((b.val.as_ref()?, Some(&b.key)))
+            }
+            Store::Packed(v) => Some((v.get(pos as usize)?.as_ref()?, None)),
+            Store::Uninit => None,
+        }
     }
 
     /// The entry at a position (holes and out-of-range give `None`).
@@ -3575,6 +3751,151 @@ impl FromIterator<Value> for ZArray {
 
 #[cfg(test)]
 mod tests {
+    /// The lean probe finds what the general one finds for the keys it
+    /// takes, and nothing for the keys it leaves to it; `entry_at` gives
+    /// the element at a position with its key, and nothing at a hole.
+    #[test]
+    fn lean_probe_and_entry_at() {
+        let mut t = HashTable::new();
+        for (i, name) in (0i64..).zip(["foo_0", "x", "a-long-key-of-twenty-six-bytes", "12", "-3x"])
+        {
+            t.insert(ArrayKey::Str(ZStr::from(name)), Value::Int(i));
+        }
+        // Another string with the same bytes; its hash is not known yet.
+        let fresh = |s: &str| ZStr::from(s.to_owned().into_bytes());
+        let key = fresh("foo_0");
+        assert!(t.lean_zstr_probe_mut(&key).is_none());
+        let _ = key.hash_value();
+        assert!(matches!(t.lean_zstr_probe_mut(&key), Some(Value::Int(0))));
+        for (name, found) in [
+            ("x", Some(1)),
+            ("a-long-key-of-twenty-six-bytes", Some(2)),
+            ("a-long-key-of-twenty-six-bytez", None),
+            ("12", None),
+            ("-3x", None),
+            ("", None),
+            ("nope", None),
+        ] {
+            let key = fresh(name);
+            let _ = key.hash_value();
+            let got = match t.lean_zstr_probe_mut(&key) {
+                Some(Value::Int(i)) => Some(*i),
+                _ => None,
+            };
+            assert_eq!(got, found, "{name}");
+        }
+        // The general probe finds the ones left to it.
+        assert!(matches!(
+            t.get_sym_zstr_mut(&fresh("-3x")),
+            Some(Value::Int(4))
+        ));
+        // A list: no probe; its entries have no key of their own.
+        let mut list = HashTable::new();
+        let _ = list.push(Value::Int(7));
+        let _ = list.push(Value::Int(8));
+        assert!(list.lean_zstr_probe_mut(&key).is_none());
+        assert!(matches!(list.entry_at(1), Some((Value::Int(8), None))));
+        assert!(list.entry_at(2).is_none());
+        // A hash: the key of the bucket; nothing at a hole or at the end.
+        assert!(matches!(
+            t.entry_at(1),
+            Some((Value::Int(1), Some(ArrayKey::Str(k)))) if k.as_bytes() == b"x"
+        ));
+        t.remove(&ArrayKey::Str(ZStr::from("x")));
+        assert!(t.entry_at(1).is_none());
+        assert!(t.entry_at(5).is_none());
+        assert!(HashTable::new().entry_at(0).is_none());
+    }
+
+    /// The lean lookups and the lean append agree with the general table
+    /// functions, and `surely_str` with the key conversion.
+    #[test]
+    fn lean_find_and_append() {
+        let fresh = |s: &str| ZStr::from(s.to_owned().into_bytes());
+        let mut lean = HashTable::with_capacity_mixed(8);
+        let mut general = HashTable::with_capacity_mixed(8);
+        let names = [
+            "a",
+            "c350",
+            "1f",
+            "x-y",
+            "",
+            "a-rather-long-key-of-30-bytes!",
+            "1e5",
+        ];
+        for (i, name) in (0i64..).zip(names) {
+            let key = fresh(name);
+            let h = key.hash_now();
+            assert_eq!(h, zend_hash_bytes_of(name));
+            assert!(lean.lean_find(&key, h).is_none(), "{name}");
+            assert!(lean.lean_append(key, h, Value::Int(i)).is_ok(), "{name}");
+            general.insert(ArrayKey::Str(fresh(name)), Value::Int(i));
+        }
+        // The eighth fills the table; the ninth is the general insert's.
+        let key = fresh("eighth");
+        let h = key.hash_now();
+        assert!(lean.lean_append(key, h, Value::Null).is_ok());
+        let key = fresh("ninth");
+        let h = key.hash_now();
+        assert!(lean.lean_append(key, h, Value::Null).is_err());
+        assert_eq!(lean.len(), 8);
+        for (i, name) in (0i64..).zip(names) {
+            let key = fresh(name);
+            let h = key.hash_now();
+            assert!(matches!(lean.lean_find(&key, h), Some(Value::Int(n)) if *n == i));
+            assert!(matches!(lean.get_zstr(&key), Some(Value::Int(n)) if *n == i));
+            assert!(matches!(general.lean_find(&key, h), Some(Value::Int(n)) if *n == i));
+            if let Some(v) = lean.lean_find_mut(&key, h) {
+                *v = Value::Int(-1);
+            }
+            assert!(matches!(lean.get_zstr(&key), Some(Value::Int(-1))));
+        }
+        let missing = fresh("missing");
+        assert!(lean.lean_find(&missing, missing.hash_now()).is_none());
+        // A list and an empty table: not the lean functions'.
+        let mut list = HashTable::new();
+        let _ = list.push(Value::Int(1));
+        let key = fresh("k");
+        let h = key.hash_now();
+        assert!(list.lean_find(&key, h).is_none());
+        assert!(list.lean_append(key, h, Value::Null).is_err());
+        assert!(HashTable::new()
+            .lean_find(&missing, missing.hash_now())
+            .is_none());
+        // `surely_str` never claims a key the conversion makes an int.
+        for name in [
+            "",
+            "a",
+            "-",
+            "-a",
+            "1f",
+            "f1",
+            "12",
+            "-12",
+            "012",
+            "0",
+            "-0",
+            "1e5",
+            "12 ",
+            " 12",
+            "9223372036854775808",
+            "1.5",
+            "+1",
+        ] {
+            let is_str = matches!(ArrayKey::from_bytes(name.as_bytes()), ArrayKey::Str(_));
+            if ArrayKey::surely_str(name.as_bytes()) {
+                assert!(is_str, "{name:?}");
+            }
+        }
+        assert!(ArrayKey::surely_str(b"c350") && ArrayKey::surely_str(b"1f"));
+        assert!(!ArrayKey::surely_str(b"12") && !ArrayKey::surely_str(b"-"));
+    }
+
+    /// The hash of a string's bytes, for the test above.
+    fn zend_hash_bytes_of(s: &str) -> u64 {
+        crate::string::zend_hash_bytes(s.as_bytes())
+    }
+
     /// Keys compare by their bytes at every length around the size classes
     /// of `same_bytes`, and differ when any one byte does.
     #[test]

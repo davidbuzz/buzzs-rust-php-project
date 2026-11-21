@@ -122,6 +122,18 @@ pub struct OptContext<'a> {
     /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
     /// does the check itself).
     pub verifies_return: bool,
+    /// The functions a name resolved when the code is compiled (an
+    /// `InitFCall` without a namespace fallback) is certain to reach when
+    /// the code runs, with their argument send modes: the internal ones
+    /// and the finalized top-level functions of the same file
+    /// (`zend_optimizer_get_called_func`). `None`: no callee is known.
+    pub known: Option<&'a dyn super::FunctionTable>,
+}
+
+impl std::fmt::Debug for dyn super::FunctionTable + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FunctionTable")
+    }
 }
 
 impl OptContext<'_> {
@@ -240,6 +252,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
                 scalar_params: &[],
                 sapi_name: None,
                 verifies_return: false,
+                known: None,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
@@ -726,6 +739,118 @@ mod tests {
             ..CompileOptions::default()
         };
         compile(&program, Rc::from(src.as_bytes()), opts).expect("compile")
+    }
+
+    /// `opcache/tests/gh18050`: `in_array()` of a variable holding a known
+    /// array is `ZEND_IN_ARRAY` over the set of its values, strict as the
+    /// third argument says; a loose search among values with an integer in
+    /// digits stays a call, and so does one whose strictness is not known.
+    #[test]
+    fn in_array_of_a_known_array_is_an_opcode() {
+        use crate::opcode::{ArgSrc, Place, PlaceBase};
+        use php_runtime::{ZArray, ZStr};
+        let strings = |items: &[&str]| {
+            Value::Array(ZArray::from_values(
+                items.iter().map(|s| Value::Str(ZStr::from(*s))),
+            ))
+        };
+        // `$ary = <literal 1>; T0 = in_array($v, $ary[, <third>]); return T0;`
+        let run_with = |known: bool, haystack: Value, third: Option<Operand>| {
+            // Variables are sent as places (0: `$v`, 1: `$ary`, 2: `$s`).
+            let send = |arg: Operand| Op::Send {
+                src: match arg {
+                    Operand::Cv(cv) => ArgSrc::Place(cv),
+                    arg => ArgSrc::Val(arg),
+                },
+            };
+            let mut ops = vec![
+                Op::AssignCv {
+                    cv: 1,
+                    val: Operand::Lit(1),
+                    dst: None,
+                },
+                Op::InitFCall {
+                    name: 0,
+                    fallback: None,
+                    display: 0,
+                },
+                send(Operand::Cv(0)),
+                send(Operand::Cv(1)),
+            ];
+            if let Some(third) = third {
+                ops.push(send(third));
+            }
+            ops.push(Op::DoCall { dst: Some(0) });
+            ops.push(Op::Return {
+                val: Operand::Tmp(0),
+            });
+            let mut code = OpArray {
+                ops,
+                literals: vec![
+                    Value::Str(ZStr::from("in_array")),
+                    haystack,
+                    Value::Bool(true),
+                    Value::Bool(false),
+                ],
+                places: (0..3)
+                    .map(|cv| Place {
+                        base: PlaceBase::Cv(cv),
+                        segs: Vec::new(),
+                    })
+                    .collect(),
+                cv_names: vec![ZStr::from("v"), ZStr::from("ary"), ZStr::from("s")],
+                num_tmps: 1,
+                ..OpArray::default()
+            };
+            // `in_array()` takes its arguments by value; with no callee
+            // known, a variable sent may become a reference.
+            let by_value = |name: &[u8]| {
+                (known && name == b"in_array").then(crate::compiler::FunctionInfo::default)
+            };
+            let ctx = OptContext {
+                bound_cvs: &[(0, false), (2, false)],
+                known: Some(&by_value),
+                ..OptContext::default()
+            };
+            sccp::run_sccp(&mut code, &ctx);
+            code.ops.iter().find_map(|op| match op {
+                Op::InArray { a, set, strict, .. } => Some((
+                    *a,
+                    *strict,
+                    match code.literals.get(*set as usize) {
+                        Some(Value::Array(set)) => set.len(),
+                        _ => usize::MAX,
+                    },
+                )),
+                _ => None,
+            })
+        };
+        let run = |haystack: Value, third: Option<Operand>| run_with(true, haystack, third);
+        assert_eq!(
+            run(strings(&["x", "y", "x"]), None),
+            Some((Operand::Cv(0), false, 2))
+        );
+        // The callee is not known: `$ary` may become a reference there.
+        assert_eq!(run_with(false, strings(&["x", "y"]), None), None);
+        assert_eq!(
+            run(strings(&["x", "y"]), Some(Operand::Lit(2))),
+            Some((Operand::Cv(0), true, 2))
+        );
+        assert_eq!(
+            run(strings(&["x", "y"]), Some(Operand::Lit(3))),
+            Some((Operand::Cv(0), false, 2))
+        );
+        // An integer in digits: loosely no byte comparison, strictly a key.
+        assert_eq!(run(strings(&["1", "a"]), None), None);
+        assert_eq!(
+            run(strings(&["1", "a"]), Some(Operand::Lit(2))),
+            Some((Operand::Cv(0), true, 2))
+        );
+        // A float among them, a nested array: a call.
+        let mixed = Value::Array(ZArray::from_values([Value::Int(1), Value::Float(1.5)]));
+        assert_eq!(run(mixed, Some(Operand::Lit(2))), None);
+        // The strictness is a variable nothing is known of.
+        assert_eq!(run(strings(&["x", "y"]), Some(Operand::Cv(2))), None);
     }
 
     /// Pass 13 keeps an assignment whose variable is only read through an

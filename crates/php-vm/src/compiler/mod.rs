@@ -1066,6 +1066,18 @@ impl Compiler<'_> {
             } else {
                 self.opts.optimization_level
             };
+            // The callees a compiled name is certain to reach: a finalized
+            // top-level function of this file, or an internal function (a
+            // user function of another file may be another one when the
+            // compiled code runs again).
+            let (file_functions, declared) = (&self.known_functions, self.functions);
+            let known = |lc: &[u8]| {
+                file_functions.get(lc).copied().or_else(|| {
+                    declared
+                        .and_then(|table| table.find(lc))
+                        .filter(|info| info.internal)
+                })
+            };
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
@@ -1076,6 +1088,7 @@ impl Compiler<'_> {
                     .as_ref()
                     .and_then(|c| c.get(b"PHP_SAPI")),
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
+                known: Some(&known),
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);
