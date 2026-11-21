@@ -841,10 +841,10 @@ fn could_not_open(file: &[u8]) {
 }
 
 /// The absolute, symlink-resolved path of the primary script
-/// (`php_execute_script` expands it for `__FILE__` and messages).
+/// (`VCWD_REALPATH` in `php_cli.c`, through the realpath cache); the path
+/// as given when it does not resolve.
 fn real_path(file: &[u8]) -> Vec<u8> {
-    std::fs::canonicalize(std::ffi::OsStr::from_bytes(file))
-        .map_or_else(|_| file.to_vec(), |c| c.into_os_string().into_vec())
+    php_streams::paths::realpath(file).unwrap_or_else(|| file.to_vec())
 }
 
 fn lossy(b: &[u8]) -> String {
