@@ -424,21 +424,31 @@ fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     if n != b.len() {
         return false;
     }
-    if (8..=16).contains(&n) {
+    // The commonest keys first: under 8 bytes, then 8 to 16.
+    if n < 8 {
+        if n >= 4 {
+            return a.first_chunk::<4>() == b.first_chunk::<4>()
+                && a.last_chunk::<4>() == b.last_chunk::<4>();
+        }
+        return a.iter().zip(b).all(|(x, y)| x == y);
+    }
+    if n <= 16 {
         return a.first_chunk::<8>() == b.first_chunk::<8>()
             && a.last_chunk::<8>() == b.last_chunk::<8>();
     }
-    if (4..8).contains(&n) {
-        return a.first_chunk::<4>() == b.first_chunk::<4>()
-            && a.last_chunk::<4>() == b.last_chunk::<4>();
+    // Over 16 bytes: 8 at a time, then the last 8 (overlapping). A loop of
+    // its own: `chunks_exact().zip().all()` compiled to two iterator calls.
+    let (mut x, mut y) = (a, b);
+    while let (Some((cx, rx)), Some((cy, ry))) =
+        (x.split_first_chunk::<8>(), y.split_first_chunk::<8>())
+    {
+        if cx != cy {
+            return false;
+        }
+        x = rx;
+        y = ry;
     }
-    if n < 4 {
-        return a.iter().zip(b).all(|(x, y)| x == y);
-    }
-    a.chunks_exact(8)
-        .zip(b.chunks_exact(8))
-        .all(|(x, y)| x == y)
-        && a.last_chunk::<8>() == b.last_chunk::<8>()
+    a.last_chunk::<8>() == b.last_chunk::<8>()
 }
 
 /// `_zend_hash_get_valid_pos` over one storage: the first live slot at or

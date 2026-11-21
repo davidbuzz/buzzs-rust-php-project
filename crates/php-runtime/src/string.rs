@@ -521,10 +521,11 @@ impl ZStr {
         Self::from_vec(bytes.into())
     }
 
-    /// A new string of `len` bytes, the `i`-th of them `byte_at(i)`: one
-    /// exactly sized allocation written where the bytes stay
-    /// (`zend_string_alloc` and a loop over `ZSTR_VAL`, as php-src's number
-    /// formatters build their results), with no buffer in between.
+    /// A new string of `len` bytes, the `i`-th of them `byte_at(i)`, asked
+    /// for from the last byte to the first: one exactly sized allocation
+    /// written where the bytes stay (`zend_string_alloc` and a loop over
+    /// `ZSTR_VAL` from its end, as php-src's number formatters build their
+    /// results), with no buffer in between.
     #[inline]
     #[must_use]
     pub fn from_fn(len: usize, mut byte_at: impl FnMut(usize) -> u8) -> Self {
@@ -539,7 +540,7 @@ impl ZStr {
         // panic, the block is leaked, never read.)
         unsafe {
             let data = block.as_ptr().cast::<u8>().add(HEADER);
-            for i in 0..len {
+            for i in (0..len).rev() {
                 data.add(i).write(byte_at(i));
             }
             block.as_ptr().write(Header {

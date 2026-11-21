@@ -1559,13 +1559,40 @@ pub(super) unsafe fn assign_dims(frame: *mut Frame, inst: &Inst) -> bool {
     assign_dims_cv_in(f, inst.a, inst.d, val)
 }
 
-/// `Op::AssignOpDimCv`: `$cv[dim] op= val`: `+=` with a string key in a
-/// variable first ([`assign_op_str`]), else [`assign_op_dim_any`].
+/// `Op::AssignOpDimCv`: `$cv[dim] op= val`. A dispatcher with no stack
+/// frame: `+=` with a key in a variable that holds a string goes to
+/// [`assign_op_dim_str`], anything else to [`assign_op_dim_any`], each by a
+/// tail call (an int key pays the tag test alone).
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    let str_key = inst.e == 0 && dim_kind(inst) == KIND_CV && {
+        // SAFETY: the caller's contract; `frame` is the current frame.
+        let f = unsafe { &*frame };
+        matches!(
+            f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+            Some(Value::Str(_))
+        )
+    };
+    if str_key {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { assign_op_dim_str(frame, inst) }
+    } else {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { assign_op_dim_any(frame, inst) }
+    }
+}
+
+/// [`assign_op_dim`] for `+=` with a string key in a variable (what the
+/// dispatcher saw; anything else would be taken for that):
+/// [`assign_op_str`], else [`assign_op_dim_any`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn assign_op_dim_str(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_op_str(unsafe { &mut *frame }, inst) {
         return true;
@@ -1575,7 +1602,8 @@ pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
     unsafe { assign_op_dim_any(frame, inst) }
 }
 
-/// `$cv[$key] += value` where the variable `$key` holds a string: the
+/// `$cv[$key] += value` (the instruction's operator and key kind, as
+/// [`assign_op_dim`] found them) where the variable `$key` holds a string: the
 /// value an int in a variable or a literal, the table the variable `$cv`
 /// holds directly and alone, the element an int found by a probe that
 /// makes no call (`HashTable::lean_zstr_probe_mut`: not a key that may be
@@ -1585,13 +1613,9 @@ pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the head of `assign_op_dim`
 fn assign_op_str(f: &mut Frame, inst: &Inst) -> bool {
-    if inst.e != 0 || dim_kind(inst) != KIND_CV || f.symtab_attached {
-        return false;
-    }
-    if !matches!(
-        f.cvs.get(inst.b as usize).and_then(CvSlot::get),
-        Some(Value::Str(_))
-    ) {
+    // `+=` with the key in a variable: the dispatcher's tests. (The key's
+    // tag is tested below, where the key is read.)
+    if f.symtab_attached {
         return false;
     }
     let y = match val_kind(inst) {
@@ -1666,6 +1690,8 @@ unsafe fn assign_op_dim_any(frame: *mut Frame, inst: &Inst) -> bool {
 #[allow(clippy::inline_always)] // the head of `assign_op_dim`
 fn assign_op_int(f: &mut Frame, inst: &Inst) -> Option<()> {
     /// The table `slot` holds directly, when no other handle shares it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // nested helpers are not inlined by themselves
     fn table(slot: &mut Option<Value>) -> Option<&mut HashTable> {
         match slot {
             Some(Value::Array(arr)) => arr.get_mut_unshared(),
@@ -1674,8 +1700,13 @@ fn assign_op_int(f: &mut Frame, inst: &Inst) -> Option<()> {
     }
     /// The element `key` (an int, or a string with symbol-table
     /// semantics) names in `tbl`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // as a call it cost 28 instructions an element
     fn element<'t>(tbl: &'t mut HashTable, key: &Value) -> Option<&'t mut Value> {
         match key {
+            // A list through the always-inlined accessor (`get_int_mut`
+            // had become a call here: 22 instructions an element).
+            Value::Int(i) if tbl.is_packed() => tbl.get_packed_mut(*i),
             Value::Int(i) => tbl.get_int_mut(*i),
             Value::Str(s) => str_element(tbl, s),
             _ => None,
@@ -2246,38 +2277,40 @@ fn fe_step_plain(f: &mut Frame, inst: &Inst, with_key: bool) -> bool {
         return false;
     }
     *pos = at + 1;
-    let old_key = key_to.map(|key_to| {
-        key_to.replace(match key {
+    // (A `match`: as an `Option::map` closure it was a call, 19 an element.)
+    let old_key = match key_to {
+        Some(key_to) => key_to.replace(match key {
             Some(ArrayKey::Str(s)) => Value::Str(s.clone()),
             Some(ArrayKey::Int(i)) => Value::Int(*i),
             None => Value::Int(i64::from(at)),
-        })
-    });
+        }),
+        None => None,
+    };
     let old = if let Value::Str(s) = v {
         to.replace(Value::Str(s.clone()))
     } else {
-        let old = to.take();
         // SAFETY: `v` is a scalar (plain and no string: seen above) in the
         // iterator's table, `to` a variable of the frame: both valid for
-        // 16 bytes and distinct. A scalar owns nothing, so its bytes are
-        // its copy; the slot holds nothing (taken above), and a `Some` has
-        // its value's layout (the tag is the value's own: the trace JIT's
+        // 16 bytes and distinct. The old value is moved out by its bytes
+        // (`old` owns it from here) and the slot is written over at once,
+        // before anything reads it, so nothing is released twice. A scalar
+        // owns nothing, so its bytes are its copy, and a `Some` has its
+        // value's layout (the tag is the value's own: the trace JIT's
         // `value_layout` test pins it). The safe form was measured first:
         // the value rebuilt through a jump on its tag and stored tag and
         // payload apart left zend:hash2 at 1.23 times the C count.
         unsafe {
+            let old = std::ptr::read(to);
             std::ptr::copy_nonoverlapping(
                 std::ptr::from_ref(v).cast::<u8>(),
                 std::ptr::from_mut(to).cast::<u8>(),
                 std::mem::size_of::<Value>(),
             );
+            old
         }
-        old
     };
     release_plain(old);
-    if let Some(old_key) = old_key {
-        release_plain(old_key);
-    }
+    release_plain(old_key);
     true
 }
 

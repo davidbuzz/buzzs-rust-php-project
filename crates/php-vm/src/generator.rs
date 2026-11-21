@@ -101,6 +101,10 @@ pub struct GenData {
     /// until the generator object is freed, not just while its frame
     /// lives (`zend_generator_free_storage`).
     pub(crate) closure: Option<Obj>,
+    /// While the frame runs: the box it came in, holding the released
+    /// frame it was swapped with on the stack (`FrameStack::push_boxed`),
+    /// which goes back there at the next `yield`. It holds no value.
+    spare: Option<Box<Frame>>,
 }
 
 thread_local! {
@@ -189,6 +193,7 @@ fn close(g: &Obj) {
     with(g, |d| {
         d.state = GenState::Finished;
         d.frame = None;
+        d.spare = None;
         d.values = None;
         d.yield_from = None;
         d.send_target = None;
@@ -272,6 +277,7 @@ impl Vm {
                 lent: false,
                 func_name,
                 closure,
+                spare: None,
             },
         );
         let v = Value::Object(g);
@@ -304,12 +310,13 @@ impl Vm {
         let g = self.frames.last_mut().and_then(|f| f.generator.take());
         match g {
             Some(g) => {
-                let frames = &mut self.frames;
+                let (frames, empty_code, empty_vars) =
+                    (&mut self.frames, &self.empty_code, &self.empty_vars);
                 let stored = with(&g, move |d| {
                     if let Some(u) = update {
                         u(d);
                     }
-                    d.frame = frames.pop().map(Box::new);
+                    d.frame = frames.pop_boxed(d.spare.take(), empty_code, empty_vars);
                     d.state = GenState::Suspended;
                 })
                 .is_some();
@@ -675,7 +682,10 @@ impl Vm {
             return exc.map_or(Ok(()), |e| Err(Throw::Exception(e)));
         };
         frame.generator = Some(g.clone());
-        self.frames.push(*frame);
+        let spare = self.frames.push_boxed(frame);
+        if spare.is_some() {
+            with(g, |d| d.spare = spare);
+        }
         self.observer_begin_top();
         let base = self.frames.len() - 1;
         let r = match exc {

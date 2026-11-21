@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 23/82 with `BUZZS_JIT=0`).
+Score: 81/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 24/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -71,12 +71,16 @@ Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       temporary's string moved into a new bucket), and `dechex()` writing its digits
       into the string it returns (`ZStr::from_fn`): hash2 1.53 -> 1.19, hash1
       1.40 -> 1.22. Both still miss.
-      Open: hash2 needs about 20 more instructions off an iteration, hash1 about 60:
-      `frameless_quick` (75 around `dechex()`, 27 of them the call site's cache
-      test), the key's free (57), the trace's call through `jit_row_dim_keyed` (25).
-      With the JIT off ary3 lost 13% (the lean `+=` path's test stands before every
-      int-key `+=`; a frameless function that looks at the key's type first would cost
-      about 8). heapsort's outer loop (a `return` inside it) and `gen_random`
+      Then (2026-11-21) the lean paths without stack frames: the byte comparison of
+      two keys without the iterator calls of its long-key branch (they made every
+      probe inlining it save six registers) and short keys first, `$a[$k] op= v`
+      behind a frameless dispatcher (`assign_op_dim` -> `assign_op_dim_str` or the old
+      handler), `dechex()` filling its digits from the end: hash2 1.19 -> 1.10
+      (meets), hash1 1.22 -> 1.16, and the JIT-off ary3 back at 1.36.
+      Open: hash1 needs about 30 more instructions off an iteration: its element rows
+      are the int-key ones (the key is a temporary) and fail over to the string-key
+      handler at every access; `frameless_quick` (75 around `dechex()`); the key's
+      free. heapsort's outer loop (a `return` inside it) and `gen_random`
       (constants defined at run time, a `global`) stay interpreted; a `foreach` step
       is no trace row yet.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
@@ -170,7 +174,9 @@ Score: 80/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
 - [ ] Shapes the 82 workloads do not cover, measured 2026-11-21 (instructions a loop
       iteration, ours against the C implementation's; candidates for `perf/bench`):
-      a generator's `send()` 4,581 / 510 and a `foreach` over a generator 2,643 / 450;
+      a generator's `send()` 4,499 / 510 and a `foreach` over a generator 2,556 / 450
+      (its frame is now swapped onto the stack and back; the rest is the builtin
+      method call machinery around `send()` and the nested `execute()`);
       a method whose body writes `$this->items[$k]` and returns `$this` 2,498 / 479;
       `new B(...)` with a constructor body 3,129 / 1,235; `['id' => $i, 'name' => 'x',
       'n' => $i]` 1,858 / 559 and `[$i, $i]` 1,029 / 404 (were 3,039 and 1,585: array

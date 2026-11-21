@@ -652,6 +652,52 @@ impl FrameStack {
         Some(self.vec.remove(self.live))
     }
 
+    /// Pushes a boxed frame (a generator's) by swapping it with the
+    /// released frame kept in the slot for the next call at this depth:
+    /// nothing is dropped or freed, and the box comes back holding that
+    /// frame, for [`FrameStack::pop_boxed`] to swap back. With no frame
+    /// kept there, the frame moves in as [`FrameStack::push`] moves it, the
+    /// box is freed and `None` is returned.
+    #[inline]
+    pub(crate) fn push_boxed(&mut self, mut frame: Box<Frame>) -> Option<Box<Frame>> {
+        if let Some(slot) = self.vec.get_mut(self.live) {
+            std::mem::swap(slot, &mut *frame);
+            self.live += 1;
+            return Some(frame);
+        }
+        self.vec.push(*frame);
+        self.live += 1;
+        None
+    }
+
+    /// Pops the top frame into a box: into `spare` (the box
+    /// [`FrameStack::push_boxed`] gave back) by a swap that puts the
+    /// released frame it holds back in the slot, else into a new box,
+    /// leaving an empty frame in the slot for the next push to swap with.
+    /// The frames kept above stay where they are. `None` when the stack is
+    /// empty.
+    #[inline]
+    pub(crate) fn pop_boxed(
+        &mut self,
+        spare: Option<Box<Frame>>,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) -> Option<Box<Frame>> {
+        let top = self.live.checked_sub(1)?;
+        let slot = self.vec.get_mut(top)?;
+        self.live = top;
+        Some(match spare {
+            Some(mut b) => {
+                std::mem::swap(slot, &mut *b);
+                b
+            }
+            None => Box::new(std::mem::replace(
+                slot,
+                Frame::empty_builtin(empty_code, empty_vars),
+            )),
+        })
+    }
+
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.live {
