@@ -30,10 +30,12 @@ CMP = ['<', '<=', '>', '>=', '==', '!=', '===', '!==']
 
 
 # What every generated function returns (also from the middle of a loop).
-RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $o->n, $o->u, $s]'
+RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $o->n, $o->u, $z, $s]'
 # Constants (a typed loop reads them as their values) and properties.
 CONSTS = ['KI', 'KF', 'KB', 'KS', 'P::CI', 'P::CF', 'P::CB', 'PHP_INT_SIZE', 'M_PI']
 PROPS = ['$o->x', '$o->f', '$o->n', '$o->u']
+# Elements under string keys (the local `$z`).
+KEYED = ["$z['k']", "$z['f']", "$z['s']", "$z['none']"]
 
 
 class Gen:
@@ -80,7 +82,7 @@ class Gen:
         if k < 0.96:
             return self.pick(PROPS)
         if k < 0.98:
-            return self.pick(CONSTS)
+            return self.pick(CONSTS + KEYED)
         return self.pick(OTHERS)
 
     def expr(self, d=0):
@@ -134,6 +136,8 @@ class Gen:
             return self.pick([f'$o->x {self.pick(["+", "-", "*"])}= {self.atom()};', f'{v} = $o->x;',
                               f'{self.pick(PROPS)} {self.pick(["+", "-", "*"])}= {self.atom()};',
                               f'{self.pick(PROPS)} = {self.atom()};', f'{self.pick(PROPS)}{self.pick(["++", "--"])};',
+                              f'{v} = {self.pick(KEYED)};', f'{v} = {self.pick(KEYED[:2])};',
+                              f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
                               f'$o->f = {self.expr()};', '$o->x++;', f'$o->x = {self.atom()};',
                               f'{v} = $o->f;'])
@@ -222,7 +226,7 @@ class Gen:
         body = ' '.join(self.loop() if self.r.random() < 0.7 else self.stmt()
                         for _ in range(self.r.randrange(2, 6)))
         return (f'function {name}($x, $y, $n, $p, $q, $m, $o) {{ $s = "abc"; $i = 0; $j = 0; $k = 0; $w = 0; '
-                f'$fv = 0; $fk = 0; {inits} {body} return {RESULT}; }}')
+                f'$fv = 0; $fk = 0; $z = ["k" => 3, "f" => 1.5, "s" => "x"]; {inits} {body} return {RESULT}; }}')
 
     def program(self):
         fns = [f'f{i}' for i in range(self.r.randrange(1, 4))]

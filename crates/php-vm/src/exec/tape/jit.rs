@@ -419,6 +419,30 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
         inst.a = index;
         inst.b = block;
         inst.p = native.as_ptr() as usize;
+        enter_at_jumps_back(tape, &code.ops, entry.typed, entry.at, entry.end);
+    }
+}
+
+/// Makes `Vm::run` enter the tape at the jumps back to the head `head`
+/// of a loop the second tier is to try (`end`: one more than the loop's
+/// last instruction; 0 when not known). A loop whose first op has no fast
+/// path of the interpreter's own (`abs()`, a constant) is otherwise run op
+/// by op without the tape ever being at its head again: the entry
+/// instruction would count one arrival and never a second.
+fn enter_at_jumps_back(tape: &mut [Inst], ops: &[Op], typed: bool, head: usize, end: usize) {
+    if !typed {
+        return;
+    }
+    for i in head + 1..end.min(tape.len()) {
+        // (Not where the tape has no instruction to jump with: a jump on
+        // a literal, `while (true)`.)
+        let jumps = !matches!(
+            tape[i].op,
+            super::TOp::Native | super::TOp::Exit | super::TOp::Ext | super::TOp::Step
+        );
+        if jumps && jump_target(tape, ops, i) == Some(head) {
+            tape[i].enter = true;
+        }
     }
 }
 
@@ -651,6 +675,13 @@ unsafe fn retire(f: *mut Frame, ip: *const Inst, record: *mut usize, block: *mut
                 inst.b = at;
                 inst.p = record as usize;
             }
+            enter_at_jumps_back(
+                &mut tape,
+                &(&*f).code.ops,
+                *entry.add(HB_TYPED) != 0,
+                head,
+                *entry.add(HB_END),
+            );
         }
         // Leaked, as the record is: frames in the middle of the old tape
         // go on reading it.
@@ -768,6 +799,19 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 _ => None,
             }
         };
+        let keyed = |cv: u32, lit: u32| -> Option<typed::Ty> {
+            let Value::Str(key) = frame.code.literals.get(lit as usize)? else {
+                return None;
+            };
+            let Value::Array(array) = frame.cvs.get(cv as usize)?.get()? else {
+                return None;
+            };
+            match array.get_zstr(key)? {
+                Value::Int(_) => Some(typed::Ty::Int),
+                Value::Float(_) => Some(typed::Ty::Float),
+                _ => None,
+            }
+        };
         let slow = |at: usize| {
             MISSES.with(|m| m.borrow().get(&(block as usize, at)).copied()) >= Some(MISS_LIMIT)
         };
@@ -786,6 +830,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             slow: &slow,
             snapshot: &snapshot,
             element: &element,
+            keyed: &keyed,
             each: &each,
             builtin: &builtin,
             property: &property,
@@ -881,30 +926,8 @@ unsafe extern "C" fn not_typed(_f: *mut Frame, block: *mut usize) -> usize {
 /// specialised instructions cost 1-29% less.
 fn loop_heads(tape: &[Inst], ops: &[Op], stays: &dyn Fn(usize) -> bool) -> Vec<(usize, usize)> {
     let mut heads: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-    for (i, inst) in tape.iter().enumerate() {
-        let jumps = match inst.op.shape() {
-            Shape::Jmp | Shape::JmpBoolT(_) | Shape::Cmp { .. } | Shape::IncCmp { .. } => true,
-            // A family instruction that can branch but does not here (a
-            // fetch without a `??` target) carries no offset.
-            Shape::Family { ending, .. } => ending.branches && inst.c != 0,
-            _ => false,
-        };
-        // A jump on a literal has no tape instruction (`while (1)`): its
-        // target is the op's.
-        let target = match ops.get(i) {
-            Some(&(Op::JmpNz(Operand::Lit(_), to) | Op::JmpZ(Operand::Lit(_), to))) => {
-                Some(to as usize)
-            }
-            _ if jumps => {
-                #[allow(clippy::cast_possible_wrap)]
-                let delta = i64::from(inst.c as i32) / std::mem::size_of::<Inst>() as i64;
-                i64::try_from(i)
-                    .ok()
-                    .and_then(|i| usize::try_from(i + delta).ok())
-            }
-            _ => None,
-        };
-        let Some(target) = target else {
+    for i in 0..tape.len() {
+        let Some(target) = jump_target(tape, ops, i) else {
             continue;
         };
         if target <= i && (target..=i).all(stays) {
@@ -913,6 +936,34 @@ fn loop_heads(tape: &[Inst], ops: &[Op], stays: &dyn Fn(usize) -> bool) -> Vec<(
         }
     }
     heads.into_iter().collect()
+}
+
+/// Where instruction `i` of `tape` jumps to when it jumps (`None`: it
+/// does not).
+fn jump_target(tape: &[Inst], ops: &[Op], i: usize) -> Option<usize> {
+    let inst = tape.get(i)?;
+    let jumps = match inst.op.shape() {
+        Shape::Jmp | Shape::JmpBoolT(_) | Shape::Cmp { .. } | Shape::IncCmp { .. } => true,
+        // A family instruction that can branch but does not here (a
+        // fetch without a `??` target) carries no offset.
+        Shape::Family { ending, .. } => ending.branches && inst.c != 0,
+        _ => false,
+    };
+    // A jump on a literal has no tape instruction (`while (1)`): its
+    // target is the op's.
+    match ops.get(i) {
+        Some(&(Op::JmpNz(Operand::Lit(_), to) | Op::JmpZ(Operand::Lit(_), to))) => {
+            Some(to as usize)
+        }
+        _ if jumps => {
+            #[allow(clippy::cast_possible_wrap)]
+            let delta = i64::from(inst.c as i32) / std::mem::size_of::<Inst>() as i64;
+            i64::try_from(i)
+                .ok()
+                .and_then(|i| usize::try_from(i + delta).ok())
+        }
+        _ => None,
+    }
 }
 
 /// Whether the code returns to the interpreter at instruction `i`

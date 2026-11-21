@@ -645,6 +645,39 @@ pub(super) unsafe extern "C" fn jit_get_num(
     tag
 }
 
+/// For a typed loop of the JIT: the number under the key the string
+/// literal `lit` is, in the array the variable `cv` of frame `f` holds
+/// directly, copied into the slot `dst`, as [`jit_get_num`] (the read of
+/// [`fetch_str_into_cv`]).
+///
+/// # Safety
+/// `f` is the current frame and `dst` a slot of it holding a scalar or
+/// nothing.
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_get_key(
+    f: *const Frame,
+    cv: usize,
+    lit: usize,
+    dst: *mut Value,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(Value::Str(key)) = f.code.literals.get(lit) else {
+        return 0;
+    };
+    let Some(Value::Array(arr)) = f.cvs.get(cv).and_then(|slot| slot.get()) else {
+        return 0;
+    };
+    let (v, tag) = match arr.get_zstr(key) {
+        Some(Value::Int(x)) => (Value::Int(*x), 2),
+        Some(Value::Float(x)) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    // SAFETY: the caller's contract: nothing to release in `dst`.
+    unsafe { std::ptr::write(dst, v) };
+    tag
+}
+
 /// For a typed loop of the JIT: stores the number with tag `tag` (2: an
 /// int, else a float) and bits `bits` at int offset `i` of the packed
 /// array the variable slot `array` holds directly and alone, over an

@@ -650,6 +650,10 @@ enum Fast {
         value: Opnd,
         consume: Option<SlotRef>,
     },
+    /// A read of the number under a string literal's key (the variable's
+    /// and the literal's indexes) of the array a variable holds
+    /// (`dims::jit_get_key`).
+    GetKey { cv: u32, lit: u32 },
     /// A read of the number in a declared property (the place's index)
     /// on a property cache hit (`spec::jit_prop_get`).
     PropGet { place: u32 },
@@ -921,6 +925,9 @@ pub(super) struct Seen<'a> {
     /// The type of the first element, `depth` arrays down, of the array a
     /// compiled variable (by index) holds, when that is a number.
     pub(super) element: &'a dyn Fn(u32, usize) -> Option<Ty>,
+    /// The type of the number under the key a string literal (by index)
+    /// is, in the array a compiled variable (by index) holds.
+    pub(super) keyed: &'a dyn Fn(u32, u32) -> Option<Ty>,
     /// Whether the numbers a `foreach` iterator (by index) yields are
     /// floats, and whether its keys are ints; `None` when it is not over
     /// an array of numbers.
@@ -1385,6 +1392,22 @@ impl Analysis<'_> {
                 let dst = u32::try_from(inst.p).ok()?;
                 self.fetched(st, &mut call, i, inst.d, dst, float)?;
             }
+            // `$cv['key']` read into the variable of the `AssignCv` folded
+            // into it. The element's type is what the key holds now.
+            TOp::FetchDimSC => {
+                array(self)?;
+                let float = match (self.seen.keyed)(inst.a, inst.b)? {
+                    Ty::Int => false,
+                    Ty::Float => true,
+                    Ty::Bool | Ty::Plain => return None,
+                };
+                call.fast = Some(Fast::GetKey {
+                    cv: inst.a,
+                    lit: inst.b,
+                });
+                let dst = u32::try_from(inst.p).ok()?;
+                self.fetched(st, &mut call, i, inst.d, dst, float)?;
+            }
             // `$cv[d1][d2]...` read.
             TOp::FetchDimsC => {
                 let array = array(self)?;
@@ -1611,7 +1634,7 @@ impl Analysis<'_> {
         // short cut falls back on the handler by itself.)
         if matches!(
             call.fast,
-            Some(Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. })
+            Some(Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. } | Fast::GetKey { .. })
         ) && (!self.seen.fast || (self.seen.slow)(i))
         {
             call.fast = None;
@@ -2374,6 +2397,7 @@ pub(super) fn candidate(tape: &[Inst], code: &OpArray, head: usize, last: usize)
                     | TOp::Ext
                     | TOp::FetchDimC
                     | TOp::FetchDimIC
+                    | TOp::FetchDimSC
                     | TOp::FetchDimsC
                     | TOp::AssignDimC
                     | TOp::AssignDimIC
@@ -2432,6 +2456,8 @@ fn jumps(inst: &Inst) -> bool {
     }
 }
 
+/// `dims::jit_get_key`.
+type GetKey = unsafe extern "C" fn(*const crate::vm::Frame, usize, usize, *mut Value) -> usize;
 /// `spec::jit_prop_get`.
 type PropGet = unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Value) -> usize;
 /// `spec::jit_prop_set`.
@@ -2873,7 +2899,7 @@ impl Emit<'_, '_> {
         let (done, slow) = (self.b.create_block(), self.b.create_block());
         let cvs = self.cvs;
         match fast {
-            Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. } => {
+            Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. } | Fast::GetKey { .. } => {
                 let (slot, ty) = call.result?;
                 let float = ty == Ty::Float;
                 let dest = call.jump.unwrap_or(call.after);
@@ -2889,6 +2915,12 @@ impl Emit<'_, '_> {
                         let array = self.b.ins().iadd_imm(cvs, i64::from(array));
                         let helper = dims::jit_get_num2 as GetNum2 as usize;
                         (helper, vec![array, self.int(i)?, self.int(j)?, dst])
+                    }
+                    Fast::GetKey { cv, lit } => {
+                        let cv = self.b.ins().iconst(types::I64, i64::from(cv));
+                        let lit = self.b.ins().iconst(types::I64, i64::from(lit));
+                        let helper = dims::jit_get_key as GetKey as usize;
+                        (helper, vec![self.frame, cv, lit, dst])
                     }
                     Fast::PropGet { place } => {
                         let place = self.b.ins().iconst(types::I64, i64::from(place));

@@ -553,7 +553,19 @@ fn typed_at_least(src: &str, n: u64) {
 /// reaches the entry instruction (nothing is compiled, and nothing is
 /// wrong).
 fn typed(src: &str) -> u64 {
-    (0..12).map(|_| three(src).1).max().unwrap_or(0)
+    let mut most = 0;
+    for attempt in 0..40 {
+        most = most.max(three(src).1);
+        if attempt >= 11 {
+            if most > 0 {
+                break;
+            }
+            // Nothing in twelve runs: the flag may be held up for longer
+            // than those took.
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    most
 }
 
 #[test]
@@ -1048,6 +1060,57 @@ function h($o, $k) { $t = 0; for ($i = 0; $i < $k; $i++) { try { $o->n += PHP_IN
 $p = new P; var_export([$p->run(40), f(new P, 30), f(new M, 30), g(new P, 30), h(new P, 20)]);
 $a = new P; $b = $a; $r = &$a->x; for ($i = 0; $i < 30; $i++) { $a->x += 1; $b->f = $i; $r++; } var_export([$a->x, $b->f, $r]);
 $o = new stdClass; $o->d = 1; for ($i = 0; $i < 30; $i++) { $o->d += $i; $o->e = $i; } var_export([$o->d, $o->e]);
+",
+    );
+}
+
+#[test]
+fn a_loop_headed_by_an_op_the_interpreter_runs_itself_still_gets_hot() {
+    // `$y = abs($x)` and a constant's read have no fast path in
+    // `hot::step`: `Vm::run` ran such a loop without the tape ever
+    // reaching its head a second time, and it was never compiled.
+    if std::env::var_os("PHPRUST_JIT").is_some() {
+        return;
+    }
+    let saved = options();
+    for src in [
+        "<?php $n = 300; $x = -3; $y = 0; for ($i = 0; $i < $n; $i++) { $y = abs($x); } var_dump($y);",
+        "<?php const K = 4; $n = 300; $y = 0; for ($i = 0; $i < $n; $i++) { $y = K; $y += $i; } var_dump($y);",
+    ] {
+        configure(Options {
+            enabled: false,
+            ..saved
+        });
+        let interpreted = run(src);
+        configure(Options {
+            enabled: true,
+            everything: false,
+            first_tier: false,
+            registers: true,
+            hot_loop: 5,
+        });
+        let before = stats();
+        let compiled = run(src);
+        let typed = stats().typed_loops - before.typed_loops;
+        // (Restored before the checks: the options are the process's.)
+        configure(saved);
+        assert_eq!(interpreted, compiled, "{src}");
+        assert!(typed > 0, "no typed loop: {src}");
+    }
+}
+
+#[test]
+fn typed_loops_read_numbers_under_string_keys() {
+    typed_at_least(
+        "<?php $a = ['alpha' => 1, 'beta' => 2.5, 'gamma' => 3]; $s = 0; $t = 0.0; for ($i = 0; $i < 40; $i++) { $v = $a['gamma']; $s += $v; $w = $a['beta']; $t += $w; } var_dump($s, $t);",
+        1,
+    );
+    three(
+        r"<?php
+function f($a, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $v = $a['k']; $s += $v; if ($i == 9) { $a['k'] = 2.5; } if ($i == 15) { $a['k'] = 'x'; } if ($i == 17) { unset($a['k']); } if ($i == 19) { $a = 'str'; } if ($i == 21) { $a = ['k' => 7]; } } return $s; }
+function g(&$a, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $v = $a['k']; $s += $v; $a['k'] = $v + 1; } return $s; }
+try { var_dump(f(['k' => 1, 'j' => 2], 30)); } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(); }
+$b = ['k' => 3]; var_dump(g($b, 30), $b, f(['j' => 1, 'k' => 4], 8), f(['1' => 5, 'k' => 6], 8));
 ",
     );
 }
