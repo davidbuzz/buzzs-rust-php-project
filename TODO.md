@@ -194,11 +194,12 @@ Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       the general steps of `fe_fetch_into` for an array or object value.
 
 ## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 17 left in the targeted set of 13,935
+- [ ] Optimizer/opcache dump failures (30 of 38; 16 left in the targeted set of 13,935
       tests on 2026-11-21): dce_005, sccp_010/011/012/026,
       nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2,
-      array_map_foreach_optimization_007/008/013/014, named_parameter_new,
-      gh9164. Done 2026-11-21: jit/ignored_opcodes and preload_optimizer (a call of
+      array_map_foreach_optimization_007/008/013/014, named_parameter_new.
+      Done 2026-11-21: gh9164 (a script index shared by forked processes:
+      `php_opcache::shared_index`), jit/ignored_opcodes and preload_optimizer (a call of
       a function of the file, or a preloaded one, that only returns a literal is
       that literal: `optimizer::inline_literal_calls`; the optimizer runs with user
       opcode handlers set; the `$PRELOAD$` dump), gh18050 (`in_array()` of a

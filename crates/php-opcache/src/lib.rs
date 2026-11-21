@@ -9,6 +9,7 @@
 
 pub mod blacklist;
 pub mod file_cache;
+pub mod shared_index;
 
 use std::collections::HashMap;
 

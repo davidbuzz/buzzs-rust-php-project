@@ -875,6 +875,9 @@ fn opcache_compile_hook(
     if !enable || (!enable_cli && !file_cache_only) {
         return vm.compile_source_default(src, filename, false, skip_shebang);
     }
+    // The index the processes forked from this one share (opened before
+    // the script that may fork runs: its own compile comes first).
+    php_opcache::shared_index::init();
 
     use std::os::unix::ffi::OsStrExt;
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename.as_bytes()));
@@ -975,6 +978,7 @@ fn opcache_compile_hook(
         if !file_cache_only {
             // `cache_script_in_shared_memory()`.
             vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{real_str}'"));
+            php_opcache::shared_index::record_cached(&real_str);
             GLOBAL_CACHE.with(|c| {
                 c.borrow_mut()
                     .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit.clone());
@@ -1056,6 +1060,7 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         vm_accel_log(vm, AccelLog::Debug, "Restart Scheduled! Reason: user");
     }
     GLOBAL_CACHE.with(|c| c.borrow_mut().reset());
+    php_opcache::shared_index::record_reset();
     Ok(Value::Bool(true))
 }
 
@@ -1276,6 +1281,38 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 let reval = entry.last_revalidate + vm.ini_long("opcache.revalidate_freq");
                 s.make_mut()
                     .insert(ZStr::from("revalidate"), Value::Int(reval));
+                scripts_arr
+                    .make_mut()
+                    .insert(ZStr::from(path.as_str()), Value::Array(s));
+            }
+            // The scripts the processes sharing this one's cache (forked
+            // from the same startup) cached.
+            for path in php_opcache::shared_index::cached_elsewhere() {
+                if cache.scripts.contains_key(&path) {
+                    continue;
+                }
+                let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+                let mut s = ZArray::new();
+                s.make_mut().insert(
+                    ZStr::from("full_path"),
+                    Value::Str(ZStr::from(path.as_str())),
+                );
+                s.make_mut().insert(ZStr::from("hits"), Value::Int(0));
+                s.make_mut().insert(
+                    ZStr::from("memory_consumption"),
+                    Value::Int(i64::try_from(size).unwrap_or(0) + 1024),
+                );
+                s.make_mut().insert(
+                    ZStr::from("last_used"),
+                    Value::Str(ZStr::from(format_ctime(0))),
+                );
+                s.make_mut()
+                    .insert(ZStr::from("last_used_timestamp"), Value::Int(0));
+                s.make_mut().insert(ZStr::from("timestamp"), Value::Int(0));
+                s.make_mut().insert(
+                    ZStr::from("revalidate"),
+                    Value::Int(vm.ini_long("opcache.revalidate_freq")),
+                );
                 scripts_arr
                     .make_mut()
                     .insert(ZStr::from(path.as_str()), Value::Array(s));
@@ -1516,6 +1553,9 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         c.borrow_mut()
             .invalidate(&real_str, force, mtime_sec, validate_timestamps)
     });
+    if was_cached {
+        php_opcache::shared_index::record_invalidated(&real_str);
+    }
 
     Ok(Value::Bool(file_found || was_cached))
 }
@@ -1798,7 +1838,8 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Err(_) => return Ok(Value::Bool(false)),
     };
     let real_str = realpath.to_string_lossy().into_owned();
-    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&real_str));
+    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&real_str))
+        || php_opcache::shared_index::cached_elsewhere().contains(&real_str);
     Ok(Value::Bool(cached))
 }
 
