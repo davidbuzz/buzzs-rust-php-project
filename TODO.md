@@ -13,7 +13,6 @@ Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
       written at the `Int` payload offset (a `Bool`'s value is the byte after the tag).
-      Sub-list: perf/TODO-jit-step1.md
 - [~] JIT Step 2 — array/string dim rows. Done 2026-11-20 (`24eca59c`): int-offset array
       rows for int elements (`$t = $a[$i]`, the folded `$v = $a[$i]`, `$a[$i] = v`, `$a[] = v`,
       `$a[$i] op= v`) through helpers the trace calls, native `& | ^ << >>` and `NumBinC`.
