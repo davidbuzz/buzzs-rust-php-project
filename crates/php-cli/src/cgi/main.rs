@@ -1,8 +1,14 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! The `php-cgi` binary: the CGI/1.1 SAPI (ref: sapi/cgi/cgi_main.c).
-//! FastCGI (`-b`, `FCGI_WEB_SERVER_ADDRS`, an accepting socket on stdin)
-//! is not supported.
+//! The `php-cgi` binary: the CGI/1.1 and FastCGI SAPI (ref:
+//! sapi/cgi/cgi_main.c, main/fastcgi.c).
+//!
+//! FastCGI: `-b <address:port>|<port>|<path>` listens on a TCP or Unix
+//! socket, and a listening socket passed as standard input (mod_fcgid,
+//! spawn-fcgi) is used as it is. `PHP_FCGI_MAX_REQUESTS` (default 500),
+//! `PHP_FCGI_CHILDREN` (pre-forked children), `FCGI_WEB_SERVER_ADDRS`
+//! and `fastcgi.logging` behave as in php-src; `PHP_FCGI_BACKLOG` is
+//! checked, but the listen backlog is the standard library's.
 //!
 //! It shares the configuration search, the extension list and the startup
 //! checks with the `php` binary, and runs the request through the
@@ -32,12 +38,16 @@ mod getopt;
 mod memcap;
 #[path = "../startup.rs"]
 mod startup;
+mod fastcgi;
+mod sys;
 
 use config::Config;
 use getopt::{GetOpt, Opt, INVALID};
 use php_cli_server::parser::Method;
 use php_cli_server::request::Request;
-use php_cli_server::sapi::{CgiInfo, CliServerModule, PreparedVm, RequestCtx, ServerOutput};
+use php_cli_server::sapi::{
+    CgiInfo, CliServerModule, FastCgiStreams, PreparedVm, RequestCtx, ServerOutput,
+};
 use php_runtime::{Value, ZStr};
 use php_vm::ext::{Args, Extension, VmResult};
 use php_vm::{Vm, VmOptions};
@@ -339,14 +349,18 @@ fn out(bytes: &[u8]) {
     let _ = o.flush();
 }
 
-/// `main()` of `cgi_main.c` without the FastCGI loop.
+/// `main()` of `cgi_main.c`.
 #[allow(clippy::too_many_lines)]
 fn run(argv: &[Vec<u8>]) -> i32 {
     php_memlimit::bind_to_current_thread();
     let argv0 = argv.first().cloned().unwrap_or_else(|| b"php-cgi".to_vec());
+    // `fcgi_is_fastcgi()`: a web server passed a listening socket as
+    // standard input.
+    let stdin_fastcgi = sys::stdin_is_listening_socket();
     let mut environment = env::Env::from_process();
-    let cgi = env::is_cgi(&environment);
+    let cgi = !stdin_fastcgi && env::is_cgi(&environment);
     let skip_getopt = env::skip_getopt(environment.get("QUERY_STRING").as_deref());
+    let mut bindpath: Option<String> = None;
 
     // First pass: the options needed before startup.
     let mut opts = config::Options {
@@ -363,6 +377,10 @@ fn run(argv: &[Vec<u8>]) -> i32 {
                 b'd' => opts
                     .defines
                     .extend(php_vm::parse_cli_define(&v.unwrap_or_default())),
+                // Started from a shell as an external FastCGI server.
+                b'b' if !stdin_fastcgi => {
+                    bindpath = v.map(|v| String::from_utf8_lossy(&v).into_owned());
+                }
                 _ => {}
             }
         }
@@ -388,25 +406,45 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         }
     }
 
-    // Second pass: help and invalid options.
-    if !skip_getopt {
-        let mut g = GetOpt::new(argv, OPTIONS, true);
-        while let Some((c, _)) = g.next_opt() {
-            if c == INVALID || c == i32::from(b'h') || c == i32::from(b'?') {
-                out(&usage(&argv0));
-                return i32::from(c == INVALID);
+    // FastCGI: the `-b` socket, or the one on standard input.
+    let listener = if let Some(path) = &bindpath {
+        if let Ok(b) = std::env::var("PHP_FCGI_BACKLOG") {
+            let backlog = fastcgi::atoi(&b);
+            if backlog < -1 || backlog > i64::from(libc::SOMAXCONN) {
+                let _ = std::io::stderr().write_all(
+                    format!(
+                        "Invalid backlog {backlog}, needs to be between -1 and {}\n",
+                        libc::SOMAXCONN
+                    )
+                    .as_bytes(),
+                );
+                return 255;
             }
         }
+        let Some(l) = fastcgi::listen(path) else {
+            let _ = std::io::stderr().write_all(
+                format!("Couldn't create FastCGI listen socket on port {path}\n").as_bytes(),
+            );
+            return 255;
+        };
+        sys::setup_signals();
+        Some(l)
+    } else if stdin_fastcgi {
+        sys::setup_signals();
+        Some((sys::stdin_listener(), None))
+    } else {
+        None
+    };
+    if let Some((listener, allowed)) = listener {
+        finish(fastcgi_main(&cfg, argv, &argv0, skip_getopt, listener, allowed));
     }
 
-    let settings = env::Settings {
-        fix_pathinfo: cfg_bool(&cfg, "cgi.fix_pathinfo", true),
-        discard_path: cfg_bool(&cfg, "cgi.discard_path", false),
-        doc_root: cfg
-            .get("doc_root")
-            .filter(|v| !v.is_empty())
-            .map(|v| v.as_bytes().to_vec()),
-    };
+    // Second pass: help and invalid options.
+    if let Some(status) = help_pass(argv, &argv0, skip_getopt) {
+        return status;
+    }
+
+    let settings = request_settings(&cfg);
     let mut info = env::init_request_info(&mut environment, &settings, &env::RealFs);
     environment.apply();
 
@@ -510,12 +548,10 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         None
     };
 
-    let request = build_request(&info, content);
+    let request = build_request(&info, content, environment.vars());
     let php_self = env::php_self(
         info.request_uri.as_deref(),
-        std::env::var_os("PATH_INFO")
-            .as_deref()
-            .map(OsStrExt::as_bytes),
+        environment.get("PATH_INFO").as_deref(),
         settings.fix_pathinfo,
     );
     let cgi_info = CgiInfo {
@@ -551,6 +587,163 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     ctx.exit_status.get()
 }
 
+/// The second option pass: `-h`, `-?` and invalid options print the usage
+/// and end the run (with this status).
+fn help_pass(argv: &[Vec<u8>], argv0: &[u8], skip_getopt: bool) -> Option<i32> {
+    if skip_getopt {
+        return None;
+    }
+    let mut g = GetOpt::new(argv, OPTIONS, true);
+    while let Some((c, _)) = g.next_opt() {
+        if c == INVALID || c == i32::from(b'h') || c == i32::from(b'?') {
+            out(&usage(argv0));
+            return Some(i32::from(c == INVALID));
+        }
+    }
+    None
+}
+
+/// The `cgi.*` settings `init_request_info()` reads.
+fn request_settings(cfg: &Config) -> env::Settings {
+    env::Settings {
+        fix_pathinfo: cfg_bool(cfg, "cgi.fix_pathinfo", true),
+        discard_path: cfg_bool(cfg, "cgi.discard_path", false),
+        doc_root: cfg
+            .get("doc_root")
+            .filter(|v| !v.is_empty())
+            .map(|v| v.as_bytes().to_vec()),
+    }
+}
+
+/// The FastCGI part of `main()`: `PHP_FCGI_MAX_REQUESTS`,
+/// `PHP_FCGI_CHILDREN` (pre-forked children, each replaced when it
+/// exits), the second option pass, then requests until the limit, a
+/// shutdown signal or a failed `accept()`. Returns the exit status.
+fn fastcgi_main(
+    cfg: &Config,
+    argv: &[Vec<u8>],
+    argv0: &[u8],
+    skip_getopt: bool,
+    listener: fastcgi::Listener,
+    allowed: Option<Vec<std::net::IpAddr>>,
+) -> i32 {
+    let fail = |msg: &str| {
+        let _ = std::io::stderr().write_all(msg.as_bytes());
+        255
+    };
+    let mut max_requests: i64 = 500;
+    if let Ok(v) = std::env::var("PHP_FCGI_MAX_REQUESTS") {
+        max_requests = fastcgi::atoi(&v);
+        if max_requests < 0 {
+            return fail("PHP_FCGI_MAX_REQUESTS is not valid\n");
+        }
+    }
+    let children_str = std::env::var("PHP_FCGI_CHILDREN").ok();
+    let mut children = 0;
+    if let Some(c) = &children_str {
+        children = fastcgi::atoi(c);
+        if children < 0 {
+            return fail("PHP_FCGI_CHILDREN is not valid\n");
+        }
+    }
+    let mgmt = fastcgi::MgmtVars::new(children_str.as_deref());
+    if children > 0
+        && sys::prefork(u32::try_from(children).unwrap_or(u32::MAX)) == sys::Role::Parent
+    {
+        return 0;
+    }
+    if let Some(status) = help_pass(argv, argv0, skip_getopt) {
+        return status;
+    }
+
+    let settings = request_settings(cfg);
+    let logging = cfg_bool(cfg, "fastcgi.logging", true);
+    let server = fastcgi::Server::new(listener, allowed, mgmt);
+    let mut conn = None;
+    let mut requests: i64 = 0;
+    let mut exit_status = 0;
+    while let Some(params) = server.accept_request(&mut conn) {
+        let Some(c) = conn.clone() else {
+            break;
+        };
+        let status = fastcgi_request(cfg, &settings, logging, params, &c);
+        if exit_status == 0 {
+            exit_status = status;
+        }
+        requests += 1;
+        if max_requests != 0 && requests == max_requests {
+            c.finish_request(true);
+            if max_requests != 1 {
+                exit_status = 0;
+            }
+            break;
+        }
+    }
+    exit_status
+}
+
+/// One FastCGI request: `init_request_info()` on its environment, the
+/// body from its `STDIN` stream, the script with output and log messages
+/// as records, then `fcgi_finish_request()` (before the VM is torn down,
+/// as `sapi_cgi_deactivate()` ends the request in request shutdown).
+fn fastcgi_request(
+    cfg: &Config,
+    settings: &env::Settings,
+    logging: bool,
+    params: fastcgi::Env,
+    conn: &Rc<fastcgi::Connection>,
+) -> i32 {
+    let mut environment = env::Env::new(params);
+    let info = env::init_request_info(&mut environment, settings, &env::RealFs);
+    let content = usize::try_from(info.content_length)
+        .ok()
+        .filter(|&n| n > 0)
+        .map(|n| conn.read_body(n));
+    let request = build_request(&info, content, environment.vars());
+    let php_self = env::php_self(
+        info.request_uri.as_deref(),
+        environment.get("PATH_INFO").as_deref(),
+        settings.fix_pathinfo,
+    );
+    let cgi_info = CgiInfo {
+        php_self,
+        fcgi_env: Some(environment.vars().to_vec()),
+        ..CgiInfo::default()
+    };
+    let streams: Rc<dyn FastCgiStreams> = conn.clone();
+    let ctx = Rc::new(RequestCtx::new_cgi(request, cgi_info).with_fastcgi(streams));
+    if info.response_code != 200 {
+        let _ = ctx.header_op(php_cli_server::headers::HeaderOp::SetStatus(
+            info.response_code,
+        ));
+    }
+    let ini = sapi_ini(cfg);
+    let server_cfg = php_cli_server::sapi::ServerConfig {
+        document_root: Vec::new(),
+        host: String::new(),
+        port: 0,
+        router: None,
+        ini: ini.clone(),
+        extensions: extensions::all,
+    };
+    let mut prepared = new_prepared_vm(cfg, ini);
+    if logging {
+        // `sapi_cgi_log_message()`: `log_errors` messages as FCGI_STDERR.
+        let c = conn.clone();
+        prepared.vm.log_hook = Some(Box::new(move |msg: &[u8]| {
+            let mut line = msg.to_vec();
+            line.push(b'\n');
+            let _ = c.stderr(&line);
+        }));
+    }
+    let (_, vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
+    conn.finish_request(false);
+    let status = ctx.exit_status.get();
+    drop(ctx);
+    drop(vm);
+    status
+}
+
 /// The INI entries for the VM: the SAPI defaults, then the configuration.
 fn sapi_ini(cfg: &Config) -> Vec<(String, String)> {
     SAPI_INI
@@ -560,8 +753,13 @@ fn sapi_ini(cfg: &Config) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The request as the built-in server's machinery sees it.
-fn build_request(info: &env::RequestInfo, content: Option<Vec<u8>>) -> Request {
+/// The request as the built-in server's machinery sees it; `vars` is the
+/// request's environment (the process environment of a CGI request).
+fn build_request(
+    info: &env::RequestInfo,
+    content: Option<Vec<u8>>,
+    vars: &[(Vec<u8>, Vec<u8>)],
+) -> Request {
     let method_name = info.request_method.clone().unwrap_or_default();
     let mut request = Request {
         method: method_from(&method_name),
@@ -576,21 +774,18 @@ fn build_request(info: &env::RequestInfo, content: Option<Vec<u8>>) -> Request {
             .headers
             .push((b"content-type".to_vec(), info.content_type.clone()));
     }
-    if let Some(cookie) = std::env::var_os("HTTP_COOKIE") {
-        request
-            .headers
-            .push((b"cookie".to_vec(), cookie.as_bytes().to_vec()));
+    // `read_cookies`: `HTTP_COOKIE` of the request's environment.
+    if let Some((_, cookie)) = vars.iter().find(|(k, _)| k == b"HTTP_COOKIE") {
+        request.headers.push((b"cookie".to_vec(), cookie.clone()));
     }
     if let Some(auth) = &info.authorization {
         request
             .headers
             .push((b"authorization".to_vec(), auth.clone()));
     }
-    for (k, v) in std::env::vars_os() {
-        if let Some(name) = env::request_header_name(k.as_bytes()) {
-            request
-                .headers_original_case
-                .push((name, v.as_bytes().to_vec()));
+    for (k, v) in vars {
+        if let Some(name) = env::request_header_name(k) {
+            request.headers_original_case.push((name, v.clone()));
         }
     }
     request
@@ -816,7 +1011,9 @@ mod tests {
             path_translated: Some(b"/t/x.php".to_vec()),
             ..env::RequestInfo::default()
         };
-        let r = build_request(&info, Some(b"b=2".to_vec()));
+        let vars = vec![(b"HTTP_COOKIE".to_vec(), b"c=3".to_vec())];
+        let r = build_request(&info, Some(b"b=2".to_vec()), &vars);
+        assert_eq!(r.header(b"cookie"), Some(&b"c=3"[..]));
         assert_eq!(r.method, Method::Post);
         assert_eq!(
             r.header(b"content-type"),

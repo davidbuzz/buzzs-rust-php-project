@@ -174,6 +174,12 @@ fn register(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray, cookie: 
     let _ = query::register_variable_ex(name, value, track, &opts, vm);
 }
 
+/// `php_register_variable_safe()` into `$_SERVER`-like `track` (the
+/// FastCGI environment as `cgi_php_load_env_var()` registers it).
+pub(crate) fn register_server_var(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray) {
+    register(vm, name, value, track, false);
+}
+
 /// The lower-cased content type without parameters, as SAPI.c looks it up.
 pub fn content_type_key(ct: &[u8]) -> Vec<u8> {
     let end = ct
@@ -725,6 +731,11 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             let v = Value::Str(ZStr::from(v.as_bytes()));
             register(vm, k.as_bytes(), v, &mut server, false);
         }
+        // cgi_php_import_environment_variables(): then a FastCGI
+        // request's environment, newest name first (`fcgi_loadenv()`).
+        for (k, v) in cgi.fcgi_env.iter().flatten().rev() {
+            register(vm, k, Value::Str(ZStr::from(v.as_slice())), &mut server, false);
+        }
         let self_ = Value::Str(ZStr::from(cgi.php_self.as_slice()));
         register(vm, b"PHP_SELF", self_, &mut server, false);
     }
@@ -789,6 +800,12 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                 ArrayKey::from_bytes(k.as_bytes()),
                 Value::Str(ZStr::from(v.as_bytes())),
             );
+        }
+        // Under FastCGI `$_ENV` is built by the same import as
+        // `$_SERVER`: the request's environment follows.
+        let fcgi_env = ctx.cgi.as_ref().and_then(|c| c.fcgi_env.as_ref());
+        for (k, v) in fcgi_env.into_iter().flatten().rev() {
+            register(vm, k, Value::Str(ZStr::from(v.as_slice())), &mut env, false);
         }
     }
 

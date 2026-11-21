@@ -111,6 +111,9 @@ pub struct RequestCtx {
     pub router_declined: Cell<bool>,
     /// Set when the request runs under the CGI SAPI (`php-cgi`).
     pub cgi: Option<CgiInfo>,
+    /// The FastCGI connection a `php-cgi` request writes to instead of
+    /// standard output and standard error.
+    pub fcgi: Option<Rc<dyn FastCgiStreams>>,
     /// The exit status of the request's `Vm::shutdown`.
     pub exit_status: Cell<i32>,
 }
@@ -132,11 +135,42 @@ pub struct CgiInfo {
     pub rfc2616_headers: Cell<bool>,
     /// `cgi.nph`.
     pub nph: Cell<bool>,
+    /// The FastCGI request's environment (`request->env`: its `PARAMS`
+    /// after `init_request_info()`), in the order the names were first
+    /// set; `fcgi_loadenv()` visits them newest first. `None` for a plain
+    /// CGI request, whose environment is the process environment.
+    pub fcgi_env: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+}
+
+impl CgiInfo {
+    /// `fcgi_getenv(request, name)`: `name` in the FastCGI environment.
+    pub fn fcgi_getenv(&self, name: &[u8]) -> Option<&[u8]> {
+        self.fcgi_env
+            .as_ref()?
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_slice())
+    }
+}
+
+/// The streams of a request `php-cgi` read from a FastCGI connection
+/// (`fcgi_write()` of `main/fastcgi.c`): the response goes out as
+/// `FCGI_STDOUT` records and log messages as `FCGI_STDERR` records.
+pub trait FastCgiStreams: std::fmt::Debug {
+    /// `fcgi_write(request, FCGI_STDOUT, ...)`; `false` when the
+    /// connection failed.
+    fn stdout(&self, data: &[u8]) -> bool;
+    /// `fcgi_write(request, FCGI_STDERR, ...)`; `false` when the
+    /// connection failed.
+    fn stderr(&self, data: &[u8]) -> bool;
+    /// `fcgi_flush(request, 0)`: sends what is buffered.
+    fn flush(&self) -> bool;
 }
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
     static ORIG_ERROR_LOG: Cell<Option<NativeFn>> = const { Cell::new(None) };
+    static ORIG_GETENV: Cell<Option<NativeFn>> = const { Cell::new(None) };
 }
 
 /// Runs `f` with the current request context (`None` outside a request).
@@ -174,6 +208,7 @@ impl RequestCtx {
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: None,
+            fcgi: None,
             exit_status: Cell::new(0),
         }
     }
@@ -201,8 +236,17 @@ impl RequestCtx {
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: Some(cgi),
+            fcgi: None,
             exit_status: Cell::new(0),
         }
+    }
+
+    /// This CGI request's output and log messages go to `streams` (a
+    /// FastCGI connection).
+    #[must_use]
+    pub fn with_fastcgi(mut self, streams: Rc<dyn FastCgiStreams>) -> Self {
+        self.fcgi = Some(streams);
+        self
     }
 
     /// Applies a header operation.
@@ -221,13 +265,15 @@ impl RequestCtx {
         if self.aborted.get() {
             return;
         }
-        let ok = match &self.stream {
-            Some(stream) => {
+        let ok = match (&self.stream, &self.fcgi) {
+            (Some(stream), _) => {
                 let mut s: &TcpStream = stream;
                 s.write_all(data).is_ok()
             }
+            // `sapi_fcgi_ub_write()`.
+            (None, Some(fcgi)) => fcgi.stdout(data),
             // `sapi_cgi_ub_write()`.
-            None => std::io::stdout().write_all(data).is_ok(),
+            (None, None) => std::io::stdout().write_all(data).is_ok(),
         };
         if !ok {
             self.aborted.set(true);
@@ -587,7 +633,8 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     setcookie_common(vm, a, true)
 }
 
-/// `flush()`: `sapi_cli_server_flush` sends the headers.
+/// `flush()`: `sapi_cli_server_flush` sends the headers; under FastCGI
+/// `sapi_fcgi_flush` also sends the buffered records.
 #[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.flush_stdout();
@@ -595,6 +642,11 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     if let Some(ctx) = ctx {
         call_header_callback(vm, &ctx);
         ctx.send_headers();
+        if let Some(fcgi) = &ctx.fcgi {
+            if !fcgi.flush() {
+                ctx.aborted.set(true);
+            }
+        }
     }
     vm.headers_sent = true;
     Ok(Value::Null)
@@ -635,20 +687,65 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value(CGI_SAPI_NAME))
 }
 
-/// `sapi_cgi_log_message()`: the message and a newline on stderr.
+/// `sapi_cgi_log_message()`: the message and a newline on stderr, or
+/// in an `FCGI_STDERR` record under FastCGI with `fastcgi.logging`.
 fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ty = if a.has(1) { a.int(1) } else { 0 };
     if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
         vm.flush_stdout();
         let mut line = a.str(0).as_bytes().to_vec();
         line.push(b'\n');
-        let _ = std::io::stderr().write_all(&line);
+        let fcgi = current().and_then(|c| c.fcgi.clone().map(|f| (c, f)));
+        match fcgi {
+            Some((ctx, f)) if vm.ini_bool("fastcgi.logging") => {
+                if !f.stderr(&line) {
+                    ctx.aborted.set(true);
+                }
+            }
+            _ => {
+                let _ = std::io::stderr().write_all(&line);
+            }
+        }
         return Ok(Value::Bool(true));
     }
     match ORIG_ERROR_LOG.with(Cell::get) {
         Some(orig) => orig(vm, a),
         None => Ok(Value::Bool(false)),
     }
+}
+
+/// `getenv()` under the CGI SAPI. For a FastCGI request a name is looked
+/// up in the request's environment before the process environment
+/// (`sapi_fcgi_getenv`, unless `$local_only`), and without a name the
+/// result is the process environment plus the request's environment
+/// (`php_load_environment_variables()` through
+/// `cgi_php_import_environment_variables`). A plain CGI request gets the
+/// standard function.
+fn getenv_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let orig = ORIG_GETENV.with(Cell::get);
+    let fcgi_env = with_ctx(|c| c.cgi.as_ref().and_then(|g| g.fcgi_env.clone())).flatten();
+    let Some(fcgi_env) = fcgi_env else {
+        return orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a));
+    };
+    if !a.has(0) || a.at(0).is_null() {
+        let mut all = ZArray::new();
+        for (k, v) in std::env::vars_os() {
+            all.make_mut()
+                .insert(ArrayKey::from_bytes(k.as_bytes()), str_value(v.as_bytes()));
+        }
+        for (k, v) in fcgi_env.iter().rev() {
+            crate::vars::register_server_var(vm, k, str_value(v), &mut all);
+        }
+        return Ok(Value::Array(all));
+    }
+    let local_only = a.has(1) && a.bool(1);
+    if !local_only {
+        let name = a.str(0);
+        if let Some((_, v)) = fcgi_env.iter().find(|(k, _)| k == name.as_bytes()) {
+            return Ok(str_value(v));
+        }
+    }
+    orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a))
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -826,6 +923,9 @@ impl Extension for CliServerModule {
             if let Some(b) = vm.native_function("error_log") {
                 ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
             }
+            if let Some(b) = vm.native_function("getenv") {
+                ORIG_GETENV.with(|c| c.set(Some(b.handler)));
+            }
         }
         for (name, v) in UPLOAD_ERR {
             m.constant(name, Value::Int(*v));
@@ -862,7 +962,12 @@ impl Extension for CliServerModule {
             .function_static("apache_request_headers(): array", apache_request_headers)
             .function_static("getallheaders(): array", apache_request_headers)
             .function_static("apache_response_headers(): array", apache_response_headers);
-        if !self.cgi {
+        if self.cgi {
+            m.function_static(
+                "getenv(?string $name = null, bool $local_only = false): array|string|false",
+                getenv_cgi,
+            );
+        } else {
             m.function(
                 &format!("{}(mixed $value): mixed", crate::router::RETURN_HOOK),
                 router_return,
