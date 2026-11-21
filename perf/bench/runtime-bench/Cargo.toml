@@ -3,9 +3,9 @@
 # phprust workspace, so it never touches the root Cargo.toml or Cargo.lock).
 #
 #   cd perf/bench/runtime-bench
-#   CARGO_TARGET_DIR=~/.cache/phprust-runtime-bench cargo bench -- --save-baseline main
+#   cargo bench -- --save-baseline main       # builds into the repo's target/release
 #   ... change php-runtime ...
-#   CARGO_TARGET_DIR=~/.cache/phprust-runtime-bench cargo bench -- --baseline main
+#   cargo bench -- --baseline main
 [package]
 name = "php-runtime-bench"
 version = "0.1.0"
