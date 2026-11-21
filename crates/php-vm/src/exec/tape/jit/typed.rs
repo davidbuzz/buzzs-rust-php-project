@@ -61,7 +61,13 @@
 //! * the step of a `foreach` over an array of numbers ([`Plan::Each`]);
 //! * static property reads, writes and `isset`, which have no tape
 //!   instruction, through the interpreter's own cached fast path
-//!   ([`Plan::Ext`]).
+//!   ([`Plan::Ext`]);
+//! * a call by name of a small plain user function whose body is made of
+//!   the first group's instructions, inline ([`Inlined`], [`Plan::Bind`]):
+//!   the function's instructions become instructions of the loop, after
+//!   the tape's own, on variables that are in no frame. It has no frame
+//!   to stop in: whatever gives up inside it has the whole call redone by
+//!   the interpreter, from its `InitFCall`.
 //!
 //! A loop whose types stop holding is compiled once more for the types
 //! met then; a loop the analysis cannot type is looked at a few times
@@ -316,18 +322,14 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             };
             call.dst.is_some() && computed(name.as_bytes(), usize::from(call.argc))
         }
-        // A call of one of those functions with computed arguments: its
-        // `InitFCall` (of a name that cannot be a namespaced function),
-        // its `Send`s and its `DoCall`. (A `Send` or a `DoCall` of any
-        // other call follows an `InitFCall` that is not one of these.)
-        Op::InitFCall {
-            name,
-            fallback: None,
-            ..
-        } => matches!(lits.get(*name as usize), Some(Value::Str(name))
-            if computed(name.as_bytes(), 1) || computed(name.as_bytes(), 2)),
-        Op::Send {
-            src: ArgSrc::Val(_) | ArgSrc::Place(_),
+        // A call by a name that cannot be a namespaced function, with
+        // computed arguments: its `InitFCall`, its `Send`s and its
+        // `DoCall`. One of those math functions' is computed; a user
+        // function's may run inline ([`Inlined`]), which only shows when
+        // the loop is looked at (the function need not exist yet).
+        Op::InitFCall { fallback: None, .. }
+        | Op::Send {
+            src: ArgSrc::Val(_) | ArgSrc::CallResult(_) | ArgSrc::Place(_),
         }
         | Op::DoCall { .. }
         | Op::Abs { .. }
@@ -375,8 +377,58 @@ fn computed(name: &[u8], argc: usize) -> bool {
     }
 }
 
-/// The most arguments of a builtin call the second tier computes.
-const MAX_ARGS: usize = 2;
+/// The most arguments of a call the second tier computes (a builtin's)
+/// or runs inline (a user function's).
+const MAX_ARGS: usize = 4;
+/// How deep such calls may nest (`f($a, g($b))`): each depth has its own
+/// argument variables, [`ARG_VARS`] in all.
+const MAX_DEPTH: usize = 3;
+const ARG_VARS: usize = MAX_ARGS * MAX_DEPTH;
+
+/// Where the variables of an inlined user function live: below the
+/// argument variables ([`arg_slot`]), by the slot's offset in the frame
+/// the function would have had. Like those, they are no slots of any
+/// frame: nothing is ever loaded from or stored to them.
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+const VIRTUAL_AT: i32 = SLOT as i32 * 16;
+
+/// The variable of an inlined function's slot `slot` ([`VIRTUAL_AT`]).
+fn virtual_slot(slot: SlotRef) -> SlotRef {
+    SlotRef {
+        tmp: slot.tmp,
+        at: -(VIRTUAL_AT + slot.at),
+    }
+}
+
+/// The inlined function's slot a variable stands for, when it is one.
+fn real_slot(slot: SlotRef) -> Option<SlotRef> {
+    (slot.at <= -VIRTUAL_AT).then(|| SlotRef {
+        tmp: slot.tmp,
+        at: -slot.at - VIRTUAL_AT,
+    })
+}
+
+/// The most instructions of a user function the second tier inlines, and
+/// the room each inlined call takes in the loop's instruction numbers.
+pub(super) const INLINE_OPS: usize = 48;
+const INLINE_SPAN: usize = 64;
+
+/// A call of a user function that a typed loop runs inline: the call's
+/// ops in the loop, and the function's code with a tape of its own (the
+/// function's may hold entry instructions of the JIT). Its instructions
+/// are the loop's instructions `base..`, after the last of the loop's own.
+pub(super) struct Inlined {
+    /// The call's `InitFCall` and `DoCall`.
+    init: usize,
+    call: usize,
+    /// The literal of the function's name at the call.
+    name: u32,
+    base: usize,
+    /// The function's first instruction for the arguments passed.
+    first: usize,
+    func: std::rc::Rc<crate::func::UserFunction>,
+    tape: Box<[Inst]>,
+}
 
 /// The variable the `k`-th argument of a builtin call is kept in between
 /// its `Send` and the `DoCall`: not a slot of the frame (the call has no
@@ -562,6 +614,19 @@ enum Plan {
         tmp: SlotRef,
         next: usize,
     },
+    /// The call of a user function the loop runs inline, at its
+    /// `DoCall`: the arguments kept since their `Send`s ([`Plan::Arg`])
+    /// become the function's parameters, its other variables are
+    /// undefined (`cvs` variables and `tmps` temporaries in all), and the
+    /// loop goes on at the function's first instruction, `to`.
+    Bind {
+        /// The first of its argument variables ([`Analysis::arg_base`]).
+        args: usize,
+        argc: usize,
+        cvs: usize,
+        tmps: usize,
+        to: usize,
+    },
     /// The loop is left for good here (a `return`): the interpreter's.
     Leave,
     /// A family instruction run by its own handler, on the frame (which is
@@ -717,7 +782,244 @@ enum Fast {
 /// (the offsets of a nested access and its value).
 const MAX_CONSUMED: usize = 4;
 
+impl Opnd {
+    /// The operand of an inlined function's instruction, in the loop.
+    fn inlined(self) -> Opnd {
+        match self.num {
+            Num::Slot(slot) => Opnd {
+                num: Num::Slot(virtual_slot(slot)),
+                float: self.float,
+            },
+            _ => self,
+        }
+    }
+}
+
+impl Truthy {
+    /// As [`Opnd::inlined`].
+    fn inlined(self) -> Truthy {
+        match self {
+            Truthy::Num(o) => Truthy::Num(o.inlined()),
+            Truthy::Bool(slot) => Truthy::Bool(virtual_slot(slot)),
+            Truthy::Known(_) => self,
+        }
+    }
+}
+
 impl Plan {
+    /// The plan of an inlined function's instruction as an instruction
+    /// of the loop: its slots are variables ([`virtual_slot`]), its
+    /// instructions follow `base`, and no temporary is nulled (there is
+    /// none). `None` for what works on a frame (a handler's call, a
+    /// `foreach`, a call).
+    fn inlined(self, base: usize) -> Option<Plan> {
+        let v = virtual_slot;
+        Some(match self {
+            Plan::Jmp { to } => Plan::Jmp { to: to + base },
+            Plan::Cmp {
+                a,
+                b,
+                test,
+                taken,
+                fall,
+            } => Plan::Cmp {
+                a: a.inlined(),
+                b: b.inlined(),
+                test,
+                taken: taken + base,
+                fall: fall + base,
+            },
+            Plan::IncCmp {
+                slot,
+                inc,
+                bound,
+                cc,
+                taken,
+                fall,
+            } => Plan::IncCmp {
+                slot: v(slot),
+                inc,
+                bound: bound.inlined(),
+                cc,
+                taken: taken + base,
+                fall: fall + base,
+            },
+            Plan::Arith {
+                op,
+                a,
+                b,
+                dst,
+                next,
+            } => Plan::Arith {
+                op,
+                a: a.inlined(),
+                b: b.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Int2 {
+                op,
+                a,
+                b,
+                dst,
+                next,
+            } => Plan::Int2 {
+                op,
+                a: a.inlined(),
+                b: b.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Div { a, b, dst, next } => Plan::Div {
+                a: a.inlined(),
+                b: b.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Conv {
+                to_float,
+                a,
+                dst,
+                next,
+                ..
+            } => Plan::Conv {
+                to_float,
+                a: a.inlined(),
+                consume: None,
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Math { f, a, dst, next } => Plan::Math {
+                f,
+                a: a.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::AbsInt { a, dst, next } => Plan::AbsInt {
+                a: a.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Pick {
+                max,
+                a,
+                b,
+                dst,
+                next,
+            } => Plan::Pick {
+                max,
+                a: a.inlined(),
+                b: b.inlined(),
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::Truth {
+                value,
+                when,
+                taken,
+                fall,
+                ..
+            } => Plan::Truth {
+                value: value.inlined(),
+                when,
+                consume: None,
+                taken: taken + base,
+                fall: fall + base,
+            },
+            Plan::Compare {
+                a,
+                b,
+                test,
+                dst,
+                next,
+            } => Plan::Compare {
+                a: a.inlined(),
+                b: b.inlined(),
+                test,
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::SetBool {
+                value,
+                negate,
+                dst,
+                next,
+                ..
+            } => Plan::SetBool {
+                value: value.inlined(),
+                negate,
+                consume: None,
+                dst: v(dst),
+                next: next + base,
+            },
+            Plan::JmpEx {
+                value,
+                when,
+                dst,
+                target,
+                fall,
+                ..
+            } => Plan::JmpEx {
+                value: value.inlined(),
+                when,
+                consume: None,
+                dst: v(dst),
+                target: target + base,
+                fall: fall + base,
+            },
+            Plan::Assign2 {
+                value,
+                cv,
+                tmp,
+                next,
+                ..
+            } => Plan::Assign2 {
+                value: value.inlined(),
+                consume: None,
+                cv: v(cv),
+                tmp: v(tmp),
+                next: next + base,
+            },
+            Plan::Step {
+                slot,
+                inc,
+                float,
+                copy,
+                next,
+            } => Plan::Step {
+                slot: v(slot),
+                inc,
+                float,
+                copy: copy.map(|(dst, post)| (v(dst), post)),
+                next: next + base,
+            },
+            Plan::Const { dst, value, next } => Plan::Const {
+                dst: v(dst),
+                value: value.inlined(),
+                next: next + base,
+            },
+            Plan::Copy {
+                src,
+                dst,
+                float,
+                next,
+                ..
+            } => Plan::Copy {
+                src: v(src),
+                dst: v(dst),
+                float,
+                consume: false,
+                next: next + base,
+            },
+            Plan::Arg { .. }
+            | Plan::Bind { .. }
+            | Plan::Leave
+            | Plan::Call(_)
+            | Plan::Each { .. }
+            | Plan::Ext { .. } => return None,
+        })
+    }
+
     /// Whether the instruction may run again after it ran: it writes
     /// nothing but temporaries (which the ops before their use compute
     /// again). What an argument of a builtin call the loop computes may be
@@ -728,6 +1030,7 @@ impl Plan {
             | Plan::Cmp { .. }
             | Plan::Truth { .. }
             | Plan::Arg { .. }
+            | Plan::Bind { .. }
             | Plan::Leave => true,
             Plan::Compare { dst, .. } | Plan::SetBool { dst, .. } | Plan::JmpEx { dst, .. } => {
                 dst.tmp
@@ -753,7 +1056,7 @@ impl Plan {
     /// Where execution may go on.
     fn successors(&self) -> [Option<usize>; 2] {
         match *self {
-            Plan::Jmp { to } => [Some(to), None],
+            Plan::Jmp { to } | Plan::Bind { to, .. } => [Some(to), None],
             Plan::Cmp { taken, fall, .. }
             | Plan::IncCmp { taken, fall, .. }
             | Plan::Truth { taken, fall, .. } => [Some(taken), Some(fall)],
@@ -817,6 +1120,32 @@ impl Plan {
                 }
             }
             Plan::Leave => {}
+            Plan::Bind {
+                args,
+                argc,
+                cvs,
+                tmps,
+                ..
+            } => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let slot = |tmp: bool, k: usize| {
+                    virtual_slot(SlotRef {
+                        tmp,
+                        at: (k * SLOT) as i32,
+                    })
+                };
+                for k in 0..cvs {
+                    let ty = if k < argc {
+                        st.get(&arg_slot(args + k)).copied().unwrap_or(Ty::Plain)
+                    } else {
+                        Ty::Plain
+                    };
+                    st.insert(slot(false, k), ty);
+                }
+                for k in 0..tmps {
+                    st.insert(slot(true, k), Ty::Plain);
+                }
+            }
             Plan::Compare { dst, .. } => {
                 st.insert(dst, Ty::Bool);
             }
@@ -944,6 +1273,16 @@ pub(super) struct Loop {
     /// loop's entry (`super::const_is`; a constant may be defined to
     /// something else in another request).
     consts: Vec<(usize, Ty, u64)>,
+    /// How many instructions the loop's own tape has: the instructions
+    /// from there on are those of inlined functions ([`Inlined`]).
+    real: usize,
+    /// The variables of the inlined functions ([`virtual_slot`]).
+    virtuals: Vec<SlotRef>,
+    /// The functions inlined, each by the literal of its name at the call
+    /// and its address: checked again at the loop's entry
+    /// (`super::user_is`; the name may be another function's in another
+    /// request).
+    inlined: Vec<(u32, usize)>,
 }
 
 impl Loop {
@@ -984,6 +1323,12 @@ pub(super) struct Seen<'a> {
     /// resolved to when its call last ran; `None` when it has not run, or
     /// calls may not be skipped (observers).
     pub(super) builtin: &'a dyn Fn(u32) -> Option<Vec<u8>>,
+    /// The user function the function-name literal (by index) resolved to
+    /// when its call last ran, when a call of it with that many arguments
+    /// can run inline: a plain function (no types, no defaults used, no
+    /// references, no statics) of at most [`INLINE_OPS`] ops, and calls
+    /// are not observed.
+    pub(super) user: &'a dyn Fn(u32, usize) -> Option<std::rc::Rc<crate::func::UserFunction>>,
     /// The type of the number the property at a place (by index) holds,
     /// when its read is a cache hit.
     pub(super) property: &'a dyn Fn(u32) -> Option<Ty>,
@@ -1013,9 +1358,19 @@ struct Analysis<'a> {
     entry: State,
     /// The constants planned as their values ([`Loop::consts`]).
     consts: Vec<(usize, Ty, u64)>,
+    /// The calls of user functions the loop may run inline.
+    inl: &'a [Inlined],
+    /// How many instructions the loop's own tape has ([`Loop::real`]).
+    real: usize,
+    /// Set while an inlined function's instruction is planned: the tape,
+    /// literals, places and ops are then the function's, and its slots
+    /// are in no frame (nothing is known of one but what the state says).
+    inline: bool,
+    /// Which of `inl` have been entered ([`Plan::Bind`]).
+    bound: Vec<bool>,
 }
 
-impl Analysis<'_> {
+impl<'a> Analysis<'a> {
     /// The type of `slot` in `st`, for an instruction that writes it or
     /// lets a handler consume it: all that is asked of a slot met for the
     /// first time is that it owns nothing now, and that is all its entry
@@ -1026,8 +1381,9 @@ impl Analysis<'_> {
         if let Some(ty) = st.get(&slot).or_else(|| self.entry.get(&slot)) {
             return Some(*ty);
         }
-        if slot.at < 0 {
-            // An argument variable ([`arg_slot`]) nothing was sent to.
+        if slot.at < 0 || self.inline {
+            // An argument variable ([`arg_slot`]) nothing was sent to, or
+            // a variable of an inlined function.
             return Some(Ty::Plain);
         }
         (self.seen.snapshot)(slot)?;
@@ -1042,7 +1398,7 @@ impl Analysis<'_> {
     fn read(&mut self, st: &State, slot: SlotRef) -> Option<Ty> {
         Some(match st.get(&slot) {
             Some(ty) => *ty,
-            None if slot.at < 0 => Ty::Plain,
+            None if slot.at < 0 || self.inline => Ty::Plain,
             None => match self.entry.get(&slot) {
                 Some(ty @ (Ty::Int | Ty::Float | Ty::Bool)) => *ty,
                 _ => {
@@ -1131,6 +1487,116 @@ impl Analysis<'_> {
     /// operand that is not known to be a number).
     #[allow(clippy::too_many_lines)]
     fn plan(&mut self, st: &State, i: usize) -> Option<Plan> {
+        if i >= self.real && !self.inline {
+            return self.inlined_plan(st, i);
+        }
+        self.own_plan(st, i)
+    }
+
+    /// The plan of instruction `i` of an inlined function ([`Inlined`]):
+    /// planned as the function's own instruction, on the types of its
+    /// variables in `st`, and moved into the loop ([`Plan::inlined`]). Its
+    /// `return` of a number stores that into the temporary of the call's
+    /// `DoCall` and goes on after it. The function has no frame: its
+    /// instructions may only go forward (a loop would need a safe point)
+    /// and must be of the kinds that touch none.
+    fn inlined_plan(&mut self, st: &State, i: usize) -> Option<Plan> {
+        let inl: &'a [Inlined] = self.inl;
+        let callee = inl
+            .iter()
+            .find(|c| i >= c.base && i < c.base + c.tape.len())?;
+        let at = i - callee.base;
+        let code = &callee.func.code;
+        let local: State = st
+            .iter()
+            .filter_map(|(slot, ty)| Some((real_slot(*slot)?, *ty)))
+            .collect();
+        // The function's view, for one instruction.
+        let saved = (
+            std::mem::replace(&mut self.tape, &callee.tape),
+            std::mem::replace(&mut self.lits, &code.literals),
+            std::mem::replace(&mut self.places, &code.places),
+            std::mem::replace(&mut self.ops, &code.ops),
+            std::mem::take(&mut self.sites),
+            std::mem::take(&mut self.entry),
+        );
+        self.inline = true;
+        let returned = match code.ops.get(at) {
+            Some(&Op::Return { val }) => Some(self.op_number(&local, val).map(|(value, _)| value)),
+            _ => None,
+        };
+        let plan = match returned {
+            Some(_) => None,
+            None => self.own_plan(&local, at),
+        };
+        self.inline = false;
+        (
+            self.tape,
+            self.lits,
+            self.places,
+            self.ops,
+            self.sites,
+            self.entry,
+        ) = saved;
+        if let Some(value) = returned {
+            let value = value?.inlined();
+            let next = (callee.call + 1 < self.real).then_some(callee.call + 1)?;
+            let Some(&Op::DoCall { dst }) = self.ops.get(callee.call) else {
+                return None;
+            };
+            let Some(dst) = dst else {
+                return Some(Plan::Jmp { to: next });
+            };
+            let dst = tmp(dst.checked_mul(SLOT_U32)?)?;
+            self.ty(st, dst)?;
+            return Some(match value.num {
+                Num::Slot(src) => Plan::Copy {
+                    src,
+                    dst,
+                    float: value.float,
+                    consume: false,
+                    next,
+                },
+                _ => Plan::Const { dst, value, next },
+            });
+        }
+        let plan = plan?;
+        // Forward only, and inside the function.
+        if plan
+            .successors()
+            .into_iter()
+            .flatten()
+            .any(|to| to <= at || to >= callee.tape.len())
+        {
+            return None;
+        }
+        plan.inlined(callee.base)
+    }
+
+    /// The first argument variable of the call `site`: those of its depth
+    /// among the calls around it (an outer call's arguments are kept
+    /// while an inner call runs). `None` beyond [`MAX_DEPTH`].
+    fn arg_base(&self, site: &Site) -> Option<usize> {
+        let depth = self
+            .sites
+            .iter()
+            .filter(|outer| outer.init < site.init && outer.call > site.call)
+            .count();
+        (depth < MAX_DEPTH).then_some(depth * MAX_ARGS)
+    }
+
+    /// The call site `inl` has for the `InitFCall` at `init`, and its index.
+    fn inlined_site(&self, init: usize) -> Option<(usize, &'a Inlined)> {
+        if self.inline {
+            return None;
+        }
+        let inl: &'a [Inlined] = self.inl;
+        inl.iter().enumerate().find(|(_, c)| c.init == init)
+    }
+
+    /// [`Self::plan`] of one of the tape's own instructions.
+    #[allow(clippy::too_many_lines)]
+    fn own_plan(&mut self, st: &State, i: usize) -> Option<Plan> {
         let inst = *self.tape.get(i)?;
         let after = |n: usize| (i + n < self.tape.len()).then_some(i + n);
         if let Some(call) = self.call(st, i) {
@@ -1967,6 +2433,9 @@ impl Analysis<'_> {
             // `DoCall` computes.
             Op::InitFCall { .. } => {
                 let site = self.sites.iter().find(|site| site.init == i)?;
+                if self.inlined_site(i).is_some() {
+                    return Some(Plan::Jmp { to: next });
+                }
                 let name = (self.seen.builtin)(site.name)?;
                 computed(&name, site.sends.len()).then_some(Plan::Jmp { to: next })
             }
@@ -1974,12 +2443,20 @@ impl Analysis<'_> {
                 let (site, k) = self.sites.iter().find_map(|site| {
                     Some((site, site.sends.iter().position(|send| *send == i)?))
                 })?;
-                let name = (self.seen.builtin)(site.name)?;
-                if !computed(&name, site.sends.len()) || k >= MAX_ARGS {
+                if k >= MAX_ARGS {
                     return None;
                 }
+                if self.inlined_site(site.init).is_none() {
+                    let name = (self.seen.builtin)(site.name)?;
+                    if !computed(&name, site.sends.len()) {
+                        return None;
+                    }
+                }
+                let k = self.arg_base(site)? + k;
                 let operand = match *src {
-                    ArgSrc::Val(operand) => operand,
+                    // (A call's result is a value to a parameter that is
+                    // not by reference: none of these functions' is.)
+                    ArgSrc::Val(operand) | ArgSrc::CallResult(operand) => operand,
                     // A plain variable.
                     ArgSrc::Place(id) => match self.places.get(id as usize)? {
                         Place {
@@ -1988,7 +2465,7 @@ impl Analysis<'_> {
                         } if segs.is_empty() => Operand::Cv(*var),
                         _ => return None,
                     },
-                    _ => return None,
+                    ArgSrc::TempPlace(_) => return None,
                 };
                 let (value, consume) = self.op_number(st, operand)?;
                 Some(Plan::Arg {
@@ -2000,10 +2477,27 @@ impl Analysis<'_> {
             }
             &Op::DoCall { dst } => {
                 let site = self.sites.iter().find(|site| site.call == i)?.clone();
+                let args = self.arg_base(&site)?;
+                if let Some((k, callee)) = self.inlined_site(site.init) {
+                    // Every argument a number, kept since its `Send`.
+                    for k in 0..site.sends.len() {
+                        self.number(st, arg_slot(args + k))?;
+                    }
+                    *self.bound.get_mut(k)? = true;
+                    let code = &callee.func.code;
+                    return Some(Plan::Bind {
+                        args,
+                        argc: site.sends.len(),
+                        cvs: code.cv_names.len(),
+                        tmps: code.num_tmps as usize,
+                        to: callee.base + callee.first,
+                    });
+                }
                 let name = (self.seen.builtin)(site.name)?;
                 let mut args = Vec::new();
+                let first = self.arg_base(&site)?;
                 for k in 0..site.sends.len().min(MAX_ARGS + 1) {
-                    args.push(self.number(st, arg_slot(k))?);
+                    args.push(self.number(st, arg_slot(first + k))?);
                 }
                 let dst = match dst {
                     Some(dst) => Some(temp(dst)?),
@@ -2018,6 +2512,10 @@ impl Analysis<'_> {
     /// The constant the op at `i` reads, as a store of its value into
     /// `dst`; the loop's entry then checks that the value is still that.
     fn constant(&mut self, st: &State, i: usize, dst: SlotRef, next: usize) -> Option<Plan> {
+        if self.inline {
+            // (The entry's check reads the loop's own op array.)
+            return None;
+        }
         self.ty(st, dst)?;
         let (ty, bits) = (self.seen.constant)(i)?;
         if !self.consts.iter().any(|(at, ..)| *at == i) {
@@ -2424,15 +2922,43 @@ fn literal(lits: &[Value], x: u32) -> Option<Opnd> {
 /// numeric one, an operand is not known to be a number, or no round can
 /// follow another with the same types.
 pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_>) -> Option<Loop> {
+    let sites = call_sites(&code.ops);
+    // The calls of user functions from the head on that may run inline.
+    let mut inl: Vec<Inlined> = Vec::new();
+    for site in &sites {
+        if site.init < head || site.sends.len() > MAX_ARGS {
+            continue;
+        }
+        let Some(func) = (seen.user)(site.name, site.sends.len()) else {
+            continue;
+        };
+        let callee = super::super::lower(&func.code);
+        if callee.len() > INLINE_SPAN {
+            continue;
+        }
+        inl.push(Inlined {
+            init: site.init,
+            call: site.call,
+            name: site.name,
+            base: tape.len() + INLINE_SPAN * inl.len(),
+            first: func.plain_first_op(site.sends.len()),
+            func,
+            tape: callee,
+        });
+    }
     let mut an = Analysis {
         tape,
         lits: &code.literals,
         seen,
         places: &code.places,
         ops: &code.ops,
-        sites: call_sites(&code.ops),
+        sites,
         entry: State::new(),
         consts: Vec::new(),
+        inl: &inl,
+        real: tape.len(),
+        inline: false,
+        bound: vec![false; inl.len()],
     };
     // The loop's instructions: from its head to its last jump back.
     let last = (head..tape.len()).rev().find(|i| {
@@ -2443,7 +2969,8 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
                     if to as usize == head
             )
     })?;
-    let inside = |i: usize| i > head && i <= last;
+    // (An inlined function's instructions are after the tape's own.)
+    let inside = |i: usize| (i > head && i <= last) || i >= tape.len();
     let mut ins: BTreeMap<usize, State> = BTreeMap::new();
     ins.insert(head, State::new());
     let mut work = vec![head];
@@ -2497,12 +3024,47 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             *known = (*known).min(start);
         }
     }
+    // An inlined function has no frame to go on in: whatever stops in it
+    // has the whole call redone, like one that stops among the arguments.
+    let mut virtuals = Vec::new();
+    let mut inlined = Vec::new();
+    for (callee, _) in inl.iter().zip(&an.bound).filter(|(_, bound)| **bound) {
+        if !matches!(plans.get(&callee.init), Some((Plan::Jmp { .. }, _))) {
+            return None;
+        }
+        let start = resume.get(&callee.init).copied().unwrap_or(callee.init);
+        for at in callee.base..callee.base + callee.tape.len() {
+            if plans.contains_key(&at) {
+                resume.insert(at, start);
+            }
+        }
+        let code = &callee.func.code;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        for (tmp, count) in [(false, code.cv_names.len()), (true, code.num_tmps as usize)] {
+            for k in 0..count {
+                let slot = virtual_slot(SlotRef {
+                    tmp,
+                    at: (k * SLOT) as i32,
+                });
+                if !virtuals.contains(&slot) {
+                    virtuals.push(slot);
+                }
+            }
+        }
+        // Kept alive for good, as the code is: its address then names it.
+        let func = std::rc::Rc::clone(&callee.func);
+        inlined.push((callee.name, std::rc::Rc::as_ptr(&func) as usize));
+        std::mem::forget(func);
+    }
     let lp = Loop {
         head,
         entry: an.entry,
         plans,
         resume,
         consts: an.consts,
+        real: tape.len(),
+        virtuals,
+        inlined,
     };
     // Worth it only if some round can follow another.
     let repeats = lp.plans.values().any(|(plan, st)| {
@@ -2609,6 +3171,8 @@ type GetNum2 = unsafe extern "C" fn(*const Option<Value>, i64, i64, *mut Value) 
 type SetNum2 = unsafe extern "C" fn(*mut Option<Value>, i64, i64, usize, u64) -> usize;
 /// `dims::jit_op_num`.
 type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) -> usize;
+/// `super::user_is`.
+type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
 /// `super::const_is`.
 type ConstIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
 /// `super::each_num`.
@@ -2693,7 +3257,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         b.declare_var(float, types::F64);
         vars.insert(*slot, (int, float));
     }
-    for k in 0..MAX_ARGS {
+    for k in 0..ARG_VARS {
         let n = 2 * (lp.entry.len() + k);
         let (int, float) = (
             Variable::from_u32(u32::try_from(n).ok()?),
@@ -2702,6 +3266,16 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         b.declare_var(int, types::I64);
         b.declare_var(float, types::F64);
         vars.insert(arg_slot(k), (int, float));
+    }
+    for (k, slot) in lp.virtuals.iter().enumerate() {
+        let n = 2 * (lp.entry.len() + ARG_VARS + k);
+        let (int, float) = (
+            Variable::from_u32(u32::try_from(n).ok()?),
+            Variable::from_u32(u32::try_from(n + 1).ok()?),
+        );
+        b.declare_var(int, types::I64);
+        b.declare_var(float, types::F64);
+        vars.insert(*slot, (int, float));
     }
     let flag = b
         .ins()
@@ -2748,6 +3322,19 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         };
         let next = e.b.create_block();
         e.b.ins().brif(ok, next, &[], bail, &[]);
+        e.b.switch_to_block(next);
+    }
+    // The functions the loop runs inline: still what their names call.
+    for (name, func) in &lp.inlined {
+        #[allow(clippy::cast_possible_wrap)]
+        let args = [
+            e.frame,
+            e.b.ins().iconst(types::I64, i64::from(*name)),
+            e.b.ins().iconst(types::I64, *func as i64),
+        ];
+        let same = e.helper(super::user_is as UserIs as usize, &args)?;
+        let next = e.b.create_block();
+        e.b.ins().brif(same, next, &[], bail, &[]);
         e.b.switch_to_block(next);
     }
     // The constants the loop was compiled with: still those values.
@@ -2829,8 +3416,18 @@ impl Emit<'_, '_> {
         }
     }
 
-    /// Returns: stopped for `why` at instruction `i`.
+    /// Returns: stopped for `why` at instruction `i`. (In an inlined
+    /// function there is nowhere to stop: the call is redone from its
+    /// start, [`Loop::resume`].)
     fn ret(&mut self, i: usize, why: u8) {
+        let (i, why) = if i >= self.lp.real {
+            (
+                self.lp.resume.get(&i).copied().unwrap_or(self.lp.head),
+                WHY_GENERIC,
+            )
+        } else {
+            (i, why)
+        };
         let packed = (i << WHY_BITS) | usize::from(why);
         #[allow(clippy::cast_possible_wrap)]
         let r = self.b.ins().iconst(types::I64, packed as i64);
@@ -2851,7 +3448,8 @@ impl Emit<'_, '_> {
             self.ret(to, WHY_GENERIC);
             return Some(());
         };
-        if to > from {
+        // (Out of an inlined function, back into the loop: no jump back.)
+        if to > from || from >= self.lp.real {
             self.b.ins().jump(block, &[]);
             return Some(());
         }
@@ -3380,6 +3978,25 @@ impl Emit<'_, '_> {
         let repeat = self.lp.may_repeat(&out);
         match *plan {
             Plan::Jmp { to } => self.go(i, to, repeat)?,
+            Plan::Bind { args, argc, to, .. } => {
+                for k in 0..argc {
+                    let arg = arg_slot(args + k);
+                    let float = match self.lp.ty(st, arg)? {
+                        Ty::Int => false,
+                        Ty::Float => true,
+                        Ty::Bool | Ty::Plain => return None,
+                    };
+                    let (int, fl) = *self.vars.get(&arg)?;
+                    let v = self.b.use_var(if float { fl } else { int });
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    let param = virtual_slot(SlotRef {
+                        tmp: false,
+                        at: (k * SLOT) as i32,
+                    });
+                    self.write(st, param, float, v)?;
+                }
+                self.go(i, to, repeat)?;
+            }
             Plan::Cmp {
                 a,
                 b,

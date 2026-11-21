@@ -90,8 +90,13 @@ class Gen:
         if d > 2 or self.r.random() < 0.35:
             return self.atom()
         k = self.r.random()
-        if k < 0.06:
+        if k < 0.03:
             return f'{self.pick(["sqrt", "floor", "ceil", "sin", "round", "log", "exp"])}({self.expr(d + 1)})'
+        # Small user functions, which a typed loop runs inline.
+        if k < 0.05:
+            return f'{self.pick(["h0", "h2", "h4", "h5"])}({self.expr(d + 1)})'
+        if k < 0.07:
+            return f'{self.pick(["h1", "h3"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
         if k < 0.1:
             return f'{self.pick(["intdiv", "min", "max"])}({self.expr(d + 1)}, {self.atom()})'
         if k < 0.14:
@@ -237,6 +242,10 @@ class Gen:
         fns = [f'f{i}' for i in range(self.r.randrange(1, 4))]
         out = ['<?php']
         out.append("const KI = 3; const KF = 1.5; const KB = true; const KS = '7';")
+        out.append('function h0($x) { return $x * 2 + 1; } function h1($a, $b) { return $a - $b; } '
+                   'function h2($x) { if ($x > 5) { return $x - 5; } $y = $x; $y++; return $y; } '
+                   'function h3($a, $b) { $t = $a * $b; return $t / 2.0; } function h4($x) { return $x % 7; } '
+                   'function h5($x) { return $x < 3 ? $x << 2 : (int)($x * 0.5); }')
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'function __construct($x) { $this->x = $x; } }')

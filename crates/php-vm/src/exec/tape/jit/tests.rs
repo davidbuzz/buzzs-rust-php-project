@@ -1150,3 +1150,64 @@ var_export([f(new R, 30), f(new stdClass, 20)]);
 ",
     );
 }
+
+#[test]
+fn typed_loops_run_small_numeric_functions_inline() {
+    // A float function, an int one called twice in an expression, a call
+    // as an argument of a call.
+    typed_at_least(
+        "<?php function u_sq($x) { return $x * $x; } function u_add($a, $b) { return $a + $b; } function t($n) { $s = 0; $f = 0.5; for ($i = 0; $i < $n; $i++) { $s += u_sq($i) - u_add($i, 3); $f = u_add($f, 0.25) * 1.5; $s += u_add($i, u_sq($i + 1)); } return [$s, $f]; } var_dump(t(50), t(4));",
+        1,
+    );
+    // Each on its own: what runs inline (branches, locals, bools, four
+    // arguments, an unused result), what stops in the middle of a function
+    // (an int overflow, a division by zero, whose error names the call),
+    // and what is no function to inline (types, defaults, recursion, an
+    // undefined variable, a string, no value returned).
+    three(
+        r#"<?php
+function u_sq($x) { return $x * $x; }
+function u_add($a, $b) { return $a + $b; }
+function u_lim($x) { if ($x > 10) { return 10; } if ($x < -10) { return -10; } return $x; }
+function u_big($x) { return $x * 4611686018427387904; }
+function u_bump($x) { $x++; $y = $x; $y += 2; return $y; }
+function u_undef($x) { return $x + $nope; }
+function u_text($x) { return $x . 'a'; }
+function u_nothing($x) { $y = $x + 1; }
+function u_rec($x) { return $x > 0 ? u_rec($x - 1) + 1 : 0; }
+function u_typed(int $x) { return $x + 1; }
+function u_ret(int $x): float { return $x; }
+function u_dflt($x, $y = 3) { return $x + $y; }
+function u_mod($a, $b) { return $a % $b; }
+function u_truth($x) { return $x ? 1 : 2; }
+function u_both($a, $b) { return $a && $b ? 5 : 6; }
+function u_four($a, $b, $c, $d) { return ($a - $b) * ($c - $d); }
+function u_half($x) { return $x / 2; }
+function u_cmp($a, $b) { return $a < $b; }
+function t1($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_sq($i) - u_add($i, 3); } return $s; }
+function t2($n) { $f = 0.5; for ($i = 0; $i < $n; $i++) { $f = u_add($f, 0.25) * 1.5 - u_sq($f) * 0.001; } return $f; }
+function t3($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_lim($i - 20) + u_lim(u_sq($i)); $s += u_add($i, u_sq($i + 1)); } return $s; }
+function t4($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_bump($i) + u_four($i, 1, $s & 3, 2); u_sq($i); } return $s; }
+function t5($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_truth($i & 1) + u_truth($i * 0.5) + u_both($i, $i - 5); } return $s; }
+function t6($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s = u_big($i + 1) > 1e19 ? $s + 1 : $s + 2; } return $s; }
+function t7($n) { $s = 1; for ($i = 0; $i < $n; $i++) { $s = u_sq($s) + 3; } return $s; }
+function t8($n, $z) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_mod($i + 7, $i - $z); } return $s; }
+function t9($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_dflt($i) + u_dflt($i, 1) + u_typed($i) + u_rec(3); } return $s; }
+function t10($n) { $s = 0.0; for ($i = 0; $i < $n; $i++) { $s += u_ret($i) + u_half($i); } return $s; }
+function t11($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += @u_undef($i); } return $s; }
+function t12($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $v = u_nothing($i); $s += $i; } return [$s, $v]; }
+function t13($n) { $s = ''; for ($i = 0; $i < $n; $i++) { $s = u_text($i); } return $s; }
+function t14($n, $v) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_sq($v); if ($i == 9) { $v = '7'; } if ($i == 12) { $v = 2.5; } } return $s; }
+function t15($n) { $c = 0; for ($i = 0; $i < $n; $i++) { if (u_cmp($i, 7)) { $c++; } $c += u_add($i, $i) > 20 ? 1 : 0; } return $c; }
+function t16($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_add($i, u_add(1, u_add($i, 2))); $s -= u_add(u_sq($i), u_sq(2)); } return $s; }
+function u_three($a, $b, $c) { return $a * 100 + $b * 10 + $c; }
+function t17($n) { $s = 0; $f = 0.5; for ($i = 0; $i < $n; $i++) { $s += u_three($i, u_add($i, u_three(1, 2, u_sq($i))), min($i, u_add(3, $i))) % 977; $f += u_add($f * 0.001, u_sq(u_add($i, 0.5))); $s += max(u_add($i, 1), min(u_sq($i), u_add(40, $i))); } return [$s, $f]; }
+function t18($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += u_three(u_add($i, 1), u_add($i, u_add($i, u_add($i, 2))), 5) % 977; } return $s; }
+foreach ([40, 6] as $n) {
+  var_export([t1($n), t2($n), t3($n), t4($n), t5($n), t6($n), t7($n), t9($n), t10($n), t11($n), t12($n), t13($n), t14($n, 3), t15($n), t16($n), t17($n), t18($n)]);
+  foreach ([100, 12] as $z) { try { var_export(t8($n, $z)); } catch (DivisionByZeroError $e) { echo $e->getMessage(), '@', $e->getLine(), ' ', $e->getTraceAsString(), "\n"; } }
+}
+echo "\n";
+"#,
+    );
+}

@@ -791,6 +791,31 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 crate::opcode::CachedFuncKind::User(_) => None,
             }
         };
+        // The user function a call site calls, when it can run inline.
+        let user = |name: u32, argc: usize| -> Option<std::rc::Rc<crate::func::UserFunction>> {
+            use crate::func::{flags, CallShape};
+            if crate::jit::calls_are_observed() {
+                return None;
+            }
+            let cache = frame.code.fcall_cache.try_borrow().ok()?;
+            let cached = cache.get(name as usize)?.as_ref()?;
+            let crate::opcode::CachedFuncKind::User(func) = &cached.func else {
+                return None;
+            };
+            let func = func.upgrade()?;
+            let plain = cached.scope.is_none()
+                && cached.called.is_none()
+                && func.call_shape() == CallShape::UNTYPED
+                && func.params.len() == argc
+                && func.return_type.is_none()
+                && func.flags & (flags::CLOSURE | flags::STATIC) == 0
+                && func.uses.is_empty()
+                && func.class_name.is_none()
+                && func.hook_prop.is_none()
+                && func.code.try_table.is_empty()
+                && func.code.ops.len() <= typed::INLINE_OPS;
+            plain.then_some(func)
+        };
         // What a property holds now, when its read is a cache hit.
         let property = |place: u32| -> Option<typed::Ty> {
             match crate::exec::spec::read_hit(frame, place)? {
@@ -843,6 +868,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             statik: &statik,
             each: &each,
             builtin: &builtin,
+            user: &user,
             property: &property,
         };
         let code = php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen));
@@ -1046,6 +1072,34 @@ fn const_at(f: &Frame, at: usize) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// For a typed loop's entry: whether the function-name literal `name` of
+/// frame `f`'s code still calls the user function at address `func` (the
+/// one the loop runs inline, kept alive since), and calls are not
+/// observed.
+///
+/// # Safety
+/// `f` is the current frame.
+pub(super) unsafe extern "C" fn user_is(f: *mut Frame, name: usize, func: usize) -> usize {
+    if crate::jit::calls_are_observed() {
+        return 0;
+    }
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Ok(cache) = f.code.fcall_cache.try_borrow() else {
+        return 0;
+    };
+    let same = match cache.get(name).and_then(Option::as_ref) {
+        Some(cached) => match &cached.func {
+            crate::opcode::CachedFuncKind::User(weak) => {
+                weak.as_ptr() as usize == func && cached.scope.is_none()
+            }
+            crate::opcode::CachedFuncKind::Builtin(_) => false,
+        },
+        None => false,
+    };
+    usize::from(same)
 }
 
 /// For a typed loop's entry: whether the constant the op at `at` reads
