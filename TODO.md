@@ -21,9 +21,10 @@ Last updated 22 Nov 2026.
   (XFAIL tests that pass); 1,086 skip for host reasons (Windows-only, 32-bit-only, PDO
   drivers that are not installed, bundled-GD and older-library variants, online tests,
   readline, FPM); 1,134 are out of scope (`phpt-scope.txt`).
-- **Per-workload guide**: `scripts/acceptance.sh` 82/82 workloads within 1.10x of
-  `perf/bench/goal.tsv` with the JIT on (25/82 with `BUZZS_JIT=0`), 21 Nov. `goal.tsv`
-  still holds counts measured from C PHP 8.3.
+- **Per-workload guide**: `scripts/acceptance.sh` against the goal re-recorded from
+  `/usr/bin/php8.5` (22 Nov, release build of `3fa1dfd7`, JIT on): 80/82 workloads within
+  1.10x; over: `suite:builtins` 1.15, `zend:hash1` 1.12 (`zend:hash2` 1.09). Against the
+  8.3 goal all 82 were within (21 Nov): 8.5 is 9% and 3% cheaper on those two.
 - **Rust tests**: `cargo test --workspace` 4,980 passed, 122 ignored (21 Nov; the run's two
   failures fixed and rechecked).
 - **Web servers**: end-to-end tests pass (22 Nov): nginx 1.24 -> FastCGI -> `php-cgi`
@@ -45,13 +46,14 @@ Last updated 22 Nov 2026.
   php-intl constants, php-mbstring and the php-stdstr/stdarr/stdmisc fixtures) with
   `/usr/bin/php8.5`, re-check the "(8.3)" expected outputs in the php-vm tests, and fix
   toward 8.5/master whatever then differs. About 70 lines still name 8.3 or 8.3.6.
-- [ ] Re-record `perf/bench/goal.tsv` from `/usr/bin/php8.5` (`acceptance.py --record`)
-  and re-run `scripts/acceptance.sh` (owner, 22 Nov). 8.5 may be faster than 8.3 on
-  some workloads, so the 82/82 may change.
 - [ ] README and FEATURE_GAP numbers from today's evidence run (timing against 8.5.12,
   cargo test, PHPT), replacing the 8.3.6 figures (owner, 22 Nov).
 
 ## B. Performance beyond the benchmark inputs
+
+- [ ] The two workloads over the 8.5 goal: `suite:builtins` (1.15x: string builtins in a
+  loop, see the Strings item below) and `zend:hash1` (1.12x: string keys built at run time
+  and `isset()` on them); `zend:hash2` is at 1.09x.
 
 The deliverable is met on the 31 inputs. These are shapes real applications run that the
 inputs do not cover, measured 21 Nov in instructions per loop iteration (ours / C);
