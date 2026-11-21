@@ -596,6 +596,276 @@ fn discard_plain(old: Value) {
     }
 }
 
+/// For a typed loop of the JIT (`exec/tape/jit/typed.rs`): the number at
+/// int offset `i` of the packed array the variable slot `array` holds
+/// directly, copied into the slot `dst`, which the caller knows to own
+/// nothing. Returns the number's tag as the JIT reads it (2 for an int, 3
+/// for a float); 0, nothing changed, for anything else (no array, not
+/// packed, no such element, an element that is not a number): the general
+/// handler then runs. The case [`fetch_packed_into_cv`] takes, less the
+/// tests the caller has made.
+///
+/// # Safety
+/// `array` points at a compiled variable's slot of the current frame and
+/// `dst` at another slot of it (a variable's or a temporary's), which
+/// holds a scalar or nothing.
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_get_num(
+    array: *const Option<Value>,
+    i: i64,
+    dst: *mut Value,
+) -> usize {
+    // The array the variable holds, directly or through a reference
+    // (`$a` of `function f(&$a)`, a global).
+    let through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &*array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &*through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let (v, tag) = match arr.get_packed(i) {
+        Some(Value::Int(x)) => (Value::Int(*x), 2),
+        Some(Value::Float(x)) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    // SAFETY: the caller's contract: nothing to release in `dst`, and a
+    // variable's slot holding a number has that number's layout (the JIT's
+    // layout probe).
+    unsafe { std::ptr::write(dst, v) };
+    tag
+}
+
+/// For a typed loop of the JIT: stores the number with tag `tag` (2: an
+/// int, else a float) and bits `bits` at int offset `i` of the packed
+/// array the variable slot `array` holds directly and alone, over an
+/// existing element that is a scalar or a string (released), or as the
+/// next element of the table. Returns 1 for the former and 2 for the
+/// latter (the table may have grown: the caller polls for a safe point,
+/// as after the handler); 0, nothing changed, for anything else (a shared
+/// array, a hole, a hash table): the general handler then runs. The
+/// offset cases of [`write_plain`].
+///
+/// # Safety
+/// `array` points at a compiled variable's slot of the current frame.
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_set_num(
+    array: *mut Option<Value>,
+    i: i64,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // The array the variable holds, directly or through a reference.
+    let mut through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &mut *array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow_mut() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &mut *through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let Some(tbl) = arr.get_mut_unshared() else {
+        return 0;
+    };
+    #[allow(clippy::cast_possible_wrap)]
+    let v = if tag == 2 {
+        Value::Int(bits as i64)
+    } else {
+        Value::Float(f64::from_bits(bits))
+    };
+    if let Some(slot) = tbl.get_packed_mut(i) {
+        if !slot.is_plain() {
+            return 0;
+        }
+        discard_plain(std::mem::replace(slot, v));
+        return 1;
+    }
+    // The next element of a packed table (a hole or a hash table: the
+    // number is given back, and owns nothing).
+    match tbl.assign_packed_int(i, v) {
+        Ok(old) => {
+            if let Some(old) = old {
+                discard_plain(old);
+            }
+            2
+        }
+        Err(_) => 0,
+    }
+}
+
+/// [`jit_get_num`] of `$array[i][j]`: both arrays packed, the inner one
+/// held directly by the outer one's element.
+///
+/// # Safety
+/// As [`jit_get_num`].
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_get_num2(
+    array: *const Option<Value>,
+    i: i64,
+    j: i64,
+    dst: *mut Value,
+) -> usize {
+    // The array the variable holds, directly or through a reference
+    // (`$a` of `function f(&$a)`, a global).
+    let through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &*array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &*through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let Some(Value::Array(row)) = arr.get_packed(i) else {
+        return 0;
+    };
+    let (v, tag) = match row.get_packed(j) {
+        Some(Value::Int(x)) => (Value::Int(*x), 2),
+        Some(Value::Float(x)) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    // SAFETY: as in `jit_get_num`.
+    unsafe { std::ptr::write(dst, v) };
+    tag
+}
+
+/// [`jit_set_num`] of `$array[i][j]`, over an existing element only: both
+/// arrays packed and held alone (the variable's and the outer element's:
+/// nothing to separate). Returns 1, or 0, nothing changed.
+///
+/// # Safety
+/// As [`jit_set_num`].
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_set_num2(
+    array: *mut Option<Value>,
+    i: i64,
+    j: i64,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // The array the variable holds, directly or through a reference.
+    let mut through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &mut *array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow_mut() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &mut *through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let Some(Value::Array(row)) = arr.get_mut_unshared().and_then(|t| t.get_packed_mut(i)) else {
+        return 0;
+    };
+    let Some(slot) = row.get_mut_unshared().and_then(|t| t.get_packed_mut(j)) else {
+        return 0;
+    };
+    if !slot.is_plain() {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_wrap)]
+    let v = if tag == 2 {
+        Value::Int(bits as i64)
+    } else {
+        Value::Float(f64::from_bits(bits))
+    };
+    discard_plain(std::mem::replace(slot, v));
+    1
+}
+
+/// For a typed loop of the JIT: `$array[i] op= y` for a number `y` (tag
+/// `tag`: 2 an int, else a float; bits `bits`) and operator `op` (0 `+`, 1
+/// `-`, 2 `*`), on an existing number element of the packed array the
+/// variable slot `array` holds directly and alone; `exec::num_bin` decides
+/// the result, as it does for the handler. Returns 1; 0, nothing changed,
+/// for anything else (an int overflow included): the handler then runs.
+///
+/// # Safety
+/// As [`jit_set_num`].
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_op_num(
+    array: *mut Option<Value>,
+    i: i64,
+    op: usize,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    use crate::exec::Num;
+    // The array the variable holds, directly or through a reference.
+    let mut through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &mut *array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow_mut() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &mut *through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let Some(slot) = arr.get_mut_unshared().and_then(|t| t.get_packed_mut(i)) else {
+        return 0;
+    };
+    let x = match slot {
+        Value::Int(x) => Num::Int(*x),
+        Value::Float(x) => Num::Float(*x),
+        _ => return 0,
+    };
+    #[allow(clippy::cast_possible_wrap)]
+    let y = if tag == 2 {
+        Num::Int(bits as i64)
+    } else {
+        Num::Float(f64::from_bits(bits))
+    };
+    let op = match op {
+        0 => BinaryOp::Add,
+        1 => BinaryOp::Sub,
+        2 => BinaryOp::Mul,
+        _ => return 0,
+    };
+    let Some(r) = crate::exec::num_bin(crate::opcode::BinKind::Arith(op), x, y) else {
+        return 0;
+    };
+    // A number over a number: nothing to release.
+    std::mem::forget(std::mem::replace(slot, r));
+    1
+}
+
 /// `Op::FetchDimsCv`: `$cv[d1][d2]...` read (`fetch_dims_cv_in`), as
 /// [`fetch_dim`].
 ///

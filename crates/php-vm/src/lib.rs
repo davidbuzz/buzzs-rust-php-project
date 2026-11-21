@@ -39,6 +39,7 @@ mod generator;
 pub mod include;
 pub mod interrupt;
 mod iter;
+pub mod jit;
 mod lazy;
 pub mod object;
 mod observer;

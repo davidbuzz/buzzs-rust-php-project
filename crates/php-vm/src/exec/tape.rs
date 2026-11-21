@@ -105,20 +105,50 @@ const _: () = {
 /// compiler allocated; decoding on first use must not show as memory the
 /// script allocated between two readings).
 #[derive(Default)]
-pub(crate) struct Tape(OnceCell<Box<[Inst]>>);
+pub(crate) struct Tape {
+    /// The instructions as first decoded (and, with the JIT on, with the
+    /// entry instructions of the loops it may compile).
+    first: OnceCell<Box<[Inst]>>,
+    /// The instructions in use instead, once the JIT has given an entry
+    /// up ([`jit::retire`]): the same tape without that entry instruction.
+    /// (An entry instruction that leads nowhere would cost its loop a
+    /// hundred machine instructions a round.)
+    #[cfg(feature = "jit")]
+    current: std::cell::Cell<Option<&'static [Inst]>>,
+}
 
 impl Tape {
-    /// The instructions, decoded from `code` on first use.
+    /// The instructions, decoded from `code` on first use; with the JIT
+    /// on, the loops it may compile get their entry instructions then
+    /// ([`jit::install`]).
     #[inline]
     fn get(&self, code: &OpArray) -> &[Inst] {
-        self.0
-            .get_or_init(|| php_memlimit::persistent(|| lower(code)))
+        #[cfg(feature = "jit")]
+        if let Some(tape) = self.current.get() {
+            return tape;
+        }
+        self.first.get_or_init(|| {
+            php_memlimit::persistent(|| {
+                #[cfg_attr(not(feature = "jit"), allow(unused_mut))]
+                let mut tape = lower(code);
+                #[cfg(feature = "jit")]
+                jit::install(code, &mut tape);
+                tape
+            })
+        })
+    }
+
+    /// Puts `tape` in use in place of the instructions decoded first
+    /// (same op array, same length; leaked by the caller).
+    #[cfg(feature = "jit")]
+    fn replace(&self, tape: &'static [Inst]) {
+        self.current.set(Some(tape));
     }
 }
 
 impl Drop for Tape {
     fn drop(&mut self) {
-        if let Some(buf) = self.0.take() {
+        if let Some(buf) = self.first.take() {
             php_memlimit::persistent(|| drop(buf));
         }
     }
@@ -126,7 +156,7 @@ impl Drop for Tape {
 
 impl std::fmt::Debug for Tape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.get() {
+        match self.first.get() {
             Some(t) => write!(f, "Tape({} instructions)", t.len()),
             None => f.write_str("Tape(not decoded)"),
         }
@@ -537,6 +567,87 @@ macro_rules! fam_arm {
     }};
 }
 
+/// The handler of a `family` row behind the one signature machine code
+/// calls ([`jit::Handler`]): 0 when it declined, 1 when execution goes on
+/// after the ops the instruction covers, 2 when it goes on at the jump
+/// target. The modes are [`fam_arm!`]'s.
+#[cfg(feature = "jit")]
+macro_rules! fam_tramp {
+    (@fn $f:ident, $inst:ident, $call:expr, $ret:ty, $conv:expr) => {{
+        unsafe extern "C" fn tramp($f: *mut Frame, $inst: *const Inst) -> usize {
+            // SAFETY: the caller's contract is `run_core`'s: `f` is the
+            // current frame, usable for the tape `inst` points into.
+            let r: $ret = unsafe {
+                let $inst = &*$inst;
+                $call
+            };
+            ($conv)(r)
+        }
+        tramp as jit::Handler
+    }};
+    (plain_f, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(f, inst), bool, usize::from) };
+    (poll_f, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(f, inst), bool, usize::from) };
+    (branch_f, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(f, inst), Br, jit::br_code) };
+    (branch_poll_f, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(f, inst), Br, jit::br_code) };
+    (plain, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(frame_st(f), inst), bool, usize::from) };
+    (poll, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(frame_st(f), inst), bool, usize::from) };
+    (branch, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(frame_st(f), inst), Br, jit::br_code) };
+    (branch_poll, $h:expr) => { fam_tramp!(@fn f, inst, ($h)(frame_st(f), inst), Br, jit::br_code) };
+}
+
+/// How a `family` row's mode ends ([`jit::Ending`]).
+#[cfg(feature = "jit")]
+macro_rules! fam_ending {
+    (plain_f) => {
+        jit::Ending {
+            branches: false,
+            polls: false,
+        }
+    };
+    (plain) => {
+        jit::Ending {
+            branches: false,
+            polls: false,
+        }
+    };
+    (poll_f) => {
+        jit::Ending {
+            branches: false,
+            polls: true,
+        }
+    };
+    (poll) => {
+        jit::Ending {
+            branches: false,
+            polls: true,
+        }
+    };
+    (branch_f) => {
+        jit::Ending {
+            branches: true,
+            polls: false,
+        }
+    };
+    (branch) => {
+        jit::Ending {
+            branches: true,
+            polls: false,
+        }
+    };
+    (branch_poll_f) => {
+        jit::Ending {
+            branches: true,
+            polls: true,
+        }
+    };
+    (branch_poll) => {
+        jit::Ending {
+            branches: true,
+            polls: true,
+        }
+    };
+}
+
 /// Defines [`TOp`], the opcode lookups [`lower`] uses and [`run_core`] from
 /// the tables of specialised instruction families.
 macro_rules! tape_ops {
@@ -567,6 +678,10 @@ macro_rules! tape_ops {
             CallInit,
             /// `Op::Send` of a value ([`calls`]).
             CallSend,
+            /// The entry of a compiled loop ([`jit`]): it stands where
+            /// the loop's first instruction was, and runs the machine code
+            /// of the tape from there. Never decoded by [`lower`].
+            Native,
             /// `Op::Jmp`.
             Jmp,
             /// `Op::JmpZ` of a temporary holding a bool.
@@ -644,6 +759,48 @@ macro_rules! tape_ops {
             }
         }
 
+        #[cfg(feature = "jit")]
+        impl TOp {
+            /// What the instruction is made of, for the code generator
+            /// ([`jit`]): the row of the table it comes from.
+            fn shape(self) -> jit::Shape {
+                use jit::Shape;
+                match self {
+                    // Not in a tape that is compiled (`jit::install` puts
+                    // it there afterwards).
+                    TOp::Exit | TOp::Native => Shape::Leave(WHY_EXIT),
+                    TOp::Step => Shape::Leave(WHY_STEP),
+                    TOp::Ext => Shape::Leave(WHY_EXT),
+                    TOp::CallInit | TOp::CallSend => Shape::Leave(WHY_CALL),
+                    TOp::Jmp => Shape::Jmp,
+                    TOp::JmpZT => Shape::JmpBoolT(false),
+                    TOp::JmpNzT => Shape::JmpBoolT(true),
+                    TOp::IncC => Shape::IncDecC(true),
+                    TOp::DecC => Shape::IncDecC(false),
+                    TOp::PreIncT => Shape::IncDecT { inc: true, post: false },
+                    TOp::PreDecT => Shape::IncDecT { inc: false, post: false },
+                    TOp::PostIncT => Shape::IncDecT { inc: true, post: true },
+                    TOp::PostDecT => Shape::IncDecT { inc: false, post: true },
+                    TOp::AssignC => Shape::AssignC,
+                    TOp::AssignT => Shape::AssignT,
+                    TOp::AssignI => Shape::AssignI,
+                    TOp::AssignL => Shape::AssignL,
+                    $( TOp::$cn => Shape::Cmp { ka: $cka, kb: $ckb, m: $cm }, )*
+                    $( TOp::$in => Shape::IncCmp { inc: $iinc, kb: $ikb, m: $im }, )*
+                    $( TOp::$an => Shape::ArithTmp { op: jit::Arith::$aop, ka: $aka, kb: $akb }, )*
+                    $( TOp::$vn => Shape::ArithCv { op: jit::Arith::$vop, ka: $vka, kb: $vkb }, )*
+                    $( TOp::$on => Shape::AssignOp { op: jit::Arith::$oop, kb: $okb }, )*
+                    $(
+                        TOp::$fname => Shape::Family {
+                            handler: fam_tramp!($fmode, $fh),
+                            covers: $fskip,
+                            ending: fam_ending!($fmode),
+                        },
+                    )*
+                }
+            }
+        }
+
         /// Runs specialised instructions from `ip` until one stops it
         /// ([`Out`]): the loop of the tape. Inlined into [`run_tape`].
         ///
@@ -681,6 +838,20 @@ macro_rules! tape_ops {
                     TOp::CallInit | TOp::CallSend => {
                         return Out { ip, at: ip, why: WHY_CALL };
                     }
+                    // The machine code stops as this loop does, for the
+                    // same reasons, wherever it got to.
+                    #[cfg(feature = "jit")]
+                    TOp::Native => {
+                        let (stopped, at) = jit::enter(st.f, ip);
+                        #[allow(clippy::cast_possible_truncation)]
+                        return Out {
+                            ip: (stopped & !7) as *const Inst,
+                            at: at as *const Inst,
+                            why: (stopped & 7) as u8,
+                        };
+                    }
+                    #[cfg(not(feature = "jit"))]
+                    TOp::Native => return step_out(ip),
                     TOp::Jmp => take_jump!(ip, inst),
                     TOp::JmpZT => {
                         let s = tmp_slot(st, inst.a);
@@ -1233,29 +1404,41 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         Op::IncDecCvCmpJmp { cv, kind, .. } => {
-            let Some(&Op::CmpJmp {
-                a, b, target, mask, ..
-            }) = code.ops.get(i + 1)
-            else {
-                return None;
+            // Fused with the smart branch after it when that compares the
+            // variable against something else, which the fused form reads
+            // before the store. `$i > 0` and `$n > $i` have the variable on
+            // the right (compiled as `0 < $i`, `$i < $n` mirrored): the
+            // mirrored comparison.
+            let fused = || {
+                let &Op::CmpJmp {
+                    a, b, target, mask, ..
+                } = code.ops.get(i + 1)?
+                else {
+                    return None;
+                };
+                let known = Operand::Cv(cv);
+                let (other, mask) = match (a == known, b == known) {
+                    (true, false) => (b, mask),
+                    (false, true) => (a, mirrored(mask)),
+                    _ => return None,
+                };
+                let (kb, fb) = src(code, other)?;
+                Some(Inst {
+                    k: mask,
+                    a: cv_off(code, cv)?,
+                    b: fb,
+                    c: rel(code, i, target)?,
+                    ..plain(TOp::inccmp(kind.is_inc(), kb, mask & 7)?)
+                })
             };
-            // The variable against something else, which the fused form
-            // reads before the store. `$i > 0` and `$n > $i` have the
-            // variable on the right (compiled as `0 < $i`, `$i < $n`
-            // mirrored): the mirrored comparison.
-            let known = Operand::Cv(cv);
-            let (other, mask) = match (a == known, b == known) {
-                (true, false) => (b, mask),
-                (false, true) => (a, mirrored(mask)),
-                _ => return None,
-            };
-            let (kb, fb) = src(code, other)?;
-            Inst {
-                k: mask,
-                a: cv_off(code, cv)?,
-                b: fb,
-                c: rel(code, i, target)?,
-                ..plain(TOp::inccmp(kind.is_inc(), kb, mask & 7)?)
+            // Any other comparison after it (`$c++; if ($a < $b)`): the
+            // step alone, and the `CmpJmp` then runs as its own op.
+            match fused() {
+                Some(inst) => inst,
+                None => Inst {
+                    a: cv_off(code, cv)?,
+                    ..plain(if kind.is_inc() { TOp::IncC } else { TOp::DecC })
+                },
             }
         }
         Op::IncDecCv {
@@ -1297,7 +1480,18 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_tmp(op, ka, kb)?)
             }
         }
+        // Also the form fused with the `CmpJmp` after its `AssignCv` (a
+        // rotated loop's `$i = $i + 1` and condition): the assignment is
+        // this instruction and the comparison then runs as the smart
+        // branch it is ("otherwise the `CmpJmp` runs as its own op").
         Op::BinAssignCv {
+            op: BinKind::Arith(op),
+            a,
+            b,
+            cv,
+            ..
+        }
+        | Op::BinAssignCvCmpJmp {
             op: BinKind::Arith(op),
             a,
             b,
@@ -1313,13 +1507,16 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_cv(op, ka, kb)?)
             }
         }
+        // Also the form fused with the `CmpJmp` after it (`$i += 1` as a
+        // rotated loop's step), as for `BinAssignCvCmpJmp` above.
         Op::AssignOpCv {
             cv,
             op,
             val,
             dst: None,
             ..
-        } => {
+        }
+        | Op::AssignOpCvCmpJmp { cv, op, val, .. } => {
             let (kb, fb) = src(code, val)?;
             Inst {
                 a: cv_off(code, cv)?,
@@ -1904,6 +2101,8 @@ fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize
 
 mod calls;
 mod dims;
+#[cfg(feature = "jit")]
+pub(crate) mod jit;
 mod props;
 mod scalar;
 mod strs;

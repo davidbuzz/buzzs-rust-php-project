@@ -272,6 +272,29 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     check_startup_shm(vm);
     JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+    let setting = get_ini_string(vm, "opcache.jit");
+    configure_vm_jit(vm, &setting);
+}
+
+/// Tells the VM's code generator (`php_vm::jit`) whether to compile:
+/// when opcache runs, `opcache.jit` (`setting`) is on (`JIT_G(on)`) and
+/// there is a JIT buffer, as `zend_jit_startup` and `zend_jit_config`
+/// decide.
+fn configure_vm_jit(vm: &Vm, setting: &str) {
+    let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+    let (buffer_size, _) = php_support::ini::parse_quantity(&raw_buf);
+    let enabled = JIT_ENABLED.with(std::cell::Cell::get)
+        && is_opcache_enabled(vm)
+        && buffer_size > 0
+        && !vm.ini_bool("opcache.file_cache_only")
+        && JitConfig::parse(setting).is_ok_and(|c| c.enabled && c.on);
+    php_vm::jit::configure(php_vm::jit::Options {
+        enabled,
+        everything: false,
+        first_tier: false,
+        registers: true,
+        hot_loop: u32::try_from(vm.ini_long("opcache.jit_hot_loop").max(0)).unwrap_or(u32::MAX),
+    });
 }
 
 /// `JIT_G(enabled)` after start-up: `zend_jit_config` on the configured
@@ -303,6 +326,7 @@ fn on_update_jit(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     if let Ok(cfg) = JitConfig::parse(&String::from_utf8_lossy(value)) {
         JIT_ENABLED.with(|c| c.set(cfg.enabled));
     }
+    configure_vm_jit(vm, &String::from_utf8_lossy(value));
     Ok(true)
 }
 

@@ -22,7 +22,14 @@ use std::ptr::{self, NonNull};
 use std::rc::{Rc, Weak};
 
 /// A PHP value (`zval`).
+///
+/// `repr(u8)` fixes the layout the JIT's machine code reads and writes
+/// (`php-vm`, `exec/tape/jit.rs`): the tag is the byte at offset 0, numbered
+/// in declaration order, a `bool` is the byte at offset 1 and every other
+/// payload starts at offset 8. It is the layout rustc chose unprompted;
+/// reorder the variants only together with the JIT's tag constants.
 #[derive(Clone, Default)]
+#[repr(u8)]
 pub enum Value {
     /// `null`.
     #[default]

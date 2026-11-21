@@ -86,6 +86,9 @@ fn check(code: &OpArray) -> Box<[Inst]> {
         let label = match *op {
             Op::Jmp(t) | Op::JmpZ(_, t) | Op::JmpNz(_, t) => Some(t),
             Op::CmpJmp { target, .. } => Some(target),
+            // (Not fused with a comparison of other operands: the step
+            // alone, which does not jump.)
+            Op::IncDecCvCmpJmp { .. } if matches!(inst.op, TOp::IncC | TOp::DecC) => None,
             Op::IncDecCvCmpJmp { .. } => match code.ops.get(i + 1) {
                 Some(&Op::CmpJmp { target, .. }) => Some(target),
                 other => panic!("op {i}: fused with {other:?}"),

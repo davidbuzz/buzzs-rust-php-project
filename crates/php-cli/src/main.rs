@@ -332,6 +332,7 @@ fn main() {
 fn finish(status: i32) -> ! {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
+    php_vm::jit::report_if_asked();
     std::process::exit(status)
 }
 

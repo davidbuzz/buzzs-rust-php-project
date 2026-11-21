@@ -205,6 +205,7 @@ impl Vm {
 
     /// Installs the process's observer hooks before request execution.
     pub fn set_observer(&mut self, hooks: ObserverHooks) {
+        crate::jit::note_observers();
         self.observer = ObserverState {
             enabled: true,
             hooks: Some(hooks),

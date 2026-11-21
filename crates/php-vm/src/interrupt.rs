@@ -138,6 +138,16 @@ pub(crate) fn safe_point_due() -> bool {
     SAFE_POINT.is_due()
 }
 
+/// The address of the flag [`safe_point_due`] reads (one byte, non-zero
+/// when a safe point is due), for machine code that polls it directly
+/// (`exec/tape/jit.rs`). Never inlined, for the flag's linkage (module
+/// docs).
+#[cfg(feature = "jit")]
+#[inline(never)]
+pub(crate) fn safe_point_flag() -> *const u8 {
+    SAFE_POINT.due.as_ptr().cast_const().cast()
+}
+
 /// Asks for a safe point after the current instruction: called by whoever
 /// queues work for it (a destructor, a due collection), after setting its
 /// own source. Async-signal-safe.
