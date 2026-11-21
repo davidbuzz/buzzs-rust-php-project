@@ -413,6 +413,69 @@ fn plain_cv_update(
     Some((cv, res.map(|v| add_or_find_literal(literals, v))))
 }
 
+/// `$cv[k] op= v` and `++$cv[k]` & co. (one dimension, CV base): the CV and,
+/// when the CV holds a known array with a known element under a literal or
+/// known key, and `v` is known, the literals of the new array and of the
+/// new element. `(cv, None)` when the result is not known.
+fn dim_cv_update(
+    op: &Op,
+    places: &[Place],
+    cur_state: &[CvLattice],
+    literals: &mut Vec<Value>,
+) -> Option<(u32, Option<(u32, u32)>)> {
+    let place = match op {
+        Op::AssignOp { place, .. } | Op::IncDec { place, .. } => *place,
+        _ => return None,
+    };
+    let p = places.get(place as usize)?;
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    let [Seg::Dim(k)] = p.segs.as_slice() else {
+        return None;
+    };
+    let CvLattice::Const(cur) = *cur_state.get(cv as usize)? else {
+        return Some((cv, None));
+    };
+    let new = (|| {
+        let Value::Array(arr) = literals.get(cur as usize)? else {
+            return None;
+        };
+        let key = match literals.get(cv_or_lit(k, cur_state)? as usize)? {
+            Value::Int(n) => ArrayKey::Int(*n),
+            Value::Str(s) => ArrayKey::from_zstr(s),
+            _ => return None,
+        };
+        let elem = arr.get(&key)?.clone();
+        let res = match op {
+            Op::AssignOp { op: bop, val, .. } => {
+                let rhs = literals.get(cv_or_lit(val, cur_state)? as usize)?.clone();
+                fold_bin_op(BinKind::Arith(*bop), &elem, &rhs)?
+            }
+            Op::IncDec { kind, .. } => match elem {
+                Value::Int(i) => Value::Int(match kind {
+                    IncDecKind::PreInc | IncDecKind::PostInc => i.checked_add(1)?,
+                    IncDecKind::PreDec | IncDecKind::PostDec => i.checked_sub(1)?,
+                }),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut arr = arr.clone();
+        arr.make_mut().insert(key, res.clone());
+        Some((arr, res))
+    })();
+    Some((
+        cv,
+        new.map(|(arr, res)| {
+            (
+                add_or_find_array_literal(literals, arr),
+                add_or_find_literal(literals, res),
+            )
+        }),
+    ))
+}
+
 /// The literal of `operand` when it is a literal or a CV with a known
 /// constant.
 fn cv_or_lit(operand: &Operand, cur_state: &[CvLattice]) -> Option<u32> {
@@ -904,6 +967,12 @@ fn update_cv_state_for_op(
     if let Some((cv, lit)) = const_assign_dim(op, places, cur_state, literals) {
         if let Some(slot) = cur_state.get_mut(cv as usize) {
             *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
+            return;
+        }
+    }
+    if let Some((cv, new)) = dim_cv_update(op, places, cur_state, literals) {
+        if let Some(slot) = cur_state.get_mut(cv as usize) {
+            *slot = new.map_or(CvLattice::Bottom, |(arr, _)| CvLattice::Const(arr));
             return;
         }
     }
@@ -2460,6 +2529,28 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             dst,
                         };
                         changed = true;
+                    }
+                }
+
+                // `$cv[k] op= c` / `++$cv[k]` on a known element of a
+                // known array, its result unused: the plain store of the
+                // new element.
+                let unused = matches!(
+                    op,
+                    Op::AssignOp { dst: None, .. } | Op::IncDec { dst: None, .. }
+                );
+                if unused {
+                    if let Some((_, Some((_, elem)))) =
+                        dim_cv_update(op, &op_array.places, &cur_state, &mut op_array.literals)
+                    {
+                        if let Op::AssignOp { place, .. } | Op::IncDec { place, .. } = *op {
+                            *op = Op::Assign {
+                                place,
+                                val: Operand::Lit(elem),
+                                dst: None,
+                            };
+                            changed = true;
+                        }
                     }
                 }
 
