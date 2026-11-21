@@ -30,7 +30,10 @@ CMP = ['<', '<=', '>', '>=', '==', '!=', '===', '!==']
 
 
 # What every generated function returns (also from the middle of a loop).
-RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $s]'
+RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $o->n, $o->u, $s]'
+# Constants (a typed loop reads them as their values) and properties.
+CONSTS = ['KI', 'KF', 'KB', 'KS', 'P::CI', 'P::CF', 'P::CB', 'PHP_INT_SIZE', 'M_PI']
+PROPS = ['$o->x', '$o->f', '$o->n', '$o->u']
 
 
 class Gen:
@@ -75,7 +78,9 @@ class Gen:
         if k < 0.93:
             return self.pick(['$i', '$j', '$n', '$fv', '$fk'])
         if k < 0.96:
-            return self.pick(['$o->x', '$o->f'])
+            return self.pick(PROPS)
+        if k < 0.98:
+            return self.pick(CONSTS)
         return self.pick(OTHERS)
 
     def expr(self, d=0):
@@ -127,6 +132,9 @@ class Gen:
             return f'{v} = ({self.var()} = {self.expr()}) {self.pick(["+", "-", "*"])} {self.atom()};'
         if k2 < 0.12:
             return self.pick([f'$o->x {self.pick(["+", "-", "*"])}= {self.atom()};', f'{v} = $o->x;',
+                              f'{self.pick(PROPS)} {self.pick(["+", "-", "*"])}= {self.atom()};',
+                              f'{self.pick(PROPS)} = {self.atom()};', f'{self.pick(PROPS)}{self.pick(["++", "--"])};',
+                              f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
                               f'$o->f = {self.expr()};', '$o->x++;', f'$o->x = {self.atom()};',
                               f'{v} = $o->f;'])
         if k2 < 0.15:
@@ -219,7 +227,9 @@ class Gen:
     def program(self):
         fns = [f'f{i}' for i in range(self.r.randrange(1, 4))]
         out = ['<?php']
-        out.append('class P { public $x; public $f = 0.5; function __construct($x) { $this->x = $x; } }')
+        out.append("const KI = 3; const KF = 1.5; const KB = true; const KS = '7';")
+        out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
+                   'public int $n = 1; public int|float $u = 2; function __construct($x) { $this->x = $x; } }')
         out += [self.function(f) for f in fns]
         out.append('function show($v) { if (is_float($v)) { return is_nan($v) ? "NAN" : sprintf("%.17g", $v); } '
                    'if (is_array($v)) { $o = []; foreach ($v as $k => $e) { $o[] = $k . "=>" . show($e); } '
