@@ -116,7 +116,9 @@ class Gen:
         k = self.r.random()
         if k > 0.9:
             return self.pick([f'isset({self.arr()}[{self.index()}])', f'empty({self.arr()}[{self.index()}])',
-                              f'is_int({self.var()})', f'is_float({self.var()})', f'isset({self.var()})'])
+                              f'is_int({self.var()})', f'is_float({self.var()})', f'isset({self.var()})',
+                              f'isset({self.pick(PROPS)})', f'empty({self.pick(PROPS)})',
+                              f'isset({self.pick(STATICS)})', f'empty({self.pick(STATICS)})'])
         if k < 0.1:
             return self.var()
         if k < 0.15:

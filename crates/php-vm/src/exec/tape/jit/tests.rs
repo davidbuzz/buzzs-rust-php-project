@@ -1133,3 +1133,20 @@ var_export([S::run(40), T::run(40), S::turn(30), refs(30), bad(30), S::$n, S::$t
 ",
     );
 }
+
+#[test]
+fn typed_loops_test_properties_with_isset_and_empty() {
+    typed_at_least(
+        "<?php class Q { public $b = 0; public $c = 5; static $s = 0; static $t = 3; } $o = new Q; $n = 0; for ($i = 0; $i < 40; $i++) { $x = isset($o->b); $y = empty($o->b); $z = isset(Q::$t); $w = empty(Q::$s); if ($x) { $n++; } if ($y) { $n += 2; } if ($z) { $n += 4; } if ($w) { $n += 8; } if (isset($o->c) && !empty(Q::$t)) { $n += 16; } } var_dump($n, $x, $y, $z, $w);",
+        1,
+    );
+    three(
+        r"<?php
+class R { public $a = 1; public $n = null; public ?int $t = null; public int $u; static $s = null; static ?int $st = null; private $data = [];
+  function __isset($k) { return $k === 'magic'; } function __get($k) { return 7; } }
+function f($o, $k) { $c = 0; for ($i = 0; $i < $k; $i++) { if (isset($o->a)) { $c += 1; } if (isset($o->n)) { $c += 2; } if (empty($o->t)) { $c += 4; } if (isset($o->u)) { $c += 8; } if (isset($o->magic)) { $c += 16; } if (isset($o->nope)) { $c += 32; } if (!empty($o->magic)) { $c += 64; }
+  if (isset(R::$s)) { $c += 128; } if (empty(R::$st)) { $c += 256; } if ($i == 9) { $o->n = 3; R::$s = 'x'; $o->a = null; } if ($i == 14) { unset($o->a); $o->u = 0; R::$st = 5; } } return $c; }
+var_export([f(new R, 30), f(new stdClass, 20)]);
+",
+    );
+}

@@ -352,6 +352,7 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             ..
         }
         | Op::AssignStaticProp { dst: None, .. }
+        | Op::IssetStaticProp { .. }
         | Op::Return { .. } => true,
         _ => false,
     }
@@ -1627,6 +1628,17 @@ impl Analysis<'_> {
                     };
                 }
             }
+            // `isset($obj->prop)` / `empty($obj->prop)` into a temporary:
+            // a bool.
+            TOp::IssetObjProp => {
+                let &Op::IssetObjProp { place, dst, .. } = self.ops.get(inst.d as usize)? else {
+                    return None;
+                };
+                self.object_place(st, place)?;
+                let dst = tmp(dst.checked_mul(SLOT_U32)?)?;
+                self.ty(st, dst)?;
+                call.result = Some((dst, Ty::Bool));
+            }
             // `isset($cv[dim])` / `empty($cv[dim])` into a temporary: a
             // bool. (The variable may hold anything; it is only read.)
             TOp::IssetDimC => {
@@ -1881,6 +1893,20 @@ impl Analysis<'_> {
                     result: Some((slot, ty)),
                     consume: None,
                     after: i + 1,
+                    next,
+                })
+            }
+            // `isset(A::$p)` / `empty(A::$p)` into a temporary: a bool.
+            &Op::IssetStaticProp { dst, .. } => {
+                if (self.seen.slow)(i) {
+                    return None;
+                }
+                let dst = temp(dst)?;
+                self.ty(st, dst)?;
+                Some(Plan::Ext {
+                    result: Some((dst, Ty::Bool)),
+                    consume: None,
+                    after: next,
                     next,
                 })
             }
@@ -2511,6 +2537,7 @@ pub(super) fn candidate(tape: &[Inst], code: &OpArray, head: usize, last: usize)
                     | TOp::AssignObjProp
                     | TOp::AssignOpObjProp
                     | TOp::IncDecObjProp
+                    | TOp::IssetObjProp
                     | TOp::IssetDimC
                     | TOp::TypeCheckC
                     | TOp::TypeCheckJmpC
