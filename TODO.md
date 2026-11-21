@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 81/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 24/82 with `BUZZS_JIT=0`).
+Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 25/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -77,10 +77,10 @@ Score: 81/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by d
       behind a frameless dispatcher (`assign_op_dim` -> `assign_op_dim_str` or the old
       handler), `dechex()` filling its digits from the end: hash2 1.19 -> 1.10
       (meets), hash1 1.22 -> 1.16, and the JIT-off ary3 back at 1.36.
-      Open: hash1 needs about 30 more instructions off an iteration: its element rows
-      are the int-key ones (the key is a temporary) and fail over to the string-key
-      handler at every access; `frameless_quick` (75 around `dechex()`); the key's
-      free. heapsort's outer loop (a `return` inside it) and `gen_random`
+      Then string-key rows for keys made as strings (`dims::made_str`), lean paths
+      for keys that are integers in digits (`ArrayKey::small_int`), and keyed trace
+      rows calling a helper made for their op: hash1 1.16 -> 1.08 (meets). Open:
+      heapsort's outer loop (a `return` inside it) and `gen_random`
       (constants defined at run time, a `global`) stay interpreted; a `foreach` step
       is no trace row yet.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions

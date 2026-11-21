@@ -185,7 +185,10 @@ pub(super) const NO_TO: u32 = u32::MAX;
 /// folded `AssignCv`'s variable; a read into its temporary with an offset
 /// that can be an int is [`TOp::FetchDimIT`] ([`fetch_dim_tmp`]), and any
 /// other read without a folded variable general.
-fn fetch_op(code: &OpArray, dk: u8, di: u32, to: u32) -> TOp {
+fn fetch_op(code: &OpArray, dk: u8, di: u32, to: u32, made_str: bool) -> TOp {
+    if made_str {
+        return TOp::FetchDimC;
+    }
     if to == NO_TO {
         let int_offset = match dk {
             KIND_TMP | KIND_TMPKEEP | KIND_CV => true,
@@ -215,11 +218,11 @@ fn fetch_op(code: &OpArray, dk: u8, di: u32, to: u32) -> TOp {
 /// ([`assign_dim_int`]) when the offset can be an int or is absent (an
 /// append; not a literal of another type) and the value can be a scalar or
 /// a string (not a literal of another type); else [`TOp::AssignDimC`].
-fn assign_op(code: &OpArray, (dk, di): (u8, u32), (vk, vi): (u8, u32)) -> TOp {
+fn assign_op(code: &OpArray, (dk, di): (u8, u32), (vk, vi): (u8, u32), made_str: bool) -> TOp {
     let lit = |i: u32| code.literals.get(i as usize);
     let dim_ok = match dk {
         KIND_LIT => matches!(lit(di), Some(Value::Int(_))),
-        _ => true,
+        _ => !made_str,
     };
     let val_ok = match vk {
         KIND_LIT => lit(vi).is_some_and(Value::is_plain),
@@ -229,6 +232,60 @@ fn assign_op(code: &OpArray, (dk, di): (u8, u32), (vk, vi): (u8, u32)) -> TOp {
         TOp::AssignDimIC
     } else {
         TOp::AssignDimC
+    }
+}
+
+/// Whether the key operand `dim` of the element access at op `i` is a
+/// temporary that the op right before it (`Nop`s aside) makes and that
+/// always holds a string then: a concatenation, an interpolation, a string
+/// cast, or a frameless call of a function that returns a string. A hint
+/// for the choice of the row (an int key in a string-key row takes its
+/// general path, so a wrong guess costs time, never a result).
+fn made_str(code: &OpArray, i: usize, dim: Operand) -> bool {
+    /// Builtins whose frameless call returns a string (or throws).
+    const STRING_BUILTINS: &[&[u8]] = &[
+        b"dechex",
+        b"decbin",
+        b"decoct",
+        b"chr",
+        b"strtolower",
+        b"strtoupper",
+        b"trim",
+        b"ltrim",
+        b"rtrim",
+        b"str_repeat",
+        b"implode",
+        b"substr",
+        b"ucfirst",
+        b"lcfirst",
+    ];
+    let (Operand::Tmp(t) | Operand::TmpKeep(t)) = dim else {
+        return false;
+    };
+    let before = code.ops.get(..i).unwrap_or_default();
+    let Some(op) = before.iter().rev().find(|op| !matches!(op, Op::Nop)) else {
+        return false;
+    };
+    match op {
+        Op::Rope { dst, .. }
+        | Op::Bin {
+            op: BinKind::Arith(BinaryOp::Concat),
+            dst,
+            ..
+        }
+        | Op::Cast {
+            kind: CastKind::String,
+            dst,
+            ..
+        } => *dst == t,
+        Op::FramelessICall(fc) => {
+            fc.dst == Some(t)
+                && matches!(
+                    code.literals.get(fc.name as usize),
+                    Some(Value::Str(name)) if STRING_BUILTINS.contains(&name.as_bytes())
+                )
+        }
+        _ => false,
     }
 }
 
@@ -261,7 +318,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 d: to,
                 k: dk,
                 p: dst as usize,
-                ..plain(fetch_op(code, dk, di, to))
+                ..plain(fetch_op(code, dk, di, to, made_str(code, i, dim)))
             }
         }
         Op::FetchDimsCv {
@@ -303,7 +360,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 b: di,
                 p: vi as usize,
                 k: dk | (vk << 3),
-                ..plain(assign_op(code, (dk, di), (vk, vi)))
+                ..plain(assign_op(code, (dk, di), (vk, vi), made_str(code, i, dim)))
             }
         }
         Op::AssignDimsCv { cv, val, place } => {
@@ -649,13 +706,19 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     let Some(Value::Str(key)) = key else {
         return false;
     };
-    if !ArrayKey::surely_str(key.as_bytes()) {
-        return false;
-    }
     let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
         return false;
     };
-    let Some(found) = arr.lean_find(key, key.hash_now()) else {
+    let found = if ArrayKey::surely_str(key.as_bytes()) {
+        arr.lean_find(key, key.hash_now())
+    } else {
+        // An integer in digits is the int key (`ZEND_HANDLE_NUMERIC_STR`).
+        match ArrayKey::small_int(key.as_bytes()) {
+            Some(i) => arr.lean_get_int(i),
+            None => return false,
+        }
+    };
+    let Some(found) = found else {
         return false;
     };
     if !found.is_plain() {
@@ -1310,9 +1373,15 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     let Some(Value::Str(key)) = f.tmps.get(inst.b as usize) else {
         return false;
     };
-    if !ArrayKey::surely_str(key.as_bytes()) {
-        return false;
-    }
+    // An integer in digits is the int key (`ZEND_HANDLE_NUMERIC_STR`).
+    let int_key = if ArrayKey::surely_str(key.as_bytes()) {
+        None
+    } else {
+        match ArrayKey::small_int(key.as_bytes()) {
+            Some(i) => Some(i),
+            None => return false,
+        }
+    };
     let v = match val_kind(inst) {
         KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
         KIND_LIT => f.code.literals.get(inst.p),
@@ -1331,6 +1400,33 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
     let Some(table) = arr.get_mut_unshared() else {
         return false;
     };
+    if let Some(i) = int_key {
+        match table.lean_get_int_mut(i) {
+            Some(el) => {
+                if !matches!(
+                    el,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    return false;
+                }
+                // A scalar over a scalar: nothing to release.
+                std::mem::forget(std::mem::replace(el, v));
+            }
+            None => {
+                if table.lean_add_int(i, v).is_err() {
+                    // (A scalar given back: nothing to release.)
+                    return false;
+                }
+            }
+        }
+        // The key's string is released (`FREE_OP2`).
+        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+            if let Value::Str(key) = std::mem::take(slot) {
+                drop(key);
+            }
+        }
+        return true;
+    }
     let h = key.hash_now();
     if let Some(el) = table.lean_find_mut(key, h) {
         if !matches!(

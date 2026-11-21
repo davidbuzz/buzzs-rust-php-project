@@ -1416,6 +1416,67 @@ unsafe extern "C" fn jit_row_dim_keyed(
     u32::from(!done)
 }
 
+/// [`jit_row_dim_keyed`] for a read (`FetchDim*`): the handler, and on its
+/// decline the quiet read of a missing key. The row's op is known when the
+/// trace is emitted, so no dispatch on it is made here.
+///
+/// # Safety
+/// As [`jit_row_dim_keyed`].
+unsafe extern "C" fn jit_row_fetch_key(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    at: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    if unsafe { super::dims::fetch_dim_key(frame, &*inst) } != super::Br::Decline {
+        return 0;
+    }
+    // SAFETY: the caller's contract, passed on.
+    unsafe { jit_row_dim_keyed(frame, inst, std::ptr::null(), at) }
+}
+
+/// [`jit_row_dim_keyed`] for a write (`AssignDimIC`, `AssignDimC`).
+///
+/// # Safety
+/// As [`jit_row_dim_keyed`].
+unsafe extern "C" fn jit_row_assign_key(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    _at: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    u32::from(!unsafe { super::dims::assign_dim_key(frame, &*inst) })
+}
+
+/// [`jit_row_dim_keyed`] for a compound write (`AssignOpDimC`).
+///
+/// # Safety
+/// As [`jit_row_dim_keyed`].
+unsafe extern "C" fn jit_row_assign_op_key(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    _at: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    u32::from(!unsafe { super::dims::assign_op_dim(frame, &*inst) })
+}
+
+/// The helper of a keyed element row of op `op`: one made for it, else
+/// [`jit_row_dim_keyed`].
+fn keyed_row_helper(op: TOp) -> usize {
+    match op {
+        TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
+            jit_row_fetch_key as *const () as usize
+        }
+        TOp::AssignDimIC | TOp::AssignDimC => jit_row_assign_key as *const () as usize,
+        TOp::AssignOpDimC => jit_row_assign_op_key as *const () as usize,
+        _ => jit_row_dim_keyed as *const () as usize,
+    }
+}
+
 /// The handler row of the tape's `new` instruction at `i`
 /// (`calls::CALL_NEW`: `calls::new_plain` makes the object, with the
 /// arguments its constructor only stores, and declines anything that
@@ -5797,8 +5858,9 @@ impl Emitter {
             // no int, then the poll.
             C_DIMKEY => {
                 let row = self.row_arg(i);
+                let helper = keyed_row_helper(self.tape[i].op);
                 self.emit_helper(
-                    jit_row_dim_keyed as *const () as usize,
+                    helper,
                     [HArg::Frame, row, HArg::Null],
                     u32::try_from(i).unwrap_or(u32::MAX),
                     Target::Side(i),

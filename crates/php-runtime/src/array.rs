@@ -101,6 +101,32 @@ impl ArrayKey {
         }
     }
 
+    /// The int key a string of up to 18 digits is (`ZEND_HANDLE_NUMERIC_STR`
+    /// for those: decimal digits, an optional `-`, no leading zero, not
+    /// `-0`), decided without a call. `None` for anything else, including
+    /// longer integers in digits, which [`ArrayKey::from_bytes`] converts.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a few byte tests in a lean handler
+    #[must_use]
+    pub fn small_int(bytes: &[u8]) -> Option<i64> {
+        let (neg, digits) = match bytes.split_first()? {
+            (b'-', rest) => (true, rest),
+            _ => (false, bytes),
+        };
+        let (&first, _) = digits.split_first()?;
+        if digits.len() > 18 || (first == b'0' && (neg || digits.len() > 1)) {
+            return None;
+        }
+        let mut n: i64 = 0;
+        for &c in digits {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            n = n * 10 + i64::from(c - b'0');
+        }
+        Some(if neg { -n } else { n })
+    }
+
     /// The hash used for bucket placement (`h`): the integer itself or the
     /// string's PHP hash.
     #[inline]
@@ -702,6 +728,22 @@ impl HashData {
                 {
                     return Some(idx);
                 }
+            }
+            idx = b.next;
+        }
+        None
+    }
+
+    /// [`HashData::find_int`], always inlined: for the lean lookups.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
+    fn lean_probe_int(&self, ts: u32, h: i64) -> Option<u32> {
+        #[allow(clippy::cast_sign_loss)]
+        let mut idx = self.head(ts, h as u64);
+        while idx != INVALID {
+            let b = self.buckets.get(idx as usize)?;
+            if matches!(b.key, ArrayKey::Int(k) if k == h) && b.val.is_some() {
+                return Some(idx);
             }
             idx = b.next;
         }
@@ -1858,6 +1900,66 @@ impl HashTable {
         };
         let idx = d.lean_probe(self.table_size, key, h)?;
         d.buckets.get(idx as usize)?.val.as_ref()
+    }
+
+    /// The element under the int key `i`, found without a call: a list's
+    /// slot or a hash's bucket.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    #[must_use]
+    pub fn lean_get_int(&self, i: i64) -> Option<&Value> {
+        match &self.store {
+            Store::Packed(v) => v.get(usize::try_from(i).ok()?)?.as_ref(),
+            Store::Hash(d) => {
+                let idx = d.lean_probe_int(self.table_size, i)?;
+                d.buckets.get(idx as usize)?.val.as_ref()
+            }
+            Store::Uninit => None,
+        }
+    }
+
+    /// Mutable [`HashTable::lean_get_int`].
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_get_int_mut(&mut self, i: i64) -> Option<&mut Value> {
+        let ts = self.table_size;
+        match &mut self.store {
+            Store::Packed(v) => v.get_mut(usize::try_from(i).ok()?)?.as_mut(),
+            Store::Hash(d) => {
+                let idx = d.lean_probe_int(ts, i)?;
+                d.buckets.get_mut(idx as usize)?.val.as_mut()
+            }
+            Store::Uninit => None,
+        }
+    }
+
+    /// Adds `val` under the int key `i`, which the caller found absent
+    /// ([`HashTable::lean_get_int_mut`]), to a hash with room for it,
+    /// without a call (and the next free index moves past `i`).
+    ///
+    /// # Errors
+    /// Gives the value back, nothing changed, for a table that is no hash
+    /// or is full: the general insert's.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_add_int(&mut self, i: i64, val: Value) -> Result<(), Value> {
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return Err(val);
+        };
+        let used = d.buckets.len();
+        if used >= ts as usize || used == d.buckets.capacity() {
+            return Err(val);
+        }
+        #[allow(clippy::cast_sign_loss)]
+        let Some(slot) = d.index.get_mut(hash_slot(ts, i as u64)) else {
+            return Err(val);
+        };
+        let head = std::mem::replace(slot, to_u32(used));
+        d.buckets.push(Bucket::new(ArrayKey::Int(i), val, head));
+        self.num_elements += 1;
+        self.note_int_key(i);
+        Ok(())
     }
 
     /// Mutable [`HashTable::lean_find`].
@@ -3815,6 +3917,76 @@ mod tests {
         assert!(t.entry_at(1).is_none());
         assert!(t.entry_at(5).is_none());
         assert!(HashTable::new().entry_at(0).is_none());
+    }
+
+    /// `small_int` gives the int key `ArrayKey::from_bytes` makes, for every
+    /// string it takes, and takes every such key of up to 18 digits.
+    #[test]
+    fn small_int_is_the_numeric_key() {
+        let mut cases: Vec<String> = [
+            "",
+            "-",
+            "0",
+            "-0",
+            "00",
+            "01",
+            "-01",
+            "1",
+            "-1",
+            "9",
+            "10",
+            "1999",
+            "c350",
+            "1f",
+            "1e5",
+            " 1",
+            "1 ",
+            "+1",
+            "1.0",
+            "999999999999999999",
+            "-999999999999999999",
+            "1000000000000000000",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "0x1",
+            "١",
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+        cases.extend((0..2000).map(|i| format!("{i:x}")));
+        cases.extend((0..300).map(|i| format!("-{i}")));
+        for s in &cases {
+            let general = match ArrayKey::from_bytes(s.as_bytes()) {
+                ArrayKey::Int(i) => Some(i),
+                ArrayKey::Str(_) => None,
+            };
+            match ArrayKey::small_int(s.as_bytes()) {
+                Some(i) => assert_eq!(Some(i), general, "{s:?}"),
+                None => assert!(
+                    general.is_none() || s.trim_start_matches('-').len() > 18,
+                    "{s:?}"
+                ),
+            }
+        }
+        // The lean int functions on a hash and on a list.
+        let mut h = HashTable::with_capacity_mixed(8);
+        assert!(h.lean_add_int(10, Value::Int(1)).is_ok());
+        assert!(h.lean_add_int(-3, Value::Int(2)).is_ok());
+        assert!(matches!(h.lean_get_int(10), Some(Value::Int(1))));
+        assert!(matches!(h.get_int(-3), Some(Value::Int(2))));
+        assert!(h.lean_get_int(11).is_none());
+        if let Some(v) = h.lean_get_int_mut(10) {
+            *v = Value::Int(5);
+        }
+        assert!(matches!(h.get_int(10), Some(Value::Int(5))));
+        assert!(matches!(h.push(Value::Null), Ok(11)));
+        let mut l = HashTable::new();
+        let _ = l.push(Value::Int(7));
+        assert!(matches!(l.lean_get_int(0), Some(Value::Int(7))));
+        assert!(l.lean_get_int(-1).is_none());
+        assert!(l.lean_add_int(1, Value::Null).is_err());
     }
 
     /// The lean lookups and the lean append agree with the general table
