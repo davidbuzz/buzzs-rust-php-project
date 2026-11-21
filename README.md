@@ -78,8 +78,8 @@ it off).
 python3 perf/bench/timing.py     # builds the release php if needed, then compares it with /usr/bin/php
 ```
 
-`perf/bench/timing.py` builds the release `php` of the checkout (`cargo build --release -p php-cli`
-into `~/.cache/phprust-perf-acceptance`, shared with `scripts/acceptance.sh`; give a binary as the
+`perf/bench/timing.py` builds the release `php` of the checkout (`cargo build --release -p php-cli`,
+so `target/release/php`, the binary `scripts/acceptance.sh` measures too; give a binary as the
 argument to measure that one instead), then runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
 and the `perf/bench/<op>.php` loops under both binaries, alternately on the same cores, takes
 the fastest of 5 rounds per input and compares the totals. **Met** (release build of

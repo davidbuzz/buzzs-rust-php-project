@@ -21,10 +21,9 @@ wait4) are reported; the verdict is on wall-clock.
 usage: python3 perf/bench/timing.py [<candidate-php>] [--ref PHP] [--filter RX] [--rounds N]
                                     [--no-build]
   Without <candidate-php>, it first builds the release `php` from this checkout
-  (`cargo build --release -p php-cli` into CARGO_TARGET_DIR, default
-  ~/.cache/phprust-perf-acceptance, which `scripts/acceptance.sh` shares; a few
-  seconds when nothing changed, up to ~15 minutes after source changes) and
-  measures that. --no-build measures the binary already there.
+  (`cargo build --release -p php-cli`, so target/release/php, or CARGO_TARGET_DIR
+  when set; a few seconds when nothing changed, up to ~15 minutes after source
+  changes) and measures that. --no-build measures the binary already there.
 Exit status: 0 = total within 1.10 x C, 1 = over, 2 = usage / environment error.
 """
 import os
@@ -67,18 +66,20 @@ def run_once(binary, script, cores):
     return wall, ru.ru_utime + ru.ru_stime, os.waitstatus_to_exitcode(status)
 
 
+def release_php():
+    """Where `cargo build --release -p php-cli` puts the `php` binary."""
+    target = os.environ.get('CARGO_TARGET_DIR') or os.path.join(ROOT, 'target')
+    return os.path.join(os.path.abspath(target), 'release', 'php')
+
+
 def build_release():
     """Builds the release `php` of this checkout; its path, or None."""
-    target = os.environ.get('CARGO_TARGET_DIR') or os.path.expanduser(
-        '~/.cache/phprust-perf-acceptance')
-    print(f'# building the release php into {target} (cargo build --release -p php-cli)',
-          flush=True)
-    env = dict(os.environ, CARGO_TARGET_DIR=target)
-    r = subprocess.run(['cargo', 'build', '--release', '-p', 'php-cli'], cwd=ROOT, env=env)
+    print(f'# building {release_php()} (cargo build --release -p php-cli)', flush=True)
+    r = subprocess.run(['cargo', 'build', '--release', '-p', 'php-cli'], cwd=ROOT)
     if r.returncode != 0:
         print('timing.py: the release build failed', file=sys.stderr)
         return None
-    return os.path.join(target, 'release', 'php')
+    return release_php()
 
 
 def main():
@@ -112,9 +113,7 @@ def main():
             if cand is None:
                 return 2
         else:
-            target = os.environ.get('CARGO_TARGET_DIR') or os.path.expanduser(
-                '~/.cache/phprust-perf-acceptance')
-            cand = os.path.join(target, 'release', 'php')
+            cand = release_php()
     # Both binaries on the same cores: the box's last three (the owner's
     # CPU limit), or none pinned on a small machine.
     ncpu = os.cpu_count() or 1
