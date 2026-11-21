@@ -104,17 +104,26 @@ const _: () = {
 /// (php-src's handlers and operand offsets are part of the op array the
 /// compiler allocated; decoding on first use must not show as memory the
 /// script allocated between two readings).
-#[derive(Default)]
 pub(crate) struct Tape {
     /// The instructions as first decoded (and, with the JIT on, with the
     /// entry instructions of the loops it may compile).
     first: OnceCell<Box<[Inst]>>,
-    /// The instructions in use instead, once the JIT has given an entry
-    /// up ([`jit::retire`]): the same tape without that entry instruction.
-    /// (An entry instruction that leads nowhere would cost its loop a
-    /// hundred machine instructions a round.)
-    #[cfg(feature = "jit")]
-    current: std::cell::Cell<Option<&'static [Inst]>>,
+    /// The instructions in use, and how many: null until decoded, then
+    /// `first`'s, or those the JIT put in their place when it gave an
+    /// entry up ([`jit::retire`]: the same tape without that entry
+    /// instruction, which would otherwise cost its loop a hundred machine
+    /// instructions a round). One word to test per frame entered, as the
+    /// `OnceCell` alone was.
+    live: std::cell::Cell<(*const Inst, usize)>,
+}
+
+impl Default for Tape {
+    fn default() -> Self {
+        Tape {
+            first: OnceCell::new(),
+            live: std::cell::Cell::new((std::ptr::null(), 0)),
+        }
+    }
 }
 
 impl Tape {
@@ -123,11 +132,21 @@ impl Tape {
     /// ([`jit::install`]).
     #[inline]
     fn get(&self, code: &OpArray) -> &[Inst] {
-        #[cfg(feature = "jit")]
-        if let Some(tape) = self.current.get() {
-            return tape;
+        let (at, len) = self.live.get();
+        if !at.is_null() {
+            // SAFETY: `live` is `first`'s buffer, which is not touched
+            // again until this `Tape` is dropped, or a leaked tape
+            // ([`Tape::replace`]).
+            return unsafe { std::slice::from_raw_parts(at, len) };
         }
-        self.first.get_or_init(|| {
+        self.decode(code)
+    }
+
+    /// [`Tape::get`]'s first use.
+    #[cold]
+    #[inline(never)]
+    fn decode(&self, code: &OpArray) -> &[Inst] {
+        let tape = self.first.get_or_init(|| {
             php_memlimit::persistent(|| {
                 #[cfg_attr(not(feature = "jit"), allow(unused_mut))]
                 let mut tape = lower(code);
@@ -135,14 +154,16 @@ impl Tape {
                 jit::install(code, &mut tape);
                 tape
             })
-        })
+        });
+        self.live.set((tape.as_ptr(), tape.len()));
+        tape
     }
 
     /// Puts `tape` in use in place of the instructions decoded first
     /// (same op array, same length; leaked by the caller).
     #[cfg(feature = "jit")]
     fn replace(&self, tape: &'static [Inst]) {
-        self.current.set(Some(tape));
+        self.live.set((tape.as_ptr(), tape.len()));
     }
 }
 
