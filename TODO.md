@@ -1,299 +1,166 @@
 # TODO — phprust (entire project)
 
-Companion to `FEATURE_GAP.md` (the authoritative gap table with %/pri per row;
-keep it updated via `scripts/update_feature_gap.py`). This file is the
-action-ordered work queue. Ordered by impact: biggest measured misses first,
-then conformance closes, then in-scope unimplemented features.
+The action-ordered work queue: open work first, by impact; finished work is summarised at
+the end (the details are in git history and `FEATURE_GAP.md`). `FEATURE_GAP.md` is the
+per-area table with % and priority; its % column is refreshed from a PHPT run by
+`scripts/update_feature_gap.py`.
 
-Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
+Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting.
+Last updated 22 Nov 2026.
 
-## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 82/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 25/82 with `BUZZS_JIT=0`).
+## Where things stand
 
-- [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
-      Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
-      written at the `Int` payload offset (a `Bool`'s value is the byte after the tag).
-- [~] JIT Step 2 — array/string dim rows. Done 2026-11-20 (`24eca59c`): int-offset array
-      rows for int elements (`$t = $a[$i]`, the folded `$v = $a[$i]`, `$a[$i] = v`, `$a[] = v`,
-      `$a[$i] op= v`) through helpers the trace calls, native `& | ^ << >>` and `NumBinC`.
-      String-key reads done too (hash_read and x_eq_hash_v 1.45 -> 0.84, with the keys of
-      compile-time arrays interned). Open: string keys built at run time (hash1/hash2),
-      string-key writes, string offsets (x_eq_str_0),
-      nested dims (matrix), float elements (heapsort), `isset`/`++` on an element, and an
-      inline packed read in place of the helper call. An int-key hash insert with one
-      probe (`HashTable::set_int_plain`) took ary 1.59 -> 1.10 (meets) and ary2 1.93 -> 1.48;
-      `sort()`/`rsort()` of int lists and native int callbacks took suite:arrays 1.77 ->
-      0.46. `$a[$i][$j]` read into a temporary runs through the tape's handler inside a
-      trace (matrix 1.79, unchanged: its inner loop is 625 instructions against C's 352).
-      Done 2026-11-20/21 (interpreted paths; a trace calls the same handlers): a lean
-      `$a[$i][$k]` through two lists (matrix 1.79 -> 0.97), a read into a temporary, and
-      behind the lean paths, each a small function of its own, arrays held by reference
-      (heapsort 2.95 -> 2.21), hashes with int keys (ary2 1.48 -> 1.06 with the hot count
-      by loop length) and string keys in variables and temporaries (hash1 1.97 -> 1.52,
-      hash2 2.54 -> 1.66 with `foreach` on the tape, array_rw 1.81 -> 1.35).
-      Done 2026-11-21: the string-key steps make the probe themselves
-      (`HashTable::sym_zstr_probe`, no `memcmp` call for a long key) and a string key goes
-      straight to them after the lean int path missed (`dims::fetch_miss`,
-      `assign_miss`): hash1 1.52 -> 1.44, hash2 1.66 -> 1.53, array_rw 1.35 -> 1.22. Then
-      the lean handlers decode the offset once themselves and those two functions are
-      gone (the second look cost an int key that misses the lean path about 10
-      instructions): hash1 1.41, array_rw 1.19, heapsort without the JIT 2.34 -> 2.19.
-      Done 2026-11-21: a trace's element rows take a variable that holds a reference
-      or an array of floats (`jit_dim_get_wide`/`jit_dim_set_wide`), its comparisons
-      floats (`J_CMPS`), and `$i = $j` / `--$l` with a used result are rows of its own:
-      heapsort's inner loop compiles (2.35 -> 1.59).
-      Done 2026-11-21 (later): a trace runs `a . b` into a temporary, `??` of a
-      temporary and the element rows whose key is no int (a string in a variable or a
-      temporary) through the tape's own handlers (`C_DIMKEY`, `jit_row_dim_keyed`), a
-      read that raises nothing for a missing key gives null inside the trace
-      (`dims::fetch_key_missing`), and a jump on a temporary takes an int as well as a
-      bool: array_rw 1.19 -> 1.07 (meets the goal), and both loops of hash1 compile
-      (1.41 -> 1.40: what is left is the handlers' own cost).
-      Then `jit_dim_get_wide` (a third of heapsort: 50 calls an outer iteration at 98
-      instructions) reads the element where it lies: heapsort 1.59 -> 1.48; and the
-      trace reads a list's scalar element itself, without the call
-      (`Emitter::emit_list_read`, the layout pinned by `list_layout` and
-      `reference_layout`): heapsort 1.08 (meets the goal), dim_read 0.78 -> 0.32,
-      ary3 0.93 -> 0.61, ary2 0.90, ary 0.83, sieve 0.82.
-      Then the write in place (`Emitter::emit_list_write`: a scalar over a list's
-      scalar element, or as the list's next element with room in the allocation; the
-      layout pinned by `unshared_table_counts` and `list_append_layout`): heapsort
-      0.97, sieve 0.82 -> 0.47, dim_write 0.82 -> 0.31, ary 0.83 -> 0.72, ary2
-      0.90 -> 0.78 (with the overwrite alone the last two lost 9%: every write of theirs
-      adds an element).
-      Done 2026-11-21 (the tape's own handlers, lean paths that make no call, each
-      in front of the handler it was): the step of a `foreach` over plain values
-      (`dims::fe_step_plain`: 158 -> about 90 instructions a step), `$a[$key] += $int`
-      with a string key (`assign_op_str`, `HashTable::lean_zstr_probe_mut`: 195 ->
-      about 120), the read and the write of an element under a string key that was
-      just built (`fetch_str_lean`, `assign_str_lean`: the key hashed in line, the
-      temporary's string moved into a new bucket), and `dechex()` writing its digits
-      into the string it returns (`ZStr::from_fn`): hash2 1.53 -> 1.19, hash1
-      1.40 -> 1.22. Both still miss.
-      Then (2026-11-21) the lean paths without stack frames: the byte comparison of
-      two keys without the iterator calls of its long-key branch (they made every
-      probe inlining it save six registers) and short keys first, `$a[$k] op= v`
-      behind a frameless dispatcher (`assign_op_dim` -> `assign_op_dim_str` or the old
-      handler), `dechex()` filling its digits from the end: hash2 1.19 -> 1.10
-      (meets), hash1 1.22 -> 1.16, and the JIT-off ary3 back at 1.36.
-      Then string-key rows for keys made as strings (`dims::made_str`), lean paths
-      for keys that are integers in digits (`ArrayKey::small_int`), and keyed trace
-      rows calling a helper made for their op: hash1 1.16 -> 1.08 (meets). Open:
-      heapsort's outer loop (a `return` inside it) and `gen_random`
-      (constants defined at run time, a `global`) stay interpreted; a `foreach` step
-      is no trace row yet.
-- [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
-      compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
-      fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
-      the tape and inlined in a compiled loop (self_cc_f 4.64 -> 0.09); frameless builtins
-      kept on the tape (`sqrt($x)` & co. as one instruction, the others called in the tape
-      loop: float_math 1.95 -> 0.82); methods whose body reads or writes int properties of
-      `$this` inlined (suite:calls 3.95 -> 0.11, suite:props 2.40 -> 0.82 with `self::$s++`
-      compiled too); builtin calls prepared at a depth without a pooled frame; one-argument
-      builtins with a computed argument (`chr(65 + $i % 26)`) and `dechex()` without a
-      frame or handler (strings 2.16 -> 1.64, hash1 3.37 -> 1.95). Done 2026-11-20: a
-      builtin call with computed arguments is one frameless op at its `DoCall`
-      (`specialise::spread_frameless_call_at`), and `strpos`/`substr`/`max`/`min`/strict
-      `in_array`/`str_contains` & co. are answered without their handler
-      (`special::quick_eval_n`, tape row `FramelessQ`): suite:builtins 4.52 -> 1.55,
-      suite:strings 1.64 -> 1.34. Done 2026-11-20: those loops compile (a trace calls the
-      tape's own handler for a row it has no code for: `jit::plan_row`), and calls of two
-      or three arguments are straight-line code (`special::quick_eval_2`/`quick_eval_3`):
-      suite:builtins 1.55 -> 1.16, suite:strings 1.34 -> 1.18. Done 2026-11-21: a trace
-      calls the handlers themselves (they are `extern "C"`; the shims between are gone):
-      ops:strlen 1.08 -> 0.97, ops:count 0.97 -> 0.88, suite:builtins 1.04. Open: a
-      handler call from a trace still saves and restores five registers around the
-      handler (callee-saved registers for the trace's bases would spare that), and the
-      interpreter's user-call protocol (memory note `call-redesign-plan`).
-- [~] JIT Step 4 — `New` rows (new_obj 3.27, micro:new_Foo 2.02, objects 4.64),
-      elvis/ternary, `$this::CONST`, `$GLOBALS['v']`, `$_GET`. Done 2026-11-20: tape
-      instructions for all of them (a ternary's arms, `?:`, `??`, non-scalar assignments,
-      `$this::NAME` as one row, global reads run in the tape loop), which is not enough
-      to flip them: x_eq_f_q_f_a 2.43, x_eq_a_elvis_null 1.86, x_eq_f_q_f_tmp 1.48,
-      x_eq_f_elvis_tmp 1.40, x_eq_GLOBALS_v 2.02, x_eq__GET 2.60. `$this::CONST` is folded
-      in a trace now (x_eq_Foo_cc_TEST 1.34 -> 0.26).
-      Done 2026-11-20: temporaries of int/bool/null/any-scalar kind with joins in a trace,
-      so the scalar forms compile (x_eq_f_elvis_tmp 1.40 -> 0.33, x_eq_f_q_f_tmp 1.48 ->
-      0.38); a hand-written cached global read (x_eq__GET 2.60 -> 1.96, x_eq_GLOBALS_v
-      2.02 -> 1.89).
-      Done 2026-11-20: a trace copies and releases arrays (x_eq_f_q_f_a 2.43 -> 0.44,
-      x_eq_a_elvis_null 1.86 -> 0.40) and calls the cached global read (x_eq__GET 1.96 ->
-      1.79, x_eq_GLOBALS_v 1.89 -> 1.69).
-      Done 2026-11-20: a trace reads a global slot itself (`C_GREAD`: the slots' addresses
-      go into a table when the trace is entered): x_eq__GET 1.79 -> 0.27, x_eq_GLOBALS_v
-      1.69 -> 0.25. `new` of a class without a constructor is a tape instruction
-      (new_Foo 2.05 -> 1.71).
-      Open: object allocation and release themselves (see the Objects item below);
-      strings and objects moved by a trace.
-      Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
-- [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
-      turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
-- [~] JIT follow-ons: floats in traces. Done 2026-11-21: comparisons and `+=`/`-=`/`*=` of floats are
-      compiled (by the operands' tags: `J_CMPS`, `J_ASSIGN_OPS`), and a math builtin may
-      end an inlined method (`KQUICK`). Open: float arithmetic into a temporary or
-      another variable (`$a * $b` of floats, a float literal operand) still leaves a
-      loop to the interpreter (the float loops meet the goal interpreted since `&&`/`||`
-      conditions jump straight to their outcome: mandel 0.78, mandel2 1.00, float_math
-      0.84; a trace would still be several times faster); property access inside
-      inlined callee bodies; `self::`/`static::` scope guards for call inlining.
-- [x] Objects (all three meet the goal: new_obj 1.07, new_Foo 0.97, objects 0.78). Done
-      2026-11-21: `new C(...)` with a constructor that only assigns its parameters to
-      properties (a
-      promoted constructor is one) is one tape instruction without the call
-      (`calls::new_stored`, from `UserFunction::ctor_fold`), which a trace calls: new_obj
-      3.30 -> 1.97, objects 3.99 -> 2.64. Then: an object of its class's defaults made by
-      straight-line code (`object::new_defaults`), a temporary's value stored over an
-      object and the object released directly, the free of a plain object in one
-      function (new_Foo 1.73 -> 1.39, new_obj 1.76), and `$p->len()` inlined in the
-      trace with its `sqrt` and the float `+=` (objects 2.64 -> 1.21).
-      Then each `new` instruction keeps what the full checks found out at its place
-      (`calls::NewSite`: the class, where each argument comes from, the slot and the
-      type bits of each store) and a later `new` there reads the arguments where they
-      are and stores them: `new_stored` 364 -> 254 instructions for `new R($i)`,
-      objects 1.21 -> 1.02, new_obj 1.76 -> 1.55; with the stores writing the slots
-      directly (`calls::store_arg`) objects 0.99, new_obj 1.52.
-      What was left, by the profile of new_obj (964 instructions an iteration against
-      C's 635): the possible-root bookkeeping of the new object (152), allocation (113
-      in `object::new_defaults`) and release (~270 across seven functions) against C's
-      ~135 and ~130. Then `$v = new C(...)` over the last handle of a plain object of
-      `C` makes the new object in the old one's block (`object::reuse_for_new`: the
-      handle a new object would be given, the old one back on the free list after it,
-      the root entry moved to the slot the next root takes, memory use and its peak
-      as an allocation and a free leave them; `calls::new_over`, `site_over`,
-      `NEW_OVER`, `Emitter::emit_new_row`): new_Foo 1.39 -> 0.97, new_obj
-      1.52 -> 1.07, objects 0.99 -> 0.78, with and without the JIT (it is the tape's
-      own `new` instruction).
-      Open: an old object whose slots hold strings, arrays or objects is not made
-      over yet (its values would be released after the new object stands).
-- [ ] Memory allocator: profile per-allocation cost claim (~81→~30 ins) on release build;
-      update FEATURE_GAP row % from estimate to measured.
-- [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout
-      items (one-alloc objects, reference size, 8B hash index) — design pass.
-- [ ] Interpreter-level spec gaps: dim_read/dim_write/abs still over goal JIT-off.
-- [ ] Shapes the 82 workloads do not cover, measured 2026-11-21 (instructions a loop
-      iteration, ours against the C implementation's; candidates for `perf/bench`):
-      a generator's `send()` 4,499 / 510 and a `foreach` over a generator 2,556 / 450
-      (its frame is now swapped onto the stack and back; the rest is the builtin
-      method call machinery around `send()` and the nested `execute()`);
-      a method whose body writes `$this->items[$k]` and returns `$this` 2,498 / 479;
-      `new B(...)` with a constructor body 3,129 / 1,235; `['id' => $i, 'name' => 'x',
-      'n' => $i]` 1,858 / 559 and `[$i, $i]` 1,029 / 404 (were 3,039 and 1,585: array
-      literals were `Vm::run` ops, now `InitArrayT`/`ArrayAddT` rows); a `foreach` over
-      an array of arrays 370 / 158; `new S("abc", $i)` with a constructor of plain
-      stores 1,450 / 742 (the old object holds a string, so its block is not made
-      over); `strtoupper()`/`strpos()`/`str_contains()` 3,251 / 1,717; a `foreach`
-      over a list of strings 181 / 140 and with keys over a hash 174 / 141 (were 241
-      and 217). What is known of the causes: every return that is not a scalar out of
-      a variable or temporary of an untyped function is `call.rs::return_generic`
-      (`return;`, a constructor's end, `return $this`, strings, arrays, typed
-      returns); `calls::new_over` and the site check fail on every `new` of a class
-      whose constructor has a body; `strs::frameless_quick_n` costs about 165 around
-      a two- or three-argument builtin, and `strtoupper()` & co. are handler calls;
-      the general steps of `fe_fetch_into` for an array or object value.
+- **The deliverable** (README): the total runtime of ours on identical inputs, both at
+  their defaults, is at most 1.10x C's, measured by `perf/bench/timing.py`. Last measured
+  21 Nov (release build of `d3380559`, against C PHP 8.3.6): **0.53x** wall-clock (1.847 s
+  against 3.517 s), every one of the 31 inputs faster (0.32x `suite/calls.php` to 0.98x
+  `suite/float_math.php`). The reference is now `/usr/bin/php8.5` (PHP 8.5.12); the first
+  measurement against it is PHASE 4 of today's `./run-all-tests.sh`.
+- **Conformance**: full in-scope PHPT run of 21 Nov (debug binary, `1ffce758`, and again
+  on `d3380559`): **0 failures**. Of 21,844 tests run, 21,829 pass, 11 are XFAIL and 4 WARN
+  (XFAIL tests that pass); 1,086 skip for host reasons (Windows-only, 32-bit-only, PDO
+  drivers that are not installed, bundled-GD and older-library variants, online tests,
+  readline, FPM); 1,134 are out of scope (`phpt-scope.txt`).
+- **Per-workload guide**: `scripts/acceptance.sh` 82/82 workloads within 1.10x of
+  `perf/bench/goal.tsv` with the JIT on (25/82 with `BUZZS_JIT=0`), 21 Nov. `goal.tsv`
+  still holds counts measured from C PHP 8.3.
+- **Rust tests**: `cargo test --workspace` 4,980 passed, 122 ignored (21 Nov; the run's two
+  failures fixed and rechecked).
 
-## B. Conformance close-out to 100% in-scope phpt (currently 99.8%, 38 failures)
-- [ ] Optimizer/opcache dump failures (30 of 38; 10 left in the targeted set of 13,935
-      tests on 2026-11-21): sccp_026,
-      nullsafe_001/002, assign_dim_op_result_type, gh18107_1/2,
-      array_map_foreach_optimization_008/013 (the dumps of the closures php-src
-      compiles for a partial application), named_parameter_new (named arguments to
-      a constructor known at compile time as positional sends, and the return type
-      check of `new self` dropped). Done 2026-11-21: sccp_012 (`$a[k] op= c` and `$a[k]++` on a known element fold: `sccp::dim_cv_update`), dce_005, sccp_010, sccp_011 (an object that never escapes, of a class whose objects do nothing visible, is folded like a local array: `optimizer::fold_local_objects`), array_map_foreach_optimization_007
-      and _014 (`array_map()` of a partial application is a loop; a `foreach` over an
-      int-keyed list result keeps no live ranges), gh9164 (a script index shared by forked processes:
-      `php_opcache::shared_index`), jit/ignored_opcodes and preload_optimizer (a call of
-      a function of the file, or a preloaded one, that only returns a literal is
-      that literal: `optimizer::inline_literal_calls`; the optimizer runs with user
-      opcode handlers set; the `$PRELOAD$` dump), gh18050 (`in_array()` of a
-      variable holding a known array is `ZEND_IN_ARRAY`: a variable sent by value to
-      a function known at compile time no longer switches the propagation of
-      variables off, `OptContext::known`, and a known variable stays known across a
-      call that cannot reach it by name), opt/coalesce (`??`/`??=` of a local
-      nothing has assigned goes on to the next op, and the first store of a literal
-      goes when no later op names the variable), opt/dce_001 (a concatenation of
-      scalar-typed parameters that nothing reads is dead, the concatenations it read
-      with it) and opt/dce_007 (an array literal that nothing reads is dead when no
-      element can raise anything), opt/dce_008 (a store of a locally built array of
-      scalars into an array nothing reads: `compact::scalar_array_vars`) and
-      opt/dce_009 (the loop of a `foreach` over an empty class constant, removed where
-      the constant is put in place for the dump), opt/sccp_017 and opt/sccp_019 (the
-      dead copy `$b = $a` of a locally built array of scalars and both arrays' element
-      stores), opt/sccp_002 and opt/sccp_005 (an array literal with an element that
-      is no constant is a partly known array: `sccp::partial_array_builds`) and
-      opt/dce_004 (an array replaced before anything reads it goes with the stores
-      into it: `dce::remove_overwritten_arrays`). What the open ones need: objects
-      that do not escape (sccp_010/011/012, dce_005), a type narrowed by a type check
-      along a branch (sccp_026), `JMP_NULL` on the variable itself with constants
-      kept across calls (nullsafe), the SSA dump's types of `ASSIGN_DIM_OP`
-      (assign_dim_op_result_type), and named arguments of known callees as positional
-      sends (named_parameter_new).
-- [x] Optimizer (2026-11-21): two wrong results with the optimizer on. An unread
-      `$a[] = v` was dropped although it throws after the largest int key
-      (`$a = [PHP_INT_MAX => 5]; $a[] = 1;` lost its Error): it goes only with a
-      constant value and when no array of the variable can hold that key, as php-src
-      keeps `ASSIGN_DIM ... NEXT` of a value it does not know. And array constants
-      were compared with `===`, so `0.0` and `-0.0` in an element became one zero on
-      both paths (php-src GH-24063): `sccp::same_constant` compares floats by their
-      bits. Oracle scripts `extra_partarr.php` and `extra_negzero.php` cover both.
-- [x] Optimizer (2026-11-21): an array literal that may be the last holder of an object
-      keeps its store. Pass 13 dropped `$a = [new D];` of an unread `$a` (and
-      `$b = [$o]; $o = null;`), the temporary array was freed at once and D's
-      destructor ran before the rest of the function; PHP keeps it to the end, with
-      and without its optimizer. `compact::build_is_inert` looks at what the array is
-      built from. No PHPT covers it.
-- [x] Optimizer (2026-11-21): the block pass folded `!` into a jump that keeps its
-      result (`T = BOOL_NOT X; D = JMPZ_EX T` became `D = JMPNZ_EX X`), so with
-      `opcache.enable_cli=1` the code after `!$a && !$b` and `!$a || !$c` saw the
-      opposite result. php-src folds `BOOL_NOT` only into `JMPZ`/`JMPNZ`. No PHPT
-      covers it; found by running scripts with known output through the optimizer.
-- [ ] tests/basic/oom_rfc1867_files_registration_full_path: needs Zend MM's placement of
-      large blocks in 2 MiB chunks (the third 1.2 MiB copy of the file name needs a fifth
-      chunk there); php-memlimit counts those blocks by size, so 8M is not reached.
-- [x] ext/session rfc1867_incomplete_class_reserved_props (2026-11-20): a member with no
-      declared property lost its name mangling in `Vm::write_mangled_prop`.
-- [ ] ext/gettext 6 failures: host locale `.mo` setup (environment, not engine) — script
-      a locale fixture setup so they run.
-- [ ] Debug-binary-only opcache failures (sccp_003/004/009/016/031/032,
-      ct_eval_frameless_002).
-- [ ] Verify (not cause of JIT work, flagged earlier): `PHP Warning:` CLI prefix /
-      leading-newline difference vs C PHP in our stderr formatting.
-- [ ] mysqli_result_references (refcount-1 reference dumped as `&`) — closes mysqli 99%→100%.
+## A. In flight (22 Nov)
 
-## C. In-scope but unimplemented (0% rows)
-- [ ] `php-cgi` binary (sapi/cgi port) + phpt-runner CGI sections → unlocks ~305 skipped
-      tests (ext/phar 102, tests/basic 80, ext/standard 47, filter 21, session 21, zlib 11,
-      soap 10, mbstring 8, Zend 3, iconv 1, lang 1).
-- [ ] ext/pdo_mysql driver over php-mysqlnd (169 tests, MariaDB env).
+- [~] Evidence run (owner, started 00:50): `./run-all-tests.sh` = release build,
+  `cargo test --workspace --release`, the full PHPT run on the release `php`,
+  `timing.py` against `/usr/bin/php8.5`; commits `22-NOV-2026.full-test-run.log`.
+- [~] Branch `e2e-web` (worktree `/tmp/claude-1000/wt-e2e`), edited only, to be merged
+  after the evidence run, then one build and the checks below:
+  - FastCGI in `php-cgi` (ref: main/fastcgi.c): `-b <addr:port>|<port>|<path>`, a
+    listening socket on standard input, keep-alive, `GET_VALUES`,
+    `PHP_FCGI_MAX_REQUESTS`, `PHP_FCGI_CHILDREN`, `FCGI_WEB_SERVER_ADDRS`,
+    `fastcgi.logging`.
+  - End-to-end tests: `crates/php-cli/tests/fastcgi.rs` (the protocol against
+    `php-cgi -b`; nginx 1.24 passing `*.php` to `php-cgi` over a Unix socket) and
+    `crates/php-sapi-apache2/tests/apache_e2e.rs` (mod_php in the system apache2:
+    `apache2 -M` lists `php_module`, PHP through `http://127.0.0.1:<port>/` URLs).
+  - The C reference `/usr/bin/php` -> `/usr/bin/php8.5` in tests, scripts and docs.
+  - Removed: TAPE_FASTER_MOSTLY.md, perf/RELEASE_BENCH_2026-11-04.md,
+    perf/NOTE-jit-2026-11-16.md, perf/TODO-jit-step1.md, the root copy of
+    REVIEW-tape-series-2026-11-13.md, crates/php-ext-pcre/PROPOSALS.md.
+  - Then: `cargo fmt`, `clippy --all-targets` and `cargo test` of php-cli,
+    php-cli-server, php-sapi-apache2 and php-vm; the tests that run the reference and
+    now run 8.5 (php-pcntl, php-posix, php-sockets, php-sysv, php-session, php-mysqlnd,
+    phpt-runner); PHPT `sapi/cgi`.
+- [ ] Re-derive the 8.3 data with 8.5.12 (owner, 22 Nov): regenerate the oracle fixtures
+  recorded from 8.3 (php-hash vectors, php-ctype/php-json/php-filter `oracle.txt`,
+  php-filter HTML/Unicode tables, php-sodium, php-fileinfo, php-support fmt/ini cases,
+  php-intl constants, php-mbstring and the php-stdstr/stdarr/stdmisc fixtures) with
+  `/usr/bin/php8.5`, re-check the "(8.3)" expected outputs in the php-vm tests, and fix
+  toward 8.5/master whatever then differs. About 70 lines still name 8.3 or 8.3.6.
+- [ ] Re-record `perf/bench/goal.tsv` from `/usr/bin/php8.5` (`acceptance.py --record`)
+  and re-run `scripts/acceptance.sh` (owner, 22 Nov). 8.5 may be faster than 8.3 on
+  some workloads, so the 82/82 may change.
+- [ ] README and FEATURE_GAP numbers from today's evidence run (timing against 8.5.12,
+  cargo test, PHPT), replacing the 8.3.6 figures (owner, 22 Nov).
 
-## D. Smaller residuals to 100% (med/low, from FEATURE_GAP "Missing" notes)
-- [ ] apache2handler (75%): output-start file:line in header warnings, implicit_flush,
-      abort bailout, header_register_callback before implicit sends, session upload
-      progress, real interruptible timeout.
-- [ ] php -S server: session cookies, header callback with output-started location,
-      ignore_user_abort bailout.
-- [ ] ext/opcache: preload (66 tests), file cache (3), INI-validation warnings,
-      native machine-code JIT emission (our own JIT is separate; this is opcache's).
-- [ ] sodium: SensitiveParameter reflection marker, trace-arg scrub hook (sodium_error_001),
-      AEGIS/IPCrypt/XOF/ML-KEM (needs libsodium ≥1.0.19 — host pkg question).
-- [ ] filter: `uri_parser_class` php-uri hook wiring.
-- [ ] ctype: setlocale(LC_CTYPE) table selection (needs de_DE locale).
-- [ ] zip: callbacks on last-ref stream close; newer-libzip paths (seekable, torrentzip, zstd).
-- [ ] posix: open_basedir checks (access/mkfifo/mknod).
-- [ ] streams/http: `ftp://` proxying.
-- [ ] finfo: libmagic 5.48 bundled descriptions (5 phpt wording diffs).
-- [ ] zend_test: 3 opcache-dependent tests (gh17899, observer_preload, optimizer_register_pass).
-- [ ] ext/session upload progress / rfc1867 items shared with apache row.
+## B. Performance beyond the benchmark inputs
 
-## E. Housekeeping / process
-- [ ] Refresh FEATURE_GAP.md scoreboard rows after JIT Step 1 commit (37/82 → 43/82;
-      const/static-lookup row 3/12 → 9/12; property/const micro numbers).
-- [ ] Commit cadence: checkpoint the moment lib tests are green; never push (user rule).
-- [ ] JIT knobs stay `BUZZS_*`, never `PHPRUST_*`: `BUZZS_JIT=0` (off), `BUZZS_JIT_DEBUG`
-      (dump), `BUZZS_JIT_HOT=<n>` (compile after n back edges instead of 20,000; for test runs).
-- [ ] PHPT runs exercise the JIT by default now; after every JIT step also run the set with
-      `--env BUZZS_JIT_HOT=100` (every loop compiled) and with `--env BUZZS_JIT=0`.
+The deliverable is met on the 31 inputs. These are shapes real applications run that the
+inputs do not cover, measured 21 Nov in instructions per loop iteration (ours / C);
+candidates for `perf/bench` and for work.
 
-## Done recently (do not redo)
-- [x] Trace JIT base → call inlining → property read/write rows → three cached-property
-      row classes (37/82) — chain 45bde918..ccef215d.
-- [x] JIT Step 1 static props/class consts code + measurement (43/82, zero regressions).
+- [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
+  frame is swapped onto the stack and back; the rest is the builtin-method call machinery
+  around `send()` and the nested `execute()`).
+- [ ] Calls and returns: a method that writes `$this->items[$k]` and returns `$this`
+  2,498 / 479. Every return that is not a scalar from a variable or temporary of an
+  untyped function goes through `call.rs::return_generic` (`return;`, a constructor's
+  end, `return $this`, strings, arrays, typed returns).
+- [ ] Objects: `new B(...)` with a constructor body 3,129 / 1,235 (`calls::new_over` and
+  the site check fail for every class whose constructor has a body); `new S("abc", $i)`
+  1,450 / 742 (an old object whose slots hold strings, arrays or objects is not made
+  over in place).
+- [ ] Arrays: `['id' => $i, 'name' => 'x', 'n' => $i]` 1,858 / 559, `[$i, $i]`
+  1,029 / 404, a `foreach` over an array of arrays 370 / 158, over a list of strings
+  181 / 140, with keys over a hash 174 / 141 (the general steps of `fe_fetch_into`).
+- [ ] Strings: `strtoupper()`/`strpos()`/`str_contains()` 3,251 / 1,717
+  (`strs::frameless_quick_n` costs about 165 around a two- or three-argument builtin;
+  `strtoupper()` & co. are handler calls).
+- [ ] Trace JIT coverage (`crates/php-vm/src/exec/tape/jit.rs`): float arithmetic into a
+  temporary or another variable leaves the trace; property access inside inlined callee
+  bodies; `self::`/`static::` scope guards for call inlining; closures; native-call
+  inlining; heapsort's outer loop (a `return` inside it) and `gen_random` (constants
+  defined at run time, a `global`) stay interpreted; a `foreach` step is no trace row;
+  strings and objects moved by a trace; a handler call from a trace saves and restores
+  five registers (callee-saved registers for the trace's bases would spare that).
+- [ ] The interpreter's user-call protocol (the call-redesign plan: Rc-free prepare,
+  `num_args`, fused enter, one flag word).
+- [ ] Memory allocator (FEATURE_GAP 50%): the per-allocation cost (about 81 -> 30
+  instructions) is a design estimate; profile the release build and set the % from it.
+- [ ] Value layout (FEATURE_GAP 90%): one allocation per object (slots inline), the
+  reference size (72 B against php's 32), the 12-byte-per-slot hash index.
+- [ ] With the JIT off (`BUZZS_JIT=0`, not the default): 25/82 workloads meet the goal;
+  dim_read, dim_write and abs are among those over it. Low priority: the deliverable is
+  measured at the default, JIT on.
+
+## C. Conformance and features
+
+- [ ] apache2handler (FEATURE_GAP 75%): the row's "Missing" list dates from 3 Nov; output
+  start, the header callback, implicit flush, abort polling, the CPU timer and upload
+  progress were implemented on 6-7 Nov (`19de417e`, `29f444d5`). Run
+  `cargo test -p php-sapi-apache2 --test httpd -- --ignored --test-threads=1`, then
+  update the row.
+- [ ] `php -S` (CLI built-in web server row): its "Missing" note (session cookies, the
+  header callback when output sends the headers, the "output started at" location, the
+  `ignore_user_abort` bailout) dates from 3 Nov, and every run `sapi/cli` test passes;
+  check each and fix or remove it.
+- [ ] opcache's own JIT (`opcache.jit=tracing|function`) reports "JIT is not available",
+  so 5 `ext/opcache/tests/jit` tests skip (bug80426, gh13400, gh21710,
+  preload_restart_function_jit, preload_restart_hot_counters). C's CLI default has it
+  disabled; our trace JIT is a separate thing.
+- [ ] Needs host libraries this box does not have (the tests skip): sodium
+  AEGIS/IPCrypt/XOF/ML-KEM (libsodium >= 1.0.19/1.0.21; 9 tests); `setlocale(LC_CTYPE)`
+  table selection in ext/ctype (lc_ctype_inheritance needs a de_DE locale);
+  newer-libzip paths (seekable streams, torrentzip, zstd).
+- [ ] No test covers (FEATURE_GAP "Missing"): http `ftp://` proxying; ext/zip callbacks
+  when a stream closes the last reference.
+
+## D. Housekeeping
+
+- [ ] FEATURE_GAP's "Remaining"/"Missing" notes still name tests that pass in the 21 Nov
+  full run: Fibers (destructors_004 & co.), Attributes (005_objects, `#[\NoDiscard]`),
+  ext/session (bug79031 & co.), ext/sodium (sensitive_parameter, sodium_error_001),
+  zend_test (gh17899, observer_preload, optimizer_register_pass), ext/uri
+  (`zend/internal_api_*`), mysqli_result_references, ext/fileinfo (libmagic
+  descriptions); the `.phpt` runner row says CGI sections are not done and the
+  Superglobals row calls CGI request parsing out of scope (php-cgi exists since 10 Nov);
+  the Strings row says `ZStr` has no cached UTF-8 validity flag (it has:
+  `is_valid_utf8()`/`mark_valid_utf8()`). Prune them against the full run.
+- [ ] Contribution policy (FEATURE_GAP 0%): CONTRIBUTING.md, code of conduct, security
+  policy, before taking external contributions.
+- [ ] Update this file after each evidence run.
+- Rules that stay: never push unless the owner asks (`git push davidbuzz master`); JIT
+  knobs are `BUZZS_*` (`BUZZS_JIT=0` off, `BUZZS_JIT_DEBUG=1` reports, `BUZZS_JIT_HOT=<n>`
+  compiles a loop after n back edges instead of 1,000); after a JIT change also run the
+  PHPT set with `--env BUZZS_JIT_HOT=100` and with `--env BUZZS_JIT=0`; PHPT runs use
+  `-j 3`.
+
+## Done (summary)
+
+- The deliverable: 0.53x C's total runtime on the 31 inputs (21 Nov, against 8.3.6);
+  `perf/bench/timing.py` measures it; `./run-all-tests.sh` records the build, the Rust
+  tests, the PHPT run and the timing in a dated log committed to git (22 Nov).
+- The trace JIT, on by default since 20 Nov (`57aa54cc`): whole loops as x86-64 code;
+  inlined function, static and instance-method calls; property rows; static properties
+  and class constants; array element rows (int and string keys, lists read and written
+  in place); float comparisons and `op=`; global reads; array copies; pure-int
+  functions compiled whole with native recursion.
+- Interpreter fast paths: string-key probes, `foreach` steps, `new` sites and
+  constructor folds, objects made over in place: 82/82 acceptance workloads (21 Nov).
+- Optimizer: every opcache optimizer and dump test passes (SCCP, DCE, `JMP_NULL` chains,
+  escape analysis, named arguments of known callees, PFA dumps, type narrowing on
+  branches), and three wrong results with the optimizer on fixed (21 Nov).
+- Conformance: the 38 failures of 16 Nov down to 0 (21 Nov), including the rfc1867
+  memory test (large blocks take a chunk each), the session reserved-properties test,
+  ext/gettext (`LANGUAGE` unset) and the debug-binary-only opcache tests.
+- SAPIs and drivers: php-cgi (CGI/1.1, 10 Nov), ext/pdo_mysql (296 run tests pass),
+  ext/mysqli + mysqlnd, mod_php (prefork).
