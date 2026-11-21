@@ -182,6 +182,15 @@ pub struct CallShape {
     fold: std::cell::OnceCell<Option<Box<[FoldStep]>>>,
 }
 
+impl Drop for CallShape {
+    fn drop(&mut self) {
+        // Freed as it was allocated: outside the accounting.
+        if let Some(Some(steps)) = self.fold.take() {
+            php_memlimit::persistent(|| drop(steps));
+        }
+    }
+}
+
 /// One step of a constructor that only stores its parameters
 /// ([`UserFunction::ctor_fold`]): `$this-><property> = $<parameter>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,7 +270,9 @@ impl UserFunction {
     pub(crate) fn ctor_fold(&self) -> Option<&[FoldStep]> {
         self.call_shape
             .fold
-            .get_or_init(|| self.compute_fold())
+            // A run-time cache, outside the request's memory accounting
+            // (`memory_get_usage()` must not move on a first `new`).
+            .get_or_init(|| php_memlimit::persistent(|| self.compute_fold()))
             .as_deref()
     }
 

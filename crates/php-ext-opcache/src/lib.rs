@@ -576,8 +576,10 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         ModifyHandler::None,
     ))
     .ini(d(
+        // php-src master's default (`zend_accelerator_module.c`): the JIT
+        // is off until a script's INI asks for it.
         "opcache.jit",
-        Some("tracing"),
+        Some("disable"),
         Access::ALL,
         ModifyHandler::None,
     ))
