@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts using the `ftp` extension against a
-//! scripted FTP server thread. Expected outputs match `/usr/bin/php`.
+//! scripted FTP server thread. Expected outputs match `/usr/bin/php8.5`.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};

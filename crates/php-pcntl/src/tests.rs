@@ -4,14 +4,14 @@
 //! signal dispositions/masks or process attributes runs in an isolated
 //! subprocess (the test binary re-executed with a single `iso_*` test), so
 //! the multi-threaded cargo harness is never disturbed.  Deterministic
-//! behaviour is compared with `/usr/bin/php` where available.
+//! behaviour is compared with `/usr/bin/php8.5` where available.
 
 #![allow(clippy::format_collect)]
 
 use super::*;
 use std::process::Command;
 
-const ORACLE: &str = "/usr/bin/php";
+const ORACLE: &str = "/usr/bin/php8.5";
 const ISOLATED: &str = "PHP_PCNTL_ISOLATED";
 
 fn php(code: &str) -> Option<String> {

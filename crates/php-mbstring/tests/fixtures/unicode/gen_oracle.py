@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the oracle fixtures in this directory with /usr/bin/php.
+"""Regenerate the oracle fixtures in this directory with /usr/bin/php8.5.
 
 * `phpt.tsv`: every mb_convert_encoding / mb_check_encoding / mb_strcut call
   made by the php-src .phpt tests listed below (run against the real PHP,
@@ -29,7 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parents[4] / "modules" / "php-src"
 TESTS = SRC / "ext/mbstring/tests"
-PHP = "/usr/bin/php"
+PHP = "/usr/bin/php8.5"
 
 PHPTS = """
 utf_encodings ucs2_encoding ucs4_encoding utf7imap_encoding base64_encoding

@@ -10,7 +10,7 @@ metadata:
 
 Rules learned the hard way while coordinating 15-20 agents on /home/buzz/phprust:
 
-- The box OOM-rebooted once (/usr/bin/php at 6.5 GB + VS Code). Every oracle php call needs `-d memory_limit=1G`; cargo is capped at 6 jobs in .cargo/config.toml (never override with -j); php-cli caps its own address space with RLIMIT_AS. User decision 6 Nov 2026: the cap becomes adaptive (max of 4 GiB and 75% of RAM+swap; `PHPRUST_MAX_AS_MB` still overrides) so ext/gmp gmp_setbit_long can run; memory_limit remains the real bound.
+- The box OOM-rebooted once (/usr/bin/php8.5 at 6.5 GB + VS Code). Every oracle php call needs `-d memory_limit=1G`; cargo is capped at 6 jobs in .cargo/config.toml (never override with -j); php-cli caps its own address space with RLIMIT_AS. User decision 6 Nov 2026: the cap becomes adaptive (max of 4 GiB and 75% of RAM+swap; `PHPRUST_MAX_AS_MB` still overrides) so ext/gmp gmp_setbit_long can run; memory_limit remains the real bound.
 - MariaDB: user decision 6 Nov 2026 to `GRANT ALL ON *.* TO 'phptest'@<host>` (done) so mysqli gh22854 / mysqli_get_client_stats can pass; mysqli_fetch_field_types stays failing (MariaDB has no JSON type). The user declined running ext/mysqli single-threaded in the suite, so its two shared-table races stay flaky under -j 12.
 - Always `git diff --stat Cargo.toml` before `git add`: I once swept an agent's uncommitted workspace-member line into my commit and HEAD stopped building.
 - Never delete other agents' files in the shared scratchpad (I deleted `*.py` there once and broke running agents). Agents must use private worktrees under the scratchpad with their own CARGO_TARGET_DIR because the shared tree is often mid-edit.

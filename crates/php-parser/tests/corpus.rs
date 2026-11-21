@@ -138,7 +138,7 @@ fn rel(p: &Path) -> String {
 }
 
 #[test]
-#[ignore = "needs /usr/bin/php; regenerates tests/fixtures/php_lint.tsv"]
+#[ignore = "needs /usr/bin/php8.5; regenerates tests/fixtures/php_lint.tsv"]
 fn regenerate() {
     use std::process::Command;
     let tmp = std::env::temp_dir().join(format!("php-parser-lint-{}", std::process::id()));

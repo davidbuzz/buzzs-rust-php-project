@@ -3,15 +3,15 @@
 A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
 Success is defined by **byte-for-byte output matching** with PHP: error/warning message
 text, line numbers, `var_dump` formatting, float printing — and by **performance: the Rust
-implementation must be as fast as the C implementation (`/usr/bin/php`) or faster**.
+implementation must be as fast as the C implementation (`/usr/bin/php8.5`) or faster**.
 
 ## Ground rules
 
 - `modules/php-src/` is a **READ-ONLY** reference clone of php-src (gitignored; the
   specification this port is written against and the source of the `.phpt` tests). Never edit it.
-- `/usr/bin/php` (PHP 8.3.6) is an oracle for expected behaviour. **Every** invocation of it
+- `/usr/bin/php8.5` (PHP 8.5.12) is an oracle for expected behaviour. **Every** invocation of it
   MUST pass `-d memory_limit=1G` (the system php.ini sets `memory_limit=-1` and an unbounded
-  script has OOM-crashed the machine). Where 8.3 and php-src master differ, follow master.
+  script has OOM-crashed the machine). Where 8.5 and php-src master differ, follow master.
 - Track progress in `FEATURE_GAP.md`: update the `%` column for rows you advance; keep rows at
   100% as the completion record. The full crate → php-src source mapping is in `CLAUDE.md`.
 
@@ -83,7 +83,7 @@ Cargo workspace, ~100 crates, strictly layered:
 - Every crate's doc comments cite the php-src file(s) it ports (e.g.
   `ref: Zend/zend_hash.c`); match that C source's observable behaviour exactly.
 - When behaviour is unclear, write a small script and run it through the oracle
-  (`/usr/bin/php -d memory_limit=1G`) rather than guessing.
+  (`/usr/bin/php8.5 -d memory_limit=1G`) rather than guessing.
 - Don't trade speed for convenience in hot paths: avoid needless allocation, cloning, and
   indirection in the executor and `php-runtime` core types. The target is to match or beat
   the C implementation; `scripts/acceptance.sh` enforces this per workload.
@@ -133,7 +133,7 @@ Git worktree and branch:
 
 - `.cargo/config.toml` caps cargo at **6 jobs**; never override with `-j`.
 - Run at most one `cargo test`/`cargo build` at a time per agent.
-- Do not run the whole php-src suite with `--php /usr/bin/php`; use subsets.
+- Do not run the whole php-src suite with `--php /usr/bin/php8.5`; use subsets.
 
 ## Test services
 

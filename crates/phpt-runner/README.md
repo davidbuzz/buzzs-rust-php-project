@@ -51,7 +51,7 @@ target/debug/phpt-runner -q --summary-depth 2 modules/php-src/Zend/tests modules
 target/debug/phpt-runner modules/php-src/Zend/tests/add_001.phpt
 
 # Validate the runner itself against the C implementation:
-target/debug/phpt-runner --php /usr/bin/php modules/php-src/tests/run-test
+target/debug/phpt-runner --php /usr/bin/php8.5 modules/php-src/tests/run-test
 ```
 
 Output is one `PASS`/`FAIL`/`SKIP`/`XFAIL`/`WARN`/`BORK` line per test in run-tests.php's format,
@@ -70,7 +70,7 @@ are reported as `OUT` (a separate count in the table, summary and JSON), exclude
 pass-rate denominator and never written to the baseline. `--no-scope` disables this.
 
 `phpt-environment.txt` at the repository root lists tests whose failures on this host are caused
-only by host library or service limitations (where `/usr/bin/php` and `/usr/bin/php8.5` fail
+only by host library or service limitations (where `/usr/bin/php8.5` and `/usr/bin/php8.5` fail
 identically: Ubuntu's system `libgd` 2.3.3 lacks GD2 support, and MariaDB 10.11 has no native
 `JSON` column type). Those tests still run; when one fails (without timing out or borking), it is
 reported as `PASS` (`reason: host environment (phpt-environment.txt)`), counted in `pass` in
@@ -102,7 +102,7 @@ A binary that loads no php.ini (ours) gets `-d extension_dir=/nonexistent/phpt-r
 so its built-in `extension_dir` (which may point at the system PHP's modules) cannot make
 `--EXTENSIONS--` lines or `dl()`-based SKIPIF checks pick up the system's `.so` files: tests
 needing an extension the binary lacks are SKIPPED. Binaries that load php.ini files (e.g.
-`/usr/bin/php`, whose `extension=` lines need the real directory) keep their own.
+`/usr/bin/php8.5`, whose `extension=` lines need the real directory) keep their own.
 `-d extension_dir=...` overrides either way.
 
 ## Baseline workflow
@@ -198,5 +198,5 @@ under run-tests.php (Ubuntu build differences). On the master test tree that `mo
 holds, the same binary passes 73.6% because the tests target PHP 8.6.
 
 `cargo test -p phpt-runner` covers the parser, matcher, diff, scheduler and baseline logic, runs
-fixture tests for every section type against `/usr/bin/php`, and checks `tests/run-test` plus a
-sample of `Zend/tests` (all skipped if `/usr/bin/php` is absent).
+fixture tests for every section type against `/usr/bin/php8.5`, and checks `tests/run-test` plus a
+sample of `Zend/tests` (all skipped if `/usr/bin/php8.5` is absent).

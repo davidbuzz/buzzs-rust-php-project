@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `files` save handler: on-disk layout, locking, GC and messages
 //! (`mod_files.c`, `ext/session/tests/mod_files/*.phpt`), plus interop
-//! with `/usr/bin/php` when it is installed.
+//! with `/usr/bin/php8.5` when it is installed.
 #![allow(clippy::too_many_lines)]
 
 mod common;
@@ -275,10 +275,10 @@ fn open_basedir_denial() {
 }
 
 fn php() -> Option<Command> {
-    if !Path::new("/usr/bin/php").exists() {
+    if !Path::new("/usr/bin/php8.5").exists() {
         return None;
     }
-    let mut c = Command::new("/usr/bin/php");
+    let mut c = Command::new("/usr/bin/php8.5");
     c.args([
         "-d",
         "memory_limit=1G",

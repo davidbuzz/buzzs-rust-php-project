@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests on real loopback/UNIX sockets, with `.phpt` expectations ported
-//! by hand and `/usr/bin/php` comparisons where behaviour is shared.
+//! by hand and `/usr/bin/php8.5` comparisons where behaviour is shared.
 
 #![allow(
     clippy::too_many_lines,
@@ -13,7 +13,7 @@ use super::*;
 use crate::value::{Key, OutValue, Value};
 use std::process::Command;
 
-const ORACLE: &str = "/usr/bin/php";
+const ORACLE: &str = "/usr/bin/php8.5";
 
 fn php(code: &str) -> Option<String> {
     if !std::path::Path::new(ORACLE).exists() {

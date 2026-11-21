@@ -563,7 +563,7 @@ mod tests {
     use super::*;
 
     /// libm's results, which Rust's `f64::asinh`/`acosh`/`atanh` miss by
-    /// one bit for these arguments (`/usr/bin/php -n`).
+    /// one bit for these arguments (`/usr/bin/php8.5 -n`).
     #[test]
     fn inverse_hyperbolics_are_libms() {
         assert_eq!(asinh(0.044_318_560_479_840_056), 0.044_304_065_350_020_95);

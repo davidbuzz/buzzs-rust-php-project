@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php` by
+//! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php8.5` by
 //! `tests/oracle/gen_oracle.php`: the hand-written matrix of
 //! `tests/oracle/custom.php` (every filter over representative inputs,
 //! flags and options, plus deterministic fuzzing of the parsers) and every
@@ -638,10 +638,10 @@ fn oracle() {
     eprintln!("filter oracle: {checked} ok, {skipped} skipped, {explained} explained");
 }
 
-/// Regenerates the fixture with `/usr/bin/php`:
+/// Regenerates the fixture with `/usr/bin/php8.5`:
 /// `cargo test -p php-filter -- --ignored regenerate_oracle`.
 #[test]
-#[ignore = "needs /usr/bin/php and modules/php-src"]
+#[ignore = "needs /usr/bin/php8.5 and modules/php-src"]
 fn regenerate_oracle() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle/gen_oracle.php");
     let status = std::process::Command::new("php")

@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Test vectors generated from the C implementation (`/usr/bin/php`), see
+//! Test vectors generated from the C implementation (`/usr/bin/php8.5`), see
 //! `vectors.rs`.
 
 mod vectors;

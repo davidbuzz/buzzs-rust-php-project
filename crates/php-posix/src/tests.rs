@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Unit tests; the oracle tests compare against `/usr/bin/php` when it is
+//! Unit tests; the oracle tests compare against `/usr/bin/php8.5` when it is
 //! installed (and are skipped otherwise).
 
 #![allow(clippy::format_push_string, clippy::format_collect)]
@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
-const ORACLE: &str = "/usr/bin/php";
+const ORACLE: &str = "/usr/bin/php8.5";
 
 /// Runs PHP code in the oracle, returning stdout (or `None` when there is
 /// no oracle with ext/posix).

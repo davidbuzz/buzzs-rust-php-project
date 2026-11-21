@@ -85,10 +85,10 @@ fn oracle_scripts() {
 }
 
 #[test]
-#[ignore = "regenerates the expected outputs with /usr/bin/php"]
+#[ignore = "regenerates the expected outputs with /usr/bin/php8.5"]
 fn regen_oracle() {
     for p in scripts() {
-        let out = std::process::Command::new("/usr/bin/php")
+        let out = std::process::Command::new("/usr/bin/php8.5")
             .args([
                 "-d",
                 "memory_limit=1G",

@@ -1684,7 +1684,7 @@ mod tests {
 
     /// Both arms of `$c ? 1 : 1` give `1`, so `substr('foo', 1, ...)` is
     /// evaluated at compile time (opcache `ct_eval_frameless_002`;
-    /// `/usr/bin/php` prints "o"); different arms stay a run-time choice.
+    /// `/usr/bin/php8.5` prints "o"); different arms stay a run-time choice.
     #[test]
     fn sccp_joins_equal_constants_of_both_branches() {
         let unit = compile_src(

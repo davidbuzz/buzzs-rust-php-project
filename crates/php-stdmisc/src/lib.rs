@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The remaining "misc" of PHP's `ext/standard` that is not covered by the
 //! string/array/stream crates (php-src master semantics, verified against
-//! `/usr/bin/php` with oracle fixtures in `tests/fixtures`).
+//! `/usr/bin/php8.5` with oracle fixtures in `tests/fixtures`).
 //!
 //! * [`browscap`] — `get_browser()` (browscap.ini matching).
 //! * [`crypt`] — `crypt()` with every bundled algorithm (std/ext DES, MD5,

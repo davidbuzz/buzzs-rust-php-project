@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the run-time lookup caches: every script reads
 //! the same names repeatedly, so the second and later executions run
-//! from the cache. Expected output from `/usr/bin/php -n` (paths
+//! from the cache. Expected output from `/usr/bin/php8.5 -n` (paths
 //! normalised to `t.php`) unless noted; it is also the output of the
 //! uncached implementation.
 

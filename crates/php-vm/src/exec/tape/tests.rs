@@ -986,7 +986,7 @@ $o = new P(); var_dump(props($o));
 /// compound assignments, `++`/`--`, `isset`/`empty`, chained assignment,
 /// and `new` on both the ctor path (fall-through) and the no-ctor path
 /// (jump over the ctor call). Every props family instruction appears, the
-/// tape shape is checked, and the output matches `/usr/bin/php`.
+/// tape shape is checked, and the output matches `/usr/bin/php8.5`.
 #[test]
 fn props_in_every_specialised_form() {
     let arrays = op_arrays(PROPS_IN_EVERY_SPECIALISED_FORM);
@@ -1058,7 +1058,7 @@ var_dump(dims(5));
 /// compound assignments, `isset`/`empty`, `++`/`--`, chained dimensions,
 /// string offsets, string keys, and `.=` on a variable. Every dims family
 /// instruction appears, the tape shape is checked, and the output matches
-/// `/usr/bin/php`.
+/// `/usr/bin/php8.5`.
 #[test]
 fn dims_in_every_specialised_form() {
     let arrays = op_arrays(DIMS_IN_EVERY_SPECIALISED_FORM);

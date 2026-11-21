@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Compares `token_get_all()` output with `/usr/bin/php` on a corpus of
+//! Compares `token_get_all()` output with `/usr/bin/php8.5` on a corpus of
 //! tricky snippets. Skipped when PHP (with ext/tokenizer) is unavailable.
 //!
 //! Snippets avoid syntax newer than the installed PHP (8.3): `public(set)`,
@@ -210,7 +210,7 @@ fn matches_php_token_get_all() {
 }
 
 /// Whether `src` uses tokens or scanner fixes that only exist in php-src
-/// master and therefore cannot be compared with an older `/usr/bin/php`.
+/// master and therefore cannot be compared with an older `/usr/bin/php8.5`.
 fn uses_master_only_lexing(src: &[u8]) -> bool {
     use TokenKind as T;
     let toks = php_lexer::token_get_all(src);
@@ -226,7 +226,7 @@ fn uses_master_only_lexing(src: &[u8]) -> bool {
 }
 
 /// Compares every `.phpt` `--FILE--` section in php-src with
-/// `/usr/bin/php`. Slow (~15s); run with `cargo test -- --ignored`.
+/// `/usr/bin/php8.5`. Slow (~15s); run with `cargo test -- --ignored`.
 #[test]
 #[ignore = "shells out to php for ~23k files"]
 fn full_corpus_matches_php() {

@@ -330,9 +330,9 @@ fn tagnames_match_oracle() {
 }
 
 #[test]
-#[ignore = "regenerates the oracle files with /usr/bin/php"]
+#[ignore = "regenerates the oracle files with /usr/bin/php8.5"]
 fn regenerate_oracle() {
-    let status = std::process::Command::new("/usr/bin/php")
+    let status = std::process::Command::new("/usr/bin/php8.5")
         .args(["-d", "memory_limit=1G"])
         .arg(root().join("oracle/gen.php"))
         .status()

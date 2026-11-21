@@ -8,7 +8,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 and to run as fast as the C implementation or faster (see "Performance").
 `modules/php-src/` is a READ-ONLY reference clone of https://github.com/php/php-src (never edit it; it is gitignored).
 `modules/php-rust/` is a READ-ONLY clone of https://github.com/francescotinti/php-rust — the competing project (phprust.com); for study/comparison only, never edit it, never copy code from it (its license must be respected; use it for measured comparisons and ideas, not code).
-`/usr/bin/php` (the C implementation, PHP 8.3.6) is installed and may be used as an oracle to check expected behaviour. Where 8.3 and php-src master differ, follow master.
+`/usr/bin/php8.5` (the C implementation, PHP 8.5.12) is installed and may be used as an oracle to check expected behaviour. Where 8.5 and php-src master differ, follow master. (The unversioned `/usr/bin/php` is whichever version the system's alternatives select; do not use it as the reference.)
 
 ## Commands
 
@@ -33,7 +33,7 @@ env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 3 -q --no-art
 - `phpt-environment.txt` lists tests that fail only for host reasons, identically under C PHP (Ubuntu libgd without GD2, MariaDB lacking a native JSON type). The runner reports them as PASS; `--no-environment` shows raw failures. Do not add them to the baseline.
 - `--json report.json` then `scripts/update_feature_gap.py report.json` rewrites FEATURE_GAP.md's `%` column from a run.
 - Use dev builds for correctness and scoped PHPT runs. Reserve `--release` (thin LTO, one codegen unit, slow to rebuild) for performance measurement. Avoid `cargo clean` in edit/test loops.
-- When behaviour is unclear, run a small script through the oracle (`/usr/bin/php -d memory_limit=1G x.php`) rather than guessing.
+- When behaviour is unclear, run a small script through the oracle (`/usr/bin/php8.5 -d memory_limit=1G x.php`) rather than guessing.
 
 ## Architecture
 
@@ -118,7 +118,7 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 - Run `cargo fmt && cargo clippy --all-targets && cargo test` (scoped with `-p`) before declaring work done.
 
 ## Performance
-The target is parity or better with `/usr/bin/php`. `scripts/acceptance.sh` builds the release `php` (`cargo build --release -p php-cli`: `target/release/php`) and runs `perf/bench/acceptance.py`, which counts user-space instructions per workload and compares each count against the **goal**: the instruction counts measured for the C implementation, recorded in `perf/bench/goal.tsv`. The acceptance criterion is one number per workload — candidate instructions ≤ 1.10 × goal — and the check passes only when **every** workload meets it. It currently passes: all 82 workloads meet the criterion (25 with the JIT off). The trace JIT (`crates/php-vm/src/exec/tape/jit.rs`) is on by default on x86-64 Linux: `BUZZS_JIT=0` turns it off, `BUZZS_JIT_DEBUG=1` prints what it compiles and why it refuses a loop, and `BUZZS_JIT_HOT=<n>` compiles a loop after n back edges instead of 1,000 (for test runs; a long loop is taken sooner either way: its count starts ahead by its length). Regenerate the goal with `acceptance.py --record` (measures `/usr/bin/php`). Run the check after touching hot paths: the VM executor and php-runtime value/array/string code. Options: `--filter RX`, `ACCEPTANCE_SET=zend,micro,suite,ops`, `PHP_BIN=<path>` to skip the build. `perf/README.md` explains the measuring method (instruction counts, not wall clock, because the box is loaded). In hot paths, avoid needless allocation, cloning and indirection.
+The target is parity or better with `/usr/bin/php8.5`. `scripts/acceptance.sh` builds the release `php` (`cargo build --release -p php-cli`: `target/release/php`) and runs `perf/bench/acceptance.py`, which counts user-space instructions per workload and compares each count against the **goal**: the instruction counts measured for the C implementation, recorded in `perf/bench/goal.tsv`. The acceptance criterion is one number per workload — candidate instructions ≤ 1.10 × goal — and the check passes only when **every** workload meets it. It currently passes: all 82 workloads meet the criterion (25 with the JIT off). The trace JIT (`crates/php-vm/src/exec/tape/jit.rs`) is on by default on x86-64 Linux: `BUZZS_JIT=0` turns it off, `BUZZS_JIT_DEBUG=1` prints what it compiles and why it refuses a loop, and `BUZZS_JIT_HOT=<n>` compiles a loop after n back edges instead of 1,000 (for test runs; a long loop is taken sooner either way: its count starts ahead by its length). Regenerate the goal with `acceptance.py --record` (measures `/usr/bin/php8.5`). Run the check after touching hot paths: the VM executor and php-runtime value/array/string code. Options: `--filter RX`, `ACCEPTANCE_SET=zend,micro,suite,ops`, `PHP_BIN=<path>` to skip the build. `perf/README.md` explains the measuring method (instruction counts, not wall clock, because the box is loaded). In hot paths, avoid needless allocation, cloning and indirection.
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
@@ -132,8 +132,8 @@ When coordinating subagents on a large task:
 
 ## Resource limits (the box has OOM-crashed once)
 - **Use at most 3 CPUs in total** (the owner needs the rest of the box): `.cargo/config.toml` caps `cargo` at 3 jobs and test binaries at 3 threads (`RUST_TEST_THREADS`); never override it with `-j`. Run the PHPT runner with `-j 3` (its default is every CPU), and run one heavy job at a time: never a build, a test suite, a PHPT run or a profile alongside another.
-- EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down. (Our own `php` caps its address space with `RLIMIT_AS` in `crates/php-cli/src/main.rs`.)
-- Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php` (use subsets).
+- EVERY invocation of `/usr/bin/php8.5` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down. (Our own `php` caps its address space with `RLIMIT_AS` in `crates/php-cli/src/main.rs`.)
+- Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php8.5` (use subsets).
 
 ## Test services
 - MariaDB 10.11 is installed for ext/mysqli tests: database `test`, user `phptest` / password `phptest` on 127.0.0.1:3306 (set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest MYSQL_TEST_DB=test` when running those tests, e.g. via the runner's `--env`). Start/stop with `sudo systemctl start|stop mariadb`.

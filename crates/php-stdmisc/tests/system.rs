@@ -1,5 +1,5 @@
 //! Environment, process-information and `phpinfo()` primitive tests
-//! (expectations from `/usr/bin/php` and the `general_functions` phpt files).
+//! (expectations from `/usr/bin/php8.5` and the `general_functions` phpt files).
 
 mod common;
 

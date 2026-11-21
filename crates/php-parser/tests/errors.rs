@@ -542,7 +542,7 @@ fn ours(snippet: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs /usr/bin/php; regenerates tests/fixtures/error_messages.tsv"]
+#[ignore = "needs /usr/bin/php8.5; regenerates tests/fixtures/error_messages.tsv"]
 fn regenerate() {
     use std::process::Command;
     let tmp = std::env::temp_dir().join(format!("php-parser-errors-{}.php", std::process::id()));

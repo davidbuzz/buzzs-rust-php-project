@@ -36,7 +36,7 @@ callgrind's `Ir`.
 | + php-vm opt-level 2 | 172 M | 86 ms |
 | `[profile.dev] opt-level = 1` for all crates (+ cli2) instead | 161 M | 76 ms |
 | release build (728fb5f) | 61 M | 33 ms |
-| `/usr/bin/php` | 40 M | 31 ms |
+| `/usr/bin/php8.5` | 40 M | 31 ms |
 
 * **70 % of today's startup is `reflection::misc::record_module`**. It copies
   every function, class and constant name into three `HashSet<Vec<u8>>`
@@ -129,7 +129,7 @@ a thread-local read in `has_pending_destructors`, and the `run` frame is over
 
 All 728fb5f builds. Treat these as indicative only, and use the instruction tables for A/B comparisons. Some O0+P cells are slower than O0 purely from load (`method`, `preg_match`); their instruction counts are lower.
 
-| bench | debug O0 | O0 + P | vmO1 + P | allO1 + P(01–06) | release | release + P | /usr/bin/php |
+| bench | debug O0 | O0 + P | vmO1 + P | allO1 + P(01–06) | release | release + P | /usr/bin/php8.5 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | abs | 13331.9 | 6095.6 | 2096.0 | 1008.4 | 1132.1 | 807.0 | 22.2 |
 | array_set | 5646.5 | 5104.9 | 1381.4 | 1337.6 | 1739.2 | 1270.8 | 31.2 |
@@ -160,7 +160,7 @@ All 728fb5f builds. Treat these as indicative only, and use the instruction tabl
 | all crates opt-level 1 + patches 01–06 | 15.2 | 4.6 | 2.1 | 15.8 |
 | release | 13.7 | 3.6 | 2.2 | 14.4 |
 | release + patches 01–07 | 10.5 | 3.2 | 2.1 | 11.2 |
-| `/usr/bin/php` | 1.0 | 0.6 | 0.8 | 1.6 |
+| `/usr/bin/php8.5` | 1.0 | 0.6 | 0.8 | 1.6 |
 
 `hash_pbkdf2_large_length` is already fast in this tree, because php-hash is
 built at opt-level 3. Its timeout must come from load, or from a different
@@ -176,7 +176,7 @@ are **interpreter-bound**:
 
 21 trivial tests (`bench/phpt`) with `-j 1` spawn 25 `php` processes: one
 per test, plus one SKIPIF, one CLEAN and two probes. The runner's total CPU
-is 2.80 s with the 728fb5f debug binary against 0.79 s with `/usr/bin/php`,
+is 2.80 s with the 728fb5f debug binary against 0.79 s with `/usr/bin/php8.5`,
 about 112 ms per process. That is exactly the php startup cost; the runner's
 own work (diffing, INI argument building) is in the noise. **Per-test
 overhead is php startup.** At today's 716 ms × ~21 k tests, that is about

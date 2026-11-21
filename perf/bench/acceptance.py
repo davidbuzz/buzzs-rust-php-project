@@ -4,7 +4,7 @@
 Counts user-space instructions (``perf stat -e instructions:u``, or callgrind's
 ``Ir`` when perf is unavailable: BACKEND=callgrind) of each workload for the
 candidate php, and compares each count against the recorded goal: the
-instruction counts measured for the C implementation (/usr/bin/php), stored in
+instruction counts measured for the C implementation (/usr/bin/php8.5), stored in
 goal.tsv. This mirrors php-src's benchmark/benchmark.php, which tracks
 callgrind instruction counts of Zend/bench.php per commit, as a pass/fail check.
 
@@ -23,7 +23,7 @@ Workload sets (ACCEPTANCE_SET, comma separated; default "zend,micro,suite,ops"):
 
 usage: acceptance.py <candidate-php> [--goal FILE] [--ref PHP] [--filter RX]
   --record  measure the reference C php and write goal.tsv (the goal numbers
-            come from a real measurement of /usr/bin/php, never hand-written)
+            come from a real measurement of /usr/bin/php8.5, never hand-written)
 Exit status: 0 = every workload within the goal, 1 = at least one over goal or
 failed, 2 = usage / environment error.
 """
@@ -37,7 +37,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 ZEND = os.path.join(ROOT, 'modules', 'php-src', 'Zend')
-REF = os.environ.get('REF', '/usr/bin/php')
+REF = os.environ.get('REF', '/usr/bin/php8.5')
 COMMON = ['-d', 'memory_limit=1G', '-d', 'opcache.enable_cli=0']
 FLOOR = 1.10
 OPS = ['empty_loop', 'int_add', 'float_mul', 'is_smaller_jmp', 'concat_assign', 'dim_read',

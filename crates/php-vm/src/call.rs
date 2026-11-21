@@ -5668,7 +5668,7 @@ mod fast_builtin_tests {
         }
     }
 
-    /// Expectations from `/usr/bin/php -n` (`var_dump` of each call).
+    /// Expectations from `/usr/bin/php8.5 -n` (`var_dump` of each call).
     #[test]
     fn float_math_matches_the_handlers() {
         assert_eq!(float("sqrt", Value::Int(2)), 1.414_213_562_373_095_1);
@@ -5733,7 +5733,7 @@ mod fast_builtin_tests {
 
 /// Call-site caches of `INIT_METHOD_CALL`, `INIT_STATIC_METHOD_CALL` with
 /// `self`/`parent`/`static`, and closure calls: scripts whose sites run
-/// several times (fill, then hit). Expected output from `/usr/bin/php -n`
+/// several times (fill, then hit). Expected output from `/usr/bin/php8.5 -n`
 /// (PHP 8.3.6).
 #[cfg(test)]
 #[allow(clippy::needless_raw_string_hashes)]

@@ -8,7 +8,7 @@
 //! # Tokenizer API
 //!
 //! [`token_get_all`] returns the same `(id, text, line)` triples as PHP's
-//! `token_get_all()` without flags (verified against `/usr/bin/php` over every
+//! `token_get_all()` without flags (verified against `/usr/bin/php8.5` over every
 //! `.phpt` file in php-src), and [`Lexer::new`] is a plain iterator of
 //! [`Token`]s with the same semantics:
 //!

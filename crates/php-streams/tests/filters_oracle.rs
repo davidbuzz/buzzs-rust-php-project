@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Bundled stream filters checked against `/usr/bin/php` output recorded in
+//! Bundled stream filters checked against `/usr/bin/php8.5` output recorded in
 //! `tests/data/filters_oracle.txt` (generator: `tests/data/gen_filters.php`).
 
 use php_streams::diag;

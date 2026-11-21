@@ -976,7 +976,7 @@ mod tests {
              try { $m[new stdClass]; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }");
         // Handles: WeakMap #1; the caught TypeError #2, the first Error #3
         // (freeing #2 when `$e` is overwritten), the second Error #2 (freeing
-        // #3), so the stdClass is #3 (`/usr/bin/php -n` agrees).
+        // #3), so the stdClass is #3 (`/usr/bin/php8.5 -n` agrees).
         assert_eq!(
             out,
             "WeakMap key must be an object\nCannot append to WeakMap\nCannot append to WeakMap\nObject stdClass#3 not contained in WeakMap\n"

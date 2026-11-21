@@ -1,6 +1,6 @@
 # Host-environment PHPT failures (paths relative to modules/php-src).
 # Owner decision of 6 Nov 2026: PHPT failures caused only by the host environment (where C PHP
-# `/usr/bin/php` 8.3.6 and `/usr/bin/php8.5` 8.5.12 fail them identically on this machine for
+# `/usr/bin/php8.5` 8.5.12 fails them identically on this machine for
 # host library or service reasons) count as PASS in our pass rates and reports, not as failures
 # or baseline entries.
 #
@@ -11,8 +11,8 @@
 # a comment.
 
 # Ubuntu's system libgd 2.3.3 (2.3.3-9ubuntu5) is built without GD2 support (`gdImageCreateFromGd2Ptr`
-# emits `GD2 image support has been disabled` before returning NULL). Both `/usr/bin/php -d memory_limit=1G`
-# (8.3.6) and `/usr/bin/php8.5 -d memory_limit=1G` (8.5.12) fail this test identically by printing:
+# emits `GD2 image support has been disabled` before returning NULL). `/usr/bin/php8.5 -d memory_limit=1G`
+# (8.5.12) fails this test identically by printing:
 #   Warning: imagecreatefromstring(): GD2 image support has been disabled
 # before the two expected warnings (`Passed data is not in "GD2" format` and `Couldn't create GD Image
 # Stream out of Data`).
@@ -20,8 +20,8 @@ ext/gd/tests/createfromstring-overflow.phpt
 
 # The local test database service is MariaDB 10.11 (127.0.0.1:3306), where `JSON` is an alias for
 # `LONGTEXT` rather than a native MySQL JSON column type. The server's column metadata reports field
-# type 252 (`MYSQLI_TYPE_BLOB`) instead of 245 (`MYSQLI_TYPE_JSON`), so both `/usr/bin/php -d memory_limit=1G`
-# (8.3.6) and `/usr/bin/php8.5 -d memory_limit=1G` (8.5.12) fail this test identically with:
+# type 252 (`MYSQLI_TYPE_BLOB`) instead of 245 (`MYSQLI_TYPE_JSON`), so `/usr/bin/php8.5 -d memory_limit=1G`
+# (8.5.12) fails this test identically with:
 #   [006] Expecting 245 for JSON got code 252 for BLOB
 ext/mysqli/tests/mysqli_fetch_field_types.phpt
 

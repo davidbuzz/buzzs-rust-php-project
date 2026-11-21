@@ -134,7 +134,7 @@ fn uconverter_oop_callback_sequence() {
         }
     }
     // ICU 74 reports "\xC1" and "\xA1" as two illegal sequences (as
-    // /usr/bin/php does with the same ICU), each pass of the
+    // /usr/bin/php8.5 does with the same ICU), each pass of the
     // preflight-then-convert sequence calling back.
     let t = |r: &str| format!("toUCallback({r}, ...)");
     let f = |r: &str| format!("fromUCallback({r}, ...)");

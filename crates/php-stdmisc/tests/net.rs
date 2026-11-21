@@ -124,14 +124,14 @@ fn interfaces_shape() {
     assert!(s.contains("'lo' =>"), "{s}");
 }
 
-/// Live comparison with `/usr/bin/php` (machine-dependent, so ignored by
+/// Live comparison with `/usr/bin/php8.5` (machine-dependent, so ignored by
 /// default): `cargo test -p php-stdmisc --test net -- --ignored`.
 #[test]
-#[ignore = "needs /usr/bin/php; compares live machine state"]
+#[ignore = "needs /usr/bin/php8.5; compares live machine state"]
 fn interfaces_and_hostname_match_live_php() {
     let mut ctx = CollectingContext::new();
     let php = |code: &str| {
-        let out = std::process::Command::new("/usr/bin/php")
+        let out = std::process::Command::new("/usr/bin/php8.5")
             .args(["-n", "-d", "memory_limit=1G", "-r", code])
             .output()
             .expect("php");

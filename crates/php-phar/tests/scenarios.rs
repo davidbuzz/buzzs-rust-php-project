@@ -793,11 +793,11 @@ fn run(name: &str) -> String {
 }
 
 #[test]
-#[ignore = "regenerates scenario outputs with /usr/bin/php"]
+#[ignore = "regenerates scenario outputs with /usr/bin/php8.5"]
 fn regenerate_scenarios() {
     for name in scenarios() {
         let w = workdir(&name);
-        let o = Command::new("/usr/bin/php")
+        let o = Command::new("/usr/bin/php8.5")
             .args([
                 "-d",
                 "memory_limit=1G",

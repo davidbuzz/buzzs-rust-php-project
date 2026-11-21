@@ -1,6 +1,6 @@
 <?php
 // Generates oracle.tsv: a sequence of mb_* calls and their results under
-// /usr/bin/php. Replayed by tests/strings_oracle.rs.
+// /usr/bin/php8.5. Replayed by tests/strings_oracle.rs.
 // Usage: php gen_oracle.php > oracle.tsv
 mt_srand(12345);
 $diag = [];

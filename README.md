@@ -49,7 +49,7 @@ target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts modules/p
 ```
 
 `env -u LANGUAGE` matters only if your shell exports `LANGUAGE` (glibc's gettext lets it override
-`LC_ALL`, which fails six ext/gettext tests under any PHP, including `/usr/bin/php`). Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
+`LC_ALL`, which fails six ext/gettext tests under any PHP, including `/usr/bin/php8.5`). Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
 `--json report.json` plus `scripts/update_feature_gap.py report.json` rewrites the `%` column
 of FEATURE_GAP.md from a run. `phpt-baseline.txt` lists known failures so CI only fails on
 regressions (`--baseline phpt-baseline.txt`, refresh with `--update-baseline`).
@@ -68,7 +68,7 @@ The full run, recorded as evidence in git, is one command:
 
 It builds the whole workspace in release mode, runs `cargo test --workspace --release`, the
 full in-scope PHPT suite on the release `php` (every PASS/FAIL line, a diff for each failure,
-checked against `phpt-baseline.txt`) and `perf/bench/timing.py` against `/usr/bin/php`. All of
+checked against `phpt-baseline.txt`) and `perf/bench/timing.py` against `/usr/bin/php8.5`. All of
 the output goes to `<DD-MON-YYYY>.full-test-run.log` in the repository root, ending in a summary
 of the four phases, and the script commits that file locally (it never pushes).
 `16-NOV-2026.full-test-run.log` is an earlier run in the same layout, without the timing phase.
@@ -88,7 +88,7 @@ at most 1.10x the total runtime of C. C's CLI default has opcache loaded but dis
 it off).
 
 ```sh
-python3 perf/bench/timing.py     # builds the release php if needed, then compares it with /usr/bin/php
+python3 perf/bench/timing.py     # builds the release php if needed, then compares it with /usr/bin/php8.5
 ```
 
 `perf/bench/timing.py` builds the release `php` of the checkout (`cargo build --release -p php-cli`,
@@ -122,7 +122,7 @@ below were measured against — `0c7255dc521` ("Merge branch 'PHP-8.6'", 2 Nov 2
 `scripts/fetch-phpt-tests.sh --verify` checks an existing checkout against that pin. Moving to
 a newer php-src means editing the pin and re-baselining.
 
-`/usr/bin/php` (PHP 8.3.6) is used as an oracle by the library test suites. Where 8.3 and
+`/usr/bin/php8.5` (PHP 8.5.12) is used as an oracle by the library test suites. Where 8.5 and
 php-src master differ, the port follows master.
 
 ## License

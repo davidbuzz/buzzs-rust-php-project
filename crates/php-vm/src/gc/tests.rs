@@ -439,7 +439,7 @@ fn live_root_hole_takes_the_last_root() {
 /// `new` of a class with a native constructor buffers the object
 /// (`ZEND_CALL_RELEASE_THIS`), as a user constructor does. (`Exception`
 /// is the bare VM's class with a native constructor; `ArrayObject` gives
-/// the same output under `/usr/bin/php -n`.)
+/// the same output under `/usr/bin/php8.5 -n`.)
 #[test]
 fn native_constructor_buffers_the_new_object() {
     let out = run(&format!(

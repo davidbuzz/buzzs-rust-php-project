@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Variable-table names shared with the op array (`op_array->vars`): a
 //! frame copies the compiled-variable names only when a variable is created
-//! at run time. Expected PHP outputs are php-src's (`/usr/bin/php -n`).
+//! at run time. Expected PHP outputs are php-src's (`/usr/bin/php8.5 -n`).
 use php_runtime::{Value, ZStr};
 use php_vm::opcode::OpArray;
 use php_vm::vm::{Frame, FrameKind, VarStore};

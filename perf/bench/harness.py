@@ -85,7 +85,7 @@ def main():
     if len(sys.argv) < 3:
         sys.exit('usage: harness.py <candidate-binary> <label> [reference-binary]')
     cand, label = sys.argv[1], sys.argv[2]
-    ref = sys.argv[3] if len(sys.argv) > 3 else '/usr/bin/php'
+    ref = sys.argv[3] if len(sys.argv) > 3 else '/usr/bin/php8.5'
     reps = int(os.environ.get('REPS', '3'))
     core = os.environ.get('CORE', str(os.cpu_count() - 1))
     core = None if core == 'none' else int(core)
