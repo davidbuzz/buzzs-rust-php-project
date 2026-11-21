@@ -1,11 +1,11 @@
 # TODO — phprust (entire project)
 
-The action-ordered work queue: open work first, by impact; finished work is summarised at
-the end (the details are in git history and `FEATURE_GAP.md`). `FEATURE_GAP.md` is the
-per-area table with % and priority; its % column is refreshed from a PHPT run by
-`scripts/update_feature_gap.py`.
+The action-ordered work queue, by impact. It lists only work that is not finished: a
+completed item is deleted, not ticked (finished work is in git history and
+`FEATURE_GAP.md`). `FEATURE_GAP.md` is the per-area table with % and priority; its %
+column is refreshed from a PHPT run by `scripts/update_feature_gap.py`.
 
-Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting.
+Status: [ ] open · [~] in progress · [-] blocked/awaiting.
 Last updated 22 Nov 2026.
 
 ## Where things stand
@@ -143,24 +143,3 @@ candidates for `perf/bench` and for work.
   compiles a loop after n back edges instead of 1,000); after a JIT change also run the
   PHPT set with `--env BUZZS_JIT_HOT=100` and with `--env BUZZS_JIT=0`; PHPT runs use
   `-j 3`.
-
-## Done (summary)
-
-- The deliverable: 0.53x C's total runtime on the 31 inputs (21 Nov, against 8.3.6);
-  `perf/bench/timing.py` measures it; `./run-all-tests.sh` records the build, the Rust
-  tests, the PHPT run and the timing in a dated log committed to git (22 Nov).
-- The trace JIT, on by default since 20 Nov (`57aa54cc`): whole loops as x86-64 code;
-  inlined function, static and instance-method calls; property rows; static properties
-  and class constants; array element rows (int and string keys, lists read and written
-  in place); float comparisons and `op=`; global reads; array copies; pure-int
-  functions compiled whole with native recursion.
-- Interpreter fast paths: string-key probes, `foreach` steps, `new` sites and
-  constructor folds, objects made over in place: 82/82 acceptance workloads (21 Nov).
-- Optimizer: every opcache optimizer and dump test passes (SCCP, DCE, `JMP_NULL` chains,
-  escape analysis, named arguments of known callees, PFA dumps, type narrowing on
-  branches), and three wrong results with the optimizer on fixed (21 Nov).
-- Conformance: the 38 failures of 16 Nov down to 0 (21 Nov), including the rfc1867
-  memory test (large blocks take a chunk each), the session reserved-properties test,
-  ext/gettext (`LANGUAGE` unset) and the debug-binary-only opcache tests.
-- SAPIs and drivers: php-cgi (CGI/1.1, 10 Nov), ext/pdo_mysql (296 run tests pass),
-  ext/mysqli + mysqlnd, mod_php (prefork).
