@@ -814,8 +814,8 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
         };
         let statik = |place: u32| -> Option<typed::Ty> {
             let (cell, _) = crate::rtcache::static_place_cell_in(frame, place)?;
-            let held = cell.try_borrow().ok()?;
-            match &*held {
+            let value = cell.try_borrow().ok()?;
+            match &*value {
                 Value::Int(_) => Some(typed::Ty::Int),
                 Value::Float(_) => Some(typed::Ty::Float),
                 _ => None,
