@@ -419,6 +419,7 @@ dependencies = [
  "php-runtime",
  "php-sapi",
  "php-stdstr",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
