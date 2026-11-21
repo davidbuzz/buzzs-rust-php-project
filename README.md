@@ -75,11 +75,12 @@ at most 1.10x the total runtime of C. C's CLI default has opcache loaded but dis
 it off).
 
 ```sh
-cargo build --release -p php-cli
-python3 perf/bench/timing.py target/release/php     # against /usr/bin/php
+python3 perf/bench/timing.py     # builds the release php if needed, then compares it with /usr/bin/php
 ```
 
-`perf/bench/timing.py` runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
+`perf/bench/timing.py` builds the release `php` of the checkout (`cargo build --release -p php-cli`
+into `~/.cache/phprust-perf-acceptance`, shared with `scripts/acceptance.sh`; give a binary as the
+argument to measure that one instead), then runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
 and the `perf/bench/<op>.php` loops under both binaries, alternately on the same cores, takes
 the fastest of 5 rounds per input and compares the totals. **Met** (release build of
 `d3380559`, 21 Nov 2026): ours 1.847 s against C's 3.517 s, **0.53x** wall-clock (0.53x CPU

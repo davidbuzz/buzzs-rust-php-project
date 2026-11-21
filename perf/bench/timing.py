@@ -18,7 +18,13 @@ binary the fastest round counts (other load on the box only adds time); the
 totals are the sums. Both wall-clock and CPU time (user + system, from
 wait4) are reported; the verdict is on wall-clock.
 
-usage: timing.py <candidate-php> [--ref PHP] [--filter RX] [--rounds N]
+usage: python3 perf/bench/timing.py [<candidate-php>] [--ref PHP] [--filter RX] [--rounds N]
+                                    [--no-build]
+  Without <candidate-php>, it first builds the release `php` from this checkout
+  (`cargo build --release -p php-cli` into CARGO_TARGET_DIR, default
+  ~/.cache/phprust-perf-acceptance, which `scripts/acceptance.sh` shares; a few
+  seconds when nothing changed, up to ~15 minutes after source changes) and
+  measures that. --no-build measures the binary already there.
 Exit status: 0 = total within 1.10 x C, 1 = over, 2 = usage / environment error.
 """
 import os
@@ -52,7 +58,7 @@ def inputs():
 
 def run_once(binary, script, cores):
     """(wall seconds, cpu seconds, exit status) of one run."""
-    cmd = ['taskset', '-c', cores, binary] + COMMON + [script]
+    cmd = (['taskset', '-c', cores] if cores else []) + [binary] + COMMON + [script]
     t0 = time.perf_counter()
     p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          cwd=os.path.dirname(script))
@@ -61,33 +67,65 @@ def run_once(binary, script, cores):
     return wall, ru.ru_utime + ru.ru_stime, os.waitstatus_to_exitcode(status)
 
 
+def build_release():
+    """Builds the release `php` of this checkout; its path, or None."""
+    target = os.environ.get('CARGO_TARGET_DIR') or os.path.expanduser(
+        '~/.cache/phprust-perf-acceptance')
+    print(f'# building the release php into {target} (cargo build --release -p php-cli)',
+          flush=True)
+    env = dict(os.environ, CARGO_TARGET_DIR=target)
+    r = subprocess.run(['cargo', 'build', '--release', '-p', 'php-cli'], cwd=ROOT, env=env)
+    if r.returncode != 0:
+        print('timing.py: the release build failed', file=sys.stderr)
+        return None
+    return os.path.join(target, 'release', 'php')
+
+
 def main():
     args = sys.argv[1:]
-    if not args or args[0].startswith('-'):
-        print(__doc__, file=sys.stderr)
-        return 2
-    cand = os.path.abspath(args.pop(0))
+    cand = None
     ref = '/usr/bin/php'
     filt = None
+    build = True
     rounds = int(os.environ.get('ROUNDS', '5'))
     while args:
         a = args.pop(0)
+        if a in ('-h', '--help'):
+            print(__doc__)
+            return 0
         if a == '--ref':
             ref = args.pop(0)
         elif a == '--filter':
             filt = re.compile(args.pop(0))
         elif a == '--rounds':
             rounds = int(args.pop(0))
+        elif a == '--no-build':
+            build = False
+        elif not a.startswith('-') and cand is None:
+            cand = os.path.abspath(a)
         else:
             print(f'timing.py: unknown argument {a}', file=sys.stderr)
             return 2
-    cores = os.environ.get('CORES', '13-15')
+    if cand is None:
+        if build:
+            cand = build_release()
+            if cand is None:
+                return 2
+        else:
+            target = os.environ.get('CARGO_TARGET_DIR') or os.path.expanduser(
+                '~/.cache/phprust-perf-acceptance')
+            cand = os.path.join(target, 'release', 'php')
+    # Both binaries on the same cores: the box's last three (the owner's
+    # CPU limit), or none pinned on a small machine.
+    ncpu = os.cpu_count() or 1
+    default_cores = f'{ncpu - 3}-{ncpu - 1}' if ncpu >= 8 else ''
+    cores = os.environ.get('CORES', default_cores)
     for b in (cand, ref):
         if not os.access(b, os.X_OK):
             print(f'timing.py: {b} is not executable', file=sys.stderr)
             return 2
-    print(f'# candidate {cand}\n# reference {ref}\n# {rounds} rounds, cores {cores}, '
-          'fastest round per input\n')
+    print(f'# candidate {cand}\n# reference {ref}\n# {rounds} rounds, cores {cores or "any"}, '
+          'fastest round per input\n', flush=True)
     print(f"{'input':<28} {'C wall s':>9} {'ours wall s':>11} {'ratio':>6}   "
           f"{'C cpu s':>8} {'ours cpu s':>10} {'ratio':>6}")
     tot = {'cw': 0.0, 'ow': 0.0, 'cc': 0.0, 'oc': 0.0}
