@@ -549,7 +549,7 @@ fn regenerate() {
     let mut out = String::new();
     for s in SNIPPETS {
         std::fs::write(&tmp, format!("<?php {s}")).unwrap();
-        let o = Command::new("php")
+        let o = Command::new("/usr/bin/php8.5")
             .args(["-n", "-l", "-d", "display_errors=1", "-d", "log_errors=0"])
             .arg(&tmp)
             .output()

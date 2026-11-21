@@ -1,6 +1,6 @@
 <?php
 // Generates tests/data/unserialize_cases.txt:
-//   php -d memory_limit=1G tests/data/gen_unserialize.php > tests/data/unserialize_cases.txt
+//   /usr/bin/php8.5 -d memory_limit=1G tests/data/gen_unserialize.php > tests/data/unserialize_cases.txt
 // Each line: <hex input> <result>, where result is "ok" or the last
 // "Error at offset"/"Extra data" warning text.
 $cases = [

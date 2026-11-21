@@ -11,8 +11,9 @@
 //! `FILTER_VALIDATE_REGEXP` with the recorded `preg_match()` results and
 //! `FILTER_CALLBACK` with the recorded callback return values.
 //!
-//! The oracle is PHP 8.3; [`php83_difference`] documents where php-src
-//! master (which this crate follows) intentionally differs.
+//! The oracle is PHP 8.5.12, which matches php-src master (the semantics
+//! this crate follows) on every recorded call: results, exceptions and
+//! diagnostics are compared as recorded.
 
 use crate::engine::{FilterArgs, FilterInputs};
 use crate::host::FilterHost;
@@ -238,89 +239,6 @@ fn exception_text(e: &RuntimeError) -> String {
     }
 }
 
-/// Message wording changes between PHP 8.3 and master.
-fn normalize_exception(e: &str) -> String {
-    e.replace(
-        "\"thousand\" option cannot be empty",
-        "\"thousand\" option must not be empty",
-    )
-}
-
-/// Known, intentional differences between PHP 8.3 (the oracle) and php-src
-/// master. Returns `true` when the mismatch is explained.
-fn php83_difference(func: &str, args: &[Value], ours: &str, theirs: &str) -> bool {
-    let _ = (ours, theirs);
-    // Master warns about unknown filter ids in filter_var_array()
-    // definitions; 8.3 silently used FILTER_DEFAULT.
-    if func == "filter_var_array" {
-        let mut stripped = ours.to_string();
-        while let Some(p) = stripped.find("\"Warning: filter_var_array(): Unknown filter with ID ")
-        {
-            let end = stripped[p + 1..]
-                .find('"')
-                .map_or(stripped.len(), |e| p + e + 2);
-            stripped.replace_range(p..end, "");
-            stripped = stripped.replace("[, ", "[").replace(", ]", "]");
-        }
-        return stripped == theirs;
-    }
-    if func != "filter_var" {
-        return false;
-    }
-    // Master rejects a hostname label ending in '-' at the end of the
-    // string (the `*(s + 1) == '\0'` check); 8.3 accepted it.
-    if let Some(Value::Str(s)) = args.first() {
-        let b = s.as_bytes();
-        let t = b.strip_suffix(b".").unwrap_or(b);
-        if t.ends_with(b"-") && ours.starts_with("b:0;") {
-            return true;
-        }
-        if let Some(u) = crate::url_parse::parse_url(b) {
-            if u.host.as_ref().is_some_and(|h| h.ends_with(b"-")) && ours.starts_with("b:0;") {
-                return true;
-            }
-        }
-    }
-    let filter = args.get(1).and_then(Value::as_int);
-    let flags = args.get(2).and_then(Value::as_int).unwrap_or(0);
-    // filter_sanitize_encoded_0xff.phpt: 8.3 mis-encoded byte 0xFF.
-    if filter == Some(crate::constants::FILTER_SANITIZE_ENCODED) {
-        if let Some(Value::Str(s)) = args.first() {
-            if s.as_bytes().contains(&0xff) {
-                return true;
-            }
-        }
-    }
-    // Master's ipv6_get_status_flags follows RFC 6890 (documentation,
-    // IPv4-mapped, 6to4... ranges changed classification).
-    if filter == Some(crate::constants::FILTER_VALIDATE_IP)
-        && flags
-            & (crate::constants::FILTER_FLAG_NO_PRIV_RANGE
-                | crate::constants::FILTER_FLAG_NO_RES_RANGE
-                | 0x1000_0000)
-            != 0
-    {
-        if let Some(Value::Str(s)) = args.first() {
-            if s.as_bytes().contains(&b':') {
-                return true;
-            }
-        }
-    }
-    // Master validates http(s) URLs with a bracketed IPv6 host like any
-    // other (path/query flags and userinfo are checked); 8.3 accepted them
-    // early.
-    if let (Some(Value::Str(s)), Some(filter)) = (args.first(), args.get(1)) {
-        if filter.as_int() == Some(crate::constants::FILTER_VALIDATE_URL) {
-            if let Some(u) = crate::url_parse::parse_url(s.as_bytes()) {
-                if u.host.as_ref().is_some_and(|h| h.first() == Some(&b'[')) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 struct Record<'a> {
     line_no: usize,
     func: &'a str,
@@ -470,38 +388,6 @@ fn inputs_for(rec: &Record<'_>) -> FilterInputs {
     inputs
 }
 
-/// PHP 8.3 had `FILTER_FLAG_GLOBAL_RANGE = 0x10000000`; master moved it to
-/// `0x20000000` and gave the old bit to `FILTER_THROW_ON_FAILURE` (which 8.3
-/// does not have). Recorded flags are translated to master's values.
-fn remap_83_flags(v: &Value) -> Value {
-    const OLD_GLOBAL: i64 = 0x1000_0000;
-    let remap = |f: i64| {
-        if f & OLD_GLOBAL != 0 {
-            (f & !OLD_GLOBAL) | crate::constants::FILTER_FLAG_GLOBAL_RANGE
-        } else {
-            f
-        }
-    };
-    match v.deref() {
-        Value::Int(f) if f >= 0 => Value::Int(remap(f)),
-        Value::Array(a) => {
-            let mut out = ZArray::new();
-            for (k, x) in a.iter() {
-                let nx = match (k, x) {
-                    (ArrayKey::Str(s), Value::Int(f)) if s.as_bytes() == b"flags" && *f >= 0 => {
-                        Value::Int(remap(*f))
-                    }
-                    (_, Value::Array(_)) => remap_83_flags(x),
-                    _ => x.clone(),
-                };
-                out.make_mut().insert(k.clone(), nx);
-            }
-            Value::Array(out)
-        }
-        other => other,
-    }
-}
-
 /// Runs one record; `None` when it needs VM-only behaviour (zpp errors).
 fn replay(rec: &Record<'_>, host: &mut ReplayHost) -> Option<RtResult<Value>> {
     let a = &rec.args;
@@ -509,7 +395,7 @@ fn replay(rec: &Record<'_>, host: &mut ReplayHost) -> Option<RtResult<Value>> {
         "filter_var" => {
             host.fname = "filter_var";
             let filter = zpp_long(a.get(1), crate::constants::FILTER_DEFAULT)?;
-            let opts = zpp_args(a.get(2).map(remap_83_flags).as_ref(), 0)?;
+            let opts = zpp_args(a.get(2), 0)?;
             let value = a.first()?.clone();
             crate::filter_var(host, &value, filter, &opts)
         }
@@ -518,10 +404,7 @@ fn replay(rec: &Record<'_>, host: &mut ReplayHost) -> Option<RtResult<Value>> {
             let Value::Array(arr) = a.first()?.deref() else {
                 return None;
             };
-            let opts = zpp_args(
-                a.get(1).map(remap_83_flags).as_ref(),
-                crate::constants::FILTER_DEFAULT,
-            )?;
+            let opts = zpp_args(a.get(1), crate::constants::FILTER_DEFAULT)?;
             let add_empty = a.get(2).is_none_or(|v| !matches!(v, Value::Bool(false)));
             crate::filter_var_array(host, &arr, &opts, add_empty)
         }
@@ -531,7 +414,7 @@ fn replay(rec: &Record<'_>, host: &mut ReplayHost) -> Option<RtResult<Value>> {
             let t = zpp_long(a.first(), -1)?;
             let name = zpp_str(a.get(1))?;
             let filter = zpp_long(a.get(2), crate::constants::FILTER_DEFAULT)?;
-            let opts = zpp_args(a.get(3).map(remap_83_flags).as_ref(), 0)?;
+            let opts = zpp_args(a.get(3), 0)?;
             crate::filter_input(host, &inputs, t, &name, filter, &opts)
         }
         "filter_input_array" => {
@@ -563,7 +446,6 @@ fn replay(rec: &Record<'_>, host: &mut ReplayHost) -> Option<RtResult<Value>> {
 fn oracle() {
     let mut checked = 0;
     let mut skipped = 0;
-    let mut explained = 0;
     let mut failures = Vec::new();
     for (i, line) in FIXTURE.lines().enumerate() {
         if line.starts_with('#') || line.is_empty() {
@@ -586,21 +468,18 @@ fn oracle() {
             Ok(v) => (ser(v), String::new()),
             Err(e) => (ser(&Value::Null), exception_text(e)),
         };
-        // php-src master warns when NAN is coerced to string; 8.3 did not.
         let diags: Vec<String> = host
             .diagnostics
             .iter()
             .map(|d| format!("{}: {}", level_label(d.level), d.message))
-            .filter(|d| d != "Warning: unexpected NAN value was coerced to string")
             .collect();
-        let rec_exception = normalize_exception(&rec.exception);
         let expected_diags: Vec<String> = rec
             .diags
             .iter()
             .filter(|d| !d.contains("Passing null to parameter"))
             .cloned()
             .collect();
-        let ok = result == rec.result && exception == rec_exception && diags == expected_diags;
+        let ok = result == rec.result && exception == rec.exception && diags == expected_diags;
         if ok {
             checked += 1;
             continue;
@@ -612,18 +491,8 @@ fn oracle() {
             rec.exception,
             rec.diags
         );
-        if php83_difference(rec.func, &rec.args, &ours, &theirs) {
-            if std::env::var_os("FILTER_ORACLE_VERBOSE").is_some() {
-                eprintln!(
-                    "explained line {}: {:?}\n  ours:   {ours}\n  php8.3: {theirs}",
-                    rec.line_no, rec.args
-                );
-            }
-            explained += 1;
-            continue;
-        }
         failures.push(format!(
-            "line {}: {}({:?})\n  ours:   {ours}\n  php8.3: {theirs}",
+            "line {}: {}({:?})\n  ours:   {ours}\n  php8.5: {theirs}",
             rec.line_no, rec.func, rec.args
         ));
     }
@@ -631,11 +500,11 @@ fn oracle() {
     failures.truncate(40);
     assert!(
         n == 0,
-        "{n} mismatches ({checked} ok, {skipped} skipped, {explained} explained):\n{}",
+        "{n} mismatches ({checked} ok, {skipped} skipped):\n{}",
         failures.join("\n")
     );
     assert!(checked > 20_000, "too few records checked: {checked}");
-    eprintln!("filter oracle: {checked} ok, {skipped} skipped, {explained} explained");
+    eprintln!("filter oracle: {checked} ok, {skipped} skipped");
 }
 
 /// Regenerates the fixture with `/usr/bin/php8.5`:
@@ -644,7 +513,7 @@ fn oracle() {
 #[ignore = "needs /usr/bin/php8.5 and modules/php-src"]
 fn regenerate_oracle() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle/gen_oracle.php");
-    let status = std::process::Command::new("php")
+    let status = std::process::Command::new("/usr/bin/php8.5")
         .arg(script)
         .status()
         .expect("run php");

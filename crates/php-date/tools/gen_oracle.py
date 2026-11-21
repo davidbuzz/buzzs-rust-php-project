@@ -187,7 +187,7 @@ def main():
     for name, cmds in commands(tests_dir).items():
         cmds = [c for c in cmds if not any(p.search(c) for p in SKIP)]
         inp = "\n".join(cmds) + "\n"
-        res = subprocess.run(["php", "-n", "-d", "date.timezone=UTC", os.path.join(HERE, "probe.php")], input=inp.encode("latin-1"),
+        res = subprocess.run(["/usr/bin/php8.5", "-n", "-d", "date.timezone=UTC", os.path.join(HERE, "probe.php")], input=inp.encode("latin-1"),
                              capture_output=True, check=True).stdout.decode("latin-1").split("\n")
         with open(os.path.join(DATA, name + ".tsv"), "w", encoding="latin-1", newline="\n") as f:
             for c, r in zip(cmds, res):

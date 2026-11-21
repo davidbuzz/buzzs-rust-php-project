@@ -879,7 +879,7 @@ fn oracle_cases() {
 #[ignore = "needs /usr/bin/php8.5; rewrites the fixture"]
 fn regenerate_oracle() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
-    let out = std::process::Command::new("php")
+    let out = std::process::Command::new("/usr/bin/php8.5")
         .arg(format!("{dir}/gen_oracle.php"))
         .output()
         .expect("run php");

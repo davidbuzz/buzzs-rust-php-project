@@ -77,7 +77,7 @@ fn oracle() {
 #[ignore = "needs /usr/bin/php8.5 and modules/php-src"]
 fn regenerate_oracle() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle/gen_oracle.php");
-    let status = std::process::Command::new("php")
+    let status = std::process::Command::new("/usr/bin/php8.5")
         .arg(dir)
         .status()
         .expect("run php");

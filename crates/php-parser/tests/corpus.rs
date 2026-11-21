@@ -155,7 +155,7 @@ fn regenerate() {
         let short = short_open_tag(&secs);
         let f = tmp.join(format!("t{i}.php"));
         std::fs::write(&f, file).unwrap();
-        let o = Command::new("php")
+        let o = Command::new("/usr/bin/php8.5")
             .args([
                 "-n",
                 "-l",

@@ -148,7 +148,7 @@ foreach ($argv as $path) {
         std::fs::write(&p, s.as_ref()).ok()?;
         paths.push(p);
     }
-    let out = Command::new("php")
+    let out = Command::new("/usr/bin/php8.5")
         .arg("-d")
         .arg("short_open_tag=0")
         .arg("-d")
