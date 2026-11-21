@@ -650,6 +650,23 @@ enum Fast {
         value: Opnd,
         consume: Option<SlotRef>,
     },
+    /// A read of the number in a declared property (the place's index)
+    /// on a property cache hit (`spec::jit_prop_get`).
+    PropGet { place: u32 },
+    /// A write of a number into one, over a scalar (`spec::jit_prop_set`).
+    PropSet {
+        place: u32,
+        value: Opnd,
+        consume: Option<SlotRef>,
+    },
+    /// `op=` of a number on one (`spec::jit_prop_op`; `op` as
+    /// [`Fast::Op`]'s, and 3 for `++`, 4 for `--`).
+    PropOp {
+        place: u32,
+        op: usize,
+        value: Opnd,
+        consume: Option<SlotRef>,
+    },
     /// [`Fast::Get`] of `$cv[i][j]`.
     Get2 { array: i32, i: Opnd, j: Opnd },
     /// [`Fast::Set`] of `$cv[i][j]`, over an existing element.
@@ -1480,6 +1497,9 @@ impl Analysis<'_> {
                     u32::MAX
                 };
                 self.fetched(st, &mut call, i, to, inst.b, float)?;
+                if self.cached_place(inst.a) {
+                    call.fast = Some(Fast::PropGet { place: inst.a });
+                }
             }
             // `$obj->prop = val`, `op= val`, `++` & co., as statements (a
             // used result would be a value of a type not known here).
@@ -1502,8 +1522,46 @@ impl Analysis<'_> {
                     _ => return None,
                 };
                 self.object_place(st, place)?;
-                if let Some(Operand::Tmp(t)) = value {
-                    self.consume(st, &mut call, t)?;
+                // The number the loop has for the value, for the short
+                // cut, and the temporary it is consumed from.
+                let (number, consume) = match value {
+                    Some(Operand::Tmp(t)) => self.value(st, &mut call, DIM_TMP, t as usize)?,
+                    Some(Operand::Cv(c)) => (self.dim_number(st, DIM_CV, c), None),
+                    Some(Operand::Lit(l)) => (self.dim_number(st, DIM_LIT, l), None),
+                    _ => (None, None),
+                };
+                if self.cached_place(place) {
+                    call.fast = match (self.ops.get(inst.d as usize)?, number) {
+                        (Op::AssignObjProp { .. }, Some(value)) => Some(Fast::PropSet {
+                            place,
+                            value,
+                            consume,
+                        }),
+                        (Op::AssignOpObjProp { op, .. }, Some(value)) => {
+                            let op = match *op {
+                                php_runtime::BinaryOp::Add => Some(0),
+                                php_runtime::BinaryOp::Sub => Some(1),
+                                php_runtime::BinaryOp::Mul => Some(2),
+                                _ => None,
+                            };
+                            op.map(|op| Fast::PropOp {
+                                place,
+                                op,
+                                value,
+                                consume,
+                            })
+                        }
+                        (Op::IncDecObjProp { kind, .. }, _) => Some(Fast::PropOp {
+                            place,
+                            op: if kind.is_inc() { 3 } else { 4 },
+                            value: Opnd {
+                                num: Num::Int(1),
+                                float: false,
+                            },
+                            consume: None,
+                        }),
+                        _ => None,
+                    };
                 }
             }
             // `isset($cv[dim])` / `empty($cv[dim])` into a temporary: a
@@ -1551,8 +1609,10 @@ impl Analysis<'_> {
         // A read whose short cut does not fit what it reads (a hash table,
         // elements that are not numbers) calls its handler. (A write's
         // short cut falls back on the handler by itself.)
-        if matches!(call.fast, Some(Fast::Get { .. } | Fast::Get2 { .. }))
-            && (!self.seen.fast || (self.seen.slow)(i))
+        if matches!(
+            call.fast,
+            Some(Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. })
+        ) && (!self.seen.fast || (self.seen.slow)(i))
         {
             call.fast = None;
         }
@@ -1965,6 +2025,14 @@ impl Analysis<'_> {
         })
     }
 
+    /// Whether the place `id` is one the property cache covers (`$cv->p`,
+    /// `$this->p`): the short cuts read the cache's entry for it.
+    fn cached_place(&self, id: u32) -> bool {
+        self.places
+            .get(id as usize)
+            .is_some_and(crate::place::propcache::cacheable)
+    }
+
     /// Checks that the place `id` is a property path from an object the
     /// loop does not track (`$obj->a`, `$this->a->b`), with literal names:
     /// its handler then reads and writes no slot the loop tracks.
@@ -2364,6 +2432,12 @@ fn jumps(inst: &Inst) -> bool {
     }
 }
 
+/// `spec::jit_prop_get`.
+type PropGet = unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Value) -> usize;
+/// `spec::jit_prop_set`.
+type PropSet = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
+/// `spec::jit_prop_op`.
+type PropOp = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, u64) -> usize;
 /// `dims::jit_get_num`.
 type GetNum = unsafe extern "C" fn(*const Option<Value>, i64, *mut Value) -> usize;
 /// `dims::jit_set_num`.
@@ -2799,7 +2873,7 @@ impl Emit<'_, '_> {
         let (done, slow) = (self.b.create_block(), self.b.create_block());
         let cvs = self.cvs;
         match fast {
-            Fast::Get { .. } | Fast::Get2 { .. } => {
+            Fast::Get { .. } | Fast::Get2 { .. } | Fast::PropGet { .. } => {
                 let (slot, ty) = call.result?;
                 let float = ty == Ty::Float;
                 let dest = call.jump.unwrap_or(call.after);
@@ -2815,6 +2889,11 @@ impl Emit<'_, '_> {
                         let array = self.b.ins().iadd_imm(cvs, i64::from(array));
                         let helper = dims::jit_get_num2 as GetNum2 as usize;
                         (helper, vec![array, self.int(i)?, self.int(j)?, dst])
+                    }
+                    Fast::PropGet { place } => {
+                        let place = self.b.ins().iconst(types::I64, i64::from(place));
+                        let helper = crate::exec::spec::jit_prop_get as PropGet as usize;
+                        (helper, vec![self.frame, place, dst])
                     }
                     _ => return None,
                 };
@@ -2844,7 +2923,9 @@ impl Emit<'_, '_> {
             }
             Fast::Set { value, consume, .. }
             | Fast::Set2 { value, consume, .. }
-            | Fast::Op { value, consume, .. } => {
+            | Fast::Op { value, consume, .. }
+            | Fast::PropSet { value, consume, .. }
+            | Fast::PropOp { value, consume, .. } => {
                 let (tag, bits) = if value.float {
                     let v = self.float(value)?;
                     (
@@ -2873,6 +2954,17 @@ impl Emit<'_, '_> {
                         let op = self.b.ins().iconst(types::I64, i64::try_from(op).ok()?);
                         let helper = dims::jit_op_num as OpNum as usize;
                         (helper, vec![array, self.int(index)?, op, tag, bits])
+                    }
+                    Fast::PropSet { place, .. } => {
+                        let place = self.b.ins().iconst(types::I64, i64::from(place));
+                        let helper = crate::exec::spec::jit_prop_set as PropSet as usize;
+                        (helper, vec![self.frame, place, tag, bits])
+                    }
+                    Fast::PropOp { place, op, .. } => {
+                        let place = self.b.ins().iconst(types::I64, i64::from(place));
+                        let op = self.b.ins().iconst(types::I64, i64::try_from(op).ok()?);
+                        let helper = crate::exec::spec::jit_prop_op as PropOp as usize;
+                        (helper, vec![self.frame, place, op, tag, bits])
                     }
                     _ => return None,
                 };

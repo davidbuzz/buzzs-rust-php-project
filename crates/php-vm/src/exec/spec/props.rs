@@ -584,6 +584,138 @@ fn incdec_hit(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
     with_hit_obj(f, &hit, |od| incdec_in(od, hit.slot, kind))
 }
 
+/// For a typed loop of the JIT (`exec/tape/jit/typed.rs`): the number in
+/// the declared property of place `pid` on a cache hit, the object held
+/// directly by its variable (or `$this`), copied into the slot `dst`,
+/// which the caller knows to own nothing. Returns the number's tag as the
+/// JIT reads it (2 for an int, 3 for a float); 0, nothing changed, for
+/// anything else: the handler then runs. The hit of [`read_hit`], less the
+/// copy through a `Value` and `store_fetched_in`.
+///
+/// # Safety
+/// `f` is the current frame and `dst` a slot of it holding a scalar or
+/// nothing.
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_get(
+    f: *mut Frame,
+    pid: usize,
+    dst: *mut Value,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Ok(pid) = PlaceId::try_from(pid) else {
+        return 0;
+    };
+    let Some(hit) = hit_key(f, pid, PC_READ, PC_DYN) else {
+        return 0;
+    };
+    let Some(od) = hit_data(f, &hit) else {
+        return 0;
+    };
+    let Ok(slots) = od.slots.try_borrow() else {
+        return 0;
+    };
+    let (v, tag) = match slots.get(hit.slot) {
+        Some(Some(Value::Int(x))) => (Value::Int(*x), 2),
+        Some(Some(Value::Float(x))) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    // SAFETY: the caller's contract: nothing to release in `dst`.
+    unsafe { std::ptr::write(dst, v) };
+    tag
+}
+
+/// For a typed loop of the JIT: stores the number with tag `tag` (2: an
+/// int, else a float) and bits `bits` into the declared property of place
+/// `pid` on a cache hit, over a scalar, when the property takes the value
+/// as it is. Returns 1, or 0 with nothing changed (the handler then runs).
+/// The hit of [`assign_hit`] for a number.
+///
+/// # Safety
+/// `f` is the current frame.
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_set(
+    f: *mut Frame,
+    pid: usize,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Ok(pid) = PlaceId::try_from(pid) else {
+        return 0;
+    };
+    let Some(hit) = hit_key(f, pid, PC_WRITE, PC_DYN) else {
+        return 0;
+    };
+    #[allow(clippy::cast_possible_wrap)]
+    let new = if tag == 2 {
+        Value::Int(bits as i64)
+    } else {
+        Value::Float(f64::from_bits(bits))
+    };
+    if !hit_accepts(&hit, &new) {
+        return 0;
+    }
+    let Some(od) = hit_data(f, &hit) else {
+        return 0;
+    };
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return 0;
+    };
+    match slots.get_mut(hit.slot) {
+        Some(Some(cell @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))) => {
+            *cell = new;
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// For a typed loop of the JIT: `op=` (`op` 0 for `+`, 1 for `-`, 2 for
+/// `*`) of the number with tag `tag` and bits `bits`, or `++` (`op` 3) or
+/// `--` (4), on the number in the declared property of place `pid` on a
+/// cache hit. Returns 1, or 0 with nothing changed (the handler then
+/// runs). The hits of [`assign_op_hit`] and [`incdec_hit`].
+///
+/// # Safety
+/// `f` is the current frame.
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_op(
+    f: *mut Frame,
+    pid: usize,
+    op: usize,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Ok(pid) = PlaceId::try_from(pid) else {
+        return 0;
+    };
+    let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
+        return 0;
+    };
+    let Some(od) = hit_data(f, &hit) else {
+        return 0;
+    };
+    #[allow(clippy::cast_possible_wrap)]
+    let rhs = if tag == 2 {
+        Num::Int(bits as i64)
+    } else {
+        Num::Float(f64::from_bits(bits))
+    };
+    let done = match op {
+        0 => assign_op_in(od, hit.slot, hit.accept, BinaryOp::Add, rhs),
+        1 => assign_op_in(od, hit.slot, hit.accept, BinaryOp::Sub, rhs),
+        2 => assign_op_in(od, hit.slot, hit.accept, BinaryOp::Mul, rhs),
+        3 => incdec_in(od, hit.slot, IncDecKind::PreInc),
+        4 => incdec_in(od, hit.slot, IncDecKind::PreDec),
+        _ => None,
+    };
+    usize::from(done.is_some())
+}
+
 /// The frame-local fast paths of the property ops (`exec/hot.rs`, which
 /// runs them in its own loop like the other run-time cache hits): `$o->p`
 /// read, `=`, `op=` of a number, `++`/`--` and `isset()`/`empty()` on a

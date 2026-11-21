@@ -1033,3 +1033,21 @@ var_export([g(1, 3.0), k(1, 3.0), g(1, 30.0), m(1, 2.5), m(1.5, 2), m(1, 2), n(1
 ",
     );
 }
+
+#[test]
+fn typed_loops_read_and_write_properties_by_their_short_cuts() {
+    three(
+        r"<?php
+class P { public $x = 0; public $f = 0.5; public int $n = 0; public ?float $q = null; public $s = 'a'; public readonly int $r;
+  function __construct() { $this->r = 3; }
+  function run($k) { for ($i = 0; $i < $k; $i++) { $this->x += $i; $this->n = $this->x & 7; $this->f = $this->f * 1.5 - $this->r; $this->x--; $this->q = $i; } return [$this->x, $this->n, $this->f, $this->q]; } }
+class M { private $data = ['x' => 1]; function __get($n) { return $this->data[$n] ?? 0; } function __set($n, $v) { $this->data[$n] = $v + 1; } }
+function f($o, $k) { $t = 0; for ($i = 0; $i < $k; $i++) { $o->x += 2; $o->x++; $t += $o->x; $o->x *= 1; $o->x -= 1; $o->x = $o->x + $i; } return $t; }
+function g($o, $k) { for ($i = 0; $i < $k; $i++) { $o->x = $i; if ($i == 11) { $o->x = 'str'; } if ($i == 13) { $o->x = 1.5; } if ($i == 15) { unset($o->x); } if ($i == 17) { $o->x = PHP_INT_MAX; } $o->x++; } return $o->x; }
+function h($o, $k) { $t = 0; for ($i = 0; $i < $k; $i++) { try { $o->n += PHP_INT_MAX; } catch (TypeError $e) { $t++; } $o->n = $i; } return [$t, $o->n]; }
+$p = new P; var_export([$p->run(40), f(new P, 30), f(new M, 30), g(new P, 30), h(new P, 20)]);
+$a = new P; $b = $a; $r = &$a->x; for ($i = 0; $i < 30; $i++) { $a->x += 1; $b->f = $i; $r++; } var_export([$a->x, $b->f, $r]);
+$o = new stdClass; $o->d = 1; for ($i = 0; $i < 30; $i++) { $o->d += $i; $o->e = $i; } var_export([$o->d, $o->e]);
+",
+    );
+}
