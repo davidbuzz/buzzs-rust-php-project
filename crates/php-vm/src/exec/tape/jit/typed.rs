@@ -42,24 +42,31 @@
 //!   with computed arguments makes no call at all: its arguments are kept
 //!   in variables until the `DoCall` ([`Plan::Arg`]), and if the loop gives
 //!   up in between, the whole call is redone by the interpreter
-//!   ([`Loop::resume`]). A `return` leaves the loop;
-//! * array element reads and writes (`isset`, `op=`, `++` and nested ones
-//!   included), object property reads and writes, `count()`, `strlen()`,
-//!   type tests and `.=`, as calls of their family handlers on the exact
+//!   ([`Loop::resume`]). A constant or class constant that holds a number
+//!   or a bool is read as that value, checked again at the loop's entry
+//!   ([`Loop::consts`]). A `return` leaves the loop;
+//! * array element reads and writes (`isset`, `op=`, `++`, nested ones and
+//!   a string literal's key included), object property reads, writes and
+//!   `isset`, `count()`, `strlen()`, type tests and `.=`, as calls of their
+//!   family handlers on the exact
 //!   frame ([`Plan::Call`]). The array's, object's or string's variable is
 //!   not tracked; what the handler leaves in a tracked slot is read back
 //!   behind a test of its type, which was guessed from what the array or
 //!   property holds when the loop is compiled. An int offset into a
-//!   packed array of numbers takes a short cut through a small helper
-//!   ([`Fast`]): a write falls back on its handler in place, a read that
+//!   packed array of numbers, a number under a string key and a declared
+//!   property on a property cache hit take a short cut through a small
+//!   helper ([`Fast`]): a write falls back on its handler in place, a read that
 //!   misses is run outside the loop and, if it keeps missing, compiled as
 //!   the handler's call ([`WHY_MISS`]);
-//! * the step of a `foreach` over an array of numbers ([`Plan::Each`]).
+//! * the step of a `foreach` over an array of numbers ([`Plan::Each`]);
+//! * static property reads, writes and `isset`, which have no tape
+//!   instruction, through the interpreter's own cached fast path
+//!   ([`Plan::Ext`]).
 //!
 //! A loop whose types stop holding is compiled once more for the types
 //! met then; a loop the analysis cannot type is looked at a few times
 //! (its variables may settle after the first round) and then left to the
-//! first tier.
+//! first tier, or, with that off, to the interpreter (`super::retire`).
 
 // One arm a plan kind, one function a concern, here as in the tape: an
 // arm merged with its neighbour, or a table split to fit a line count,
