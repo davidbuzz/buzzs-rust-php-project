@@ -33,6 +33,8 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--no-scope` | Run and count every selected test. |
 | `--environment <FILE>` | Host-environment failure list (default: `phpt-environment.txt` in the php-src root or an ancestor, i.e. the repository root). |
 | `--no-environment` | Report host-environment failures as `FAIL`. |
+| `--extra-conflicts <FILE>` | Conflict keys php-src does not declare (default: `phpt-conflicts.txt` in the php-src root or an ancestor, i.e. the repository root). |
+| `--no-extra-conflicts` | Schedule by php-src's own conflict keys only. |
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
 | `--php-cgi <PATH>` | CGI binary for tests with `--GET--`, `--POST--`, `--POST_RAW--`, `--PUT--`, `--GZIP_POST--`, `--DEFLATE_POST--`, `--COOKIE--`, `--EXPECTHEADERS--` or `--CGI--` (default: `$TEST_PHP_CGI_EXECUTABLE`, else run-tests.php's `get_binary()` search beside `--php`: `<dir>/../../sapi/cgi/php-cgi`, then the binary's name with `php` replaced by `php-cgi`, e.g. `target/debug/php-cgi`, `/usr/bin/php-cgi8.5` for `/usr/bin/php8.5`). Without one those tests SKIP with `CGI not available`. |
 | `--no-cgi` | Do not look for a CGI binary (CGI tests SKIP). |
@@ -70,12 +72,18 @@ are reported as `OUT` (a separate count in the table, summary and JSON), exclude
 pass-rate denominator and never written to the baseline. `--no-scope` disables this.
 
 `phpt-environment.txt` at the repository root lists tests whose failures on this host are caused
-only by host library or service limitations (where `/usr/bin/php8.5` and `/usr/bin/php8.5` fail
+only by host library or service limitations (where C PHP, `/usr/bin/php8.5`, fails them
 identically: Ubuntu's system `libgd` 2.3.3 lacks GD2 support, and MariaDB 10.11 has no native
 `JSON` column type). Those tests still run; when one fails (without timing out or borking), it is
 reported as `PASS` (`reason: host environment (phpt-environment.txt)`), counted in `pass` in
 summaries and JSON reports, and not written to `phpt-baseline.txt`. `--no-environment` disables
 this.
+
+`phpt-conflicts.txt` at the repository root gives conflict keys to php-src tests that share a
+file without declaring it (no `--CONFLICTS--` section or directory `CONFLICTS` file), so that
+they never run at the same time; run in parallel, one deletes what the other is using, under C
+PHP's `run-tests.php -j` as well. The keys are added to the tests' own. `--no-extra-conflicts`
+disables this.
 
 ## Environment for service-backed suites
 

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
-use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
+use phpt_runner::discover::{collect, find_srcdir, ConflictResolver, ExtraConflicts};
 use phpt_runner::environment::{normalize_env, Environment};
 use phpt_runner::ini::{
     default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
@@ -106,6 +106,14 @@ struct Cli {
     /// Ignore the environment file: report host-environment failures as FAIL.
     #[arg(long, conflicts_with = "environment")]
     no_environment: bool,
+    /// File giving tests conflict keys that php-src does not declare (tests sharing a key
+    /// never run at the same time) [default: `phpt-conflicts.txt` in the php-src root or one
+    /// of its ancestors].
+    #[arg(long, value_name = "FILE")]
+    extra_conflicts: Option<PathBuf>,
+    /// Ignore the extra conflicts file: schedule by php-src's own conflict keys only.
+    #[arg(long, conflicts_with = "extra_conflicts")]
+    no_extra_conflicts: bool,
     /// Append each result to this JSON-lines file as soon as it completes; tests already
     /// recorded there are not run again (their recorded results are reused). Makes long runs
     /// resumable after the runner is killed.
@@ -122,7 +130,7 @@ struct Cli {
     env: Vec<String>,
     /// Run each test script N times in the same process (`php --repeat N`) and check the
     /// output of the last execution, like run-tests.php --repeat. Exports `SKIP_REPEAT=1`;
-    /// tests with FILE_EXTERNAL, CLEAN, STDIN or CAPTURE_STDIO sections are skipped.
+    /// tests with `FILE_EXTERNAL`, `CLEAN`, `STDIN` or `CAPTURE_STDIO` sections are skipped.
     #[arg(long, value_name = "N", default_value_t = 1)]
     repeat: u32,
     /// Write a `JUnit` XML report in run-tests.php's format to this file [default:
@@ -436,6 +444,23 @@ fn load_scope(cli: &Cli, srcdir: &Path) -> Result<Option<(Scope, PathBuf)>, Stri
     Ok(Some((scope, path)))
 }
 
+/// Load the extra conflicts file (explicit `--extra-conflicts`, else the default one if
+/// present).
+fn load_extra_conflicts(cli: &Cli, srcdir: &Path) -> Result<ExtraConflicts, String> {
+    if cli.no_extra_conflicts {
+        return Ok(ExtraConflicts::default());
+    }
+    let Some(path) = cli
+        .extra_conflicts
+        .clone()
+        .or_else(|| ExtraConflicts::find_default(srcdir))
+    else {
+        return Ok(ExtraConflicts::default());
+    };
+    ExtraConflicts::load(&path)
+        .map_err(|e| format!("cannot read extra conflicts file {}: {e}", path.display()))
+}
+
 /// Load the environment file (explicit `--environment`, else the default one if present).
 fn load_environment(cli: &Cli, srcdir: &Path) -> Result<Option<(Environment, String)>, String> {
     if cli.no_environment {
@@ -607,15 +632,20 @@ fn execute(
     runner: &Runner,
     tests: &[PathBuf],
     environment: Option<&(Environment, String)>,
+    extra_conflicts: &ExtraConflicts,
     mut log: Option<&mut std::fs::File>,
     keep_diffs: bool,
 ) -> Vec<TestResult> {
     let mut resolver = ConflictResolver::default();
     let jobs: Vec<Job> = tests
         .iter()
-        .map(|t| Job {
-            path: t.clone(),
-            conflicts: resolver.conflicts_for(t),
+        .map(|t| {
+            let mut conflicts = resolver.conflicts_for(t);
+            conflicts.extend_from_slice(extra_conflicts.keys_for(&runner.shortname(t)));
+            Job {
+                path: t.clone(),
+                conflicts,
+            }
         })
         .collect();
     let workers = cli.jobs.unwrap_or_else(|| {
@@ -716,6 +746,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let (mut tests, srcdir) = select_tests(cli)?;
     let scope = load_scope(cli, &srcdir)?;
     let environment = load_environment(cli, &srcdir)?;
+    let extra_conflicts = load_extra_conflicts(cli, &srcdir)?;
     let out_of_scope = apply_scope(&mut tests, &srcdir, scope.as_ref());
     if cli.list {
         for t in &tests {
@@ -784,6 +815,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         &runner,
         &tests,
         environment.as_ref(),
+        &extra_conflicts,
         log.as_mut(),
         junit_path.is_some(),
     );

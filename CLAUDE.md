@@ -31,6 +31,7 @@ env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 3 -q --no-art
 - `phpt-baseline.txt` lists known failures; `--baseline phpt-baseline.txt` fails only on regressions, `--update-baseline` refreshes it.
 - `phpt-scope.txt` lists out-of-scope path prefixes (FPM, phpdbg, pgsql, ffi, readline, …; php-cgi, pdo_mysql, mysqli and sqlite are in scope). The runner reads it by default; those tests report `OUT` and are excluded from pass rates and the baseline. `--no-scope` runs everything. opcache is in scope; its optimizer/JIT-dependent failures are tracked in the baseline.
 - `phpt-environment.txt` lists tests that fail only for host reasons, identically under C PHP (Ubuntu libgd without GD2, MariaDB lacking a native JSON type). The runner reports them as PASS; `--no-environment` shows raw failures. Do not add them to the baseline.
+- `phpt-conflicts.txt` gives conflict keys to php-src tests that share a file without declaring it, so the runner never runs them at the same time (a parallel run would otherwise fail them intermittently, under C PHP too).
 - `--json report.json` then `scripts/update_feature_gap.py report.json` rewrites FEATURE_GAP.md's `%` column from a run.
 - Use dev builds for correctness and scoped PHPT runs. Reserve `--release` (thin LTO, one codegen unit, slow to rebuild) for performance measurement. Avoid `cargo clean` in edit/test loops.
 - When behaviour is unclear, run a small script through the oracle (`/usr/bin/php8.5 -d memory_limit=1G x.php`) rather than guessing.

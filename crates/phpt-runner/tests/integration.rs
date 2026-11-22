@@ -699,7 +699,7 @@ fn repeat_mode_against_reference_php() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// `--junit FILE` writes run-tests.php's JUnit XML.
+/// `--junit FILE` writes run-tests.php's `JUnit` XML.
 #[test]
 fn junit_report_against_reference_php() {
     let Some(php) = reference_php() else {

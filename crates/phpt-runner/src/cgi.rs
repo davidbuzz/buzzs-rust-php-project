@@ -320,19 +320,17 @@ fn numeric(s: &[u8]) -> Option<Numeric> {
 
 /// PHP 8 `==` between two strings: numerically if both are numeric strings.
 #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
-fn loose_eq(a: &[u8], b: &[u8]) -> bool {
-    if a == b {
+fn loose_eq(left: &[u8], right: &[u8]) -> bool {
+    if left == right {
         return true;
     }
-    match (numeric(a), numeric(b)) {
-        (Some(Numeric::Int(x)), Some(Numeric::Int(y))) => x == y,
-        (Some(x), Some(y)) => {
-            let f = |n: Numeric| match n {
-                Numeric::Int(i) => i as f64,
-                Numeric::Float(f) => f,
-            };
-            f(x) == f(y)
-        }
+    let as_float = |n: Numeric| match n {
+        Numeric::Int(int) => int as f64,
+        Numeric::Float(float) => float,
+    };
+    match (numeric(left), numeric(right)) {
+        (Some(Numeric::Int(l)), Some(Numeric::Int(r))) => l == r,
+        (Some(l), Some(r)) => as_float(l) == as_float(r),
         _ => false,
     }
 }
