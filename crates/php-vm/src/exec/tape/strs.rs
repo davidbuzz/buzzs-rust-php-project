@@ -311,8 +311,8 @@ pub(super) unsafe extern "C" fn frameless_quick(frame: *mut Frame, inst: *const 
         // A reference is the generic op's (it reads through it), and so is
         // a result slot holding a value to release, unless that slot is
         // the argument's own.
-        // SAFETY: `dst` is the validated result field.
         if matches!(arg, Value::Reference(_))
+            // SAFETY: `dst` is the validated result field.
             || (dst != NO_DST && dst != inst.a && !is_scalar(unsafe { tmp_slot(st, dst) }))
         {
             return Br::Decline;
@@ -424,20 +424,23 @@ unsafe fn frameless_quick_n(frame: *mut Frame, inst: &Inst) -> Br {
     if dst != NO_DST && !over_arg && !is_scalar(unsafe { tmp_slot(st, dst) }) {
         return Br::Decline;
     }
-    // SAFETY (the operands below): validated offsets of their kinds; the
-    // references are dropped before the temporaries are consumed.
+    // SAFETY: `inst.a` is an offset of kind `ka` that `lower` validated; the
+    // references below are dropped before the temporaries are consumed.
     let Some(a) = (unsafe { q_arg(st, ka, inst.a) }) else {
         return Br::Decline;
     };
     let result = match count {
         1 => crate::special::quick_eval(inst.e, a),
         2 => {
+            // SAFETY: as for `a`: `inst.b` is a validated offset of kind `kb`.
             let Some(b) = (unsafe { q_arg(st, kb, inst.b) }) else {
                 return Br::Decline;
             };
             crate::special::quick_eval_2(inst.e, a, b)
         }
         _ => {
+            // SAFETY: as for `a`: `inst.b` and `inst.d` are validated offsets of
+            // kinds `kb` and `kc`.
             let (Some(b), Some(c)) = (unsafe { (q_arg(st, kb, inst.b), q_arg(st, kc, inst.d)) })
             else {
                 return Br::Decline;

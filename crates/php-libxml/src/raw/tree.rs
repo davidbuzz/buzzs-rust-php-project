@@ -1059,6 +1059,7 @@ impl Node {
         self.ns().map(|ns| Namespace {
             // SAFETY: prefix/href are NULL or C strings owned by the xmlNs.
             prefix: unsafe { opt_slice(ns.prefix) }.map(<[u8]>::to_vec),
+            // SAFETY: as for `prefix`.
             href: unsafe { opt_slice(ns.href) }.unwrap_or_default().to_vec(),
         })
     }

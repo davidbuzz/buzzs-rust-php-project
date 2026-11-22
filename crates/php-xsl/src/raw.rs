@@ -931,9 +931,10 @@ unsafe fn ext_function(ctxt: *mut ffi::xmlXPathParserContext, nargs: c_int, kind
         return;
     }
     let known = ACTIVE.with(|a| a.borrow().contains(&(tctxt as usize)));
-    // SAFETY: tctxt is live; `_private` is only interpreted for contexts
-    // this crate created (and configured with a DispatchRef pointer).
     let private = if known {
+        // SAFETY: tctxt is live; `_private` is only interpreted for
+        // contexts this crate created (and configured with a DispatchRef
+        // pointer).
         unsafe { ffi::php_xsl_glue_ctxt_private(tctxt) }
     } else {
         std::ptr::null_mut()

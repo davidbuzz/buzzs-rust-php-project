@@ -325,11 +325,13 @@ pub(super) unsafe fn assign_res(frame: *mut crate::vm::Frame, inst: &Inst) -> bo
             st.tmps.add(inst.c as usize).cast::<Value>(),
         )
     };
-    // SAFETY: both point at live slots.
+    // SAFETY: both point at live slots; these shared references end with
+    // the checks, before anything writes through the pointers.
+    let (cur, old) = unsafe { (&*cv, &*res) };
     if !matches!(
-        unsafe { &*cv },
+        cur,
         None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
-    ) || !is_scalar(unsafe { &*res })
+    ) || !is_scalar(old)
     {
         return false;
     }

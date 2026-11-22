@@ -883,7 +883,7 @@ macro_rules! tape_ops {
             ctx: *const jit::JitCtx,
             mut ip: *const Inst,
         ) -> Out {
-            // SAFETY (the whole loop): `ip` stays inside the tape (every
+            // SAFETY: (the whole loop) `ip` stays inside the tape (every
             // instruction advances it by what `lower` validated: the next
             // op, the ops a fused instruction covers, or a jump target, and
             // the sentinel stops a run past the last op), and every slot
@@ -1859,8 +1859,10 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                         // For the rows of a compiled loop that read through
                         // the global scope (`jit::JitCtx::set_vm`).
                         j.set_vm(std::ptr::from_mut(vm));
+                        // SAFETY: as above; `j` is this tape's live context.
                         unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) }
                     }
+                    // SAFETY: as above; no context, so no back-edge hook.
                     None => unsafe { run_core::<false>(st, std::ptr::null(), p) },
                 };
                 // SAFETY: both point into the tape.

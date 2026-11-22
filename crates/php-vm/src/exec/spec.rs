@@ -1023,6 +1023,8 @@ impl Vm {
         let Some(slot) = f.cvs.get(idx) else {
             return false;
         };
+        // SAFETY: no other reference into the slot is alive: the keys and
+        // the appended value are owned copies.
         let val_mut = unsafe { slot.get_mut_unchecked() };
         let Some(Value::Array(arr)) = val_mut else {
             return false;

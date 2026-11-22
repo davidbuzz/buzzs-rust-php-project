@@ -1397,6 +1397,7 @@ unsafe extern "C" fn jit_row_dim_keyed(
     // SAFETY: the caller's contract, for each handler.
     let done = match inst.op {
         TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
+            // SAFETY: the caller's contract: `frame` runs the tape `inst` is a row of.
             let br = unsafe { super::dims::fetch_dim_key(frame, inst) };
             br != super::Br::Decline || {
                 // SAFETY: the caller's contract; the handler's borrow of
@@ -1412,7 +1413,9 @@ unsafe extern "C" fn jit_row_dim_keyed(
                 quiet && super::dims::fetch_key_missing(f, inst).is_some()
             }
         }
+        // SAFETY: the caller's contract, as for the fetch rows above.
         TOp::AssignDimIC | TOp::AssignDimC => unsafe { super::dims::assign_dim_key(frame, inst) },
+        // SAFETY: the caller's contract, as for the fetch rows above.
         TOp::AssignOpDimC => unsafe { super::dims::assign_op_dim(frame, inst) },
         _ => false,
     };
@@ -8832,7 +8835,10 @@ fn place(code: &[u8]) -> Option<*mut u8> {
     if p == (-1isize) as *mut c_void {
         return None;
     }
+    // SAFETY: `p` is the fresh writable mapping of `len >= code.len()` bytes, distinct from
+    // `code`.
     unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), p.cast::<u8>(), code.len()) };
+    // SAFETY: `p .. p + len` is the mapping made above; only its protection changes.
     if unsafe { mprotect(p, len, PROT_READ | PROT_EXEC) } != 0 {
         return None;
     }
@@ -9131,8 +9137,8 @@ pub(super) unsafe fn back_edge(
     if counts.is_null() {
         return target;
     }
-    // SAFETY: guaranteed by the caller.
     #[allow(clippy::cast_sign_loss)] // `at` is a row of the tape at `tbase`
+    // SAFETY: guaranteed by the caller.
     let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
     // SAFETY: the cells cover the whole tape (`Tables::new(tape)`).
     let c = unsafe { &*ctx.jtr.get().add(idx) }.load(Ordering::Relaxed);
@@ -9226,13 +9232,19 @@ unsafe fn back_edge_slow(
         // the cell (this version of the tape stays interpreted) and
         // resume at `-(r + 1)`.  A non-negative return is a poll or the
         // iteration cap: the trace stays armed.
+        // SAFETY: a cell value of at least `MAX_ATTEMPTS` that is not `usize::MAX` is the entry
+        // address `attempt` stored: code `place` put in executable pages, compiled for the
+        // `LoopFn` ABI.
         let f: LoopFn = unsafe { std::mem::transmute(c) };
         if debug_on() {
             static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let k = N.fetch_add(1, Ordering::Relaxed);
             if k < 12 {
+                // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
                 let d: Vec<(u8, i64)> = (0..f.cvs.len().min(8))
+                    // SAFETY: `i` is below the frame's variable count: `p` is that variable's
+                    // 16-byte slot behind `st.cvs`, its tag byte and payload word initialized.
                     .map(|i| unsafe {
                         let p = st.cvs.add(i * 16);
                         (*p, std::ptr::read_unaligned(p.add(8).cast::<i64>()))
@@ -9241,9 +9253,11 @@ unsafe fn back_edge_slow(
                 eprintln!("jit: ENTER at={idx} cv={d:?}");
             }
         }
-        // SAFETY: the region only touches the frame's slots, and exits
-        // leave them exactly as an interpreted run would.
         ctx.poll_row.set(std::ptr::null());
+        // SAFETY: `f` is the trace's code (above), called with the slot
+        // bases of the frame it was compiled for; the region only touches
+        // the frame's slots, and exits leave them exactly as an
+        // interpreted run would.
         let ret = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
         let r = ret.r;
         if debug_on() {
@@ -9253,8 +9267,11 @@ unsafe fn back_edge_slow(
                 eprintln!("jit: trace run #{k} at={idx} r={r}");
             }
             if k < 12 {
+                // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
                 let d: Vec<(u8, i64)> = (0..f.cvs.len().min(8))
+                    // SAFETY: `i` is below the frame's variable count: `p` is that variable's
+                    // 16-byte slot behind `st.cvs`, its tag byte and payload word initialized.
                     .map(|i| unsafe {
                         let p = st.cvs.add(i * 16);
                         (*p, std::ptr::read_unaligned(p.add(8).cast::<i64>()))
@@ -9277,18 +9294,24 @@ unsafe fn back_edge_slow(
             // is alive (tested above).
             unsafe { (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed) };
             let r = (-(r + REPLAN) - 1).clamp(0, (ctx.tlen - 1) as i64) as usize;
+            // SAFETY: `r` is clamped below `ctx.tlen`: a row of this tape.
             return unsafe { ctx.tbase.add(r) };
         }
         if r < 0 {
             if debug_on() {
                 // Which guard's slot broke the assumption: dump every tag.
                 // The tag byte is the first byte of each slot's `Value`.
+                // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
                 let t: Vec<u8> = (0..f.cvs.len())
+                    // SAFETY: `i` is below the frame's variable count: the tag byte of that
+                    // slot behind `st.cvs`.
                     .map(|i| unsafe { *(st.cvs.add(i * 16)) })
                     .collect();
                 eprintln!("jit:   cv tags = {t:?}");
                 let t: Vec<u8> = (0..f.tmps.len())
+                    // SAFETY: `i` is below the frame's temporary count: the tag byte of that
+                    // slot behind `st.tmps`.
                     .map(|i| unsafe { *(st.tmps.add(i * 16)) })
                     .collect();
                 eprintln!("jit:   tmp tags = {t:?}");
@@ -9300,6 +9323,7 @@ unsafe fn back_edge_slow(
             // is alive (tested above).
             unsafe { (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed) };
             let r = (-(r + 1)).clamp(0, (ctx.tlen - 1) as i64) as usize;
+            // SAFETY: `r` is clamped below `ctx.tlen`: a row of this tape.
             return unsafe { ctx.tbase.add(r) };
         }
         // The instruction to resume at, and the row of a poll exit (plus
@@ -9330,9 +9354,12 @@ unsafe fn back_edge_slow(
         } else {
             exits.store(0, Ordering::Relaxed);
             if !ctx.tape.is_null() {
+                // SAFETY: a context's tape pointer, not null here, is the tape it was made for,
+                // which outlives the frames that run it.
                 unsafe { (*ctx.tape).jit_good() };
             }
         }
+        // SAFETY: `resume` is clamped below `ctx.tlen`: a row of this tape.
         return unsafe { ctx.tbase.add(resume) };
     }
     // SAFETY: as above.
@@ -9342,6 +9369,11 @@ unsafe fn back_edge_slow(
 /// Not hot yet (count toward `HOT_LIMIT`), or hot and not yet compiled
 /// (try to compile, then run or mark refused). Out of line so the
 /// steady-state hook stays tiny.
+///
+/// # Safety
+/// As [`back_edge_slow`]: `at`/`target` point into the running tape `ctx`
+/// describes, with `target <= at`, `idx` is the row index of `at`, and
+/// `st` holds the slot bases of the frame that runs the tape.
 #[cold]
 unsafe fn edge_count(
     st: St,
@@ -9354,10 +9386,12 @@ unsafe fn edge_count(
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let k = N.fetch_add(1, Ordering::Relaxed);
         if k < 40 || k % 1_000_000 == 0 {
+            // SAFETY: `target` is a row of the tape `ctx.tbase` starts (the caller's contract).
             let head = unsafe { target.offset_from(ctx.tbase) };
             eprintln!("jit: count #{k} at={idx} head={head} tlen={}", ctx.tlen);
         }
     }
+    // SAFETY: `target` is a row of the tape `ctx.tbase` starts (the caller's contract).
     let head = unsafe { target.offset_from(ctx.tbase) } as usize;
     if idx >= ctx.tlen || head > idx {
         return target;
@@ -9423,6 +9457,7 @@ mod layout_tests {
         };
         // The raw field word: the `NonNull<RcInner<T>>` `std::rc::Rc`
         // stores, i.e. the allocation base.
+        // SAFETY: `h.class` is a live `Rc`, one pointer wide: its word is initialized.
         let raw = unsafe { *(std::ptr::addr_of!(h.class) as *const usize) };
         let value = std::rc::Rc::as_ptr(&h.class) as usize;
         assert_eq!(value - raw, usize::try_from(RC_VALUE_OFFSET).unwrap());
@@ -9438,12 +9473,15 @@ mod layout_tests {
         use php_runtime::Value;
         assert_eq!(std::mem::size_of::<Value>(), 16);
         assert_eq!(std::mem::size_of::<Option<Value>>(), 16);
+        // SAFETY: `v` is a live 16-byte `Value`, whose first byte is its initialized tag.
         let tag = |v: &Value| unsafe { *std::ptr::from_ref(v).cast::<u8>() };
         assert_eq!(tag(&Value::Null), TAG_NULL);
         assert_eq!(tag(&Value::Bool(true)), TAG_BOOL);
         assert_eq!(tag(&Value::Int(1)), TAG_INT);
         assert_eq!(tag(&Value::Str(php_runtime::ZStr::from("x"))), TAG_STR);
         let i = Value::Int(0x0102_0304_0506_0708);
+        // SAFETY: the 8 bytes at `PAYLOAD` are inside the live `Int` `i`, its initialized
+        // payload.
         let word = unsafe {
             std::ptr::read_unaligned(
                 std::ptr::from_ref(&i)
@@ -9455,10 +9493,13 @@ mod layout_tests {
         assert_eq!(word, 0x0102_0304_0506_0708);
         for b in [false, true] {
             let v = Value::Bool(b);
+            // SAFETY: `BOOL_BYTE` is inside the live `Bool` `v`, its initialized value byte.
             let byte = unsafe { *std::ptr::from_ref(&v).cast::<u8>().add(BOOL_BYTE as usize) };
             assert_eq!(byte, u8::from(b));
         }
         let none: Option<Value> = None;
+        // SAFETY: `none` is a live 16-byte `Option<Value>`, whose first byte is its initialized
+        // niche tag.
         assert_eq!(unsafe { *std::ptr::from_ref(&none).cast::<u8>() }, TAG_NONE);
     }
 
@@ -9589,7 +9630,7 @@ mod layout_tests {
     #[test]
     fn list_layout() {
         use php_runtime::{Value, ZArray};
-        // SAFETY (all reads below): a `Value` is a tag byte and a payload
+        // SAFETY: (all reads below) a `Value` is a tag byte and a payload
         // word (`value_layout`); the words read are inside the live
         // array's allocation.
         let word = |v: &Value, off: u32| unsafe {
@@ -9635,6 +9676,8 @@ mod layout_tests {
         assert_ne!(word(&Value::Array(sparse), LIST_KIND), LIST_PACKED);
         // A hole reads as `TAG_NONE`, above `TAG_FLOAT`.
         let hole: Option<Value> = None;
+        // SAFETY: `hole` is a live 16-byte `Option<Value>`, whose first byte is its initialized
+        // niche tag.
         assert!(unsafe { *std::ptr::from_ref(&hole).cast::<u8>() } > TAG_FLOAT);
         assert_eq!(std::mem::size_of::<Option<Value>>(), 16);
     }
@@ -9685,7 +9728,7 @@ mod layout_tests {
     #[test]
     fn list_append_layout() {
         use php_runtime::{Value, ZArray};
-        // SAFETY (all reads and writes below): as in `list_layout`; the
+        // SAFETY: (all reads and writes below) as in `list_layout`; the
         // words are inside the live table's allocation, the element
         // written is inside the list's (the room was just tested), and
         // the table has no other handle.
@@ -9697,9 +9740,11 @@ mod layout_tests {
                     .cast::<*mut u8>(),
             )
         };
+        // SAFETY: see the note above `handle`: the word is inside the live table.
         let word = |v: &Value, off: u32| unsafe {
             std::ptr::read_unaligned(handle(v).add(off as usize).cast::<i64>())
         };
+        // SAFETY: see the note above `handle`: the word is inside the live table.
         let half = |v: &Value, off: u32| unsafe {
             std::ptr::read_unaligned(handle(v).add(off as usize).cast::<u32>())
         };
@@ -9724,6 +9769,8 @@ mod layout_tests {
                 continue;
             }
             // The trace's append of `2.5` at offset `n`.
+            // SAFETY: see the note above `handle`: `n` is below the list's room, so the element
+            // written is inside its allocation, and the table has no other handle.
             unsafe {
                 let h = handle(&slot);
                 let elems = std::ptr::read_unaligned(h.add(LIST_ELEMS as usize).cast::<*mut u8>());
@@ -9800,9 +9847,12 @@ mod layout_tests {
             )
         };
         assert_eq!(tag, TAG_REF);
+        // SAFETY: `cell` is the live box of `r` (held by the test); the offset is inside it.
         let borrow =
             || unsafe { std::ptr::read_unaligned(cell.add(REF_BORROW as usize).cast::<i64>()) };
+        // SAFETY: `cell` is the live box of `r` (held by the test); the offset is inside it.
         let value_tag = || unsafe { *cell.add(REF_VALUE as usize) };
+        // SAFETY: `cell` is the live box of `r` (held by the test); the offset is inside it.
         let payload = || unsafe {
             std::ptr::read_unaligned(cell.add((REF_VALUE + PAYLOAD) as usize).cast::<i64>())
         };
@@ -10044,6 +10094,8 @@ mod layout_tests {
         let cell = std::cell::RefCell::new(Some(Box::new(7u32)));
         let raw = std::ptr::addr_of!(cell) as usize;
         // Unborrowed: the borrow flag word is 0.
+        // SAFETY: `raw` is the address of the live `cell`; its first word is the initialized
+        // borrow flag.
         assert_eq!(unsafe { *(raw as *const usize) }, 0);
         // `as_ptr` names the value: 8 bytes past the cell's base.
         assert_eq!(
@@ -10052,6 +10104,8 @@ mod layout_tests {
         );
         let empty: std::cell::RefCell<Option<Box<u32>>> = std::cell::RefCell::new(None);
         assert_eq!(
+            // SAFETY: the word 8 bytes into the live `empty` is its initialized option (null
+            // for `None`).
             unsafe { *((std::ptr::addr_of!(empty) as usize + 8) as *const usize) },
             0
         );
@@ -10295,23 +10349,32 @@ mod layout_tests {
         // pointer, as the trace's slots are written.
         let tmp = std::cell::UnsafeCell::new(Value::Null);
         let t = tmp.get().cast::<u8>();
+        // SAFETY: used between helper calls only, when nothing else accesses `tmp`.
         let tmp_is = |want: i64| matches!(unsafe { &*tmp.get() }, Value::Int(v) if *v == want);
         // An `Int` element into a temporary.
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(1)), t, 0) }, 0);
         assert!(tmp_is(20));
         // A float element, a missing key, an offset that is no int.
         for k in [Value::Int(2), Value::Int(7), Value::Null, Value::Float(1.0)] {
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+            // temporary or variable, a live key `Value`), alive for the call.
             assert_eq!(unsafe { jit_dim_get(p, at(&k), t, 0) }, 1);
             assert!(tmp_is(20));
         }
         // Into a variable: undefined, or holding a plain value.
         let to = CvSlot::new(None);
         let d = std::ptr::from_ref(&to).cast_mut().cast::<u8>();
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(0)), d, 1) }, 0);
         assert!(matches!(to.get(), Some(Value::Int(10))));
         // A variable holding an array is not overwritten here.
         let busy = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
         let b = std::ptr::from_ref(&busy).cast_mut().cast::<u8>();
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(p, at(&Value::Int(0)), b, 1) }, 1);
         assert!(matches!(busy.get(), Some(Value::Array(_))));
         // A hash table's int keys are found too.
@@ -10320,6 +10383,8 @@ mod layout_tests {
             (2i64, Value::Int(22)),
         ]))));
         let h = std::ptr::from_ref(&hash).cast_mut();
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(h, at(&Value::Int(2)), t, 0) }, 0);
         assert!(tmp_is(22));
         // String keys: a key of the table, a numeric string naming an int
@@ -10330,14 +10395,22 @@ mod layout_tests {
         ]))));
         let np = std::ptr::from_ref(&named).cast_mut();
         let key = |s: &str| Value::Str(php_runtime::ZStr::from(s));
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(np, at(&key("beta")), t, 0) }, 0);
         assert!(tmp_is(2));
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(np, at(&key("7")), t, 0) }, 0);
         assert!(tmp_is(70));
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(np, at(&key("gamma")), t, 0) }, 1);
         assert!(tmp_is(70));
         // A key the tape knows to be no integer key is looked up as it is.
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+            // temporary or variable, a live key `Value`), alive for the call.
             unsafe { jit_dim_get(np, at(&key("beta")), t, DIM_GET_EXACT_KEY) },
             0
         );
@@ -10346,18 +10419,26 @@ mod layout_tests {
         let mut to2 = CvSlot::new(None);
         let d2 = std::ptr::from_mut(&mut to2);
         let (kb, kg) = (key("beta"), key("gamma"));
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get_key` requires (variables and
+        // a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get_key(np, &raw const kb, d2, 0) }, 0);
         assert!(matches!(to2.get(), Some(Value::Int(2))));
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get_key` requires (variables and
+        // a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get_key(np, &raw const kg, d2, 0) }, 1);
         assert!(matches!(to2.get(), Some(Value::Int(2))));
         let mut held_text = CvSlot::new(Some(key("old")));
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_get_key` requires (variables
+            // and a live key `Value`), alive for the call.
             unsafe { jit_dim_get_key(np, &raw const kb, &raw mut held_text, 0) },
             0
         );
         assert!(matches!(held_text.get(), Some(Value::Int(2))));
         let mut held_arr = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_get_key` requires (variables
+            // and a live key `Value`), alive for the call.
             unsafe { jit_dim_get_key(np, &raw const kb, &raw mut held_arr, 0) },
             1
         );
@@ -10366,6 +10447,8 @@ mod layout_tests {
         let text = CvSlot::new(Some(key("old")));
         let tp = std::ptr::from_ref(&text).cast_mut().cast::<u8>();
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+            // temporary or variable, a live key `Value`), alive for the call.
             unsafe { jit_dim_get(np, at(&key("beta")), tp, DIM_GET_TO_CV) },
             0
         );
@@ -10373,6 +10456,8 @@ mod layout_tests {
         // No array in the variable at all.
         let none = CvSlot::new(None);
         let n = std::ptr::from_ref(&none).cast_mut();
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_get` requires (variable,
+        // temporary or variable, a live key `Value`), alive for the call.
         assert_eq!(unsafe { jit_dim_get(n, at(&Value::Int(0)), t, 0) }, 1);
     }
 
@@ -10391,11 +10476,17 @@ mod layout_tests {
         let p = std::ptr::from_ref(&arr).cast_mut();
         let null = std::ptr::null();
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Int(7)), 0) },
             0
         );
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable, live
+        // key and value `Value`s), alive for the call.
         assert_eq!(unsafe { jit_dim_set(p, null, at(&Value::Int(8)), 0) }, 0);
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(p, at(&Value::Int(40)), at(&Value::Int(9)), 0) },
             0
         );
@@ -10407,10 +10498,14 @@ mod layout_tests {
         assert!(matches!(a.get_int(40), Some(Value::Int(9))));
         // A value or an offset that is no int.
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Float(1.0)), 0) },
             1
         );
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(p, at(&Value::Null), at(&Value::Int(1)), 0) },
             1
         );
@@ -10418,9 +10513,13 @@ mod layout_tests {
         // A second handle on the table: the write must separate first.
         let other = held(&arr).clone();
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(p, at(&Value::Int(0)), at(&Value::Int(5)), 0) },
             1
         );
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable, live
+        // key and value `Value`s), alive for the call.
         assert_eq!(unsafe { jit_dim_set(p, null, at(&Value::Int(5)), 0) }, 1);
         assert!(matches!(other.get_int(0), Some(Value::Int(7))));
         assert_eq!(other.len(), 4);
@@ -10431,6 +10530,8 @@ mod layout_tests {
         )]))));
         let n = std::ptr::from_ref(&nested).cast_mut();
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_set` requires (a variable,
+            // live key and value `Value`s), alive for the call.
             unsafe { jit_dim_set(n, at(&Value::Int(0)), at(&Value::Int(5)), 0) },
             1
         );
@@ -10450,6 +10551,8 @@ mod layout_tests {
         ]))));
         let p = std::ptr::from_ref(&arr).cast_mut();
         let k0 = Value::Int(0);
+        // SAFETY: test-owned stand-ins for the slots `jit_dim_op` requires (a variable, live
+        // key and operand `Value`s), alive for the call.
         let run = |op: u32, y: i64| unsafe { jit_dim_op(p, at(&k0), at(&Value::Int(y)), op) };
         let elem = |slot: &CvSlot| match held(slot).get_int(0) {
             Some(Value::Int(v)) => *v,
@@ -10473,12 +10576,16 @@ mod layout_tests {
         // An overflow, and a missing key.
         let k1 = Value::Int(1);
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_op` requires (a variable,
+            // live key and operand `Value`s), alive for the call.
             unsafe { jit_dim_op(p, at(&k1), at(&Value::Int(1)), DIM_OP_ADD) },
             1
         );
         assert!(matches!(held(&arr).get_int(1), Some(Value::Int(i64::MAX))));
         let k9 = Value::Int(9);
         assert_eq!(
+            // SAFETY: test-owned stand-ins for the slots `jit_dim_op` requires (a variable,
+            // live key and operand `Value`s), alive for the call.
             unsafe { jit_dim_op(p, at(&k9), at(&Value::Int(1)), DIM_OP_ADD) },
             1
         );

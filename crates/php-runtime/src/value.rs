@@ -1412,7 +1412,9 @@ mod tests {
                 .add(std::mem::offset_of!(Tailed<3>, tail))
                 .cast::<u64>()
         };
+        // SAFETY: element 1 of the three-element tail (see above).
         unsafe { tail.add(1).write(20) };
+        // SAFETY: as for the write.
         assert_eq!(unsafe { tail.add(1).read() }, 20);
         assert_eq!(head.id, 5);
         assert_eq!(o.addr() + payload_offset::<Head>(), base.as_ptr() as usize);

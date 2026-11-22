@@ -1362,8 +1362,10 @@ impl ZStr {
             // SAFETY: `oh.ptr` is valid for `other_len` bytes, and `self` is
             // unique and external.
             let other_bytes = unsafe { std::slice::from_raw_parts(oh.ptr, other_len) };
+            // SAFETY: as above: `self` is unique and external.
             let mut v = unsafe { self.take_vec() };
             v.extend_from_slice(other_bytes);
+            // SAFETY: `self` was emptied by `take_vec` just above.
             unsafe { self.put_vec(v) };
             let h = self.header();
             h.hash.set(0);
