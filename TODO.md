@@ -121,6 +121,13 @@ candidates for `perf/bench` and for work.
   newer-libzip paths (seekable streams, torrentzip, zstd).
 - [ ] No test covers (FEATURE_GAP "Missing"): http `ftp://` proxying; ext/zip callbacks
   when a stream closes the last reference.
+- [ ] New php-src tests (pin cb90f9a2377) still failing:
+  - `ext/fileinfo` gh25051, hwpx_mime: master's bundled libmagic database (5.48, format
+    21; the system libmagic 5.45 reads format 18) gives `font/ttf` for TrueType and
+    detects HWPX/NuGet zips; port its entries into `php-fileinfo`'s overlay.
+  - `ext/openssl` close_in_psk_client_cb_UAF: the stream is no resource yet while
+    `stream_socket_client()` runs the TLS handshake (C registers it when the stream is
+    allocated), so `psk_client_cb` gets `null` instead of the stream.
 
 ## D. Housekeeping
 
