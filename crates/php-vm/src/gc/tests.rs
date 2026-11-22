@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Script-level tests of the cycle collector (expected output from php
-//! 8.3 / master).
+//! Script-level tests of the cycle collector (expected output from
+//! `/usr/bin/php8.5 -n`, or php-src master where the two differ).
 
 use crate::{Vm, VmOptions};
 use std::cell::RefCell;
@@ -659,7 +659,7 @@ fn root_index_finds_and_forgets_every_handle() {
 /// `$this` and closures of calls returning in a loop are buffered once
 /// (`LAST_ROOT` answers the later returns), and a collection that empties
 /// the buffer makes the next return buffer the object again (php-src
-/// 8.3: 2, 0, 0, 1, 1, 2).
+/// 8.5: 2, 0, 0, 1, 1, 2).
 #[test]
 fn returning_this_is_buffered_once_and_again_after_a_collection() {
     let out = run("<?php class A { public $s; function m() { return 1; } }\n\
@@ -676,7 +676,7 @@ fn returning_this_is_buffered_once_and_again_after_a_collection() {
 
 /// The last root is recognised by its address alone: once it is freed (its
 /// buffer entry removed), an object allocated in its place is buffered
-/// when a shared handle of it is released (php-src 8.3 and 8.5: 1, 0, 1,
+/// when a shared handle of it is released (php-src 8.5: 1, 0, 1,
 /// 1, 2, 2, 0, 0, 2).
 #[test]
 fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
@@ -699,7 +699,7 @@ fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
 /// object: `$o = new C; $o->m();` in a loop frees the previous object
 /// between buffering the new one (its constructor's return) and the
 /// method's return, which then finds the new one recorded. The counts are
-/// php-src 8.3's.
+/// php-src 8.5's.
 #[test]
 fn freeing_another_root_keeps_the_last_root() {
     let out = run(

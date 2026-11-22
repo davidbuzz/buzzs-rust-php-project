@@ -12,7 +12,11 @@ use std::rc::Rc;
 
 /// `trim(string $string, string $characters = ...)` as the VM registers it.
 fn trim_info() -> FunctionInfo {
-    FunctionInfo::from_flags(true, 1, [(false, false), (false, false)].into_iter())
+    FunctionInfo::from_flags(true, 1, [(false, false), (false, false)].into_iter()).with_names(
+        ["string", "characters"]
+            .into_iter()
+            .map(php_runtime::ZStr::from),
+    )
 }
 
 /// `str_replace(..., &$count = null)`.
@@ -102,8 +106,22 @@ fn known_internal_function_reads_its_by_value_arguments() {
         reading_error_line("<?php\nstr_replace(1, 2, 3, $a[]);"),
         None
     );
-    // Named arguments are not matched to parameters (run-time decision).
-    assert_eq!(reading_error_line("<?php\ntrim(string: $a[]);"), None);
+    // A named argument is compiled for its parameter's mode, in its
+    // place or not (`zend_get_arg_num`); an unknown name is left to run time.
+    assert_eq!(reading_error_line("<?php\ntrim(string: $a[]);"), Some(2));
+    assert_eq!(
+        reading_error_line("<?php\ntrim($s, characters: $a[]);"),
+        Some(2)
+    );
+    assert_eq!(
+        reading_error_line("<?php\ntrim(characters: $a[]);"),
+        Some(2)
+    );
+    assert_eq!(
+        reading_error_line("<?php\ntrim(characters: 'x', string: $a[]);"),
+        Some(2)
+    );
+    assert_eq!(reading_error_line("<?php\ntrim(nope: $a[]);"), None);
     // Without the function table only this file's functions are known.
     assert!(compile_src("<?php\ntrim($a[]);", false).is_ok());
     assert!(compile_src("<?php\nunknown($a[]->b);", true).is_ok());

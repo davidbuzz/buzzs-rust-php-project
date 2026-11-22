@@ -90,10 +90,14 @@ candidates for `perf/bench` and for work.
 
 ## C. Conformance and features
 
-- [ ] `ext/openssl/tests/stream_server_reneg_limit.phpt` failed in the 22 Nov full run (its
-  `CertificateGenerator` could not sign the CSR, then the server timed out) and passes on
-  its own (3 of 3) and in the 21 Nov run: find what it shares with a test that runs beside
-  it.
+- [ ] `gc_status()["roots"]` counts objects only: php-src also buffers an array whose count
+  drops to a non-zero value (`$b = $a; unset($b);` is 1 root there, 0 here; `implode()`
+  releases its array with `GC_TRY_DTOR_NO_REF`). `gc_collect_cycles()` results are not
+  affected (cycles always pass through an object or a reference here).
+- [ ] `$g .= $g` with `$g` undefined and an error handler that throws: C reads the right
+  operand first (the handler throws), suppresses the left operand's warning while the
+  exception is pending and stores `""`; ours stops at the first warning. (The other
+  compound assignments now store their result before throwing, as php-src does.)
 
 - [ ] `php -S` (CLI built-in web server row): its "Missing" note (session cookies, the
   header callback when output sends the headers, the "output started at" location, the

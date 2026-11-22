@@ -2269,7 +2269,7 @@ mod tests {
 
     /// `isset()`/`empty()` of a known string offset or array element folds
     /// (opcache `opt/sccp_isset_isempty_string_dim`, `opt/sccp_031`);
-    /// expectations from php 8.3.
+    /// expectations from `/usr/bin/php8.5 -n`.
     #[test]
     fn sccp_folds_isset_and_empty_of_known_dims() {
         let unit = compile_src(

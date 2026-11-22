@@ -287,8 +287,8 @@ fn appending_to_globals_is_a_compile_error() {
 /// `ZEND_ASSIGN_DIM` reads an undefined final offset only at its
 /// container: the warning follows the earlier fetches' diagnostics, is not
 /// raised for a scalar, and for a string comes from
-/// `zend_check_string_offset` (expected output: php-src master, which adds
-/// the null-offset deprecation to PHP 8.3's).
+/// `zend_check_string_offset` (expected output: `/usr/bin/php8.5 -n`, with
+/// the null-offset deprecation of 8.5 and master).
 #[test]
 fn undefined_final_offsets_warn_at_the_container() {
     assert_eq!(

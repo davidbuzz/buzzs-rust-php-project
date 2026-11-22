@@ -222,7 +222,7 @@ mod tests {
     /// with empty operands, negative numbers, in-place extension of a
     /// temporary, and the parts that decline (floats, undefined and
     /// referenced variables, arrays, null and bools). Expected output from
-    /// `/usr/bin/php -n` (8.3).
+    /// `/usr/bin/php8.5 -n`.
     #[test]
     fn ropes_and_concats_match_php() {
         let out = run(r#"<?php

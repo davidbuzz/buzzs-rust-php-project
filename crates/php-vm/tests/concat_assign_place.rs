@@ -5,9 +5,8 @@
 //! `ZEND_ASSIGN_STATIC_PROP_OP` with `ZEND_CONCAT` run `concat_function` on
 //! the fetched slot (`result == op1`), so `zend_string_extend` grows a string
 //! nobody else holds, instead of copying it into a new string that a second
-//! walk writes back. The outputs are byte for byte what `/usr/bin/php -n`
-//! (8.3) prints; the property-hook and `private(set)` script, which 8.3
-//! cannot run, is checked against the debug build before this change. The
+//! walk writes back. The outputs are byte for byte what `/usr/bin/php8.5 -n`
+//! prints. The
 //! allocation counts compare `.=` with the plain assignment of the same
 //! place: in-place growth costs no allocation per append.
 
@@ -428,8 +427,7 @@ array(1) {
 /// PHP 8.4 properties: a `set` hook still runs for `.=` (the hook writes
 /// the backing value), `private(set)` still forbids `.=` from outside the
 /// class and allows it inside, after the places have been used in loops.
-/// Expected output from the debug build before this change (8.3 cannot
-/// run hooks).
+/// Expected output from `/usr/bin/php8.5 -n`.
 #[test]
 fn hooked_and_set_restricted_properties_take_the_generic_path() {
     assert_eq!(

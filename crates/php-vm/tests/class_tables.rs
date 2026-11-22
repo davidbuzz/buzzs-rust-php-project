@@ -27,7 +27,7 @@ impl Write for Sink {
 }
 
 /// Inheritance, an interface, a trait and an enum whose cases and constant
-/// interleave; the printed orders are those of php-src (8.3 and master
+/// interleave; the printed orders are those of php-src (8.5 and master
 /// agree on every line). The bare VM has no ext/standard array functions
 /// (`array_keys`, `array_map`), so the keys and names are collected with
 /// `foreach`.

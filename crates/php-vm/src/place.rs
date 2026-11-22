@@ -2823,6 +2823,21 @@ impl Vm {
         }
     }
 
+    /// The "Undefined variable" warning of a read-modify-write of the
+    /// undefined variable `name` (`$x op= v`, `$x++`). php-src has set the
+    /// variable to null first (`_get_zval_cv_lookup_BP_VAR_RW`) and the
+    /// opcode goes on with an exception an error handler threw: the result
+    /// is stored, then the exception is thrown. Returns that exception; an
+    /// exit or a fatal error stops at once.
+    #[cold]
+    fn rw_undefined_var(&mut self, name: &ZStr) -> VmResult<Option<Throw>> {
+        match self.warning(&crate::exec::undefined_var_msg(name)) {
+            Ok(()) => Ok(None),
+            Err(t @ Throw::Exception(_)) => Ok(Some(t)),
+            Err(t) => Err(t),
+        }
+    }
+
     fn write_var_root(
         &mut self,
         store: &Rc<RefCell<VarStore>>,
@@ -2860,29 +2875,34 @@ impl Vm {
             }
             WOp::FetchRw => {
                 let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
-                match cur {
-                    Some(v) => Ok(v),
-                    None => {
-                        let name = store.borrow().names[idx].clone();
-                        self.warning(&crate::exec::undefined_var_msg(&name))?;
-                        Ok(Value::Null)
-                    }
+                if let Some(v) = cur {
+                    return Ok(v);
                 }
+                let name = store.borrow().names[idx].clone();
+                if let Some(t) = self.rw_undefined_var(&name)? {
+                    RW_THROW.with(|c| c.set(Some(t)));
+                }
+                Ok(Value::Null)
             }
             WOp::AssignOp(op, rhs) => {
-                let cur = {
-                    let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
-                    match cur {
-                        Some(v) => v,
-                        None => {
-                            let name = store.borrow().names[idx].clone();
-                            self.warning(&crate::exec::undefined_var_msg(&name))?;
-                            Value::Null
-                        }
-                    }
+                let mut held = None;
+                let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
+                let cur = if let Some(v) = cur {
+                    v
+                } else {
+                    let name = store.borrow().names[idx].clone();
+                    held = self.rw_undefined_var(&name)?;
+                    Value::Null
                 };
-                let nv = self.assign_op_value(op, &cur, &rhs)?;
-                self.write_var_root(store, idx, WOp::Assign(nv))
+                let nv = match self.assign_op_value(op, &cur, &rhs) {
+                    Ok(nv) => nv,
+                    Err(e) => return Err(held.unwrap_or(e)),
+                };
+                let r = self.write_var_root(store, idx, WOp::Assign(nv))?;
+                match held {
+                    Some(t) => Err(t),
+                    None => Ok(r),
+                }
             }
             WOp::MakeRef => {
                 let mut st = store.borrow_mut();
@@ -3542,8 +3562,9 @@ impl Vm {
     /// null first (and keeps it), and the opcode goes on with the exception
     /// set: `++`/`--` still change it (`zend_pre_incdec_property_zval`; the
     /// exception is thrown once the result is written, see `RW_THROW`),
-    /// the arithmetic operators store their result, and `concat_function`
-    /// gives up converting the null.
+    /// and the other operators store their result (`concat_function`
+    /// converts the null with `zval_try_get_string_func`, which does not
+    /// fail).
     #[cold]
     #[inline(never)]
     fn rw_dynamic_threw(
@@ -3570,10 +3591,8 @@ impl Vm {
                 Ok(Value::Null)
             }
             RwThrow::Op(op, rhs) => {
-                if op != BinaryOp::Concat {
-                    if let Ok(nv) = self.assign_op_value(op, &Value::Null, rhs) {
-                        self.write_dynamic_prop(obj, name.clone(), nv);
-                    }
+                if let Ok(nv) = self.assign_op_value(op, &Value::Null, rhs) {
+                    self.write_dynamic_prop(obj, name.clone(), nv);
                 }
                 Err(t)
             }
@@ -3758,10 +3777,25 @@ impl Vm {
             }
         }
         let base2 = base.clone();
-        let cur = self.write_place(base, &segs, WOp::FetchRw)?;
-        let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
+        // An undefined variable's warning may throw (see
+        // `Vm::rw_undefined_var`): the result is stored first.
+        let saved = RW_THROW.with(std::cell::Cell::take);
+        let cur = self.write_place(base, &segs, WOp::FetchRw);
+        let pending = RW_THROW.with(|c| c.replace(saved));
+        let cur = cur?;
+        let nv = match ops::binary_op(op, &cur, &v, self) {
+            Ok(nv) => nv,
+            Err(e) => {
+                let err = self.rt_throw(e);
+                return Err(pending.unwrap_or(err));
+            }
+        };
         drop(cur);
-        self.write_place(base2, &segs, WOp::Assign(nv))
+        let r = self.write_place(base2, &segs, WOp::Assign(nv))?;
+        match pending {
+            Some(t) => Err(t),
+            None => Ok(r),
+        }
     }
 
     /// The undefined compiled variable a read-modify-write of `pid` fetches
@@ -3868,11 +3902,12 @@ impl Vm {
                 return Ok(Some((r?, None, thrown)));
             }
             None => {
-                return Ok(Some((
-                    self.write_place_cached(pid, base, segs, WOp::FetchRw)?,
-                    None,
-                    None,
-                )));
+                // An undefined variable's warning may throw (see
+                // `Vm::rw_undefined_var`).
+                let saved = RW_THROW.with(std::cell::Cell::take);
+                let r = self.write_place_cached(pid, base, segs, WOp::FetchRw);
+                let thrown = RW_THROW.with(|c| c.replace(saved));
+                return Ok(Some((r?, None, thrown)));
             }
         }
         // Save and restore around the walk: user code it runs (offsetGet,

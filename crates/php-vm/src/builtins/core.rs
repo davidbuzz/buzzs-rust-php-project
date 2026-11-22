@@ -646,16 +646,7 @@ fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
             }
         }
     }
-    if let Some(parent) = &c.parent {
-        let mut inherited = Vec::new();
-        properties_info(parent, &mut inherited);
-        for e in inherited {
-            if user.is_none() && own_info(c, e.0.as_bytes()).is_some() {
-                continue;
-            }
-            push(out, e);
-        }
-    }
+    // `zend_do_link_class` binds trait properties before it inherits.
     if user.is_some() {
         for t in &c.traits {
             let mut bound = Vec::new();
@@ -665,6 +656,16 @@ fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
                     push(out, e);
                 }
             }
+        }
+    }
+    if let Some(parent) = &c.parent {
+        let mut inherited = Vec::new();
+        properties_info(parent, &mut inherited);
+        for e in inherited {
+            if user.is_none() && own_info(c, e.0.as_bytes()).is_some() {
+                continue;
+            }
+            push(out, e);
         }
     }
     // The rest of what `c` declares (all of an internal class's own).
@@ -1017,7 +1018,9 @@ fn is_subclass_of(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn spl_autoload_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(cb) = opt(a, 0) {
-        if !vm.is_callable_value(&cb) {
+        // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its
+        // deprecations.
+        if vm.zend_is_callable(&cb, false)?.is_err() {
             return Err(super::util::type_error(
                 vm,
                 a,
@@ -1075,7 +1078,8 @@ fn spl_object_hash(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set_error_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    if !cb.is_null() && !vm.is_callable_value(&cb) {
+    // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its deprecations.
+    if !cb.is_null() && vm.zend_is_callable(&cb, false)?.is_err() {
         let desc = vm.callable_error(&cb);
         return Err(super::util::type_error(
             vm,
@@ -1112,7 +1116,8 @@ fn get_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn set_exception_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    if !cb.is_null() && !vm.is_callable_value(&cb) {
+    // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its deprecations.
+    if !cb.is_null() && vm.zend_is_callable(&cb, false)?.is_err() {
         let desc = vm.callable_error(&cb);
         return Err(super::util::type_error(
             vm,

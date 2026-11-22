@@ -2485,9 +2485,7 @@ object(W)#9 (3) {
     /// `$this->a[$k]` read, assigned, `op=`, `++`/`--`, `.=` and tested from
     /// the cached slot: copy-on-write, references inside the array, numeric
     /// string keys, overflow, undefined keys, diagnostics of the generic walk,
-    /// typed and readonly array properties, `ArrayAccess` objects. (The
-    /// readonly lines are php-src master's "Cannot indirectly modify";
-    /// 8.3 says "Cannot modify".)
+    /// typed and readonly array properties, `ArrayAccess` objects.
     #[test]
     #[allow(clippy::too_many_lines)] // one oracle-checked script
     fn elements_of_cached_array_properties() {

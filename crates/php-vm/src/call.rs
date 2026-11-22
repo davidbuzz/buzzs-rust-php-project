@@ -578,8 +578,8 @@ impl Vm {
     /// (`$this->name()` where the compiler found `$this` guaranteed) the
     /// frame's `$this`, otherwise the operand's value. A frame without one
     /// (a closure nested in a closure that was unbound from its object)
-    /// throws as `ZEND_FETCH_THIS` would (PHP 8.3; master's handler assumes
-    /// an object).
+    /// throws as `ZEND_FETCH_THIS` would (as PHP 8.3 did; the handler of 8.5
+    /// and master assumes an object, and 8.5 crashes on such a script).
     #[inline]
     pub(crate) fn method_object(&mut self, obj: Operand) -> VmResult<Value> {
         if !matches!(obj, Operand::Unused) {
@@ -5733,8 +5733,7 @@ mod fast_builtin_tests {
 
 /// Call-site caches of `INIT_METHOD_CALL`, `INIT_STATIC_METHOD_CALL` with
 /// `self`/`parent`/`static`, and closure calls: scripts whose sites run
-/// several times (fill, then hit). Expected output from `/usr/bin/php8.5 -n`
-/// (PHP 8.3.6).
+/// several times (fill, then hit). Expected output from `/usr/bin/php8.5 -n`.
 #[cfg(test)]
 #[allow(clippy::needless_raw_string_hashes)]
 mod method_site_cache_tests {
@@ -5991,10 +5990,11 @@ Closure Q p-secret k=5 calls=1
     /// (no `JMP_NULL`: allowed with a callable conversion), first-class
     /// callables, generators, `Closure::bind()` refusing to unbind a
     /// closure whose only `$this` is a method call, the error of a nested
-    /// closure that lost `$this` (PHP 8.3's; master's handler assumes an
-    /// object), and the destructor of an object whose last outside
+    /// closure that lost `$this` (PHP 8.3's error; the handler of 8.5 and
+    /// master assumes an object, and `/usr/bin/php8.5` crashes on this
+    /// script), and the destructor of an object whose last outside
     /// reference goes while a `$this->m()` call holds it. Expected output
-    /// from `/usr/bin/php -n` (8.3.6) with master's warning text.
+    /// from `/usr/bin/php8.3 -n` with master's warning text.
     #[test]
     fn implicit_this_receivers_match_fetch_this() {
         let src = r###"<?php

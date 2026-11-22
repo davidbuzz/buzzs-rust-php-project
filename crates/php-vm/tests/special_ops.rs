@@ -699,8 +699,8 @@ bool(false)
 #[test]
 fn chr_and_ord_literals_fold_to_constants() {
     // Only `chr(0..=255)` and one-byte `ord()` literals fold; the rest are
-    // calls, with php-src master's range and length deprecations (8.3 has
-    // none) and their strict-mode TypeErrors. A folded argument is sent by
+    // calls, with the range and length deprecations (8.5 and master) and
+    // their strict-mode TypeErrors. A folded argument is sent by
     // value even after a call argument (`h(g(), chr(65))`), and in write
     // context the constant behaves like the call's temporary.
     assert_eq!(

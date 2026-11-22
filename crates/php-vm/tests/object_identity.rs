@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object identity through the object store and the property count of a
 //! table whose declared slot is being unset (`Zend/tests/unset`).
-//! Expected outputs are `/usr/bin/php -n` (8.3, same as master here).
+//! Expected outputs are `/usr/bin/php8.5 -n` (the same as master here).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

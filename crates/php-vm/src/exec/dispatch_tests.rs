@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the dispatch loop (`Vm::run`): the local `ip`,
 //! jumps, safe points and the loop layout. Expected output from
-//! `/usr/bin/php -n` (PHP 8.3), paths normalised to `t.php`.
+//! `/usr/bin/php8.5 -n`, paths normalised to `t.php`.
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -423,7 +423,7 @@ i,e,d,c,
 /// `PHP_INT_MIN / -1`, negative and 64-bit shifts and non-int operands of
 /// `%` (with its deprecation) are left to the generic path. String
 /// concatenation and comparisons skip the equality probe or take it as
-/// they apply. Expected output from `/usr/bin/php -n` (8.3).
+/// they apply. Expected output from `/usr/bin/php8.5 -n`.
 #[test]
 fn division_modulo_and_shifts_on_the_numeric_fast_path() {
     let src = r#"<?php

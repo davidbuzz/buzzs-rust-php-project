@@ -40,8 +40,12 @@ use std::hash::BuildHasherDefault;
 /// A `HashSet` with [`FxHasher`].
 type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 
-/// `Zend/zend_builtin_functions.stub.php`.
+/// `Zend/zend_builtin_functions.stub.php` (master's order: `clone()`,
+/// `exit()` and `die()` first).
 const CORE_FUNCTIONS: &[&str] = &[
+    "clone",
+    "exit",
+    "die",
     "zend_version",
     "func_num_args",
     "func_get_arg",
@@ -102,9 +106,6 @@ const CORE_FUNCTIONS: &[&str] = &[
     "gc_enable",
     "gc_disable",
     "gc_status",
-    "clone",
-    "exit",
-    "die",
 ];
 
 /// A symbol's entry in an [`Attributed`] table.
@@ -792,7 +793,7 @@ mod tests {
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    /// Expected output from `php -n` 8.3 / master.
+    /// Expected output from `/usr/bin/php8.5 -n` / master.
     #[test]
     fn user_functions_are_listed_in_declaration_order() {
         let out = run(r#"<?php
@@ -813,7 +814,7 @@ echo implode(',', get_defined_functions()['user']), "\n";
             run("<?php echo implode(',', array_slice(get_defined_functions()['internal'], 0, 6));");
         assert_eq!(
             out,
-            "zend_version,func_num_args,func_get_arg,func_get_args,strlen,strcmp"
+            "clone,exit,die,zend_version,func_num_args,func_get_arg"
         );
     }
 

@@ -1897,7 +1897,7 @@ mod tests {
 /// Scripts through both routes of [`step`]: its inline core ops and the
 /// hot ops it hands to [`step_ext`], in the same loops, and ops whose fast
 /// path declines on either route. Expected output from
-/// `/usr/bin/php -n` (PHP 8.3), paths normalised to `t.php`.
+/// `/usr/bin/php8.5 -n`, paths normalised to `t.php`.
 #[cfg(test)]
 mod route_tests {
     #![allow(clippy::needless_raw_string_hashes)]

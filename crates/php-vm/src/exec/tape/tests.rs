@@ -1,8 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests of the tape: what [`lower`] decodes, and scripts whose loops run on
-//! it. Expected output from `/usr/bin/php8.5 -n` (identical under 8.3),
-//! paths normalised to `t.php`.
+//! it. Expected output from `/usr/bin/php8.5 -n`, paths normalised to
+//! `t.php`.
 #![allow(clippy::needless_raw_string_hashes)]
 
 use super::{lower, Inst, TOp};

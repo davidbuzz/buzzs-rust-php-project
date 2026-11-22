@@ -498,7 +498,7 @@ late-ns
 /// uninitialized, `isset`/`empty`, closures bound to other scopes (the
 /// same op array, other access), a reference to a static property and
 /// `func_num_args()` with an unused result. Expected output from
-/// `/usr/bin/php -n` (8.3).
+/// `/usr/bin/php8.5 -n`.
 #[test]
 fn hot_loop_cache_hits_keep_scope_and_type_semantics() {
     let out = run(r#"<?php

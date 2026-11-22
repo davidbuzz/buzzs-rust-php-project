@@ -694,7 +694,7 @@ mod tests {
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    // Expected outputs are from `/usr/bin/php -n -d memory_limit=1G` (8.3).
+    // Expected outputs are from `/usr/bin/php8.5 -n -d memory_limit=1G`.
 
     #[test]
     fn static_property_reads_writes_and_tests_in_loops() {

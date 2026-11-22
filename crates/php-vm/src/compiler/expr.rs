@@ -2415,7 +2415,7 @@ impl Compiler<'_> {
             });
             return Ok(Some(Operand::Tmp(t)));
         }
-        self.compile_args(args, fbc)?;
+        self.compile_args(args, fbc.as_ref())?;
         // `zend_compile_call_common` gives the call opcode the call's own
         // line (`opline->lineno = lineno`) but leaves `CG(zend_lineno)`
         // where compiling the last argument put it, so the opcodes that
@@ -2540,7 +2540,7 @@ impl Compiler<'_> {
         }
         let lc = name.to_ascii_lowercase();
         if let Some(info) = self.known_functions.get(&lc) {
-            return Some(*info);
+            return Some(info.clone());
         }
         self.functions?.find(&lc)
     }
@@ -2596,13 +2596,13 @@ impl Compiler<'_> {
     /// an argument for a by-value parameter is compiled for reading
     /// (`BP_VAR_R`): `f($a[])` and `f($a[]->b)` are the compile error
     /// "Cannot use [] for reading". Otherwise a variable is a
-    /// `BP_VAR_FUNC_ARG` fetch, which appends or throws at run time.
-    /// Named arguments are not matched to parameters here, so they are
-    /// compiled as for an unknown `fbc`.
+    /// `BP_VAR_FUNC_ARG` fetch, which appends or throws at run time. A
+    /// named argument for a parameter of a known `fbc` (`zend_get_arg_num`)
+    /// is compiled for that parameter's mode.
     pub(crate) fn compile_args(
         &mut self,
         args: &ArgList,
-        fbc: Option<super::FunctionInfo>,
+        fbc: Option<&super::FunctionInfo>,
     ) -> CResult<()> {
         let mut seen_named = false;
         let mut seen_unpack = false;
@@ -2641,6 +2641,17 @@ impl Compiler<'_> {
                 }
                 ArgKind::Named { name, value } => {
                     seen_named = true;
+                    // An unpacked argument makes `fbc` unknown. (php-src also
+                    // sends an argument in its place positionally; a named send
+                    // behaves the same, and keeps the call off the frameless
+                    // path, as `zend_args_contain_unpack_or_named` does.)
+                    let by_value = fbc.filter(|_| !seen_unpack).is_some_and(|f| {
+                        f.arg_num(&name.name)
+                            .is_some_and(|n| !f.sends_by_ref(n - 1))
+                    });
+                    if by_value && reads_append(value) {
+                        return self.err("Cannot use [] for reading", value.span.line);
+                    }
                     let n = self.lit_str(&name.name);
                     let src = self.arg_src_for(value)?;
                     self.emit(Op::SendNamed { name: n, src });
@@ -3050,7 +3061,7 @@ impl Compiler<'_> {
                 // `zend_compile_assert`: the internal `assert()` is the
                 // `fbc`, except for a namespaced call.
                 let fbc = self.known_fbc(n);
-                self.compile_args(args, fbc)?;
+                self.compile_args(args, fbc.as_ref())?;
                 if args.args.len() == 1 {
                     if matches!(args.args[0].kind, ArgKind::Unpack(_)) {
                         return self.err(

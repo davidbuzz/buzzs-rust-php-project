@@ -1109,7 +1109,7 @@ mod tests {
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    // Expected outputs below are from `/usr/bin/php -n` (8.3).
+    // Expected outputs below are from `/usr/bin/php8.5 -n`.
 
     /// `$GLOBALS[$k]` with a changing key reads the variable `$k` names
     /// each time: only literal names are cached per instruction (the

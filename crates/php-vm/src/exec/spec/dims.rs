@@ -775,7 +775,7 @@ pub(in crate::exec) fn fe_assign_in(f: &mut Frame, ops: &[Op], ip: usize, t: u32
 mod tests {
     //! `foreach` by value over arrays with the fused value/key assignments
     //! ([`fe_assign_in`]) and their fallbacks. Expected output from
-    //! `/usr/bin/php -n` (PHP 8.3).
+    //! `/usr/bin/php8.5 -n`.
 
     use crate::{Vm, VmOptions};
     use std::cell::RefCell;

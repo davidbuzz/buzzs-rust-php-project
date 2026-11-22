@@ -6,7 +6,8 @@
 //! (`tsrm_realpath`) resolved, so neither `..` segments nor symbolic links
 //! show in `__FILE__`, `__DIR__`, `getFileName()`, backtraces or messages,
 //! and `get_included_files()` lists the same paths. Expected outputs follow
-//! php 8.3 (`/usr/bin/php -n`) on the same trees.
+//! `/usr/bin/php8.5 -n` on the same trees, with php-src master's warning
+//! origin (`include()`, its argument only with `error_include_args`).
 
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;

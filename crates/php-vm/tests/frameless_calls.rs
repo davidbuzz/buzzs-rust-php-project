@@ -4,7 +4,7 @@
 //! shapes run without the builtin frame, and that every shape which can
 //! warn or throw keeps the frame, so traces, error handlers and
 //! `__toString()` callbacks still see `#0 file(line): strpos(...)`.
-//! Expected outputs are `/usr/bin/php -n` (8.3) with php-src master's
+//! Expected outputs are `/usr/bin/php8.5 -n`'s, with php-src master's
 //! closure names and frameless `min()` tie (`min(null, false)` is the
 //! second argument, `ZEND_FRAMELESS_FUNCTION(min, 2)`).
 use php_runtime::{Value, ZStr};

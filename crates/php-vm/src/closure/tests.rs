@@ -1,6 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Script-level tests of closures (expected output from php 8.3+/master).
+//! Script-level tests of closures (expected output from `/usr/bin/php8.5 -n`,
+//! or php-src master where the two differ).
 
 use crate::{Vm, VmOptions};
 use std::cell::RefCell;
@@ -215,7 +216,9 @@ fn nullsafe_closure_creation_is_compile_error() {
 }
 
 /// Attribute argument-list errors are reported on the declaration's line
-/// (`CG(zend_lineno)` in `zend_compile_attributes()`; `first_class_callable_011`).
+/// (`CG(zend_lineno)` in `zend_compile_attributes()`; `first_class_callable_011`);
+/// a parameter's on the parameter's (`zend_compile_params` sets the line to
+/// its AST node's: the variable's here).
 #[test]
 fn attribute_closure_error_uses_declaration_line() {
     let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
@@ -229,7 +232,7 @@ fn attribute_closure_error_uses_declaration_line() {
     );
     assert_eq!(
         run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"),
-        format!("{msg}2\nStack trace:\n#0 {{main}}\n")
+        format!("{msg}5\nStack trace:\n#0 {{main}}\n")
     );
 }
 

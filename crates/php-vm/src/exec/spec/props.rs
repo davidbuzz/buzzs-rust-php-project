@@ -1391,7 +1391,7 @@ echo implode(',', $r), "\n";"#);
     /// loop (`prop_op_in`): hits on `$this` and on a variable held by
     /// reference, and every fallback (typed overflow, readonly, coercion,
     /// uninitialized, magic methods, unset slots, dynamic properties,
-    /// visibility). Expected output from php 8.3.
+    /// visibility). Expected output from `/usr/bin/php8.5 -n`.
     #[test]
     fn hot_loop_property_ops_match_php() {
         let out = run(r#"<?php
@@ -1500,7 +1500,7 @@ Cannot access private property P::$priv
     /// `new` in loops, where a class without a constructor is created in
     /// the frame-local hot loop (`new_in`): defaults evaluated on the first
     /// `new`, handle reuse order, constructors, `Throwable`s, abstract
-    /// classes. Expected output from php 8.3.
+    /// classes. Expected output from `/usr/bin/php8.5 -n`.
     #[test]
     fn hot_loop_new_matches_php() {
         let out = run(r#"<?php
@@ -1571,8 +1571,11 @@ object(stdClass)#9 (1) {
     /// hot path (`crate::props::new_with_ctor`): handle reuse, inherited
     /// constructor scope, promoted and readonly properties, destructor
     /// order, a private constructor, an argument that throws
-    /// (`ZEND_LIVE_NEW`), WeakMap keys and GC roots. Expected
-    /// output from `/usr/bin/php -n` (8.3).
+    /// (`ZEND_LIVE_NEW`), `WeakMap` keys and GC roots. Expected
+    /// output from `/usr/bin/php8.5 -n`, except the root count
+    /// (`gc_status()["roots"]`): 8.5 reports 5, buffering the array
+    /// `implode()` releases (`GC_TRY_DTOR_NO_REF`), and this collector
+    /// buffers objects only (see TODO.md), so it reports 4.
     #[test]
     fn new_with_constructor_matches_php() {
         let out = run(r#"<?php

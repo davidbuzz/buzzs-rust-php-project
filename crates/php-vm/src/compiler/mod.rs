@@ -517,7 +517,7 @@ pub(crate) struct Compiler<'f> {
 /// What `zend_compile_args` reads of a function it finds in
 /// `CG(function_table)` at compile time (its `fbc`): how each argument is
 /// sent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FunctionInfo {
     /// `fbc->type == ZEND_INTERNAL_FUNCTION`.
     pub internal: bool,
@@ -530,6 +530,8 @@ pub struct FunctionInfo {
     /// Bit `i`: parameter `i` is sent by reference (`ZEND_SEND_BY_REF` or
     /// `ZEND_SEND_PREFER_REF`); parameters past the 64th count as by value.
     pub by_ref: u64,
+    /// The parameters' names (`zend_get_arg_num`); empty when unknown.
+    pub param_names: std::rc::Rc<[ZStr]>,
 }
 
 impl FunctionInfo {
@@ -541,6 +543,26 @@ impl FunctionInfo {
             func.required(),
             func.params().iter().map(|p| (p.by_ref, p.variadic)),
         )
+        .with_names(func.params().iter().map(|p| p.name.clone()))
+    }
+
+    /// The same, with the parameters' names.
+    #[must_use]
+    pub(crate) fn with_names(mut self, names: impl Iterator<Item = ZStr>) -> Self {
+        self.param_names = names.collect();
+        self
+    }
+
+    /// `zend_get_arg_num`: the 1-based position of the parameter called
+    /// `name` (a variadic parameter is not matched by name).
+    #[must_use]
+    pub fn arg_num(&self, name: &[u8]) -> Option<usize> {
+        let declared = self.num_params as usize - usize::from(self.variadic);
+        self.param_names
+            .iter()
+            .take(declared)
+            .position(|n| n.as_bytes() == name)
+            .map(|i| i + 1)
     }
 
     /// From each declared parameter's (by reference, variadic) flags.
@@ -1121,7 +1143,7 @@ impl Compiler<'_> {
             // compiled code runs again).
             let (file_functions, declared) = (&self.known_functions, self.functions);
             let known = |lc: &[u8]| {
-                file_functions.get(lc).copied().or_else(|| {
+                file_functions.get(lc).cloned().or_else(|| {
                     declared
                         .and_then(|table| table.find(lc))
                         .filter(|info| info.internal)

@@ -29,6 +29,7 @@ fn dump(src: &str) -> String {
             num_params: 2,
             variadic: true,
             by_ref: 0,
+            param_names: std::rc::Rc::from([]),
         })
     };
     let end = main_line_end(src.as_bytes(), None);
@@ -1149,6 +1150,7 @@ fn type_checks_narrow_on_their_edges() {
             num_params: 2,
             variadic: lc == b"var_dump",
             by_ref: 0,
+            param_names: std::rc::Rc::from([]),
         })
     };
     let unit =

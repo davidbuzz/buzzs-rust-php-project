@@ -193,15 +193,16 @@ fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
             }
         }
     }
-    for n in &parent_names(c) {
-        push(n, out);
-    }
+    // `zend_do_link_class` binds trait properties before it inherits.
     for t in &c.traits {
         if let Some(td) = &t.decl {
             for p in &td.props {
                 push(&p.name, out);
             }
         }
+    }
+    for n in &parent_names(c) {
+        push(n, out);
     }
     for p in &c.props {
         push(&p.name, out);
@@ -243,12 +244,9 @@ pub(crate) fn methods(c: &Rc<Class>) -> Vec<Rc<Method>> {
                 push(ZStr::from("tryfrom"), &mut order);
             }
         }
-        if let Some(p) = &c.parent {
-            for m in methods(p) {
-                push(m.name.to_ascii_lowercase(), &mut order);
-            }
-        }
     }
+    // The rest in binding order (`zend_do_link_class`): trait methods, then
+    // the inherited ones, then abstract trait methods and interface methods.
     for lc in &c.method_order {
         push(lc.clone(), &mut order);
     }
@@ -275,13 +273,14 @@ pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
             };
             push(n, &mut order);
         }
-        if let Some(p) = &c.parent {
-            for cc in consts(p) {
+        // `zend_do_link_class` binds trait constants before it inherits.
+        for t in &c.traits {
+            for cc in consts(t) {
                 push(&cc.name, &mut order);
             }
         }
-        for t in &c.traits {
-            for cc in consts(t) {
+        if let Some(p) = &c.parent {
+            for cc in consts(p) {
                 push(&cc.name, &mut order);
             }
         }

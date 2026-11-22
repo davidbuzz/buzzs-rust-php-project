@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 /// A function a call resolves to at compile time
 /// (`zend_optimizer_get_called_func`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Known {
     /// Send modes.
     pub info: FunctionInfo,
@@ -139,6 +139,7 @@ impl Resolver<'_> {
             f.required,
             f.params.iter().map(|p| (p.by_ref, p.variadic)),
         )
+        .with_names(f.params.iter().map(|p| p.name.clone()))
     }
 
     /// The result type of a call of user function `f`.
@@ -705,7 +706,7 @@ impl<'a> Lower<'a> {
     /// The parameter names of a known function (its variadic one
     /// excluded): a user function's, or those of the internal function
     /// `internal_lc`.
-    fn param_names(&self, known: Option<Known>, internal_lc: Option<&[u8]>) -> Option<Vec<ZStr>> {
+    fn param_names(&self, known: Option<&Known>, internal_lc: Option<&[u8]>) -> Option<Vec<ZStr>> {
         let k = known?;
         let mut names: Vec<ZStr> = match k.user {
             Some(u) => self
@@ -1163,8 +1164,8 @@ impl<'a> Lower<'a> {
                     }
                     _ => None,
                 };
-                let known = found.map(|(k, _, _)| k);
-                let names = self.param_names(known, None);
+                let known = found.as_ref().map(|(k, _, _)| k.clone());
+                let names = self.param_names(known.as_ref(), None);
                 let (n, _) = self.scan_call(i, names.as_deref());
                 // `zend_optimizer_get_called_func`: a method that no child
                 // class can override (private, final, or of a final class)
@@ -1220,8 +1221,8 @@ impl<'a> Lower<'a> {
                             .class_decl(c)
                             .is_some_and(|d| d.flags & crate::class::cflags::TRAIT == 0)
                 });
-                let fixed = resolved && known.is_some_and(|k| k.user.is_some());
-                let names = self.param_names(known, None);
+                let fixed = resolved && known.as_ref().is_some_and(|k| k.user.is_some());
+                let names = self.param_names(known.as_ref(), None);
                 let (n, _) = self.scan_call(i, names.as_deref());
                 let c = self.class_z(class, " (exception)");
                 let init_at = self.lines.len();
@@ -1295,9 +1296,9 @@ impl<'a> Lower<'a> {
                         .map(|(k, _, _)| k),
                     _ => None,
                 };
-                let names = internal.or_else(|| self.param_names(known, None));
+                let names = internal.or_else(|| self.param_names(known.as_ref(), None));
                 let names = names.map(|mut v| {
-                    if known.is_some_and(|k| k.info.variadic) {
+                    if known.as_ref().is_some_and(|k| k.info.variadic) {
                         v.pop();
                     }
                     v
@@ -2451,9 +2452,9 @@ impl Lower<'_> {
         let lc = self.lit_bytes(name);
         let line = self.oa.line(i);
         let known = self.res.function(&lc, line);
-        let names = self.param_names(known, Some(&lc));
+        let names = self.param_names(known.as_ref(), Some(&lc));
         let (n, simple) = self.scan_call(i, names.as_deref());
-        let frameless = match known {
+        let frameless = match &known {
             Some(k) if fallback.is_none() && k.user.is_none() && simple && n <= 3 => {
                 let ok = crate::compiler::frameless_arities(&lc)
                     .unwrap_or(&[])
@@ -2478,7 +2479,7 @@ impl Lower<'_> {
             return;
         }
         let init_at = self.lines.len();
-        let kind = match (known, fallback) {
+        let kind = match (&known, fallback) {
             (Some(k), _) => {
                 let mut l = ZLine::new("INIT_FCALL")
                     .x(format!(" {n}"))
@@ -2502,7 +2503,7 @@ impl Lower<'_> {
                 CallKind::ByName
             }
         };
-        let user = known.is_some_and(|k| k.user.is_some());
+        let user = known.as_ref().is_some_and(|k| k.user.is_some());
         self.calls.push(Call {
             kind,
             known,
@@ -2521,7 +2522,7 @@ impl Lower<'_> {
             Some(c) => {
                 c.sent += 1;
                 let (num, name) = resolve_arg(c, name);
-                (c.known, c.frameless.is_some(), num, name)
+                (c.known.clone(), c.frameless.is_some(), num, name)
             }
             None => (None, false, Some(1), name),
         };
@@ -2651,7 +2652,7 @@ impl Lower<'_> {
             let b = args.next().unwrap_or(Z::Unused);
             let mut l = ZLine::new(op).ot(dst).a(a).b(b);
             l.suffix = format!("({})", String::from_utf8_lossy(&name));
-            l.ret = call.known.map(|k| k.ret);
+            l.ret = call.known.as_ref().map(|k| k.ret);
             self.push(l);
             if n == 3 {
                 let c = args.next().unwrap_or(Z::Unused);
@@ -2664,11 +2665,11 @@ impl Lower<'_> {
         }
         // `zend_get_call_op`: deprecated functions, and `#[\NoDiscard]` ones
         // whose result is unused, keep `DO_FCALL_BY_NAME`.
-        let by_name = call.known.is_some_and(|k| {
+        let by_name = call.known.as_ref().is_some_and(|k| {
             use crate::func::flags;
             k.flags & flags::DEPRECATED != 0 || (k.flags & flags::NODISCARD != 0 && dst.is_none())
         });
-        let op = match (call.kind, call.known) {
+        let op = match (call.kind, &call.known) {
             (CallKind::FCall | CallKind::Method | CallKind::Static, Some(_)) if by_name => {
                 "DO_FCALL_BY_NAME"
             }
@@ -2685,7 +2686,7 @@ impl Lower<'_> {
         };
         let mut l = ZLine::new(op).ot(dst);
         if call.kind != CallKind::New {
-            l.ret = call.known.map(|k| k.ret);
+            l.ret = call.known.as_ref().map(|k| k.ret);
         }
         self.push(l);
     }
@@ -2696,13 +2697,13 @@ impl Lower<'_> {
     /// opline goes and the arguments it sent are freed
     /// (`zend_delete_call_instructions`).
     fn try_inline(&mut self, call: &Call, dst: Option<u32>) -> bool {
-        let (Some(init), Some(Known { user: Some(u), .. })) = (call.inline, call.known) else {
+        let (Some(init), Some(Known { user: Some(u), .. })) = (call.inline, &call.known) else {
             return false;
         };
         let static_call = call.kind == CallKind::Static;
         let Some(v) = self
             .res
-            .inline_value(u, call.sent, static_call, dst.is_some())
+            .inline_value(*u, call.sent, static_call, dst.is_some())
         else {
             return false;
         };

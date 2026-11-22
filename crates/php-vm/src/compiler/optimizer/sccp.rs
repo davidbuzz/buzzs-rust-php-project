@@ -1355,7 +1355,7 @@ fn place_sends_may_bind(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
                     return true;
                 };
                 if matches!(src, ArgSrc::Place(_))
-                    && callee.is_none_or(|info| info.sends_by_ref(*sent))
+                    && callee.as_ref().is_none_or(|info| info.sends_by_ref(*sent))
                 {
                     return true;
                 }

@@ -205,7 +205,7 @@ fn yield_from_in_by_ref_generator_is_fatal() {
 /// `foreach` over generators through the one-access resume and fetch
 /// paths: plain yields, keys, `yield from` arrays and generators, return
 /// values, `break` with `finally`, exceptions and an aggregate returning a
-/// generator (expected output from php 8.3).
+/// generator (expected output from `/usr/bin/php8.5 -n`).
 #[test]
 fn generator_foreach_fast_paths_match_general_resume() {
     let src = r#"<?php
