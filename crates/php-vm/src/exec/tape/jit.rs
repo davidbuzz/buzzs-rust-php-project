@@ -1185,6 +1185,65 @@ pub(super) unsafe extern "C" fn const_is(f: *mut Frame, at: usize, tag: usize, b
     usize::from(same)
 }
 
+/// For a typed loop: the step of a `foreach` over an array of values that
+/// are not numbers, with the assignment to the loop's variable that
+/// follows it, without the general path of [`fe_fetch`] and the
+/// interpreter's assignment after it. The next element of iterator `iter`
+/// of frame `f` is copied into the variable's slot `value`, whose old
+/// value is released as an assignment releases it (an array or object may
+/// become a GC root, and an object's destructor may then be waiting: the
+/// caller polls); when `key` is not null, the element's int key goes to
+/// that slot, which the caller knows to own nothing. Returns 1 at the end
+/// of the iteration, 2 when an element was stored, and 0, nothing
+/// changed, for anything else (not an array iterated by value, an element
+/// or a variable that is a reference, a key that is not an int):
+/// [`fe_fetch`] then runs.
+///
+/// # Safety
+/// `f` is the current frame, which has no symbol table attached; `value`
+/// points at a variable's slot of it and `key` (when not null) at another
+/// that holds a scalar or nothing.
+pub(super) unsafe extern "C" fn each_any(
+    f: *mut Frame,
+    iter: usize,
+    value: *mut Option<Value>,
+    key: *mut Value,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let frame = unsafe { &mut *f };
+    let Some(Some(crate::vm::ForeachIter::Array { arr, pos })) = frame.iters.get_mut(iter) else {
+        return 0;
+    };
+    let (at, v, k) = if key.is_null() {
+        match arr.fe_fetch(*pos) {
+            Some((at, v)) => (at, v, None),
+            None => return 1,
+        }
+    } else {
+        match arr.fe_fetch_with_key(*pos) {
+            Some((at, v, Value::Int(k))) => (at, v, Some(k)),
+            Some(_) => return 0,
+            None => return 1,
+        }
+    };
+    // SAFETY: the caller's contract; the slot is not borrowed (the frame's
+    // variables are only touched through the frame, borrowed here alone,
+    // and `arr` is the iterator's own handle on the array).
+    let slot = unsafe { &mut *value };
+    if matches!(v, Value::Reference(_)) || matches!(slot, Some(Value::Reference(_))) {
+        return 0;
+    }
+    let v = v.clone();
+    *pos = at + 1;
+    let old = slot.replace(v);
+    if let Some(k) = k {
+        // SAFETY: the caller's contract: nothing to release in the slot.
+        unsafe { std::ptr::write(key, Value::Int(k)) };
+    }
+    crate::exec::release_slot_value(old);
+    2
+}
+
 /// For a typed loop: the step of a `foreach` over a packed or hash array
 /// of numbers, without the general path of [`fe_fetch`]. The next element
 /// of iterator `iter` of frame `f` goes to the slot `value` and, when

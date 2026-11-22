@@ -3366,7 +3366,7 @@ fn discard_unrooted(old: Option<Value>) {
 /// anything else is released at once by [`discard_unrooted`].
 #[inline(always)]
 #[allow(clippy::inline_always)] // the common case is an empty or scalar slot
-fn release_slot_value(old: Option<Value>) {
+pub(crate) fn release_slot_value(old: Option<Value>) {
     if matches!(
         old,
         Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))

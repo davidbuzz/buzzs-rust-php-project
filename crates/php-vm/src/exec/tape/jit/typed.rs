@@ -746,6 +746,9 @@ enum Plan {
     /// the loop has one, likewise (its temporary, its variable, and
     /// whether the array's keys are ints, which the loop then tracks).
     EachAny {
+        /// Whether the short cut is tried (`super::each_any`: the element
+        /// straight into the loop variable).
+        slim: bool,
         iter: u32,
         end: usize,
         step: usize,
@@ -2969,7 +2972,15 @@ impl<'a> Analysis<'a> {
             }
         };
         let end = end as usize;
+        // The short cut stores into the variable, and an int key into
+        // its own: not with a key that is anything else, nor with an
+        // element still waiting in the temporary.
+        let slim = self.seen.fast
+            && value.1.is_some()
+            && st.get(&value.0) != Some(&Ty::Any)
+            && matches!(key, None | Some((_, Some(_), true)));
         (full < self.tape.len() && end < self.tape.len()).then_some(Plan::EachAny {
+            slim,
             iter,
             end,
             step,
@@ -3551,6 +3562,9 @@ type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) ->
 type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
 /// `super::const_is`.
 type ConstIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
+/// `super::each_any`.
+type EachAny =
+    unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Option<Value>, *mut Value) -> usize;
 /// `super::each_num`.
 type EachNum = unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Value, *mut Value) -> usize;
 
@@ -4804,13 +4818,56 @@ impl Emit<'_, '_> {
                 self.go(i, full, repeat)?;
             }
             Plan::EachAny {
+                slim,
+                iter,
                 end,
                 step,
                 full,
                 value,
                 key,
-                ..
             } => {
+                // The short cut: the next element straight into the loop
+                // variable (`super::each_any`).
+                if let (true, Some(var)) = (slim, value.1) {
+                    let value_at = self.b.ins().iadd_imm(self.cvs, i64::from(var.at));
+                    let key_var = key.and_then(|(_, var, _)| var);
+                    let key_at = match key_var {
+                        Some(key) => {
+                            let base = self.base(key);
+                            self.b.ins().iadd_imm(base, i64::from(key.at))
+                        }
+                        None => self.b.ins().iconst(types::I64, 0),
+                    };
+                    let which = self.b.ins().iconst(types::I64, i64::from(iter));
+                    let r = self.helper(
+                        super::each_any as EachAny as usize,
+                        &[self.frame, which, value_at, key_at],
+                    )?;
+                    let [stored, miss, general] = std::array::from_fn(|_| self.b.create_block());
+                    self.b.set_cold_block(general);
+                    let hit = self.b.ins().icmp_imm(IntCC::Equal, r, 2);
+                    self.b.ins().brif(hit, stored, &[], miss, &[]);
+                    self.b.switch_to_block(miss);
+                    let over = self.land(i, end, st);
+                    let ended = self.b.ins().icmp_imm(IntCC::Equal, r, 1);
+                    self.b.ins().brif(ended, over, &[], general, &[]);
+                    self.b.switch_to_block(stored);
+                    // The poll after the assignment: what it released may
+                    // have a destructor waiting.
+                    self.poll(i, full)?;
+                    let out = plan.out(st, full);
+                    if let Some(key) = key_var {
+                        let base = self.base(key);
+                        let (int, _) = *self.vars.get(&key)?;
+                        let v = self
+                            .b
+                            .ins()
+                            .load(types::I64, mem(), base, key.at + PAYLOAD_AT);
+                        self.b.def_var(int, v);
+                    }
+                    self.go(i, full, self.lp.may_repeat(&out))?;
+                    self.b.switch_to_block(general);
+                }
                 #[allow(clippy::cast_possible_wrap)]
                 let callee = self
                     .b

@@ -1346,3 +1346,25 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn the_foreach_short_cut_releases_and_declines_as_the_interpreter_does() {
+    // Destructors in their order (the array's own copy keeps the objects
+    // to the end; pairs are released as the loop goes), a loop variable
+    // that is a reference, an element that is one, `unset` of the
+    // variable, string keys.
+    three(
+        r#"<?php
+class D { public $id; static $log = ''; function __construct($i) { $this->id = $i; } function __destruct() { self::$log .= $this->id . ','; } }
+function d1($n) { $a = []; for ($i = 0; $i < $n; $i++) { $a[] = new D($i); } $s = 0; foreach ($a as $k => $o) { $a[$k] = null; $s += $o->id; D::$log .= 'v' . $k . ';'; } return $s; }
+function d2($n) { $s = 0; $a = []; for ($i = 0; $i < $n; $i++) { $a[] = [$i, new D(100 + $i)]; } foreach ($a as $pair) { $s += $pair[0]; } return $s; }
+function d3(&$ref, $list) { $s = 0; foreach ($list as $ref) { $s += $ref->id; } return $s; }
+function d4($list) { $s = 0; $x = 5; $y = &$x; foreach ($list as $y) { $s += 1; } return [$s, is_object($x)]; }
+function d5($list) { $s = 0; foreach ($list as $i => $v) { $s += $i; unset($v); } return $s; }
+function d6($list) { $s = ''; foreach ($list as $k => $v) { $s = $k; } return $s; }
+$objs = []; for ($i = 0; $i < 20; $i++) { $objs[] = new D(200 + $i); }
+$r = null; $refs = [1, 2, 3]; $q = 7; $refs[1] = &$q;
+foreach ([1, 2] as $round) { var_export([d1(20), d2(20), d3($r, $objs), d4($objs), d5($objs), d6(['a' => 1, 'b' => 2, 5 => 3]), d5($refs)]); echo D::$log, "\n"; D::$log = ''; }
+"#,
+    );
+}
