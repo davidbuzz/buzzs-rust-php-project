@@ -420,6 +420,35 @@ fn rt_find_in<'a>(
     Some((c, e))
 }
 
+/// For the JIT (`exec/tape/jit.rs`): the static user method that
+/// `spec::name()` (`name` the method-name literal) calls from the running
+/// user frame `f`, on the hit of the member cache [`Vm::static_call_hit`]
+/// takes; `None` on a miss, for a class named at run time, and for an
+/// instance method (`parent::__construct()`).
+pub(crate) fn static_call_user_in(
+    f: &Frame,
+    spec: &ClassSpec,
+    name: u32,
+) -> Option<Rc<crate::func::UserFunction>> {
+    if f.kind == FrameKind::Builtin || matches!(spec, ClassSpec::Dyn(_)) {
+        return None;
+    }
+    let cache = f.code.rt_cache.static_calls.try_borrow().ok()?;
+    let entries = cache.get(name as usize)?;
+    let (_, e) = rt_find_in(f, spec, entries)?;
+    let Target::Method(m) = &e.target else {
+        return None;
+    };
+    let m = m.upgrade()?;
+    if !m.is_static() {
+        return None;
+    }
+    match &m.func {
+        crate::func::Func::User(user) => Some(Rc::clone(user)),
+        crate::func::Func::Builtin(_) => None,
+    }
+}
+
 /// [`Vm::static_prop_cached`] on the running user frame `f`: the storage
 /// cell of `spec::$name` (`name` the property-name literal) from the op
 /// array's member cache, and whether the property is typed.

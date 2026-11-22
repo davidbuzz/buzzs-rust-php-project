@@ -328,6 +328,19 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
         // function's may run inline ([`Inlined`]), which only shows when
         // the loop is looked at (the function need not exist yet).
         Op::InitFCall { fallback: None, .. }
+        // A static method's or a method's call by name, likewise.
+        | Op::InitStaticCall {
+            class:
+                crate::opcode::ClassSpec::Named(_)
+                | crate::opcode::ClassSpec::SelfClass
+                | crate::opcode::ClassSpec::Parent
+                | crate::opcode::ClassSpec::Static,
+            name: Operand::Lit(_),
+        }
+        | Op::InitMethodCall {
+            obj: Operand::Cv(_) | Operand::Unused,
+            name: Operand::Lit(_),
+        }
         | Op::Send {
             src: ArgSrc::Val(_) | ArgSrc::CallResult(_) | ArgSrc::Place(_),
         }
@@ -445,8 +458,7 @@ pub(super) struct Inlined {
     /// The call's `InitFCall` and `DoCall`.
     init: usize,
     call: usize,
-    /// The literal of the function's name at the call.
-    name: u32,
+    kind: SiteKind,
     base: usize,
     /// How many arguments the call passes, and the function's first
     /// instruction for that many.
@@ -472,28 +484,66 @@ fn arg_slot(k: usize) -> SlotRef {
 #[derive(Clone, Debug)]
 struct Site {
     init: usize,
+    kind: SiteKind,
     name: u32,
     sends: Vec<usize>,
     call: usize,
 }
 
-/// The calls of `ops` that are an `InitFCall` without a namespace
-/// fallback, plain `Send`s and a `DoCall`, nested ones included.
+/// How a call names what it calls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SiteKind {
+    /// `f()`: a name that cannot be a namespaced function's.
+    Func,
+    /// `A::f()` (also `self::`, `parent::`, `static::`), the method by name.
+    Static,
+    /// `$cv->f()` or `$this->f()` (`Operand::Unused`), the method by name.
+    Method(Operand),
+    /// Any other call: nothing the second tier computes or inlines.
+    Other,
+}
+
+/// The calls of `ops`, each from the op that starts it over its plain
+/// `Send`s to its `DoCall`, nested ones included.
 fn call_sites(ops: &[Op]) -> Vec<Site> {
+    use crate::opcode::ClassSpec;
     let mut open: Vec<Site> = Vec::new();
     let mut sites = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        match op {
+        let start = match op {
             Op::InitFCall {
                 name,
                 fallback: None,
                 ..
-            } => open.push(Site {
+            } => Some((SiteKind::Func, *name)),
+            Op::InitStaticCall {
+                class:
+                    ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
+                name: Operand::Lit(name),
+            } => Some((SiteKind::Static, *name)),
+            Op::InitMethodCall {
+                obj: obj @ (Operand::Cv(_) | Operand::Unused),
+                name: Operand::Lit(name),
+            } => Some((SiteKind::Method(*obj), *name)),
+            Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. } => Some((SiteKind::Other, 0)),
+            _ => None,
+        };
+        if let Some((kind, name)) = start {
+            open.push(Site {
                 init: i,
-                name: *name,
+                kind,
+                name,
                 sends: Vec::new(),
                 call: 0,
-            }),
+            });
+            continue;
+        }
+        match op {
             Op::Send { .. } => {
                 if let Some(site) = open.last_mut() {
                     site.sends.push(i);
@@ -646,6 +696,10 @@ enum Plan {
     /// undefined (`cvs` variables and `tmps` temporaries in all), and the
     /// loop goes on at the function's first instruction, `to`.
     Bind {
+        /// For a method's call: the op that starts it and the method's
+        /// address, checked at every call (`super::user_is`: the object
+        /// may be of another class each time).
+        check: Option<(usize, usize)>,
         /// The first of its argument variables ([`Analysis::arg_base`]).
         args: usize,
         argc: usize,
@@ -1304,11 +1358,11 @@ pub(super) struct Loop {
     real: usize,
     /// The variables of the inlined functions ([`virtual_slot`]).
     virtuals: Vec<SlotRef>,
-    /// The functions inlined, each by the literal of its name at the call
-    /// and its address: checked again at the loop's entry
+    /// The functions and static methods inlined, each by the op that
+    /// starts its call and its address: checked again at the loop's entry
     /// (`super::user_is`; the name may be another function's in another
-    /// request).
-    inlined: Vec<(u32, usize)>,
+    /// request). (A method's is checked at each call, [`Plan::Bind`].)
+    inlined: Vec<(usize, usize)>,
 }
 
 impl Loop {
@@ -1349,12 +1403,13 @@ pub(super) struct Seen<'a> {
     /// resolved to when its call last ran; `None` when it has not run, or
     /// calls may not be skipped (observers).
     pub(super) builtin: &'a dyn Fn(u32) -> Option<Vec<u8>>,
-    /// The user function the function-name literal (by index) resolved to
-    /// when its call last ran, when a call of it with that many arguments
-    /// can run inline: a plain function (no types, no defaults used, no
-    /// references, no statics) of at most [`INLINE_OPS`] ops, and calls
-    /// are not observed.
-    pub(super) user: &'a dyn Fn(u32, usize) -> Option<std::rc::Rc<crate::func::UserFunction>>,
+    /// The user function the call started by the op (by index) resolved
+    /// to when it last ran (a function by name, a static method of a
+    /// named class, a method of the object a variable or `$this` holds
+    /// now), when a call of it with that many arguments can run inline:
+    /// a plain declaration (no references, no statics, no variadic) of at
+    /// most [`INLINE_OPS`] ops, and calls are not observed.
+    pub(super) user: &'a dyn Fn(usize, usize) -> Option<std::rc::Rc<crate::func::UserFunction>>,
     /// The type of the number the property at a place (by index) holds,
     /// when its read is a cache hit.
     pub(super) property: &'a dyn Fn(u32) -> Option<Ty>,
@@ -2528,10 +2583,25 @@ impl<'a> Analysis<'a> {
             // A builtin call with computed arguments: nothing to do at
             // its `InitFCall`, each `Send` keeps its argument, the
             // `DoCall` computes.
-            Op::InitFCall { .. } => {
+            Op::InitFCall { .. } | Op::InitStaticCall { .. } | Op::InitMethodCall { .. } => {
                 let site = self.sites.iter().find(|site| site.init == i)?;
-                if self.inlined_site(i).is_some() {
+                // (A call that kept turning out to be of another method:
+                // `super::missed`, counted at the op the call is redone
+                // from.)
+                if (self.seen.slow)(i) {
+                    return None;
+                }
+                if let Some((_, callee)) = self.inlined_site(i) {
+                    // The object's variable: one the loop does not track.
+                    if let SiteKind::Method(Operand::Cv(var)) = callee.kind {
+                        if !self.untracked(st, cv(var.checked_mul(SLOT_U32)?)?) {
+                            return None;
+                        }
+                    }
                     return Some(Plan::Jmp { to: next });
+                }
+                if site.kind != SiteKind::Func {
+                    return None;
                 }
                 let name = (self.seen.builtin)(site.name)?;
                 computed(&name, site.sends.len()).then_some(Plan::Jmp { to: next })
@@ -2544,6 +2614,9 @@ impl<'a> Analysis<'a> {
                     return None;
                 }
                 if self.inlined_site(site.init).is_none() {
+                    if site.kind != SiteKind::Func {
+                        return None;
+                    }
                     let name = (self.seen.builtin)(site.name)?;
                     if !computed(&name, site.sends.len()) {
                         return None;
@@ -2587,13 +2660,19 @@ impl<'a> Analysis<'a> {
                     }
                     *self.bound.get_mut(k)? = true;
                     let code = &callee.func.code;
+                    let check = matches!(callee.kind, SiteKind::Method(_))
+                        .then(|| (callee.init, std::rc::Rc::as_ptr(&callee.func) as usize));
                     return Some(Plan::Bind {
+                        check,
                         args,
                         argc: site.sends.len(),
                         cvs: code.cv_names.len(),
                         tmps: code.num_tmps as usize,
                         to: callee.base + callee.first,
                     });
+                }
+                if site.kind != SiteKind::Func {
+                    return None;
                 }
                 let name = (self.seen.builtin)(site.name)?;
                 let mut args = Vec::new();
@@ -3028,10 +3107,10 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     // The calls of user functions from the head on that may run inline.
     let mut inl: Vec<Inlined> = Vec::new();
     for site in &sites {
-        if site.init < head || site.sends.len() > MAX_ARGS {
+        if site.init < head || site.sends.len() > MAX_ARGS || site.kind == SiteKind::Other {
             continue;
         }
-        let Some(func) = (seen.user)(site.name, site.sends.len()) else {
+        let Some(func) = (seen.user)(site.init, site.sends.len()) else {
             continue;
         };
         let callee = super::super::lower(&func.code);
@@ -3041,7 +3120,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         inl.push(Inlined {
             init: site.init,
             call: site.call,
-            name: site.name,
+            kind: site.kind,
             base: tape.len() + INLINE_SPAN * inl.len(),
             argc: site.sends.len(),
             first: func.plain_first_op(site.sends.len()),
@@ -3156,7 +3235,9 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         }
         // Kept alive for good, as the code is: its address then names it.
         let func = std::rc::Rc::clone(&callee.func);
-        inlined.push((callee.name, std::rc::Rc::as_ptr(&func) as usize));
+        if !matches!(callee.kind, SiteKind::Method(_)) {
+            inlined.push((callee.init, std::rc::Rc::as_ptr(&func) as usize));
+        }
         std::mem::forget(func);
     }
     let lp = Loop {
@@ -3428,11 +3509,11 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         e.b.switch_to_block(next);
     }
     // The functions the loop runs inline: still what their names call.
-    for (name, func) in &lp.inlined {
+    for (init, func) in &lp.inlined {
         #[allow(clippy::cast_possible_wrap)]
         let args = [
             e.frame,
-            e.b.ins().iconst(types::I64, i64::from(*name)),
+            e.b.ins().iconst(types::I64, i64::try_from(*init).ok()?),
             e.b.ins().iconst(types::I64, *func as i64),
         ];
         let same = e.helper(super::user_is as UserIs as usize, &args)?;
@@ -4081,7 +4162,32 @@ impl Emit<'_, '_> {
         let repeat = self.lp.may_repeat(&out);
         match *plan {
             Plan::Jmp { to } => self.go(i, to, repeat)?,
-            Plan::Bind { args, argc, to, .. } => {
+            Plan::Bind {
+                check,
+                args,
+                argc,
+                to,
+                ..
+            } => {
+                // A method's call: of this method still, for the object
+                // there is now. If not, the whole call is the
+                // interpreter's, and the miss is counted.
+                if let Some((init, func)) = check {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let operands = [
+                        self.frame,
+                        self.b.ins().iconst(types::I64, i64::try_from(init).ok()?),
+                        self.b.ins().iconst(types::I64, func as i64),
+                    ];
+                    let same = self.helper(super::user_is as UserIs as usize, &operands)?;
+                    let (ok, other) = (self.b.create_block(), self.b.create_block());
+                    self.b.set_cold_block(other);
+                    self.b.ins().brif(same, ok, &[], other, &[]);
+                    self.b.switch_to_block(other);
+                    let from = self.lp.resume.get(&init).copied().unwrap_or(init);
+                    self.ret(from, WHY_MISS);
+                    self.b.switch_to_block(ok);
+                }
                 for k in 0..argc {
                     let arg = arg_slot(args + k);
                     let float = match self.lp.ty(st, arg)? {

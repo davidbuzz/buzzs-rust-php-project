@@ -1259,3 +1259,49 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn static_methods_and_methods_run_inline_too() {
+    typed_at_least(
+        "<?php class M { static function sq($x) { return $x * $x; } static function add(int $a, int $b = 1): int { return $a + $b; } function twice($x) { return $x * 2; } function run($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += self::sq($i) + static::add($i) + M::add($i, 2) + $this->twice($i); } return $s; } } function t($o, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $o->twice($i) + M::sq($i); } return $s; } var_dump(t(new M, 50), (new M)->run(50), t(new M, 3));",
+        2,
+    );
+    // Overridden, private and protected methods, `static::` in a
+    // subclass, a call site that sees two classes in turn, an object that
+    // changes class or becomes null in the loop, `__call`, a method that
+    // uses `$this`, calls as arguments of calls.
+    three(
+        r#"<?php
+class M { public $v = 3;
+  static function sq($x) { return $x * $x; }
+  static function add(int $a, int $b = 1): int { return $a + $b; }
+  function twice($x) { return $x * 2; }
+  function lt($a, $b) { return $a < $b; }
+  function get() { return $this->v; }
+  function useThis($x) { return $x + $this->v; }
+  private function hidden($x) { return $x + 100; }
+  protected static function prot($x) { return $x + 1000; }
+  function inner($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $this->twice($i) + $this->hidden($i) + self::sq($i) + static::prot($i) + M::add($i); } return $s; }
+  static function sinner($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += M::sq($i) + M::prot($i) + M::add($i, 2); } return $s; }
+  function __call($name, $args) { return 7; }
+  static function __callStatic($name, $args) { return 9; }
+}
+class N extends M { function twice($x) { return $x * 3; } static function sq($x) { return $x + 1; } protected static function prot($x) { return $x + 2000; } }
+class O { function twice($x) { return 'str'; } }
+function q1($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += M::sq($i) + M::add($i) + M::add($i, 5) + N::sq($i); } return $s; }
+function q2($o, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $o->twice($i); if ($o->lt($i, 9)) { $s++; } } return $s; }
+function q3($n) { $a = new M; $b = new N; $s = 0; for ($i = 0; $i < $n; $i++) { $o = $i % 3 ? $a : $b; $s += $o->twice($i); } return $s; }
+function q4($n) { $a = new M; $s = 0; for ($i = 0; $i < $n; $i++) { $s += $a->twice($i); if ($i == 9) { $a = new N; } if ($i == 14) { $a = null; } if ($i == 15) { $a = new M; } } return $s; }
+function q5($o, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $o->get() + $o->useThis($i) + $o->nope($i) + M::nope2($i); } return $s; }
+function q6($o, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $o->twice(M::sq($o->twice($i))) % 1000; $s += M::add(M::add($i), $o->twice(2)); } return $s; }
+function q7($n) { $s = 0; for ($i = 0; $i < $n; $i++) { try { $s += M::prot($i); } catch (Error $e) { $s += 1; } } return $s; }
+function q8($o, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $o->twice($i); } return $s; }
+foreach ([40, 6] as $n) {
+  var_export([q1($n), q2(new M, $n), q2(new N, $n), q3($n), q5(new M, $n), q6(new M, $n), q6(new N, $n), q7($n), (new M)->inner($n), (new N)->inner($n), M::sinner($n), N::sinner($n)]);
+  try { var_export(q4($n)); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), '@', $e->getLine(), "\n"; }
+  try { var_export(q8(new O, $n)); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+}
+echo "\n";
+"#,
+    );
+}

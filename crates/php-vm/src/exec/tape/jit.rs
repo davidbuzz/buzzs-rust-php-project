@@ -792,25 +792,17 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             }
         };
         // The user function a call site calls, when it can run inline.
-        let user = |name: u32, argc: usize| -> Option<std::rc::Rc<crate::func::UserFunction>> {
+        let user = |init: usize, argc: usize| -> Option<std::rc::Rc<crate::func::UserFunction>> {
             use crate::func::{flags, CallShape};
             if crate::jit::calls_are_observed() {
                 return None;
             }
-            let cache = frame.code.fcall_cache.try_borrow().ok()?;
-            let cached = cache.get(name as usize)?.as_ref()?;
-            let crate::opcode::CachedFuncKind::User(func) = &cached.func else {
-                return None;
-            };
-            let func = func.upgrade()?;
-            let plain = cached.scope.is_none()
-                && cached.called.is_none()
-                && matches!(func.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
+            let func = callee_at(frame, init)?;
+            let plain = matches!(func.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
                 && argc <= func.params.len()
                 && argc >= func.required as usize
-                && func.flags & (flags::CLOSURE | flags::STATIC) == 0
+                && func.flags & flags::CLOSURE == 0
                 && func.uses.is_empty()
-                && func.class_name.is_none()
                 && func.hook_prop.is_none()
                 && func.code.try_table.is_empty()
                 && func.code.ops.len() <= typed::INLINE_OPS;
@@ -1074,32 +1066,90 @@ fn const_at(f: &Frame, at: usize) -> Option<Value> {
     }
 }
 
-/// For a typed loop's entry: whether the function-name literal `name` of
+/// The user function the call started by the op at `init` of frame `f`'s
+/// code calls now, by the caches the interpreter's own fast paths read
+/// (`calls::prepare_fcall`, `Vm::static_call_hit`, `calls::prepare_method`): a
+/// function by a name that cannot be a namespaced one's; a static method
+/// of a class named in the code; a method, by name, of the object a
+/// variable or `$this` holds, for that object's class and the calling
+/// scope. `None` when the cache has no such entry (the call has not run,
+/// or runs through `__call`, or the object is of another class than last
+/// time).
+fn callee_at(f: &Frame, init: usize) -> Option<std::rc::Rc<crate::func::UserFunction>> {
+    use crate::func::flags;
+    use crate::opcode::CachedFuncKind;
+    let user = |cached: &crate::opcode::CachedFunc| match &cached.func {
+        CachedFuncKind::User(weak) => weak.upgrade(),
+        CachedFuncKind::Builtin(_) => None,
+    };
+    match *f.code.ops.get(init)? {
+        Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } => {
+            let cache = f.code.fcall_cache.try_borrow().ok()?;
+            let cached = cache.get(name as usize)?.as_ref()?;
+            let func = user(cached)?;
+            (cached.scope.is_none()
+                && cached.called.is_none()
+                && func.class_name.is_none()
+                && func.flags & flags::STATIC == 0)
+                .then_some(func)
+        }
+        Op::InitStaticCall {
+            ref class,
+            name: Operand::Lit(name),
+        } => crate::rtcache::static_call_user_in(f, class, name),
+        Op::InitMethodCall {
+            obj,
+            name: Operand::Lit(lit),
+        } => {
+            let object = match obj {
+                Operand::Cv(cv) => match f.cvs.get(cv as usize)?.get()? {
+                    Value::Object(object) => object,
+                    _ => return None,
+                },
+                Operand::Unused => f.this.as_ref()?,
+                _ => return None,
+            };
+            let class = crate::object::class_of(object);
+            if class.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+                return None;
+            }
+            let scope = f
+                .scope
+                .as_ref()
+                .map_or(0, |s| std::rc::Rc::as_ptr(s) as usize);
+            let cache = f.code.method_cache.try_borrow().ok()?;
+            let cached = cache.get(init)?.as_ref()?;
+            if cached.class_addr != std::rc::Rc::as_ptr(class) as usize
+                || cached.scope_addr != scope
+                || cached.name_lit != Some(lit)
+            {
+                return None;
+            }
+            user(&cached.func)
+        }
+        _ => None,
+    }
+}
+
+/// For a typed loop: whether the call started by the op at `init` of
 /// frame `f`'s code still calls the user function at address `func` (the
 /// one the loop runs inline, kept alive since), and calls are not
-/// observed.
+/// observed. For a function's or a static method's call, at the loop's
+/// entry; for a method's, at each call.
 ///
 /// # Safety
 /// `f` is the current frame.
-pub(super) unsafe extern "C" fn user_is(f: *mut Frame, name: usize, func: usize) -> usize {
+pub(super) unsafe extern "C" fn user_is(f: *mut Frame, init: usize, func: usize) -> usize {
     if crate::jit::calls_are_observed() {
         return 0;
     }
     // SAFETY: the caller's contract.
     let f = unsafe { &*f };
-    let Ok(cache) = f.code.fcall_cache.try_borrow() else {
-        return 0;
-    };
-    let same = match cache.get(name).and_then(Option::as_ref) {
-        Some(cached) => match &cached.func {
-            crate::opcode::CachedFuncKind::User(weak) => {
-                weak.as_ptr() as usize == func && cached.scope.is_none()
-            }
-            crate::opcode::CachedFuncKind::Builtin(_) => false,
-        },
-        None => false,
-    };
-    usize::from(same)
+    usize::from(callee_at(f, init).is_some_and(|now| std::rc::Rc::as_ptr(&now) as usize == func))
 }
 
 /// For a typed loop's entry: whether the constant the op at `at` reads
