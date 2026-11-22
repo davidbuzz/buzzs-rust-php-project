@@ -158,6 +158,8 @@ fn regenerate() {
         let o = Command::new("/usr/bin/php8.5")
             .args([
                 "-n",
+                "-d",
+                "memory_limit=1G",
                 "-l",
                 "-d",
                 if short {

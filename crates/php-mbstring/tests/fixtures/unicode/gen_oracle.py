@@ -75,7 +75,7 @@ def run_phpt(name: str, workdir: Path, log: Path) -> None:
     # Prepend the prelude without disturbing line structure of the test.
     code = re.sub(r"^\s*<\?php", "", code, count=1)
     script.write_text(prelude + "\n" + code, encoding="latin-1")
-    args = [PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0"]
+    args = [PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0"]
     for ini in sec.get("INI", "").splitlines():
         if ini.strip():
             args += ["-d", ini.strip()]
@@ -97,7 +97,7 @@ def canonical_names() -> dict:
         'foreach (mb_list_encodings() as $e) { $n = [$e, mb_preferred_mime_name($e) ?: $e];'
         ' foreach (array_merge($n, mb_encoding_aliases($e)) as $a) echo strtolower($a), "\\t", $e, "\\n"; }'
     )
-    res = subprocess.run([PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0", "-r", code],
+    res = subprocess.run([PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0", "-r", code],
                          capture_output=True, text=True, check=True)
     names = {}
     for line in res.stdout.splitlines():
@@ -154,7 +154,7 @@ def main() -> None:
     print(f"phpt.tsv: {len(uniq)} lines")
     env = dict(os.environ)
     with open(HERE / "fuzz.tsv", "w") as f:
-        subprocess.run([PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0",
+        subprocess.run([PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0",
                         str(HERE / "fuzz.php")], stdout=f, check=True, env=env)
     print("fuzz.tsv written")
 

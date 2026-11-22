@@ -514,6 +514,7 @@ fn oracle() {
 fn regenerate_oracle() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle/gen_oracle.php");
     let status = std::process::Command::new("/usr/bin/php8.5")
+        .args(["-d", "memory_limit=1G"])
         .arg(script)
         .status()
         .expect("run php");

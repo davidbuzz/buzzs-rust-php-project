@@ -550,7 +550,16 @@ fn regenerate() {
     for s in SNIPPETS {
         std::fs::write(&tmp, format!("<?php {s}")).unwrap();
         let o = Command::new("/usr/bin/php8.5")
-            .args(["-n", "-l", "-d", "display_errors=1", "-d", "log_errors=0"])
+            .args([
+                "-n",
+                "-d",
+                "memory_limit=1G",
+                "-l",
+                "-d",
+                "display_errors=1",
+                "-d",
+                "log_errors=0",
+            ])
             .arg(&tmp)
             .output()
             .unwrap();

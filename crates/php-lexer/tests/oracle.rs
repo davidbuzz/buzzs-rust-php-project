@@ -149,6 +149,7 @@ foreach ($argv as $path) {
         paths.push(p);
     }
     let out = Command::new("/usr/bin/php8.5")
+        .args(["-d", "memory_limit=1G"])
         .arg("-d")
         .arg("short_open_tag=0")
         .arg("-d")

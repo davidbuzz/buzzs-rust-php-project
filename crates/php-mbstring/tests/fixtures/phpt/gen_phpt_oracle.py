@@ -67,7 +67,7 @@ def main():
             if log.exists():
                 log.unlink()
             log.touch()
-            args = [PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=-1", "-d", "display_errors=0", "-d", "memory_limit=512M"]
+            args = [PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=-1", "-d", "display_errors=0", "-d", "memory_limit=1G"]
             inis = []
             for ini in sec.get("INI", "").splitlines():
                 if "=" in ini and ini.strip():

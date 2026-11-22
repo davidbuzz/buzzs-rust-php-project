@@ -486,7 +486,15 @@ pub fn regenerate(name: &str, cases: &[Case]) {
     }
     std::fs::write(&exprs, list).expect("write exprs");
     let out = Command::new("/usr/bin/php8.5")
-        .args(["-n", "-d", "error_reporting=-1", "-d", "display_errors=1"])
+        .args([
+            "-n",
+            "-d",
+            "memory_limit=1G",
+            "-d",
+            "error_reporting=-1",
+            "-d",
+            "display_errors=1",
+        ])
         .arg(&driver)
         .arg(&exprs)
         .output()

@@ -880,6 +880,7 @@ fn oracle_cases() {
 fn regenerate_oracle() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
     let out = std::process::Command::new("/usr/bin/php8.5")
+        .args(["-d", "memory_limit=1G"])
         .arg(format!("{dir}/gen_oracle.php"))
         .output()
         .expect("run php");

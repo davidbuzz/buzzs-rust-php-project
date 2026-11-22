@@ -328,7 +328,15 @@ fn regenerate() {
         );
         std::fs::write(&tmp, script).unwrap();
         let o = Command::new("/usr/bin/php8.5")
-            .args(["-n", "-d", "zend.assertions=1", "-d", "display_errors=1"])
+            .args([
+                "-n",
+                "-d",
+                "memory_limit=1G",
+                "-d",
+                "zend.assertions=1",
+                "-d",
+                "display_errors=1",
+            ])
             .arg(&tmp)
             .output()
             .unwrap();
