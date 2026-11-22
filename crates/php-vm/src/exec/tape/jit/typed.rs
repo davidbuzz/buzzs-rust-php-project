@@ -2271,9 +2271,29 @@ impl<'a> Analysis<'a> {
             // first element has now.
             TOp::FetchDimC | TOp::FetchDimIC => {
                 let array = array(self)?;
-                let float = self.element_float(inst.a, 1)?;
                 let index = self.dim(st, &mut call, inst.k & 7, inst.b)?;
-                call.fast = index.map(|index| Fast::Get { array, index });
+                // Under a string literal's key (a row's field): the type
+                // that key holds now, and its own short cut.
+                let keyed = if inst.k & 7 == DIM_LIT
+                    && matches!(self.lits.get(inst.b as usize), Some(Value::Str(_)))
+                {
+                    (self.seen.keyed)(inst.a, inst.b)
+                } else {
+                    None
+                };
+                let float = match keyed {
+                    Some(ty @ (Ty::Int | Ty::Float)) => {
+                        call.fast = Some(Fast::GetKey {
+                            cv: inst.a,
+                            lit: inst.b,
+                        });
+                        ty == Ty::Float
+                    }
+                    _ => {
+                        call.fast = index.map(|index| Fast::Get { array, index });
+                        self.element_float(inst.a, 1)?
+                    }
+                };
                 let dst = u32::try_from(inst.p).ok()?;
                 self.fetched(st, &mut call, i, inst.d, dst, float)?;
             }

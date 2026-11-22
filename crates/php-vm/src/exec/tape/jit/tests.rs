@@ -1440,3 +1440,26 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn fields_of_rows_are_read_by_the_string_key_short_cut() {
+    // Rows of one shape; rows whose field is a float, a numeric string,
+    // in another order, missing, an array; a row that is a string or
+    // null; a key that is an int written as a string.
+    three(
+        r#"<?php
+function r1($rows) { $s = 0; foreach ($rows as $row) { $s += $row['a'] + $row['b'] * 2; } return $s; }
+function r2($rows) { $s = 0.0; foreach ($rows as $i => $row) { $s += $row['f'] * $i; if ($row['a'] > 5) { $s += 1; } } return $s; }
+function r3($cfg, $n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $cfg['step'] + ($cfg['scale'] > 1.0 ? 2 : 3) + $cfg['12'] + $cfg[12]; } return $s; }
+function r4($rows) { $s = 0; foreach ($rows as $row) { $s += $row['a'] + ($row['opt'] ?? 7) + (isset($row['b']) ? 1 : 0); } return $s; }
+function r5($rows) { $s = 0; foreach ($rows as $k => $row) { try { $s += $row['a']; } catch (TypeError $e) { $s += 1000; } } return $s; }
+function r6($rows) { $s = 0; foreach ($rows as $row) { $s += @$row['missing'] + $row['a']; } return $s; }
+$rows = []; for ($i = 0; $i < 40; $i++) { $rows[] = ['a' => $i, 'b' => $i * 2, 'f' => $i / 4]; }
+$odd = $rows; $odd[7]['a'] = 2.5; $odd[9]['a'] = '11'; $odd[11] = ['b' => 1, 'f' => 0.0, 'a' => 3]; $odd[13]['opt'] = 100; unset($odd[15]['b']);
+$bad = $rows; $bad[20]['a'] = [1]; $bad[21] = 'str'; $bad[22] = null;
+$cfg = ['step' => 3, 'scale' => 1.5, 12 => 5, 'x' => 'y'];
+foreach ([1, 2] as $round) { var_export([r1($rows), r2($rows), r3($cfg, 40), r4($rows), r1($odd), r2($odd), r4($odd), r6($rows), r1([]), r1([['a' => 1, 'b' => 2]])]); try { var_export(r5($bad)); var_export(r1($bad)); } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; } }
+echo "\n";
+"#,
+    );
+}
