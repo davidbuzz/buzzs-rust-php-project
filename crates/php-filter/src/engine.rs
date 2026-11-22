@@ -125,6 +125,8 @@ struct Engine<'h, H: FilterHost + ?Sized> {
     /// Addresses of the references whose arrays are being filtered
     /// (`Z_PROTECT_RECURSION`).
     guard: Vec<usize>,
+    /// Nesting of `php_zval_filter_recursive` (for the stack limit).
+    depth: usize,
 }
 
 fn sv(v: Vec<u8>) -> Value {
@@ -275,6 +277,23 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
         flags: i64,
         options: Option<&Value>,
     ) -> RtResult<ZArray> {
+        if let Some(e) = self.host.stack_overflowed(self.depth) {
+            return Err(e);
+        }
+        self.depth += 1;
+        let r = self.filter_array_elements(&mut arr, filter, flags, options);
+        self.depth -= 1;
+        r.map(|()| arr)
+    }
+
+    /// The loop of [`Self::filter_array`] (`ZEND_HASH_FOREACH_VAL`).
+    fn filter_array_elements(
+        &mut self,
+        arr: &mut ZArray,
+        filter: i64,
+        flags: i64,
+        options: Option<&Value>,
+    ) -> RtResult<()> {
         let table = arr.make_mut();
         for (_, slot) in table.iter_mut() {
             match slot {
@@ -304,7 +323,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
                 }
             }
         }
-        Ok(arr)
+        Ok(())
     }
 
     /// `php_filter_call`. `filter` is `None` for the "array apply" mode
@@ -460,6 +479,7 @@ fn engine<H: FilterHost + ?Sized>(host: &mut H, func: FilterFunction) -> Engine<
         host,
         func,
         guard: Vec::new(),
+        depth: 0,
     }
 }
 

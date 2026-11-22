@@ -278,6 +278,10 @@ fn posix_mknod(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn posix_access(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = a.str(0);
+    // `zend_argument_must_not_be_empty_error(1)` (php-src master).
+    if path.is_empty() {
+        return Err(a.value_error(vm, 1, "must not be empty"));
+    }
     let r = with(|p| p.access(path.as_bytes(), a.int(1)));
     true_on_ok(vm, a, r)
 }

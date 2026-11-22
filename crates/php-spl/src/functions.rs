@@ -373,7 +373,7 @@ fn autoload_register(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> 
     if !do_throw {
         host.diagnostic(
             ErrorLevel::Notice,
-            "spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw",
+            "spl_autoload_register(): Argument #2 ($throw) has been ignored, spl_autoload_register() will always throw",
         )?;
     }
     if !cb.is_null() && callable_identity(host, &cb) == b"spl_autoload_call" {

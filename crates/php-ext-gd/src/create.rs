@@ -43,10 +43,18 @@ fn imagetypes(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn size_args(vm: &mut Vm, a: &Args) -> VmResult<(i32, i32)> {
     let (x, y) = (a.int(0), a.int(1));
     if x <= 0 || x >= INT_MAX {
-        return Err(a.value_error(vm, 1, "must be greater than 0"));
+        return Err(a.value_error(
+            vm,
+            1,
+            &format!("must be greater than 0 and less than {INT_MAX}"),
+        ));
     }
     if y <= 0 || y >= INT_MAX {
-        return Err(a.value_error(vm, 2, "must be greater than 0"));
+        return Err(a.value_error(
+            vm,
+            2,
+            &format!("must be greater than 0 and less than {INT_MAX}"),
+        ));
     }
     Ok((ci(x), ci(y)))
 }
@@ -294,7 +302,7 @@ fn imagejpeg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let quality = a.int(2);
     if !(-1..=100).contains(&quality) {
         sink.discard(vm)?;
-        return Err(a.value_error(vm, 3, "must be at between -1 and 100"));
+        return Err(a.value_error(vm, 3, "must be between -1 and 100"));
     }
     emit(vm, sink, &im, &Encoder::Jpeg(ci(quality)))
 }

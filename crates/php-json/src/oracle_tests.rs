@@ -33,6 +33,11 @@ fn num(s: &str) -> i64 {
 }
 
 fn msg_matches(ours: &str, php83: &str) -> bool {
+    // php-src master words the depth limit "less than or equal to".
+    let php83 = php83.replace(
+        "($depth) must be less than 2147483647",
+        "($depth) must be less than or equal to 2147483647",
+    );
     ours == php83 || ours.starts_with(&format!("{php83} near location "))
 }
 

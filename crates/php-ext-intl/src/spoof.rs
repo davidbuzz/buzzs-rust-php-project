@@ -126,6 +126,13 @@ fn set_restriction_level(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// `Spoofchecker::getRestrictionLevel()`: `uspoof_getRestrictionLevel()`.
+fn get_restriction_level(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = fetch(vm, a)?;
+    let level = core::with::<Spoofchecker, _>(&o, |c| c.restriction_level()).unwrap_or(0);
+    Ok(Value::Int(i64::from(level)))
+}
+
 fn set_allowed_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
     let p = a.str(0);
@@ -195,6 +202,7 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("Spoofchecker::setAllowedLocales", set_allowed_locales),
         ("Spoofchecker::setChecks", set_checks),
         ("Spoofchecker::setRestrictionLevel", set_restriction_level),
+        ("Spoofchecker::getRestrictionLevel", get_restriction_level),
         ("Spoofchecker::setAllowedChars", set_allowed_chars),
         ("Spoofchecker::getSkeleton", get_skeleton),
         ("Spoofchecker::getBidiSkeleton", get_bidi_skeleton),

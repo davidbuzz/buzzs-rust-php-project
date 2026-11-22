@@ -127,6 +127,11 @@ fn get_locale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     run(vm, a, |c| c.locale(ty), s)
 }
 
+/// `Collator::getRules()` / `collator_get_rules()`.
+fn get_rules(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    run(vm, a, |c| c.rules(), s)
+}
+
 fn get_sort_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let off = usize::from(a.this.is_none());
     let x = a.str(off);
@@ -271,6 +276,7 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("Collator::getStrength", get_strength),
         ("Collator::setStrength", set_strength),
         ("Collator::getLocale", get_locale),
+        ("Collator::getRules", get_rules),
         ("Collator::getErrorCode", core::get_error_code),
         ("Collator::getErrorMessage", core::get_error_message),
         ("Collator::getSortKey", get_sort_key),

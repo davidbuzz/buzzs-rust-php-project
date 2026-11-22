@@ -130,6 +130,16 @@ fn match_config(vm: &Vm) -> MatchConfig {
 }
 
 impl FilterHost for VmFilterHost<'_> {
+    fn stack_overflowed(&mut self, depth: usize) -> Option<RuntimeError> {
+        // About 512 bytes of C stack a level: `php_zval_filter_recursive`
+        // with `php_zval_filter` inlined.
+        if depth < self.vm.native_recursion_limit(512) {
+            return None;
+        }
+        let t = self.vm.stack_size_error();
+        Some(to_rt(self.vm, t))
+    }
+
     fn regex_match(&mut self, pattern: &ZStr, subject: &[u8]) -> RtResult<Option<bool>> {
         let (compiled, warnings) = PCRE.with(|p| {
             let mut p = p.borrow_mut();

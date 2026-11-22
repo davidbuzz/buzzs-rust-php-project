@@ -362,10 +362,7 @@ pub fn add_errors(v: &mut Value, e: &Errors) {
     let list = |msgs: &[crate::parse::Message]| {
         let mut a = Value::assoc();
         for m in msgs {
-            a.set_index(
-                i64::try_from(m.position).unwrap_or(0),
-                Value::Str(m.message.to_string()),
-            );
+            a.set_index(m.position, Value::Str(m.message.to_string()));
         }
         a
     };
@@ -1680,6 +1677,20 @@ mod tests {
         assert_eq!(
             parse_failure_message(b"foo", &e),
             b"Failed to parse time string (foo) at position 0 (f): The timezone could not be found in the database".to_vec()
+        );
+    }
+
+    #[test]
+    fn errors_stop_after_sixteen() {
+        // TIMELIB_MAX_ERRORS: 16 errors are kept, then one entry at -1.
+        let (_, errors) = parse_strtotime(&[1u8; 40]);
+        assert_eq!(errors.errors.len(), 17);
+        assert!(errors.errors[..16].iter().all(|m| m.position >= 0));
+        let last = &errors.errors[16];
+        assert_eq!(last.position, -1);
+        assert_eq!(
+            last.message,
+            "There are more than 16 errors, which are not returned"
         );
     }
 

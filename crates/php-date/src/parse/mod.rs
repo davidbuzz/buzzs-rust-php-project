@@ -25,6 +25,8 @@ pub use zone::{parse_timezone_spec, TimezoneSpec};
 #[allow(missing_docs)]
 pub mod code {
     pub const WARN_DOUBLE_TZ: u32 = 0x101;
+    pub const WARN_TOO_MANY_WARNINGS: u32 = 0x1ff;
+    pub const ERR_TOO_MANY_ERRORS: u32 = 0x2ff;
     pub const WARN_INVALID_TIME: u32 = 0x102;
     pub const WARN_INVALID_DATE: u32 = 0x103;
     pub const WARN_TRAILING_DATA: u32 = 0x11a;
@@ -68,15 +70,18 @@ pub mod code {
     pub const ERR_NUMBER_OUT_OF_RANGE: u32 = 0x226;
 }
 
-const MAX_ERRORS: usize = 1000;
+/// `TIMELIB_MAX_ERRORS`: the errors (and the warnings) a parse keeps; the
+/// next one is replaced by a single "too many" entry at position -1.
+const MAX_ERRORS: usize = 16;
 
 /// One parse error or warning (`timelib_error_message`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     /// timelib error code (see [`code`]).
     pub code: u32,
-    /// Byte position in the (whitespace-trimmed) input.
-    pub position: usize,
+    /// Byte position in the (whitespace-trimmed) input; -1 for the entry
+    /// that says more were dropped.
+    pub position: i64,
     /// The byte at that position (0 past the end).
     pub character: u8,
     /// The message text, e.g. `"Unexpected character"`.
@@ -92,7 +97,25 @@ pub struct Errors {
     pub errors: Vec<Message>,
 }
 
+/// timelib's cap on messages (`TIMELIB_MAX_ERRORS`): once `MAX_ERRORS`
+/// are kept, the next one becomes the `too_many` entry (position -1) and
+/// the rest are dropped.
+fn push_capped(list: &mut Vec<Message>, m: Message, too_many: u32, text: &'static str) {
+    if list.len() == MAX_ERRORS {
+        list.push(Message {
+            code: too_many,
+            position: -1,
+            character: 0,
+            message: text,
+        });
+    }
+    if list.len() < MAX_ERRORS {
+        list.push(m);
+    }
+}
+
 impl Errors {
+    /// `add_error()` (and `add_pbf_error()`).
     pub(crate) fn add_error(
         &mut self,
         code: u32,
@@ -100,16 +123,20 @@ impl Errors {
         character: u8,
         message: &'static str,
     ) {
-        if self.errors.len() < MAX_ERRORS {
-            self.errors.push(Message {
+        push_capped(
+            &mut self.errors,
+            Message {
                 code,
-                position,
+                position: i64::try_from(position).unwrap_or(i64::MAX),
                 character,
                 message,
-            });
-        }
+            },
+            code::ERR_TOO_MANY_ERRORS,
+            "There are more than 16 errors, which are not returned",
+        );
     }
 
+    /// `add_warning()` (and `add_pbf_warning()`).
     pub(crate) fn add_warning(
         &mut self,
         code: u32,
@@ -117,14 +144,17 @@ impl Errors {
         character: u8,
         message: &'static str,
     ) {
-        if self.warnings.len() < MAX_ERRORS {
-            self.warnings.push(Message {
+        push_capped(
+            &mut self.warnings,
+            Message {
                 code,
-                position,
+                position: i64::try_from(position).unwrap_or(i64::MAX),
                 character,
                 message,
-            });
-        }
+            },
+            code::WARN_TOO_MANY_WARNINGS,
+            "There are more than 16 warnings, which are not returned",
+        );
     }
 
     /// Whether there are neither errors nor warnings.

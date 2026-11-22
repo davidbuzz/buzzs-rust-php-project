@@ -319,8 +319,9 @@ impl OnigError {
 pub struct MatchLimits {
     /// `onig_set_match_stack_limit_size_of_match_param` (0 = unlimited).
     pub stack: Option<u32>,
-    /// `onig_set_retry_limit_in_match_of_match_param` (0 = unlimited).
-    pub retry: Option<u32>,
+    /// `onig_set_retry_limit_in_match_of_match_param` (0 = unlimited): an
+    /// `unsigned long`.
+    pub retry: Option<std::ffi::c_ulong>,
 }
 
 /// Match registers: `(beg, end)` byte offsets per group, `None` for a
@@ -343,7 +344,7 @@ impl MatchParam {
                 ffi::onig_set_match_stack_limit_size_of_match_param(mp.as_ptr(), n);
             }
             if let Some(n) = limits.retry {
-                ffi::onig_set_retry_limit_in_match_of_match_param(mp.as_ptr(), n.into());
+                ffi::onig_set_retry_limit_in_match_of_match_param(mp.as_ptr(), n);
             }
         }
         Ok(Self(mp))

@@ -338,7 +338,7 @@ fn argument_errors() {
     );
     assert_eq!(
         err(json_decode(&mut state, &mut h, b"[]", None, 1 << 31, 0)),
-        "json_decode(): Argument #3 ($depth) must be less than 2147483647"
+        "json_decode(): Argument #3 ($depth) must be less than or equal to 2147483647"
     );
     assert_eq!(
         err(json_encode(&mut state, &mut h, &Value::Null, 0, 1 << 31)),

@@ -102,6 +102,15 @@ pub trait FilterHost: RuntimeContext {
         RuntimeError::Error(message)
     }
 
+    /// `zend_call_stack_overflowed()` in `php_zval_filter_recursive` at a
+    /// nesting of `depth` arrays: the error to throw
+    /// (`zend_call_stack_size_error()`), if the C stack would be exhausted.
+    /// The default never overflows.
+    fn stack_overflowed(&mut self, depth: usize) -> Option<RuntimeError> {
+        let _ = depth;
+        None
+    }
+
     /// Parses `uri` with the ext/uri parser registered as `parser` (for the
     /// `uri_parser_class` option of `FILTER_VALIDATE_URL`; the built-in
     /// `"parse_url"` parser never reaches the host). The default knows no
