@@ -8,7 +8,7 @@ The TODO list for the Rust port of PHP: everything that has to be built to pass 
 - **out**: out of scope and excluded from all pass rates: non-CLI SAPIs except apache2handler, php-cgi and FPM, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap.
 - **Opcache**: in scope; its tests run and count in the pass rates.
 - **Host-environment failures** listed in `phpt-environment.txt` (C PHP fails them identically on this machine) count as passing.
-- **Test counts** in parentheses are `.phpt` files in `modules/php-src/` at commit `0c7255dc521` (23,792 in the tree).
+- **Test counts** in parentheses are `.phpt` files in `modules/php-src/` at commit `0c7255dc521` (23,792 in the tree); the tree moved to `6e4c78a1723` (21 Nov 2026, 23,999) on 22 Nov, and the counts are refreshed with the next full run.
 
 | Item | % | Pri | Description |
 |---|---|---|---|
