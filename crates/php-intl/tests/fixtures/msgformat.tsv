@@ -1681,29 +1681,29 @@ s:named	s:ru_RU	s:{a} {b} {a}	a:{"name":"Cid","count":7,"gender":"x","n":"999999
 s:named	s:ru_RU	s:{x, plural, offset:2 other{# (#)}}	a:{"name":"Ann","count":0,"gender":"female","place":"Paris","n":12345,"d":0,"t":3600,"a":"A","b":"B","x":5}	s:3 (3)
 s:named	s:ru_RU	s:{x, plural, offset:2 other{# (#)}}	a:{"name":"Bob","count":1,"gender":"male","place":"Rome","n":2.7,"d":1341100800,"t":1341100800.5,"a":1.5,"b":true,"x":1.5}	s:-0,5 (-0,5)
 s:named	s:ru_RU	s:{x, plural, offset:2 other{# (#)}}	a:{"name":"Cid","count":7,"gender":"x","n":"9999999999999","d":"86400","t":-1,"x":-3}	s:-5 (-5)
-s:bad	s:{0	s:!U_ZERO_ERROR	s:Creating message formatter failed: U_ZERO_ERROR
+s:bad	s:{0	s:!U_ZERO_ERROR	s:MessageFormatter::formatMessage(): Creating message formatter failed: U_ZERO_ERROR
 s:badctor	s:{0	s:!IntlException
-s:bad	s:{0,foo}	s:!U_UNMATCHED_BRACES	s:Creating message formatter failed: U_UNMATCHED_BRACES
+s:bad	s:{0,foo}	s:!U_UNMATCHED_BRACES	s:MessageFormatter::formatMessage(): Creating message formatter failed: U_UNMATCHED_BRACES
 s:badctor	s:{0,foo}	s:!IntlException
-s:bad	s:{0,choice}	s:!U_PATTERN_SYNTAX_ERROR	s:pattern syntax error (parse error at offset 1, after "{", before or at "0,choice}"): U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,choice}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): pattern syntax error (parse error at offset 1, after "{", before or at "0,choice}"): U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,choice}	s:!IntlException
-s:bad	s:{0,plural,one{x}}	s:!U_PATTERN_SYNTAX_ERROR	s:Creating message formatter failed: U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,plural,one{x}}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): Creating message formatter failed: U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,plural,one{x}}	s:!IntlException
-s:bad	s:{0,number} {0,date}	s:!U_DEFAULT_KEYWORD_MISSING	s:Creating message formatter failed: U_DEFAULT_KEYWORD_MISSING
+s:bad	s:{0,number} {0,date}	s:!U_DEFAULT_KEYWORD_MISSING	s:MessageFormatter::formatMessage(): Creating message formatter failed: U_DEFAULT_KEYWORD_MISSING
 s:badctor	s:{0,number} {0,date}	s:!IntlException
-s:bad	s:{0,date,'unterminated}	s:!U_PATTERN_SYNTAX_ERROR	s:pattern syntax error (parse error at offset 8, after "{0,date,", before or at "'unterminated}"): U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,date,'unterminated}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): pattern syntax error (parse error at offset 8, after "{0,date,", before or at "'unterminated}"): U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,date,'unterminated}	s:!IntlException
-s:bad	s:{a}{0}	s:{a}1	s:pattern syntax error (parse error at offset 8, after "{0,date,", before or at "'unterminated}"): U_ZERO_ERROR
+s:bad	s:{a}{0}	s:{a}1	s:MessageFormatter::__construct(): pattern syntax error (parse error at offset 8, after "{0,date,", before or at "'unterminated}"): U_ZERO_ERROR
 s:badctor	s:{a}{0}	s:MessageFormatter
-s:bad	s:{0,select,a{b}	s:!U_PATTERN_SYNTAX_ERROR	s:pattern syntax error (parse error at offset 10, after "{0,select,", before or at "a{b}"): U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,select,a{b}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): pattern syntax error (parse error at offset 10, after "{0,select,", before or at "a{b}"): U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,select,a{b}	s:!IntlException
-s:bad	s:{ 0 }	s:1	s:pattern syntax error (parse error at offset 10, after "{0,select,", before or at "a{b}"): U_ZERO_ERROR
+s:bad	s:{ 0 }	s:1	s:MessageFormatter::__construct(): pattern syntax error (parse error at offset 10, after "{0,select,", before or at "a{b}"): U_ZERO_ERROR
 s:badctor	s:{ 0 }	s:MessageFormatter
-s:bad	s:{0,number,#,##,,0}	s:!U_PATTERN_SYNTAX_ERROR	s:pattern syntax error (parse error at offset 0): U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,number,#,##,,0}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): pattern syntax error (parse error at offset 0): U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,number,#,##,,0}	s:!IntlException
-s:bad	s:}	s:}	s:pattern syntax error (parse error at offset 0): U_ZERO_ERROR
+s:bad	s:}	s:}	s:MessageFormatter::__construct(): pattern syntax error (parse error at offset 0): U_ZERO_ERROR
 s:badctor	s:}	s:MessageFormatter
-s:bad	s:{0,plural,=x{a} other{b}}	s:!U_PATTERN_SYNTAX_ERROR	s:pattern syntax error (parse error at offset 10, after "{0,plural,", before or at "=x{a} other{b}}"): U_PATTERN_SYNTAX_ERROR
+s:bad	s:{0,plural,=x{a} other{b}}	s:!U_PATTERN_SYNTAX_ERROR	s:MessageFormatter::formatMessage(): pattern syntax error (parse error at offset 10, after "{0,plural,", before or at "=x{a} other{b}}"): U_PATTERN_SYNTAX_ERROR
 s:badctor	s:{0,plural,=x{a} other{b}}	s:!IntlException
 s:parse	s:{0} has {1,number} apples	s:Bob has 1,234.5 apples	a:["Bob",1234.5]
 s:parse	s:{0} has {1,number} apples	s:Bob has apples	s:!U_MESSAGE_PARSE_ERROR

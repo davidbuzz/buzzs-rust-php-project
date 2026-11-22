@@ -32,7 +32,7 @@ struct PackRecorder<'a> {
 }
 
 impl PackValue for PackRecorder<'_> {
-    fn to_long(&self) -> i64 {
+    fn to_long(&self, _notices: &mut Notices) -> i64 {
         self.log.borrow_mut().push((self.idx, Conv::Long));
         0
     }
@@ -55,7 +55,8 @@ struct PackConverted {
 }
 
 impl PackValue for PackConverted {
-    fn to_long(&self) -> i64 {
+    // The VM converted the value, with its diagnostics, in the first pass.
+    fn to_long(&self, _notices: &mut Notices) -> i64 {
         self.long
     }
     fn to_double(&self) -> f64 {

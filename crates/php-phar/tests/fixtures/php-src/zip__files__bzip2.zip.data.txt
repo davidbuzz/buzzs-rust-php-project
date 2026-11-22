@@ -1,1 +1,9 @@
-EXCEPTION UnexpectedValueException: phar error: bzip2 extension is required in zip-based phar "%DIR%/zip/files/bzip2.zip"
+version: 
+alias: '%DIR%/zip/files/bzip2.zip'
+count: 1
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry corrupt2.php.inc dir=0 size=2932 perms=100666 mtime=1208585892 csize=421 gz=0 bz2=1 flags=0 crc=- meta=NONE md5=b4bb6d0d72d996bb5fb1b4e5bb03aab0

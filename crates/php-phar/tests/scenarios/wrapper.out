@@ -82,13 +82,13 @@ bool(false)
 > fn file_put_contents u:w.phar/.phar/x s:no
 int(2)
 > fn file_put_contents u:w.phar s:no
-W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" cannot be empty
+W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" must not be empty
 bool(false)
 > fn file_get_contents u:nophar.phar/a
 W: Failed to open stream: phar error: invalid url or non-existent phar "phar://%W%/nophar.phar/a"
 bool(false)
 > fn file_get_contents u:w.phar
-W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" cannot be empty
+W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" must not be empty
 bool(false)
 > fn scandir u:w.phar
 array(int(0)=>string(4) "dir2")

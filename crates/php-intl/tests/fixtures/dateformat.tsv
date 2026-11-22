@@ -3911,7 +3911,7 @@ s:strict	s:2012-02-30 12:00:00	s:!U_PARSE_ERROR
 s:strict	s:2012-7-1 12:00:00	i:1341144000
 s:roundtrip	s:en_US	s:MMMM d, y h:mm a	s:July 1, 2012 1:00 AM	i:1341100800	i:20
 s:roundtrip	s:de_DE	s:d. MMMM y HH:mm	s:1. Juli 2012 01:00	i:1341100800	i:18
-s:roundtrip	s:ja_JP	s:y年M月d日 H時m分	s:2012年7月1日 1時0分	i:1341100800	i:14
+s:roundtrip	s:ja_JP	s:y年M月d日 H時m分	s:2012年7月1日 1時0分	i:1341100800	i:24
 s:arr	a:{"tm_year":112,"tm_mon":6,"tm_mday":1,"tm_hour":12,"tm_min":30,"tm_sec":15}	s:Sunday, July 1, 2012 at 12:30:15 PM Coordinated Universal Time
 s:arr	a:{"tm_year":70}	s:Wednesday, December 31, 1969 at 12:00:00 AM Coordinated Universal Time
 s:arr	a:{"tm_mday":0}	s:Sunday, December 31, 1899 at 12:00:00 AM Coordinated Universal Time

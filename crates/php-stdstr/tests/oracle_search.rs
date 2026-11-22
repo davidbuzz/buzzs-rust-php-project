@@ -174,23 +174,23 @@ fn cases() -> Vec<Case> {
             Ok::<_, php_stdstr::StdError>(V::from(out))
         }));
     }
-    for c in &mut v {
-        // 8.3's php_strcspn() stopped at a NUL byte when $characters is
-        // empty; master's lookup-table version scans the whole window.
-        if c.php.starts_with("strcspn(\"x\\x00y\\x00z\", '', ") {
-            let rust = c.rust.clone();
-            *c = c.clone().expect(&rust);
-        }
-    }
     v
 }
 
+/// The 8.5 outcome as php-src master words it: master's `explode()` error
+/// adds a hint.
 fn master(_php: &str, out: &str) -> String {
-    out.replace(
-        "explode(): Argument #1 ($separator) cannot be empty",
-        "explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters",
-    )
-    .replace("cannot be empty", "must not be empty")
+    const SHORT: &str = "explode(): Argument #1 ($separator) must not be empty";
+    out.lines()
+        .map(|l| {
+            if l.ends_with(SHORT) {
+                format!("{l}, use str_split() to split a string into characters")
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]

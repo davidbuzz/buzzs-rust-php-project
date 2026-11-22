@@ -15,18 +15,18 @@ const NEWSTUB3_1: &[u8] = include_bytes!("stub/newstub3_1.txt");
 /// `newstub_len` in `stub.h`.
 const NEWSTUB_LEN: usize = 6641;
 
-/// The PHP 8.3 release-branch stub (differs from master in a few casts and
-/// an HTML typo fix). Only used through [`set_flavor`], for byte-exact
-/// comparisons against a PHP 8.3 binary.
-const PHP83: [&[u8]; 6] = [
-    include_bytes!("stub/php83/newstub0.txt"),
-    include_bytes!("stub/php83/newstub1_0.txt"),
-    include_bytes!("stub/php83/newstub1_1.txt"),
-    include_bytes!("stub/php83/newstub2.txt"),
-    include_bytes!("stub/php83/newstub3_0.txt"),
-    include_bytes!("stub/php83/newstub3_1.txt"),
+/// The release-branch stub, still the one PHP 8.5.12 writes (master adds a
+/// few casts and fixes an HTML typo). Only used through [`set_flavor`], for
+/// byte-exact comparisons against `/usr/bin/php8.5`.
+const RELEASE: [&[u8]; 6] = [
+    include_bytes!("stub/release/newstub0.txt"),
+    include_bytes!("stub/release/newstub1_0.txt"),
+    include_bytes!("stub/release/newstub1_1.txt"),
+    include_bytes!("stub/release/newstub2.txt"),
+    include_bytes!("stub/release/newstub3_0.txt"),
+    include_bytes!("stub/release/newstub3_1.txt"),
 ];
-const PHP83_LEN: usize = 6623;
+const RELEASE_LEN: usize = 6623;
 
 /// Which `stub.h` the default stub is generated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,8 +34,8 @@ pub enum Flavor {
     /// php-src master (the reference implementation).
     #[default]
     Master,
-    /// The PHP 8.3 branch (for oracle tests against `/usr/bin/php` 8.3).
-    Php83,
+    /// The release branches' (for oracle tests against `/usr/bin/php8.5`).
+    Release,
 }
 
 thread_local! {
@@ -74,7 +74,7 @@ pub fn create_default_stub(index: Option<&[u8]>, web: Option<&[u8]>) -> Result<V
             ],
             NEWSTUB_LEN,
         ),
-        Flavor::Php83 => (PHP83, PHP83_LEN),
+        Flavor::Release => (RELEASE, RELEASE_LEN),
     };
     let total = index.len() + 1 + web.len() + 1 + base;
     let mut out = Vec::with_capacity(total);
@@ -117,9 +117,10 @@ mod tests {
         assert!(e.contains("was 401 characters long"));
     }
 
+    /// `/usr/bin/php8.5` writes this stub (`const LEN = 6643;`).
     #[test]
-    fn php83_flavor() {
-        set_flavor(Flavor::Php83);
+    fn release_flavor() {
+        set_flavor(Flavor::Release);
         let s = create_default_stub(None, None).unwrap();
         set_flavor(Flavor::Master);
         assert_eq!(s.len(), 6641);

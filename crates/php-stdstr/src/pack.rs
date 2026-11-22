@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use crate::error::{ErrorKind, Notice, Notices, StdError, StdResult};
+use crate::error::{ErrorKind, Level, Notice, Notices, StdError, StdResult};
 
 const INT_MAX: i64 = i32::MAX as i64;
 
@@ -48,8 +48,9 @@ const INT_MAX: i64 = i32::MAX as i64;
 ///
 /// For a string code each argument is converted to a string at most once.
 pub trait PackValue {
-    /// `zval_get_long()`.
-    fn to_long(&self) -> i64;
+    /// `zval_get_long()`; a float that is not representable as an int
+    /// warns (`zend_dval_to_lval`), pushed to `notices`.
+    fn to_long(&self, notices: &mut Notices) -> i64;
     /// `zval_get_double()`.
     fn to_double(&self) -> f64;
     /// `zval_get_string()`.
@@ -153,6 +154,32 @@ fn numeric_prefix(s: &[u8]) -> Option<Result<i64, f64>> {
     text.parse::<f64>().ok().map(Err)
 }
 
+/// `%.*H` with precision -1 of a float outside the `i64` range: the
+/// shortest digits that round-trip, always in exponent form there
+/// (`|d| >= 2^63`), or `NAN`, `INF`, `-INF`.
+fn out_of_range_h(d: f64) -> String {
+    if d.is_nan() {
+        return "NAN".into();
+    }
+    if d.is_infinite() {
+        return if d > 0.0 { "INF".into() } else { "-INF".into() };
+    }
+    let e = format!("{:e}", d.abs());
+    let (mant, exp) = e.split_once('e').unwrap_or((&e, "0"));
+    let mant = if mant.contains('.') {
+        mant.to_string()
+    } else {
+        format!("{mant}.0")
+    };
+    let sign = if d < 0.0 { "-" } else { "" };
+    let exp: i32 = exp.parse().unwrap_or(0);
+    format!(
+        "{sign}{mant}E{}{}",
+        if exp < 0 { '-' } else { '+' },
+        exp.abs()
+    )
+}
+
 /// `%.*G` with `precision` significant digits, PHP style (`php_gcvt`).
 fn php_gcvt(d: f64, precision: usize) -> String {
     if d.is_nan() {
@@ -213,12 +240,26 @@ fn php_gcvt(d: f64, precision: usize) -> String {
 }
 
 impl PackValue for PackArg {
-    fn to_long(&self) -> i64 {
+    fn to_long(&self, notices: &mut Notices) -> i64 {
         match self {
             Self::Null => 0,
             Self::Bool(b) => i64::from(*b),
             Self::Int(i) => *i,
-            Self::Float(f) => dval_to_lval(*f),
+            Self::Float(f) => {
+                if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(f) {
+                    // `zend_oob_double_to_long_error` (`zend_error`: no
+                    // function prefix).
+                    notices.push(Notice {
+                        level: Level::Warning,
+                        func: None,
+                        message: format!(
+                            "The float {} is not representable as an int, cast occurred",
+                            out_of_range_h(*f)
+                        ),
+                    });
+                }
+                dval_to_lval(*f)
+            }
             Self::Str(s) => match numeric_prefix(s) {
                 None => 0,
                 Some(Ok(i)) => i,
@@ -274,16 +315,19 @@ fn ch(b: u8) -> char {
     char::from(b)
 }
 
-/// PHP formats messages into C strings, so a `%c` of NUL ends the text.
-fn c_msg(mut msg: String) -> String {
-    if let Some(n) = msg.find('\0') {
-        msg.truncate(n);
-    }
+/// A warning's text as php-src builds it: a `zend_string` (`php_verror`'s
+/// `"%s: %S"`), so a `%c` of NUL stays in it.
+fn c_msg(msg: String) -> String {
     msg
 }
 
-fn value_error(msg: String) -> StdError {
-    StdError::new(ErrorKind::ValueError, c_msg(msg))
+/// `zend_value_error()` formats into a C string, so a `%c` of NUL ends the
+/// exception's message.
+fn value_error(mut msg: String) -> StdError {
+    if let Some(n) = msg.find('\0') {
+        msg.truncate(n);
+    }
+    StdError::new(ErrorKind::ValueError, msg)
 }
 
 fn not_supported(code: u8) -> StdError {
@@ -565,7 +609,7 @@ pub fn pack<V: PackValue>(format: &[u8], args: &[V], notices: &mut Notices) -> S
                     _ => endian == Endian::Big,
                 };
                 for _ in 0..arg {
-                    let v = args[cur].to_long();
+                    let v = args[cur].to_long(notices);
                     cur += 1;
                     put_int(&mut out, pos as usize, v, size, big);
                     pos += size as i64;

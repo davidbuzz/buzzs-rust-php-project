@@ -30155,9 +30155,9 @@
 === substr_compare("\x00", "\xff", 0, null, true)
 => -255
 === strcmp('Hello World!', 'Hello world!')
-=> -32
+=> -1
 === substr_compare('Hello World!', 'Hello world!', 0)
-=> -32
+=> -1
 === substr_compare('Hello World!', 'Hello world!', 0, null, true)
 => 0
 === strcmp('abcdefghijklmnopqrstuvwxyz', 'abcdefghijklmnopqrstuvwxyA')

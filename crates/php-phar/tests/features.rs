@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Behaviour that the PHP 8.3 oracle cannot check (no ext/bz2 there, no
-//! running VM, php-src master fixes) — exercised directly.
+//! Behaviour the PHP 8.5 oracle cannot check (no running VM, php-src
+//! master fixes) — exercised directly.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -89,7 +89,8 @@ fn bzip2_entries_and_archives_roundtrip() {
 
 #[test]
 fn decompress_files_keeps_contents() {
-    // php-src master fix: PHP 8.3 wrote the compressed bytes as content.
+    // php-src master fix (`phar_decompress_for_compression_change`): PHP
+    // 8.3 wrote the compressed bytes as content.
     writable();
     let d = workdir("decomp");
     let p = path(&d, "d.phar");

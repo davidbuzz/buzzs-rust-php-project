@@ -52,7 +52,7 @@
 //!
 //! Default stub text and on-disk bytes follow php-src master;
 //! [`stub::set_flavor`] and [`sys::set_entry_time_override`] exist so the
-//! tests can compare byte for byte against a PHP 8.3 build.
+//! tests can compare byte for byte against a PHP 8.5 build.
 
 pub mod archive;
 mod bz2;

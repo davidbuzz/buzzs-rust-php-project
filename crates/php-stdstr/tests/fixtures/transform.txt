@@ -17,10 +17,10 @@
 === nl2br('', false)
 => ''
 === bin2hex(utf8_encode(''))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => ''
 === bin2hex(utf8_decode(''))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => ''
 === hebrev('')
 => ''
@@ -252,15 +252,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('', 1, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('', 1, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 1, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 1, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 1, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 1, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 1, '-=', 0)
 => '-'
 === str_pad('', 1, '-=', 1)
@@ -292,15 +292,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('', 3, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('', 3, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 3, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 3, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 3, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 3, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 3, '-=', 0)
 => '-=-'
 === str_pad('', 3, '-=', 1)
@@ -332,15 +332,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('', 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('', 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 10, '-=', 0)
 => '-=-=-=-=-='
 === str_pad('', 10, '-=', 1)
@@ -372,15 +372,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('', 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-=-=-=-'
 === str_pad('', 25, '-=', 1)
@@ -712,9 +712,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === hex2bin(bin2hex(''))
 => ''
 === str_increment('')
-!! ValueError: str_increment(): Argument #1 ($string) cannot be empty
+!! ValueError: str_increment(): Argument #1 ($string) must not be empty
 === str_decrement('')
-!! ValueError: str_decrement(): Argument #1 ($string) cannot be empty
+!! ValueError: str_decrement(): Argument #1 ($string) must not be empty
 === strtolower('a')
 => 'a'
 === strtoupper('a')
@@ -734,10 +734,10 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === nl2br('a', false)
 => 'a'
 === bin2hex(utf8_encode('a'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '61'
 === bin2hex(utf8_decode('a'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '61'
 === hebrev('a')
 => 'a'
@@ -1010,15 +1010,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('a', 3, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('a', 3, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 3, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 3, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 3, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 3, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 3, '-=', 0)
 => '-=a'
 === str_pad('a', 3, '-=', 1)
@@ -1050,15 +1050,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('a', 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('a', 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 10, '-=', 0)
 => '-=-=-=-=-a'
 === str_pad('a', 10, '-=', 1)
@@ -1090,15 +1090,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('a', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('a', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('a', 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-=-=-=a'
 === str_pad('a', 25, '-=', 1)
@@ -1122,9 +1122,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', -1, "\x0a", false)
 => 'a'
 === wordwrap('a', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', -1, '<br />', false)
 => 'a'
 === wordwrap('a', -1, '<br />', true)
@@ -1140,9 +1140,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('a', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 0, '<br />', false)
 => 'a'
 === wordwrap('a', 0, '<br />', true)
@@ -1158,9 +1158,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 1, "\x0a", false)
 => 'a'
 === wordwrap('a', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 1, '<br />', false)
 => 'a'
 === wordwrap('a', 1, '<br />', true)
@@ -1176,9 +1176,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 3, "\x0a", true)
 => 'a'
 === wordwrap('a', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 3, '<br />', false)
 => 'a'
 === wordwrap('a', 3, '<br />', true)
@@ -1196,9 +1196,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 5, "\x0a", true)
 => 'a'
 === wordwrap('a', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 5, '<br />', false)
 => 'a'
 === wordwrap('a', 5, '<br />', true)
@@ -1216,9 +1216,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 10, "\x0a", true)
 => 'a'
 === wordwrap('a', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 10, '<br />', false)
 => 'a'
 === wordwrap('a', 10, '<br />', true)
@@ -1236,9 +1236,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('a', 75, "\x0a", true)
 => 'a'
 === wordwrap('a', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('a', 75, '<br />', false)
 => 'a'
 === wordwrap('a', 75, '<br />', true)
@@ -1460,10 +1460,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('hello world', false)
 => 'hello world'
 === bin2hex(utf8_encode('hello world'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '68656c6c6f20776f726c64'
 === bin2hex(utf8_decode('hello world'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '68656c6c6f20776f726c64'
 === hebrev('hello world')
 => 'hello world'
@@ -1817,15 +1817,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('hello world', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('hello world', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello world', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello world', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello world', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello world', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello world', 25, '-=', 0)
 => '-=-=-=-=-=-=-=hello world'
 === str_pad('hello world', 25, '-=', 1)
@@ -1850,9 +1850,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => 'hello
 world'
 === wordwrap('hello world', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', -1, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', -1, '<br />', true)
@@ -1869,9 +1869,9 @@ world'
 === wordwrap('hello world', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('hello world', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 0, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', 0, '<br />', true)
@@ -1888,9 +1888,9 @@ world'
 => 'hello
 world'
 === wordwrap('hello world', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 1, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', 1, '<br />', true)
@@ -1910,9 +1910,9 @@ lo
 wor
 ld'
 === wordwrap('hello world', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 3, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', 3, '<br />', true)
@@ -1932,9 +1932,9 @@ world'
 => 'hello
 world'
 === wordwrap('hello world', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 5, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', 5, '<br />', true)
@@ -1954,9 +1954,9 @@ world'
 => 'hello
 world'
 === wordwrap('hello world', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 10, '<br />', false)
 => 'hello<br />world'
 === wordwrap('hello world', 10, '<br />', true)
@@ -1974,9 +1974,9 @@ world'
 === wordwrap('hello world', 75, "\x0a", true)
 => 'hello world'
 === wordwrap('hello world', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello world', 75, '<br />', false)
 => 'hello world'
 === wordwrap('hello world', 75, '<br />', true)
@@ -2216,10 +2216,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('Hello World', false)
 => 'Hello World'
 === bin2hex(utf8_encode('Hello World'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '48656c6c6f20576f726c64'
 === bin2hex(utf8_decode('Hello World'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '48656c6c6f20576f726c64'
 === hebrev('Hello World')
 => 'Hello World'
@@ -2573,15 +2573,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('Hello World', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('Hello World', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hello World', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hello World', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hello World', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hello World', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hello World', 25, '-=', 0)
 => '-=-=-=-=-=-=-=Hello World'
 === str_pad('Hello World', 25, '-=', 1)
@@ -2606,9 +2606,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => 'Hello
 World'
 === wordwrap('Hello World', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', -1, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', -1, '<br />', true)
@@ -2625,9 +2625,9 @@ World'
 === wordwrap('Hello World', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('Hello World', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 0, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', 0, '<br />', true)
@@ -2644,9 +2644,9 @@ World'
 => 'Hello
 World'
 === wordwrap('Hello World', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 1, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', 1, '<br />', true)
@@ -2666,9 +2666,9 @@ lo
 Wor
 ld'
 === wordwrap('Hello World', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 3, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', 3, '<br />', true)
@@ -2688,9 +2688,9 @@ World'
 => 'Hello
 World'
 === wordwrap('Hello World', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 5, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', 5, '<br />', true)
@@ -2710,9 +2710,9 @@ World'
 => 'Hello
 World'
 === wordwrap('Hello World', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 10, '<br />', false)
 => 'Hello<br />World'
 === wordwrap('Hello World', 10, '<br />', true)
@@ -2730,9 +2730,9 @@ World'
 === wordwrap('Hello World', 75, "\x0a", true)
 => 'Hello World'
 === wordwrap('Hello World', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hello World', 75, '<br />', false)
 => 'Hello World'
 === wordwrap('Hello World', 75, '<br />', true)
@@ -2980,10 +2980,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 => '  padded	<br>
 '
 === bin2hex(utf8_encode("  padded\x09\x0a"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '2020706164646564090a'
 === bin2hex(utf8_decode("  padded\x09\x0a"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '2020706164646564090a'
 === hebrev("  padded\x09\x0a")
 => '	  padded
@@ -3494,15 +3494,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("  padded\x09\x0a", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("  padded\x09\x0a", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("  padded\x09\x0a", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("  padded\x09\x0a", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("  padded\x09\x0a", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("  padded\x09\x0a", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("  padded\x09\x0a", 25, '-=', 0)
 => '-=-=-=-=-=-=-=-  padded	
 '
@@ -3535,9 +3535,9 @@ abcabcab'
 padded	
 '
 === wordwrap("  padded\x09\x0a", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", -1, '<br />', false)
 => '<br /><br />padded	
 '
@@ -3561,9 +3561,9 @@ padded
 === wordwrap("  padded\x09\x0a", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("  padded\x09\x0a", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 0, '<br />', false)
 => '<br /><br />padded	
 '
@@ -3584,9 +3584,9 @@ padded
 padded	
 '
 === wordwrap("  padded\x09\x0a", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 1, '<br />', false)
 => ' <br />padded	
 '
@@ -3613,9 +3613,9 @@ ded
 	
 '
 === wordwrap("  padded\x09\x0a", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 3, '<br />', false)
 => ' <br />padded	
 '
@@ -3644,9 +3644,9 @@ padde
 d	
 '
 === wordwrap("  padded\x09\x0a", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 5, '<br />', false)
 => ' <br />padded	
 '
@@ -3672,9 +3672,9 @@ d
 => '  padded	
 '
 === wordwrap("  padded\x09\x0a", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 10, '<br />', false)
 => '  padded	
 '
@@ -3700,9 +3700,9 @@ d
 => '  padded	
 '
 === wordwrap("  padded\x09\x0a", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("  padded\x09\x0a", 75, '<br />', false)
 => '  padded	
 '
@@ -4182,10 +4182,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 => '' . "\0" . ' x <br>
 ' . "\0" . ''
 === bin2hex(utf8_encode("\x00\x0b\x0c x \x0d\x0a\x00"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '000b0c2078200d0a00'
 === bin2hex(utf8_decode("\x00\x0b\x0c x \x0d\x0a\x00"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '000b0c2078200d0a00'
 === hebrev("\x00\x0b\x0c x \x0d\x0a\x00")
 => '' . "\0" . ' x 
@@ -4637,15 +4637,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 10, '-=', 0)
 => '-' . "\0" . ' x 
 ' . "\0" . ''
@@ -4686,15 +4686,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x00\x0b\x0c x \x0d\x0a\x00", 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=' . "\0" . ' x 
 ' . "\0" . ''
@@ -4727,9 +4727,9 @@ x
 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", -1, '<br />', false)
 => '' . "\0" . '<br />x<br />
 ' . "\0" . ''
@@ -4753,9 +4753,9 @@ x
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 0, '<br />', false)
 => '' . "\0" . '<br />x<br />
 ' . "\0" . ''
@@ -4777,9 +4777,9 @@ x
 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 1, '<br />', false)
 => '' . "\0" . '<br />x<br />
 ' . "\0" . ''
@@ -4804,9 +4804,9 @@ x
 x 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 3, '<br />', false)
 => '' . "\0" . '<br />x<br />
 ' . "\0" . ''
@@ -4834,9 +4834,9 @@ x
 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 5, '<br />', false)
 => '' . "\0" . ' x<br />
 ' . "\0" . ''
@@ -4862,9 +4862,9 @@ x
 => '' . "\0" . ' x 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 10, '<br />', false)
 => '' . "\0" . ' x 
 ' . "\0" . ''
@@ -4890,9 +4890,9 @@ x
 => '' . "\0" . ' x 
 ' . "\0" . ''
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x00\x0b\x0c x \x0d\x0a\x00", 75, '<br />', false)
 => '' . "\0" . ' x 
 ' . "\0" . ''
@@ -5362,10 +5362,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br("\x0cff\x0c", false)
 => 'ff'
 === bin2hex(utf8_encode("\x0cff\x0c"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '0c66660c'
 === bin2hex(utf8_decode("\x0cff\x0c"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '0c66660c'
 === hebrev("\x0cff\x0c")
 => 'ff'
@@ -5678,15 +5678,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\x0cff\x0c", 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x0cff\x0c", 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 10, '-=', 0)
 => '-=-=-=ff'
 === str_pad("\x0cff\x0c", 10, '-=', 1)
@@ -5718,15 +5718,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\x0cff\x0c", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x0cff\x0c", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0cff\x0c", 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-=-ff'
 === str_pad("\x0cff\x0c", 25, '-=', 1)
@@ -5750,9 +5750,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", -1, "\x0a", false)
 => 'ff'
 === wordwrap("\x0cff\x0c", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", -1, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", -1, '<br />', true)
@@ -5768,9 +5768,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("\x0cff\x0c", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 0, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 0, '<br />', true)
@@ -5786,9 +5786,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", 1, "\x0a", false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 1, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 1, '<br />', true)
@@ -5805,9 +5805,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => 'ff
 '
 === wordwrap("\x0cff\x0c", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 3, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 3, '<br />', true)
@@ -5825,9 +5825,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", 5, "\x0a", true)
 => 'ff'
 === wordwrap("\x0cff\x0c", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 5, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 5, '<br />', true)
@@ -5845,9 +5845,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", 10, "\x0a", true)
 => 'ff'
 === wordwrap("\x0cff\x0c", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 10, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 10, '<br />', true)
@@ -5865,9 +5865,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap("\x0cff\x0c", 75, "\x0a", true)
 => 'ff'
 === wordwrap("\x0cff\x0c", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0cff\x0c", 75, '<br />', false)
 => 'ff'
 === wordwrap("\x0cff\x0c", 75, '<br />', true)
@@ -6094,10 +6094,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br("MiXeD cAsE 123 \xc4\xe4\xd6", false)
 => 'MiXeD cAsE 123 ƒ‰÷'
 === bin2hex(utf8_encode("MiXeD cAsE 123 \xc4\xe4\xd6"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '4d6958654420634173452031323320c384c3a4c396'
 === bin2hex(utf8_decode("MiXeD cAsE 123 \xc4\xe4\xd6"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '4d69586544206341734520313233203f3f3f'
 === hebrev("MiXeD cAsE 123 \xc4\xe4\xd6")
 => '÷‰MiXeD cAsE 123 ƒ'
@@ -6452,15 +6452,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '-=', 0)
 => '-=-=-=-MiXeD cAsE 123 ƒ‰÷'
 === str_pad("MiXeD cAsE 123 \xc4\xe4\xd6", 25, '-=', 1)
@@ -6487,9 +6487,9 @@ cAsE
 123
 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", -1, '<br />', false)
 => 'MiXeD<br />cAsE<br />123<br />ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", -1, '<br />', true)
@@ -6508,9 +6508,9 @@ cAsE
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 0, '<br />', false)
 => 'MiXeD<br />cAsE<br />123<br />ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 0, '<br />', true)
@@ -6529,9 +6529,9 @@ cAsE
 123
 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 1, '<br />', false)
 => 'MiXeD<br />cAsE<br />123<br />ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 1, '<br />', true)
@@ -6555,9 +6555,9 @@ E
 123
 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 3, '<br />', false)
 => 'MiXeD<br />cAsE<br />123<br />ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 3, '<br />', true)
@@ -6581,9 +6581,9 @@ cAsE
 123
 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 5, '<br />', false)
 => 'MiXeD<br />cAsE<br />123<br />ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 5, '<br />', true)
@@ -6603,9 +6603,9 @@ cAsE
 => 'MiXeD cAsE
 123 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 10, '<br />', false)
 => 'MiXeD cAsE<br />123 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 10, '<br />', true)
@@ -6623,9 +6623,9 @@ cAsE
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 75, "\x0a", true)
 => 'MiXeD cAsE 123 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 75, '<br />', false)
 => 'MiXeD cAsE 123 ƒ‰÷'
 === wordwrap("MiXeD cAsE 123 \xc4\xe4\xd6", 75, '<br />', true)
@@ -6877,10 +6877,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", false)
 => '√©t√© caf√©'
 === bin2hex(utf8_encode("\xc3\xa9t\xc3\xa9 caf\xc3\xa9"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => 'c383c2a974c383c2a920636166c383c2a9'
 === bin2hex(utf8_decode("\xc3\xa9t\xc3\xa9 caf\xc3\xa9"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => 'e974e920636166e9'
 === hebrev("\xc3\xa9t\xc3\xa9 caf\xc3\xa9")
 => '√©t√© caf√©'
@@ -7234,15 +7234,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '-=', 0)
 => '-=-=-=-=-=-=-=√©t√© caf√©'
 === str_pad("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 25, '-=', 1)
@@ -7267,9 +7267,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => '√©t√©
 caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", -1, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", -1, '<br />', true)
@@ -7286,9 +7286,9 @@ caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 0, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 0, '<br />', true)
@@ -7305,9 +7305,9 @@ caf√©'
 => '√©t√©
 caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 1, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 1, '<br />', true)
@@ -7327,9 +7327,9 @@ caf√©'
 caf
 √©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 3, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 3, '<br />', true)
@@ -7349,9 +7349,9 @@ caf√©'
 => '√©t√©
 caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 5, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 5, '<br />', true)
@@ -7371,9 +7371,9 @@ caf√©'
 => '√©t√©
 caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 10, '<br />', false)
 => '√©t√©<br />caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 10, '<br />', true)
@@ -7391,9 +7391,9 @@ caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 75, "\x0a", true)
 => '√©t√© caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 75, '<br />', false)
 => '√©t√© caf√©'
 === wordwrap("\xc3\xa9t\xc3\xa9 caf\xc3\xa9", 75, '<br />', true)
@@ -7633,10 +7633,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('hello_world-foo bar|baz', false)
 => 'hello_world-foo bar|baz'
 === bin2hex(utf8_encode('hello_world-foo bar|baz'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '68656c6c6f5f776f726c642d666f6f206261727c62617a'
 === bin2hex(utf8_decode('hello_world-foo bar|baz'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '68656c6c6f5f776f726c642d666f6f206261727c62617a'
 === hebrev('hello_world-foo bar|baz')
 => 'hello_world-foo bar|baz'
@@ -7990,15 +7990,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('hello_world-foo bar|baz', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('hello_world-foo bar|baz', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello_world-foo bar|baz', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello_world-foo bar|baz', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello_world-foo bar|baz', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello_world-foo bar|baz', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('hello_world-foo bar|baz', 25, '-=', 0)
 => '-=hello_world-foo bar|baz'
 === str_pad('hello_world-foo bar|baz', 25, '-=', 1)
@@ -8023,9 +8023,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => 'hello_world-foo
 bar|baz'
 === wordwrap('hello_world-foo bar|baz', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', -1, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', -1, '<br />', true)
@@ -8042,9 +8042,9 @@ bar|baz'
 === wordwrap('hello_world-foo bar|baz', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('hello_world-foo bar|baz', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 0, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', 0, '<br />', true)
@@ -8061,9 +8061,9 @@ bar|baz'
 => 'hello_world-foo
 bar|baz'
 === wordwrap('hello_world-foo bar|baz', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 1, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', 1, '<br />', true)
@@ -8087,9 +8087,9 @@ bar
 |ba
 z'
 === wordwrap('hello_world-foo bar|baz', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 3, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', 3, '<br />', true)
@@ -8112,9 +8112,9 @@ d-foo
 bar|b
 az'
 === wordwrap('hello_world-foo bar|baz', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 5, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', 5, '<br />', true)
@@ -8135,9 +8135,9 @@ bar|baz'
 d-foo
 bar|baz'
 === wordwrap('hello_world-foo bar|baz', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 10, '<br />', false)
 => 'hello_world-foo<br />bar|baz'
 === wordwrap('hello_world-foo bar|baz', 10, '<br />', true)
@@ -8155,9 +8155,9 @@ bar|baz'
 === wordwrap('hello_world-foo bar|baz', 75, "\x0a", true)
 => 'hello_world-foo bar|baz'
 === wordwrap('hello_world-foo bar|baz', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('hello_world-foo bar|baz', 75, '<br />', false)
 => 'hello_world-foo bar|baz'
 === wordwrap('hello_world-foo bar|baz', 75, '<br />', true)
@@ -8419,10 +8419,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('The quick brown fox sat over the lazy dog', false)
 => 'The quick brown fox sat over the lazy dog'
 === bin2hex(utf8_encode('The quick brown fox sat over the lazy dog'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '54686520717569636b2062726f776e20666f7820736174206f76657220746865206c617a7920646f67'
 === bin2hex(utf8_decode('The quick brown fox sat over the lazy dog'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '54686520717569636b2062726f776e20666f7820736174206f76657220746865206c617a7920646f67'
 === hebrev('The quick brown fox sat over the lazy dog')
 => 'The quick brown fox sat over the lazy dog'
@@ -8823,9 +8823,9 @@ the
 lazy
 dog'
 === wordwrap('The quick brown fox sat over the lazy dog', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', -1, '<br />', false)
 => 'The<br />quick<br />brown<br />fox<br />sat<br />over<br />the<br />lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', -1, '<br />', true)
@@ -8849,9 +8849,9 @@ dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('The quick brown fox sat over the lazy dog', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 0, '<br />', false)
 => 'The<br />quick<br />brown<br />fox<br />sat<br />over<br />the<br />lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 0, '<br />', true)
@@ -8875,9 +8875,9 @@ the
 lazy
 dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 1, '<br />', false)
 => 'The<br />quick<br />brown<br />fox<br />sat<br />over<br />the<br />lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 1, '<br />', true)
@@ -8913,9 +8913,9 @@ laz
 y
 dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 3, '<br />', false)
 => 'The<br />quick<br />brown<br />fox<br />sat<br />over<br />the<br />lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 3, '<br />', true)
@@ -8949,9 +8949,9 @@ the
 lazy
 dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 5, '<br />', false)
 => 'The<br />quick<br />brown<br />fox<br />sat<br />over<br />the<br />lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 5, '<br />', true)
@@ -8977,9 +8977,9 @@ sat over
 the lazy
 dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 10, '<br />', false)
 => 'The quick<br />brown fox<br />sat over<br />the lazy<br />dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 10, '<br />', true)
@@ -8997,9 +8997,9 @@ dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 75, "\x0a", true)
 => 'The quick brown fox sat over the lazy dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('The quick brown fox sat over the lazy dog', 75, '<br />', false)
 => 'The quick brown fox sat over the lazy dog'
 === wordwrap('The quick brown fox sat over the lazy dog', 75, '<br />', true)
@@ -9294,10 +9294,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('A very long woooooooooooord.', false)
 => 'A very long woooooooooooord.'
 === bin2hex(utf8_encode('A very long woooooooooooord.'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '412076657279206c6f6e6720776f6f6f6f6f6f6f6f6f6f6f6f72642e'
 === bin2hex(utf8_decode('A very long woooooooooooord.'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '412076657279206c6f6e6720776f6f6f6f6f6f6f6f6f6f6f6f72642e'
 === hebrev('A very long woooooooooooord.')
 => '.A very long woooooooooooord'
@@ -9688,9 +9688,9 @@ very
 long
 woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', -1, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', -1, '<br />', true)
@@ -9709,9 +9709,9 @@ woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('A very long woooooooooooord.', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 0, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 0, '<br />', true)
@@ -9730,9 +9730,9 @@ very
 long
 woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 1, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 1, '<br />', true)
@@ -9761,9 +9761,9 @@ ooo
 ord
 .'
 === wordwrap('A very long woooooooooooord.', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 3, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 3, '<br />', true)
@@ -9790,9 +9790,9 @@ ooooo
 ooord
 .'
 === wordwrap('A very long woooooooooooord.', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 5, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 5, '<br />', true)
@@ -9815,9 +9815,9 @@ long
 wooooooooo
 ooord.'
 === wordwrap('A very long woooooooooooord.', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 10, '<br />', false)
 => 'A very<br />long<br />woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 10, '<br />', true)
@@ -9835,9 +9835,9 @@ ooord.'
 === wordwrap('A very long woooooooooooord.', 75, "\x0a", true)
 => 'A very long woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooord.', 75, '<br />', false)
 => 'A very long woooooooooooord.'
 === wordwrap('A very long woooooooooooord.', 75, '<br />', true)
@@ -10108,10 +10108,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br('A very long woooooooooooooooooord. and something', false)
 => 'A very long woooooooooooooooooord. and something'
 === bin2hex(utf8_encode('A very long woooooooooooooooooord. and something'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '412076657279206c6f6e6720776f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f72642e20616e6420736f6d657468696e67'
 === bin2hex(utf8_decode('A very long woooooooooooooooooord. and something'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '412076657279206c6f6e6720776f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f72642e20616e6420736f6d657468696e67'
 === hebrev('A very long woooooooooooooooooord. and something')
 => 'A very long woooooooooooooooooord. and something'
@@ -10506,9 +10506,9 @@ woooooooooooooooooord.
 and
 something'
 === wordwrap('A very long woooooooooooooooooord. and something', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', -1, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', -1, '<br />', true)
@@ -10529,9 +10529,9 @@ something'
 === wordwrap('A very long woooooooooooooooooord. and something', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('A very long woooooooooooooooooord. and something', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 0, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', 0, '<br />', true)
@@ -10552,9 +10552,9 @@ woooooooooooooooooord.
 and
 something'
 === wordwrap('A very long woooooooooooooooooord. and something', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 1, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', 1, '<br />', true)
@@ -10591,9 +10591,9 @@ som
 eth
 ing'
 === wordwrap('A very long woooooooooooooooooord. and something', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 3, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', 3, '<br />', true)
@@ -10626,9 +10626,9 @@ and
 somet
 hing'
 === wordwrap('A very long woooooooooooooooooord. and something', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 5, '<br />', false)
 => 'A<br />very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', 5, '<br />', true)
@@ -10655,9 +10655,9 @@ ooooooooor
 d. and
 something'
 === wordwrap('A very long woooooooooooooooooord. and something', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 10, '<br />', false)
 => 'A very<br />long<br />woooooooooooooooooord.<br />and<br />something'
 === wordwrap('A very long woooooooooooooooooord. and something', 10, '<br />', true)
@@ -10675,9 +10675,9 @@ something'
 === wordwrap('A very long woooooooooooooooooord. and something', 75, "\x0a", true)
 => 'A very long woooooooooooooooooord. and something'
 === wordwrap('A very long woooooooooooooooooord. and something', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('A very long woooooooooooooooooord. and something', 75, '<br />', false)
 => 'A very long woooooooooooooooooord. and something'
 === wordwrap('A very long woooooooooooooooooord. and something', 75, '<br />', true)
@@ -11008,10 +11008,10 @@ line2<br>
 line3<br>line4<br>
 line5'
 === bin2hex(utf8_encode("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '6c696e65310a6c696e65320d0a6c696e65330d6c696e65340a0d6c696e6535'
 === bin2hex(utf8_decode("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '6c696e65310a6c696e65320d0a6c696e65330d6c696e65340a0d6c696e6535'
 === hebrev("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5")
 => 'line1
@@ -11936,9 +11936,9 @@ line2
 line3line4
 line5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", -1, '<br />', false)
 => 'line1
 line2
@@ -11972,9 +11972,9 @@ line3line4
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 0, '<br />', false)
 => 'line1
 line2
@@ -12002,9 +12002,9 @@ line2
 line3line4
 line5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 1, '<br />', false)
 => 'line1
 line2
@@ -12047,9 +12047,9 @@ e4
 li
 ne5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 3, '<br />', false)
 => 'line1
 line2
@@ -12095,9 +12095,9 @@ line3
 line
 5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 5, '<br />', false)
 => 'line1
 line2
@@ -12140,9 +12140,9 @@ line3line
 4
 line5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 10, '<br />', false)
 => 'line1
 line2
@@ -12184,9 +12184,9 @@ line2
 line3line4
 line5'
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("line1\x0aline2\x0d\x0aline3\x0dline4\x0a\x0dline5", 75, '<br />', false)
 => 'line1
 line2
@@ -13189,10 +13189,10 @@ line3line4
 <br>
 '
 === bin2hex(utf8_encode("\x0a\x0d\x0a\x0d\x0d\x0a"))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '0a0d0a0d0d0a'
 === bin2hex(utf8_decode("\x0a\x0d\x0a\x0d\x0d\x0a"))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '0a0d0a0d0d0a'
 === hebrev("\x0a\x0d\x0a\x0d\x0d\x0a")
 => '
@@ -13913,15 +13913,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '-=', 0)
 => '-=-=
 
@@ -13980,15 +13980,15 @@ ab'
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad("\x0a\x0d\x0a\x0d\x0d\x0a", 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-
 
@@ -14033,9 +14033,9 @@ abcabcabca'
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", -1, '<br />', false)
 => '
 
@@ -14069,9 +14069,9 @@ abcabcabca'
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 0, '<br />', false)
 => '
 
@@ -14099,9 +14099,9 @@ abcabcabca'
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 1, '<br />', false)
 => '
 
@@ -14138,9 +14138,9 @@ abcabcabca'
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 3, '<br />', false)
 => '
 
@@ -14182,9 +14182,9 @@ o
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 5, '<br />', false)
 => '
 
@@ -14226,9 +14226,9 @@ o
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 10, '<br />', false)
 => '
 
@@ -14270,9 +14270,9 @@ o
 
 '
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap("\x0a\x0d\x0a\x0d\x0d\x0a", 75, '<br />', false)
 => '
 
@@ -15204,10 +15204,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br('aaa', false)
 => 'aaa'
 === bin2hex(utf8_encode('aaa'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '616161'
 === bin2hex(utf8_decode('aaa'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '616161'
 === hebrev('aaa')
 => 'aaa'
@@ -15520,15 +15520,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('aaa', 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('aaa', 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 10, '-=', 0)
 => '-=-=-=-aaa'
 === str_pad('aaa', 10, '-=', 1)
@@ -15560,15 +15560,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('aaa', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('aaa', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('aaa', 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-=-=aaa'
 === str_pad('aaa', 25, '-=', 1)
@@ -15592,9 +15592,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', -1, "\x0a", false)
 => 'aaa'
 === wordwrap('aaa', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', -1, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', -1, '<br />', true)
@@ -15610,9 +15610,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('aaa', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 0, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 0, '<br />', true)
@@ -15628,9 +15628,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 1, "\x0a", false)
 => 'aaa'
 === wordwrap('aaa', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 1, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 1, '<br />', true)
@@ -15646,9 +15646,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 3, "\x0a", true)
 => 'aaa'
 === wordwrap('aaa', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 3, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 3, '<br />', true)
@@ -15666,9 +15666,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 5, "\x0a", true)
 => 'aaa'
 === wordwrap('aaa', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 5, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 5, '<br />', true)
@@ -15686,9 +15686,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 10, "\x0a", true)
 => 'aaa'
 === wordwrap('aaa', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 10, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 10, '<br />', true)
@@ -15706,9 +15706,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('aaa', 75, "\x0a", true)
 => 'aaa'
 === wordwrap('aaa', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('aaa', 75, '<br />', false)
 => 'aaa'
 === wordwrap('aaa', 75, '<br />', true)
@@ -15933,10 +15933,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('abcabcabc', false)
 => 'abcabcabc'
 === bin2hex(utf8_encode('abcabcabc'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '616263616263616263'
 === bin2hex(utf8_decode('abcabcabc'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '616263616263616263'
 === hebrev('abcabcabc')
 => 'abcabcabc'
@@ -16249,15 +16249,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('abcabcabc', 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('abcabcabc', 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 10, '-=', 0)
 => '-abcabcabc'
 === str_pad('abcabcabc', 10, '-=', 1)
@@ -16289,15 +16289,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('abcabcabc', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('abcabcabc', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('abcabcabc', 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=abcabcabc'
 === str_pad('abcabcabc', 25, '-=', 1)
@@ -16321,9 +16321,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('abcabcabc', -1, "\x0a", false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', -1, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', -1, '<br />', true)
@@ -16339,9 +16339,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('abcabcabc', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('abcabcabc', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 0, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 0, '<br />', true)
@@ -16357,9 +16357,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('abcabcabc', 1, "\x0a", false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 1, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 1, '<br />', true)
@@ -16377,9 +16377,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 abc
 abc'
 === wordwrap('abcabcabc', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 3, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 3, '<br />', true)
@@ -16398,9 +16398,9 @@ abc'
 => 'abcab
 cabc'
 === wordwrap('abcabcabc', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 5, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 5, '<br />', true)
@@ -16418,9 +16418,9 @@ cabc'
 === wordwrap('abcabcabc', 10, "\x0a", true)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 10, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 10, '<br />', true)
@@ -16438,9 +16438,9 @@ cabc'
 === wordwrap('abcabcabc', 75, "\x0a", true)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('abcabcabc', 75, '<br />', false)
 => 'abcabcabc'
 === wordwrap('abcabcabc', 75, '<br />', true)
@@ -16676,10 +16676,10 @@ Warning: hex2bin(): Hexadecimal input string must have an even length
 === nl2br('Hi all, I said hello', false)
 => 'Hi all, I said hello'
 === bin2hex(utf8_encode('Hi all, I said hello'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '486920616c6c2c204920736169642068656c6c6f'
 === bin2hex(utf8_decode('Hi all, I said hello'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '486920616c6c2c204920736169642068656c6c6f'
 === hebrev('Hi all, I said hello')
 => 'Hi all, I said hello'
@@ -17036,15 +17036,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('Hi all, I said hello', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('Hi all, I said hello', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hi all, I said hello', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hi all, I said hello', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hi all, I said hello', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hi all, I said hello', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('Hi all, I said hello', 25, '-=', 0)
 => '-=-=-Hi all, I said hello'
 === str_pad('Hi all, I said hello', 25, '-=', 1)
@@ -17072,9 +17072,9 @@ I
 said
 hello'
 === wordwrap('Hi all, I said hello', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', -1, '<br />', false)
 => 'Hi<br />all,<br />I<br />said<br />hello'
 === wordwrap('Hi all, I said hello', -1, '<br />', true)
@@ -17094,9 +17094,9 @@ hello'
 === wordwrap('Hi all, I said hello', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('Hi all, I said hello', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 0, '<br />', false)
 => 'Hi<br />all,<br />I<br />said<br />hello'
 === wordwrap('Hi all, I said hello', 0, '<br />', true)
@@ -17116,9 +17116,9 @@ I
 said
 hello'
 === wordwrap('Hi all, I said hello', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 1, '<br />', false)
 => 'Hi<br />all,<br />I<br />said<br />hello'
 === wordwrap('Hi all, I said hello', 1, '<br />', true)
@@ -17144,9 +17144,9 @@ d
 hel
 lo'
 === wordwrap('Hi all, I said hello', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 3, '<br />', false)
 => 'Hi<br />all,<br />I<br />said<br />hello'
 === wordwrap('Hi all, I said hello', 3, '<br />', true)
@@ -17172,9 +17172,9 @@ I
 said
 hello'
 === wordwrap('Hi all, I said hello', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 5, '<br />', false)
 => 'Hi<br />all,<br />I<br />said<br />hello'
 === wordwrap('Hi all, I said hello', 5, '<br />', true)
@@ -17194,9 +17194,9 @@ said hello'
 => 'Hi all, I
 said hello'
 === wordwrap('Hi all, I said hello', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 10, '<br />', false)
 => 'Hi all, I<br />said hello'
 === wordwrap('Hi all, I said hello', 10, '<br />', true)
@@ -17214,9 +17214,9 @@ said hello'
 === wordwrap('Hi all, I said hello', 75, "\x0a", true)
 => 'Hi all, I said hello'
 === wordwrap('Hi all, I said hello', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('Hi all, I said hello', 75, '<br />', false)
 => 'Hi all, I said hello'
 === wordwrap('Hi all, I said hello', 75, '<br />', true)
@@ -17472,10 +17472,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br('xxhixx', false)
 => 'xxhixx'
 === bin2hex(utf8_encode('xxhixx'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '787868697878'
 === bin2hex(utf8_decode('xxhixx'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '787868697878'
 === hebrev('xxhixx')
 => 'xxhixx'
@@ -17788,15 +17788,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('xxhixx', 10, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('xxhixx', 10, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 10, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 10, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 10, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 10, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 10, '-=', 0)
 => '-=-=xxhixx'
 === str_pad('xxhixx', 10, '-=', 1)
@@ -17828,15 +17828,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('xxhixx', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('xxhixx', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('xxhixx', 25, '-=', 0)
 => '-=-=-=-=-=-=-=-=-=-xxhixx'
 === str_pad('xxhixx', 25, '-=', 1)
@@ -17860,9 +17860,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('xxhixx', -1, "\x0a", false)
 => 'xxhixx'
 === wordwrap('xxhixx', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', -1, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', -1, '<br />', true)
@@ -17878,9 +17878,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('xxhixx', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('xxhixx', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 0, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 0, '<br />', true)
@@ -17896,9 +17896,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('xxhixx', 1, "\x0a", false)
 => 'xxhixx'
 === wordwrap('xxhixx', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 1, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 1, '<br />', true)
@@ -17915,9 +17915,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => 'xxh
 ixx'
 === wordwrap('xxhixx', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 3, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 3, '<br />', true)
@@ -17936,9 +17936,9 @@ ixx'
 => 'xxhix
 x'
 === wordwrap('xxhixx', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 5, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 5, '<br />', true)
@@ -17956,9 +17956,9 @@ x'
 === wordwrap('xxhixx', 10, "\x0a", true)
 => 'xxhixx'
 === wordwrap('xxhixx', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 10, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 10, '<br />', true)
@@ -17976,9 +17976,9 @@ x'
 === wordwrap('xxhixx', 75, "\x0a", true)
 => 'xxhixx'
 === wordwrap('xxhixx', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('xxhixx', 75, '<br />', false)
 => 'xxhixx'
 === wordwrap('xxhixx', 75, '<br />', true)
@@ -18208,10 +18208,10 @@ Warning: hex2bin(): Input string must be hexadecimal string
 === nl2br('12345678901234567890', false)
 => '12345678901234567890'
 === bin2hex(utf8_encode('12345678901234567890'))
-Deprecated: Function utf8_encode() is deprecated
+Deprecated: Function utf8_encode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '3132333435363738393031323334353637383930'
 === bin2hex(utf8_decode('12345678901234567890'))
-Deprecated: Function utf8_decode() is deprecated
+Deprecated: Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives
 => '3132333435363738393031323334353637383930'
 === hebrev('12345678901234567890')
 => '12345678901234567890'
@@ -18564,15 +18564,15 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === str_pad('12345678901234567890', 25, ' ', -1)
 !! ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH
 === str_pad('12345678901234567890', 25, '', 0)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('12345678901234567890', 25, '', 1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('12345678901234567890', 25, '', 2)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('12345678901234567890', 25, '', 3)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('12345678901234567890', 25, '', -1)
-!! ValueError: str_pad(): Argument #3 ($pad_string) must be a non-empty string
+!! ValueError: str_pad(): Argument #3 ($pad_string) must not be empty
 === str_pad('12345678901234567890', 25, '-=', 0)
 => '-=-=-12345678901234567890'
 === str_pad('12345678901234567890', 25, '-=', 1)
@@ -18596,9 +18596,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('12345678901234567890', -1, "\x0a", false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', -1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', -1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', -1, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', -1, '<br />', true)
@@ -18614,9 +18614,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('12345678901234567890', 0, "\x0a", true)
 !! ValueError: wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0
 === wordwrap('12345678901234567890', 0, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 0, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 0, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 0, '<br />', true)
@@ -18632,9 +18632,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('12345678901234567890', 1, "\x0a", false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 1, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 1, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 1, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 1, '<br />', true)
@@ -18656,9 +18656,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 678
 90'
 === wordwrap('12345678901234567890', 3, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 3, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 3, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 3, '<br />', true)
@@ -18679,9 +18679,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 12345
 67890'
 === wordwrap('12345678901234567890', 5, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 5, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 5, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 5, '<br />', true)
@@ -18700,9 +18700,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 => '1234567890
 1234567890'
 === wordwrap('12345678901234567890', 10, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 10, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 10, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 10, '<br />', true)
@@ -18720,9 +18720,9 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..'
 === wordwrap('12345678901234567890', 75, "\x0a", true)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 75, '', false)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 75, '', true)
-!! ValueError: wordwrap(): Argument #3 ($break) cannot be empty
+!! ValueError: wordwrap(): Argument #3 ($break) must not be empty
 === wordwrap('12345678901234567890', 75, '<br />', false)
 => '12345678901234567890'
 === wordwrap('12345678901234567890', 75, '<br />', true)

@@ -3435,14 +3435,19 @@
 === bin2hex(pack('N', -3.99))
 => 'fffffffd'
 === bin2hex(pack('N', 1e19))
+Warning: The float 1.0E+19 is not representable as an int, cast occurred
 => '89e80000'
 === bin2hex(pack('N', -1e19))
+Warning: The float -1.0E+19 is not representable as an int, cast occurred
 => '76180000'
 === bin2hex(pack('N', 3e19))
+Warning: The float 3.0E+19 is not representable as an int, cast occurred
 => '9db80000'
 === bin2hex(pack('N', NAN))
+Warning: The float NAN is not representable as an int, cast occurred
 => '00000000'
 === bin2hex(pack('N', INF))
+Warning: The float INF is not representable as an int, cast occurred
 => '00000000'
 === bin2hex(pack('N', null))
 => '00000000'
@@ -3608,7 +3613,7 @@ Warning: pack(): 2 arguments unused
 === bin2hex(pack("\x00"))
 !! ValueError: Type 
 === bin2hex(pack('H', "\x00"))
-Warning: pack(): Type H: illegal hex digit 
+Warning: pack(): Type H: illegal hex digit  
 => '00'
 === unpack("\x00", 'a')
 !! ValueError: Invalid format type 

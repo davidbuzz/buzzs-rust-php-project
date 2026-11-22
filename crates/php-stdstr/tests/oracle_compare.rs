@@ -165,13 +165,14 @@ fn cases() -> Vec<Case> {
         }
     }
     // Exact memcmp magnitudes where glibc returns the byte difference
-    // (single bytes and long strings).
+    // (single bytes and long strings). Not 8 to 15 bytes: there the result
+    // depends on which memcmp runs (`/usr/bin/php8.5` folds a literal call
+    // at compile time and gets -1 for `'Hello World!'`, -32 at run time).
     let exact: &[(&[u8], &[u8])] = &[
         (b"a", b"c"),
         (b"c", b"a"),
         (b"\xff", b"\0"),
         (b"\0", b"\xff"),
-        (b"Hello World!", b"Hello world!"),
         (b"abcdefghijklmnopqrstuvwxyz", b"abcdefghijklmnopqrstuvwxyA"),
         (b"abcdefghijklmnop", b"abcdefghijklmnopq"),
     ];

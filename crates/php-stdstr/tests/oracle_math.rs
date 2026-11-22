@@ -9,7 +9,7 @@ use php_stdstr::math::{
 };
 use php_stdstr::{Level, Notices, StdError};
 
-/// php-src master raises this `E_NOTICE`; PHP 8.3 (the oracle) does not.
+/// php-src master raises this `E_NOTICE`; PHP 8.5 (the oracle) does not.
 const OVERFLOW_NOTICE: &str =
     "Input number is larger than PHP_INT_MAX, precision has been lost in conversion";
 
@@ -21,16 +21,9 @@ fn num(n: Number) -> V {
 }
 
 /// Drops the master-only overflow notice so the result can be compared
-/// against PHP 8.3.
+/// against PHP 8.5.
 fn strip_master_notice(notices: &mut Notices) {
     notices.retain(|n| !(n.level == Level::Notice && n.message == OVERFLOW_NOTICE));
-}
-
-/// PHP 8.3 formats float-path `base_convert` results into a 65-byte
-/// buffer, keeping only the last 64 digits; master (GH-22395) keeps up to
-/// `ZEND_DOUBLE_MAX_LENGTH - 1`.
-fn as_php83(r: Result<Vec<u8>, StdError>) -> Result<Vec<u8>, StdError> {
-    r.map(|v| v[v.len().saturating_sub(64)..].to_vec())
 }
 
 fn flit(f: f64) -> String {
@@ -207,7 +200,7 @@ fn cases() -> Vec<Case> {
                 |n| {
                     let r = base_convert(s, from, to, n);
                     strip_master_notice(n);
-                    as_php83(r)
+                    r
                 },
             ));
         }
@@ -236,7 +229,7 @@ fn cases() -> Vec<Case> {
             |n| {
                 let r = base_convert(s, from, to, n);
                 strip_master_notice(n);
-                as_php83(r)
+                r
             },
         ));
     }
