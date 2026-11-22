@@ -1305,3 +1305,44 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn foreach_over_values_that_are_no_numbers() {
+    typed_at_least(
+        "<?php class It { public $price; public $qty = 2; function __construct($p) { $this->price = $p; } function total() { return 3; } } function t($items) { $s = 0.0; $c = 0; foreach ($items as $k => $it) { $s += $it->price * $it->qty + $k; $c += $it->total(); } return [$s, $c]; } $a = []; for ($i = 0; $i < 30; $i++) { $a[] = new It($i + 0.5); } var_dump(t($a), t($a), t([]));",
+        1,
+    );
+    // Objects (with a destructor that counts), rows read by a string key,
+    // strings, string keys, `continue` and `break`, writes to the
+    // objects, values of every kind in one array, a nest, the object kept
+    // past the loop.
+    three(
+        r#"<?php
+class It { public $price; public $qty = 2; public $name = 'n'; static $dead = 0;
+  function __construct($p) { $this->price = $p; }
+  function total() { return 3; }
+  static function vat($x) { return $x * 2; }
+  function __destruct() { self::$dead++; } }
+function mk($n) { $a = []; for ($i = 0; $i < $n; $i++) { $a[] = new It($i + 0.5); } return $a; }
+function a1($items) { $s = 0.0; foreach ($items as $it) { $s += $it->price * $it->qty; } return $s; }
+function a2($items) { $s = 0.0; $c = 0; foreach ($items as $k => $it) { $s += $it->price + $k; $c += $it->total() + It::vat($k); } return [$s, $c]; }
+function a3($rows) { $s = 0; foreach ($rows as $row) { $s += $row['a'] + $row['b']; } return $s; }
+function a4($strs) { $n = 0; foreach ($strs as $str) { $n += strlen($str); } return $n; }
+function a5($map) { $n = 0; $last = ''; foreach ($map as $key => $v) { $n += $v; $last = $key; } return [$n, $last]; }
+function a6($items) { $s = 0.0; foreach ($items as $it) { if ($it->price > 5) { continue; } $s += $it->price; if ($s > 100) { break; } } return $s; }
+function a7($items) { $n = 0; foreach ($items as $it) { $it->qty++; $it->price = $it->price + 1; $n += $it->qty; } return $n; }
+function a8($mixed) { $n = 0; foreach ($mixed as $v) { $n++; } return [$n, $v]; }
+function a9($n) { $c = 0; foreach (mk($n) as $it) { $c += $it->qty; } return [$c, It::$dead]; }
+function a10($rows) { $s = 0; foreach ($rows as $i => $row) { foreach ($row as $v) { $s += $v * $i; } } return $s; }
+function a11($items) { $s = 0.0; $prev = null; foreach ($items as $it) { $s += $it->price; $prev = $it; } return [$s, $prev->price]; }
+$items = mk(40); $rows = []; $strs = []; $map = [];
+for ($i = 0; $i < 40; $i++) { $rows[] = ['a' => $i, 'b' => $i * 2]; $strs[] = $i % 3 ? 'xy' : 'abcde'; $map['k' . $i] = $i; }
+$mixed = [1, 'two', 3.0, null, [5], new It(6), true];
+$nested = [[1, 2, 3], [4, 5], [], [6]];
+foreach ([1, 2] as $round) {
+  var_export([a1($items), a2($items), a3($rows), a4($strs), a5($map), a6($items), a7($items), a8($mixed), a9(30), a10($nested), a11($items), a1([]), a4(['abc']), It::$dead]);
+}
+echo "\n";
+"#,
+    );
+}

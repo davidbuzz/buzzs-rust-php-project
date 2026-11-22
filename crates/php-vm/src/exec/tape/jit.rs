@@ -765,7 +765,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
         };
         // What a `foreach` iterator yields now: floats or ints (by the
         // first element), and whether its keys are ints.
-        let each = |iter: u32| -> Option<(bool, bool)> {
+        let each = |iter: u32| -> Option<(Option<bool>, bool)> {
             let Some(crate::vm::ForeachIter::Array { arr, .. }) =
                 frame.iters.get(iter as usize)?.as_ref()
             else {
@@ -773,9 +773,9 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             };
             let (key, value) = arr.first()?;
             let float = match value {
-                Value::Int(_) => false,
-                Value::Float(_) => true,
-                _ => return None,
+                Value::Int(_) => Some(false),
+                Value::Float(_) => Some(true),
+                _ => None,
             };
             Some((float, matches!(key, php_runtime::ArrayKey::Int(_))))
         };
@@ -1034,6 +1034,20 @@ pub(super) unsafe extern "C" fn fe_fetch(f: *mut Frame, at: usize) -> usize {
     // op neither pops the frame nor replaces its code (`run_tape`).
     let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
     crate::exec::hot::step_ext(frame, &code.ops, &code.literals, at)
+}
+
+/// The op at `at`, one of the interpreter's core ops, as `run_tape` runs
+/// it (`hot::step`): for a typed loop, the assignment of a temporary that
+/// holds no number to a variable. Returns the op to go on at, or
+/// `hot::DECLINED`, nothing changed.
+///
+/// # Safety
+/// `f` is the current frame and `at` an op of its op array.
+pub(super) unsafe extern "C" fn core_step(f: *mut Frame, at: usize) -> usize {
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    crate::exec::hot::step(frame, &code.ops, &code.literals, at)
 }
 
 /// The value the run-time cache of frame `f` holds for the constant the

@@ -30,7 +30,7 @@ CMP = ['<', '<=', '>', '>=', '==', '!=', '===', '!==']
 
 
 # What every generated function returns (also from the middle of a loop).
-RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $o->n, $o->u, $z, $s]'
+RESULT = '[$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $fv, $fk, $p, $q, $m, $o->x, $o->f, $o->n, $o->u, $z, $fo->x, $fo->n, $fs, $s]'
 # Constants (a typed loop reads them as their values) and properties.
 CONSTS = ['KI', 'KF', 'KB', 'KS', 'P::CI', 'P::CF', 'P::CB', 'PHP_INT_SIZE', 'M_PI']
 PROPS = ['$o->x', '$o->f', '$o->n', '$o->u']
@@ -207,6 +207,16 @@ class Gen:
         n = self.r.randrange(1, 40)
         body = self.block(self.r.randrange(1, 5))
         k = self.r.random()
+        if k < 0.06:
+            # Over objects and strings: the loop variable is no number.
+            head = self.pick(['foreach ($os as $fo)', 'foreach ($os as $fk => $fo)',
+                              'foreach ($ss as $fs)', 'foreach ($ss as $fk => $fs)'])
+            extra = self.pick([f'{self.var()} += $fo->x;', f'$fo->n++; {self.var()} = $fo->n;',
+                               f'{self.var()} = strlen($fs) + {self.atom()};', f'{self.var()} = $fo->im({self.atom()});',
+                               f'$fo->f = {self.expr()};', f'{self.var()} = $fo->f * {self.atom()};'])
+            self.depth -= 1
+            self.loops -= 1
+            return f'{head} {{ {extra} {body} }}'
         if k < 0.2:
             subject = self.pick(['$p', '$q', '$m[0]', '$m[1]', '$m', '[1, 2, 3]'])
             head = self.pick(['foreach ({} as $fv)', 'foreach ({} as $fk => $fv)']).format(subject)
@@ -242,7 +252,9 @@ class Gen:
         body = ' '.join(self.loop() if self.r.random() < 0.7 else self.stmt()
                         for _ in range(self.r.randrange(2, 6)))
         return (f'function {name}($x, $y, $n, $p, $q, $m, $o) {{ $s = "abc"; $i = 0; $j = 0; $k = 0; $w = 0; '
-                f'$fv = 0; $fk = 0; $z = ["k" => 3, "f" => 1.5, "s" => "x"]; {inits} {body} return {RESULT}; }}')
+                f'$fv = 0; $fk = 0; $z = ["k" => 3, "f" => 1.5, "s" => "x"]; '
+                f'$fo = $o; $fs = ""; $os = [new P(1), $o, new P(2.5), new P(4)]; $ss = ["a", "bcd", "", "ef"]; '
+                f'{inits} {body} return {RESULT}; }}')
 
     def program(self):
         fns = [f'f{i}' for i in range(self.r.randrange(1, 4))]

@@ -137,6 +137,12 @@ pub(super) enum Ty {
     /// It owns nothing (null, a bool, a number of either type, or an
     /// undefined variable): it may be written over, not read as a number.
     Plain,
+    /// It may hold anything, also what it owns (a string, an array, an
+    /// object): the loop variable of a `foreach` over such values, and
+    /// the temporary the element goes through. The code neither reads
+    /// nor writes it; only the interpreter's own ops and handlers do,
+    /// which release what they replace.
+    Any,
 }
 
 /// The types of the slots that differ from the loop's entry types (a slot
@@ -445,7 +451,7 @@ fn takes(ty: Option<&crate::types::TypeDecl>, of: Ty) -> bool {
         Ty::Int => mask::LONG,
         Ty::Float => mask::DOUBLE,
         Ty::Bool => mask::BOOL,
-        Ty::Plain => return false,
+        Ty::Plain | Ty::Any => return false,
     };
     ty.mask & need == need
 }
@@ -730,6 +736,23 @@ enum Plan {
         /// The temporaries the element went through.
         consumed: [Option<SlotRef>; 2],
     },
+    /// The step of a `foreach` over an array of values that are not
+    /// numbers (objects, strings, arrays), as [`Plan::Each`] through
+    /// `super::fe_fetch`: the element goes into the temporary `value.0`
+    /// and the loop goes on at `step`, or, when the interpreter's step
+    /// also made the assignments that follow (the loop variable held
+    /// nothing to release), into the variable `value.1` and the loop goes
+    /// on at `full`. Either is [`Ty::Any`] from then on. The key, when
+    /// the loop has one, likewise (its temporary, its variable, and
+    /// whether the array's keys are ints, which the loop then tracks).
+    EachAny {
+        iter: u32,
+        end: usize,
+        step: usize,
+        full: usize,
+        value: (SlotRef, Option<SlotRef>),
+        key: Option<(SlotRef, Option<SlotRef>, bool)>,
+    },
     /// An op without a tape instruction that the interpreter's own fast
     /// path runs on the frame alone (`hot::step_ext`: a static property's
     /// read or write on a cache hit). It goes on at `next` when the op
@@ -739,7 +762,13 @@ enum Plan {
     /// from where it got to otherwise (a read that went into its
     /// temporary, not into the variable of the `AssignCv` after it).
     Ext {
+        /// Whether the op is one of the interpreter's core ops
+        /// (`hot::step`, through `super::core_step`: an assignment of a
+        /// value that is no number) and not one of `hot::step_ext`'s.
+        core: bool,
         result: Option<(SlotRef, Ty)>,
+        /// The variable the op leaves holding anything ([`Ty::Any`]).
+        any: Option<SlotRef>,
         /// The temporary the op consumes (left null by it).
         consume: Option<SlotRef>,
         /// The instruction after the op itself.
@@ -1096,6 +1125,7 @@ impl Plan {
             | Plan::Leave
             | Plan::Call(_)
             | Plan::Each { .. }
+            | Plan::EachAny { .. }
             | Plan::Ext { .. } => return None,
         })
     }
@@ -1129,25 +1159,29 @@ impl Plan {
             | Plan::Step { .. }
             | Plan::Call(_)
             | Plan::Each { .. }
+            | Plan::EachAny { .. }
             | Plan::Ext { .. } => false,
         }
     }
 
     /// Where execution may go on.
-    fn successors(&self) -> [Option<usize>; 2] {
+    fn successors(&self) -> [Option<usize>; 3] {
         match *self {
-            Plan::Jmp { to } | Plan::Bind { to, .. } => [Some(to), None],
+            Plan::Jmp { to } | Plan::Bind { to, .. } => [Some(to), None, None],
             Plan::Cmp { taken, fall, .. }
             | Plan::IncCmp { taken, fall, .. }
-            | Plan::Truth { taken, fall, .. } => [Some(taken), Some(fall)],
-            Plan::JmpEx { target, fall, .. } => [Some(target), Some(fall)],
-            Plan::Leave => [None, None],
+            | Plan::Truth { taken, fall, .. } => [Some(taken), Some(fall), None],
+            Plan::JmpEx { target, fall, .. } => [Some(target), Some(fall), None],
+            Plan::Leave => [None, None, None],
             Plan::Compare { next, .. }
             | Plan::SetBool { next, .. }
-            | Plan::Assign2 { next, .. } => [Some(next), None],
-            Plan::Call(call) => [call.fall, call.jump],
-            Plan::Each { end, full, .. } => [Some(full), Some(end)],
-            Plan::Ext { next, .. } => [Some(next), None],
+            | Plan::Assign2 { next, .. } => [Some(next), None, None],
+            Plan::Call(call) => [call.fall, call.jump, None],
+            Plan::Each { end, full, .. } => [Some(full), Some(end), None],
+            Plan::EachAny {
+                end, step, full, ..
+            } => [Some(step), Some(full), Some(end)],
+            Plan::Ext { next, .. } => [Some(next), None, None],
             Plan::Int2 { next, .. }
             | Plan::Conv { next, .. }
             | Plan::Math { next, .. }
@@ -1158,7 +1192,7 @@ impl Plan {
             | Plan::Arith { next, .. }
             | Plan::Step { next, .. }
             | Plan::Const { next, .. }
-            | Plan::Copy { next, .. } => [Some(next), None],
+            | Plan::Copy { next, .. } => [Some(next), None, None],
         }
     }
 
@@ -1169,6 +1203,44 @@ impl Plan {
         match *self {
             // At the end of a `foreach` nothing was fetched.
             Plan::Each { end, .. } if end == to => {}
+            Plan::EachAny {
+                end,
+                full,
+                value,
+                key,
+                ..
+            } => {
+                if to == end {
+                    return out;
+                }
+                let key_ty = |int| if int { Ty::Int } else { Ty::Any };
+                match value.1.filter(|_| to == full) {
+                    // The assignments were made too.
+                    Some(var) => {
+                        out.insert(var, Ty::Any);
+                        out.insert(value.0, Ty::Plain);
+                        if let Some((tmp, var, int)) = key {
+                            out.insert(
+                                tmp,
+                                if var.is_some() {
+                                    Ty::Plain
+                                } else {
+                                    key_ty(int)
+                                },
+                            );
+                            if let Some(var) = var {
+                                out.insert(var, key_ty(int));
+                            }
+                        }
+                    }
+                    None => {
+                        out.insert(value.0, Ty::Any);
+                        if let Some((tmp, _, int)) = key {
+                            out.insert(tmp, key_ty(int));
+                        }
+                    }
+                }
+            }
             // The bool is stored only when the jump is taken.
             Plan::JmpEx {
                 consume,
@@ -1262,11 +1334,19 @@ impl Plan {
                     st.insert(key, Ty::Int);
                 }
             }
+            // (By the way out: [`Plan::out`].)
+            Plan::EachAny { .. } => {}
             Plan::Ext {
-                result, consume, ..
+                result,
+                any,
+                consume,
+                ..
             } => {
                 if let Some(tmp) = consume {
                     st.insert(tmp, Ty::Plain);
+                }
+                if let Some(var) = any {
+                    st.insert(var, Ty::Any);
                 }
                 if let Some((slot, ty)) = result {
                     st.insert(slot, ty);
@@ -1374,9 +1454,12 @@ impl Loop {
     /// Whether a round that ends with the types `st` may start the next
     /// one: every slot the entry guards as a number still is that number.
     fn may_repeat(&self, st: &State) -> bool {
-        self.entry
-            .iter()
-            .all(|(slot, ty)| *ty == Ty::Plain || self.ty(st, *slot) == Some(*ty))
+        self.entry.iter().all(|(slot, ty)| match ty {
+            Ty::Any => true,
+            // (The round's first write of it releases nothing.)
+            Ty::Plain => self.ty(st, *slot) != Some(Ty::Any),
+            ty => self.ty(st, *slot) == Some(*ty),
+        })
     }
 }
 
@@ -1395,10 +1478,11 @@ pub(super) struct Seen<'a> {
     /// The type of the number the static property of a place (by index)
     /// holds, on a hit of its run-time cache.
     pub(super) statik: &'a dyn Fn(u32) -> Option<Ty>,
-    /// Whether the numbers a `foreach` iterator (by index) yields are
-    /// floats, and whether its keys are ints; `None` when it is not over
-    /// an array of numbers.
-    pub(super) each: &'a dyn Fn(u32) -> Option<(bool, bool)>,
+    /// For the array a `foreach` iterator (by index) is over: whether its
+    /// values are floats or ints (`None`: something else, by its first
+    /// element), and whether its keys are ints; `None` when it is not
+    /// over an array, or the array is empty.
+    pub(super) each: &'a dyn Fn(u32) -> Option<(Option<bool>, bool)>,
     /// The name of the builtin the function-name literal (by index)
     /// resolved to when its call last ran; `None` when it has not run, or
     /// calls may not be skipped (observers).
@@ -1460,7 +1544,8 @@ impl<'a> Analysis<'a> {
     /// round does not read.)
     fn ty(&mut self, st: &State, slot: SlotRef) -> Option<Ty> {
         if let Some(ty) = st.get(&slot).or_else(|| self.entry.get(&slot)) {
-            return Some(*ty);
+            // (What may own something is not written over here.)
+            return (*ty != Ty::Any).then_some(*ty);
         }
         if slot.at < 0 || self.inline {
             // An argument variable ([`arg_slot`]) nothing was sent to, or
@@ -1496,7 +1581,7 @@ impl<'a> Analysis<'a> {
         let float = match self.read(st, slot)? {
             Ty::Int => false,
             Ty::Float => true,
-            Ty::Bool | Ty::Plain => return None,
+            Ty::Bool | Ty::Plain | Ty::Any => return None,
         };
         Some(Opnd {
             num: Num::Slot(slot),
@@ -1508,7 +1593,7 @@ impl<'a> Analysis<'a> {
     fn truthy(&mut self, st: &State, slot: SlotRef) -> Option<Truthy> {
         match self.read(st, slot)? {
             Ty::Bool => Some(Truthy::Bool(slot)),
-            Ty::Plain => None,
+            Ty::Plain | Ty::Any => None,
             _ => self.number(st, slot).map(Truthy::Num),
         }
     }
@@ -1749,6 +1834,35 @@ impl<'a> Analysis<'a> {
     /// [`Self::plan`] of one of the tape's own instructions.
     #[allow(clippy::too_many_lines)]
     fn own_plan(&mut self, st: &State, i: usize) -> Option<Plan> {
+        // `$cv = tmp` of something that is no number (the element of a
+        // `foreach`), or over such a variable: the interpreter's
+        // assignment, which releases what the variable held.
+        if let Some(&Op::AssignCv {
+            cv: var,
+            val: Operand::Tmp(t),
+            dst: None,
+        }) = self.ops.get(i)
+        {
+            let (dst, src) = (
+                cv(var.checked_mul(SLOT_U32)?)?,
+                tmp(t.checked_mul(SLOT_U32)?)?,
+            );
+            let any =
+                |slot: SlotRef| st.get(&slot).or_else(|| self.entry.get(&slot)) == Some(&Ty::Any);
+            if !self.inline && (any(src) || any(dst)) {
+                if (self.seen.slow)(i) {
+                    return None;
+                }
+                return (i + 1 < self.tape.len()).then_some(Plan::Ext {
+                    core: true,
+                    result: None,
+                    any: Some(dst),
+                    consume: Some(src),
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+        }
         let inst = *self.tape.get(i)?;
         let after = |n: usize| (i + n < self.tape.len()).then_some(i + n);
         if let Some(call) = self.call(st, i) {
@@ -1991,9 +2105,10 @@ impl<'a> Analysis<'a> {
     /// holds something that owns (an array, a string, an object) now, so
     /// no numeric instruction of the loop reads or writes it.
     fn untracked(&self, st: &State, slot: SlotRef) -> bool {
-        !st.contains_key(&slot)
-            && !self.entry.contains_key(&slot)
-            && (self.seen.snapshot)(slot).is_none()
+        match st.get(&slot).or_else(|| self.entry.get(&slot)) {
+            Some(ty) => *ty == Ty::Any,
+            None => (self.seen.snapshot)(slot).is_none(),
+        }
     }
 
     /// The `dims` operand of kind `kind` and index `index` as a number the
@@ -2065,7 +2180,7 @@ impl<'a> Analysis<'a> {
                 let float = match (self.seen.keyed)(inst.a, inst.b)? {
                     Ty::Int => false,
                     Ty::Float => true,
-                    Ty::Bool | Ty::Plain => return None,
+                    Ty::Bool | Ty::Plain | Ty::Any => return None,
                 };
                 call.fast = Some(Fast::GetKey {
                     cv: inst.a,
@@ -2178,7 +2293,7 @@ impl<'a> Analysis<'a> {
                 let float = match (self.seen.property)(inst.a)? {
                     Ty::Int => false,
                     Ty::Float => true,
-                    Ty::Bool | Ty::Plain => return None,
+                    Ty::Bool | Ty::Plain | Ty::Any => return None,
                 };
                 let to = if inst.op == TOp::FetchObjPropTo {
                     inst.d
@@ -2504,7 +2619,7 @@ impl<'a> Analysis<'a> {
                 }
                 let ty = match (self.seen.statik)(place)? {
                     ty @ (Ty::Int | Ty::Float) => ty,
-                    Ty::Bool | Ty::Plain => return None,
+                    Ty::Bool | Ty::Plain | Ty::Any => return None,
                 };
                 let (slot, next) = match to {
                     Some(to) => (cv(to.checked_mul(SLOT_U32)?)?, i + 2),
@@ -2515,6 +2630,8 @@ impl<'a> Analysis<'a> {
                 // cannot take the value: it too must own nothing.)
                 self.ty(st, temp(dst)?)?;
                 (next < self.tape.len()).then_some(Plan::Ext {
+                    core: false,
+                    any: None,
                     result: Some((slot, ty)),
                     consume: None,
                     after: i + 1,
@@ -2529,6 +2646,8 @@ impl<'a> Analysis<'a> {
                 let dst = temp(dst)?;
                 self.ty(st, dst)?;
                 Some(Plan::Ext {
+                    core: false,
+                    any: None,
                     result: Some((dst, Ty::Bool)),
                     consume: None,
                     after: next,
@@ -2560,6 +2679,8 @@ impl<'a> Analysis<'a> {
                     _ => return None,
                 };
                 Some(Plan::Ext {
+                    core: false,
+                    any: None,
                     result: None,
                     consume,
                     after: next,
@@ -2721,7 +2842,7 @@ impl<'a> Analysis<'a> {
                     next,
                 });
             }
-            Ty::Plain => return None,
+            Ty::Plain | Ty::Any => return None,
         };
         Some(Plan::Const { dst, value, next })
     }
@@ -2796,6 +2917,68 @@ impl<'a> Analysis<'a> {
     /// numbers, when it is one: where the element and its key end up
     /// follows `hot::step_ext`'s arm, which also runs the plain
     /// assignments to the loop's variables that follow the fetch.
+    /// [`Self::each_step`] for values that are not numbers
+    /// ([`Plan::EachAny`]).
+    fn each_any(&mut self, st: &State, i: usize) -> Option<Plan> {
+        let &Op::FeFetch {
+            iter,
+            end,
+            val,
+            key,
+        } = self.ops.get(i)?
+        else {
+            return None;
+        };
+        if self.inline || (self.seen.slow)(i) {
+            return None;
+        }
+        let (_, int_keys) = (self.seen.each)(iter)?;
+        let assigned = |an: &Self, at: usize, t: u32| match an.ops.get(at) {
+            Some(&Op::AssignCv {
+                cv: to,
+                val: Operand::Tmp(src),
+                dst: None,
+            }) if src == t => cv(to.checked_mul(SLOT_U32)?),
+            _ => None,
+        };
+        let temp = |t: u32| tmp(t.checked_mul(SLOT_U32)?);
+        let step = i + 1;
+        let mut full = step;
+        let value = (temp(val)?, assigned(self, full, val));
+        if value.1.is_some() {
+            full += 1;
+        }
+        let key = match key {
+            None => None,
+            Some(k) => {
+                // Its assignment only runs with the value's.
+                let var = assigned(self, full, k).filter(|_| value.1.is_some());
+                if var.is_some() {
+                    full += 1;
+                }
+                let slot = temp(k)?;
+                if int_keys {
+                    // Tracked as a number: nothing is released by the
+                    // stores into it.
+                    self.ty(st, slot)?;
+                    if let Some(var) = var {
+                        self.ty(st, var)?;
+                    }
+                }
+                Some((slot, var, int_keys))
+            }
+        };
+        let end = end as usize;
+        (full < self.tape.len() && end < self.tape.len()).then_some(Plan::EachAny {
+            iter,
+            end,
+            step,
+            full,
+            value,
+            key,
+        })
+    }
+
     fn each_step(&mut self, st: &State, i: usize) -> Option<Plan> {
         let &Op::FeFetch {
             iter,
@@ -2807,6 +2990,9 @@ impl<'a> Analysis<'a> {
             return None;
         };
         let (float, int_keys) = (self.seen.each)(iter)?;
+        let Some(float) = float else {
+            return self.each_any(st, i);
+        };
         // The variable the `AssignCv` at `at` copies temporary `t` into.
         let assigned = |an: &Self, at: usize, t: u32| match an.ops.get(at) {
             Some(&Op::AssignCv {
@@ -2899,7 +3085,7 @@ impl<'a> Analysis<'a> {
         match (self.seen.element)(cv, depth)? {
             Ty::Int => Some(false),
             Ty::Float => Some(true),
-            Ty::Bool | Ty::Plain => None,
+            Ty::Bool | Ty::Plain | Ty::Any => None,
         }
     }
 
@@ -3019,18 +3205,24 @@ impl<'a> Analysis<'a> {
         for slot in slots {
             let merged = match (cur.get(&slot).copied(), new.get(&slot).copied()) {
                 (Some(a), Some(b)) if a == b => continue,
+                (Some(Ty::Any), _) | (_, Some(Ty::Any)) => Ty::Any,
                 (Some(_), Some(_)) => Ty::Plain,
                 (Some(ty), None) | (None, Some(ty)) => {
-                    let held = if ty == Ty::Plain || slot.at < 0 {
-                        None
+                    let held = if slot.at < 0 {
+                        Some(Ty::Plain)
                     } else {
                         (self.seen.snapshot)(slot)
                     };
-                    if held == Some(ty) {
-                        self.entry.insert(slot, ty);
-                        ty
-                    } else {
-                        Ty::Plain
+                    match held {
+                        Some(held) if held == ty && ty != Ty::Plain => {
+                            self.entry.insert(slot, ty);
+                            ty
+                        }
+                        Some(_) => Ty::Plain,
+                        // (Its entry type is checked: it owns nothing.)
+                        None if self.entry.contains_key(&slot) => Ty::Plain,
+                        // What it held on entry may own something.
+                        None => Ty::Any,
                     }
                 }
                 (None, None) => continue,
@@ -3487,6 +3679,8 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         let base = e.base(*slot);
         let tag = e.b.ins().load(types::I8, mem(), base, slot.at);
         let ok = match ty {
+            // Nothing is asked of it.
+            Ty::Any => continue,
             Ty::Int => e.b.ins().icmp_imm(IntCC::Equal, tag, i64::from(TAG_INT)),
             Ty::Float => e.b.ins().icmp_imm(IntCC::Equal, tag, i64::from(TAG_FLOAT)),
             Ty::Bool => e.b.ins().icmp_imm(IntCC::Equal, tag, i64::from(TAG_BOOL)),
@@ -3527,7 +3721,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
             Ty::Int => TAG_INT,
             Ty::Float => TAG_FLOAT,
             Ty::Bool => TAG_BOOL,
-            Ty::Plain => return None,
+            Ty::Plain | Ty::Any => return None,
         };
         #[allow(clippy::cast_possible_wrap)]
         let args = [
@@ -3563,7 +3757,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
                 let v = e.b.ins().uload8(types::I64, mem(), base, slot.at + BOOL_AT);
                 e.b.def_var(int, v);
             }
-            Ty::Plain => {}
+            Ty::Plain | Ty::Any => {}
         }
     }
     let head = *e.blocks.get(&lp.head)?;
@@ -3688,7 +3882,7 @@ impl Emit<'_, '_> {
             Ty::Int => TAG_INT,
             Ty::Float => TAG_FLOAT,
             Ty::Bool => TAG_BOOL,
-            Ty::Plain => return None,
+            Ty::Plain | Ty::Any => return None,
         };
         let ok = self
             .b
@@ -4193,7 +4387,7 @@ impl Emit<'_, '_> {
                     let float = match self.lp.ty(st, arg)? {
                         Ty::Int => false,
                         Ty::Float => true,
-                        Ty::Bool | Ty::Plain => return None,
+                        Ty::Bool | Ty::Plain | Ty::Any => return None,
                     };
                     let (int, fl) = *self.vars.get(&arg)?;
                     let v = self.b.use_var(if float { fl } else { int });
@@ -4609,10 +4803,12 @@ impl Emit<'_, '_> {
                 }
                 self.go(i, full, repeat)?;
             }
-            Plan::Ext {
-                result,
-                after,
-                next,
+            Plan::EachAny {
+                end,
+                step,
+                full,
+                value,
+                key,
                 ..
             } => {
                 #[allow(clippy::cast_possible_wrap)]
@@ -4620,6 +4816,95 @@ impl Emit<'_, '_> {
                     .b
                     .ins()
                     .iconst(types::I64, super::fe_fetch as super::Step as usize as i64);
+                let at = self.b.ins().iconst(types::I64, i64::try_from(i).ok()?);
+                let made = self
+                    .b
+                    .ins()
+                    .call_indirect(self.handler_sig, callee, &[self.frame, at]);
+                let next = *self.b.inst_results(made).first()?;
+                // Not an array iterated by value (`hot::DECLINED`, all
+                // ones): nothing changed, the interpreter's op, counted.
+                let [declined, done, polled, go, stepped, rest, whole, rest2, other] =
+                    std::array::from_fn(|_| self.b.create_block());
+                for cold in [declined, polled, other] {
+                    self.b.set_cold_block(cold);
+                }
+                let refused = self.b.ins().icmp_imm(IntCC::Equal, next, -1);
+                self.b.ins().brif(refused, declined, &[], done, &[]);
+                self.b.switch_to_block(declined);
+                self.ret(i, WHY_MISS);
+                // The poll `run_tape` makes after the op (an object the
+                // step released may have a destructor waiting).
+                self.b.switch_to_block(done);
+                let flag = self.flag;
+                let due = self
+                    .b
+                    .ins()
+                    .load(types::I8, MemFlags::new().with_notrap(), flag, 0);
+                self.b.ins().brif(due, polled, &[], go, &[]);
+                self.b.switch_to_block(polled);
+                self.b.ins().store(mem(), at, self.record, rec_at(REC_AT)?);
+                self.ret_at(next, super::WHY_POLL);
+                self.b.switch_to_block(go);
+                // The element in its temporary: the assignments follow.
+                let at_step = self
+                    .b
+                    .ins()
+                    .icmp_imm(IntCC::Equal, next, i64::try_from(step).ok()?);
+                self.b.ins().brif(at_step, stepped, &[], rest, &[]);
+                self.b.switch_to_block(stepped);
+                let out = plan.out(st, step);
+                if let Some((tmp, var, true)) = key {
+                    // (With no assignments to make, `full` is `step`.)
+                    let slot = var.filter(|_| full == step).unwrap_or(tmp);
+                    self.read_back(slot, Ty::Int, step)?;
+                }
+                self.go(i, step, self.lp.may_repeat(&out))?;
+                self.b.switch_to_block(rest);
+                // The end of the iteration.
+                let over = self.land(i, end, st);
+                let ended = self
+                    .b
+                    .ins()
+                    .icmp_imm(IntCC::Equal, next, i64::try_from(end).ok()?);
+                self.b.ins().brif(ended, over, &[], rest2, &[]);
+                self.b.switch_to_block(rest2);
+                // The assignments made as well; or one of them only (the
+                // first tier goes on at the other).
+                if full == step || value.1.is_none() {
+                    self.b.ins().jump(other, &[]);
+                    self.b.switch_to_block(whole);
+                    self.ret_at(next, WHY_GENERIC);
+                } else {
+                    let all = self
+                        .b
+                        .ins()
+                        .icmp_imm(IntCC::Equal, next, i64::try_from(full).ok()?);
+                    self.b.ins().brif(all, whole, &[], other, &[]);
+                    self.b.switch_to_block(whole);
+                    let out = plan.out(st, full);
+                    if let Some((_, Some(var), true)) = key {
+                        self.read_back(var, Ty::Int, full)?;
+                    }
+                    self.go(i, full, self.lp.may_repeat(&out))?;
+                }
+                self.b.switch_to_block(other);
+                self.ret_at(next, WHY_GENERIC);
+            }
+            Plan::Ext {
+                core,
+                result,
+                after,
+                next,
+                ..
+            } => {
+                let step = if core {
+                    super::core_step as super::Step as usize
+                } else {
+                    super::fe_fetch as super::Step as usize
+                };
+                #[allow(clippy::cast_possible_wrap)]
+                let callee = self.b.ins().iconst(types::I64, step as i64);
                 let at = self.b.ins().iconst(types::I64, i64::try_from(i).ok()?);
                 let made = self
                     .b
