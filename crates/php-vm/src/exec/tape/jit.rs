@@ -458,6 +458,7 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
                             | Op::Unary { .. }
                             | Op::FramelessICall(_)
                             | Op::IncDec { .. }
+                            | Op::FeFree { .. }
                     )
                 ) {
                     // (For the first tier, should it be compiled: this

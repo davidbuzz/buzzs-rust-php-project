@@ -591,6 +591,9 @@ struct Site {
     init: usize,
     kind: SiteKind,
     name: u32,
+    /// Whether the name has a global fallback (an unqualified call in a
+    /// namespace): what it calls is the call site's own cache entry's.
+    fallback: bool,
     sends: Vec<usize>,
     call: usize,
 }
@@ -615,12 +618,15 @@ fn call_sites(ops: &[Op]) -> Vec<Site> {
     let mut open: Vec<Site> = Vec::new();
     let mut sites = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        let start = match op {
+        let fallback = matches!(
+            op,
             Op::InitFCall {
-                name,
-                fallback: None,
+                fallback: Some(_),
                 ..
-            } => Some((SiteKind::Func, *name)),
+            }
+        );
+        let start = match op {
+            Op::InitFCall { name, .. } => Some((SiteKind::Func, *name)),
             Op::InitStaticCall {
                 class:
                     ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
@@ -630,8 +636,7 @@ fn call_sites(ops: &[Op]) -> Vec<Site> {
                 obj: obj @ (Operand::Cv(_) | Operand::Unused),
                 name: Operand::Lit(name),
             } => Some((SiteKind::Method(*obj), *name)),
-            Op::InitFCall { .. }
-            | Op::InitDynCall { .. }
+            Op::InitDynCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -643,6 +648,7 @@ fn call_sites(ops: &[Op]) -> Vec<Site> {
                 init: i,
                 kind,
                 name,
+                fallback,
                 sends: Vec::new(),
                 call: 0,
             });
@@ -2220,7 +2226,7 @@ impl<'a> Analysis<'a> {
                         .iter()
                         .find(|site| site.sends == [at])
                         .filter(|site| site.kind == SiteKind::Func)
-                        .and_then(|site| self.builtin(site.name))
+                        .and_then(|site| self.site_builtin(site))
                         .is_some_and(|name| name != b"abs" && math_fn(&name).is_some())
                 }
                 _ => {
@@ -2377,7 +2383,7 @@ impl<'a> Analysis<'a> {
             None => {
                 site.kind == SiteKind::Func
                     && self
-                        .builtin(site.name)
+                        .site_builtin(site)
                         .is_some_and(|name| computed(&name, site.sends.len()))
             }
         };
@@ -2453,6 +2459,22 @@ impl<'a> Analysis<'a> {
                 .filter(|outer| outer.init < site.init && outer.call > site.call)
                 .count();
         (depth < MAX_DEPTH).then_some(depth * MAX_ARGS)
+    }
+
+    /// The name of the builtin the call `site` makes: as [`Self::builtin`]
+    /// of its name; of a name with a global fallback, the builtin the call
+    /// site's own cache entry holds (the global the call resolved to, kept
+    /// even when a function of the namespace's is declared later), and
+    /// none if it holds none (a builtin cached under the name could give
+    /// way to such a function).
+    fn site_builtin(&self, site: &Site) -> Option<Vec<u8>> {
+        if !site.fallback {
+            return self.builtin(site.name);
+        }
+        // (`Vm::fallback_site_slot`: after the literals, by the op after
+        // the call's first, which is the frame's `ip` while that runs.)
+        let slot = u32::try_from(self.lits.len() + site.init + 1).ok()?;
+        self.builtin(slot)
     }
 
     /// The name of the builtin the function-name literal `name` of the
@@ -3461,7 +3483,7 @@ impl<'a> Analysis<'a> {
                     if site.kind != SiteKind::Func {
                         return None;
                     }
-                    let name = self.builtin(site.name)?;
+                    let name = self.site_builtin(site)?;
                     if !computed(&name, site.sends.len()) {
                         return None;
                     }
@@ -3518,7 +3540,7 @@ impl<'a> Analysis<'a> {
                 if site.kind != SiteKind::Func {
                     return None;
                 }
-                let name = self.builtin(site.name)?;
+                let name = self.site_builtin(&site)?;
                 let mut args = Vec::new();
                 let first = self.arg_base(&site)?;
                 for k in 0..site.sends.len().min(MAX_ARGS + 1) {
@@ -4200,8 +4222,14 @@ impl<'a> Analysis<'a> {
                 });
             }
             Op::FeFree { .. } => {
-                if (self.seen.slow)(i) || i + 1 >= self.tape.len() {
+                if i + 1 >= self.tape.len() {
                     return None;
+                }
+                if (self.seen.slow)(i) {
+                    // (Its step kept declining: the release of an array
+                    // only the loop held, `foreach (f() as $x)`, whose
+                    // destructors are the VM's.)
+                    return self.out(i + 1, None, None);
                 }
                 return Some(Plan::Ext {
                     alt: None,
@@ -4559,7 +4587,11 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     // The calls of user functions from the head on that may run inline.
     let mut inl: Vec<Inlined> = Vec::new();
     for site in &sites {
-        if site.init < head || site.sends.len() > MAX_ARGS || site.kind == SiteKind::Other {
+        if site.init < head
+            || site.sends.len() > MAX_ARGS
+            || site.kind == SiteKind::Other
+            || site.fallback
+        {
             continue;
         }
         let Some(func) = (seen.user)(site.init, site.sends.len()) else {

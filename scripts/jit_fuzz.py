@@ -288,6 +288,9 @@ class Gen:
     def program(self):
         fns = [f'f{i}' for i in range(self.r.randrange(1, 4))]
         out = ['<?php']
+        if self.r.random() < 0.3:
+            # In a namespace: unqualified calls and constants have a global fallback.
+            out.append('namespace Fz;')
         out.append("const KI = 3; const KF = 1.5; const KB = true; const KS = '7';")
         out.append('function h0($x) { return $x * 2 + 1; } function h1($a, $b) { return $a - $b; } '
                    'function h2($x) { if ($x > 5) { return $x - 5; } $y = $x; $y++; return $y; } '

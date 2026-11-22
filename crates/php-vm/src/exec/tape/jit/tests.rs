@@ -1852,3 +1852,21 @@ var_dump(C::run(60), C::run(10));
         1,
     );
 }
+
+#[test]
+fn typed_loops_compute_the_builtins_of_namespaced_calls() {
+    // Unqualified calls in a namespace: the builtin the call site resolved
+    // to (its own cache entry) is computed; a function of the namespace's
+    // declared later is not called there, but where a call first runs
+    // after it; one declared before is the interpreter's call.
+    typed_at_least(
+        r#"<?php namespace A;
+function f($n) { $s = 0.0; $m = 0; for ($i = 1; $i < $n; $i++) { $s += sqrt($i) + abs(-$i) + floor($i / 3); $m = max($m, $i % 17) + intdiv($i, 7); $s -= min($m, 3); } return [$s, $m]; }
+function g($n) { $s = 0.0; for ($i = 1; $i < $n; $i++) { $s += sqrt($i) + $i * 0.5; $s -= 1; $s += 2; $s *= 1.0; } return $s; }
+var_dump(f(100));
+eval('namespace A; function sqrt($x) { return -1.0; }');
+var_dump(f(100), g(100));
+"#,
+        1,
+    );
+}
