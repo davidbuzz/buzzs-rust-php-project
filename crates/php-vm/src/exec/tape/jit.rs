@@ -805,9 +805,9 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             let func = func.upgrade()?;
             let plain = cached.scope.is_none()
                 && cached.called.is_none()
-                && func.call_shape() == CallShape::UNTYPED
-                && func.params.len() == argc
-                && func.return_type.is_none()
+                && matches!(func.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
+                && argc <= func.params.len()
+                && argc >= func.required as usize
                 && func.flags & (flags::CLOSURE | flags::STATIC) == 0
                 && func.uses.is_empty()
                 && func.class_name.is_none()

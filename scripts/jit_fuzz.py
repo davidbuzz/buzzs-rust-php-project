@@ -94,9 +94,9 @@ class Gen:
             return f'{self.pick(["sqrt", "floor", "ceil", "sin", "round", "log", "exp"])}({self.expr(d + 1)})'
         # Small user functions, which a typed loop runs inline.
         if k < 0.05:
-            return f'{self.pick(["h0", "h2", "h4", "h5"])}({self.expr(d + 1)})'
+            return f'{self.pick(["h0", "h2", "h4", "h5", "h6", "h7", "h9"])}({self.expr(d + 1)})'
         if k < 0.07:
-            return f'{self.pick(["h1", "h3"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
+            return f'{self.pick(["h1", "h3", "h7", "h9"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
         if k < 0.1:
             return f'{self.pick(["intdiv", "min", "max"])}({self.expr(d + 1)}, {self.atom()})'
         if k < 0.14:
@@ -123,7 +123,8 @@ class Gen:
             return self.pick([f'isset({self.arr()}[{self.index()}])', f'empty({self.arr()}[{self.index()}])',
                               f'is_int({self.var()})', f'is_float({self.var()})', f'isset({self.var()})',
                               f'isset({self.pick(PROPS)})', f'empty({self.pick(PROPS)})',
-                              f'isset({self.pick(STATICS)})', f'empty({self.pick(STATICS)})'])
+                              f'isset({self.pick(STATICS)})', f'empty({self.pick(STATICS)})',
+                              f'h8({self.atom()}, {self.atom()})', f'h8({self.var()}, {self.expr(1)})'])
         if k < 0.1:
             return self.var()
         if k < 0.15:
@@ -245,7 +246,9 @@ class Gen:
         out.append('function h0($x) { return $x * 2 + 1; } function h1($a, $b) { return $a - $b; } '
                    'function h2($x) { if ($x > 5) { return $x - 5; } $y = $x; $y++; return $y; } '
                    'function h3($a, $b) { $t = $a * $b; return $t / 2.0; } function h4($x) { return $x % 7; } '
-                   'function h5($x) { return $x < 3 ? $x << 2 : (int)($x * 0.5); }')
+                   'function h5($x) { return $x < 3 ? $x << 2 : (int)($x * 0.5); } '
+                   'function h6(int $x): int { return $x + 3; } function h7(float $x, $y = 2): float { return $x * $y; } '
+                   'function h8($a, $b) { return $a <= $b; } function h9(int|float $x, int $k = 5): int|float { return $x - $k; }')
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'function __construct($x) { $this->x = $x; } }')

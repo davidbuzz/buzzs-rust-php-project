@@ -413,6 +413,30 @@ fn real_slot(slot: SlotRef) -> Option<SlotRef> {
 pub(super) const INLINE_OPS: usize = 48;
 const INLINE_SPAN: usize = 64;
 
+/// What an inlined function returns ([`Analysis::returned`]).
+#[derive(Clone, Copy)]
+enum Returned {
+    Num(Opnd),
+    Bool(Truthy),
+}
+
+/// Whether a parameter or return type `ty` takes a value of type `of` as
+/// it is: no declaration, or one that names the value's own type (an int
+/// given to a `float` is converted, which is not done here).
+fn takes(ty: Option<&crate::types::TypeDecl>, of: Ty) -> bool {
+    use crate::types::mask;
+    let Some(ty) = ty else {
+        return true;
+    };
+    let need = match of {
+        Ty::Int => mask::LONG,
+        Ty::Float => mask::DOUBLE,
+        Ty::Bool => mask::BOOL,
+        Ty::Plain => return false,
+    };
+    ty.mask & need == need
+}
+
 /// A call of a user function that a typed loop runs inline: the call's
 /// ops in the loop, and the function's code with a tape of its own (the
 /// function's may hold entry instructions of the JIT). Its instructions
@@ -424,7 +448,9 @@ pub(super) struct Inlined {
     /// The literal of the function's name at the call.
     name: u32,
     base: usize,
-    /// The function's first instruction for the arguments passed.
+    /// How many arguments the call passes, and the function's first
+    /// instruction for that many.
+    argc: usize,
     first: usize,
     func: std::rc::Rc<crate::func::UserFunction>,
     tape: Box<[Inst]>,
@@ -1521,13 +1547,58 @@ impl<'a> Analysis<'a> {
             std::mem::take(&mut self.entry),
         );
         self.inline = true;
-        let returned = match code.ops.get(at) {
-            Some(&Op::Return { val }) => Some(self.op_number(&local, val).map(|(value, _)| value)),
-            _ => None,
-        };
-        let plan = match returned {
-            Some(_) => None,
-            None => self.own_plan(&local, at),
+        // What the function returns here, if it does: a number, a bool, or
+        // (`None`) something else.
+        let mut returned: Option<Option<Returned>> = None;
+        let func = &callee.func;
+        let plan = match code.ops.get(at) {
+            Some(&Op::Return { val }) => {
+                returned = Some(self.returned(&local, val));
+                None
+            }
+            // The declared return type takes the value as it is (no
+            // coercion, no error): nothing to do.
+            Some(&Op::VerifyReturn { val }) => {
+                let ty = match self.returned(&local, val) {
+                    Some(Returned::Num(value)) => Some(num_ty(value.float)),
+                    Some(Returned::Bool(_)) => Some(Ty::Bool),
+                    None => None,
+                };
+                ty.filter(|ty| takes(func.return_type.as_ref(), *ty))
+                    .map(|_| Plan::Jmp { to: at + 1 })
+            }
+            // A parameter with a default: passed (the call starts after
+            // these), or its default, a number its type takes as it is.
+            Some(&Op::RecvInit { n, skip, .. }) => Some(Plan::Jmp {
+                to: if (n as usize) < callee.argc {
+                    skip as usize
+                } else {
+                    at + 1
+                },
+            }),
+            Some(&Op::RecvDefault { n, cv: var, val }) => (|| {
+                let (value, _) = self.op_number(&local, val)?;
+                let param = func.params.get(n as usize)?;
+                if !takes(param.ty.as_ref(), num_ty(value.float)) {
+                    return None;
+                }
+                let dst = cv(var.checked_mul(SLOT_U32)?)?;
+                Some(match value.num {
+                    Num::Slot(src) => Plan::Copy {
+                        src,
+                        dst,
+                        float: value.float,
+                        consume: false,
+                        next: at + 1,
+                    },
+                    _ => Plan::Const {
+                        dst,
+                        value,
+                        next: at + 1,
+                    },
+                })
+            })(),
+            _ => self.own_plan(&local, at),
         };
         self.inline = false;
         (
@@ -1539,25 +1610,35 @@ impl<'a> Analysis<'a> {
             self.entry,
         ) = saved;
         if let Some(value) = returned {
-            let value = value?.inlined();
             let next = (callee.call + 1 < self.real).then_some(callee.call + 1)?;
             let Some(&Op::DoCall { dst }) = self.ops.get(callee.call) else {
                 return None;
             };
+            // An unused result is no work, whatever it is (the function
+            // has no effects to leave behind).
             let Some(dst) = dst else {
                 return Some(Plan::Jmp { to: next });
             };
             let dst = tmp(dst.checked_mul(SLOT_U32)?)?;
             self.ty(st, dst)?;
-            return Some(match value.num {
-                Num::Slot(src) => Plan::Copy {
-                    src,
+            return Some(match value? {
+                Returned::Num(value) => match value.inlined().num {
+                    Num::Slot(src) => Plan::Copy {
+                        src,
+                        dst,
+                        float: value.float,
+                        consume: false,
+                        next,
+                    },
+                    _ => Plan::Const { dst, value, next },
+                },
+                Returned::Bool(value) => Plan::SetBool {
+                    value: value.inlined(),
+                    negate: false,
+                    consume: None,
                     dst,
-                    float: value.float,
-                    consume: false,
                     next,
                 },
-                _ => Plan::Const { dst, value, next },
             });
         }
         let plan = plan?;
@@ -1571,6 +1652,22 @@ impl<'a> Analysis<'a> {
             return None;
         }
         plan.inlined(callee.base)
+    }
+
+    /// The value the operand `val` of a `return` is, when the loop can
+    /// hand it on: a number, or a bool.
+    fn returned(&mut self, st: &State, val: Operand) -> Option<Returned> {
+        if let Some((value, _)) = self.op_number(st, val) {
+            return Some(Returned::Num(value));
+        }
+        if matches!(val, Operand::Lit(l) if !matches!(self.lits.get(l as usize), Some(Value::Bool(_))))
+        {
+            return None;
+        }
+        match self.op_truthy(st, val)? {
+            (value @ (Truthy::Bool(_) | Truthy::Known(_)), _) => Some(Returned::Bool(value)),
+            (Truthy::Num(_), _) => None,
+        }
     }
 
     /// The first argument variable of the call `site`: those of its depth
@@ -2479,9 +2576,14 @@ impl<'a> Analysis<'a> {
                 let site = self.sites.iter().find(|site| site.call == i)?.clone();
                 let args = self.arg_base(&site)?;
                 if let Some((k, callee)) = self.inlined_site(site.init) {
-                    // Every argument a number, kept since its `Send`.
+                    // Every argument a number, kept since its `Send`, that
+                    // its parameter's type takes as it is.
                     for k in 0..site.sends.len() {
-                        self.number(st, arg_slot(args + k))?;
+                        let arg = self.number(st, arg_slot(args + k))?;
+                        let param = callee.func.params.get(k)?;
+                        if !takes(param.ty.as_ref(), num_ty(arg.float)) {
+                            return None;
+                        }
                     }
                     *self.bound.get_mut(k)? = true;
                     let code = &callee.func.code;
@@ -2941,6 +3043,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             call: site.call,
             name: site.name,
             base: tape.len() + INLINE_SPAN * inl.len(),
+            argc: site.sends.len(),
             first: func.plain_first_op(site.sends.len()),
             func,
             tape: callee,

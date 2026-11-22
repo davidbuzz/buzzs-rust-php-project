@@ -1211,3 +1211,51 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn inlined_functions_may_have_types_defaults_and_bool_or_unused_results() {
+    typed_at_least(
+        "<?php function v_int(int $x): int { return $x + 1; } function v_d(int $x, int $y = 3, float $z = 0.5): float { return $x * $y + $z; } function v_lt($a, $b) { return $a < $b; } function v_void($x): void { $y = $x + 1; } function t($n) { $s = 0; $f = 0.0; $c = 0; for ($i = 0; $i < $n; $i++) { $s += v_int($i); $f += v_d($i) + v_d($i, 2, 1.5); if (v_lt($i, 9)) { $c++; } v_void($i); } return [$s, $f, $c]; } var_dump(t(50), t(4));",
+        1,
+    );
+    // Types that take the argument as it is, and those that would convert
+    // it or refuse it (the interpreter's call, with its errors); defaults
+    // of each kind; results that are bools, null, or not used.
+    three(
+        r#"<?php
+function v_int(int $x): int { return $x + 1; }
+function v_flt(float $x): float { return $x * 0.5; }
+function v_wide(float $x) { return $x + 1; }
+function v_ret(int $x): float { return $x; }
+function v_num(int|float $x): int|float { return $x * 2; }
+function v_opt(?int $x): ?int { return $x; }
+function v_dflt($x, $y = 3) { return $x + $y; }
+function v_dflt2(int $x, int $y = 3, float $z = 0.5): float { return $x * $y + $z; }
+function v_dnull($x, $y = null) { return $y === null ? $x : $x + $y; }
+function v_dwide(int $x, float $y = 2) { return $x * $y; }
+function v_void($x): void { $y = $x + 1; }
+function v_none($x) { $y = $x * 2; return; }
+function v_bool($a, $b) { return $a < $b; }
+function v_tbool(int $a): bool { return $a > 10; }
+function v_even($x) { return $x % 2 == 0; }
+function v_true() { return true; }
+function v_zero(): int { return 0; }
+function v_str(string $x) { return 1; }
+function p1($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += v_int($i) + v_num($i) + v_opt($i) + v_zero(); } return $s; }
+function p2($n) { $f = 0.5; for ($i = 0; $i < $n; $i++) { $f += v_flt($f) + v_num($f) * 0.01; } return $f; }
+function p3($n) { $f = 0.5; for ($i = 0; $i < $n; $i++) { $f += v_wide($i) + v_ret($i) + v_flt($i); } return $f; }
+function p4($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += v_dflt($i) + v_dflt($i, 1); } return $s; }
+function p5($n) { $f = 0.0; for ($i = 0; $i < $n; $i++) { $f += v_dflt2($i) + v_dflt2($i, 2) + v_dflt2($i, 2, 1.5); } return $f; }
+function p6($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += v_dnull($i) + v_dnull($i, 2); } return $s; }
+function p7($n) { $f = 0.0; for ($i = 0; $i < $n; $i++) { $f += v_dwide($i) + v_dwide($i, 1.5); } return $f; }
+function p8($n) { $s = 0; for ($i = 0; $i < $n; $i++) { v_void($i); v_none($i); $s += $i; } return $s; }
+function p9($n) { $c = 0; for ($i = 0; $i < $n; $i++) { if (v_bool($i, 7)) { $c++; } if (v_tbool($i)) { $c += 2; } $b = v_even($i); if ($b) { $c += 4; } if (v_true()) { $c += 8; } } return [$c, $b]; }
+function p10($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $v = v_void($i); $w = v_none($i); $s += $i; } return [$s, $v, $w]; }
+function p11($n, $x) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += v_int($x); if ($i == 9) { $x = 2.0; } if ($i == 11) { $x = '5'; } if ($i == 13) { $x = 7; } } return $s; }
+function p12($n) { $s = 0; for ($i = 0; $i < $n; $i++) { try { $s += v_str($i); } catch (TypeError $e) { $s += 100; } } return $s; }
+function p13($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += v_int(PHP_INT_MAX - 20 + $i) > 0 ? 1 : 2; } return $s; }
+foreach ([40, 6] as $n) { var_export([p1($n), p2($n), p3($n), p4($n), p5($n), p6($n), p7($n), p8($n), p9($n), p10($n), p11($n, 3), p12($n)]); try { var_export(p13($n)); } catch (TypeError $e) { echo $e->getMessage(), '@', $e->getLine(), "\n"; } }
+echo "\n";
+"#,
+    );
+}
