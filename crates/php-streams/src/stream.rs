@@ -1395,13 +1395,16 @@ impl Stream {
                     let mut input = Brigade::from(vec![Bucket::new(data.clone())]);
                     let mut out = Brigade::new();
                     let f = &mut self.read_filters.filters[idx].filter;
-                    let mut status = f.filter(
-                        &mut env,
-                        &mut input,
-                        &mut out,
-                        Some(&mut consumed),
-                        FilterFlags::Normal,
-                    );
+                    let sid = env.stream_id;
+                    let mut status = crate::diag::applying_chain(sid, || {
+                        f.filter(
+                            &mut env,
+                            &mut input,
+                            &mut out,
+                            Some(&mut consumed),
+                            FilterFlags::Normal,
+                        )
+                    });
                     if self.readpos + consumed > self.writepos {
                         status = FilterStatus::ErrFatal;
                     }
@@ -1568,6 +1571,14 @@ impl Stream {
 
     /// Closes, optionally preserving the underlying handle.
     pub fn close_ex(&mut self, preserve_handle: bool) -> i32 {
+        self.close_ex_then(preserve_handle, &mut || {})
+    }
+
+    /// [`Stream::close_ex`] with `after_flush` run between the closing
+    /// flush and the rest of the close: `_php_stream_free()` flushes (a
+    /// user filter's last call, which may use `$this->stream`) before it
+    /// closes the resource (`zend_list_close()`).
+    pub fn close_ex_then(&mut self, preserve_handle: bool, after_flush: &mut dyn FnMut()) -> i32 {
         if self.closed {
             return 0;
         }
@@ -1578,6 +1589,7 @@ impl Stream {
         } else {
             0
         };
+        after_flush();
         // `try_with`: streams owned by thread-locals close during their
         // destruction, after the hook slot may be gone.
         let hook = CLOSE_HOOK

@@ -14,7 +14,7 @@
 //! extra parameters shown inside the parentheses are carried in
 //! [`Diagnostic::params`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 
 /// The PHP error level of a diagnostic.
@@ -160,6 +160,10 @@ pub struct Diagnostic {
     pub params: Vec<Vec<u8>>,
     /// The message text (binary safe: paths may be arbitrary bytes).
     pub message: Vec<u8>,
+    /// The stream whose filter chain was being applied when this was
+    /// raised (a filter's own `php_error_docref()`): its error handler
+    /// runs while the filters cannot be removed.
+    pub filtering: Option<u64>,
 }
 
 impl Diagnostic {
@@ -172,6 +176,7 @@ impl Diagnostic {
             terminating: severity == Severity::Warning,
             params: Vec::new(),
             message: message.into(),
+            filtering: None,
         }
     }
 
@@ -235,12 +240,29 @@ pub fn set_handler(handler: Option<Handler>) -> Option<Handler> {
     HANDLER.with(|h| std::mem::replace(&mut *h.borrow_mut(), handler))
 }
 
+thread_local! {
+    /// The stream whose filter chain runs a filter now.
+    static APPLYING: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Runs `f` (one filter of stream `stream_id`'s chain): diagnostics it
+/// emits are marked as raised while the chain was being applied.
+pub fn applying_chain<R>(stream_id: u64, f: impl FnOnce() -> R) -> R {
+    let prev = APPLYING.with(|a| a.replace(Some(stream_id)));
+    let r = f();
+    APPLYING.with(|a| a.set(prev));
+    r
+}
+
 /// Reports a diagnostic.
 ///
 /// The handler is taken out of its slot while it runs, so a handler that
 /// re-enters the streams layer (e.g. a user error handler doing file I/O)
 /// queues nested diagnostics instead of deadlocking.
-pub fn emit(diag: Diagnostic) {
+pub fn emit(mut diag: Diagnostic) {
+    if diag.filtering.is_none() {
+        diag.filtering = APPLYING.with(Cell::get);
+    }
     let handler = HANDLER.with(|h| h.borrow_mut().take());
     if let Some(mut handler) = handler {
         handler(diag);

@@ -192,7 +192,11 @@ fn report_in(vm: &mut Vm, ctx: Option<&ContextRef>, diags: Vec<Diagnostic>) {
             continue;
         }
         if d.code == StreamErrorCode::None {
-            emit(vm, severity_level(d.severity), &d.text());
+            let level = severity_level(d.severity);
+            match d.filtering {
+                Some(id) => crate::userfilter::while_applying(id, || emit(vm, level, &d.text())),
+                None => emit(vm, level, &d.text()),
+            }
         } else {
             entries.push(Entry {
                 code: d.code,

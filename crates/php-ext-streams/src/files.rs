@@ -142,19 +142,36 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mut result = 0;
     sync_stdio(vm, &cell);
-    if let Some(mut s) = cell.take() {
-        r.close();
-        if is_cli_std_handle(r.handle()) {
-            // GH-8827: an explicit fclose(STDIN/STDOUT/STDERR) closes the
-            // descriptor; only dropping the constant's resource keeps it.
-            s.clear_flags(php_streams::stream::flags::NO_CLOSE);
+    // The stream is closed in place: during the closing flush it is busy
+    // but still open, so a user filter's last call can use `$this->stream`
+    // (`_php_stream_free()` flushes before `zend_list_close()`).
+    let closed = match cell.get() {
+        Some(mut s) => {
+            if is_cli_std_handle(r.handle()) {
+                // GH-8827: an explicit fclose(STDIN/STDOUT/STDERR) closes the
+                // descriptor; only dropping the constant's resource keeps it.
+                s.clear_flags(php_streams::stream::flags::NO_CLOSE);
+            }
+            let id = s.id();
+            let rr = r.clone();
+            result = res::fclosing(id, || {
+                bridge::run(vm, || {
+                    s.close_ex_then(false, &mut || {
+                        drop(rr.close());
+                    })
+                })
+            })?;
+            Some(id)
         }
-        let id = s.id();
-        result = res::fclosing(id, || bridge::run(vm, || s.close()))?;
-        res::release_enclosed(id);
-        crate::process::reap(cell.id());
-    } else {
-        r.close();
+        None => None,
+    };
+    match closed {
+        Some(id) => {
+            drop(cell.take());
+            res::release_enclosed(id);
+            crate::process::reap(cell.id());
+        }
+        None => drop(r.close()),
     }
     Ok(Value::Bool(result == 0))
 }

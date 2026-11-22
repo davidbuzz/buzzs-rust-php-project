@@ -194,7 +194,14 @@ impl StreamFilter for UserFilter {
         if !obj.has_seek() {
             return true;
         }
-        obj.seek(env.stream_id, offset, whence, env.chain).is_true()
+        // The chain is being applied during `seek()` too: the filter is
+        // not removed from there (GH-22063).
+        FILTERING.with(|f| f.borrow_mut().push((env.stream_id, env.eof)));
+        let r = obj.seek(env.stream_id, offset, whence, env.chain).is_true();
+        FILTERING.with(|f| {
+            f.borrow_mut().pop();
+        });
+        r
     }
 
     fn read_seekable(&self) -> Seekable {

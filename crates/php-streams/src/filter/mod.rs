@@ -313,7 +313,10 @@ impl FilterChain {
             } else {
                 None
             };
-            status = f.filter.filter(env, &mut inp, &mut out, c, flags);
+            let sid = env.stream_id;
+            status = crate::diag::applying_chain(sid, || {
+                f.filter.filter(env, &mut inp, &mut out, c, flags)
+            });
             if status != FilterStatus::PassOn {
                 return (status, Brigade::new());
             }
