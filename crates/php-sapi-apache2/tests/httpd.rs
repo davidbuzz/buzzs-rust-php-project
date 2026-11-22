@@ -176,6 +176,7 @@ DirectoryIndex index.php index.html
 <Directory "{d}/sess">
   php_value session.save_path {root}/sessions
   php_flag session.use_strict_mode off
+  php_flag session.upload_progress.enabled on
   php_flag session.upload_progress.cleanup off
   php_value session.upload_progress.freq 0
   php_value session.upload_progress.min_freq 0

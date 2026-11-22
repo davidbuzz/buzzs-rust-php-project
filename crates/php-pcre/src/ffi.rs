@@ -150,6 +150,17 @@ impl Code {
         }
     }
 
+    /// `PCRE2_INFO_HASBACKSLASHC`: whether the pattern uses `\C`.
+    pub(crate) fn has_backslash_c(&self) -> Result<bool, i32> {
+        self.info_u32(sys::PCRE2_INFO_HASBACKSLASHC).map(|v| v != 0)
+    }
+
+    /// `PCRE2_INFO_ALLOPTIONS`: the options in force, including those
+    /// in-pattern verbs such as `(*UTF)` set.
+    pub(crate) fn all_options(&self) -> Result<u32, i32> {
+        self.info_u32(sys::PCRE2_INFO_ALLOPTIONS)
+    }
+
     /// `PCRE2_INFO_CAPTURECOUNT`.
     pub(crate) fn capture_count(&self) -> Result<u32, i32> {
         self.info_u32(sys::PCRE2_INFO_CAPTURECOUNT)

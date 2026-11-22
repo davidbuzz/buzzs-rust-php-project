@@ -286,6 +286,8 @@ fn upload_progress_is_stored_before_request_startup() {
     let ini: Vec<(String, String)> = [
         ("session.save_path", path.as_str()),
         ("session.use_strict_mode", "0"),
+        // Off by default since GHSA-658j-r8rw-q6mx.
+        ("session.upload_progress.enabled", "1"),
         ("session.upload_progress.cleanup", "0"),
         ("session.upload_progress.freq", "0"),
         ("session.upload_progress.min_freq", "0"),

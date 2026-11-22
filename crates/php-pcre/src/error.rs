@@ -126,6 +126,9 @@ pub enum CompileError {
         /// Byte offset into the pattern body (between the delimiters).
         offset: usize,
     },
+    /// `\C` in a pattern an in-pattern verb (`(*UTF)`) put in UTF mode,
+    /// where it can match half a character (GH-21134).
+    BackslashCInUtf,
     /// `pcre2_maketables()` failed for a locale-aware pattern.
     LocaleTables,
     /// `pcre2_pattern_info()` failed (should never happen).
@@ -164,6 +167,9 @@ impl CompileError {
                 m.extend_from_slice(message);
                 m.extend_from_slice(format!(" at offset {offset}").as_bytes());
                 m
+            }
+            Self::BackslashCInUtf => {
+                b"Compilation failed: using \\C is incompatible with UTF-8 mode".to_vec()
             }
             Self::LocaleTables => b"Failed to generate locale character tables".to_vec(),
             Self::PatternInfo(rc) => {

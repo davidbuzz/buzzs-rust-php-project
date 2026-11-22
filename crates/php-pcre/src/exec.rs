@@ -97,6 +97,14 @@ pub(crate) fn off(o: usize) -> i64 {
     i64::try_from(o).unwrap_or(i64::MAX)
 }
 
+/// The bytes of a match, empty when PCRE2 reports an end before the start
+/// or past the subject (a `\K` in a lookahead): such a span is never sliced.
+fn span(subject: &[u8], start: usize, end: usize) -> Vec<u8> {
+    subject
+        .get(start..end)
+        .map_or_else(Vec::new, <[u8]>::to_vec)
+}
+
 /// `populate_match_value_str` + `PCRE2_UNSET` handling.
 pub(crate) fn match_value(
     subject: &[u8],
@@ -111,7 +119,7 @@ pub(crate) fn match_value(
             Value::Str(Vec::new())
         }
     } else {
-        Value::Str(subject[start..end].to_vec())
+        Value::Str(span(subject, start, end))
     }
 }
 
@@ -130,7 +138,7 @@ pub(crate) fn offset_pair(
         };
         Value::pair(first, -1)
     } else {
-        Value::pair(Value::Str(subject[start..end].to_vec()), off(start))
+        Value::pair(Value::Str(span(subject, start, end)), off(start))
     }
 }
 

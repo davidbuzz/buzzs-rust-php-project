@@ -299,6 +299,22 @@ impl Exporter {
         }
     }
 
+    /// `zend_ast_export_class_const_name`: a constant string that is a
+    /// valid name is written bare (`C::{'foo'}` as `C::foo`), except
+    /// `class`, which would turn the fetch into `C::class`; anything else
+    /// in braces.
+    fn class_const_name(&mut self, e: &Expr, indent: usize) {
+        if let ExprKind::String(s) = &e.kind {
+            if valid_var_name(s) && !s.eq_ignore_ascii_case(b"class") {
+                self.b(s);
+                return;
+            }
+        }
+        self.c(b'{');
+        self.expr(e, 0, indent);
+        self.c(b'}');
+    }
+
     /// `zend_ast_export_var` for an identifier.
     fn var_ident(&mut self, name: &[u8]) {
         if valid_var_name(name) {
@@ -472,7 +488,7 @@ impl Exporter {
                 self.s("::");
                 match name {
                     MemberName::Ident(id) => self.b(&id.name),
-                    MemberName::Expr(x) => self.name_expr(x, indent),
+                    MemberName::Expr(x) => self.class_const_name(x, indent),
                 }
             }
             ExprKind::ClassName(class) => {
