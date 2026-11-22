@@ -466,6 +466,10 @@ pub(super) struct Inlined {
     init: usize,
     call: usize,
     kind: SiteKind,
+    /// For a method's call: the receiver's variable (`usize::MAX` for
+    /// `$this`), the address of its class now and of the frame's class
+    /// scope (0: none), for which the method was resolved.
+    recv: (usize, usize, usize),
     base: usize,
     /// How many arguments the call passes, and the function's first
     /// instruction for that many.
@@ -703,9 +707,10 @@ enum Plan {
     /// undefined (`cvs` variables and `tmps` temporaries in all), and the
     /// loop goes on at the function's first instruction, `to`.
     Bind {
-        /// For a method's call: the op that starts it and the method's
-        /// address, checked at every call (`super::user_is`: the object
-        /// may be of another class each time).
+        /// For a method's call: the receiver's variable (`usize::MAX` for
+        /// `$this`) and the address of the class the method was resolved
+        /// for, checked at every call (`super::class_is`: the object may
+        /// be of another class each time).
         check: Option<(usize, usize)>,
         /// The first of its argument variables ([`Analysis::arg_base`]).
         args: usize,
@@ -718,12 +723,15 @@ enum Plan {
     /// declared property holding a number, read from the object the call
     /// is made on (`super::inl_prop_get`: the method has no frame, so
     /// neither a `$this` nor a place of its own). `init` is the op that
-    /// starts the call, `func` the method's address, `place` the read's
-    /// place in the method's code.
+    /// starts the call, `recv` the receiver's variable (`usize::MAX` for
+    /// `$this`), `class` the address of its class and `slot` the slot the
+    /// property has in that class, for the method's scope
+    /// (`super::this_slot`).
     ThisProp {
         init: usize,
-        func: usize,
-        place: u32,
+        recv: usize,
+        class: usize,
+        slot: u32,
         dst: SlotRef,
         float: bool,
         next: usize,
@@ -1140,15 +1148,17 @@ impl Plan {
             },
             Plan::ThisProp {
                 init,
-                func,
-                place,
+                recv,
+                class,
+                slot,
                 dst,
                 float,
                 next,
             } => Plan::ThisProp {
                 init,
-                func,
-                place,
+                recv,
+                class,
+                slot,
                 dst: v(dst),
                 float,
                 next: next + base,
@@ -1480,6 +1490,10 @@ pub(super) struct Loop {
     /// (`super::user_is`; the name may be another function's in another
     /// request). (A method's is checked at each call, [`Plan::Bind`].)
     inlined: Vec<(usize, usize)>,
+    /// The class scopes (by address, 0 for none) the loop's inlined
+    /// method calls were resolved in: the frame's, checked at the loop's
+    /// entry (`super::scope_is`).
+    scopes: Vec<usize>,
 }
 
 impl Loop {
@@ -1535,7 +1549,12 @@ pub(super) struct Seen<'a> {
     /// read of `$this` in it holds now (the op that starts the method's
     /// call, the method's address, the read's place in the method's code),
     /// when the read is a hit of the method's property cache.
-    pub(super) this_prop: &'a dyn Fn(usize, usize, u32) -> Option<Ty>,
+    pub(super) this_prop: &'a dyn Fn(usize, usize, u32) -> Option<(Ty, u32)>,
+    /// For the method call started by the op (by index): the receiver's
+    /// variable (`usize::MAX` for `$this`), and the addresses of the class
+    /// of the object it holds now and of the frame's class scope (0:
+    /// none), both kept alive for good.
+    pub(super) receiver: &'a dyn Fn(usize) -> Option<(usize, usize, usize)>,
     /// The type of the number the property at a place (by index) holds,
     /// when its read is a cache hit.
     pub(super) property: &'a dyn Fn(u32) -> Option<Ty>,
@@ -1861,7 +1880,8 @@ impl<'a> Analysis<'a> {
             return None;
         }
         let func = std::rc::Rc::as_ptr(&callee.func) as usize;
-        let float = match (self.seen.this_prop)(callee.init, func, inst.a)? {
+        let (ty, slot) = (self.seen.this_prop)(callee.init, func, inst.a)?;
+        let float = match ty {
             Ty::Int => false,
             Ty::Float => true,
             Ty::Bool | Ty::Plain | Ty::Any => return None,
@@ -1869,8 +1889,9 @@ impl<'a> Analysis<'a> {
         self.ty(st, dst)?;
         Some(Plan::ThisProp {
             init: callee.init,
-            func,
-            place: inst.a,
+            recv: callee.recv.0,
+            class: callee.recv.1,
+            slot,
             dst,
             float,
             next,
@@ -2864,7 +2885,7 @@ impl<'a> Analysis<'a> {
                     *self.bound.get_mut(k)? = true;
                     let code = &callee.func.code;
                     let check = matches!(callee.kind, SiteKind::Method(_))
-                        .then(|| (callee.init, std::rc::Rc::as_ptr(&callee.func) as usize));
+                        .then_some((callee.recv.0, callee.recv.1));
                     return Some(Plan::Bind {
                         check,
                         args,
@@ -3399,10 +3420,18 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         if callee.len() > INLINE_SPAN {
             continue;
         }
+        let recv = match site.kind {
+            SiteKind::Method(_) => match (seen.receiver)(site.init) {
+                Some(recv) => recv,
+                None => continue,
+            },
+            _ => (0, 0, 0),
+        };
         inl.push(Inlined {
             init: site.init,
             call: site.call,
             kind: site.kind,
+            recv,
             base: tape.len() + INLINE_SPAN * inl.len(),
             argc: site.sends.len(),
             first: func.plain_first_op(site.sends.len()),
@@ -3492,6 +3521,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     // has the whole call redone, like one that stops among the arguments.
     let mut virtuals = Vec::new();
     let mut inlined = Vec::new();
+    let mut scopes = Vec::new();
     for (callee, _) in inl.iter().zip(&an.bound).filter(|(_, bound)| **bound) {
         if !matches!(plans.get(&callee.init), Some((Plan::Jmp { .. }, _))) {
             return None;
@@ -3517,7 +3547,11 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         }
         // Kept alive for good, as the code is: its address then names it.
         let func = std::rc::Rc::clone(&callee.func);
-        if !matches!(callee.kind, SiteKind::Method(_)) {
+        if matches!(callee.kind, SiteKind::Method(_)) {
+            if !scopes.contains(&callee.recv.2) {
+                scopes.push(callee.recv.2);
+            }
+        } else {
             inlined.push((callee.init, std::rc::Rc::as_ptr(&func) as usize));
         }
         std::mem::forget(func);
@@ -3531,6 +3565,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         real: tape.len(),
         virtuals,
         inlined,
+        scopes,
     };
     // Worth it only if some round can follow another.
     let repeats = lp.plans.values().any(|(plan, st)| {
@@ -3641,9 +3676,8 @@ type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) ->
 type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
 /// `super::const_is`.
 type ConstIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
-/// `super::inl_prop_get`.
-type InlPropGet =
-    unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, *mut u64) -> usize;
+/// `super::this_slot`.
+type ThisSlot = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, *mut u64) -> usize;
 /// `super::each_any`.
 type EachAny =
     unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Option<Value>, *mut Value) -> usize;
@@ -3807,6 +3841,19 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
             e.b.ins().iconst(types::I64, *func as i64),
         ];
         let same = e.helper(super::user_is as UserIs as usize, &args)?;
+        let next = e.b.create_block();
+        e.b.ins().brif(same, next, &[], bail, &[]);
+        e.b.switch_to_block(next);
+    }
+    // The class scope its method calls were resolved in: the frame's.
+    for scope in &lp.scopes {
+        #[allow(clippy::cast_possible_wrap)]
+        let args = [
+            e.frame,
+            e.b.ins().iconst(types::I64, *scope as i64),
+            e.b.ins().iconst(types::I64, 0),
+        ];
+        let same = e.helper(super::scope_is as UserIs as usize, &args)?;
         let next = e.b.create_block();
         e.b.ins().brif(same, next, &[], bail, &[]);
         e.b.switch_to_block(next);
@@ -4462,19 +4509,20 @@ impl Emit<'_, '_> {
                 // A method's call: of this method still, for the object
                 // there is now. If not, the whole call is the
                 // interpreter's, and the miss is counted.
-                if let Some((init, func)) = check {
+                if let Some((recv, class)) = check {
                     #[allow(clippy::cast_possible_wrap)]
                     let operands = [
                         self.frame,
-                        self.b.ins().iconst(types::I64, i64::try_from(init).ok()?),
-                        self.b.ins().iconst(types::I64, func as i64),
+                        self.b.ins().iconst(types::I64, recv as i64),
+                        self.b.ins().iconst(types::I64, class as i64),
                     ];
-                    let same = self.helper(super::user_is as UserIs as usize, &operands)?;
+                    let same = self.helper(super::class_is as UserIs as usize, &operands)?;
                     let (ok, other) = (self.b.create_block(), self.b.create_block());
                     self.b.set_cold_block(other);
                     self.b.ins().brif(same, ok, &[], other, &[]);
                     self.b.switch_to_block(other);
-                    let from = self.lp.resume.get(&init).copied().unwrap_or(init);
+                    // (The call's start: [`Loop::resume`] of its `DoCall`.)
+                    let from = self.lp.resume.get(&i).copied()?;
                     self.ret(from, WHY_MISS);
                     self.b.switch_to_block(ok);
                 }
@@ -4901,8 +4949,9 @@ impl Emit<'_, '_> {
             }
             Plan::ThisProp {
                 init,
-                func,
-                place,
+                recv,
+                class,
+                slot: at,
                 dst,
                 float,
                 next,
@@ -4918,12 +4967,12 @@ impl Emit<'_, '_> {
                 #[allow(clippy::cast_possible_wrap)]
                 let operands = [
                     self.frame,
-                    self.b.ins().iconst(types::I64, i64::try_from(init).ok()?),
-                    self.b.ins().iconst(types::I64, func as i64),
-                    self.b.ins().iconst(types::I64, i64::from(place)),
+                    self.b.ins().iconst(types::I64, recv as i64),
+                    self.b.ins().iconst(types::I64, class as i64),
+                    self.b.ins().iconst(types::I64, i64::from(at)),
                     out,
                 ];
-                let tag = self.helper(super::inl_prop_get as InlPropGet as usize, &operands)?;
+                let tag = self.helper(super::this_slot as ThisSlot as usize, &operands)?;
                 let expected = if float { TAG_FLOAT } else { TAG_INT };
                 let hit = self
                     .b

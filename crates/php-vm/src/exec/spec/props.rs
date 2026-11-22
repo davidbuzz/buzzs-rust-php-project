@@ -630,14 +630,14 @@ pub(in crate::exec) unsafe extern "C" fn jit_prop_get(
 /// from `$this`, for `obj` as `$this` and the class at address `scope` as
 /// the method's scope, on a hit of the code's property cache (the hit
 /// [`read_hit`] takes in the method's own frame, which does not exist
-/// here). `None` for anything else.
+/// here), and the property's slot. `None` for anything else.
 #[cfg(feature = "jit")]
 pub(in crate::exec) fn jit_this_prop_num(
     code: &crate::opcode::OpArray,
     scope: usize,
     obj: &Obj,
     pid: PlaceId,
-) -> Option<Value> {
+) -> Option<(Value, u32)> {
     let cache = code.prop_cache.try_borrow().ok()?;
     let e = cache.get(pid as usize)?;
     if e.class_addr == 0
@@ -655,6 +655,25 @@ pub(in crate::exec) fn jit_this_prop_num(
     }
     let slots = od.slots.try_borrow().ok()?;
     match slots.get(e.slot as usize)? {
+        Some(Value::Int(x)) => Some((Value::Int(*x), e.slot)),
+        Some(Value::Float(x)) => Some((Value::Float(*x), e.slot)),
+        _ => None,
+    }
+}
+
+/// For a method a typed loop of the JIT runs inline: the number in the
+/// declared slot `slot` of `obj`, when `obj` is of the class at address
+/// `class` (for which the loop resolved the property to that slot) and
+/// not lazy. `None` for anything else.
+#[cfg(feature = "jit")]
+#[inline]
+pub(in crate::exec) fn jit_slot_num(obj: &Obj, class: usize, slot: usize) -> Option<Value> {
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != class || !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return None;
+    }
+    let slots = od.slots.try_borrow().ok()?;
+    match slots.get(slot)? {
         Some(Value::Int(x)) => Some(Value::Int(*x)),
         Some(Value::Float(x)) => Some(Value::Float(*x)),
         _ => None,

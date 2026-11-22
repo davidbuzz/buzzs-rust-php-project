@@ -1414,3 +1414,29 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn inlined_methods_are_resolved_for_the_class_and_the_scope() {
+    // A trait's method in two classes, a private property of the same
+    // name in a subclass, a method called from inside its class and from
+    // a subclass's object, a closure bound to a class scope.
+    three(
+        r#"<?php
+trait T { private $v = 7; function tv() { return $this->v; } function tw() { return 2; } }
+class A { use T; public $v2 = 1; }
+class B { use T; private $w = 3; }
+class C1 { private $p = 1; function get() { return $this->p; } function viaOther(C1 $o) { return $o->get(); } }
+class C2 extends C1 { private $p = 50; public $extra = 9; }
+function run($list, $n) { $s = 0; for ($r = 0; $r < $n; $r++) { foreach ($list as $o) { $s += $o->tv() + $o->tw(); } } return $s; }
+function run2($list) { $s = 0; foreach ($list as $o) { $s += $o->get(); } return $s; }
+class K { public $list; function loop() { $s = 0; foreach ($this->list as $o) { $s += $o->get() + $this->own(); } return $s; } private function own() { return 1; } }
+class K2 extends K { }
+$as = [new A, new A, new A]; $bs = [new B, new B]; $mix = [new A, new B, new A, new B];
+$cs = [new C1, new C2, new C1, new C2, new C2];
+$k = new K; $k->list = $cs; $k2 = new K2; $k2->list = $cs;
+$bound = Closure::bind(function ($list) { $s = 0; foreach ($list as $o) { $s += $o->p; } return $s; }, null, C1::class);
+foreach ([1, 2, 3] as $round) { var_export([run($as, 20), run($bs, 20), run($mix, 20), run2($cs), run2([new C1]), $k->loop(), $k2->loop(), $bound([new C1, new C1])]); }
+echo "\n";
+"#,
+    );
+}

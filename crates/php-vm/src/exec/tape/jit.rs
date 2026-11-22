@@ -809,14 +809,29 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             plain.then_some(func)
         };
         // What a property read of an inlined method holds now.
-        let prop_of_this = |init: usize, func: usize, pid: u32| -> Option<typed::Ty> {
+        let prop_of_this = |init: usize, func: usize, pid: u32| -> Option<(typed::Ty, u32)> {
             // SAFETY: `func` is the address of a function the analysis
             // holds an `Rc` of (`typed::Inlined`).
             match this_prop(frame, init, func, pid)? {
-                Value::Int(_) => Some(typed::Ty::Int),
-                Value::Float(_) => Some(typed::Ty::Float),
+                (Value::Int(_), slot) => Some((typed::Ty::Int, slot)),
+                (Value::Float(_), slot) => Some((typed::Ty::Float, slot)),
                 _ => None,
             }
+        };
+        // The receiver of a method's call now: its variable (`usize::MAX`
+        // for `$this`), its class and the frame's scope, both pinned.
+        let receiver = |init: usize| -> Option<(usize, usize, usize)> {
+            let Op::InitMethodCall { obj, .. } = *frame.code.ops.get(init)? else {
+                return None;
+            };
+            let recv = match obj {
+                Operand::Cv(cv) => cv as usize,
+                Operand::Unused => usize::MAX,
+                _ => return None,
+            };
+            let class = pin(crate::object::class_of(receiver_in(frame, recv)?));
+            let scope = frame.scope.as_ref().map_or(0, pin);
+            Some((recv, class, scope))
         };
         // What a property holds now, when its read is a cache hit.
         let property = |place: u32| -> Option<typed::Ty> {
@@ -872,6 +887,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             builtin: &builtin,
             user: &user,
             this_prop: &prop_of_this,
+            receiver: &receiver,
             property: &property,
         };
         let code = php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen));
@@ -1181,7 +1197,7 @@ fn callee_at(f: &Frame, init: usize) -> Option<std::rc::Rc<crate::func::UserFunc
 /// # Safety
 /// `func` is the address of a `UserFunction` that is alive (one a typed
 /// loop runs inline is kept alive for good, `typed::analyse`).
-unsafe fn this_prop(f: &Frame, init: usize, func: usize, pid: u32) -> Option<Value> {
+unsafe fn this_prop(f: &Frame, init: usize, func: usize, pid: u32) -> Option<(Value, u32)> {
     let Op::InitMethodCall {
         obj,
         name: Operand::Lit(_),
@@ -1211,25 +1227,70 @@ unsafe fn this_prop(f: &Frame, init: usize, func: usize, pid: u32) -> Option<Val
     crate::exec::spec::jit_this_prop_num(code, scope, object, pid)
 }
 
-/// For a method a typed loop runs inline: [`this_prop`], the number's
-/// bits into `out`. Returns its tag (2 an int, 3 a float), or 0, nothing
-/// stored, when the read is no hit of the property cache.
+/// The object the variable with index `recv` of frame `f` holds, or with
+/// `usize::MAX` its `$this`: the receiver of a method's call.
+#[inline]
+fn receiver_in(f: &Frame, recv: usize) -> Option<&php_runtime::Obj> {
+    if recv == usize::MAX {
+        return f.this.as_ref();
+    }
+    match f.cvs.get(recv)?.get()? {
+        Value::Object(object) => Some(object),
+        _ => None,
+    }
+}
+
+/// For a typed loop, at a method's call it runs inline: whether the
+/// receiver ([`receiver_in`]) is an object of the class at address
+/// `class`, the one the loop resolved the method for (kept alive for
+/// good, [`pin`]: the address names it).
 ///
 /// # Safety
-/// `f` is the current frame, `func` as for [`this_prop`], and `out` is
-/// writable.
-pub(super) unsafe extern "C" fn inl_prop_get(
+/// `f` is the current frame.
+pub(super) unsafe extern "C" fn class_is(f: *mut Frame, recv: usize, class: usize) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    usize::from(receiver_in(f, recv).is_some_and(|object| {
+        std::rc::Rc::as_ptr(crate::object::class_of(object)) as usize == class
+    }))
+}
+
+/// For a typed loop's entry: whether frame `f` runs in the class scope at
+/// address `scope` (0: none), the one the loop's method calls were
+/// resolved in, and calls are not observed.
+///
+/// # Safety
+/// `f` is the current frame.
+pub(super) unsafe extern "C" fn scope_is(f: *mut Frame, scope: usize, _unused: usize) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let now = f
+        .scope
+        .as_ref()
+        .map_or(0, |s| std::rc::Rc::as_ptr(s) as usize);
+    usize::from(now == scope && !crate::jit::calls_are_observed())
+}
+
+/// For a method a typed loop runs inline: the number in the declared slot
+/// `slot` of the receiver ([`receiver_in`]), an object of the class at
+/// address `class`; its bits into `out`. Returns its tag (2 an int, 3 a
+/// float), or 0, nothing stored, for anything else.
+///
+/// # Safety
+/// `f` is the current frame and `out` is writable.
+pub(super) unsafe extern "C" fn this_slot(
     f: *mut Frame,
-    init: usize,
-    func: usize,
-    pid: usize,
+    recv: usize,
+    class: usize,
+    slot: usize,
     out: *mut u64,
 ) -> usize {
-    let Ok(pid) = u32::try_from(pid) else {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(object) = receiver_in(f, recv) else {
         return 0;
     };
-    // SAFETY: the caller's contract.
-    match unsafe { this_prop(&*f, init, func, pid) } {
+    match crate::exec::spec::jit_slot_num(object, class, slot) {
         #[allow(clippy::cast_sign_loss)]
         Some(Value::Int(x)) => {
             // SAFETY: the caller's contract.
@@ -1243,6 +1304,23 @@ pub(super) unsafe extern "C" fn inl_prop_get(
         }
         _ => 0,
     }
+}
+
+thread_local! {
+    /// The addresses of the classes compiled code names ([`pin`]).
+    static PINNED: RefCell<std::collections::HashSet<usize>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// Keeps the allocation of `class` for good, so that its address names
+/// this class and no other for as long as compiled code compares with it
+/// (the code is never freed either); returns the address.
+fn pin(class: &std::rc::Rc<crate::class::Class>) -> usize {
+    let addr = std::rc::Rc::as_ptr(class) as usize;
+    if PINNED.with(|p| p.borrow_mut().insert(addr)) {
+        std::mem::forget(std::rc::Rc::downgrade(class));
+    }
+    addr
 }
 
 /// For a typed loop: whether the call started by the op at `init` of
