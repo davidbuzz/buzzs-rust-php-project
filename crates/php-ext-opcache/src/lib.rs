@@ -64,6 +64,25 @@ impl Extension for Opcache {
         "Zend OPcache"
     }
 
+    /// `accel_startup` in the parent of a pre-forking server: the restart
+    /// counters are shared with the workers forked next (GH-8739).
+    fn process_startup(&self, ini: &[(String, String)]) {
+        let setting = |name: &str, default: bool| {
+            ini.iter()
+                .rev()
+                .find(|(k, _)| k == name)
+                .map_or(default, |(_, v)| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "on" | "yes" | "true"
+                    )
+                })
+        };
+        if setting("opcache.enable", true) && setting("opcache.enable_cli", false) {
+            php_opcache::shared_index::init_restarts();
+        }
+    }
+
     fn register(&self, module: &mut ModuleBuilder<'_>) {
         // Also register "opcache" in loaded extensions so tests with `--EXTENSIONS-- opcache` pass
         module.vm().loaded_extensions.push("opcache".to_string());
@@ -223,6 +242,11 @@ fn check_startup_ini(vm: &mut Vm) {
     /// `MIN_ACCEL_FILES` / `MAX_ACCEL_FILES`.
     const MIN_ACCEL_FILES: i64 = 200;
     const MAX_ACCEL_FILES: i64 = 1_000_000;
+    /// The sizes `OnUpdateMaxAcceleratedFiles` accepts without a warning
+    /// (the primes of `zend_accel_hash`).
+    const ACCEL_FILES_PRIMES: [i64; 13] = [
+        223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793,
+    ];
     if vm.ini_long("opcache.memory_consumption") < 8 {
         accel_log_warning(
             vm,
@@ -257,6 +281,12 @@ fn check_startup_ini(vm: &mut Vm) {
         accel_log_warning(
             vm,
             &format!("opcache.max_accelerated_files is set above the limit ({MAX_ACCEL_FILES}).\n"),
+        );
+    } else if !ACCEL_FILES_PRIMES.contains(&files) {
+        // The size is kept; master only advises one of its hash primes.
+        accel_log_warning(
+            vm,
+            "opcache.max_accelerated_files should be a value in {223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793}.\n",
         );
     }
     if !(MIN_ACCEL_FILES..=MAX_ACCEL_FILES).contains(&files) {
@@ -459,7 +489,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ))
     .ini(d(
         "opcache.max_accelerated_files",
-        Some("10000"),
+        Some("16229"),
         Access::SYSTEM,
         ModifyHandler::Long,
     ))
@@ -1083,6 +1113,7 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     }
     GLOBAL_CACHE.with(|c| c.borrow_mut().reset());
     php_opcache::shared_index::record_reset();
+    php_opcache::shared_index::record_manual_restart();
     Ok(Value::Bool(true))
 }
 
@@ -1196,9 +1227,11 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         stats
             .make_mut()
             .insert(ZStr::from("hash_restarts"), Value::Int(0));
+        // Counted by every process forked after startup when shared.
+        let manual = php_opcache::shared_index::manual_restarts().unwrap_or(cache.manual_restarts);
         stats.make_mut().insert(
             ZStr::from("manual_restarts"),
-            Value::Int(cache.manual_restarts as i64),
+            Value::Int(i64::try_from(manual).unwrap_or(i64::MAX)),
         );
         stats
             .make_mut()

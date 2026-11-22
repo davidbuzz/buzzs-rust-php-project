@@ -22,6 +22,10 @@ use std::sync::OnceLock;
 
 static INDEX: OnceLock<Option<File>> = OnceLock::new();
 
+/// The restart log: one byte a manual restart, so its length is
+/// `ZCSG(manual_restarts)` for every process sharing it.
+static RESTARTS: OnceLock<Option<File>> = OnceLock::new();
+
 /// Opens the index once a process (a forked child keeps its parent's).
 pub fn init() {
     INDEX.get_or_init(open);
@@ -67,6 +71,32 @@ fn record(kind: u8, path: &str) {
         line.extend_from_slice(path.as_bytes());
         line.push(b'\n');
         let _ = (&*file).write_all(&line);
+    }
+}
+
+/// Opens the restart log once a process, at module startup: the
+/// processes forked from this one (a pre-forking server's workers) share
+/// it, as they share the restart counters of php-src's shared memory
+/// (GH-8739).
+pub fn init_restarts() {
+    RESTARTS.get_or_init(open);
+}
+
+/// A manual restart (`opcache_reset()`), counted for every process that
+/// shares the log (each `write` of an append-mode file lands whole).
+pub fn record_manual_restart() {
+    if let Some(Some(file)) = RESTARTS.get() {
+        let _ = (&*file).write_all(b"r");
+    }
+}
+
+/// The manual restarts of all processes sharing the restart log, or `None`
+/// when it is not open.
+#[must_use]
+pub fn manual_restarts() -> Option<u64> {
+    match RESTARTS.get() {
+        Some(Some(file)) => file.metadata().ok().map(|m| m.len()),
+        _ => None,
     }
 }
 
