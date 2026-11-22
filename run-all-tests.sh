@@ -84,10 +84,12 @@ summary() {
         END { printf "cargo test --workspace --release: %d passed, %d failed, %d ignored, in %d test binaries (%d failing); exit %d\n", p, f, i, bins, bad, rc }
     ' "$work/test.out"
     echo "PHPT, in-scope php-src suite on the release php: exit $rc_phpt"
-    grep -E '^(Directory  |TOTAL |Number of tests|Out of scope|Tests (skipped|warned|failed|passed)|Expected fail|Time taken|Baseline:)' \
+    # -a: test output can hold any bytes (grep would print only "binary file
+    # matches" for the whole file).
+    grep -aE '^(Directory  |TOTAL |Number of tests|Out of scope|Tests (skipped|warned|failed|passed)|Expected fail|Time taken|Baseline:)' \
         "$work/phpt.out" | sed 's/^/    /'
     echo "runtime against C, perf/bench/timing.py: exit $rc_time"
-    grep -E '^(input  |TOTAL |# criterion)' "$work/timing.out" | sed 's/^/    /'
+    grep -aE '^(input  |TOTAL |# criterion)' "$work/timing.out" | sed 's/^/    /'
 }
 
 main() {
