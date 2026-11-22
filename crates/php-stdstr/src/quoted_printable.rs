@@ -34,8 +34,10 @@ pub fn quoted_printable_encode(s: &[u8]) -> Vec<u8> {
             || (c == b' ' && at(i) == b'\r')
         {
             lp += 3;
-            if (lp > MAXL && c <= 0x7f)
-                || (c > 0x7f && c <= 0xdf && lp + 3 > MAXL)
+            // GH-25284: a continuation byte (0x80..=0xbf) never starts a
+            // soft line break early, so a UTF-8 character is not split.
+            if (lp > MAXL && (c <= 0xbf || c > 0xf4))
+                || (c > 0xbf && c <= 0xdf && lp + 3 > MAXL)
                 || (c > 0xdf && c <= 0xef && lp + 6 > MAXL)
                 || (c > 0xef && c <= 0xf4 && lp + 9 > MAXL)
             {
@@ -67,36 +69,39 @@ fn hex2int(c: u8) -> u8 {
 
 /// `quoted_printable_decode(string $string): string`.
 ///
-/// Works on the string up to its first NUL byte (like the C code).  `=XX`
+/// Works on the whole string, NUL bytes included.  `=XX`
 /// (either case) decodes; `=` followed by optional spaces/tabs and a line
 /// break (CRLF, CR or LF) or the end of input is a soft line break; any
 /// other `=` is copied literally.  The VM coerces the argument to string.
 pub fn quoted_printable_decode(s: &[u8]) -> Vec<u8> {
-    let at = |i: usize| s.get(i).copied().unwrap_or(0);
-    let mut out = Vec::with_capacity(s.len());
+    // By length (php-src master, ba8c7aa4772): a NUL byte is data, not
+    // the end of the input.
+    let len = s.len();
+    let mut out = Vec::with_capacity(len);
     let mut i = 0usize;
-    while at(i) != 0 {
-        if at(i) == b'=' {
-            if at(i + 1).is_ascii_hexdigit() && at(i + 2).is_ascii_hexdigit() {
-                out.push((hex2int(at(i + 1)) << 4).wrapping_add(hex2int(at(i + 2))));
+    while i < len {
+        if s[i] == b'=' {
+            if len - i > 2 && s[i + 1].is_ascii_hexdigit() && s[i + 2].is_ascii_hexdigit() {
+                out.push((hex2int(s[i + 1]) << 4).wrapping_add(hex2int(s[i + 2])));
                 i += 3;
             } else {
                 let mut k = 1;
-                while at(i + k) == b' ' || at(i + k) == b'\t' {
+                while k < len - i && (s[i + k] == b' ' || s[i + k] == b'\t') {
                     k += 1;
                 }
-                match at(i + k) {
-                    0 => i += k,
-                    b'\r' if at(i + k + 1) == b'\n' => i += k + 2,
-                    b'\r' | b'\n' => i += k + 1,
-                    _ => {
-                        out.push(at(i));
-                        i += 1;
-                    }
+                if k == len - i {
+                    i += k;
+                } else if s[i + k] == b'\r' && k + 1 < len - i && s[i + k + 1] == b'\n' {
+                    i += k + 2;
+                } else if s[i + k] == b'\r' || s[i + k] == b'\n' {
+                    i += k + 1;
+                } else {
+                    out.push(s[i]);
+                    i += 1;
                 }
             }
         } else {
-            out.push(at(i));
+            out.push(s[i]);
             i += 1;
         }
     }
@@ -124,6 +129,7 @@ mod tests {
             quoted_printable_decode(b"a=3db=\r\nc=  \nd=\re=zz="),
             b"a=bcde=zz"
         );
-        assert_eq!(quoted_printable_decode(b"a\0=41"), b"a");
+        // php-src master (ba8c7aa4772): a NUL byte is data.
+        assert_eq!(quoted_printable_decode(b"a\0=41"), b"a\0A");
     }
 }

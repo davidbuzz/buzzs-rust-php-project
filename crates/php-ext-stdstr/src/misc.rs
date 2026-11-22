@@ -174,6 +174,12 @@ fn quoted_printable_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (v1, v2) = (a.str(0), a.str(1));
+    // `Z_PARAM_PATH` (php-src master).
+    for (i, v) in [&v1, &v2].into_iter().enumerate() {
+        if v.as_bytes().contains(&0) {
+            return Err(a.value_error(vm, i + 1, "must not contain any null bytes"));
+        }
+    }
     match a.opt(2) {
         None => Ok(Value::Int(i64::from(versioning::version_compare(
             v1.as_bytes(),

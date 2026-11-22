@@ -85,13 +85,21 @@ fn compare_special(f1: &[u8], f2: &[u8]) -> i32 {
     (special_form_order(f1) - special_form_order(f2)).signum()
 }
 
-/// `strtol(p, NULL, 10)` on a digit run (saturating like glibc).
-fn strtol(s: &[u8]) -> i64 {
-    let mut v: i64 = 0;
-    for &c in s.iter().take_while(|c| c.is_ascii_digit()) {
-        v = v.saturating_mul(10).saturating_add(i64::from(c - b'0'));
+/// `compare_numeric_version_forms()`: two digit runs of any length,
+/// compared by value without converting them (leading zeros skipped, then
+/// the longer run is the larger number, else the bytes decide; php-src
+/// master #25536: it used `strtol()`, which saturates).
+pub fn compare_numeric_version_forms(num1: &[u8], num2: &[u8]) -> i32 {
+    let digits = |s: &[u8]| -> Vec<u8> {
+        let s: Vec<u8> = s.iter().copied().skip_while(|&c| c == b'0').collect();
+        s.into_iter().take_while(u8::is_ascii_digit).collect()
+    };
+    let (a, b) = (digits(num1), digits(num2));
+    match a.len().cmp(&b.len()).then_with(|| a.cmp(&b)) {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
     }
-    v
 }
 
 /// `php_version_compare()`: returns -1, 0 or 1.
@@ -132,11 +140,7 @@ pub fn version_compare(v1: &[u8], v2: &[u8]) -> i32 {
         let d1 = is_dig(at(e1, 0));
         let d2 = is_dig(at(e2, 0));
         compare = if d1 && d2 {
-            match strtol(e1).cmp(&strtol(e2)) {
-                Ordering::Less => -1,
-                Ordering::Equal => 0,
-                Ordering::Greater => 1,
-            }
+            compare_numeric_version_forms(e1, e2)
         } else if !d1 && !d2 {
             compare_special(e1, e2)
         } else if d1 {

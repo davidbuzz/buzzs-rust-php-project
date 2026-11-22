@@ -2491,17 +2491,7 @@ pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
                 let xd = x[0].is_ascii_digit();
                 let yd = y[0].is_ascii_digit();
                 match (xd, yd) {
-                    (true, true) => {
-                        let xi: i64 = std::str::from_utf8(x)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        let yi: i64 = std::str::from_utf8(y)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        (xi > yi) as i32 - (xi < yi) as i32
-                    }
+                    (true, true) => php_stdstr::versioning::compare_numeric_version_forms(x, y),
                     (false, false) => {
                         let (o1, o2) = (special_order(x), special_order(y));
                         (o1 > o2) as i32 - (o1 < o2) as i32
