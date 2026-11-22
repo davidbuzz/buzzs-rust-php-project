@@ -247,6 +247,7 @@ pub fn prefork(children: u32) -> Role {
                         libc::signal(libc::SIGINT, libc::SIG_DFL);
                         libc::signal(libc::SIGQUIT, libc::SIG_DFL);
                     }
+                    php_vm::ext::php_child_init();
                     return Role::Child;
                 }
                 -1 => {

@@ -217,11 +217,6 @@ pub struct RequestCtx {
     body_ready: Cell<Option<bool>>,
     /// Bytes of the body read so far (`SG(read_post_bytes)`).
     pub read_post_bytes: Cell<i64>,
-    /// Temporary files of uploads a later multipart parse
-    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
-    /// no longer uploaded files, deleted at request end (php-src leaks
-    /// them).
-    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `max_execution_time` timer.
     pub timer: Arc<Timer>,
     /// `header_register_callback()` callable (`SG(send_header_fcc)`).
@@ -312,7 +307,6 @@ impl RequestCtx {
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             timer,
             header_callback: RefCell::new(None),
         }
@@ -963,7 +957,6 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     apply_fatal_status(vm);
     php_header(vm);
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// Makes `php://input` read the request body through the SAPI (the

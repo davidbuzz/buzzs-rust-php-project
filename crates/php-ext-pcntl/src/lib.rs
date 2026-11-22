@@ -261,11 +261,13 @@ fn pcntl_fork(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if threaded {
                 ForkedChild::arm();
             }
-            // php_child_init(): clear the stat cache.
+            // php_child_init(): clear the stat cache, then each
+            // extension's child_init_func.
             let _ = vm.call_value(
                 &Value::Str(ZStr::from("clearstatcache")),
                 vec![Value::Bool(true)],
             );
+            php_vm::ext::php_child_init();
             Ok(Value::Int(0))
         }
         Ok(pid) => Ok(Value::Int(pid)),

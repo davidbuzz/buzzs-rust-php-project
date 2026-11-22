@@ -668,6 +668,8 @@ pub fn startup_workers() -> Vec<libc::pid_t> {
                 }
             }
             log::set_pid(std::process::id());
+            // `php_child_init()` in the worker.
+            php_vm::ext::php_child_init();
             return Vec::new();
         }
         pids.push(pid);

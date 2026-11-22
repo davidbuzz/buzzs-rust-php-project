@@ -1107,7 +1107,8 @@ files: []
     });
 }
 
-/// A second multipart parse replaces `SG(rfc1867_uploaded_files)`.
+/// A second multipart parse keeps the files of the first uploaded
+/// (`SG(rfc1867_uploaded_files)` is created once).
 #[test]
 #[ignore = "needs target/debug/php"]
 fn put_multipart_twice() {
@@ -1138,7 +1139,7 @@ file one data
 -----------------------------84000087610663814162942123332--"#,
         expect: r"uploaded1: true
 rpb2: [[],[]]
-uploaded1 after: false
+uploaded1 after: true
 exists: true
 ",
     });
@@ -1169,7 +1170,7 @@ post: {"a":"1","b":"2"}
     });
 }
 
-/// After the startup multipart parse nothing is left; the startup uploads stop being uploaded files.
+/// After the startup multipart parse nothing is left; the startup uploads stay uploaded files.
 #[test]
 #[ignore = "needs target/debug/php"]
 fn post_multipart_then_rpb() {
@@ -1201,7 +1202,7 @@ file one data
         expect: r#"post: {"field1":"value one"}
 uploaded: true
 rpb: [[],[]]
-uploaded after: false
+uploaded after: true
 input: ""
 "#,
     });

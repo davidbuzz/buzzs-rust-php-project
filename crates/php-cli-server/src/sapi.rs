@@ -18,7 +18,6 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::net::TcpStream;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -100,11 +99,6 @@ pub struct RequestCtx {
     pub body: RefCell<Body>,
     /// `client->post_read_offset`.
     pub post_read_offset: Cell<usize>,
-    /// Temporary files of uploads a later multipart parse
-    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
-    /// no longer uploaded files, deleted at request end (php-src leaks
-    /// them).
-    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `header_register_callback()` callable.
     pub header_callback: RefCell<Option<Value>>,
     /// The router returned `false` (set by the return hook).
@@ -231,7 +225,6 @@ impl RequestCtx {
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
             post_read_offset: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: None,
@@ -259,7 +252,6 @@ impl RequestCtx {
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
             post_read_offset: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: Some(cgi),
@@ -1171,14 +1163,13 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     ctx.exit_status.set(vm.shutdown(r));
     call_header_callback(vm, ctx);
     ctx.send_headers();
-    cleanup_uploads(vm, ctx);
+    cleanup_uploads(vm);
 }
 
 /// `destroy_uploaded_files_hash()`: deletes the uploads that were not
-/// moved, and those an earlier hash held.
-fn cleanup_uploads(vm: &mut Vm, ctx: &RequestCtx) {
+/// moved.
+fn cleanup_uploads(vm: &mut Vm) {
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// A VM created ahead of its request (module startup is the expensive
@@ -1336,7 +1327,7 @@ fn run_request_inner(
     ctx.discard_headers.set(true);
     vm.shutdown(r);
     ctx.send_headers();
-    cleanup_uploads(vm, ctx);
+    cleanup_uploads(vm);
     Outcome::ServeStatic
 }
 
@@ -1494,6 +1485,5 @@ mod tests {
         assert_eq!(ctx.input(), b"");
         ctx.buffer_body();
         assert_eq!(ctx.request_body(), Some(&b""[..]));
-        assert!(ctx.orphaned_uploads.borrow().is_empty());
     }
 }

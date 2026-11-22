@@ -296,27 +296,16 @@ fn handle_multipart(
         read_post_bytes: ctx.read_post_bytes.get(),
     };
     let callback = vm.rfc1867_callback;
-    // The parse got past its early checks: MULTIPART_EVENT_START follows
-    // the new SG(rfc1867_uploaded_files).
-    let mut started = false;
     let mut read = |buf: &mut [u8]| ctx.read_post(buf);
     let outcome = multipart::parse_with_events(
         content_type,
         content_length(ctx),
         &upload,
         &mut read,
-        &mut |event: Rfc1867Event<'_>, bytes| {
-            if matches!(event, Rfc1867Event::Start { .. }) {
-                started = true;
-            }
-            callback.is_none_or(|cb| cb(vm, event, bytes))
-        },
+        &mut |event: Rfc1867Event<'_>, bytes| callback.is_none_or(|cb| cb(vm, event, bytes)),
     );
-    if started {
-        // The files of an earlier parse are no longer uploaded files.
-        let earlier = std::mem::take(&mut vm.rfc1867_uploaded_files);
-        ctx.orphaned_uploads.borrow_mut().extend(earlier);
-    }
+    // A later parse (`request_parse_body()`) keeps the files of an earlier
+    // one uploaded (`SG(rfc1867_uploaded_files)` is created once).
     vm.rfc1867_uploaded_files.extend(outcome.uploaded);
 
     let mut pending: Option<Throw> = None;

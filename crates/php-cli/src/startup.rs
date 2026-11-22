@@ -282,7 +282,16 @@ fn load_extensions(r: &Reporter, cfg: &Config) {
 }
 
 /// Runs the startup checks; `Err(status)` when startup fails.
+/// `php_child_init()`'s loop over the modules: each extension's
+/// `child_init_func`.
+fn child_init_all() {
+    for e in crate::extensions::all() {
+        e.child_init();
+    }
+}
+
 pub fn module_startup(cfg: &Config) -> Result<(), i32> {
+    php_vm::ext::set_child_init_hook(child_init_all);
     let r = Reporter::new(cfg);
     let mut sink: Vec<Diagnostic> = Vec::new();
     let _ = IniRegistry::with_core(

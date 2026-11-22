@@ -1033,7 +1033,8 @@ echo json_encode([$_POST, request_parse_body(), file_get_contents('php://input')
     assert_eq!(r.body, r#"[{"a":"1","b":"2"},[[],[]],""]"#);
 }
 
-/// `request_parse_body()`: A second multipart parse: nothing left, and the startup uploads stop being uploaded files.
+/// `request_parse_body()`: A second multipart parse: nothing left, and the startup uploads stay uploaded files
+/// (`multipart_after_startup_parse.phpt`).
 #[test]
 fn request_parse_body_after_startup_multipart() {
     let body = multipart(&[
@@ -1063,10 +1064,7 @@ echo json_encode([$_POST, is_uploaded_file($t), request_parse_body(), is_uploade
             ..Req::default()
         },
     );
-    assert_eq!(
-        r.body,
-        r#"[{"field1":"value one"},true,[[],[]],false,true]"#
-    );
+    assert_eq!(r.body, r#"[{"field1":"value one"},true,[[],[]],true,true]"#);
 }
 
 /// `request_parse_body()`: A too large boundary is a plain warning (`sapi_error()`), not an exception.

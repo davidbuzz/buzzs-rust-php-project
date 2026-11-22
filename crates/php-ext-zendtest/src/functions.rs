@@ -254,6 +254,33 @@ fn call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.call_value(&callable, args)
 }
 
+/// `zend_object_init_with_constructor_array(string $class, array $args)`:
+/// `object_init_with_constructor()` with the array as its named-parameter
+/// table, where an integer key is a positional argument
+/// (`zend_call_function()`).
+fn object_init_with_constructor_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let table = a.array(1);
+    let mut positional = vec![a.at(0)];
+    let mut named = Vec::new();
+    for (k, v) in table.iter() {
+        match k {
+            php_runtime::ArrayKey::Int(_) => {
+                if !named.is_empty() {
+                    return Err(vm.throw(
+                        "Error",
+                        "Cannot use positional argument after named argument",
+                    ));
+                }
+                positional.push(v.clone());
+            }
+            php_runtime::ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
+        }
+    }
+    a.values = positional;
+    a.named = named;
+    object_init_with_constructor(vm, a)
+}
+
 /// `zend_object_init_with_constructor(string $class, mixed ...$args)`.
 fn object_init_with_constructor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(cls) = crate::zpp::class_arg(vm, a, 0, false)? else {
@@ -820,6 +847,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function_static(
         "zend_object_init_with_constructor($class, mixed ...$args): mixed",
         object_init_with_constructor,
+    );
+    m.function_static(
+        "zend_object_init_with_constructor_array(string $class, array $args): mixed",
+        object_init_with_constructor_array,
     );
     m.function_static(
         "zend_call_method_if_exists(object $obj, string $method, mixed ...$args): mixed",
