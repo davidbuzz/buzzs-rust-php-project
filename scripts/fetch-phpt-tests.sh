@@ -21,10 +21,11 @@ set -euo pipefail
 
 PHP_SRC_URL='https://github.com/php/php-src'
 # The revision the conformance numbers and `phpt-baseline.txt` are measured against: php-src
-# master of 21 Nov 2026 (moved up from 0c7255dc521, 2 Nov, on 22 Nov 2026 at the owner's
-# request; 713 commits, 207 more `.phpt` files).
-PHP_SRC_SHA='6e4c78a1723f1d9845dc19de47c6ad4815486042'  # "Merge branch 'PHP-8.6'", 21 Nov 2026
-PHP_SRC_DESC='php-src master, PHP-8.6 merged'
+# master of 22 Nov 2026 (moved up from 0c7255dc521, 2 Nov, on 22 Nov 2026 at the owner's
+# request: 716 commits, 207 more `.phpt` files; the last 3, after 6e4c78a1723 of 21 Nov,
+# change no test).
+PHP_SRC_SHA='cb90f9a237757209ecd2e67a7e0c950f36ba6ea1'  # "streams: voidify parse_unix_address", 22 Nov 2026
+PHP_SRC_DESC='php-src master of 22 Nov 2026'
 
 # Every .phpt in the tree we run lives under a directory named `tests`, and the
 # support files they include (`skipif_root.inc`, `helper.inc`, locale data) live in

@@ -123,7 +123,7 @@ scripts/fetch-phpt-tests.sh
 ```
 
 The tests are under the PHP License 3.01. The script pins the revision the conformance numbers
-are measured against — `6e4c78a1723` ("Merge branch 'PHP-8.6'", 21 Nov 2026; until 22 Nov
+are measured against — `cb90f9a2377` (php-src master of 22 Nov 2026; until 22 Nov
 `0c7255dc521` of 2 Nov, against which the numbers below were measured) — because
 `phpt-baseline.txt` and the pass rate are only meaningful for one php-src revision;
 `scripts/fetch-phpt-tests.sh --verify` checks an existing checkout against that pin. Moving to
