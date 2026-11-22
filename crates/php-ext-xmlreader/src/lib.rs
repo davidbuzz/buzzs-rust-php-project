@@ -136,11 +136,17 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     }
 }
 
+/// The class name as `%pS` prints it: in full, so an anonymous class keeps
+/// its NUL byte and the file and line after it.
+fn full_class_name(o: &Obj) -> String {
+    php_vm::object::class_of(o).name.to_string_lossy()
+}
+
 fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, _v: &Value) -> VmResult<bool> {
     let Some((_, p)) = virtual_prop(o, name) else {
         return Ok(false);
     };
-    let e = XmlReader::write_property_error(&o.class_name().to_string_lossy(), p);
+    let e = XmlReader::write_property_error(&full_class_name(o), p);
     Err(throw(vm, &e))
 }
 
@@ -163,7 +169,7 @@ fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
     let Some((_, p)) = virtual_prop(o, name) else {
         return Ok(false);
     };
-    let e = XmlReader::unset_property_error(&o.class_name().to_string_lossy(), p);
+    let e = XmlReader::unset_property_error(&full_class_name(o), p);
     Err(throw(vm, &e))
 }
 

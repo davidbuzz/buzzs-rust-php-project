@@ -977,6 +977,11 @@ impl Node {
                     p.destroy();
                 }
             }
+            // A node libxml2 does not copy (a declaration: GH-25268): the
+            // modern API throws, the legacy one returns false.
+            if self.is_modern() {
+                return Err(DomError::dom(C::InvalidState));
+            }
             return Err(DomError::Silent);
         };
         if clone_document {
@@ -1046,8 +1051,8 @@ impl Node {
         }
         let lookupp = match n.t() {
             ffi::XML_ELEMENT_NODE => Some(n),
-            // SAFETY: live document.
             ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE => {
+                // SAFETY: live document.
                 N::new(unsafe { ffi::xmlDocGetRootElement(n.as_doc()) })
             }
             ffi::XML_ENTITY_NODE

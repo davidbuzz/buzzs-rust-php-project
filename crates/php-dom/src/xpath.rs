@@ -263,6 +263,12 @@ impl XPath {
         })))
     }
 
+    /// Whether an evaluation (with its PHP callbacks) is running.
+    #[must_use]
+    pub fn is_evaluating(&self) -> bool {
+        self.0.evaluation_depth.get() > 0
+    }
+
     /// Re-running `__construct()` on an existing object.
     pub fn reconstruct(&self, class: &str) -> DomResult<()> {
         if self.0.evaluation_depth.get() > 0 {
@@ -285,10 +291,10 @@ impl XPath {
     /// `$document`.
     pub fn document(&self) -> DomResult<Node> {
         let ctx = self.0.ctx.get();
-        // SAFETY: live context.
         let doc = if ctx.is_null() {
             ptr::null_mut()
         } else {
+            // SAFETY: a non-null context of this object is live.
             unsafe { (*ctx).doc }
         };
         let d = N::from_doc(doc).ok_or_else(|| DomError::dom(C::InvalidState))?;

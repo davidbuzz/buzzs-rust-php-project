@@ -118,11 +118,19 @@ fn main() {
     }
     glue.compile("phpdom_glue");
 
-    // 4. lexbor.
+    // 4. lexbor. php-src builds it with small initial pools
+    // (`-DLXB_HTML_TKZ_TOKEN_POOL_SIZE=16 -DLXB_HTML_TKZ_ATTR_POOL_SIZE=256
+    // -DLEXBOR_MRAW_CACHE_SIZE=64`), but its blocks come from ZendMM, whose
+    // `memory_limit` counts whole 2 MiB chunks; the counting allocator here
+    // counts bytes. lexbor's own larger defaults keep the "Allowed memory
+    // size" fatal of a document where php-src raises it (gh25118, gh25305).
     let mut lexbor = cc::Build::new();
     lexbor
         .include(&lexbor_ext)
         .define("LEXBOR_STATIC", None)
+        .define("LXB_HTML_TKZ_TOKEN_POOL_SIZE", "4096")
+        .define("LXB_HTML_TKZ_ATTR_POOL_SIZE", "4096")
+        .define("LEXBOR_MRAW_CACHE_SIZE", "512")
         .warnings(false)
         .flag_if_supported("-Wno-unterminated-string-initialization")
         .opt_level(2);

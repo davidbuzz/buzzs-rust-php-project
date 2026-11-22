@@ -87,6 +87,16 @@ pub trait DomHost {
         Some(class.to_string())
     }
 
+    /// `zend_update_class_constants()`: evaluates the class's constant
+    /// expressions (an undefined constant throws).
+    ///
+    /// # Errors
+    /// The exception the evaluation throws.
+    fn update_class_constants(&self, class: &str) -> Result<(), DomError> {
+        let _ = class;
+        Ok(())
+    }
+
     /// Resolves a callable given by name (`zend_is_callable`): the error
     /// is the text PHP appends after "must be a callable, ".
     fn resolve_callable(&self, name: &[u8]) -> Result<HostCallable, String> {
