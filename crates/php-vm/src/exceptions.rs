@@ -403,8 +403,14 @@ impl Vm {
                         continue;
                     };
                     // `__call`/`__callStatic` frames show themselves with
-                    // `($name, $args)`, as the trampoline is replaced.
-                    let fname = func.name().clone();
+                    // `($name, $args)`, as the trampoline is replaced; one
+                    // being entered (`vm.trampoline_entry`) is still the
+                    // trampoline, the called name with the arguments as sent.
+                    let entering = self.trampoline_entry == Some(idx);
+                    let fname = match (&f.magic_name, entering) {
+                        (Some(m), true) => m.clone(),
+                        _ => func.name().clone(),
+                    };
                     entry.insert(ArrayKey::Str(ZStr::from("function")), Value::Str(fname));
                     let scope_name = match func {
                         Func::User(u) if u.is_closure() => f.scope.as_ref().map(|s| s.name.clone()),
@@ -431,7 +437,13 @@ impl Vm {
                         );
                     }
                     if !ignore_args {
-                        let args = self.trace_frame_args(idx);
+                        let mut args = self.trace_frame_args(idx);
+                        if entering {
+                            // `__call($name, $args)`: the packed arguments.
+                            if let Some(Value::Array(sent)) = args.get_int(1).map(Value::deref) {
+                                args = sent;
+                            }
+                        }
                         entry.insert(ArrayKey::Str(ZStr::from("args")), Value::Array(args));
                     }
                 }
@@ -868,6 +880,17 @@ fn read_prop(vm: &mut Vm, o: &Obj, name: &str) -> VmResult<Value> {
     with_scope(vm, base, |vm| vm.read_property(o, &key, FetchMode::Is)).map(|v| v.deref())
 }
 
+/// `GET_PROPERTY` (not silent): [`read_prop`], but a property that
+/// `__wakeup` unset (a `message` or `code` of the wrong type) warns as an
+/// undefined property.
+fn read_prop_loud(vm: &mut Vm, o: &Obj, name: &str) -> VmResult<Value> {
+    if !has_hooked_props(o) && get_base_prop(o, name).is_none() && base_slot(o, name).is_some() {
+        vm.undefined_property_warning(o, &ZStr::from(name))?;
+        return Ok(Value::Null);
+    }
+    read_prop(vm, o, name)
+}
+
 /// `zend_update_property_num_checked` (`base_scope` selects the exception
 /// base class as scope instead of the object's own class).
 fn write_prop(vm: &mut Vm, o: &Obj, name: &str, v: Value, base_scope: bool) -> VmResult<()> {
@@ -933,11 +956,11 @@ fn error_exception_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn get_message(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = read_prop(vm, &a.this_obj(), "message")?;
+    let v = read_prop_loud(vm, &a.this_obj(), "message")?;
     Ok(Value::Str(vm.to_zstr(&v)?))
 }
 fn get_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    read_prop(vm, &a.this_obj(), "code")
+    read_prop_loud(vm, &a.this_obj(), "code")
 }
 fn get_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = read_prop(vm, &a.this_obj(), "file")?;
@@ -1054,7 +1077,10 @@ fn exc_wakeup(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "message",
             (|v: &Value| matches!(v, Value::Str(_))) as fn(&Value) -> bool,
         ),
-        ("code", |v: &Value| matches!(v, Value::Int(_))),
+        // A string code (PDOException's SQLSTATE) is kept (GH-25299).
+        ("code", |v: &Value| {
+            matches!(v, Value::Int(_) | Value::Str(_))
+        }),
     ] {
         if let Some(v) = get_base_prop(&o, name) {
             if !v.is_null() && !ok(&v) {

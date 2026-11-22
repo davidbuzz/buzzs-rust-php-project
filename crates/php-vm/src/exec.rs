@@ -3456,7 +3456,7 @@ pub(crate) const fn silence_restore(current: i64, old: i64) -> i64 {
 /// "scope X" / "global scope" for messages.
 pub(crate) fn scope_display(scope: Option<&Rc<crate::class::Class>>) -> String {
     match scope {
-        Some(c) => format!("scope {}", object::display_name(&c.name)),
+        Some(c) => format!("scope {}", c.name.to_string_lossy()),
         None => "global scope".to_string(),
     }
 }
@@ -3488,7 +3488,9 @@ thread_local! {
 /// on `EG(vm_interrupt)` at interrupt points (`ZEND_VM_ENTER`, taken jumps,
 /// after internal calls: `ZEND_VM_FCALL_INTERRUPT_CHECK`), so the plain
 /// data instructions after the allocation that crossed the limit still run
-/// (`oom_after_main_script.phpt` prints "Done" before the fatal).
+/// (`oom_after_main_script.phpt` prints "Done" before the fatal), and so
+/// does the setup of a call: the fatal of an argument's allocation names
+/// the called function in its backtrace (GHSA-8mjj-2r7p-4hg2).
 fn defers_oom(op: &Op) -> bool {
     matches!(
         op,
@@ -3519,6 +3521,12 @@ fn defers_oom(op: &Op) -> bool {
             | Op::Abs { .. }
             | Op::Echo(_)
             | Op::Free(_)
+            | Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::Send { .. }
+            | Op::SendNamed { .. }
     )
 }
 
@@ -3555,6 +3563,7 @@ impl Vm {
             }
             let r = self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line);
             self.reporting_oom = false;
+            self.trampoline_entry = None;
             r?;
         }
         Ok(())

@@ -958,6 +958,17 @@ fn rm_invoke_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rm_get_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     let scope = f.scope(vm);
+    if f.flags() & flags::ABSTRACT != 0 {
+        let name = scope.as_ref().map(|c| c.name.clone()).unwrap_or_default();
+        return Err(rexc(
+            vm,
+            &format!(
+                "Trying to create a closure from abstract method {}::{}()",
+                name,
+                f.name()
+            ),
+        ));
+    }
     if f.flags() & flags::STATIC != 0 {
         let call = PendingCall {
             scope: scope.clone(),

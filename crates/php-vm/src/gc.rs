@@ -81,6 +81,11 @@ const THRESHOLD_STEP: usize = 10_000;
 const THRESHOLD_MAX: usize = 1_000_000_000;
 /// `GC_THRESHOLD_TRIGGER`: a run collecting fewer nodes raises the threshold.
 const THRESHOLD_TRIGGER: i64 = 100;
+/// `GC_THRESHOLD_COST_RATIO`: a run may traverse this many live nodes per
+/// root added since the last run.
+const THRESHOLD_COST_RATIO: usize = 8;
+/// `GC_FIRST_ROOT`.
+const FIRST_ROOT: usize = 1;
 
 /// An external source of possible roots (the reference counts it watches
 /// live outside this crate, e.g. `PhpRef` handles in `php-runtime`).
@@ -494,6 +499,11 @@ struct GcState {
     collected: u64,
     /// `gc_threshold`.
     threshold: usize,
+    /// `gc_base_threshold`: the threshold from the collected counts, before
+    /// the cost of the live graph is added (kept across requests).
+    base_threshold: usize,
+    /// `visited`: the nodes the last pass traversed.
+    visited: usize,
     /// `buf_size`.
     buf_size: usize,
     /// Object roots.
@@ -534,6 +544,8 @@ impl Default for GcState {
             runs: 0,
             collected: 0,
             threshold: THRESHOLD_DEFAULT,
+            base_threshold: THRESHOLD_DEFAULT,
+            visited: 0,
             buf_size: DEFAULT_BUF_SIZE,
             roots: RootBuffer::default(),
             ref_pending: 0,
@@ -706,59 +718,6 @@ fn released_array(a: &php_runtime::ZArray) {
             break;
         };
         arr = next;
-    }
-}
-
-/// Nesting limit of [`release_value`]'s walk through unshared objects.
-const RELEASE_DEPTH: u32 = 64;
-
-/// `zval_ptr_dtor` of `v`, a handle about to be dropped: like
-/// [`possible_root`], and when it is the last handle of an object, the
-/// object is freed (`zend_object_std_dtor`), releasing its properties and
-/// a closure's bound variables and `$this` the same way. Call it before
-/// dropping `v`.
-pub(crate) fn release_value(v: &Value) {
-    release_value_at(v, 0);
-}
-
-fn release_value_at(v: &Value, depth: u32) {
-    match v {
-        Value::Object(o) if o.refcount() == 1 && depth < RELEASE_DEPTH => {
-            released_object(o, depth + 1);
-        }
-        _ => possible_root(v),
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn released_object(o: &Obj, depth: u32) {
-    if o.downcast_ref::<ObjectData>().is_none() {
-        return;
-    }
-    let d = crate::object::data(o);
-    if let Ok(slots) = d.slots.try_borrow() {
-        for v in slots.iter().flatten() {
-            release_value_at(v, depth);
-        }
-    }
-    if let Ok(dynamic) = d.dynamic.try_borrow() {
-        for v in dynamic.iter().flat_map(|t| t.values()) {
-            release_value_at(v, depth);
-        }
-    }
-    if let Ok(state) = d.internal.try_borrow() {
-        if let Some(c) = state
-            .as_ref()
-            .and_then(|s| s.downcast_ref::<crate::closure::ClosureData>())
-        {
-            for (_, v) in &c.vars {
-                release_value_at(v, depth);
-            }
-            if let Some(this) = &c.this {
-                root_obj(this);
-            }
-        }
     }
 }
 
@@ -1141,25 +1100,42 @@ fn grow_buffer(s: &mut GcState) {
     s.buf_size = new.min(MAX_BUF_SIZE);
 }
 
-/// `gc_adjust_threshold`: raise the threshold after unproductive automatic
-/// runs, lower it back after productive ones.
+/// `gc_adjust_threshold`: the base threshold rises after unproductive
+/// automatic runs and falls back after productive ones; the next run then
+/// waits for enough new roots to pay for the live nodes this one
+/// traversed (GH-9993).
 fn adjust_threshold(s: &mut GcState, count: i64) {
+    let mut base = s.base_threshold;
     if count < THRESHOLD_TRIGGER || s.roots.num_roots + s.ref_pending >= s.threshold {
-        if s.threshold < THRESHOLD_MAX {
-            let new = (s.threshold + THRESHOLD_STEP).min(THRESHOLD_MAX);
-            if new > s.buf_size {
-                grow_buffer(s);
-            }
-            if new <= s.buf_size {
-                s.threshold = new;
-            }
-        }
-    } else if s.threshold > THRESHOLD_DEFAULT {
-        s.threshold = s
-            .threshold
-            .saturating_sub(THRESHOLD_STEP)
-            .max(THRESHOLD_DEFAULT);
+        base = (base + THRESHOLD_STEP).min(THRESHOLD_MAX);
+    } else if base > THRESHOLD_DEFAULT {
+        base = base.saturating_sub(THRESHOLD_STEP).max(THRESHOLD_DEFAULT);
     }
+    s.base_threshold = base;
+    let live = s
+        .visited
+        .saturating_sub(usize::try_from(count).unwrap_or(0));
+    let threshold = (live / THRESHOLD_COST_RATIO + FIRST_ROOT)
+        .max(base)
+        .min(THRESHOLD_MAX);
+    grow_buffer_to(s, threshold);
+    s.threshold = threshold;
+}
+
+/// `gc_grow_root_buffer_to`: doubles the buffer up to `GC_BUF_GROW_STEP`,
+/// then grows it by whole steps, until it holds `min` roots.
+fn grow_buffer_to(s: &mut GcState, min: usize) {
+    let mut new = s.buf_size;
+    if new >= min {
+        return;
+    }
+    while new < min && new < BUF_GROW_STEP {
+        new *= 2;
+    }
+    if new < min {
+        new += (min - new).div_ceil(BUF_GROW_STEP) * BUF_GROW_STEP;
+    }
+    s.buf_size = new.min(MAX_BUF_SIZE);
 }
 
 /// Number of buffered possible roots (`num_roots`).
@@ -1189,8 +1165,14 @@ pub(crate) fn request_startup(enable: bool) {
     with_state(|s| {
         let providers = std::mem::take(&mut s.providers);
         forget_last_root();
+        // The buffer and the base threshold outlive the request; the run
+        // cost depends on the live graph of the request.
+        let (base, buf_size) = (s.base_threshold, s.buf_size);
         *s = GcState {
             providers,
+            threshold: base,
+            base_threshold: base,
+            buf_size,
             ..GcState::default()
         };
     });

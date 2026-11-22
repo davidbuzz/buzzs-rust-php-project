@@ -78,14 +78,15 @@ fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // `php_var_export_ex` builds the whole export in a buffer: warnings
     // (circular references) and output of user code run meanwhile come
-    // first, and a partial export is still written on an exception.
+    // first. On a failure (an exception from a property hook or a lazy
+    // initializer) nothing is written (GH-24743).
     let mut out = Out::collect();
     let r = dump::var_export(vm, &mut out, &v, 1);
     let bytes = out.finish(vm);
+    r?;
     if !bytes.is_empty() {
         vm.echo(&bytes);
     }
-    r?;
     Ok(Value::Null)
 }
 

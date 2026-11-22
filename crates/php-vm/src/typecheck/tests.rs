@@ -142,7 +142,7 @@ fn anonymous_self_union_diagnostics() {
     assert_eq!(
         run(src),
         "TypeError: class@anonymous\0t.php:2$0::testParam(): Argument #1 ($a) must be of type class@anonymous|string, null given, called in t.php on line 6\n\
-         TypeError: class@anonymous::test(): Return value must be of type class@anonymous|string, stdClass returned\n"
+         TypeError: class@anonymous\0t.php:2$0::test(): Return value must be of type class@anonymous|string, stdClass returned\n"
     );
 }
 
@@ -215,7 +215,7 @@ fn anonymous_parent_union_diagnostics() {
     assert_eq!(
         run(src),
         "Base@anonymous\0t.php:4$1::param(): Argument #1 ($value) must be of type class@anonymous|string, null given, called in t.php on line 9\n\
-         Base@anonymous::result(): Return value must be of type class@anonymous|string, stdClass returned\n"
+         Base@anonymous\0t.php:4$1::result(): Return value must be of type class@anonymous|string, stdClass returned\n"
     );
 }
 
@@ -235,7 +235,7 @@ fn anonymous_never_and_static_return_diagnostics() {
     assert_eq!(
         run(src),
         "class@anonymous\0t.php:2$0::neverReturn(): never-returning method must not implicitly return\n\
-         class@anonymous::staticReturn(): Return value must be of type class@anonymous\0t.php:2$0|string, stdClass returned\n"
+         class@anonymous\0t.php:2$0::staticReturn(): Return value must be of type class@anonymous\0t.php:2$0|string, stdClass returned\n"
     );
 }
 

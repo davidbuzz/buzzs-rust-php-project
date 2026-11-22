@@ -375,6 +375,22 @@ pub enum IniStage {
 }
 
 /// A native extension module.
+static CHILD_INIT_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Installs the body of [`php_child_init`]: the SAPI binary, which knows
+/// its extensions, calls each one's [`Extension::child_init`].
+pub fn set_child_init_hook(f: fn()) {
+    let _ = CHILD_INIT_HOOK.set(f);
+}
+
+/// `php_child_init()`: in a process just forked to serve requests or run
+/// code, each extension's `child_init_func` (GH-22616).
+pub fn php_child_init() {
+    if let Some(f) = CHILD_INIT_HOOK.get() {
+        f();
+    }
+}
+
 pub trait Extension {
     /// The extension name as reported by `get_loaded_extensions()`
     /// (`"ctype"`, `"json"`, ...).
@@ -383,9 +399,19 @@ pub trait Extension {
     /// Registers functions, constants, INI entries and classes (`MINIT`).
     fn register(&self, module: &mut ModuleBuilder<'_>);
 
-    /// `child_init_func`: run once in each process a SAPI forks to serve
-    /// requests (`php_child_init()`, php-fpm's workers).
+    /// `child_init_func`: run once in each process forked to serve requests
+    /// or run code (`php_child_init()`: php-fpm's workers, `pcntl_fork()`,
+    /// the workers of `php -S` and php-cgi).
     fn child_init(&self) {}
+
+    /// Process-wide `MINIT` work of a SAPI that forks its workers before any
+    /// request (`php -S` with `PHP_CLI_SERVER_WORKERS`): run once, before
+    /// the fork, with the INI settings the SAPI starts from (`-d` and its own
+    /// defaults). State made here is shared by the workers, as php-src's
+    /// module startup in the parent is (opcache's shared memory).
+    fn process_startup(&self, ini: &[(String, String)]) {
+        let _ = ini;
+    }
 }
 
 /// Registration interface handed to [`Extension::register`].
@@ -1052,6 +1078,55 @@ impl Vm {
     /// raised `exc` while `prev` was already pending.
     pub fn chain_exception(&mut self, exc: &Obj, prev: &Obj) {
         crate::exceptions::chain_previous(exc, prev);
+    }
+
+    /// `zend_update_class_constants()`: evaluates the constants, default
+    /// properties and static properties of `cls` (once: a failed update is
+    /// retried by the next one).
+    ///
+    /// # Errors
+    /// The exception an initializer throws (an undefined constant, a value
+    /// that does not fit a property's type).
+    pub fn update_class_constants(&mut self, cls: &Rc<Class>) -> VmResult<()> {
+        self.class_defaults(cls).map(drop)
+    }
+
+    /// The nesting depth a native recursion of about `frame_bytes` of C
+    /// stack a level may reach before `zend_call_stack_overflowed()` would
+    /// report the stack exhausted: the usable stack
+    /// (`zend.max_allowed_stack_size - zend.reserved_stack_size`) over the
+    /// level size.
+    #[must_use]
+    pub fn native_recursion_limit(&self, frame_bytes: i64) -> usize {
+        crate::builtins::dump::recursion_limit(self, frame_bytes)
+    }
+
+    /// The `Error` `zend_call_stack_size_error()` throws.
+    pub fn stack_size_error(&mut self) -> Throw {
+        crate::builtins::dump::stack_size_error(self)
+    }
+
+    /// The checks of `object_init_ex()`, for a native function that then
+    /// creates the object its own way: an interface, trait, enum or
+    /// abstract class cannot be instantiated, and the class's constants
+    /// are evaluated ([`Vm::update_class_constants`]).
+    ///
+    /// # Errors
+    /// The `Error` for a class that cannot be instantiated, or the
+    /// exception an initializer throws.
+    pub fn check_instantiable(&mut self, cls: &Rc<Class>) -> VmResult<()> {
+        let kind = if cls.is_interface() {
+            "interface"
+        } else if cls.is_trait() {
+            "trait"
+        } else if cls.is_enum() {
+            "enum"
+        } else if cls.flags & crate::class::cflags::ABSTRACT != 0 {
+            "abstract class"
+        } else {
+            return self.update_class_constants(cls);
+        };
+        Err(self.make_throw("Error", &format!("Cannot instantiate {kind} {}", cls.name)))
     }
 
     /// Emits a warning prefixed with the running native function

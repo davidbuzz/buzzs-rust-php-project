@@ -60,6 +60,24 @@ pub fn label(l: i64) -> &'static str {
     }
 }
 
+/// `php_escape_nul_for_log()`: log sinks take C strings, so a NUL byte
+/// (an anonymous class name's) is written as `\0` instead of cutting the
+/// message there.
+fn escape_nul_for_log(msg: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if !msg.contains(&0) {
+        return std::borrow::Cow::Borrowed(msg);
+    }
+    let mut out = Vec::with_capacity(msg.len() + 8);
+    for &b in msg {
+        if b == 0 {
+            out.extend_from_slice(b"\\0");
+        } else {
+            out.push(b);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 fn is_fatal(l: i64) -> bool {
     matches!(l, 1 | 4 | 16 | 64 | 256 | 4096)
 }
@@ -162,6 +180,18 @@ impl Vm {
         // (the builtin is bailing out; the fatal follows the call).
         if php_memlimit::is_pending() {
             return Ok(());
+        }
+        if let Some((depth, kind, name)) = &self.including {
+            if *depth == self.frames.len() {
+                let (kind, name) = (*kind, name.clone());
+                let origin = self.include_error_origin(kind, name.as_bytes());
+                if self.ini.get_bool("html_errors") {
+                    return self.docref_html(level, &origin, kind, msg);
+                }
+                let mut m = format!("{origin}: ").into_bytes();
+                m.extend_from_slice(msg);
+                return self.error_bytes(level, &m);
+            }
         }
         match self.docref_function_name() {
             Some(n) => {
@@ -480,7 +510,7 @@ impl Vm {
         if self.ini.get_bool("log_errors") {
             let log = format!(
                 "PHP {lbl}:  {} in {file_s} on line {line}{trace}",
-                String::from_utf8_lossy(msg)
+                String::from_utf8_lossy(&escape_nul_for_log(msg))
             );
             self.log_error(&log);
         }
@@ -509,6 +539,21 @@ impl Vm {
         let Some(to_stderr) = display else {
             return;
         };
+        if self.ini.get_bool("xmlrpc_errors") {
+            // The message is printed by length (`%pS`): an anonymous class
+            // name keeps its NUL byte and what follows it.
+            let mut out = format!(
+                "<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member><name>faultCode</name><value><int>{}</int></value></member><member><name>faultString</name><value><string>{lbl}:",
+                self.ini.get_long("xmlrpc_error_number")
+            )
+            .into_bytes();
+            out.extend_from_slice(msg);
+            out.extend_from_slice(
+                format!(" in {file_s} on line {line}{trace}</string></value></member></struct></value></fault></methodResponse>").as_bytes(),
+            );
+            self.echo(&out);
+            return;
+        }
         let prepend = self
             .ini
             .get("error_prepend_string")

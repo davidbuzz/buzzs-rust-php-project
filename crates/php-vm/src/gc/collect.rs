@@ -211,6 +211,9 @@ impl Vm {
             }
         }
         g.build();
+        // `GC_G(visited)`: the nodes `gc_mark_grey` reached in this pass.
+        let visited = g.nodes.len();
+        with_state(|s| s.visited = visited);
         let garbage = g.analyze();
         // `gc_collect_roots`: the live (black) roots leave the buffer, which
         // is compacted (its last roots move into the holes); the garbage

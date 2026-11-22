@@ -298,6 +298,8 @@ impl Vm {
             output_handler_conflicts: std::collections::HashMap::new(),
             output_handler_hooks: std::collections::HashMap::new(),
             include_opener: None,
+            including: None,
+            trampoline_entry: None,
             source_filter: None,
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),

@@ -119,10 +119,22 @@ impl ObjectData {
     #[must_use]
     pub fn slot_unset(&self, idx: usize) -> bool {
         let bits = self.unset_bits.get();
-        if idx < UNSET_INLINE_SLOTS {
-            return bits & (1 << idx) != 0;
-        }
-        bits & UNSET_OVERFLOW_BIT != 0 && self.overflow_unset(idx)
+        let unset = if idx < UNSET_INLINE_SLOTS {
+            bits & (1 << idx) != 0
+        } else {
+            bits & UNSET_OVERFLOW_BIT != 0 && self.overflow_unset(idx)
+        };
+        unset || self.starts_unset(idx)
+    }
+
+    /// Whether declared slot `idx` starts undefined but not uninitialized
+    /// ([`flags::DEFAULT_UNSET`]): it can only be defined or unset after.
+    #[inline]
+    fn starts_unset(&self, idx: usize) -> bool {
+        self.class
+            .props
+            .get(idx)
+            .is_some_and(|p| p.flags & crate::func::flags::DEFAULT_UNSET != 0)
     }
 
     #[cold]

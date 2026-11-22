@@ -303,6 +303,12 @@ fn stack_budget(vm: &Vm) -> i64 {
     (max - vm.ini_long("zend.reserved_stack_size").max(0)).max(FRAME_BYTES)
 }
 
+/// The nesting a native recursion of `frame_bytes` a level reaches before
+/// PHP's C stack would overflow (`zend_call_stack_overflowed()`).
+pub(crate) fn recursion_limit(vm: &Vm, frame_bytes: i64) -> usize {
+    usize::try_from(stack_budget(vm) / frame_bytes.max(1)).unwrap_or(usize::MAX)
+}
+
 /// One nesting level of a printer; `None` when PHP's C stack would have
 /// overflowed (`zend_call_stack_overflowed()`).
 pub(super) struct Depth;

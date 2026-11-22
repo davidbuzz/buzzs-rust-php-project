@@ -66,6 +66,10 @@ pub struct FiberData {
     /// The callable resolved by the constructor (`fci`/`fcc`: keeps the
     /// object a `[A::class, 'm']` callable bound to); taken by `start()`.
     call: Option<PendingCall>,
+    /// What `start()` took, kept for the fiber's lifetime: php-src holds
+    /// the `fci_cache` (its object, its closure) until the fiber is freed
+    /// (`zend_fiber_object_free`).
+    held: Option<PendingCall>,
     /// The callable as given to the constructor (`ReflectionFiber::getCallable`).
     pub callable: Value,
     /// Status.
@@ -110,6 +114,7 @@ impl FiberData {
         FiberData {
             kind,
             call: Some(call),
+            held: None,
             callable,
             state: FiberState::Init,
             threw: false,
@@ -523,7 +528,12 @@ impl Vm {
             ));
         }
         let size = requested.saturating_mul(STACK_SCALE).max(1 << 20);
-        let Some(call) = with(fiber, |d| d.call.take()).flatten() else {
+        let Some(call) = with(fiber, |d| {
+            let call = d.call.take();
+            d.held.clone_from(&call);
+            call
+        })
+        .flatten() else {
             return Err(self.fiber_error("Cannot start a fiber that has already been started"));
         };
         let call = self.fiber_bind_args(call, args, named)?;
@@ -611,7 +621,6 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
-    let r = release_callable(vm, &fiber, r);
     let destroyed = with(&fiber, |d| d.destroyed).unwrap_or(false);
     let out = match r {
         Ok(v) => {
@@ -639,48 +648,6 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
         let from = context_of(&fiber, None);
         let to = vm.fiber_stack_context(depth - 1);
         vm.observer_fiber_switch(&from, &to);
-    }
-}
-
-/// `zend_fiber_release_callable`, still inside the fiber once its function
-/// returned: the callable (a closure with its bound variables, the object
-/// of `[$obj, 'm']`) is released, so the destructors it triggers — and a
-/// collection when the released values fill the root buffer — run in the
-/// fiber; what they throw is thrown by the fiber (chained to the exception
-/// the function threw, `zend_objects_destroy_object`).
-fn release_callable(vm: &mut Vm, fiber: &Obj, r: VmResult<Value>) -> VmResult<Value> {
-    let Some(callable) = with(fiber, |d| std::mem::take(&mut d.callable)) else {
-        return r;
-    };
-    // A function name owns nothing (the collector's destructor fiber).
-    if !matches!(callable, Value::Object(_) | Value::Array(_)) {
-        return r;
-    }
-    crate::gc::release_value(&callable);
-    drop(callable);
-    let mut r = r;
-    if object::has_pending_destructors() {
-        r = merge_release_error(r, vm.run_pending_destructors());
-    }
-    if crate::gc::wants_run() && !crate::gc::running() {
-        r = merge_release_error(r, vm.gc_safe_point());
-    }
-    r
-}
-
-/// Combines the outcome of a fiber's function with an error raised while
-/// releasing its callable.
-fn merge_release_error(r: VmResult<Value>, e: VmResult<()>) -> VmResult<Value> {
-    match (r, e) {
-        (r, Ok(())) => r,
-        (Err(Throw::Exception(old)), Err(Throw::Exception(new))) => {
-            if !is_graceful_exit(&old) {
-                crate::exceptions::chain_previous(&new, &old);
-            }
-            Err(Throw::Exception(new))
-        }
-        (Ok(_), Err(e)) | (Err(Throw::Exception(_)), Err(e)) => Err(e),
-        (Err(t), Err(_)) => Err(t),
     }
 }
 
@@ -895,7 +862,7 @@ fn fiber_error_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 /// the value in transit and the return value. (Rust temporaries on the
 /// fiber's native stack stay invisible: treated as external references.)
 fn gc_traverse(d: &FiberData, v: &mut crate::gc::GcVisitor<'_>) {
-    if let Some(c) = &d.call {
+    for c in d.call.iter().chain(&d.held) {
         v.pending_call(c);
     }
     v.value(&d.callable);

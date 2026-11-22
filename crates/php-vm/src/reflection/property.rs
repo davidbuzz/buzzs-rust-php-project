@@ -846,8 +846,10 @@ fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     let has_get = prop.hooks.as_ref().is_some_and(|h| h.get.is_some());
-    if prop.flags & flags::VIRTUAL != 0 && prop.hooks.is_some() {
-        return Ok(Value::Bool(has_get));
+    // A virtual property is readable unless it has hooks but no `get`
+    // (an internal one, such as `DOMNode::$nodeName`, has none: GH-25266).
+    if prop.flags & flags::VIRTUAL != 0 {
+        return Ok(Value::Bool(prop.hooks.is_none() || has_get));
     }
     if prop.is_static {
         let cell = static_cell(vm, &p)?;

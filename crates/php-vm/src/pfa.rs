@@ -541,9 +541,11 @@ impl Vm {
         } else {
             func.return_type().cloned()
         };
+        // Void and never functions cannot `return $expr`: the call is a
+        // statement of its own.
         let is_void = ret_ty
             .as_ref()
-            .is_some_and(|t| t.mask & crate::types::mask::VOID != 0);
+            .is_some_and(|t| t.mask & (crate::types::mask::VOID | crate::types::mask::NEVER) != 0);
         let this_obj = call.this.clone();
         let static_closure = this_obj.is_none()
             && !(func.flags() & flags::CLOSURE != 0 && func.flags() & flags::STATIC == 0);

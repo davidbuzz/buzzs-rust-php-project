@@ -479,6 +479,15 @@ fn undefined_key_msg(k: &ArrayKey) -> String {
     }
 }
 
+/// The handles of a refcounted string or array (0 for other values).
+fn shared_handles(v: &Value) -> usize {
+    match v {
+        Value::Str(s) => s.refcount(),
+        Value::Array(a) => a.refcount(),
+        _ => 0,
+    }
+}
+
 /// String offset conversion (`zend_check_string_offset`). `unset` is the
 /// `BP_VAR_UNSET` fetch type: no leading-numeric warning, and illegal
 /// offsets report "Cannot unset string offsets".
@@ -1371,6 +1380,8 @@ fn concat_cv_in_place(
     };
     let idx = *cv as usize;
     let slot = f.cvs.get(idx)?;
+    // SAFETY: no other reference into the slot is alive: `rhs` is an owned
+    // operand or a literal, never a borrow of a variable slot.
     let val = unsafe { slot.get_mut_unchecked() };
     let Some(Value::Str(s)) = val else {
         return None;
@@ -4411,10 +4422,29 @@ impl Vm {
         // runs (after the container's warnings); a quiet chain that reached
         // null still reads, and reports, the remaining operands.
         let mut settled = mode == FetchMode::Is && rest.len() < segs.len() && cur.is_null();
-        for seg in rest {
+        let cv_base = rest.len() == segs.len() && matches!(place.base, PlaceBase::Cv(_));
+        for (i, seg) in rest.iter().enumerate() {
             match seg {
                 Seg::Dim(op) => {
+                    let held = if cv_base && i == 0 {
+                        shared_handles(&cur)
+                    } else {
+                        0
+                    };
                     let k = self.read_dim_operand(*op)?;
+                    if held > 1 && shared_handles(&cur) == 1 {
+                        // php-src reads the variable through its slot once the
+                        // offset is read: an error handler of the offset's
+                        // warning that released its value leaves what the
+                        // variable holds now.
+                        let base = match self.cv_read_base(&place.base) {
+                            Some(b) => b,
+                            None => {
+                                self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?
+                            }
+                        };
+                        cur = self.fetch_base_value(pid, base, segs, mode)?;
+                    }
                     if !settled {
                         cur = self.fetch_dim(cur, &k, mode)?;
                     }
@@ -4551,7 +4581,15 @@ impl Vm {
                 } else {
                     string_offset(k, &mut diags, false).map(Some)
                 };
+                let warned = !diags.is_empty();
+                let held = s.refcount();
                 self.flush_diags(diags)?;
+                // php-src holds a reference to the string while it warns:
+                // when an error handler released all the others, the string
+                // is freed and the result is null.
+                if warned && held > 1 && s.refcount() == 1 {
+                    return Ok(Value::Null);
+                }
                 let off = match off {
                     Ok(Some(o)) => o,
                     Ok(None) => return Ok(Value::Null),

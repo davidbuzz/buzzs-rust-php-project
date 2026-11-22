@@ -85,6 +85,11 @@ pub mod flags {
     /// backtrace (ext/sodium's `sodium_remove_param_values_from_backtrace`
     /// after a failed `zend_parse_parameters`).
     pub const SCRUB_ARG_ERROR_TRACE: u32 = 1 << 25;
+    /// A property whose slot starts undefined but not `IS_PROP_UNINIT`
+    /// (`__get()` & co. apply as after `unset()`): a virtual hooked
+    /// redeclaration of a backed hooked parent property that had a default
+    /// (`do_inherit_property`: "Default value was removed in child").
+    pub const DEFAULT_UNSET: u32 = 1 << 26;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
     /// The lowest of the five bits (27..=31) of a builtin *function*'s

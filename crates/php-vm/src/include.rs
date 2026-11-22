@@ -824,7 +824,13 @@ impl Vm {
         // Extension opener (stream wrappers, include_path entries such as
         // `phar://`): `php_stream_open_for_zend_ex`.
         if let Some(opener) = self.include_opener {
-            match opener(self, name, kind_name)? {
+            // A docref error raised while the opener reads (a user filter's
+            // leftover buckets) is the include's: `include(): ...`.
+            let depth = self.frames.len();
+            let prev = self.including.replace((depth, kind_name, s.clone()));
+            let opened = opener(self, name, kind_name);
+            self.including = prev;
+            match opened? {
                 crate::ext::IncludeOpen::Opened {
                     source,
                     opened_path,

@@ -719,6 +719,32 @@ fn partial_assign_dim(
     ))
 }
 
+/// sccp.c `ct_eval_array_key_exists` (through `fetch_array_elem`): whether
+/// `key` is a key of the known `array`, or `None` when that is left to run
+/// time: a null key, a float that is not an integer, another type.
+fn fold_key_exists(key: &Value, array: &Value) -> Option<bool> {
+    let Value::Array(arr) = array else {
+        return None;
+    };
+    Some(match key {
+        Value::Bool(b) => arr.get_int(i64::from(*b)).is_some(),
+        Value::Int(i) => arr.get_int(*i).is_some(),
+        // `zend_dval_to_lval_silent` + `zend_is_long_compatible`.
+        Value::Float(f) => {
+            if f.fract() != 0.0
+                || !(-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(f)
+            {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation)] // integral and in range
+            let l = *f as i64;
+            arr.get_int(l).is_some()
+        }
+        Value::Str(s) => arr.get_sym(s.as_bytes()).is_some(),
+        _ => return None,
+    })
+}
+
 /// `in_array($needle, $haystack[, $strict])` at `i` (its `InitFCall`)
 /// whose haystack is a known array and whose `strict` argument, if there
 /// is one, a known value: the call becomes `ZEND_IN_ARRAY` over the set of
@@ -1677,6 +1703,36 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         // Fold pure expressions on known temporary constants
         for op in &mut op_array.ops {
             match op {
+                // `array_key_exists()` of a known key in a known array.
+                Op::KeyExists {
+                    key,
+                    array,
+                    dst: Some(dst),
+                } => {
+                    let (Some(lk), Some(la)) =
+                        (known_lit(key, &lit_def), known_lit(array, &lit_def))
+                    else {
+                        continue;
+                    };
+                    let folded = match (
+                        op_array.literals.get(lk as usize),
+                        op_array.literals.get(la as usize),
+                    ) {
+                        (Some(k), Some(a)) => fold_key_exists(k, a),
+                        _ => None,
+                    };
+                    if let Some(res) = folded {
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                        if def_count.get(*dst as usize).copied() == Some(1) {
+                            lit_def[*dst as usize] = Some(lit);
+                        }
+                        *op = Op::Move {
+                            src: Operand::Lit(lit),
+                            dst: *dst,
+                        };
+                        changed = true;
+                    }
+                }
                 Op::Bin {
                     op: bkind,
                     a,
@@ -2609,6 +2665,29 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             }
                             fold_isset_dim(container, dim, empty)
                         });
+                        if let Some(res) = folded {
+                            let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                            *op = Op::Move {
+                                src: Operand::Lit(lit),
+                                dst,
+                            };
+                            changed = true;
+                        }
+                    }
+                    // `array_key_exists()` of a known key in a known array.
+                    Op::KeyExists {
+                        key: Operand::Lit(k),
+                        array: Operand::Lit(a),
+                        dst: Some(dst),
+                    } => {
+                        let dst = *dst;
+                        let folded = match (
+                            op_array.literals.get(*k as usize),
+                            op_array.literals.get(*a as usize),
+                        ) {
+                            (Some(key), Some(array)) => fold_key_exists(key, array),
+                            _ => None,
+                        };
                         if let Some(res) = folded {
                             let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
                             *op = Op::Move {

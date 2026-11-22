@@ -85,10 +85,13 @@ impl Vm {
     /// for an object bound without a scope); only an unscoped one prints
     /// its bare name.
     #[allow(clippy::unused_self)] // method-style API used across the VM
+    /// `Class::method` (or `function`) as error messages name it: the full
+    /// class name, so an anonymous class keeps its NUL byte and the file and
+    /// line after it (GH-25352).
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
         let name = func.name().to_string_lossy();
         match scope {
-            Some(c) => format!("{}::{}", object::display_name(&c.name), name),
+            Some(c) => format!("{}::{}", c.name.to_string_lossy(), name),
             None => name,
         }
     }
@@ -1022,7 +1025,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Call to {vis} method {}::{}() from {}",
-                    object::display_name(&m.scope().name),
+                    m.scope().name.to_string_lossy(),
                     name.to_string_lossy(),
                     scope_display(scope.as_ref())
                 ),
@@ -1224,7 +1227,7 @@ impl Vm {
                             "Error",
                             &format!(
                                 "Call to {vis} method {}::{}() from {}",
-                                object::display_name(&m.scope().name),
+                                m.scope().name.to_string_lossy(),
                                 name.to_string_lossy(),
                                 scope_display(scope.as_ref())
                             ),
@@ -1587,7 +1590,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Call to {vis} {}::{}() from {}",
-                    object::display_name(&ctor.scope().name),
+                    ctor.scope().name.to_string_lossy(),
                     ctor.name,
                     scope_display(scope.as_ref())
                 ),
@@ -2405,6 +2408,8 @@ impl Vm {
             // and the length store can panic. Forgetting the rest of the
             // element leaks nothing (see above).
             let func = unsafe { std::ptr::read(&call.func) };
+            // SAFETY: as above: `call` was the last element and its handle
+            // was read out, so the shorter vector never drops it again.
             unsafe { caller.calls.set_len(pending - 1) };
             if same_func {
                 // The frame holds this function already: the call's handle
@@ -3153,6 +3158,13 @@ impl Vm {
         if let Some(spare) = spare_args {
             self.put_arg_vec(spare);
         }
+        // A pending `memory_limit` violation is raised as a `__call` /
+        // `__callStatic` trampoline is entered (`ZEND_VM_ENTER`): the
+        // backtrace shows the trampoline (GHSA-8mjj-2r7p-4hg2).
+        if php_memlimit::is_pending() && self.frames[idx].magic_name.is_some() && closure.is_none()
+        {
+            self.trampoline_entry = Some(idx);
+        }
         if let Some(c) = closure {
             self.bind_closure_vars(idx, &c);
             self.frames[idx].closure = Some(c);
@@ -3800,6 +3812,9 @@ impl Vm {
                 };
             }
         }
+        if let Some(f) = self.frames.get(depth - 1) {
+            root_released_args(&f.args);
+        }
         self.pop_frames_to(depth);
         if let Some(t) = &ctor_this {
             // `zend_object_store_ctor_failed` for native constructors.
@@ -4413,11 +4428,13 @@ impl Vm {
         // with `%s`. The strings are only built for an error
         // (`zend_verify_return_error`), not for a value that coerces.
         let error_names = || {
+            // `get_function_or_method_name()`: both names whole (a closure
+            // of an anonymous class carries that class's full name too).
             let fname = func.as_ref().map_or_else(String::new, |f| {
-                let name = object::display_name(f.name());
+                let name = f.name().to_string_lossy();
                 match scope.as_ref() {
-                    Some(c) => format!("{}::{name}", object::display_name(&c.name)),
-                    None => name.to_string_lossy(),
+                    Some(c) => format!("{}::{name}", c.name.to_string_lossy()),
+                    None => name,
                 }
             });
             let tyname = rt.display(
@@ -5050,6 +5067,25 @@ pub(crate) fn clone_value(v: &Value) -> Value {
 fn gc_on_release(frame: &crate::vm::Frame, caller: &crate::vm::Frame) {
     if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
         crate::gc::frame_released(frame, caller.this.as_ref());
+    }
+}
+
+/// The arguments of a returning native call, about to be dropped
+/// (`zend_vm_stack_free_args`, `zval_ptr_dtor_nogc`): an array or a
+/// reference whose last handle they hold releases its contents
+/// (`zend_array_destroy`), buffering the objects still referenced
+/// elsewhere as possible roots; the arguments themselves are not buffered.
+#[inline]
+fn root_released_args(args: &[Option<Value>]) {
+    for v in args.iter().flatten() {
+        let last = match v {
+            Value::Array(a) => a.refcount() == 1,
+            Value::Reference(r) => r.refcount() == 1,
+            _ => false,
+        };
+        if last {
+            crate::gc::possible_root(v);
+        }
     }
 }
 

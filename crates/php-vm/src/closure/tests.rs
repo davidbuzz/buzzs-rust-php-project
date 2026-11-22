@@ -87,7 +87,7 @@ fn anonymous_method_closure_return_error_name_and_trace() {
          }\n");
     assert_eq!(
         out,
-        "class@anonymous::{closure:class@anonymous(): Return value must be of type array, null returned\n\
+        "class@anonymous\0t.php:2$0::{closure:class@anonymous\0t.php:2$0::bar():4}(): Return value must be of type array, null returned\n\
          #0 t.php(8): class@anonymous->{closure:class@anonymous\0t.php:2$0::bar():4}()\n\
          #1 {main}\n"
     );

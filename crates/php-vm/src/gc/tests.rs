@@ -351,22 +351,36 @@ fn collection_while_unwinding_chains_the_exception_in_flight() {
     assert_eq!(out, "C\nc f\n");
 }
 
-/// `destructors_015`: a fiber releases its callable (`zend_fiber_release_callable`)
-/// inside the fiber once its function returned; values released with a
-/// closure's bound variables can fill the root buffer, and the exception
-/// of the collection's destructor is thrown by the fiber.
+/// `destructors_015`: the arguments of a native call (`Fiber::start()`) are
+/// released after it returns (`zend_vm_stack_free_args`): an argument array
+/// released with its last handle buffers the objects it held as roots, the
+/// collection that fills the buffer runs at once, and its destructor's
+/// exception is thrown by the call.
 #[test]
-fn fiber_releases_its_callable_when_its_function_returns() {
+fn released_call_arguments_root_their_objects() {
     let out = run(
         "<?php class C { public $s; function __construct() { $this->s = $this; }\n\
          function __destruct() { echo \"C\\n\"; throw new Exception('c'); } }\n\
-         $all = []; for ($i = 0; $i < 10001; $i++) $all[] = new stdClass;\n\
-         function make() { global $all; $copy = [...$all];\n\
-         return new Fiber(function () use ($copy) { new C; echo \"return\\n\"; }); }\n\
-         $fiber = make();\n\
-         try { $fiber->start(); echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; }",
+         $all = []; for ($i = 0; $i < 20000; $i++) $all[] = new stdClass;\n\
+         $fiber = new Fiber(function () { new C; echo \"return\\n\"; });\n\
+         try { $fiber->start([...$all]); echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; }",
     );
     assert_eq!(out, "return\nC\ncaught c\n");
+}
+
+/// `fiber-callable-object-outlives-caller`: a fiber keeps the object its
+/// callable resolved to (`fci_cache`) until the fiber itself is freed
+/// (`zend_fiber_object_free`), not only until its function returns.
+#[test]
+fn fiber_keeps_its_callable_object_until_freed() {
+    let out = run(
+        "<?php class A { function __construct(public string $n) {}\n\
+         function m() { echo \"m {$this->n}\\n\"; }\n\
+         function make() { return new Fiber([A::class, 'm']); }\n\
+         function __destruct() { echo \"released {$this->n}\\n\"; } }\n\
+         $f = (new A('a'))->make(); $f->start(); echo \"started\\n\"; unset($f); echo \"end\\n\";",
+    );
+    assert_eq!(out, "m a\nstarted\nreleased a\nend\n");
 }
 
 /// Binding a reference (`$a[$i][0] = &$a[$i]`, `$y = &$x`) releases no

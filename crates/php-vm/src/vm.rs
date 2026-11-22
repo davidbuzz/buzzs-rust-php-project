@@ -2434,6 +2434,13 @@ pub struct Vm {
     pub output_handler_hooks: HashMap<ZStr, crate::ext::OutputHandlerHookFn>,
     /// `include` opener hook.
     pub include_opener: Option<crate::ext::IncludeOpenerFn>,
+    /// The include the opener hook is running (frame depth, kind, name):
+    /// `php_verror` names `kind()` while the opline is on
+    /// `ZEND_INCLUDE_OR_EVAL` and no function runs above it.
+    pub(crate) including: Option<(usize, &'static str, ZStr)>,
+    /// The `__call`/`__callStatic` frame entered with a `memory_limit`
+    /// violation pending: backtraces show it as the trampoline it still is.
+    pub(crate) trampoline_entry: Option<usize>,
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
     /// Current mbstring encoding/substitution settings.
