@@ -1368,3 +1368,49 @@ foreach ([1, 2] as $round) { var_export([d1(20), d2(20), d3($r, $objs), d4($objs
 "#,
     );
 }
+
+#[test]
+fn methods_that_read_properties_of_this_run_inline() {
+    typed_at_least(
+        "<?php class G { public $price; protected $qty = 2; function __construct($p) { $this->price = $p; } function getPrice() { return $this->price; } function total() { return $this->price * $this->qty; } function cheap() { return $this->price < 10; } } function t($items) { $s = 0.0; $c = 0; foreach ($items as $it) { $s += $it->getPrice() + $it->total(); if ($it->cheap()) { $c++; } } return [$s, $c]; } $a = []; for ($i = 0; $i < 30; $i++) { $a[] = new G($i + 0.5); } var_dump(t($a), t($a), t([]));",
+        1,
+    );
+    // Protected and private properties (a subclass's own private one of
+    // the same name), an overriding getter, a call site that sees two
+    // classes one after the other and both in turn, a property that
+    // becomes a string or is unset, a typed one that is null, `__get`, a
+    // method that writes, one that calls another.
+    three(
+        r#"<?php
+class G { public $price; protected $qty = 2; private $rate = 0.5; public $name = 'n'; public ?int $maybe = null; public $dyn;
+  function __construct($p) { $this->price = $p; }
+  function getPrice() { return $this->price; }
+  function getQty(): int { return $this->qty; }
+  function total() { return $this->price * $this->qty; }
+  function taxed($extra) { $t = $this->price + $extra; return $t * $this->rate; }
+  function cheap() { return $this->price < 10; }
+  function getName() { return $this->name; }
+  function getMaybe() { return $this->maybe; }
+  function bump() { $this->qty++; return $this->qty; }
+  function viaThis() { return $this->getPrice(); }
+  function __get($n) { return 42; }
+  function magic() { return $this->nope; }
+}
+class H extends G { protected $qty = 5; private $rate = 2.0; function getPrice() { return $this->price + 1000; } function rate() { return $this->rate; } }
+function mk($n, $cls) { $a = []; for ($i = 0; $i < $n; $i++) { $a[] = new $cls($i + 0.5); } return $a; }
+function g1($items) { $s = 0.0; foreach ($items as $it) { $s += $it->getPrice() + $it->getQty() + $it->total(); } return $s; }
+function g2($items) { $s = 0.0; $c = 0; foreach ($items as $k => $it) { $s += $it->taxed($k); if ($it->cheap()) { $c++; } } return [$s, $c]; }
+function g3($items) { $n = 0; foreach ($items as $it) { $x = $it->getName(); $n += strlen($x); } return $n; }
+function g4($items) { $n = 0; foreach ($items as $i => $it) { if ($i == 7) { $it->maybe = 3; } if ($i == 9) { $it->price = 'str'; } $m = $it->getMaybe(); $n += $m === null ? 1 : 100; } return $n; }
+function g5($items) { $n = 0; foreach ($items as $it) { $n += $it->bump() + $it->magic(); } return $n; }
+function g6($o, $n) { $s = 0.0; for ($i = 0; $i < $n; $i++) { $s += $o->getPrice() * $i + $o->viaThis(); if ($i == 20) { $o->price = 2; } if ($i == 30) { unset($o->price); $o->price = 1.5; } } return $s; }
+function g7($items) { $s = 0.0; foreach ($items as $it) { $s += $it->getPrice() + $it->total(); } return $s; }
+$gs = mk(40, 'G'); $hs = mk(40, 'H'); $mixed = []; for ($i = 0; $i < 40; $i++) { $mixed[] = $i % 3 ? $gs[$i] : $hs[$i]; }
+foreach ([1, 2] as $round) {
+  var_export([g1($gs), g1($hs), g2($gs), g2($hs), g3($gs), g5($gs), g6(new G(3.5), 40), g6(new H(3), 40), g7($mixed), g1(mk(3, 'G'))]);
+  try { var_export(g4(mk(12, 'G'))); var_export(g1($mixed)); $z = mk(12, 'G'); $z[5]->price = 'x'; var_export(g7($z)); } catch (TypeError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+}
+echo "\n";
+"#,
+    );
+}

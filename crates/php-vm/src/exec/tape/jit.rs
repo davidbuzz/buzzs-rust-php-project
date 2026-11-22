@@ -808,6 +808,16 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 && func.code.ops.len() <= typed::INLINE_OPS;
             plain.then_some(func)
         };
+        // What a property read of an inlined method holds now.
+        let prop_of_this = |init: usize, func: usize, pid: u32| -> Option<typed::Ty> {
+            // SAFETY: `func` is the address of a function the analysis
+            // holds an `Rc` of (`typed::Inlined`).
+            match this_prop(frame, init, func, pid)? {
+                Value::Int(_) => Some(typed::Ty::Int),
+                Value::Float(_) => Some(typed::Ty::Float),
+                _ => None,
+            }
+        };
         // What a property holds now, when its read is a cache hit.
         let property = |place: u32| -> Option<typed::Ty> {
             match crate::exec::spec::read_hit(frame, place)? {
@@ -861,6 +871,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             each: &each,
             builtin: &builtin,
             user: &user,
+            this_prop: &prop_of_this,
             property: &property,
         };
         let code = php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen));
@@ -889,10 +900,20 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
 ///
 /// # Safety
 /// `block` is an entry block of a record.
-unsafe extern "C" fn missed(_f: *mut Frame, block: *mut usize) -> usize {
+unsafe extern "C" fn missed(f: *mut Frame, block: *mut usize) -> usize {
     // SAFETY: the caller's contract.
     unsafe {
         let site = (block as usize, *block.add(HB_MISS_AT));
+        // A call the loop runs inline that turned out to be of another
+        // function (an object of another class), or whose method read a
+        // property of another type: the loop is compiled again for what
+        // the call is now, and the count starts over. (The loops compiled
+        // again are counted too: after `MISS_RECOMPILES`, no short cuts
+        // and no inlined calls.)
+        let call = matches!(
+            (&*f).code.ops.get(site.1),
+            Some(Op::InitFCall { .. } | Op::InitStaticCall { .. } | Op::InitMethodCall { .. })
+        );
         let count = MISSES.with(|m| {
             let mut m = m.borrow_mut();
             let count = m.entry(site).or_insert(0);
@@ -910,6 +931,9 @@ unsafe extern "C" fn missed(_f: *mut Frame, block: *mut usize) -> usize {
             *block.add(HB_MISS) += 1;
             if *block.add(HB_MISS) > MISS_RECOMPILES {
                 *block.add(HB_FAILS) |= NO_SHORT_CUTS;
+            }
+            if call {
+                MISSES.with(|m| m.borrow_mut().remove(&site));
             }
             *block.add(HB_TYPED) = TYPED_UNTRIED;
         }
@@ -1146,6 +1170,78 @@ fn callee_at(f: &Frame, init: usize) -> Option<std::rc::Rc<crate::func::UserFunc
             user(&cached.func)
         }
         _ => None,
+    }
+}
+
+/// The number the property read at place `pid` of the method at address
+/// `func` reads from `$this`, for the method's call started by the op at
+/// `init` of frame `f`'s code: the object that call is made on, and the
+/// method's scope as the call's cache entry has it.
+///
+/// # Safety
+/// `func` is the address of a `UserFunction` that is alive (one a typed
+/// loop runs inline is kept alive for good, `typed::analyse`).
+unsafe fn this_prop(f: &Frame, init: usize, func: usize, pid: u32) -> Option<Value> {
+    let Op::InitMethodCall {
+        obj,
+        name: Operand::Lit(_),
+    } = *f.code.ops.get(init)?
+    else {
+        return None;
+    };
+    let object = match obj {
+        Operand::Cv(cv) => match f.cvs.get(cv as usize)?.get()? {
+            Value::Object(object) => object,
+            _ => return None,
+        },
+        Operand::Unused => f.this.as_ref()?,
+        _ => return None,
+    };
+    let cache = f.code.method_cache.try_borrow().ok()?;
+    let cached = cache.get(init)?.as_ref()?;
+    if cached.class_addr != std::rc::Rc::as_ptr(crate::object::class_of(object)) as usize {
+        return None;
+    }
+    let scope = cached
+        .method_scope
+        .as_ref()
+        .map_or(0, |scope| scope.as_ptr() as usize);
+    // SAFETY: the caller's contract.
+    let code = unsafe { &(*(func as *const crate::func::UserFunction)).code };
+    crate::exec::spec::jit_this_prop_num(code, scope, object, pid)
+}
+
+/// For a method a typed loop runs inline: [`this_prop`], the number's
+/// bits into `out`. Returns its tag (2 an int, 3 a float), or 0, nothing
+/// stored, when the read is no hit of the property cache.
+///
+/// # Safety
+/// `f` is the current frame, `func` as for [`this_prop`], and `out` is
+/// writable.
+pub(super) unsafe extern "C" fn inl_prop_get(
+    f: *mut Frame,
+    init: usize,
+    func: usize,
+    pid: usize,
+    out: *mut u64,
+) -> usize {
+    let Ok(pid) = u32::try_from(pid) else {
+        return 0;
+    };
+    // SAFETY: the caller's contract.
+    match unsafe { this_prop(&*f, init, func, pid) } {
+        #[allow(clippy::cast_sign_loss)]
+        Some(Value::Int(x)) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = x as u64 };
+            2
+        }
+        Some(Value::Float(x)) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = x.to_bits() };
+            3
+        }
+        _ => 0,
     }
 }
 

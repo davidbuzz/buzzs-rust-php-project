@@ -99,7 +99,9 @@ class Gen:
             return f'{self.pick(["h1", "h3", "h7", "h9"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
         # Static methods and methods of `$o`, likewise.
         if k < 0.085:
-            return f'{self.pick(["P::sm", "$o->im", "P::sd"])}({self.expr(d + 1)})'
+            return f'{self.pick(["P::sm", "$o->im", "P::sd", "$o->gsum", "$fo->gsum"])}({self.expr(d + 1)})'
+        if k < 0.092:
+            return self.pick(['$o->gx()', '$o->gn()', '$fo->gx()', '$fo->gf()', '$o->gf()'])
         if k < 0.095:
             return f'{self.pick(["$o->pm", "P::sd"])}({self.expr(d + 1)}, {self.atom()})'
         if k < 0.1:
@@ -270,6 +272,8 @@ class Gen:
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'static function sm($x) { return $x + 2; } function im($x) { return $x * 3; } '
                    'function pm($a, $b) { return $a - $b; } static function sd(int|float $x, int $y = 4) { return $x * $y; } '
+                   'function gx() { return $this->x; } function gn(): int { return $this->n; } function gf() { return $this->f * 2; } '
+                   'function gsum($k) { return $this->n + $k; } '
                    'function __construct($x) { $this->x = $x; } }')
         out += [self.function(f) for f in fns]
         out.append('function show($v) { if (is_float($v)) { return is_nan($v) ? "NAN" : sprintf("%.17g", $v); } '

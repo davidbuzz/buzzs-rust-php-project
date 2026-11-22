@@ -52,7 +52,7 @@ pub(super) use dims::{
     isset_dim_cv_in,
 };
 #[cfg(feature = "jit")]
-pub(super) use props::{jit_prop_get, jit_prop_op, jit_prop_set};
+pub(super) use props::{jit_prop_get, jit_prop_op, jit_prop_set, jit_this_prop_num};
 pub(super) use props::{prop_op_in, read_hit};
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,

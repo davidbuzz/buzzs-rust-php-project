@@ -95,7 +95,8 @@ use crate::opcode::{
 };
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, Block, InstBuilder, MemFlags, SigRef, Signature, Value as V,
+    types, AbiParam, Block, InstBuilder, MemFlags, SigRef, Signature, StackSlotData, StackSlotKind,
+    Value as V,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use php_runtime::Value;
@@ -713,6 +714,20 @@ enum Plan {
         tmps: usize,
         to: usize,
     },
+    /// In a method the loop runs inline: `dst = $this->prop` for a
+    /// declared property holding a number, read from the object the call
+    /// is made on (`super::inl_prop_get`: the method has no frame, so
+    /// neither a `$this` nor a place of its own). `init` is the op that
+    /// starts the call, `func` the method's address, `place` the read's
+    /// place in the method's code.
+    ThisProp {
+        init: usize,
+        func: usize,
+        place: u32,
+        dst: SlotRef,
+        float: bool,
+        next: usize,
+    },
     /// The loop is left for good here (a `return`): the interpreter's.
     Leave,
     /// A family instruction run by its own handler, on the frame (which is
@@ -1123,6 +1138,21 @@ impl Plan {
                 consume: false,
                 next: next + base,
             },
+            Plan::ThisProp {
+                init,
+                func,
+                place,
+                dst,
+                float,
+                next,
+            } => Plan::ThisProp {
+                init,
+                func,
+                place,
+                dst: v(dst),
+                float,
+                next: next + base,
+            },
             Plan::Arg { .. }
             | Plan::Bind { .. }
             | Plan::Leave
@@ -1144,6 +1174,7 @@ impl Plan {
             | Plan::Truth { .. }
             | Plan::Arg { .. }
             | Plan::Bind { .. }
+            | Plan::ThisProp { .. }
             | Plan::Leave => true,
             Plan::Compare { dst, .. } | Plan::SetBool { dst, .. } | Plan::JmpEx { dst, .. } => {
                 dst.tmp
@@ -1184,7 +1215,7 @@ impl Plan {
             Plan::EachAny {
                 end, step, full, ..
             } => [Some(step), Some(full), Some(end)],
-            Plan::Ext { next, .. } => [Some(next), None, None],
+            Plan::Ext { next, .. } | Plan::ThisProp { next, .. } => [Some(next), None, None],
             Plan::Int2 { next, .. }
             | Plan::Conv { next, .. }
             | Plan::Math { next, .. }
@@ -1339,6 +1370,9 @@ impl Plan {
             }
             // (By the way out: [`Plan::out`].)
             Plan::EachAny { .. } => {}
+            Plan::ThisProp { dst, float, .. } => {
+                st.insert(dst, num(float));
+            }
             Plan::Ext {
                 result,
                 any,
@@ -1497,6 +1531,11 @@ pub(super) struct Seen<'a> {
     /// a plain declaration (no references, no statics, no variadic) of at
     /// most [`INLINE_OPS`] ops, and calls are not observed.
     pub(super) user: &'a dyn Fn(usize, usize) -> Option<std::rc::Rc<crate::func::UserFunction>>,
+    /// For a method that may run inline: the type of the number a property
+    /// read of `$this` in it holds now (the op that starts the method's
+    /// call, the method's address, the read's place in the method's code),
+    /// when the read is a hit of the method's property cache.
+    pub(super) this_prop: &'a dyn Fn(usize, usize, u32) -> Option<Ty>,
     /// The type of the number the property at a place (by index) holds,
     /// when its read is a cache hit.
     pub(super) property: &'a dyn Fn(u32) -> Option<Ty>,
@@ -1741,7 +1780,10 @@ impl<'a> Analysis<'a> {
                     },
                 })
             })(),
-            _ => self.own_plan(&local, at),
+            _ => match self.this_prop(&local, callee, at) {
+                Some(plan) => Some(plan),
+                None => self.own_plan(&local, at),
+            },
         };
         self.inline = false;
         (
@@ -1795,6 +1837,44 @@ impl<'a> Analysis<'a> {
             return None;
         }
         plan.inlined(callee.base)
+    }
+
+    /// Instruction `at` of the method `callee` (whose tape, places and
+    /// state are in place) when it reads a declared property of `$this`
+    /// that holds a number now ([`Plan::ThisProp`], in the method's own
+    /// slots and instruction numbers).
+    fn this_prop(&mut self, st: &State, callee: &Inlined, at: usize) -> Option<Plan> {
+        if !matches!(callee.kind, SiteKind::Method(_)) {
+            return None;
+        }
+        let inst = *self.tape.get(at)?;
+        let (dst, next) = match inst.op {
+            TOp::FetchObjProp => (tmp(inst.b.checked_mul(SLOT_U32)?)?, at + 1),
+            // Into the variable of the `AssignCv` folded into it.
+            TOp::FetchObjPropTo => (cv(inst.d.checked_mul(SLOT_U32)?)?, at + 2),
+            _ => return None,
+        };
+        let place = self.places.get(inst.a as usize)?;
+        if !matches!(place.base, PlaceBase::This)
+            || !matches!(place.segs.as_slice(), [Seg::Prop(Operand::Lit(_))])
+        {
+            return None;
+        }
+        let func = std::rc::Rc::as_ptr(&callee.func) as usize;
+        let float = match (self.seen.this_prop)(callee.init, func, inst.a)? {
+            Ty::Int => false,
+            Ty::Float => true,
+            Ty::Bool | Ty::Plain | Ty::Any => return None,
+        };
+        self.ty(st, dst)?;
+        Some(Plan::ThisProp {
+            init: callee.init,
+            func,
+            place: inst.a,
+            dst,
+            float,
+            next,
+        })
     }
 
     /// The value the operand `val` of a `return` is, when the loop can
@@ -2709,13 +2789,12 @@ impl<'a> Analysis<'a> {
             // `DoCall` computes.
             Op::InitFCall { .. } | Op::InitStaticCall { .. } | Op::InitMethodCall { .. } => {
                 let site = self.sites.iter().find(|site| site.init == i)?;
-                // (A call that kept turning out to be of another method:
-                // `super::missed`, counted at the op the call is redone
-                // from.)
-                if (self.seen.slow)(i) {
-                    return None;
-                }
                 if let Some((_, callee)) = self.inlined_site(i) {
+                    // (Not in a loop whose calls kept turning out to be
+                    // of other functions: `super::missed`.)
+                    if !self.seen.fast {
+                        return None;
+                    }
                     // The object's variable: one the loop does not track.
                     if let SiteKind::Method(Operand::Cv(var)) = callee.kind {
                         if !self.untracked(st, cv(var.checked_mul(SLOT_U32)?)?) {
@@ -3562,6 +3641,9 @@ type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) ->
 type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
 /// `super::const_is`.
 type ConstIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
+/// `super::inl_prop_get`.
+type InlPropGet =
+    unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, *mut u64) -> usize;
 /// `super::each_any`.
 type EachAny =
     unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Option<Value>, *mut Value) -> usize;
@@ -4816,6 +4898,50 @@ impl Emit<'_, '_> {
                     self.read_back(key, Ty::Int, full)?;
                 }
                 self.go(i, full, repeat)?;
+            }
+            Plan::ThisProp {
+                init,
+                func,
+                place,
+                dst,
+                float,
+                next,
+            } => {
+                // The number comes back through memory: the destination is
+                // a variable, not a slot.
+                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let out = self.b.ins().stack_addr(types::I64, slot, 0);
+                #[allow(clippy::cast_possible_wrap)]
+                let operands = [
+                    self.frame,
+                    self.b.ins().iconst(types::I64, i64::try_from(init).ok()?),
+                    self.b.ins().iconst(types::I64, func as i64),
+                    self.b.ins().iconst(types::I64, i64::from(place)),
+                    out,
+                ];
+                let tag = self.helper(super::inl_prop_get as InlPropGet as usize, &operands)?;
+                let expected = if float { TAG_FLOAT } else { TAG_INT };
+                let hit = self
+                    .b
+                    .ins()
+                    .icmp_imm(IntCC::Equal, tag, i64::from(expected));
+                let (ok, other) = (self.b.create_block(), self.b.create_block());
+                self.b.set_cold_block(other);
+                self.b.ins().brif(hit, ok, &[], other, &[]);
+                // Not that number now: the whole call is the
+                // interpreter's, and the miss is counted.
+                self.b.switch_to_block(other);
+                let from = self.lp.resume.get(&init).copied().unwrap_or(init);
+                self.ret(from, WHY_MISS);
+                self.b.switch_to_block(ok);
+                let ty = if float { types::F64 } else { types::I64 };
+                let v = self.b.ins().stack_load(ty, slot, 0);
+                self.write(st, dst, float, v)?;
+                self.go(i, next, repeat)?;
             }
             Plan::EachAny {
                 slim,

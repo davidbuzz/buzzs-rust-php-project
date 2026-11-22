@@ -625,6 +625,42 @@ pub(in crate::exec) unsafe extern "C" fn jit_prop_get(
     tag
 }
 
+/// For a method a typed loop of the JIT runs inline: the number in the
+/// declared property that place `pid` of the method's code `code` reads
+/// from `$this`, for `obj` as `$this` and the class at address `scope` as
+/// the method's scope, on a hit of the code's property cache (the hit
+/// [`read_hit`] takes in the method's own frame, which does not exist
+/// here). `None` for anything else.
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_this_prop_num(
+    code: &crate::opcode::OpArray,
+    scope: usize,
+    obj: &Obj,
+    pid: PlaceId,
+) -> Option<Value> {
+    let cache = code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.class_addr == 0
+        || e.flags & (PC_READ | PC_DYN) != PC_READ
+        || e.scope_addr != scope
+        || e.base != PROP_CACHE_THIS
+    {
+        return None;
+    }
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != e.class_addr
+        || !od.lazy.try_borrow().is_ok_and(|l| l.is_none())
+    {
+        return None;
+    }
+    let slots = od.slots.try_borrow().ok()?;
+    match slots.get(e.slot as usize)? {
+        Some(Value::Int(x)) => Some(Value::Int(*x)),
+        Some(Value::Float(x)) => Some(Value::Float(*x)),
+        _ => None,
+    }
+}
+
 /// For a typed loop of the JIT: stores the number with tag `tag` (2: an
 /// int, else a float) and bits `bits` into the declared property of place
 /// `pid` on a cache hit, over a scalar, when the property takes the value
