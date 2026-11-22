@@ -355,6 +355,26 @@ fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     {
         return Ok(true);
     }
+    if vm.ini_modify_stage() == php_vm::ext::IniStage::Activate {
+        // `ZEND_INI_STAGE_ACTIVATE` (a pool's `php_admin_value`, a
+        // per-directory value): logged, not raised.
+        // `strcmp(sapi_module.name, "fpm-fcgi") == 0`.
+        let fpm = vm
+            .constants
+            .get(&php_runtime::ZStr::from("PHP_SAPI"))
+            .is_some_and(
+                |v| matches!(v, php_runtime::Value::Str(s) if s.as_bytes() == b"fpm-fcgi"),
+            );
+        accel_log_warning(
+            vm,
+            if fpm {
+                "Zend OPcache can't be temporarily enabled. Are you using php_admin_value[opcache.enable]=1 in an individual pool's configuration?"
+            } else {
+                "Zend OPcache can't be temporarily enabled (it may be only disabled until the end of request)"
+            },
+        );
+        return Ok(false);
+    }
     // `zend_error(E_WARNING, ...)`: no function-name prefix.
     vm.raise(
         2,

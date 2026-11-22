@@ -794,6 +794,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             );
             t.insert("argc", Value::Int(count));
         }
+        check_http_proxy(&mut server);
     }
 
     // $_ENV
@@ -895,6 +896,27 @@ pub fn parse_body(vm: &mut Vm, options: &ParseBodyOptions) -> VmResult<(ZArray, 
     match pending {
         Some(t) => Err(t),
         None => Ok((post, files)),
+    }
+}
+
+/// `check_http_proxy()` (bug #72573, "httpoxy", CVE-2016-5385): a
+/// client's `Proxy:` header must not pass for the `HTTP_PROXY`
+/// environment variable, so `$_SERVER['HTTP_PROXY']` is the process
+/// environment's value, or absent.
+fn check_http_proxy(server: &mut ZArray) {
+    let key = ArrayKey::from_bytes(b"HTTP_PROXY");
+    if server.get(&key).is_none() {
+        return;
+    }
+    let t = server.make_mut();
+    match std::env::var_os("HTTP_PROXY") {
+        Some(v) => {
+            use std::os::unix::ffi::OsStrExt;
+            t.insert(key, Value::Str(ZStr::from(v.as_bytes())));
+        }
+        None => {
+            t.remove(&key);
+        }
     }
 }
 

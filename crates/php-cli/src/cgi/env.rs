@@ -86,6 +86,8 @@ pub struct Settings {
     pub discard_path: bool,
     /// `doc_root`.
     pub doc_root: Option<Vec<u8>>,
+    /// `fastcgi.script_path_encoded` (FPM).
+    pub script_path_encoded: bool,
 }
 
 impl Default for Settings {
@@ -94,6 +96,7 @@ impl Default for Settings {
             fix_pathinfo: true,
             discard_path: false,
             doc_root: None,
+            script_path_encoded: true,
         }
     }
 }
@@ -159,7 +162,7 @@ impl Default for RequestInfo {
 }
 
 /// C `atol()`.
-fn atol(s: &[u8]) -> i64 {
+pub fn atol(s: &[u8]) -> i64 {
     let s = s.trim_ascii_start();
     let (neg, digits) = match s.first() {
         Some(b'-') => (true, &s[1..]),
@@ -197,7 +200,7 @@ pub fn is_valid_path(path: &[u8]) -> bool {
 }
 
 /// `strrchr(pt, '/')`, else `strrchr(pt, '\\')`.
-fn last_slash(pt: &[u8]) -> Option<usize> {
+pub fn last_slash(pt: &[u8]) -> Option<usize> {
     pt.iter()
         .rposition(|&c| c == b'/')
         .or_else(|| pt.iter().rposition(|&c| c == b'\\'))
@@ -261,8 +264,12 @@ pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> Req
                 }
                 found = true;
                 let slen = len - pt.len();
-                if let Some(pi) = env_path_info.clone() {
-                    let off = pi.len().saturating_sub(slen);
+                // Only a PATH_INFO longer than what was stripped ends in it
+                // (GHSA-5j3f-64r7-f564, CVE-2026-129538: C read and wrote
+                // before the value otherwise; it now leaves PATH_INFO and
+                // SCRIPT_NAME alone then).
+                if let Some(pi) = env_path_info.clone().filter(|pi| pi.len() > slen) {
+                    let off = pi.len() - slen;
                     env.put("ORIG_PATH_INFO", Some(&pi));
                     let prefix = &pi[..off];
                     if orig_script_name.as_deref() == Some(prefix) {
@@ -569,6 +576,31 @@ mod tests {
         );
     }
 
+    /// GHSA-5j3f-64r7-f564 (CVE-2026-129538): a stripped suffix longer
+    /// than `PATH_INFO` leaves `PATH_INFO` (and `SCRIPT_NAME`) as they are.
+    #[test]
+    fn path_info_shorter_than_stripped_suffix() {
+        let fs = FakeFs(&["/t/s.php"]);
+        let mut e = env(&[
+            ("SCRIPT_FILENAME", "/t/s.php/b"),
+            ("PATH_INFO", "/a/b"),
+            ("SCRIPT_NAME", "/s.php"),
+        ]);
+        init_request_info(&mut e, &Settings::default(), &fs);
+        assert_eq!(e.get("PATH_INFO").as_deref(), Some(&b"/b"[..]));
+        assert_eq!(e.get("ORIG_PATH_INFO").as_deref(), Some(&b"/a/b"[..]));
+        let mut e = env(&[
+            ("SCRIPT_FILENAME", "/t/s.php/xxxxxxxxxxxxxxxx"),
+            ("PATH_INFO", "/x"),
+            ("SCRIPT_NAME", "/s.php"),
+        ]);
+        let info = init_request_info(&mut e, &Settings::default(), &fs);
+        assert_eq!(info.path_translated.as_deref(), Some(&b"/t/s.php"[..]));
+        assert_eq!(e.get("PATH_INFO").as_deref(), Some(&b"/x"[..]));
+        assert_eq!(e.get("ORIG_PATH_INFO"), None);
+        assert_eq!(e.get("SCRIPT_NAME").as_deref(), Some(&b"/s.php"[..]));
+    }
+
     /// No file anywhere along the path: 404 and no script.
     #[test]
     fn missing_script_is_404() {
@@ -600,7 +632,7 @@ mod tests {
         let s = Settings {
             fix_pathinfo: false,
             discard_path: true,
-            doc_root: None,
+            ..Settings::default()
         };
         let info = init_request_info(&mut e, &s, &FakeFs(&[]));
         assert_eq!(info.path_translated.as_deref(), Some(&b"/a/php-cgi"[..]));

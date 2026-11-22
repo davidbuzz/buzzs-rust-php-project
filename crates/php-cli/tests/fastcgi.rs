@@ -576,3 +576,57 @@ fn nginx_runs_php_through_fastcgi() {
         socket.display()
     );
 }
+
+/// What one request changes that C resets at its end
+/// (`PHP_RINIT/RSHUTDOWN_FUNCTION(basic)`) must not reach the next request
+/// the same php-cgi process serves (CVE-2026-109619): a default stream
+/// context, the umask.
+#[test]
+fn request_state_does_not_reach_the_next_request() {
+    let dir = TempDir::new("fcgi-state");
+    let script = dir.0.join("state.php");
+    std::fs::write(
+        &script,
+        "<?php if (isset($_GET['set'])) { stream_context_set_default(['http' => ['user_agent' => 'leaky']]); umask(077); echo 'set'; } else { echo json_encode(stream_context_get_options(stream_context_get_default())), ' ', decoct(umask()); }",
+    )
+    .unwrap();
+    let port = free_port();
+    let mut child = Command::new(PHP_CGI)
+        .args(["-n", "-b", &format!("127.0.0.1:{port}")])
+        .env_remove("PHP_FCGI_CHILDREN")
+        .env_remove("PHP_FCGI_MAX_REQUESTS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    wait_for(&mut child, "php-cgi -b", || {
+        TcpStream::connect(&addr).is_ok()
+    })
+    .unwrap();
+    let _proc = Proc(child);
+    let script = script.to_str().unwrap();
+    let request = |query: &str| {
+        let mut s = TcpStream::connect(&addr).unwrap();
+        let params = [
+            ("SCRIPT_FILENAME", script),
+            ("REQUEST_METHOD", "GET"),
+            ("QUERY_STRING", query),
+        ];
+        let r = fcgi(&mut s, 1, false, &params, b"");
+        assert!(r.ended, "{r:?}");
+        r.stdout
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default()
+    };
+    let before = request("");
+    assert!(before.starts_with("[] "), "{before}");
+    assert_eq!(request("set=1"), "set");
+    assert_eq!(
+        request(""),
+        before,
+        "the second request saw the first one's state"
+    );
+}

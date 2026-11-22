@@ -121,7 +121,7 @@ pub struct RequestCtx {
 /// What the CGI SAPI (`sapi/cgi/cgi_main.c`, used by `php-cgi`) changes in
 /// a request: standard output instead of a socket, `Status:` headers, the
 /// environment as `$_SERVER`, and the command-line switches.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct CgiInfo {
     /// `SG(request_info).no_headers` (`-q`, `-f`, `-l`).
     pub no_headers: bool,
@@ -143,6 +143,9 @@ pub struct CgiInfo {
     /// A response the SAPI gives instead of running the script (FPM's
     /// status and ping pages, "File not found.", "Access denied.").
     pub reply: Option<CgiReply>,
+    /// FPM: `fastcgi.error_header` after a fatal error, and this logger
+    /// for "Unable to open primary script" (`zlog(ZLOG_ERROR, ...)`).
+    pub fpm_log: Option<fn(&str)>,
 }
 
 /// A response made without running a script.
@@ -764,6 +767,13 @@ fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ty = if a.has(1) { a.int(1) } else { 0 };
     if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
         vm.flush_stdout();
+        // `php_log_err()` -> `sapi_module.log_message`: the SAPI's logger
+        // when it installed one (FPM's "PHP message: ..." through zlog).
+        if let Some(mut hook) = vm.log_hook.take() {
+            hook(a.str(0).as_bytes());
+            vm.log_hook = Some(hook);
+            return Ok(Value::Bool(true));
+        }
         let mut line = a.str(0).as_bytes().to_vec();
         line.push(b'\n');
         let fcgi = current().and_then(|c| c.fcgi.clone().map(|f| (c, f)));
@@ -812,8 +822,14 @@ fn getenv_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let local_only = a.has(1) && a.bool(1);
     if !local_only {
         let name = a.str(0);
-        if let Some((_, v)) = fcgi_env.iter().find(|(k, _)| k == name.as_bytes()) {
-            return Ok(str_value(v));
+        let name = name.as_bytes();
+        // `sapi_getenv()`: "Ugly fix for HTTP_PROXY issue, see bug #72573"
+        // (`strncasecmp(name, "HTTP_PROXY", name_len)`).
+        let proxy = name.len() <= 10 && name.eq_ignore_ascii_case(&b"HTTP_PROXY"[..name.len()]);
+        if !proxy {
+            if let Some((_, v)) = fcgi_env.iter().find(|(k, _)| k == name) {
+                return Ok(str_value(v));
+            }
         }
     }
     orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a))
@@ -1330,9 +1346,10 @@ fn run_request_inner(
 /// unless `-C`), then the script and request shutdown.
 fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
     if let Some(reply) = &cgi.reply {
-        if reply.status != 200 {
-            let _ = ctx.header_op(HeaderOp::SetStatus(reply.status));
-        }
+        // `SG(sapi_headers).http_response_code = 200` for the status and
+        // ping pages too: `init_request_info()` may have set 404 for the
+        // (non-existent) script file.
+        let _ = ctx.header_op(HeaderOp::SetStatus(reply.status));
         for h in &reply.headers {
             let _ = ctx.header_op(HeaderOp::Replace(h, 0));
         }
@@ -1352,6 +1369,19 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
             let denied = std::fs::File::open(p)
                 .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
                 && !path.is_empty();
+            if let Some(log) = cgi.fpm_log {
+                let err = std::fs::File::open(p).err().map_or_else(
+                    || "No such file or directory".to_string(),
+                    |e| {
+                        let s = e.to_string();
+                        s.split(" (os error").next().unwrap_or_default().to_string()
+                    },
+                );
+                log(&format!(
+                    "Unable to open primary script: {} ({err})",
+                    String::from_utf8_lossy(&path)
+                ));
+            }
             let (code, msg): (i32, &[u8]) = if denied {
                 (403, &b"Access denied.\n"[..])
             } else {
@@ -1375,6 +1405,16 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
         (src, path.clone())
     };
     let r = execute_script(vm, &src, &shown);
+    // FPM: "if (EG(exit_status) == 255)" the `fastcgi.error_header` line
+    // replaces the status while the headers are not sent.
+    if cgi.fpm_log.is_some() && vm.exit_status == 255 && !ctx.headers_sent() {
+        if let Some(h) = vm
+            .ini_string("fastcgi.error_header")
+            .filter(|h| !h.is_empty())
+        {
+            let _ = ctx.header_op(HeaderOp::Replace(&h, 0));
+        }
+    }
     finish(vm, ctx, r);
 }
 

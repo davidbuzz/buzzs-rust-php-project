@@ -52,10 +52,27 @@ const OUT_BUF: usize = 1024 * 8;
 /// `sizeof(fcgi_header)`.
 const HEADER_LEN: usize = 8;
 
-/// `fcgi_log()`: messages go to standard error as given (some without a
-/// newline, as in php-src).
+/// `FCGI_ERROR` (the `ZLOG_ERROR` value).
+pub const LOG_ERROR: i32 = 4;
+
+/// `fcgi_set_logger()`: FPM sends the library's messages to its log.
+static LOGGER: std::sync::OnceLock<fn(i32, &str)> = std::sync::OnceLock::new();
+
+/// `fcgi_set_logger()` (php-fpm's).
+#[allow(dead_code)]
+pub fn set_logger(f: fn(i32, &str)) {
+    let _ = LOGGER.set(f);
+}
+
+/// `fcgi_log(FCGI_ERROR, ...)`: by default to standard error as given
+/// (some without a newline, as in php-src).
 fn log(msg: &str) {
-    let _ = std::io::stderr().write_all(msg.as_bytes());
+    match LOGGER.get() {
+        Some(f) => f(LOG_ERROR, msg),
+        None => {
+            let _ = std::io::stderr().write_all(msg.as_bytes());
+        }
+    }
 }
 
 /// `fcgi_header`.
@@ -326,7 +343,7 @@ pub fn listen(path: &str) -> Option<(Listener, Option<Vec<IpAddr>>)> {
 
 /// The `FCGI_WEB_SERVER_ADDRS` list (comma-separated IPv4/IPv6
 /// addresses), logging the entries that are not addresses.
-fn allowed_clients(list: &str) -> Vec<IpAddr> {
+pub fn allowed_clients(list: &str) -> Vec<IpAddr> {
     let mut out = Vec::new();
     for cur in list.split(',') {
         match cur.parse::<IpAddr>() {
@@ -812,6 +829,8 @@ pub struct Server {
     listener: Listener,
     allowed: Option<Vec<IpAddr>>,
     mgmt: MgmtVars,
+    /// `client_sa`: the address of the last accepted client.
+    last_client: std::cell::Cell<Option<SocketAddr>>,
 }
 
 impl Server {
@@ -823,7 +842,15 @@ impl Server {
             listener,
             allowed,
             mgmt,
+            last_client: std::cell::Cell::new(None),
         }
+    }
+
+    /// `fcgi_get_last_client_ip()`: `None` for a Unix socket client
+    /// (php-fpm's access log).
+    #[allow(dead_code)]
+    pub fn last_client_ip(&self) -> Option<String> {
+        self.last_client.get().map(|c| client_ip(Some(c)))
     }
 
     /// `fcgi_accept_request()`: the next request, on `conn` while it stays
@@ -874,6 +901,7 @@ impl Server {
                 }
                 Err(_) => return None,
             };
+            self.last_client.set(client);
             if !is_allowed(self.allowed.as_deref(), client) {
                 log(&format!(
                     "Connection disallowed: IP address '{}' has been dropped.",

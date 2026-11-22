@@ -74,9 +74,22 @@ fn pass2(vm: &mut Vm) {
     vm.output(b"pass2\n");
 }
 
+/// `ZT_G(child_init_count)`: `child_init_func` calls in this process.
+static CHILD_INIT_COUNT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// `zend_test_child_init_count()`.
+pub(crate) fn child_init_count() -> i64 {
+    CHILD_INIT_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Extension for ZendTest {
     fn name(&self) -> &'static str {
         "zend_test"
+    }
+
+    /// `zend_test_child_init()`.
+    fn child_init(&self) {
+        CHILD_INIT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {

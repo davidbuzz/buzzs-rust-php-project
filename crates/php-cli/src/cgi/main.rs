@@ -50,8 +50,8 @@ use getopt::{GetOpt, Opt, INVALID};
 use php_cli_server::sapi::{CgiInfo, RequestCtx};
 use php_runtime::ZStr;
 use request::{
-    build_request, cfg_bool, fastcgi_request, new_prepared_vm, new_vm, request_settings, sapi_ini,
-    VM_STACK,
+    activate_config, build_request, cfg_bool, fastcgi_request, new_prepared_vm, new_vm,
+    request_settings, sapi_ini, VM_STACK,
 };
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -230,6 +230,9 @@ struct CommandLine {
     info: Option<u8>,
     /// `-a`: "Interactive mode enabled" is printed (nothing else changes).
     interactive: bool,
+    /// `-T [<warmup>,]<count>`: the script runs `warmup` times untimed,
+    /// then `count` times, and the time taken goes to standard error.
+    timing: Option<(i64, i64)>,
     /// Index of the first non-option argument.
     optind: usize,
 }
@@ -294,10 +297,15 @@ fn main() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-    // The VM runs on a thread with a large stack (deep recursion).
+    // The VM runs on a thread with a large stack (deep recursion); the
+    // signals go to it (see `mask_process_signals`).
+    sys::mask_process_signals(true);
     let status = std::thread::Builder::new()
         .stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX))
-        .spawn(move || run(&argv))
+        .spawn(move || {
+            sys::mask_process_signals(false);
+            run(&argv)
+        })
         .ok()
         .and_then(|h| h.join().ok())
         .unwrap_or(255);
@@ -414,19 +422,26 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         ));
     }
 
-    // Second pass: help and invalid options.
-    if let Some(status) = help_pass(argv, &argv0, skip_getopt) {
-        return status;
-    }
+    // Second pass: help and invalid options, and `-T`.
+    let timing = match second_pass(argv, &argv0, skip_getopt) {
+        Ok(t) => t,
+        Err(status) => return status,
+    };
 
     let settings = request_settings(&cfg);
     let mut info = env::init_request_info(&mut environment, &settings, &env::RealFs);
     environment.apply();
 
-    let mut cl = CommandLine::default();
+    let mut cl = CommandLine {
+        timing,
+        ..CommandLine::default()
+    };
     let mut source: Option<Vec<u8>> = None;
+    // The private copy of standard input `stdin_to_temp` made, if any.
+    let mut stdin_copy: Option<Vec<u8>> = None;
     if !cgi && !skip_getopt {
         cl = parse_command_line(argv);
+        cl.timing = timing;
         if cl.interactive {
             out(b"Interactive mode enabled\n\n");
         }
@@ -487,10 +502,19 @@ fn run(argv: &[Vec<u8>]) -> i32 {
                     std::fs::File::open(std::ffi::OsStr::from_bytes(p)).is_ok()
                 }) =>
         {
-            // Standard input when no file is named ("Standard input code").
+            // Standard input when no file is named ("Standard input code"):
+            // C passes the stream on; `highlight_file()` and
+            // `php_strip_whitespace()` take a path, so it goes to a new
+            // private file (see `stdin_to_temp`).
             let path = match info.path_translated.clone() {
                 Some(p) => p,
-                None => stdin_to_temp().unwrap_or_default(),
+                None => match stdin_to_temp() {
+                    Some(t) => {
+                        stdin_copy = Some(t.clone());
+                        t
+                    }
+                    None => Vec::new(),
+                },
             };
             let mut code = if cl.behavior == Behavior::Highlight {
                 b"<?php highlight_file('".to_vec()
@@ -509,6 +533,55 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         _ => {}
     }
 
+    // `-T`: "gettimeofday(&start, NULL)" when the option is read.
+    let mut start = std::time::Instant::now();
+    let (mut warmup, mut repeats) = cl.timing.unwrap_or((0, 1));
+    let status = loop {
+        let vm = run_once(&cfg, &settings, &cl, &info, &environment, source.clone());
+        let status = vm.exit_status;
+        if cl.timing.is_some() {
+            if warmup > 0 {
+                warmup -= 1;
+                if warmup == 0 {
+                    start = std::time::Instant::now();
+                }
+                drop(vm);
+                continue;
+            }
+            repeats -= 1;
+            if repeats > 0 {
+                drop(vm);
+                continue;
+            }
+        }
+        // The process exits next: skip the VM's destruction.
+        std::mem::forget(vm);
+        break status;
+    };
+    if let Some(t) = stdin_copy {
+        let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&t));
+    }
+    if cl.timing.is_some() {
+        let e = start.elapsed();
+        eprint!(
+            "\nElapsed time: {}.{:06} sec\n",
+            e.as_secs(),
+            e.subsec_micros()
+        );
+    }
+    status
+}
+
+/// One request of the command-line or CGI mode (one round of the request
+/// loop of `cgi_main.c`): the body, the request, the run, the shutdown.
+fn run_once(
+    cfg: &Config,
+    settings: &env::Settings,
+    cl: &CommandLine,
+    info: &env::RequestInfo,
+    environment: &env::Env,
+    source: Option<Vec<u8>>,
+) -> php_vm::Vm {
     // The request body: CONTENT_LENGTH bytes of standard input
     // (`sapi_cgi_read_post`).
     let content = if info.content_length > 0 {
@@ -520,7 +593,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         None
     };
 
-    let request = build_request(&info, content, environment.vars());
+    let request = build_request(info, content, environment.vars());
     let php_self = env::php_self(
         info.request_uri.as_deref(),
         environment.get("PATH_INFO").as_deref(),
@@ -540,7 +613,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         ));
     }
 
-    let ini = sapi_ini(&cfg);
+    let ini = sapi_ini(cfg);
     let server_cfg = php_cli_server::sapi::ServerConfig {
         document_root: Vec::new(),
         host: String::new(),
@@ -549,30 +622,92 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         ini: ini.clone(),
         extensions: extensions::all,
     };
-    let prepared = new_prepared_vm(&cfg, ini);
-    let (_, vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
-    // The copy of standard input `stdin_to_temp` may have made.
-    let _ = std::fs::remove_file(stdin_temp_path());
+    let mut prepared = new_prepared_vm(cfg, ini);
+    if let Some(pt) = &info.path_translated {
+        activate_config(
+            &mut prepared.vm,
+            cfg,
+            pt,
+            environment.get("SERVER_NAME").as_deref(),
+            environment.get("DOCUMENT_ROOT").as_deref(),
+        );
+    }
+    let (_, mut vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
+    vm.ini_deactivate();
     let _ = std::io::stdout().flush();
-    // The process exits next: skip the VM's destruction.
-    std::mem::forget(vm);
-    ctx.exit_status.get()
+    vm.exit_status = ctx.exit_status.get();
+    vm
+}
+
+/// Standard input copied to a file of its own for `-s`/`-w` without a
+/// file: created with `O_CREAT | O_EXCL` and mode 0600 under a fresh name,
+/// so a file or symlink someone planted in the temporary directory is
+/// never opened (TOCTOU-002: the name used to be predictable and the
+/// write followed symlinks).
+fn stdin_to_temp() -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut src = Vec::new();
+    std::io::stdin().lock().read_to_end(&mut src).ok()?;
+    let dir = std::env::temp_dir();
+    for attempt in 0u32..16 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let path = dir.join(format!(
+            "php-cgi-stdin-{}-{nanos:08x}-{attempt}",
+            std::process::id()
+        ));
+        let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        else {
+            continue;
+        };
+        if f.write_all(&src).is_err() {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        return Some(path.into_os_string().into_vec());
+    }
+    None
 }
 
 /// The second option pass: `-h`, `-?` and invalid options print the usage
 /// and end the run (with this status).
 fn help_pass(argv: &[Vec<u8>], argv0: &[u8], skip_getopt: bool) -> Option<i32> {
+    second_pass(argv, argv0, skip_getopt).err()
+}
+
+/// The second option pass of `main()`, made in every mode: `-h`, `-?` and
+/// invalid options print the usage and end the run (`Err` with the
+/// status); `-T [<warmup>,]<count>` asks for timed repeats (`atoi()` of
+/// each part). `FastCGI` mode reads `-T` but does not repeat.
+fn second_pass(
+    argv: &[Vec<u8>],
+    argv0: &[u8],
+    skip_getopt: bool,
+) -> Result<Option<(i64, i64)>, i32> {
+    let mut timing = None;
     if skip_getopt {
-        return None;
+        return Ok(timing);
     }
     let mut g = GetOpt::new(argv, OPTIONS, true);
-    while let Some((c, _)) = g.next_opt() {
+    while let Some((c, v)) = g.next_opt() {
         if c == INVALID || c == i32::from(b'h') || c == i32::from(b'?') {
             out(&usage(argv0));
-            return Some(i32::from(c == INVALID));
+            return Err(i32::from(c == INVALID));
+        }
+        if c == i32::from(b'T') {
+            let arg = v.unwrap_or_default();
+            timing = Some(match arg.iter().position(|&b| b == b',') {
+                Some(i) => (env::atol(&arg[..i]), env::atol(&arg[i + 1..])),
+                None => (0, env::atol(&arg)),
+            });
         }
     }
-    None
+    Ok(timing)
 }
 
 /// The `FastCGI` part of `main()`: `PHP_FCGI_MAX_REQUESTS`,
@@ -679,22 +814,6 @@ fn lint(cfg: &Config, path: Option<&[u8]>) -> Option<i32> {
     let _ = std::io::stdout().flush();
     std::mem::forget(vm);
     Some(if ok { 0 } else { 255 })
-}
-
-/// Where [`stdin_to_temp`] puts standard input.
-fn stdin_temp_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("php-cgi-stdin-{}", std::process::id()))
-}
-
-/// Standard input copied to a temporary file, for `-s`/`-w` without a file
-/// (C reads the stream directly; `highlight_file()` and
-/// `php_strip_whitespace()` take a path).
-fn stdin_to_temp() -> Option<Vec<u8>> {
-    let mut src = Vec::new();
-    std::io::stdin().lock().read_to_end(&mut src).ok()?;
-    let path = stdin_temp_path();
-    std::fs::write(&path, src).ok()?;
-    Some(path.into_os_string().into_vec())
 }
 
 #[cfg(test)]

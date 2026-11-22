@@ -26,6 +26,13 @@ pub fn in_shutdown() -> bool {
     IN_SHUTDOWN.load(Ordering::SeqCst)
 }
 
+/// `fcgi_terminate()`: the request loop stops after the current request
+/// (FPM's SIGQUIT handler calls it; one atomic store, async-signal-safe).
+#[allow(dead_code)] // php-fpm's
+pub fn request_shutdown() {
+    IN_SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
 /// The last OS error number (`errno`).
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -139,6 +146,40 @@ fn set_handler(signo: libc::c_int, handler: extern "C" fn(libc::c_int)) {
     unsafe {
         libc::sigemptyset(&raw mut sa.sa_mask);
         libc::sigaction(signo, &raw const sa, std::ptr::null_mut());
+    }
+}
+
+/// The signals php-cgi acts on: the shutdown requests
+/// (`fcgi_signal_handler`, `fastcgi_cleanup`) and the children's exits.
+const PROCESS_SIGNALS: [libc::c_int; 5] = [
+    libc::SIGTERM,
+    libc::SIGUSR1,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGCHLD,
+];
+
+/// Blocks (or unblocks) [`PROCESS_SIGNALS`] in the calling thread. The
+/// main thread blocks them before it starts the VM thread, which unblocks
+/// them: a signal sent to the process then reaches the thread waiting in
+/// `accept()` or `wait()` and interrupts it, as in the single-threaded C
+/// program (delivered to the main thread instead, the handler ran but the
+/// server went on waiting for a connection).
+pub fn mask_process_signals(block: bool) {
+    // SAFETY: `sigset_t` is plain old data, initialised by `sigemptyset`
+    // before use; `pthread_sigmask` changes only the calling thread's mask.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&raw mut set);
+        for signo in PROCESS_SIGNALS {
+            libc::sigaddset(&raw mut set, signo);
+        }
+        let how = if block {
+            libc::SIG_BLOCK
+        } else {
+            libc::SIG_UNBLOCK
+        };
+        libc::pthread_sigmask(how, &raw const set, std::ptr::null_mut());
     }
 }
 

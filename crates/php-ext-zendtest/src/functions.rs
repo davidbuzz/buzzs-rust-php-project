@@ -730,7 +730,14 @@ fn register_stub_metadata(vm: &mut Vm) {
     );
 }
 
+/// `zend_test_child_init_count()`.
+#[allow(clippy::unnecessary_wraps)]
+fn child_init_count(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(crate::child_init_count()))
+}
+
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
+    m.function_static("zend_test_child_init_count(): int", child_init_count);
     m.function_static("zend_trigger_bailout(): never", trigger_bailout);
     m.function_static(
         "zend_test_serialization_bailout(bool $unserialize, bool $locked): never",
