@@ -521,8 +521,14 @@ impl Connection {
         (h.version >= VERSION_1).then_some(h)
     }
 
-    /// `fcgi_read_request()`.
+    /// `fcgi_read_request()`. A `STDIN` record the previous request left
+    /// partly unread (a body shorter than its record, `CONTENT_LENGTH`
+    /// below what was sent) ends the connection: its rest must not be
+    /// parsed as another request (GHSA-qc49-hpvq-g2w6, CVE-2026-129289).
     pub fn read_request(&self, mgmt: &MgmtVars) -> Incoming {
+        if self.in_len.get() != 0 {
+            return Incoming::Failed;
+        }
         self.keep.set(false);
         self.ended.set(false);
         self.in_len.set(0);
@@ -760,6 +766,8 @@ impl Connection {
         let Some(mut s) = self.stream.borrow_mut().take() else {
             return;
         };
+        // A partly read STDIN record does not outlive its connection.
+        self.in_len.set(0);
         if !force {
             s.shutdown_write();
             let mut buf = [0u8; 8];
@@ -952,6 +960,41 @@ mod tests {
         );
         assert!(!is_allowed(Some(&[]), Some(v4)));
         assert_eq!(client_ip(Some(mapped)), "10.0.0.2");
+    }
+
+    /// GHSA-qc49-hpvq-g2w6: a body record longer than `CONTENT_LENGTH`
+    /// whose rest is a whole second request (here `SCRIPT_FILENAME` of
+    /// the attacker's choice) on a kept connection: the next read refuses
+    /// it instead of running it.
+    #[test]
+    fn unread_body_is_not_a_second_request() {
+        let (ours, mut theirs) = UnixStream::pair().unwrap();
+        let conn = Connection::new(Stream::Unix(ours));
+        let mut params = Vec::new();
+        encode_param(&mut params, b"CONTENT_LENGTH", b"2");
+        let mut smuggled_params = Vec::new();
+        encode_param(&mut smuggled_params, b"SCRIPT_FILENAME", b"/tmp/evil.php");
+        let mut smuggled = record(BEGIN_REQUEST, 1, &[0, 1, KEEP_CONN, 0, 0, 0, 0, 0]);
+        smuggled.extend(record(PARAMS, 1, &smuggled_params));
+        smuggled.extend(record(PARAMS, 1, b""));
+        smuggled.extend(record(STDIN, 1, b""));
+        let mut body = b"ok".to_vec();
+        body.extend_from_slice(&smuggled);
+        let mut wire = record(BEGIN_REQUEST, 1, &[0, 1, KEEP_CONN, 0, 0, 0, 0, 0]);
+        wire.extend(record(PARAMS, 1, &params));
+        wire.extend(record(PARAMS, 1, b""));
+        wire.extend(record(STDIN, 1, &body));
+        wire.extend(record(STDIN, 1, b""));
+        theirs.write_all(&wire).unwrap();
+        let mgmt = MgmtVars::new(None);
+        assert!(matches!(conn.read_request(&mgmt), Incoming::Request(_)));
+        assert_eq!(conn.read_body(2), b"ok");
+        assert!(conn.keep());
+        conn.finish_request(false);
+        assert!(
+            matches!(conn.read_request(&mgmt), Incoming::Failed),
+            "the rest of the body record was parsed as a request"
+        );
     }
 
     /// A request over a socket pair: params, body, output records and
