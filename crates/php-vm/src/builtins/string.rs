@@ -699,19 +699,19 @@ fn hexdec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = math::hexdec(s(a, 0).as_bytes(), &mut n);
     vm.std_notices(n)?;
-    Ok(num_value(r))
+    Ok(num_value(vm.std(r)?))
 }
 fn bindec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = math::bindec(s(a, 0).as_bytes(), &mut n);
     vm.std_notices(n)?;
-    Ok(num_value(r))
+    Ok(num_value(vm.std(r)?))
 }
 fn octdec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = math::octdec(s(a, 0).as_bytes(), &mut n);
     vm.std_notices(n)?;
-    Ok(num_value(r))
+    Ok(num_value(vm.std(r)?))
 }
 
 fn md5(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

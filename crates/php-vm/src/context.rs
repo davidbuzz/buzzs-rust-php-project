@@ -103,22 +103,11 @@ impl Vm {
         let cls = object::class_of(o).clone();
         if purpose == PropertyPurpose::Debug {
             if let Some(m) = cls.magic.debug_info.clone() {
+                if crate::builtins::dump::has_deferred_throw() || self.pending_throw.is_some() {
+                    return Ok(Some(ZArray::new()));
+                }
                 let r = self.call_method(o, &m, Vec::new())?;
-                return match r {
-                    Value::Array(a) => Ok(Some(a)),
-                    Value::Null => {
-                        let msg = format!(
-                            "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
-                            object::display_name(&cls.name)
-                        );
-                        self.deprecated(&msg)?;
-                        Ok(Some(ZArray::new()))
-                    }
-                    _ => {
-                        let msg = "__debugInfo() must return an array".to_string();
-                        Err(self.fatal(&msg))
-                    }
-                };
+                return crate::builtins::dump::debug_info_table(self, &cls.name, &r).map(Some);
             }
         }
         // Serialization, export and JSON initialize lazy objects (and read

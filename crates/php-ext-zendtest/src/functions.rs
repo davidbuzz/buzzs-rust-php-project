@@ -50,6 +50,13 @@ fn serialization_state(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(vm.serialization_state()))
 }
 
+/// `zend_return_non_interned_string()`: a fresh copy of the string
+/// (`RETURN_STRINGL`), never an interned one, so a callback's return value
+/// is a refcounted string in the leak tests that use it.
+fn return_non_interned_string(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(ZStr::from(a.str(0).as_bytes().to_vec())))
+}
+
 /// `zend_test_array_return()`: returns nothing although declared `array`
 /// (a release build hands back `null`).
 fn array_return(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -748,6 +755,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         serialization_state,
     );
     m.function_static("zend_test_array_return(): array", array_return);
+    m.function_static(
+        "zend_return_non_interned_string(string $str): string",
+        return_non_interned_string,
+    );
     m.function_static("zend_test_nullable_array_return(): ?array", none);
     m.function_static("zend_test_void_return(): void", none);
     m.function_static(

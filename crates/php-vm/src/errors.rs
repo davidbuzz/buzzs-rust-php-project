@@ -175,8 +175,8 @@ impl Vm {
             }
             // `php_verror` with no function running and the executor shut
             // down: `EG_FLAGS_IN_SHUTDOWN` names the origin.
-            None if !self.executor_active => {
-                let origin = if self.in_shutdown {
+            None if !self.executor_active || (self.request_ending && !self.is_executing()) => {
+                let origin = if self.in_shutdown || self.request_ending {
                     "PHP Request Shutdown"
                 } else {
                     "Unknown"

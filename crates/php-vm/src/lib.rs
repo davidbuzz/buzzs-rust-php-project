@@ -241,6 +241,7 @@ impl Vm {
             last_fatal_error_backtrace: None,
             executor_active: true,
             end_usage: 0,
+            request_ending: false,
             pending_throw: None,
             output_handler_threw: false,
             script_path: ZStr::empty(),
@@ -428,6 +429,7 @@ impl Vm {
 
     /// Request shutdown: shutdown functions, destructors, output flush.
     pub fn shutdown(&mut self, r: Result<(), Throw>) -> i32 {
+        self.request_ending = true;
         let fatal = matches!(r, Err(Throw::Fatal));
         // `oom_after_main_script`: a violation recorded by the last
         // statement is still reported.

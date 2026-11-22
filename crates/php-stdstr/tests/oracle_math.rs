@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for the `ext/standard/math.c` helpers.
 mod common;
-use common::{case, check, export_float, lit, pure, regenerate, Case, V};
+use common::{case, check_mapped, export_float, lit, pure, regenerate, Case, V};
 use php_stdstr::math::{
     abs, base_convert, bindec, ceil, decbin, dechex, decoct, deg2rad, fdiv, floor, fmod, hexdec,
     hypot, int_mod, intdiv, log, octdec, rad2deg, round_long, round_places, Number, RoundingMode,
@@ -169,14 +169,17 @@ fn cases() -> Vec<Case> {
 
     for s in BASE_INPUTS {
         for (name, f) in [
-            ("bindec", bindec as fn(&[u8], &mut Notices) -> Number),
+            (
+                "bindec",
+                bindec as fn(&[u8], &mut Notices) -> Result<Number, StdError>,
+            ),
             ("hexdec", hexdec),
             ("octdec", octdec),
         ] {
             v.push(case(&format!("{name}({})", lit(s)), |n| {
                 let r = f(s, n);
                 strip_master_notice(n);
-                Ok::<_, StdError>(num(r))
+                r.map(num)
             }));
         }
         for (from, to) in [
@@ -300,7 +303,7 @@ fn cases() -> Vec<Case> {
     );
     v.push(
         case("hexdec('17fffffffffffffff') /* master */", |n| {
-            Ok::<_, StdError>(num(hexdec(b"17fffffffffffffff", n)))
+            hexdec(b"17fffffffffffffff", n).map(num)
         })
         .expect(&format!(
             "Notice: {OVERFLOW_NOTICE}\n=> 2.7670116110564327E+19"
@@ -310,9 +313,7 @@ fn cases() -> Vec<Case> {
         case("base_convert('fg', 16, 10) /* master */", |n| {
             base_convert(b"fg", 16, 10, n)
         })
-        .expect(
-            "Deprecated: Invalid characters passed for attempted conversion, these have been ignored\n=> '15'",
-        ),
+        .expect("!! Exception: Invalid characters passed for attempted conversion"),
     );
     // GH-22395: master keeps all 78 digits.
     v.push(
@@ -344,7 +345,15 @@ fn cases() -> Vec<Case> {
 
 #[test]
 fn oracle() {
-    check("math", &cases());
+    // php-src master throws for a digit outside the base where 8.5 (the
+    // oracle) deprecates it and skips it.
+    check_mapped("math", &cases(), |_, expected| {
+        if expected.contains("Deprecated: Invalid characters passed for attempted conversion") {
+            "!! Exception: Invalid characters passed for attempted conversion".to_string()
+        } else {
+            expected.to_string()
+        }
+    });
 }
 
 #[test]

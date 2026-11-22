@@ -2281,6 +2281,11 @@ pub struct Vm {
     /// the request still holds while [`Vm::ini_deactivate`] restores the
     /// memory limits (C frees the last error message only after that).
     pub(crate) end_usage: usize,
+    /// `EG_FLAGS_IN_SHUTDOWN`: `php_request_shutdown()` has begun (the
+    /// shutdown functions, destructors, extension shutdowns and resource
+    /// closing that follow). A docref error raised then with no function
+    /// running comes from "PHP Request Shutdown".
+    pub request_ending: bool,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
     /// The last user output handler call threw (`retval` UNDEF), even if

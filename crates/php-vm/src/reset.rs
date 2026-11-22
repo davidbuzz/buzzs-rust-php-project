@@ -155,6 +155,7 @@ impl Vm {
         self.last_fatal_error_backtrace = None;
         self.error_msg_html_ready = false;
         self.reporting_oom = false;
+        self.request_ending = false;
 
         // 7. Output buffers.
         self.output = php_support::output::OutputStack::new();

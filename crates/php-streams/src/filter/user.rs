@@ -105,7 +105,7 @@ impl FilterFactory for UserFilterFactory {
         if matches!(created, UserCall::Returned(Value::Bool(false))) {
             return None;
         }
-        Some(Box::new(UserFilter { obj: Some(obj) }))
+        Some(Box::new(UserFilter::new(obj)))
     }
 }
 
@@ -113,12 +113,18 @@ impl FilterFactory for UserFilterFactory {
 #[derive(Debug)]
 pub struct UserFilter {
     obj: Option<Box<dyn UserFilterObject>>,
+    /// `thisfilter->buffer`: input a `PSFS_FEED_ME` return left on the
+    /// input brigade, put back in front of the next call's input (GH-24146).
+    kept: Brigade,
 }
 
 impl UserFilter {
     /// Wraps an already-created object.
     pub fn new(obj: Box<dyn UserFilterObject>) -> Self {
-        UserFilter { obj: Some(obj) }
+        UserFilter {
+            obj: Some(obj),
+            kept: Brigade::new(),
+        }
     }
 }
 
@@ -142,6 +148,10 @@ impl StreamFilter for UserFilter {
         let mut c = consumed
             .as_deref()
             .map(|c| i64::try_from(*c).unwrap_or(i64::MAX));
+        // "Re-present input kept back by a previous PSFS_FEED_ME".
+        while let Some(b) = self.kept.pop_back() {
+            input.push_front(b);
+        }
         FILTERING.with(|f| f.borrow_mut().push((env.stream_id, env.eof)));
         let call = obj.filter(env.stream_id, input, output, &mut c, flags.is_closing());
         FILTERING.with(|f| {
@@ -161,7 +171,18 @@ impl StreamFilter for UserFilter {
             }
         }
         if !input.is_empty() {
-            diag::warning("Unprocessed filter buckets remaining on input brigade");
+            if status == FilterStatus::FeedMe && !flags.is_closing() {
+                // Kept for the next call (the callers expect the input
+                // brigade empty when the filter returns).
+                self.kept.extend(input.drain(..));
+            } else {
+                diag::warning("Unprocessed filter buckets remaining on input brigade");
+                input.clear();
+            }
+        }
+        // "Filter could've broken contract and added buckets anyway."
+        if status != FilterStatus::PassOn {
+            output.clear();
         }
         status
     }

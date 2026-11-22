@@ -81,6 +81,44 @@ pub(crate) fn begin_dump() -> DumpScope {
     DumpScope(())
 }
 
+/// `EG(exception)` during a dump: an exception is parked for it.
+pub(crate) fn has_deferred_throw() -> bool {
+    DEFERRED_THROW.with(|d| d.borrow().is_some())
+}
+
+/// The table `zend_std_get_debug_info()` gives for a `__debugInfo()`
+/// return: an array as is, `null` deprecated (empty), anything else a
+/// `TypeError` parked for the end of the dump and an empty table
+/// (php-src master: no longer a fatal error).
+pub(crate) fn debug_info_table(
+    vm: &mut Vm,
+    class_name: &php_runtime::ZStr,
+    r: &Value,
+) -> VmResult<php_runtime::ZArray> {
+    Ok(match r.deref() {
+        Value::Array(a) => a,
+        Value::Null => {
+            vm.deprecated(&format!(
+                "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
+                crate::object::display_name(class_name)
+            ))?;
+            php_runtime::ZArray::new()
+        }
+        other => {
+            let t = vm.throw_error(
+                "TypeError",
+                &format!(
+                    "{}::__debugInfo() must return an array, {} returned",
+                    crate::object::display_name(class_name),
+                    other.value_name()
+                ),
+            );
+            defer_throw(t);
+            php_runtime::ZArray::new()
+        }
+    })
+}
+
 /// Drops the parked exception (the dump failed with its own).
 pub(crate) fn clear_deferred_throw() {
     if let Some(t) = DEFERRED_THROW.with(|d| d.borrow_mut().take()) {
@@ -165,7 +203,9 @@ fn object_dump(
 
 /// `zend_std_get_debug_info()` for classes with a user `__debugInfo()`:
 /// a returned reference is unwrapped, `null` is deprecated (empty table),
-/// anything else is fatal.
+/// anything else a `TypeError` (see [`debug_info_table`]). With an
+/// exception already thrown the method is not called ("Method call will
+/// fail"): the table is empty.
 fn debug_info(vm: &mut Vm, o: &Obj) -> VmResult<Option<ObjectDump>> {
     let cls = crate::object::class_of(o).clone();
     if cls
@@ -178,16 +218,11 @@ fn debug_info(vm: &mut Vm, o: &Obj) -> VmResult<Option<ObjectDump>> {
     let Some(m) = cls.magic.debug_info.clone() else {
         return Ok(None);
     };
-    let table = match vm.call_method(o, &m, Vec::new())?.deref() {
-        Value::Array(a) => a,
-        Value::Null => {
-            vm.deprecated(&format!(
-                "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
-                cls.name
-            ))?;
-            php_runtime::ZArray::new()
-        }
-        _ => return Err(vm.fatal("__debugInfo() must return an array")),
+    let table = if has_deferred_throw() || vm.pending_throw.is_some() {
+        php_runtime::ZArray::new()
+    } else {
+        let r = vm.call_method(o, &m, Vec::new())?;
+        debug_info_table(vm, &cls.name, &r)?
     };
     let kind = if cls.is_enum() {
         ObjectKind::Enum {
