@@ -60,14 +60,7 @@ impl IniConfiguration {
         registry: &mut IniRegistry,
         diag: &mut dyn DiagnosticSink,
     ) {
-        if !self.has_per_dir || path.len() > 4096 || !path.starts_with(b"/") {
-            return;
-        }
-        for (i, &byte) in path.iter().enumerate().skip(1) {
-            if byte == b'/' {
-                self.activate(&path[..i], registry, diag);
-            }
-        }
+        Self::activate(self.path_entries(path), registry, diag);
     }
 
     /// Applies an exact HOST section; the SAPI supplies a lowercase hostname.
@@ -77,28 +70,58 @@ impl IniConfiguration {
         registry: &mut IniRegistry,
         diag: &mut dyn DiagnosticSink,
     ) {
-        if self.has_per_host && !host.is_empty() {
-            self.activate(host, registry, diag);
-        }
+        Self::activate(self.host_entries(host), registry, diag);
     }
 
-    fn activate(&self, key: &[u8], registry: &mut IniRegistry, diag: &mut dyn DiagnosticSink) {
+    /// The entries `php_ini_activate_per_dir_config()` applies for `path`
+    /// (an absolute directory ending in `/`, or a script filename): those
+    /// of each PATH section from the outermost directory to the innermost.
+    #[must_use]
+    pub fn path_entries(&self, path: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        if !self.has_per_dir || path.len() > 4096 || !path.starts_with(b"/") {
+            return out;
+        }
+        for (i, &byte) in path.iter().enumerate().skip(1) {
+            if byte == b'/' {
+                self.section_entries(&path[..i], &mut out);
+            }
+        }
+        out
+    }
+
+    /// The entries `php_ini_activate_per_host_config()` applies for a
+    /// lowercase hostname.
+    #[must_use]
+    pub fn host_entries(&self, host: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        if self.has_per_host && !host.is_empty() {
+            self.section_entries(host, &mut out);
+        }
+        out
+    }
+
+    /// `php_ini_activate_config()`'s plain entries of one section.
+    fn section_entries(&self, key: &[u8], out: &mut Vec<(String, Vec<u8>)>) {
         let Some(IniValue::Array(section)) = self.values.get(&IniKey::Str(key.to_vec())) else {
             return;
         };
         for (key, value) in section.iter() {
             if let (IniKey::Str(key), IniValue::Scalar(value)) = (key, value) {
                 if let Ok(name) = std::str::from_utf8(key) {
-                    registry.alter(
-                        name,
-                        &value.to_bytes(),
-                        Access::SYSTEM,
-                        Stage::Activate,
-                        false,
-                        diag,
-                    );
+                    out.push((name.to_string(), value.to_bytes()));
                 }
             }
+        }
+    }
+
+    fn activate(
+        entries: Vec<(String, Vec<u8>)>,
+        registry: &mut IniRegistry,
+        diag: &mut dyn DiagnosticSink,
+    ) {
+        for (name, value) in entries {
+            registry.alter(&name, &value, Access::SYSTEM, Stage::Activate, false, diag);
         }
     }
 }

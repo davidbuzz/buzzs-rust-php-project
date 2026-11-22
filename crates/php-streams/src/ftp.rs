@@ -228,10 +228,11 @@ fn connect(sess: &mut Session<'_>, path: &[u8]) -> Option<Connection> {
     };
     let mut resource = parser.parse(cstr(path))?;
     resource.path.as_ref()?;
+    // The whole scheme, in any case (GHSA-f6gg-rchx-xw8j, CVE-2026-128064).
     let use_ssl = resource
         .scheme
         .as_ref()
-        .is_some_and(|s| s.len() > 3 && s[3] == b's');
+        .is_some_and(|s| s.eq_ignore_ascii_case(b"ftps"));
     if resource.port == 0 {
         resource.port = 21;
     }

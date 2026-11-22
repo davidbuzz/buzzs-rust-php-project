@@ -458,8 +458,29 @@ fn sys_get_temp_dir(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(bytes(r))
 }
 
+thread_local! {
+    /// `BG(umask)`: the umask before the first `umask()` call, which every
+    /// request end restores.
+    static SAVED_UMASK: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
 fn umask(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(lib::umask(opt_int(a, 0))))
+    let old = lib::umask(opt_int(a, 0));
+    SAVED_UMASK.with(|s| {
+        if s.get().is_none() {
+            s.set(Some(old));
+        }
+    });
+    Ok(Value::Int(old))
+}
+
+/// `PHP_RSHUTDOWN_FUNCTION(basic)` restores `BG(umask)`, so a request's
+/// `umask()` does not stay in force for the next request a `FastCGI`
+/// worker serves.
+pub(crate) fn restore_umask() {
+    if let Some(m) = SAVED_UMASK.with(std::cell::Cell::get) {
+        lib::umask(Some(m));
+    }
 }
 
 fn unlink(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

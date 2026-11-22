@@ -1215,6 +1215,18 @@ impl Stream {
     /// Casts to a file descriptor (`php_stream_cast`). With
     /// `report_errors` false this is a capability check.
     pub fn cast(&mut self, kind: CastAs, report_errors: bool) -> Option<RawFd> {
+        // `_php_stream_cast()`: "synchronize our buffer (if possible)", so
+        // the descriptor is at the stream's position with nothing buffered.
+        if kind != CastAs::FdForSelect {
+            self.flush();
+            if self.ops.can_seek() && !self.has_flag(flags::NO_SEEK) {
+                let mut dummy = self.position;
+                self.ops
+                    .seek(&mut self.state, self.position, SEEK_SET, &mut dummy);
+                self.readpos = 0;
+                self.writepos = 0;
+            }
+        }
         if self.is_filtered() && kind != CastAs::FdForSelect {
             if report_errors {
                 diag::warning("Cannot cast a filtered stream on this system");
@@ -1254,10 +1266,30 @@ impl Stream {
 
     /// `stream_isatty()` / `posix_isatty()` on the stream.
     pub fn isatty(&mut self) -> bool {
-        let fd = self
-            .cast(CastAs::FdForSelect, false)
-            .or_else(|| self.cast(CastAs::Fd, false));
-        fd.is_some_and(crate::sys::isatty)
+        self.any_fd().is_some_and(crate::sys::isatty)
+    }
+
+    /// `php_stream_can_cast()`: whether the stream can be cast to `kind`,
+    /// asked without the buffer sync a real cast makes.
+    pub fn can_cast(&mut self, kind: CastAs) -> bool {
+        if self.is_filtered() && kind != CastAs::FdForSelect {
+            return false;
+        }
+        self.ops.cast(&mut self.state, kind, false).is_some()
+    }
+
+    /// The descriptor `stream_isatty()` and `posix_isatty()` use: a
+    /// `select()`able one if the stream can give one, else a plain one,
+    /// each kind tried with [`Stream::can_cast`] first, so a stream that
+    /// cannot be cast is neither flushed nor repositioned.
+    pub fn any_fd(&mut self) -> Option<RawFd> {
+        if self.can_cast(CastAs::FdForSelect) {
+            self.cast(CastAs::FdForSelect, false)
+        } else if self.can_cast(CastAs::Fd) {
+            self.cast(CastAs::Fd, false)
+        } else {
+            None
+        }
     }
 
     /// Reads the next directory entry (`php_stream_readdir`).

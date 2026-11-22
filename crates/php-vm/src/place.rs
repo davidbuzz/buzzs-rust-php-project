@@ -2218,8 +2218,8 @@ impl Vm {
                     // so the frame's copy must not be written back over it
                     // when the error handler attaches or syncs the symbol
                     // table (`global $x` / `$GLOBALS` writes; bug79793).
-                    self.frame().clear_cv_for_symtab_slot(&store, idx);
-                    if let Some(main) = self.frames.first() {
+                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
+                    if let Some(main) = self.frames.get_mut(0) {
                         if main.symtab_attached {
                             main.clear_cv_for_symtab_slot(&store, idx);
                         }
@@ -2242,7 +2242,7 @@ impl Vm {
                     }
                 } else {
                     drop(st);
-                    self.frame().clear_cv_for_symtab_slot(&store, idx);
+                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
                     let mut st = store.borrow_mut();
                     let slot = st.slots[idx].as_mut().expect("slot defined");
                     let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
@@ -2845,8 +2845,8 @@ impl Vm {
         wop: WOp,
     ) -> VmResult<Value> {
         if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
-            self.frame().clear_cv_for_symtab_slot(store, idx);
-            if let Some(main) = self.frames.first() {
+            self.frame_mut().clear_cv_for_symtab_slot(store, idx);
+            if let Some(main) = self.frames.get_mut(0) {
                 if main.symtab_attached {
                     main.clear_cv_for_symtab_slot(store, idx);
                 }
@@ -3390,8 +3390,8 @@ impl Vm {
             crate::gc::release_duplicate(Value::Reference(src));
             return self.write_place(base, &segs, WOp::Assign(v));
         };
-        self.frame().clear_cv_for_symtab_slot(&store, idx);
-        if let Some(main) = self.frames.first() {
+        self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
+        if let Some(main) = self.frames.get_mut(0) {
             if main.symtab_attached {
                 main.clear_cv_for_symtab_slot(&store, idx);
             }
@@ -3737,8 +3737,8 @@ impl Vm {
         if let RBase::Var(store, idx) = &base {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
-                    self.frame().clear_cv_for_symtab_slot(store, *idx);
-                    if let Some(main) = self.frames.first() {
+                    self.frame_mut().clear_cv_for_symtab_slot(store, *idx);
+                    if let Some(main) = self.frames.get_mut(0) {
                         if main.symtab_attached {
                             main.clear_cv_for_symtab_slot(store, *idx);
                         }
@@ -3971,20 +3971,20 @@ impl Vm {
     /// The int fast path of [`Vm::place_incdec`] before the generic place
     /// resolution: a plain compiled variable holding an int directly.
     #[inline]
-    fn incdec_cv_int_fast(&self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
-        let f = self.frame();
+    fn incdec_cv_int_fast(&mut self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+        let f = self.frame_mut();
         let p = &f.code.places[pid as usize];
         let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
             return None;
         };
-        let idx = *cv as usize;
-        let slot = f.cvs.get(idx)?;
-        match slot.get() {
+        let cv = *cv;
+        let idx = cv as usize;
+        match f.cvs.get(idx)?.get() {
             Some(Value::Int(i)) => {
                 let mut int_val = *i;
                 let res = incdec_int_slot(&mut int_val, kind)?;
-                slot.set(Some(Value::Int(int_val)));
-                f.sync_cv_to_symtab(*cv, &Value::Int(int_val));
+                f.cvs[idx].set(Some(Value::Int(int_val)));
+                f.sync_cv_to_symtab(cv, &Value::Int(int_val));
                 Some(res)
             }
             _ => None,

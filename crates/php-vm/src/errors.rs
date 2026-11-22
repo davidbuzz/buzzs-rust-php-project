@@ -173,6 +173,18 @@ impl Vm {
                 m.extend_from_slice(msg);
                 self.error_bytes(level, &m)
             }
+            // `php_verror` with no function running and the executor shut
+            // down: `EG_FLAGS_IN_SHUTDOWN` names the origin.
+            None if !self.executor_active => {
+                let origin = if self.in_shutdown {
+                    "PHP Request Shutdown"
+                } else {
+                    "Unknown"
+                };
+                let mut m = format!("{origin}: ").into_bytes();
+                m.extend_from_slice(msg);
+                self.error_bytes(level, &m)
+            }
             None => self.error_bytes(level, msg),
         }
     }
@@ -341,10 +353,41 @@ impl Vm {
         }
         if is_fatal(level) {
             self.exit_status = 255;
+            self.bailouts += 1;
             object::set_destructors_enabled(false);
             return Err(Throw::Fatal);
         }
         Ok(())
+    }
+
+    /// The extensions' `RSHUTDOWN`s (`zend_deactivate_modules()`), in the
+    /// reverse of their registration order as `zend_collect_module_handlers()`
+    /// lists them (the session's data goes before the standard module's
+    /// resources are closed). One that bails out leaves its module's
+    /// shutdown incomplete, so the process ends with status 1 rather than
+    /// serve another request on that state (GHSA-g3vh-838c-65v7).
+    pub(crate) fn run_shutdown_hooks(&mut self) {
+        for h in self.shutdown_hooks.clone().into_iter().rev() {
+            let before = self.bailouts;
+            h(self);
+            if self.bailouts != before {
+                self.flush_stdout();
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Runs `f` as `shutdown_executor()` runs `zend_close_rsrc_list()`,
+    /// inside its own `zend_try`: a fatal error a resource's destructor
+    /// raises (a user stream's `stream_close()`) ends that destructor, not
+    /// the process. For an extension whose request-shutdown hook also
+    /// closes the request's resources; a bailout in the rest of the hook
+    /// (its `RSHUTDOWN` proper) still ends the process.
+    pub fn closing_resources<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
+        let before = self.bailouts;
+        let r = f(self);
+        self.bailouts = before;
+        r
     }
 
     /// `zend_error_impl`: every reported error clears
@@ -367,7 +410,10 @@ impl Vm {
             Some(e) => {
                 self.exception_error(&e, level::WARNING);
             }
-            None => self.record_fatal_backtrace(),
+            // "EG(last_fatal_error_backtrace) is useless when the executor
+            // is inactive" (a late error of the INI restore at request end).
+            None if self.executor_active => self.record_fatal_backtrace(),
+            None => {}
         }
     }
 
@@ -404,11 +450,11 @@ impl Vm {
     /// (`zend_trace_to_string(..., include_main = true)`), else empty.
     fn fatal_backtrace_suffix(&mut self) -> String {
         match self.last_fatal_error_backtrace.clone() {
-            Some(trace) => {
+            Some(trace) if self.executor_active => {
                 let s = self.trace_to_string(&trace, true);
                 format!("\nStack trace:\n{s}")
             }
-            None => String::new(),
+            _ => String::new(),
         }
     }
 
@@ -579,6 +625,7 @@ impl Vm {
         }
         if level == level::ERROR {
             self.exit_status = 255;
+            self.bailouts += 1;
         }
     }
 
@@ -610,6 +657,7 @@ impl Vm {
             self.display_error(lv, msg.as_bytes(), file, line);
         }
         self.exit_status = 255;
+        self.bailouts += 1;
         object::set_destructors_enabled(false);
     }
 

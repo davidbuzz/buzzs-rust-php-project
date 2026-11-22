@@ -7,7 +7,6 @@ use php_ext_streams::res;
 use php_runtime::float::format_double;
 use php_runtime::numeric::{is_numeric_string_ex, Number};
 use php_runtime::Value;
-use php_streams::stream::CastAs;
 use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
@@ -115,11 +114,7 @@ pub(crate) fn fd_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<FdArg> {
         // php_stream_from_zval_no_verify(): zend_fetch_resource2_ex()
         // throws for anything but an open stream.
         let cell = res::stream_of_resource(vm, a, r)?;
-        let cast = res::with_stream(vm, &cell, |s| {
-            s.cast(CastAs::FdForSelect, false)
-                .or_else(|| s.cast(CastAs::Fd, false))
-                .ok_or_else(|| s.ops_label())
-        })?;
+        let cast = res::with_stream(vm, &cell, |s| s.any_fd().ok_or_else(|| s.ops_label()))?;
         return match cast {
             Some(Ok(fd)) => Ok(FdArg::Fd(i64::from(fd))),
             Some(Err(label)) => {

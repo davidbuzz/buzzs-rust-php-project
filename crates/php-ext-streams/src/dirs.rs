@@ -28,6 +28,12 @@ fn set_default_dir(r: Option<Resource>) {
     DEFAULT_DIR.with(|d| *d.borrow_mut() = r);
 }
 
+/// `PHP_RINIT_FUNCTION(dir)`: no default directory handle carries over
+/// into the next request served by this thread.
+pub(crate) fn shutdown() {
+    set_default_dir(None);
+}
+
 fn is_default_dir(r: &Resource) -> bool {
     DEFAULT_DIR.with(|d| {
         d.borrow()

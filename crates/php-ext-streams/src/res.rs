@@ -523,6 +523,9 @@ pub fn shutdown(vm: &mut Vm) {
     }
     close_deferred(vm);
     close_bailed(vm);
+    // `FG(default_context) = NULL` (`PHP_RINIT_FUNCTION(basic)`): a
+    // `stream_context_set_default()` stays with its own request.
+    DEFAULT_CONTEXT.with(|d| *d.borrow_mut() = None);
 }
 
 /// Runs `f` (closing stream `id`) as `fclose()` does: user filters still

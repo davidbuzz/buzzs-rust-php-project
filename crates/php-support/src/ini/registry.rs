@@ -487,6 +487,14 @@ impl IniRegistry {
         self.restore(name, Stage::Runtime, diag);
     }
 
+    /// The directives modified since startup or the last
+    /// [`IniRegistry::deactivate`], in the order they were first modified
+    /// (`EG(modified_ini_directives)`).
+    #[must_use]
+    pub fn modified_names(&self) -> Vec<String> {
+        self.modified.clone()
+    }
+
     /// `zend_ini_deactivate()`: restores every modified directive at the
     /// end of the request.
     pub fn deactivate(&mut self, diag: &mut dyn DiagnosticSink) {

@@ -3048,7 +3048,9 @@ unsafe extern "C" fn jit_dim_get(
         };
         let v = *v;
         if flags & DIM_GET_TO_CV != 0 {
-            let slot = &*dst.cast::<crate::vm::CvSlot>();
+            // The destination slot, exclusively: the frame's other slots
+            // are read through `arr`/`key`, never this one's value.
+            let slot = &mut *dst.cast::<crate::vm::CvSlot>();
             if matches!(
                 slot.get(),
                 Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
@@ -3254,7 +3256,7 @@ unsafe extern "C" fn jit_dim_set_wide(
 unsafe extern "C" fn jit_dim_get_key(
     arr: *const crate::vm::CvSlot,
     key: *const php_runtime::Value,
-    dst: *const crate::vm::CvSlot,
+    dst: *mut crate::vm::CvSlot,
     _word: u32,
 ) -> u32 {
     use php_runtime::Value;
@@ -3268,7 +3270,8 @@ unsafe extern "C" fn jit_dim_get_key(
             return 1;
         };
         let v = *v;
-        let slot = &*dst;
+        // The destination slot, exclusively (as above).
+        let slot = &mut *dst;
         match slot.get() {
             // Nothing or a scalar: it owns nothing.
             None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
@@ -10340,22 +10343,22 @@ mod layout_tests {
         );
         assert!(tmp_is(2));
         // The helper of `$v = $arr['key']`: the same answers.
-        let to2 = CvSlot::new(None);
-        let d2 = std::ptr::from_ref(&to2);
+        let mut to2 = CvSlot::new(None);
+        let d2 = std::ptr::from_mut(&mut to2);
         let (kb, kg) = (key("beta"), key("gamma"));
         assert_eq!(unsafe { jit_dim_get_key(np, &raw const kb, d2, 0) }, 0);
         assert!(matches!(to2.get(), Some(Value::Int(2))));
         assert_eq!(unsafe { jit_dim_get_key(np, &raw const kg, d2, 0) }, 1);
         assert!(matches!(to2.get(), Some(Value::Int(2))));
-        let held_text = CvSlot::new(Some(key("old")));
+        let mut held_text = CvSlot::new(Some(key("old")));
         assert_eq!(
-            unsafe { jit_dim_get_key(np, &raw const kb, &raw const held_text, 0) },
+            unsafe { jit_dim_get_key(np, &raw const kb, &raw mut held_text, 0) },
             0
         );
         assert!(matches!(held_text.get(), Some(Value::Int(2))));
-        let held_arr = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
+        let mut held_arr = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
         assert_eq!(
-            unsafe { jit_dim_get_key(np, &raw const kb, &raw const held_arr, 0) },
+            unsafe { jit_dim_get_key(np, &raw const kb, &raw mut held_arr, 0) },
             1
         );
         assert!(matches!(held_arr.get(), Some(Value::Array(_))));

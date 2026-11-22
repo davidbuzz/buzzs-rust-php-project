@@ -243,11 +243,15 @@ pub fn shm_remove(id: c_int) -> Result<(), i32> {
 /// An attached shared-memory segment (`shmat`); detached on drop.
 ///
 /// The usable length is unknown at attach time (PHP stats the segment
-/// afterwards), so it starts at 0 and is set with [`Segment::set_len`].
+/// afterwards), so it starts at 0 and is set with [`Segment::set_len`],
+/// which never lets it exceed the kernel's size of the segment: the
+/// bounds the raw copies check cannot be widened past the mapping.
 #[derive(Debug)]
 pub struct Segment {
     addr: *mut u8,
     len: usize,
+    /// The segment's id (`shmid`), for its size.
+    id: c_int,
 }
 
 // SAFETY: the mapping is process-wide (not thread-bound); all access goes
@@ -265,16 +269,17 @@ pub fn shmat(id: c_int, readonly: bool) -> Result<Segment, i32> {
         Ok(Segment {
             addr: p.cast::<u8>(),
             len: 0,
+            id,
         })
     }
 }
 
 impl Segment {
-    /// Sets the accessible length.  `len` must not exceed the segment size
-    /// reported by `shmctl(IPC_STAT)` (a segment's size never changes), which
-    /// is the only way callers obtain it.
+    /// Sets the accessible length, at most the segment's size as
+    /// `shmctl(IPC_STAT)` reports it (a segment's size never changes), so a
+    /// wrong `len` can shorten what is reachable but never lengthen it.
     pub fn set_len(&mut self, len: usize) {
-        self.len = len;
+        self.len = len.min(shm_size(self.id).unwrap_or(0));
     }
 
     /// The accessible length.

@@ -1303,13 +1303,31 @@ fn write_out(fname: &[u8], image: &[u8], flags: u32) -> Result<(), String> {
             s(fname)
         ));
     };
-    let data = if flags & FILE_COMPRESSED_GZ != 0 {
-        crate::compress::gzip(image).unwrap_or_default()
-    } else if flags & FILE_COMPRESSED_BZ2 != 0 {
-        crate::compress::bzip2(image).unwrap_or_default()
-    } else {
-        image.to_vec()
+    // A compression failure fails the flush (it used to write an empty
+    // archive): `phar_flush_ex()`'s "unable to compress all contents".
+    let compressed = |r: Option<Vec<u8>>, lib: &str| {
+        r.ok_or_else(|| {
+            format!(
+                "unable to compress all contents of phar \"{}\" using {lib}, PHP versions older than 5.2.6 have a buggy {lib}",
+                s(fname)
+            )
+        })
     };
+    let data = if flags & FILE_COMPRESSED_GZ != 0 {
+        compressed(crate::compress::gzip(image), "zlib")
+    } else if flags & FILE_COMPRESSED_BZ2 != 0 {
+        compressed(crate::compress::bzip2(image), "bz2")
+    } else {
+        Ok(image.to_vec())
+    };
+    let data = match data {
+        Ok(d) => d,
+        Err(e) => {
+            out.close();
+            return Err(e);
+        }
+    };
+    // `php_stream_copy_to_stream_ex()`'s result is not checked in C either.
     let _ = out.write(&data);
     out.close();
     php_streams::state::clear_stat_cache();

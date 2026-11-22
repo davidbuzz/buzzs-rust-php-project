@@ -239,6 +239,8 @@ impl Vm {
             shutdown_functions: Vec::new(),
             last_error: None,
             last_fatal_error_backtrace: None,
+            executor_active: true,
+            end_usage: 0,
             pending_throw: None,
             output_handler_threw: false,
             script_path: ZStr::empty(),
@@ -275,6 +277,7 @@ impl Vm {
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
+            bailouts: 0,
             startup_hooks: Vec::new(),
             module_startup_hooks: Vec::new(),
             ini_modify_hooks: std::collections::HashMap::new(),
@@ -319,8 +322,9 @@ impl Vm {
         }
     }
 
-    /// Re-reads cached ini values after a change.
-    pub(crate) fn sync_ini(&mut self, name: &str) {
+    /// Re-reads cached ini values after a change (a SAPI that alters
+    /// entries through [`Vm::ini`] directly calls it too).
+    pub fn sync_ini(&mut self, name: &str) {
         match name {
             "error_reporting" => {
                 self.error_reporting = match self.ini.get("error_reporting") {
@@ -475,15 +479,14 @@ impl Vm {
         // module started (`output_handler=ob_gzhandler`) still has its
         // module's request state when it is flushed.
         php_support::output::end_all(self);
-        for h in self.shutdown_hooks.clone() {
-            h(self);
-        }
+        self.run_shutdown_hooks();
         php_support::output::deactivate(self);
         object::set_destructors_enabled(false);
         // `sapi_deactivate`: headers go out (and header_register_callback
         // runs) even when the script produced no output.
         crate::builtins::headers::send_headers(self);
         self.flush_stdout();
+        self.end_usage = php_memlimit::real_usage();
         php_memlimit::request_end();
         self.exit_status
     }

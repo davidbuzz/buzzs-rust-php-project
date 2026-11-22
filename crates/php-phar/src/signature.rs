@@ -112,6 +112,20 @@ pub fn verify(sig_type: u32, data: &[u8], sig: &[u8], fname: &[u8]) -> Result<Ve
         }
         Ok(hex_upper(&d))
     };
+    // The signature type is not covered by the signature: with a public
+    // key next to the phar only an OpenSSL signature is accepted, else an
+    // OpenSSL-signed phar could be re-signed with a plain hash
+    // (GHSA-68fq-fh7h-f8gr, CVE-2026-128090).
+    if !matches!(
+        sig_type,
+        SIG_OPENSSL | SIG_OPENSSL_SHA256 | SIG_OPENSSL_SHA512
+    ) {
+        let mut pubkey = fname.to_vec();
+        pubkey.extend_from_slice(b".pubkey");
+        if std::fs::metadata(crate::sys::path(&pubkey)).is_ok() {
+            return Err("openssl public key found, but the signature does not use openssl".into());
+        }
+    }
     match sig_type {
         SIG_OPENSSL | SIG_OPENSSL_SHA256 | SIG_OPENSSL_SHA512 => {
             let Some(hook) = openssl() else {
@@ -174,6 +188,23 @@ pub fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyless_signature_refused_next_to_a_public_key() {
+        let dir = std::env::temp_dir().join(format!("phar-sig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let phar = dir.join("a.phar");
+        let fname = phar.to_string_lossy().into_owned();
+        let mut t = SIG_SHA256;
+        let sig = create(&mut t, b"abc", b"", fname.as_bytes()).unwrap();
+        assert!(verify(SIG_SHA256, b"abc", &sig, fname.as_bytes()).is_ok());
+        std::fs::write(dir.join("a.phar.pubkey"), b"key").unwrap();
+        assert_eq!(
+            verify(SIG_SHA256, b"abc", &sig, fname.as_bytes()).unwrap_err(),
+            "openssl public key found, but the signature does not use openssl"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn hash_signatures() {

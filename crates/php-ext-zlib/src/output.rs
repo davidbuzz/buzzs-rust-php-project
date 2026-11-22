@@ -195,7 +195,8 @@ fn update_compression(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
         Ok(s) => s,
         Err((core, msg)) => {
             if core {
-                vm.raise(16, msg)?;
+                // `php_error_docref("ref.outcontrol", E_CORE_ERROR, ...)`.
+                vm.php_error_bytes(16, msg.as_bytes())?;
             } else {
                 vm.php_warning(msg)?;
             }

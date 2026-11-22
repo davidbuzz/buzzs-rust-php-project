@@ -10,6 +10,7 @@ rust-version.workspace = true
 php-runtime = { path = "../php-runtime" }
 php-random = { path = "../php-random" }
 php-support = { path = "../php-support" }
+libc = "0.2"
 
 [lints]
 workspace = true

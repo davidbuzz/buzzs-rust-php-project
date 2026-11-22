@@ -528,8 +528,14 @@ use std::cell::UnsafeCell;
 /// An inline compiled variable slot in a frame.
 ///
 /// Guaranteed zero-overhead `Option<Value>` representation (16 bytes,
-/// identical to `Option<Value>`), providing borrow-free read access
-/// and direct scalar stores.
+/// identical to `Option<Value>`), so the tape interpreter and the JIT can
+/// address slots by offset. Safe code reads through `&self` and writes
+/// only through `&mut self`, so a reference from [`CvSlot::get`] can never
+/// outlive the value it points to: a store while one is held (a
+/// destructor or `__set` run by user code replacing the variable) does
+/// not compile. The only shared-reference write is the `unsafe`
+/// [`CvSlot::get_mut_unchecked`], whose callers must hold no such
+/// reference.
 #[repr(transparent)]
 pub struct CvSlot(UnsafeCell<Option<Value>>);
 
@@ -541,21 +547,35 @@ impl CvSlot {
 
     #[inline(always)]
     pub fn get(&self) -> Option<&Value> {
+        // SAFETY: writes need `&mut self` (or the `unsafe`
+        // `get_mut_unchecked`, whose contract excludes live shared
+        // references), so no write can happen while this borrow lives.
         unsafe { (*self.0.get()).as_ref() }
     }
 
     #[inline(always)]
     pub fn get_clone(&self) -> Option<Value> {
-        unsafe { (*self.0.get()).clone() }
+        self.get().cloned()
     }
 
+    /// Stores `val`, returning the previous value (whose drop may run a
+    /// destructor: callers drop it once they no longer borrow the frame).
     #[inline(always)]
-    pub fn set(&self, val: Option<Value>) -> Option<Value> {
-        unsafe { std::mem::replace(&mut *self.0.get(), val) }
+    pub fn set(&mut self, val: Option<Value>) -> Option<Value> {
+        std::mem::replace(self.0.get_mut(), val)
     }
 
+    /// A mutable view through a shared reference, for the paths that hold
+    /// the frame only by `&` (the tape interpreter's raw slot pointers).
+    ///
+    /// # Safety
+    ///
+    /// No reference from [`CvSlot::get`] (or another
+    /// `get_mut_unchecked`) to this slot may be alive while the returned
+    /// one is used.
     #[inline(always)]
     pub unsafe fn get_mut_unchecked(&self) -> &mut Option<Value> {
+        // SAFETY: the caller guarantees exclusive access (see above).
         unsafe { &mut *self.0.get() }
     }
 
@@ -1966,7 +1986,7 @@ impl Frame {
                 continue;
             };
             let val = sv.take();
-            if let Some(cv) = self.cvs.get(i) {
+            if let Some(cv) = self.cvs.get_mut(i) {
                 if let Some(old) = cv.set(val) {
                     crate::gc::release_duplicate(old);
                 }
@@ -2056,7 +2076,7 @@ impl Frame {
     /// mutation of `store.slots[sym_idx]` that will be followed by
     /// [`Frame::sync_from_symbol_table`].
     #[inline]
-    pub fn clear_cv_for_symtab_slot(&self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
+    pub fn clear_cv_for_symtab_slot(&mut self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
         if self.symtab_attached && Rc::ptr_eq(store, &self.vars) {
             let st = self.vars.borrow();
             if let Some(name) = st.names.get(sym_idx) {
@@ -2066,7 +2086,7 @@ impl Frame {
                     .get(sym_idx)
                     .is_some_and(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.cvs.get(sym_idx) {
+                    if let Some(slot) = self.cvs.get_mut(sym_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -2077,7 +2097,7 @@ impl Frame {
                     .iter()
                     .position(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.cvs.get(cv_idx) {
+                    if let Some(slot) = self.cvs.get_mut(cv_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -2250,6 +2270,17 @@ pub struct Vm {
     /// `EG(last_fatal_error_backtrace)`: the stack recorded for the last
     /// fatal error under `fatal_error_backtraces` (cleared by every error).
     pub last_fatal_error_backtrace: Option<php_runtime::ZArray>,
+    /// `EG(active)`: false once the executor has shut down
+    /// (`shutdown_executor()`, see [`Vm::ini_deactivate`]) and in a VM
+    /// that only judges INI values between requests. A fatal error then
+    /// records and prints no backtrace (GHSA-2fjv-p558-g82m), and a
+    /// `php_error_docref()` origin is `PHP Request Shutdown` (or `Unknown`
+    /// before the first request).
+    pub executor_active: bool,
+    /// `zend_memory_usage(true)` when the request's accounting ended: what
+    /// the request still holds while [`Vm::ini_deactivate`] restores the
+    /// memory limits (C frees the last error message only after that).
+    pub(crate) end_usage: usize,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
     /// The last user output handler call threw (`retval` UNDEF), even if
@@ -2353,6 +2384,9 @@ pub struct Vm {
     pub loaded_extensions: Vec<String>,
     /// Request shutdown hooks of extensions.
     pub shutdown_hooks: Vec<fn(&mut Vm)>,
+    /// Bailouts so far (fatal errors that end the script): a module's
+    /// `RSHUTDOWN` that bails out ends the process (`zend_deactivate_modules`).
+    pub bailouts: u32,
     /// Request startup hooks of extensions (`RINIT`).
     pub startup_hooks: Vec<fn(&mut Vm)>,
     /// Module startup hooks of extensions, run after registration.
@@ -2557,7 +2591,7 @@ mod tests {
 
     #[test]
     fn peek_cv_reads_slots_in_place_without_holding_a_borrow() {
-        let f = frame_with(&["a", "b"]);
+        let mut f = frame_with(&["a", "b"]);
         f.cvs[0].set(Some(Value::Int(7)));
         assert_eq!(f.peek_cv(0, as_int), Some(7));
         // Undefined.
@@ -2608,7 +2642,7 @@ mod tests {
 
     #[test]
     fn peek_cv_clones_share_the_string() {
-        let f = frame_with(&["s"]);
+        let mut f = frame_with(&["s"]);
         f.cvs[0].set(Some(Value::Str(ZStr::from("abc"))));
         let v = f.peek_cv(0, |slot: Option<&Value>| slot.cloned());
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));

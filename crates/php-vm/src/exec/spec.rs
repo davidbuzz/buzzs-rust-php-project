@@ -378,16 +378,14 @@ pub(in crate::exec) fn store_fetched_in(
 ) -> bool {
     if let Some(to) = to {
         let idx = to as usize;
-        if let Some(slot) = f.cvs.get(idx) {
-            if is_plain_slot(slot.get()) {
-                // The table's mirror first (it only touches the table), so
-                // the value moves into the slot without a clone.
-                f.sync_cv_to_symtab(to, &v);
-                let old = slot.set(Some(v));
-                // A scalar is forgotten; a string is released.
-                discard_unrooted(old);
-                return true;
-            }
+        if f.cvs.get(idx).is_some_and(|slot| is_plain_slot(slot.get())) {
+            // The table's mirror first (it only touches the table), so
+            // the value moves into the slot without a clone.
+            f.sync_cv_to_symtab(to, &v);
+            let old = f.cvs[idx].set(Some(v));
+            // A scalar is forgotten; a string is released.
+            discard_unrooted(old);
+            return true;
         }
     }
     put_tmp(&mut f.tmps[dst as usize], v);
@@ -698,23 +696,19 @@ impl Vm {
     /// otherwise, having changed nothing, for the generic assignment.
     #[inline(always)]
     #[allow(clippy::inline_always)] // hot plain CV write in the dispatch pre-match
-    pub(super) fn cv_store_plain(&self, cv: u32, v: Value) -> Result<(), Value> {
-        let f = self.frame();
+    pub(super) fn cv_store_plain(&mut self, cv: u32, v: Value) -> Result<(), Value> {
+        let f = self.frame_mut();
         let idx = cv as usize;
-        let Some(slot) = f.cvs.get(idx) else {
+        let Some(slot) = f.cvs.get_mut(idx) else {
             return Err(v);
         };
         if !is_plain_slot(slot.get()) {
             return Err(v);
         }
-        unsafe {
-            if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
-                (slot.get_mut_unchecked(), &v)
-            {
-                *dst_f = *rf;
-                f.sync_cv_to_symtab(cv, &v);
-                return Ok(());
-            }
+        if let (Some(Value::Float(dst_f)), Value::Float(rf)) = (slot.as_mut(), &v) {
+            *dst_f = *rf;
+            f.sync_cv_to_symtab(cv, &v);
+            return Ok(());
         }
         let old = slot.set(Some(v.clone()));
         f.sync_cv_to_symtab(cv, &v);
@@ -843,12 +837,13 @@ impl Vm {
         };
         let f = self.frames.vec.get_mut(live - 1)?;
         if let Some(to) = to {
-            if let Some(slot) = f.cvs.get(to as usize) {
-                if !matches!(slot.get(), Some(Value::Reference(_))) {
-                    f.sync_cv_to_symtab(to, &v);
-                    super::release_slot_value(slot.set(Some(v)));
-                    return Some(true);
-                }
+            if f.cvs
+                .get(to as usize)
+                .is_some_and(|slot| !matches!(slot.get(), Some(Value::Reference(_))))
+            {
+                f.sync_cv_to_symtab(to, &v);
+                super::release_slot_value(f.cvs[to as usize].set(Some(v)));
+                return Some(true);
             }
         }
         put_tmp(f.tmps.get_mut(dst as usize)?, v);

@@ -546,6 +546,7 @@ fn session_upload_progress_is_tracked() {
             ini: ini(&[
                 ("session.save_path", save_path.as_str()),
                 ("session.use_strict_mode", "0"),
+                ("session.upload_progress.enabled", "1"),
                 ("session.upload_progress.cleanup", "0"),
                 ("session.upload_progress.freq", "0"),
                 ("session.upload_progress.min_freq", "0"),

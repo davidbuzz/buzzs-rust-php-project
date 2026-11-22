@@ -36,8 +36,9 @@ impl Extension for Spl {
         funcs::register(m);
         m.info(info);
         // Ahead of the stream layer's shutdown hook (which closes all
-        // resources): see `files::shutdown`.
-        m.vm().shutdown_hooks.insert(0, files::shutdown);
+        // resources; it was registered earlier, and the hooks run in
+        // reverse): see `files::shutdown`.
+        m.on_request_shutdown(files::shutdown);
     }
 }
 

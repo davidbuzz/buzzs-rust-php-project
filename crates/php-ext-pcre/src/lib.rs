@@ -24,11 +24,11 @@ use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, VmResult};
 use php_vm::func::{BuiltinFn, Func};
 use php_vm::Vm;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::OnceLock;
 
-static ORIG_PREG_MATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-static ORIG_PREG_MATCH_ALL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-static ORIG_PREG_SPLIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static ORIG_PREG_MATCH: OnceLock<BuiltinFn> = OnceLock::new();
+static ORIG_PREG_MATCH_ALL: OnceLock<BuiltinFn> = OnceLock::new();
+static ORIG_PREG_SPLIT: OnceLock<BuiltinFn> = OnceLock::new();
 
 /// When a pattern has the `/u` modifier (PCRE2_UTF), matched string captures
 /// / substrings extracted from the subject can be marked valid UTF-8 with
@@ -100,11 +100,9 @@ fn is_pattern_utf(vm: &mut Vm, a: &Args) -> bool {
 }
 
 fn wrapped_preg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let ptr = ORIG_PREG_MATCH.load(Ordering::Relaxed);
-    if ptr.is_null() {
+    let Some(&handler) = ORIG_PREG_MATCH.get() else {
         return Ok(Value::Bool(false));
-    }
-    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    };
     let res = handler(vm, a)?;
     // `false` means the pattern failed (or matching errored): recompiling it
     // for the UTF-8 check would repeat its compilation warning.
@@ -115,11 +113,9 @@ fn wrapped_preg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn wrapped_preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let ptr = ORIG_PREG_MATCH_ALL.load(Ordering::Relaxed);
-    if ptr.is_null() {
+    let Some(&handler) = ORIG_PREG_MATCH_ALL.get() else {
         return Ok(Value::Bool(false));
-    }
-    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    };
     let res = handler(vm, a)?;
     // `false` means the pattern failed (or matching errored): recompiling it
     // for the UTF-8 check would repeat its compilation warning.
@@ -130,11 +126,9 @@ fn wrapped_preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn wrapped_preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let ptr = ORIG_PREG_SPLIT.load(Ordering::Relaxed);
-    if ptr.is_null() {
+    let Some(&handler) = ORIG_PREG_SPLIT.get() else {
         return Ok(Value::Bool(false));
-    }
-    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    };
     let res = handler(vm, a)?;
     if !matches!(res, Value::Bool(false)) && is_pattern_utf(vm, a) {
         mark_captures_valid_utf8(&res);
@@ -143,7 +137,7 @@ fn wrapped_preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn wrap_pcre_functions(vm: &mut Vm) {
-    let list: [(&str, &AtomicPtr<()>, BuiltinFn); 3] = [
+    let list: [(&str, &OnceLock<BuiltinFn>, BuiltinFn); 3] = [
         ("preg_match", &ORIG_PREG_MATCH, wrapped_preg_match),
         (
             "preg_match_all",
@@ -155,7 +149,8 @@ fn wrap_pcre_functions(vm: &mut Vm) {
     for (name, slot, wrapper) in list {
         let key = ZStr::from(name);
         if let Some(Func::Builtin(b)) = vm.functions.get(&key).cloned() {
-            slot.store(b.handler as *mut (), Ordering::Relaxed);
+            // The first registration's handler: the original builtin.
+            let _ = slot.set(b.handler);
             let mut nb = (*b).clone();
             nb.handler = wrapper;
             vm.functions

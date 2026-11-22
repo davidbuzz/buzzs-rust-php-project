@@ -22,6 +22,14 @@
 //!
 //! See `README.md` for the Apache configuration.
 
+// The request heap and `memory_limit` accounting, as in the `php`,
+// `php-cgi` and `php-fpm` binaries: the module's Rust allocations go
+// through it (Apache's own pools and libraries are not affected). Without
+// it nothing was counted, so `memory_get_usage()` stayed at its start
+// value and `memory_limit` held only where a builtin checks a size before
+// allocating.
+php_memlimit::install_global_allocator!();
+
 pub mod backend;
 pub mod config;
 pub mod cookie;

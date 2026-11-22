@@ -1097,8 +1097,8 @@ fn fetch_str_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
 /// past the `AssignCv`; `None`, `v` dropped and nothing changed, otherwise.
 #[inline(always)]
 #[allow(clippy::inline_always)] // the tail of `fetch_dim`'s fast paths
-fn store_plain_into(f: &Frame, to: u32, v: Value) -> Option<Br> {
-    let slot = f.cvs.get(to as usize)?;
+fn store_plain_into(f: &mut Frame, to: u32, v: Value) -> Option<Br> {
+    let slot = f.cvs.get_mut(to as usize)?;
     if matches!(
         slot.get(),
         Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
@@ -2489,7 +2489,7 @@ fn fe_assign(f: &mut Frame, cv: u32, tmp: u32, v: Value) {
             let assigned = crate::exec::hot::assign_cv_in(f, cv, Operand::Tmp(tmp), None);
             debug_assert!(assigned);
         }
-    } else if let Some(slot) = f.cvs.get(cv as usize) {
+    } else if let Some(slot) = f.cvs.get_mut(cv as usize) {
         match slot.set(Some(v)) {
             // An old string by its own drop (one fewer handle, or freed).
             Some(Value::Str(s)) => drop(s),

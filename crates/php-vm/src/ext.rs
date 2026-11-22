@@ -382,6 +382,10 @@ pub trait Extension {
 
     /// Registers functions, constants, INI entries and classes (`MINIT`).
     fn register(&self, module: &mut ModuleBuilder<'_>);
+
+    /// `child_init_func`: run once in each process a SAPI forks to serve
+    /// requests (`php_child_init()`, php-fpm's workers).
+    fn child_init(&self) {}
 }
 
 /// Registration interface handed to [`Extension::register`].

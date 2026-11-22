@@ -166,38 +166,51 @@ fn run_thread(
 
     let timer = params.timer.clone();
     let (tx, rx) = mpsc::channel::<()>();
+    let target = watch.map(|(r, capture)| WatchTarget { r, capture });
 
-    let watchdog_handle = if let Some((r, capture)) = watch {
-        if let Some(clock) = current_cpu_clock() {
+    // A scoped thread: the scope joins the watchdog before `r` and
+    // `capture` go out of scope, even when the request panics (a joined
+    // handle after the request, as before, was skipped by unwinding and
+    // left the watchdog with a dangling request).
+    std::thread::scope(|scope| {
+        if let (Some(target), Some(clock)) = (target, current_cpu_clock()) {
             let timer_clone = timer.clone();
-            let raw_r: (usize, usize) = unsafe { std::mem::transmute(r as *const dyn Backend) };
-            let raw_cap: Option<usize> = capture.map(|c| c as *const StderrCapture as usize);
-            std::thread::Builder::new()
+            let _ = std::thread::Builder::new()
                 .name("php-watchdog".into())
-                .spawn(move || {
-                    let r: &dyn Backend = unsafe { std::mem::transmute(raw_r) };
-                    let capture: Option<&StderrCapture> =
-                        raw_cap.map(|p| unsafe { &*(p as *const StderrCapture) });
+                .spawn_scoped(scope, move || {
+                    let (r, capture) = target.into_parts();
                     let mut sink = EngineTimeout { r, capture };
                     watchdog(&timer_clone, &rx, &mut || clock_ns(clock), &mut sink);
-                })
-                .ok()
-        } else {
-            None
+                });
         }
-    } else {
-        None
-    };
-
-    if let Some(backend) = make() {
-        crate::request::run(backend, &params);
-    }
-
-    let _ = tx.send(());
-    if let Some(h) = watchdog_handle {
-        let _ = h.join();
-    }
+        if let Some(backend) = make() {
+            crate::request::run(backend, &params);
+        }
+        let _ = tx.send(());
+    });
     OK
+}
+
+/// What the watchdog thread uses of the request.
+struct WatchTarget<'a> {
+    r: &'a dyn Backend,
+    capture: Option<&'a StderrCapture>,
+}
+
+// SAFETY: the watchdog reads the connection's `aborted` flag (a plain int
+// Apache's own threads read the same way) and, at a hard timeout, writes
+// the captured output and calls `ap_log_rerror` just before `_exit`;
+// `StderrCapture` is descriptors and an atomic offset (fd syscalls and
+// atomics, safe from any thread). The scope in
+// `run_thread` guarantees neither reference outlives the request.
+unsafe impl Send for WatchTarget<'_> {}
+
+impl<'a> WatchTarget<'a> {
+    /// Both references (taking `self` keeps the closure capturing the
+    /// `Send` wrapper, not its fields).
+    fn into_parts(self) -> (&'a dyn Backend, Option<&'a StderrCapture>) {
+        (self.r, self.capture)
+    }
 }
 
 /// Where the watchdog reports: the engine's interrupt flags in production

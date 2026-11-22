@@ -303,6 +303,25 @@ fn apache_loads_mod_php_and_runs_php() {
     let r = curl(&format!("http://127.0.0.1:{port}/?name=index"), &[]);
     assert_eq!(field(&r.body, "name"), "index", "{r:?}");
 
+    // `memory_limit` holds in the module: a 6 MiB string shows in
+    // `memory_get_usage()`, and growing past the limit ends the request
+    // with PHP's fatal error (the module's allocator counts).
+    std::fs::write(
+        root.join("docroot/mem.php"),
+        "<?php ini_set('memory_limit', '16M');\n$s = str_repeat('x', 6 << 20);\necho memory_get_usage() > (6 << 20) ? \"counted\\n\" : \"not counted\\n\";\n$a = [];\nfor ($i = 0; $i < 64; $i++) { $a[] = str_repeat('y', 1 << 20); }\necho \"survived\\n\";\n",
+    )
+    .unwrap();
+    let r = curl(&format!("http://127.0.0.1:{port}/mem.php"), &[]);
+    assert!(r.body.starts_with("counted\n"), "{r:?}");
+    assert!(!r.body.contains("survived"), "{r:?}");
+    let log = std::fs::read_to_string(root.join("logs/error.log")).unwrap_or_default();
+    assert!(
+        r.body
+            .contains("Allowed memory size of 16777216 bytes exhausted")
+            || log.contains("Allowed memory size of 16777216 bytes exhausted"),
+        "{r:?}\n{log}"
+    );
+
     eprintln!(
         "{} with {} -> PHP {v} (apache2handler): OK",
         r.header("Server"),

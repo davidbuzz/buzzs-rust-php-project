@@ -503,17 +503,16 @@ impl Vm {
     fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let slot = f.cvs.get(idx)?;
-        let is_ref = matches!(slot.get(), Some(Value::Reference(_)));
+        let is_ref = matches!(f.cvs.get(idx)?.get(), Some(Value::Reference(_)));
         if !is_ref && f.symtab_attached {
             f.unsync_cv_from_symtab(cv);
         }
-        let old = match slot.get() {
+        let old = match f.cvs.get(idx)?.get() {
             Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
                 return Some((r.clone(), v));
             }
             Some(Value::Reference(r)) => Some(r.set(v.clone())),
-            _ => slot.set(Some(v.clone())),
+            _ => f.cvs[idx].set(Some(v.clone())),
         };
         if !is_ref {
             f.sync_cv_to_symtab(cv, &v);

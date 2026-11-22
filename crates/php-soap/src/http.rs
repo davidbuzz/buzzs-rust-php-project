@@ -384,7 +384,19 @@ fn read_body(stream: &mut dyn HttpStream, close: bool, headers: &[u8]) -> Option
         }
         Some(buf)
     } else if length > 0 {
-        let mut buf = Vec::with_capacity(length);
+        // `zend_string_falloc(header_length, false, /* fallible */ true)`: a
+        // length over the memory limit fails the read (and queues the
+        // "Allowed memory size exhausted" fatal), it does not reserve that
+        // much (a server's Content-Length is untrusted).
+        if php_memlimit::try_reserve(length).is_err() {
+            return None;
+        }
+        let mut buf = Vec::new();
+        // Without a memory limit, an allocation the system refuses fails
+        // the read as well (no abort).
+        if buf.try_reserve_exact(length).is_err() {
+            return None;
+        }
         while buf.len() < length {
             let chunk = stream.read(length - buf.len());
             if chunk.is_empty() {
@@ -1309,6 +1321,10 @@ mod tests {
         assert!(read_body(&mut s, false, b"Content-Length: 5\r\n").is_none());
         let mut s = MemStream(b"until close".to_vec(), 0);
         assert_eq!(read_body(&mut s, true, b"").unwrap(), b"until close");
+        // RESEXHAUST-001: an absurd Content-Length fails the read instead
+        // of reserving that much.
+        let mut s = MemStream(b"tiny".to_vec(), 0);
+        assert!(read_body(&mut s, false, b"Content-Length: 9223372036854775807\r\n").is_none());
     }
 
     #[test]

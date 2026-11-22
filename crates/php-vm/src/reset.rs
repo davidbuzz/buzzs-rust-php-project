@@ -11,6 +11,52 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 impl Vm {
+    /// `zend_deactivate()` after `shutdown_executor()`, for a SAPI that
+    /// drops the VM once the request is over (CGI, FPM):
+    /// `zend_ini_deactivate()` restores every directive the request
+    /// modified, in the order they were first modified, through the
+    /// entry's handlers at the deactivate stage. Their diagnostics (a
+    /// `max_memory_limit` below what the request still holds,
+    /// `zlib.output_compression` against an `output_handler` not yet
+    /// restored) are reported as C reports them: "in Unknown on line 0",
+    /// from "PHP Request Shutdown", and with no fatal error backtrace
+    /// (GHSA-2fjv-p558-g82m). Each handler runs in its own `zend_try`: one
+    /// that bails out does not stop the others.
+    pub fn ini_deactivate(&mut self) {
+        use php_support::ini::Stage;
+        self.in_shutdown = true;
+        self.executor_active = false;
+        for name in self.ini.modified_names() {
+            let memory = name == "memory_limit" || name == "max_memory_limit";
+            if memory {
+                let usage = self.end_usage.max(php_memlimit::real_usage());
+                self.ini.memory_usage = u64::try_from(usage).unwrap_or(u64::MAX);
+            }
+            let mut sink: Vec<php_support::Diagnostic> = Vec::new();
+            self.ini.restore(&name, Stage::Deactivate, &mut sink);
+            for d in sink {
+                let level = i64::from(d.level.0);
+                let _ = if d.docref {
+                    self.docref(level, &d.message)
+                } else {
+                    self.error(level, &d.message)
+                };
+            }
+            // The limit itself is left alone: the request's allocations
+            // may still exceed the restored value ("set the memory limit
+            // when the memory manager has been shut down").
+            if !memory {
+                self.sync_ini(&name);
+            }
+            if let Some(h) = self.ini_modify_hooks.get(name.as_str()).copied() {
+                let v = self.ini.get(&name).map(<[u8]>::to_vec).unwrap_or_default();
+                self.ini_stage = crate::ext::IniStage::Restore;
+                let _ = h(self, &v);
+                self.ini_stage = crate::ext::IniStage::Runtime;
+            }
+        }
+    }
+
     /// Restores clean start-of-request state on a persistent VM instance:
     /// drops user functions, classes and constants, resets superglobals,
     /// statics, autoloaders, error handlers, output buffers, headers, INI,
@@ -19,9 +65,7 @@ impl Vm {
         // Ensure request shutdown hooks ran if not already completed.
         if !self.in_shutdown {
             self.in_shutdown = true;
-            for h in self.shutdown_hooks.clone() {
-                h(self);
-            }
+            self.run_shutdown_hooks();
             self.in_shutdown = false;
         }
 

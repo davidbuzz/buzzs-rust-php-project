@@ -9,7 +9,7 @@ use crate::host::SessionHost;
 use crate::serializer::Serializer;
 use crate::state::{already_started_error, headers_sent_error, warn, SessionStatus};
 use php_runtime::numeric::{is_numeric_string_ex, Number};
-use php_runtime::{ErrorLevel, ZStr};
+use php_runtime::{ErrorLevel, RuntimeError, ZStr};
 use php_support::ini::{parse_bool, parse_quantity};
 
 /// `PHP_INI_USER`.
@@ -152,9 +152,10 @@ pub const DIRECTIVES: &[Directive] = &[
         Kind::SidBits,
     ),
     d("session.lazy_write", "1", INI_ALL, Kind::SessionBool),
+    // Off by default (GHSA-658j-r8rw-q6mx, CVE-2026-115560).
     d(
         "session.upload_progress.enabled",
-        "1",
+        "0",
         INI_PERDIR,
         Kind::PlainBool,
     ),
@@ -286,7 +287,7 @@ impl Default for SessionConfig {
             sid_length: 32,
             sid_bits_per_character: 4,
             lazy_write: true,
-            rfc1867_enabled: true,
+            rfc1867_enabled: false,
             rfc1867_cleanup: true,
             rfc1867_prefix: ZStr::from("upload_progress_"),
             rfc1867_name: ZStr::from("PHP_SESSION_UPLOAD_PROGRESS"),
@@ -425,8 +426,18 @@ fn quantity_warn(h: &mut dyn SessionHost, name: &str, v: &[u8]) -> i64 {
     n
 }
 
-/// `SESSION_CHECK_ACTIVE_STATE` + `SESSION_CHECK_OUTPUT_STATE`.
+/// `SESSION_CHECK_UPLOAD_PROGRESS_STATE` + `SESSION_CHECK_ACTIVE_STATE` +
+/// `SESSION_CHECK_OUTPUT_STATE`. With upload progress on, no session
+/// setting changes at run time (GHSA-658j-r8rw-q6mx: the progress data is
+/// written with the settings the request started with).
 fn check_state(h: &mut dyn SessionHost, stage: IniStage) -> bool {
+    if h.session().config.rfc1867_enabled && stage == IniStage::Runtime {
+        h.session().set_exception(RuntimeError::Error(
+            "Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On"
+                .into(),
+        ));
+        return false;
+    }
     if h.session().status == SessionStatus::Active {
         already_started_error(
             h,

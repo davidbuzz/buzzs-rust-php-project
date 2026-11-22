@@ -9,7 +9,9 @@
 //! (closed by `proc_close()`, like `proc_open_rsrc_dtor`).
 
 use crate::ctx::RtExt;
-use php_runtime::{ErrorLevel, Resource, RtResult, RuntimeError, Value, ZArray, ZStr};
+use php_runtime::{
+    ErrorLevel, Resource, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
 use php_stdmisc::process::{self, CommandArg, ProcHost, Process};
 use php_streams::stream::CastAs;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -119,6 +121,72 @@ impl ProcHost for Host {
     }
 }
 
+/// The VM as the runtime context while [`php_ext_streams::bridge`] has it
+/// lent out: each service goes to the VM the bridge holds.
+struct LentVm;
+
+impl LentVm {
+    fn with<R>(f: impl FnOnce(&mut Vm) -> R) -> Option<R> {
+        php_ext_streams::bridge::with_vm(f)
+    }
+}
+
+impl RuntimeContext for LentVm {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        Self::with(|vm| vm.diagnostic(level, message)).unwrap_or(Ok(()))
+    }
+
+    fn precision(&self) -> i64 {
+        Self::with(|vm| vm.precision()).unwrap_or(14)
+    }
+
+    fn serialize_precision(&self) -> i64 {
+        Self::with(|vm| vm.serialize_precision()).unwrap_or(-1)
+    }
+
+    fn cast_object(
+        &mut self,
+        obj: &php_runtime::Obj,
+        target: php_runtime::CastTarget,
+    ) -> RtResult<Option<Value>> {
+        Self::with(|vm| vm.cast_object(obj, target)).unwrap_or(Ok(None))
+    }
+
+    fn do_operation(
+        &mut self,
+        op: php_runtime::BinaryOp,
+        op1: &Value,
+        op2: &Value,
+    ) -> RtResult<Option<Value>> {
+        Self::with(|vm| vm.do_operation(op, op1, op2)).unwrap_or(Ok(None))
+    }
+
+    fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        Self::with(|vm| vm.compare_objects(op1, op2)).unwrap_or(Ok(1))
+    }
+
+    fn object_properties(
+        &mut self,
+        obj: &php_runtime::Obj,
+        purpose: php_runtime::PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        Self::with(|vm| vm.object_properties(obj, purpose)).unwrap_or(Ok(None))
+    }
+
+    fn object_dump(
+        &mut self,
+        obj: &php_runtime::Obj,
+        purpose: php_runtime::PropertyPurpose,
+    ) -> RtResult<php_runtime::ObjectDump> {
+        Self::with(|vm| vm.object_dump(obj, purpose)).unwrap_or_else(|| {
+            Ok(php_runtime::ObjectDump {
+                kind: php_runtime::ObjectKind::Regular { lazy_prefix: "" },
+                properties: None,
+            })
+        })
+    }
+}
+
 fn proc_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let command = a.at(0);
     let spec = a.array(1);
@@ -131,14 +199,19 @@ fn proc_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let mut host = Host::default();
     vm.flush_stdout();
-    let r = process::proc_open(
-        cmd,
-        &spec,
-        cwd.as_ref().map(ZStr::as_bytes),
-        env.as_ref(),
-        &mut host,
-        vm,
-    );
+    // The VM is lent to the stream layer while the descriptors are
+    // resolved: casting a user-space stream runs its `stream_flush()` and
+    // `stream_cast()` (`php_stream_cast()`).
+    let r = php_ext_streams::bridge::run_stream(vm, || {
+        process::proc_open(
+            cmd,
+            &spec,
+            cwd.as_ref().map(ZStr::as_bytes),
+            env.as_ref(),
+            &mut host,
+            &mut LentVm,
+        )
+    })?;
     for w in std::mem::take(&mut host.warnings) {
         vm.raise(ErrorLevel::Warning.bits(), &w)?;
     }
