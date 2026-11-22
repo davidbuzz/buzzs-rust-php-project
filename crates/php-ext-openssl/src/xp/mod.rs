@@ -294,6 +294,7 @@ pub(crate) struct SessionParent {
     ctx: Option<openssl::ssl::SslContext>,
     session: Option<openssl::ssl::SslSession>,
     has_handle: bool,
+    callbacks: bool,
 }
 
 impl SessionParent {
@@ -306,12 +307,14 @@ impl SessionParent {
                     .tls()
                     .and_then(|t| t.ssl().session().map(ToOwned::to_owned)),
                 has_handle: o.tls().is_some(),
+                callbacks: o.callbacks,
             },
             None => SessionParent {
                 is_tls: false,
                 ctx: None,
                 session: None,
                 has_handle: false,
+                callbacks: false,
             },
         }
     }
@@ -389,6 +392,13 @@ fn setup(
                 Code::SslNotSupported,
                 "Supplied SSL session stream is not initialized",
             );
+        } else if ops.persistent && parent.callbacks {
+            // GH-25172: the callbacks are request data a persistent stream
+            // would outlive.
+            warn(
+                Code::PersistentNotSupported,
+                "Supplied SSL session stream with callbacks is not supported for persistent streams",
+            );
         } else if let Some(ctx) = &parent.ctx {
             let Ok(mut ssl) = Ssl::new(ctx) else {
                 warn(Code::CreateFailed, "SSL handle creation failure");
@@ -412,9 +422,11 @@ fn setup(
             return Ok(attach(ops, ssl));
         }
     }
+    sess::callbacks_set();
     let Some(ctx) = ctx::create_ctx(vm, opts, ops.is_client, method_flags, ops.persistent)? else {
         return Ok(false);
     };
+    ops.callbacks = sess::callbacks_set();
     if ops.is_client {
         match early::client_payload(vm, opts) {
             Ok(p) => ops.early_send = p,
@@ -544,11 +556,13 @@ fn accept(
         return Ok(Ok(conn));
     };
     let (enable_on_connect, method, timeout) = (lops.enable_on_connect, lops.method, lops.timeout);
+    let callbacks = lops.callbacks;
     let parent = lops.ctx.clone().map(|ctx| SessionParent {
         is_tls: true,
         ctx: Some(ctx),
         session: None,
         has_handle: true,
+        callbacks,
     });
     let mut conn = conn;
     let Some(tcp) = dup_socket(&mut conn) else {

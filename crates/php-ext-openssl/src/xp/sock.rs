@@ -86,6 +86,9 @@ pub(crate) struct TlsOps {
     pub(crate) timed_out: bool,
     /// `persistent_id != NULL`.
     pub(crate) persistent: bool,
+    /// The context has PHP callbacks (`session_callbacks`, `psk_callbacks`
+    /// or `early_data_callbacks` set).
+    pub(crate) callbacks: bool,
     /// `early_data_state`.
     pub(crate) early_state: super::early::State,
     /// `early_data_send`.
@@ -210,6 +213,7 @@ impl TlsOps {
             connect_timeout: timeout,
             timed_out: false,
             persistent: false,
+            callbacks: false,
             early_state: super::early::State::None,
             early_send: None,
             early_offset: 0,

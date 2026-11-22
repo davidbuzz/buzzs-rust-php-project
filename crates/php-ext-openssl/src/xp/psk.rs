@@ -127,7 +127,7 @@ fn call_psk_cb(cb: &Value, identity: Option<&[u8]>) -> Result<Option<PskValue>, 
 
 /// `php_openssl_psk_build_session`.
 unsafe fn build_session(ssl: *mut SSL, psk: &[u8], md: *const EVP_MD) -> *mut SSL_SESSION {
-    // SAFETY (whole function): `ssl` is live; every returned pointer is
+    // SAFETY: (whole function) `ssl` is live; every returned pointer is
     // checked before use and the new session is freed on failure.
     unsafe {
         let mut cipher = SSL_CIPHER_find(ssl, TLS13_AES128_GCM_SHA256.as_ptr());
@@ -283,6 +283,7 @@ fn validate(vm: &mut Vm, name: &str, cb: &Value, persistent: bool) -> Option<Val
 }
 
 fn set_registry(b: &SslContextBuilder, f: impl FnOnce(&mut Callbacks)) {
+    super::sess::note_callbacks();
     let key = b.as_ptr() as usize;
     REGISTRY.with(|r| f(r.borrow_mut().entry(key).or_default()));
 }

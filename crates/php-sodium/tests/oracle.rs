@@ -116,6 +116,8 @@ fn master(line: &str) -> String {
     let overrides: &[(&str, &str)] = &[
         // 8.5: "is too large" (SodiumException).
         ("pwhash_lenbig", "EXC ValueError: sodium_crypto_pwhash(): Argument #1 ($length) must be less than 4294967295 bytes"),
+        // 8.5 names the key "Argument #3 ($counter)".
+        ("stream_xchacha20_xor_ic_badkey", "EXC SodiumException: sodium_crypto_stream_xchacha20_xor_ic(): Argument #4 ($key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long"),
     ];
     if let Some((_, v)) = overrides.iter().find(|(l, _)| *l == label) {
         return format!("{label}: {v}");

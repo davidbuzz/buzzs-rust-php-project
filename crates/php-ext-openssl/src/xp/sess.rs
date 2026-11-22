@@ -36,6 +36,19 @@ thread_local! {
     /// An exception raised while configuring (`zend_type_error` & co.):
     /// thrown once the transport has reported its failure.
     static PENDING: RefCell<Option<Throw>> = const { RefCell::new(None) };
+    /// A PHP callback was installed in the context being built.
+    static CALLBACKS_SET: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Notes that a PHP callback (session, PSK or early data) was installed
+/// in the context being built.
+pub(crate) fn note_callbacks() {
+    CALLBACKS_SET.with(|c| c.set(true));
+}
+
+/// Whether a callback was installed since the last call (which resets it).
+pub(crate) fn callbacks_set() -> bool {
+    CALLBACKS_SET.with(|c| c.replace(false))
 }
 
 /// Records the stream id for callbacks fired during I/O on it.
@@ -159,6 +172,7 @@ pub(crate) fn setup_client(
             new_cb: Some(cb),
             ..Callbacks::default()
         });
+        note_callbacks();
         new_session_cb(b, id);
         enable_cache = true;
     }
@@ -249,6 +263,9 @@ pub(crate) fn setup_server(
     let has_new = cbs.new_cb.is_some();
     let has_remove = cbs.remove_cb.is_some();
     let id = register(cbs);
+    if has_get || has_new || has_remove {
+        note_callbacks();
+    }
     if has_get {
         b.set_session_cache_mode(SslSessionCacheMode::SERVER | SslSessionCacheMode::NO_INTERNAL);
         new_session_cb(b, id);

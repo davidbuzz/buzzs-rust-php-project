@@ -91,6 +91,7 @@ pub(crate) fn setup_server(
         }
         let key = b.as_ptr() as usize;
         CALLBACKS.with(|c| c.borrow_mut().insert(key, cb));
+        super::sess::note_callbacks();
         if max == 0 {
             max = i64::try_from(CHUNK).unwrap_or(0);
         }

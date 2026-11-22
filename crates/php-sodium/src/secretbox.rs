@@ -229,10 +229,11 @@ pub fn stream_xchacha20_xor_ic(
         NONCEBYTES,
         "SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES",
     )?;
+    // php-src master names the key as argument #4 (it was #3, `$counter`).
     check_len(
         f,
-        3,
-        "counter",
+        4,
+        "key",
         key,
         KEYBYTES,
         "SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES",
