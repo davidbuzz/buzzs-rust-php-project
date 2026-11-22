@@ -36,6 +36,21 @@ Last updated 22 Nov 2026.
 
 ## A. Next (22 Nov)
 
+- [ ] **FPM** (in scope since 22 Nov, owner: nginx deployments use php-fpm). A `php-fpm`
+  binary sharing what `php-cgi` already has (`fpm_main.c` is a fork of `cgi_main.c` and
+  uses the same `main/fastcgi.c`): the FastCGI protocol (`cgi/fastcgi.rs`),
+  `init_request_info`/the CGI environment (`cgi/env.rs`) and the CGI request context
+  (`php-cli-server/src/sapi.rs`) move into one module both binaries use. FPM's own parts
+  (about 9,000 of its 13,000 C lines): `php-fpm.conf` and pool files (`include=`,
+  `${ENV}`, `$pool`, `php_value`/`php_admin_value`, `env[]`), the master process and
+  process manager (`pm = static/dynamic/ondemand`, `pm.max_requests`), signals
+  (`SIGUSR2` reload, `SIGQUIT` graceful stop), the scoreboard, `pm.status_path` and
+  `ping.path`, `access.log`/`access.format`, `slowlog` and
+  `request_terminate_timeout`, `catch_workers_output`, `clear_env`,
+  `security.limit_extensions`, `PHP_VALUE`/`PHP_ADMIN_VALUE` FastCGI params,
+  `fastcgi_finish_request()`, `fpm_get_status()`, `-t`/`-y`/`-F`/`-R`. Tests:
+  `sapi/fpm/tests` (151, through `TEST_PHP_FPM_EXECUTABLE`) and a third end-to-end test,
+  nginx -> php-fpm, beside apache2 + mod_php and nginx + php-cgi.
 - [~] Re-derive the 8.3 data with 8.5.12 (owner, 22 Nov). Done: php-hash vectors, php-filter
   HTML/Unicode tables, php-ctype/php-json/php-filter `oracle.txt` (only filter's differed;
   its replay now matches 8.5 on every record). To do: the other oracle fixtures recorded
