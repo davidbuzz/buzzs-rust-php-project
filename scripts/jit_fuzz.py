@@ -154,6 +154,8 @@ class Gen:
                               f'{self.pick(PROPS)} = {self.atom()};', f'{self.pick(PROPS)}{self.pick(["++", "--"])};',
                               f'{v} = {self.pick(KEYED)};', f'{v} = {self.pick(KEYED[:2])};',
                               f'{v} = {self.pick(STATICS)};', f'{self.pick(STATICS)} = {self.atom()};',
+                              f'{self.pick(["$o", "$fo"])}->ax({self.atom()});', f'{self.pick(["$o", "$fo"])}->bump();',
+                              f'$o->su({self.expr()});', f'{v} = $o->sr({self.atom()});',
                               f'{self.pick(STATICS[:2])} = {v};', f'{v} = {self.pick(STATICS[:2])};',
                               f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
@@ -273,7 +275,8 @@ class Gen:
                    'static function sm($x) { return $x + 2; } function im($x) { return $x * 3; } '
                    'function pm($a, $b) { return $a - $b; } static function sd(int|float $x, int $y = 4) { return $x * $y; } '
                    'function gx() { return $this->x; } function gn(): int { return $this->n; } function gf() { return $this->f * 2; } '
-                   'function gsum($k) { return $this->n + $k; } '
+                   'function gsum($k) { return $this->n + $k; } function ax($v) { $this->x += $v; } function bump() { $this->n++; } '
+                   'function su($v) { $this->u = $v; } function sr($v) { $this->f = $v; return $v; } '
                    'function __construct($x) { $this->x = $x; } }')
         out += [self.function(f) for f in fns]
         out.append('function show($v) { if (is_float($v)) { return is_nan($v) ? "NAN" : sprintf("%.17g", $v); } '

@@ -661,6 +661,84 @@ pub(in crate::exec) fn jit_this_prop_num(
     }
 }
 
+/// For a method a typed loop of the JIT runs inline: the slot of the
+/// declared property that place `pid` of the method's code `code` writes
+/// (and, for `op=` and `++`, reads) on `$this`, and the builtin types the
+/// property takes as they are (`u32::MAX`: any), for `obj` and `scope` as
+/// in [`jit_this_prop_num`], on a hit of the code's property cache.
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_this_prop_slot(
+    code: &crate::opcode::OpArray,
+    scope: usize,
+    obj: &Obj,
+    pid: PlaceId,
+    reads: bool,
+) -> Option<(u32, u32)> {
+    let cache = code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    let want = if reads { PC_READ | PC_WRITE } else { PC_WRITE };
+    if e.class_addr == 0
+        || e.flags & (want | PC_DYN) != want
+        || e.scope_addr != scope
+        || e.base != PROP_CACHE_THIS
+        || Rc::as_ptr(&object::data(obj).class) as usize != e.class_addr
+    {
+        return None;
+    }
+    Some((e.slot, e.accept))
+}
+
+/// For a method a typed loop of the JIT runs inline: a write of the
+/// number `rhs` to the declared slot `slot` of `obj`, an object of the
+/// class at address `class` and not lazy, whose property takes the
+/// builtin types `accept` as they are: `op` 0 stores it over a scalar
+/// (the hit of [`assign_hit`] for a number), 1, 2 and 3 are `+=`, `-=`
+/// and `*=` on a number ([`assign_op_in`]), 4 and 5 `++` and `--`
+/// ([`incdec_in`]). `false`, nothing changed, for anything else.
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_slot_put(
+    obj: &Obj,
+    class: usize,
+    slot: usize,
+    accept: u32,
+    op: usize,
+    rhs: Num,
+) -> bool {
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != class || !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return false;
+    }
+    match op {
+        0 => {
+            let new = match rhs {
+                Num::Int(x) => Value::Int(x),
+                Num::Float(x) => Value::Float(x),
+            };
+            if !accepts(accept, &new) {
+                return false;
+            }
+            let Ok(mut slots) = od.slots.try_borrow_mut() else {
+                return false;
+            };
+            match slots.get_mut(slot) {
+                Some(Some(
+                    cell @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)),
+                )) => {
+                    *cell = new;
+                    true
+                }
+                _ => false,
+            }
+        }
+        1 => assign_op_in(od, slot, accept, BinaryOp::Add, rhs).is_some(),
+        2 => assign_op_in(od, slot, accept, BinaryOp::Sub, rhs).is_some(),
+        3 => assign_op_in(od, slot, accept, BinaryOp::Mul, rhs).is_some(),
+        4 => incdec_in(od, slot, IncDecKind::PreInc).is_some(),
+        5 => incdec_in(od, slot, IncDecKind::PreDec).is_some(),
+        _ => false,
+    }
+}
+
 /// For a method a typed loop of the JIT runs inline: the number in the
 /// declared slot `slot` of `obj`, when `obj` is of the class at address
 /// `class` (for which the loop resolved the property to that slot) and

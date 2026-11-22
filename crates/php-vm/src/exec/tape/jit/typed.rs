@@ -736,6 +736,23 @@ enum Plan {
         float: bool,
         next: usize,
     },
+    /// In a method the loop runs inline: a write of the number `value`
+    /// to a declared property of `$this` (`super::this_put`; `recv`,
+    /// `class` and `slot` as in [`Plan::ThisProp`], `accept` the builtin
+    /// types the property takes as they are): `op` 0 is `=`, 1 to 3 `+=`,
+    /// `-=`, `*=`, 4 and 5 `++` and `--`. The call cannot be redone once
+    /// this ran, so nothing after it in the method may give up
+    /// ([`settled`]).
+    ThisPut {
+        init: usize,
+        recv: usize,
+        class: usize,
+        slot: u32,
+        accept: u32,
+        op: usize,
+        value: Opnd,
+        next: usize,
+    },
     /// The loop is left for good here (a `return`): the interpreter's.
     Leave,
     /// A family instruction run by its own handler, on the frame (which is
@@ -1163,6 +1180,25 @@ impl Plan {
                 float,
                 next: next + base,
             },
+            Plan::ThisPut {
+                init,
+                recv,
+                class,
+                slot,
+                accept,
+                op,
+                value,
+                next,
+            } => Plan::ThisPut {
+                init,
+                recv,
+                class,
+                slot,
+                accept,
+                op,
+                value: value.inlined(),
+                next: next + base,
+            },
             Plan::Arg { .. }
             | Plan::Bind { .. }
             | Plan::Leave
@@ -1204,6 +1240,7 @@ impl Plan {
             | Plan::Call(_)
             | Plan::Each { .. }
             | Plan::EachAny { .. }
+            | Plan::ThisPut { .. }
             | Plan::Ext { .. } => false,
         }
     }
@@ -1225,7 +1262,9 @@ impl Plan {
             Plan::EachAny {
                 end, step, full, ..
             } => [Some(step), Some(full), Some(end)],
-            Plan::Ext { next, .. } | Plan::ThisProp { next, .. } => [Some(next), None, None],
+            Plan::Ext { next, .. } | Plan::ThisProp { next, .. } | Plan::ThisPut { next, .. } => {
+                [Some(next), None, None]
+            }
             Plan::Int2 { next, .. }
             | Plan::Conv { next, .. }
             | Plan::Math { next, .. }
@@ -1379,7 +1418,7 @@ impl Plan {
                 }
             }
             // (By the way out: [`Plan::out`].)
-            Plan::EachAny { .. } => {}
+            Plan::EachAny { .. } | Plan::ThisPut { .. } => {}
             Plan::ThisProp { dst, float, .. } => {
                 st.insert(dst, num(float));
             }
@@ -1550,6 +1589,12 @@ pub(super) struct Seen<'a> {
     /// call, the method's address, the read's place in the method's code),
     /// when the read is a hit of the method's property cache.
     pub(super) this_prop: &'a dyn Fn(usize, usize, u32) -> Option<(Ty, u32)>,
+    /// For a method that may run inline: the slot a property write to
+    /// `$this` in it goes to and the builtin types the property takes as
+    /// they are (the op that starts the call, the method's address, the
+    /// write's place in the method's code, whether it also reads: `op=`,
+    /// `++`), on a hit of the method's property cache.
+    pub(super) this_write: &'a dyn Fn(usize, usize, u32, bool) -> Option<(u32, u32)>,
     /// For the method call started by the op (by index): the receiver's
     /// variable (`usize::MAX` for `$this`), and the addresses of the class
     /// of the object it holds now and of the frame's class scope (0:
@@ -1867,6 +1912,12 @@ impl<'a> Analysis<'a> {
             return None;
         }
         let inst = *self.tape.get(at)?;
+        if matches!(
+            inst.op,
+            TOp::AssignObjProp | TOp::AssignOpObjProp | TOp::IncDecObjProp
+        ) {
+            return self.this_put(st, callee, at, inst);
+        }
         let (dst, next) = match inst.op {
             TOp::FetchObjProp => (tmp(inst.b.checked_mul(SLOT_U32)?)?, at + 1),
             // Into the variable of the `AssignCv` folded into it.
@@ -1895,6 +1946,60 @@ impl<'a> Analysis<'a> {
             dst,
             float,
             next,
+        })
+    }
+
+    /// [`Self::this_prop`] for a write, as a statement, of a number to a
+    /// declared property of `$this` ([`Plan::ThisPut`]).
+    fn this_put(&mut self, st: &State, callee: &Inlined, at: usize, inst: Inst) -> Option<Plan> {
+        let one = Opnd {
+            num: Num::Int(1),
+            float: false,
+        };
+        let (place, op, value) = match *self.ops.get(inst.d as usize)? {
+            Op::AssignObjProp {
+                place,
+                val,
+                dst: None,
+            } => (place, 0, self.op_number(st, val)?.0),
+            Op::AssignOpObjProp {
+                place,
+                op,
+                val,
+                dst: None,
+            } => {
+                let op = match op {
+                    php_runtime::BinaryOp::Add => 1,
+                    php_runtime::BinaryOp::Sub => 2,
+                    php_runtime::BinaryOp::Mul => 3,
+                    _ => return None,
+                };
+                (place, op, self.op_number(st, val)?.0)
+            }
+            Op::IncDecObjProp {
+                place,
+                kind,
+                dst: None,
+            } => (place, if kind.is_inc() { 4 } else { 5 }, one),
+            _ => return None,
+        };
+        let path = self.places.get(place as usize)?;
+        if !matches!(path.base, PlaceBase::This)
+            || !matches!(path.segs.as_slice(), [Seg::Prop(Operand::Lit(_))])
+        {
+            return None;
+        }
+        let func = std::rc::Rc::as_ptr(&callee.func) as usize;
+        let (slot, accept) = (self.seen.this_write)(callee.init, func, place, op != 0)?;
+        Some(Plan::ThisPut {
+            init: callee.init,
+            recv: callee.recv.0,
+            class: callee.recv.1,
+            slot,
+            accept,
+            op,
+            value,
+            next: at + 1,
         })
     }
 
@@ -3537,6 +3642,17 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             *known = (*known).min(start);
         }
     }
+    // A call that wrote a property cannot be redone: nothing after the
+    // write may give up, in the method or (a call among the arguments of
+    // another) outside it.
+    for (at, (plan, _)) in &plans {
+        if let Plan::ThisPut { init, next, .. } = *plan {
+            if resume.contains_key(&init) || !settled(&plans, tape.len(), next) || *at < tape.len()
+            {
+                return None;
+            }
+        }
+    }
     // An inlined function has no frame to go on in: whatever stops in it
     // has the whole call redone, like one that stops among the arguments.
     let mut virtuals = Vec::new();
@@ -3592,6 +3708,28 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         plan.successors().contains(&Some(head)) && lp.may_repeat(&plan.out(st, head))
     });
     repeats.then_some(lp)
+}
+
+/// Whether nothing can give up from instruction `from` of an inlined
+/// function (those from `real` on) to its return: only jumps, stores of
+/// values known now and copies between variables are on every way, none
+/// of which has a way out but to the next instruction.
+fn settled(plans: &BTreeMap<usize, (Plan, State)>, real: usize, from: usize) -> bool {
+    let mut work = vec![from];
+    let mut seen = Vec::new();
+    while let Some(at) = work.pop() {
+        if at < real || seen.contains(&at) {
+            continue;
+        }
+        seen.push(at);
+        match plans.get(&at) {
+            Some((plan @ (Plan::Jmp { .. } | Plan::Const { .. } | Plan::Copy { .. }), _)) => {
+                work.extend(plan.successors().into_iter().flatten());
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Whether the loop of `tape` from `head` to its last jump back `last` is
@@ -3696,6 +3834,9 @@ type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) ->
 type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
 /// `super::const_is`.
 type ConstIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
+/// `super::this_put`.
+type ThisPut =
+    unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, usize, u64) -> usize;
 /// `super::this_slot`.
 type ThisSlot = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, *mut u64) -> usize;
 /// `super::each_any`.
@@ -3734,7 +3875,7 @@ struct Emit<'a, 'b> {
     handler_sig: SigRef,
     /// The signatures of the array helpers, by their number of arguments
     /// less three.
-    helper_sigs: [SigRef; 3],
+    helper_sigs: [SigRef; 4],
     /// The signature of a [`MathFn`].
     math_sig: SigRef,
     /// The int and the float variable of each slot.
@@ -3767,7 +3908,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         sig.returns.push(AbiParam::new(types::I64));
         sig
     };
-    let helper_sigs = [3, 4, 5].map(|args| b.import_signature(helper_sig(args)));
+    let helper_sigs = [3, 4, 5, 6].map(|args| b.import_signature(helper_sig(args)));
     let mut math_sig = Signature::new(handler_sig.call_conv);
     math_sig.params.push(AbiParam::new(types::F64));
     math_sig.returns.push(AbiParam::new(types::F64));
@@ -4966,6 +5107,47 @@ impl Emit<'_, '_> {
                     self.read_back(key, Ty::Int, full)?;
                 }
                 self.go(i, full, repeat)?;
+            }
+            Plan::ThisPut {
+                init,
+                recv,
+                class,
+                slot: at,
+                accept,
+                op,
+                value,
+                next,
+            } => {
+                let (tag, bits) = if value.float {
+                    let v = self.float(value)?;
+                    (
+                        TAG_FLOAT,
+                        self.b.ins().bitcast(types::I64, MemFlags::new(), v),
+                    )
+                } else {
+                    (TAG_INT, self.int(value)?)
+                };
+                let how = usize::from(tag) | (op << 2) | ((accept as usize) << 32);
+                #[allow(clippy::cast_possible_wrap)]
+                let operands = [
+                    self.frame,
+                    self.b.ins().iconst(types::I64, recv as i64),
+                    self.b.ins().iconst(types::I64, class as i64),
+                    self.b.ins().iconst(types::I64, i64::from(at)),
+                    self.b.ins().iconst(types::I64, how as i64),
+                    bits,
+                ];
+                let stored = self.helper(super::this_put as ThisPut as usize, &operands)?;
+                let (ok, other) = (self.b.create_block(), self.b.create_block());
+                self.b.set_cold_block(other);
+                self.b.ins().brif(stored, ok, &[], other, &[]);
+                // Not written (nothing changed): the whole call is the
+                // interpreter's, and the miss is counted.
+                self.b.switch_to_block(other);
+                let from = self.lp.resume.get(&init).copied().unwrap_or(init);
+                self.ret(from, WHY_MISS);
+                self.b.switch_to_block(ok);
+                self.go(i, next, repeat)?;
             }
             Plan::ThisProp {
                 init,

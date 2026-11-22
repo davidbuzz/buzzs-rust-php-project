@@ -1463,3 +1463,56 @@ echo "\n";
 "#,
     );
 }
+
+#[test]
+fn methods_that_write_a_property_run_inline_when_nothing_follows_the_write() {
+    typed_at_least(
+        "<?php class W { public $n = 0; private $hits = 0; function setN($v) { $this->n = $v; } function add($v) { $this->n += $v; } function hit() { $this->hits++; } function hits() { return $this->hits; } } function t($o, $k) { for ($i = 0; $i < $k; $i++) { $o->setN($i); $o->add(2); $o->hit(); } return [$o->n, $o->hits()]; } var_dump(t(new W, 50), t(new W, 4));",
+        1,
+    );
+    // Setters, `+=`, `++`, `*=` on private, typed and readonly
+    // properties; a value the type refuses or converts; a property that
+    // becomes a string, a float, a reference; an int that overflows; a
+    // write followed by more work, two writes, a write on one branch
+    // (none of which may run inline); calls as arguments of builtins.
+    three(
+        r#"<?php
+class W { public $n = 0; public $f = 0.5; public int $ti = 0; public float $tf = 0.0; public readonly int $ro; public $s = 'str'; private $hits = 0; public ?W $next = null;
+  function __construct() { $this->ro = 1; }
+  function setN($v) { $this->n = $v; }
+  function setF(float $v): void { $this->f = $v; }
+  function add($v) { $this->n += $v; }
+  function inc() { $this->n++; }
+  function dec() { $this->hits--; return; }
+  function scale($k) { $this->f *= $k; }
+  function setTi($v) { $this->ti = $v; }
+  function setTf($v) { $this->tf = $v; }
+  function setRo($v) { $this->ro = $v; }
+  function setS($v) { $this->s = $v; }
+  function fluent($v) { $this->n = $v; return $this; }
+  function setRet($v) { $this->n = $v; return $v; }
+  function setThenCalc($v) { $this->n = $v; return $v * 2; }
+  function calcThenSet($v) { $t = $v * 2 + 1; $this->n = $t; return $t; }
+  function twoSets($v) { $this->n = $v; $this->f = $v * 0.5; }
+  function condSet($v) { if ($v > 5) { $this->n = $v; } }
+  function hit() { $this->hits++; }
+  function hits() { return $this->hits; }
+  function addBig() { $this->n += PHP_INT_MAX; }
+}
+function s1($o, $k) { for ($i = 0; $i < $k; $i++) { $o->setN($i); $o->add(2); $o->inc(); $o->hit(); $o->dec(); $o->hit(); } return [$o->n, $o->hits()]; }
+function s2($o, $k) { for ($i = 0; $i < $k; $i++) { $o->setF($i * 0.5); $o->scale(1.5); } return $o->f; }
+function s3($o, $k) { $s = 0; for ($i = 0; $i < $k; $i++) { $s += $o->setRet($i) + $o->calcThenSet($i); $o->fluent($i); $o->condSet($i); } return [$s, $o->n]; }
+function s4($o, $k) { $s = 0; for ($i = 0; $i < $k; $i++) { $s += $o->setThenCalc($i); $o->twoSets($i); } return [$s, $o->n, $o->f]; }
+function s5($o, $k) { for ($i = 0; $i < $k; $i++) { $o->setTi($i); $o->setTf($i * 1.5); } return [$o->ti, $o->tf]; }
+function s6($o, $k) { $c = 0; for ($i = 0; $i < $k; $i++) { try { $o->setTi($i < 20 ? $i : 2.5); } catch (TypeError $e) { $c++; } try { $o->setRo($i); } catch (Error $e) { $c += 100; } $o->setTf($i); } return [$c, $o->ti, $o->tf]; }
+function s7($o, $k) { for ($i = 0; $i < $k; $i++) { $o->setS($i); $o->setN($i < 10 ? $i : 'x' . $i); } return [$o->s, $o->n]; }
+function s8($o, $k) { for ($i = 0; $i < $k; $i++) { $o->inc(); if ($i == 9) { $o->n = 'abc'; } if ($i == 12) { $o->n = 1.5; } if ($i == 20) { $r = &$o->n; $r = 100; } } return $o->n; }
+function s9($o, $k) { for ($i = 0; $i < $k; $i++) { $o->add($i); $o->addBig(); $o->add(-1); } return $o->n; }
+function s10($list) { foreach ($list as $i => $o) { $o->setN($i); $o->hit(); } $t = 0; foreach ($list as $o) { $t += $o->n + $o->hits(); } return $t; }
+function s11($o, $k) { $s = 0; for ($i = 0; $i < $k; $i++) { $s += max($o->setRet($i), 3) + abs($o->calcThenSet(-$i)); } return [$s, $o->n]; }
+$list = []; for ($i = 0; $i < 30; $i++) { $list[] = new W; }
+foreach ([40, 6] as $k) { var_export([s1(new W, $k), s2(new W, $k), s3(new W, $k), s4(new W, $k), s5(new W, $k), s6(new W, $k), s7(new W, $k), s8(new W, $k), s9(new W, $k), s10($list), s11(new W, $k)]); }
+echo "\n";
+"#,
+    );
+}

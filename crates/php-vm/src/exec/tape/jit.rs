@@ -818,6 +818,29 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 _ => None,
             }
         };
+        // The slot a property write of an inlined method goes to, and the
+        // types the property takes.
+        let write_of_this = |init: usize, func: usize, pid: u32, reads: bool| {
+            let Op::InitMethodCall { obj, .. } = *frame.code.ops.get(init)? else {
+                return None;
+            };
+            let recv = match obj {
+                Operand::Cv(cv) => cv as usize,
+                Operand::Unused => usize::MAX,
+                _ => return None,
+            };
+            let object = receiver_in(frame, recv)?;
+            let cache = frame.code.method_cache.try_borrow().ok()?;
+            let cached = cache.get(init)?.as_ref()?;
+            let scope = cached
+                .method_scope
+                .as_ref()
+                .map_or(0, |scope| scope.as_ptr() as usize);
+            // SAFETY: `func` is the address of a function the analysis
+            // holds an `Rc` of (`typed::Inlined`).
+            let code = &(*(func as *const crate::func::UserFunction)).code;
+            crate::exec::spec::jit_this_prop_slot(code, scope, object, pid, reads)
+        };
         // The receiver of a method's call now: its variable (`usize::MAX`
         // for `$this`), its class and the frame's scope, both pinned.
         let receiver = |init: usize| -> Option<(usize, usize, usize)> {
@@ -888,6 +911,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             user: &user,
             this_prop: &prop_of_this,
             receiver: &receiver,
+            this_write: &write_of_this,
             property: &property,
         };
         let code = php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen));
@@ -1304,6 +1328,46 @@ pub(super) unsafe extern "C" fn this_slot(
         }
         _ => 0,
     }
+}
+
+/// For a method a typed loop runs inline: a write to the declared slot
+/// `slot` of the receiver ([`receiver_in`]), an object of the class at
+/// address `class`, of the number with bits `bits`. `how` packs the
+/// number's tag (bits 0-1: 2 an int, 3 a float), the operation (bits 2-4:
+/// `spec::jit_slot_put`'s `op`) and, from bit 32, the builtin types the
+/// property takes as they are. Returns 1, or 0 with nothing changed.
+///
+/// # Safety
+/// `f` is the current frame.
+pub(super) unsafe extern "C" fn this_put(
+    f: *mut Frame,
+    recv: usize,
+    class: usize,
+    slot: usize,
+    how: usize,
+    bits: u64,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(object) = receiver_in(f, recv) else {
+        return 0;
+    };
+    #[allow(clippy::cast_possible_wrap)]
+    let rhs = if how & 3 == 2 {
+        crate::exec::Num::Int(bits as i64)
+    } else {
+        crate::exec::Num::Float(f64::from_bits(bits))
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let accept = (how >> 32) as u32;
+    usize::from(crate::exec::spec::jit_slot_put(
+        object,
+        class,
+        slot,
+        accept,
+        (how >> 2) & 7,
+        rhs,
+    ))
 }
 
 thread_local! {
