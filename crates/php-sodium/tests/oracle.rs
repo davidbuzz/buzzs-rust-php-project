@@ -1,10 +1,10 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays `examples/sodium_oracle.php` through this crate and compares
-//! every line with the output recorded from `/usr/bin/php` 8.3.6 (bundled
-//! with libsodium 1.0.18) in `data/oracle.txt`.  Where php-src master
-//! changed behaviour (the pwhash family throws `ValueError` and checks the
-//! minimum limits itself), the expectation is adjusted to master.
+//! every line with the output recorded from `/usr/bin/php8.5` (PHP 8.5.12,
+//! libsodium 1.0.18) in `data/oracle.txt`.  Where php-src master differs
+//! (the pwhash family's argument checks throw `ValueError`), the
+//! expectation is adjusted to master.
 
 use php_sodium::{
     aead, boxes, hash, pwhash, ristretto, secretbox, secretstream, sign, util, Error,
@@ -110,18 +110,12 @@ fn ok<T>(v: T) -> Result<T, Error> {
     Ok(v)
 }
 
-/// The recorded 8.3 line, adjusted to php-src master where it differs.
+/// The recorded 8.5 line, adjusted to php-src master where it differs.
 fn master(line: &str) -> String {
     let (label, _) = line.split_once(": ").unwrap();
     let overrides: &[(&str, &str)] = &[
+        // 8.5: "is too large" (SodiumException).
         ("pwhash_lenbig", "EXC ValueError: sodium_crypto_pwhash(): Argument #1 ($length) must be less than 4294967295 bytes"),
-        ("pwhash_mem_min", "EXC ValueError: sodium_crypto_pwhash(): Argument #5 ($memlimit) must be greater than or equal to 8192"),
-        ("pwhash_str_mem_min", "EXC ValueError: sodium_crypto_pwhash_str(): Argument #3 ($memlimit) must be greater than or equal to 8192"),
-        ("scrypt_ops_min", "EXC ValueError: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 ($opslimit) must be greater than or equal to 524288"),
-        // 8.3 named the wrong constants in these two messages.
-        ("kdf_badkey", "EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #4 ($key) must be SODIUM_CRYPTO_KDF_KEYBYTES bytes long"),
-        ("scalarmult_badp", "EXC SodiumException: sodium_crypto_scalarmult(): Argument #2 ($p) must be SODIUM_CRYPTO_SCALARMULT_BYTES bytes long"),
-        ("scrypt_mem_min", "EXC ValueError: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 ($memlimit) must be greater than or equal to 16777216"),
     ];
     if let Some((_, v)) = overrides.iter().find(|(l, _)| *l == label) {
         return format!("{label}: {v}");
@@ -132,7 +126,7 @@ fn master(line: &str) -> String {
     {
         return line.replacen("EXC SodiumException", "EXC ValueError", 1);
     }
-    // 8.3 misnamed `$string2` in the length-mismatch messages.
+    // 8.5 misnames `$string2` in the length-mismatch messages.
     line.replace("($string_2)", "($string2)")
 }
 

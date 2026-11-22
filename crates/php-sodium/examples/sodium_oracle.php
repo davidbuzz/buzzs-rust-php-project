@@ -1,6 +1,6 @@
 <?php
 // Deterministic ext/sodium results, one "label: value" line each, mirrored
-// by tests/oracle.rs.  Run: php -d memory_limit=1G sodium_oracle.php
+// by tests/oracle.rs.  Run: /usr/bin/php8.5 -n -d memory_limit=1G sodium_oracle.php
 function show($v) {
     if (is_bool($v)) return $v ? 'true' : 'false';
     if (is_int($v)) return "int($v)";

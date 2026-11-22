@@ -103,7 +103,7 @@ kdf_short: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #1
 kdf_long: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #1 ($subkey_length) must be less than or equal to SODIUM_CRYPTO_KDF_BYTES_MAX
 kdf_negid: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #2 ($subkey_id) must be greater than or equal to 0
 kdf_badctx: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #3 ($context) must be SODIUM_CRYPTO_KDF_CONTEXTBYTES bytes long
-kdf_badkey: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #4 ($key) must be SODIUM_CRYPTO_KDF_BYTES_MIN bytes long
+kdf_badkey: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #4 ($key) must be SODIUM_CRYPTO_KDF_KEYBYTES bytes long
 box_seed_keypair: 3d94eea49c580aef816935762be049559d6d1440dede12e6a125f1841fff8e6f4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
 box_seed_keypair_bad: EXC SodiumException: sodium_crypto_box_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_BOX_SEEDBYTES bytes long
 box_publickey_from_secretkey: 4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
@@ -131,7 +131,7 @@ box_seal_open_badkp: EXC SodiumException: sodium_crypto_box_seal_open(): Argumen
 scalarmult: 301f8aa8f6463cedd9d94bd588ab632b0a075f6b28ec9aa3f2800f6385d6246e
 scalarmult_zero: EXC SodiumException: internal error
 scalarmult_badn: EXC SodiumException: sodium_crypto_scalarmult(): Argument #1 ($n) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long
-scalarmult_badp: EXC SodiumException: sodium_crypto_scalarmult(): Argument #2 ($p) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long
+scalarmult_badp: EXC SodiumException: sodium_crypto_scalarmult(): Argument #2 ($p) must be SODIUM_CRYPTO_SCALARMULT_BYTES bytes long
 kx_seed_keypair: cb2f5160fc1f7e05a55ef49d340b48da2e5a78099d53393351cd579dd42503d60e0216223f147143d32615a91189c288c1728cba3cc5f9f621b1026e03d83129
 kx_seed_keypair_bad: EXC SodiumException: sodium_crypto_kx_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_KX_SEEDBYTES bytes long
 kx_secretkey: cb2f5160fc1f7e05a55ef49d340b48da2e5a78099d53393351cd579dd42503d6
@@ -218,14 +218,14 @@ pwhash_mem0: EXC SodiumException: sodium_crypto_pwhash(): Argument #5 ($memlimit
 pwhash_alg: EXC SodiumException: unsupported password hashing algorithm
 pwhash_alg_empty: EXC SodiumException: unsupported password hashing algorithm
 pwhash_salt: EXC SodiumException: sodium_crypto_pwhash(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SALTBYTES bytes long [W: empty password]
-pwhash_mem_min: EXC SodiumException: internal error
+pwhash_mem_min: EXC SodiumException: sodium_crypto_pwhash(): Argument #5 ($memlimit) must be greater than or equal to 8192
 pwhash_str_prefix: 246172676f6e32696424763d3139246d3d382c743d312c703d3124
 pwhash_str_verify: [true,false]
 pwhash_str_verify_fixed: false
 pwhash_str_verify_garbage: false [W: empty password]
 pwhash_str_ops0: EXC SodiumException: sodium_crypto_pwhash_str(): Argument #2 ($opslimit) must be greater than 0
 pwhash_str_mem0: EXC SodiumException: sodium_crypto_pwhash_str(): Argument #3 ($memlimit) must be greater than 0
-pwhash_str_mem_min: EXC SodiumException: internal error
+pwhash_str_mem_min: EXC SodiumException: sodium_crypto_pwhash_str(): Argument #3 ($memlimit) must be greater than or equal to 8192
 pwhash_str_empty_len: int(93) [W: empty password]
 pwhash_needs_rehash: [false,true,true]
 scrypt: 42fa366219ca6b8997059907a4eb416cf8d911749572dfbcd167084b5807f524
@@ -233,8 +233,8 @@ scrypt_len0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): A
 scrypt_ops0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 ($opslimit) must be greater than 0
 scrypt_mem0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 ($memlimit) must be greater than 0
 scrypt_salt: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES bytes long [W: empty password]
-scrypt_ops_min: EXC SodiumException: internal error
-scrypt_mem_min: EXC SodiumException: internal error
+scrypt_ops_min: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 ($opslimit) must be greater than or equal to 524288
+scrypt_mem_min: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 ($memlimit) must be greater than or equal to 16777216
 scrypt_str: [int(101),243724,true,false]
 scrypt_str_ops0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #2 ($opslimit) must be greater than 0
 scrypt_str_mem0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 ($memlimit) must be greater than 0
