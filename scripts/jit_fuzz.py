@@ -94,14 +94,14 @@ class Gen:
             return f'{self.pick(["sqrt", "floor", "ceil", "sin", "round", "log", "exp"])}({self.expr(d + 1)})'
         # Small user functions, which a typed loop runs inline.
         if k < 0.05:
-            return f'{self.pick(["h0", "h2", "h4", "h5", "h6", "h7", "h9"])}({self.expr(d + 1)})'
+            return f'{self.pick(["h0", "h2", "h4", "h5", "h6", "h7", "h9", "hm0", "hm1"])}({self.expr(d + 1)})'
         if k < 0.07:
             return f'{self.pick(["h1", "h3", "h7", "h9"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
         # Static methods and methods of `$o`, likewise.
         if k < 0.085:
             return f'{self.pick(["P::sm", "$o->im", "P::sd", "$o->gsum", "$fo->gsum"])}({self.expr(d + 1)})'
         if k < 0.092:
-            return self.pick(['$o->gx()', '$o->gn()', '$fo->gx()', '$fo->gf()', '$o->gf()'])
+            return self.pick(['$o->gx()', '$o->gn()', '$fo->gx()', '$fo->gf()', '$o->gf()', '$o->len()', '$fo->len()'])
         if k < 0.095:
             return f'{self.pick(["$o->pm", "P::sd"])}({self.expr(d + 1)}, {self.atom()})'
         if k < 0.1:
@@ -134,6 +134,14 @@ class Gen:
                               f'h8({self.atom()}, {self.atom()})', f'h8({self.var()}, {self.expr(1)})'])
         if k < 0.1:
             return self.var()
+        if k < 0.12:
+            # Strings (and what a variable holds) compared.
+            return f"{self.pick(['$fs', '$s', '$fk', '$fv', self.var()])} {self.pick(CMP)} {self.pick(['$fs', "'bcd'", "'7'", "''", 'null', '$s', self.atom()])}"
+        if k < 0.13:
+            return f"{self.pick(['$fo', '$o', '$fv', '$fs', self.var()])} instanceof {self.pick(['P', 'Nope', 'stdClass'])}"
+        if k < 0.14:
+            # The truth of strings, of what a foreach gives.
+            return self.pick(['$fs', '!$fs', '$s && $fs', '$fv || !$fs', '!$fk', '$fo && $fs'])
         if k < 0.15:
             return '!' + self.var()
         if k < 0.25:
@@ -160,6 +168,12 @@ class Gen:
                               f"$s .= $z['s'] . {self.atom()};", f'$s = "<{{$i}}>" . $fs;', f'$fs = $s . {self.atom()};',
                               f"$fs = $z['s']; {v} = strlen($fs) + {self.atom()};", f'$s = (string)({self.expr()});',
                               f'{v} = strlen($s . {self.atom()});',
+                              # Array literals.
+                              f"{v} = count([{self.var()}, 'k' => {self.atom()}, $s, {self.var()} % 4 => 1]) + {self.atom()};",
+                              # What the loop leaves to the interpreter and comes back after.
+                              f'{v} = array_sum($q) % 7;', f'$fs = str_repeat("ab", {self.var()} & 3);',
+                              f'{v} = in_array({self.atom()}, $p) ? 1 : 2;', f'{v} = strlen(strrev($s));',
+                              f'{v} = count(array_keys($q)) + {self.atom()};', f'{v} = (int)round({self.expr()});',
                               f'{self.pick(STATICS[:2])} = {v};', f'{v} = {self.pick(STATICS[:2])};',
                               f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
@@ -226,7 +240,9 @@ class Gen:
             self.loops -= 1
             return f'{head} {{ {extra} {body} }}'
         if k < 0.2:
-            subject = self.pick(['$p', '$q', '$m[0]', '$m[1]', '$m', '[1, 2, 3]'])
+            subject = self.pick(['$p', '$q', '$m[0]', '$m[1]', '$m', '[1, 2, 3]',
+                                 # Numbers under string keys (and an int one).
+                                 "['a' => 3, 'b' => -1, 'c' => 7, 9 => 2]", "['x' => 1.5, 'y' => -2.5]"])
             head = self.pick(['foreach ({} as $fv)', 'foreach ({} as $fk => $fv)']).format(subject)
             self.depth -= 1
             self.loops -= 1
@@ -273,14 +289,16 @@ class Gen:
                    'function h3($a, $b) { $t = $a * $b; return $t / 2.0; } function h4($x) { return $x % 7; } '
                    'function h5($x) { return $x < 3 ? $x << 2 : (int)($x * 0.5); } '
                    'function h6(int $x): int { return $x + 3; } function h7(float $x, $y = 2): float { return $x * $y; } '
-                   'function h8($a, $b) { return $a <= $b; } function h9(int|float $x, int $k = 5): int|float { return $x - $k; }')
+                   'function h8($a, $b) { return $a <= $b; } function h9(int|float $x, int $k = 5): int|float { return $x - $k; } '
+                   # Builtins a typed loop computes, in functions it runs inline.
+                   'function hm0($x) { return sqrt(abs($x)) + floor($x * 0.5); } function hm1($x) { return max($x, 3) - intdiv($x, 2); }')
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'static function sm($x) { return $x + 2; } function im($x) { return $x * 3; } '
                    'function pm($a, $b) { return $a - $b; } static function sd(int|float $x, int $y = 4) { return $x * $y; } '
                    'function gx() { return $this->x; } function gn(): int { return $this->n; } function gf() { return $this->f * 2; } '
                    'function gsum($k) { return $this->n + $k; } function ax($v) { $this->x += $v; } function bump() { $this->n++; } '
-                   'function su($v) { $this->u = $v; } function sr($v) { $this->f = $v; return $v; } '
+                   'function len() { return sqrt($this->x * $this->x + $this->f * $this->f); } function su($v) { $this->u = $v; } function sr($v) { $this->f = $v; return $v; } '
                    'function __construct($x) { $this->x = $x; } }')
         out += [self.function(f) for f in fns]
         out.append('function show($v) { if (is_float($v)) { return is_nan($v) ? "NAN" : sprintf("%.17g", $v); } '

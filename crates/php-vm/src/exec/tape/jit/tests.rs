@@ -174,6 +174,7 @@ fn compiled_code_reports_where_it_stopped() {
             end: 0,
             typed: false,
             native: true,
+            dormant: false,
         })
         .collect();
     let native = new_record(&tape, &entries, 1).expect("record");
@@ -1547,6 +1548,272 @@ foreach ([1, 2] as $round) {
   try { var_export([c1($rows), c2($rows), c3($items), c4(40), c5(40), c6($rows), c7($items), c8(40), c9($rows), c1([]), c3([$items[0]])]); var_export(c10(40)); } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
 }
 echo "\n";
+"#,
+    );
+}
+
+#[test]
+fn a_loop_leaves_for_what_it_cannot_run_and_comes_back() {
+    // `echo` and a `new` between inlined calls: the loop is compiled,
+    // leaves for those and is entered again after them.
+    if std::env::var_os("PHPRUST_JIT").is_some() {
+        return;
+    }
+    let src = "<?php class Pt { public $x; function __construct($x) { $this->x = $x; } function getX() { return $this->x; } } function sq($v) { return $v * $v; } function t($items) { $s = 0; foreach ($items as $k => $it) { $s += $it->getX() + sq($k); echo $k, ','; $o = new Pt($k); $s += $o->getX() + sq($s % 7); } return $s; } $a = []; for ($i = 0; $i < 30; $i++) { $a[] = new Pt($i); } var_dump(t($a), t($a), t([]));";
+    let saved = options();
+    configure(Options {
+        enabled: false,
+        ..saved
+    });
+    let interpreted = run(src);
+    for hot_loop in [1, 2, 5] {
+        configure(Options {
+            enabled: true,
+            everything: false,
+            first_tier: false,
+            registers: true,
+            hot_loop,
+        });
+        let before = stats();
+        let compiled = run(src);
+        let typed = stats().typed_loops - before.typed_loops;
+        configure(saved);
+        assert_eq!(interpreted, compiled, "hot_loop {hot_loop}");
+        assert!(typed > 0, "no typed loop with hot_loop {hot_loop}");
+    }
+}
+
+#[test]
+fn a_loop_compiled_again_is_not_entered_at_its_head_from_a_stale_resume_point() {
+    // The second loop is compiled first with the method call left to the
+    // interpreter (not called yet: a resume point after it), then again
+    // with the call inline (no resume point): the old resume point must
+    // not run the new code from the loop's head.
+    if std::env::var_os("PHPRUST_JIT").is_some() {
+        return;
+    }
+    let src = r#"<?php
+class P { public int $n = 1; static $sf = 0.5; function bump() { $this->n++; } }
+function f1($y, $n, $q, $o) { $c = 0; $d = $y; $g = $n; $h = $y; $ss = ["a", "bcd", "", "ef"];
+foreach ($ss as $fk => $fs) { $h = strlen($fs) + $g; $a = P::$sf; }
+for ($j = 0; $j <= 27; ++$j) { $g = --$a; $o->bump(); if (empty($q[$c % 8])) { $c -= $h; } else { $d -= $c; } }
+return [$a, $c, $d, $g, $h, $o->n, $j]; }
+for ($round = 0; $round < 2; $round++) {
+echo json_encode(f1(0.0, 3, [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5], new P)), "\n";
+echo json_encode(f1(3, 25, [1, 2, 3, 4, 5, 6, 7, 8], new P)), "\n";
+}
+"#;
+    let saved = options();
+    configure(Options {
+        enabled: false,
+        ..saved
+    });
+    let interpreted = run(src);
+    for hot_loop in [1, 2, 3] {
+        configure(Options {
+            enabled: true,
+            everything: false,
+            first_tier: false,
+            registers: true,
+            hot_loop,
+        });
+        let compiled = run(src);
+        configure(saved);
+        assert_eq!(interpreted, compiled, "hot_loop {hot_loop}");
+    }
+}
+
+#[test]
+fn inlined_functions_compute_the_math_builtins_they_call() {
+    // `sqrt()` of `$this` properties in a method, a builtin of a
+    // parameter in a function, and those inside another call's arguments
+    // (whose own arguments the inner calls must leave alone).
+    typed_is(
+        r#"<?php
+class P { public $x; public $y; function __construct($x, $y) { $this->x = $x; $this->y = $y; }
+    function len() { return sqrt($this->x * $this->x + $this->y * $this->y); } }
+function g($v) { return sqrt($v) + abs($v - 3); }
+function h($a, $b) { return $a * 10 + $b; }
+function f() { $d = 0.0; $p = new P(3, 4);
+    for ($i = 0; $i < 20; $i++) { $d += $p->len() + g($i) + h($i, g($i + 1)) + sqrt(g($i)); }
+    return $d; }
+var_dump(f());
+"#,
+        1,
+    );
+    // A `new` each round, left to the interpreter.
+    typed_is(
+        r#"<?php
+class P { public $x; public $y; function __construct($x, $y) { $this->x = $x; $this->y = $y; }
+    function len() { return sqrt($this->x * $this->x + $this->y * $this->y); } }
+function f() { $d = 0.0; for ($i = 0; $i < 20; $i++) { $p = new P($i, $i + 1); $d += $p->len(); } return $d; }
+var_dump(f());
+"#,
+        1,
+    );
+}
+
+#[test]
+fn typed_loops_divide_ints() {
+    // Into a float sum, a math function, `(float)`, `/` by a float: a
+    // float either way, exact or not.
+    typed_is(
+        r#"<?php
+function f($n) { $s = 0.5; $t = 0.0;
+    for ($i = 1; $i < $n; $i++) { $s += $i / 4; $t = $t * 0.5 + sqrt($i / 3) + (float)($i / 2) + ($i / 6) / 1.5 + PHP_INT_MAX / $i * 1.0; }
+    return [$s, $t]; }
+var_dump(f(40));
+"#,
+        1,
+    );
+    // Into variables: an int when exact, a float when not, as it was the
+    // last time (and a loop that keeps being wrong about it is
+    // interpreted in the end).
+    for src in [
+        "<?php function f() { $s = 0; for ($i = 1; $i < 60; $i++) { $q = ($i * 6) / 3; $s += $q; } return $s; } var_dump(f(), f());",
+        "<?php function f() { $s = 0.5; for ($i = 1; $i < 60; $i++) { $q = ($i * 4 + 1) / 4; $s += $q; } return $s; } var_dump(f(), f());",
+        "<?php function f() { $s = 0; for ($i = 1; $i < 60; $i++) { $q = $i / 3; $s += $q; } return $s; } var_dump(f(), f(), f());",
+        "<?php function f() { $s = 0; for ($i = 1; $i < 60; $i++) { $s += (int) ($i / 4); } return $s; } var_dump(f(), f());",
+        "<?php function f() { $s = 0; for ($i = 1; $i < 60; $i++) { try { $s += 12 / ($i % 4); } catch (DivisionByZeroError $e) { $s--; } } return $s; } var_dump(f());",
+        "<?php function f() { $s = 0; for ($i = 1; $i < 60; $i++) { $s += PHP_INT_MIN / ($i % 3 - 1 ?: 1); } return $s; } var_dump(f());",
+        "<?php function f() { $x = 1 << 40; for ($i = 1; $i < 60; $i++) { $x /= 2; } return $x; } var_dump(f());",
+    ] {
+        both(src);
+    }
+}
+
+#[test]
+fn typed_loops_compare_strings_and_take_any_elements() {
+    // Comparisons of strings, null and bools, through the interpreter's
+    // semantics (numeric strings, an int with a string), into branches
+    // and bools; a `foreach` over numbers under string keys, and over
+    // elements of all kinds; `max()` and `min()` of floats.
+    let src = r#"<?php
+function f($s, $m) {
+    $c = 0; $n = strlen($s);
+    for ($i = 0; $i < $n; $i++) { $ch = $s[$i]; if ($ch === "o" || $ch == "i") { $c++; } elseif ($ch < "f") { $c += 10; } if ($i == "5") { $c += 100; } }
+    $out = "";
+    foreach ($m as $k => $v) { $x = 0; if ($v == "1000") { $x |= 1; } if ($v == 0) { $x |= 2; } if ($v == null) { $x |= 4; }
+        if ($v < "9") { $x |= 8; } if ($v <= "10") { $x |= 16; } if ($v === "7") { $x |= 32; } if ($v != "abc") { $x |= 64; }
+        if ($k < "m") { $x |= 128; } if ($v == 1) { $x |= 256; } if ($v == true) { $x |= 512; } $t = $c % 3 ? "x" : $c; if ($t === "x") { $x |= 1024; }
+        $out .= $x . ","; }
+    $sum = 0.0; $hi = -INF; $lo = INF;
+    foreach (['a' => 1.5, 'b' => -2.0, 'c' => 4.25, 7 => 0.5] as $k => $v) { $sum += $v; $hi = max($hi, $v); $lo = min($lo, $v); }
+    return [$c, $out, $sum, $hi, $lo, max(NAN, 1.0), min(1.0, NAN)];
+}
+for ($r = 0; $r < 3; $r++) {
+    var_dump(f('hello world, this is it', ['a' => 1, 'k1' => 2.5, 'z' => null, 'q' => '7', 'e' => '1e3', 'n' => '', 'w' => ' 1', 'x' => 'abc', 'y' => '10', 'b' => true, 'big' => '9223372036854775809']));
+    var_dump(f('abc', [1, 2, 'k1' => 3, '9', 0, false]));
+}
+"#;
+    typed_at_least(src, 2);
+}
+
+#[test]
+fn typed_loops_return_from_a_foreach_and_compare_objects() {
+    // A search loop: `return` from inside a `foreach` (the iterator's
+    // release before it), `===` of objects, of a key with a string.
+    typed_at_least(
+        r#"<?php
+class It { public $id; public $name; function __construct($i, $n) { $this->id = $i; $this->name = $n; } }
+function find($items, $id) { foreach ($items as $item) { if ($item->id === $id) { return $item; } } return null; }
+function findk($m, $key) { foreach ($m as $k => $v) { if ($k === $key) { return $v; } } return -1; }
+function same($items, $o) { $n = 0; foreach ($items as $item) { if ($item === $o) { $n++; } if ($item !== null && $item->name == "n3") { $n += 10; } } return $n; }
+$items = []; for ($i = 0; $i < 50; $i++) { $items[] = new It($i, "n$i"); }
+$m = []; for ($i = 0; $i < 50; $i++) { $m["k$i"] = $i * 2; }
+$s = 0;
+for ($r = 0; $r < 30; $r++) { $s += find($items, $r)->id; $s += findk($m, "k$r"); $s += same($items, $items[$r]); var_dump(find($items, 99)); }
+echo $s, "\n";
+"#,
+        2,
+    );
+}
+
+#[test]
+fn typed_loops_build_array_literals() {
+    // Rows built in a loop: string, int and numeric-string keys, the next
+    // index, nested literals, values of every kind; an undefined variable
+    // is the VM's (its warning), and the loop is interpreted in the end.
+    typed_at_least(
+        r#"<?php
+function f($s) {
+    $rows = []; $n = 0;
+    for ($i = 0; $i < 30; $i++) {
+        $rows[] = ["id" => $i, "v" => $i * 2, "s" => $s, 5 => 1.5, "7" => null, [$i, [$s . $i]], $i => true, $i => false];
+        $n += count($rows[$i]);
+    }
+    return [$n, $rows[29], $rows[3]];
+}
+function g() { $rows = []; for ($i = 0; $i < 30; $i++) { $rows[] = [$i, $undef]; } return $rows[5]; }
+var_dump(f('str'), f('x'), g());
+"#,
+        1,
+    );
+}
+
+#[test]
+fn typed_loops_test_instanceof_and_leave_for_steps_that_keep_declining() {
+    // `instanceof` of classes, a parent, an interface, of values that are
+    // no objects; a class that is never loaded (its step declines: the
+    // interpreter's op, the loop entered again after it), as is a float
+    // compared with a string.
+    typed_at_least(
+        r#"<?php
+interface Shape {} class A implements Shape { public $v = 1; } class B extends A {} class C {}
+function f($items) { $n = 0;
+    foreach ($items as $it) { if ($it instanceof A) { $n += 1; } if ($it instanceof B) { $n += 10; } if ($it instanceof Shape) { $n += 100; }
+        if (!($it instanceof C)) { $n += 1000; } if ($it instanceof Nope) { $n += 5; } if ($it == 2.5) { $n += 7; } if ($it < "y") { $n += 3; } }
+    return $n; }
+$items = [new A, new B, new C, 1, "x", null, [1], new B, 2.5, "2.5"];
+for ($r = 0; $r < 20; $r++) { echo f($items), " "; }
+"#,
+        1,
+    );
+}
+
+#[test]
+fn typed_loops_test_the_truth_of_anything_and_leave_calls_they_cannot_make() {
+    // `if ($v)`, `!$v`, `$v && $k` of strings, arrays, null, objects; a
+    // user function called with a string (no number to run it inline
+    // with: the interpreter's call, the loop entered again after it).
+    let src = r#"<?php
+function hallo($a) { } function g($v) { return $v * 2; }
+function f($m) { $n = 0;
+    foreach ($m as $k => $v) { if ($v) { $n += 1; } if (!$v) { $n += 10; } $b = !$v; if ($b) { $n += 100; } if ($v && $k) { $n += 1000; } if ($v || !$k) { $n += 7; } }
+    return $n; }
+function h() { $c = 0; for ($i = 0; $i < 30; $i++) { hallo("hallo"); $c += g($i) + $i * 3 - 1; $c ^= 5; $c += $i % 3; } return $c; }
+for ($r = 0; $r < 5; $r++) {
+    var_dump(f(['a' => 'x', 'b' => '', 'c' => '0', 'd' => [], 'e' => [1], 'f' => null, 'g' => 1.5, 'h' => new stdClass, 'i' => 'abc', 0 => 'z']));
+    var_dump(h());
+}
+"#;
+    typed_at_least(src, 1);
+}
+
+#[test]
+fn typed_loops_run_the_foreach_loops_inside_them() {
+    // A `foreach` inside the loop: over a row (string keys), a literal,
+    // an empty literal, a temporary; destructors of what the inner
+    // arrays held run where they do interpreted.
+    typed_at_least(
+        r#"<?php
+function f($rows) { $s = 0; $t = "";
+    foreach ($rows as $k => $row) { foreach ($row as $c => $v) { $s += $v; $t .= $c; } foreach ([1, 2] as $w) { $s += $w; } foreach ([] as $w) { $s += 100; } }
+    return [$s, $t]; }
+function g($rows) { $n = 0; foreach ($rows as $row) { foreach ($row['items'] as $it) { $n += $it; } } return $n; }
+$rows = []; for ($i = 0; $i < 30; $i++) { $rows[] = ['a' => $i, 'b' => $i * 2, 'c' => 1]; }
+$r2 = []; for ($i = 0; $i < 30; $i++) { $r2[] = ['items' => [$i, $i + 1, 3]]; }
+for ($r = 0; $r < 3; $r++) { var_dump(f($rows), g($r2)); }
+"#,
+        2,
+    );
+    // (Once, and only compared: destructors raise the process-wide
+    // safe-point flag, which keeps other tests' loops from their code.)
+    both(
+        r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "d{$this->n} "; } }
+function h() { $n = 0; for ($i = 0; $i < 20; $i++) { foreach ([new D($i)] as $o) { $n += $o->n; } } return $n; }
+echo h(), "\n";
 "#,
     );
 }

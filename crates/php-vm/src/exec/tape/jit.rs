@@ -156,7 +156,19 @@ const CODE_NONE: usize = 0;
 const CODE_FAILED: usize = 1;
 
 /// Words of an entry block.
-const HB_WORDS: usize = 11;
+const HB_WORDS: usize = 13;
+/// Entry block word: for an instruction a typed loop is entered again at
+/// ([`typed::Plan::Out`]), the address of the entry block of that loop's
+/// head, whose typed code it calls; 0 otherwise.
+const HB_OWNER: usize = 11;
+/// Entry block word, of a loop's head: set when compiling the loop put
+/// entry instructions for its resume points into a new tape
+/// ([`retape`]); the frame at hand must then stop once to get on it.
+const HB_RETAPE: usize = 12;
+/// [`HB_DEAD`] of an entry whose instruction is not in the tape yet: one
+/// made for a point a typed loop may be entered again at, until a loop
+/// is compiled that does.
+const DORMANT: usize = 2;
 /// Entry block word: whether the first tier is to compile and run the
 /// loop that starts here (when the second tier does not).
 const HB_NATIVE: usize = 9;
@@ -201,6 +213,9 @@ const FAIL_LIMIT: usize = 4;
 /// Set in [`HB_FAILS`] when the loop's typed code is to be compiled
 /// without short cuts.
 const NO_SHORT_CUTS: usize = 0x200;
+/// Set in [`HB_FAILS`] once the loop was found to be one that waits
+/// longer before it is compiled ([`typed::Loop::wait`]).
+const WAITED: usize = 0x400;
 /// How often the read short cut of one instruction may miss before the
 /// loop is compiled again with that instruction calling its handler.
 const MISS_LIMIT: u32 = 8;
@@ -233,6 +248,9 @@ struct Entry {
     typed: bool,
     /// Whether the first tier is to run it (when the second does not).
     native: bool,
+    /// Whether it is only a point a typed loop may be entered again at:
+    /// not in the tape until one is compiled that is ([`DORMANT`]).
+    dormant: bool,
 }
 
 /// Byte offset of record word `i`, for the emitter.
@@ -330,6 +348,7 @@ pub(super) enum Shape {
 /// machine code there, and the rest of the tape is interpreted as before.
 /// A tape that is not compiled (nothing worth it, or the code generator
 /// gave up) is left as it is.
+#[allow(clippy::too_many_lines)] // the entries of each kind, one after the other
 pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
     let options = crate::jit::options();
     if !options.enabled {
@@ -358,6 +377,29 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
     } else {
         Vec::new()
     };
+    if options.registers && why().is_some() {
+        // The loops the second tier does not look at, and the first op of
+        // each it has no form for.
+        let takes = |i: usize| {
+            !leaves(tape, &code.ops, i)
+                || code
+                    .ops
+                    .get(i)
+                    .is_some_and(|op| typed::plannable_op(op, &code.literals))
+        };
+        for (head, last) in loop_heads(tape, &code.ops, &|_| true) {
+            if typed_heads.iter().any(|(h, _)| *h == head) {
+                continue;
+            }
+            match (head..=last).find(|i| !takes(*i)) {
+                Some(i) => eprintln!(
+                    "jit: loop at {head}: not looked at, for op {i}: {:?}",
+                    code.ops.get(i)
+                ),
+                None => eprintln!("jit: loop at {head}: not looked at"),
+            }
+        }
+    }
     let typed_at = |at: usize| typed_heads.iter().find(|(head, _)| *head == at).copied();
     let entries: Vec<Entry> = if options.everything {
         // Every instruction the code does something for.
@@ -368,6 +410,7 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
                 end: 0,
                 typed: typed_at(at).is_some(),
                 native: true,
+                dormant: false,
             })
             .collect()
     } else {
@@ -381,6 +424,7 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
                         end: last + 1,
                         typed: false,
                         native: true,
+                        dormant: false,
                     },
                 )
             })
@@ -394,8 +438,38 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
                     end: last + 1,
                     typed: true,
                     native,
+                    dormant: false,
                 },
             );
+        }
+        // Where a typed loop may be entered again: after each call and
+        // each `echo` in it, and each comparison and `instanceof` (when
+        // its step keeps declining) ([`typed::Plan::Out`]).
+        for (head, last) in &typed_heads {
+            for at in head + 2..=*last {
+                if matches!(
+                    code.ops.get(at - 1),
+                    Some(
+                        Op::DoCall { .. }
+                            | Op::Echo(_)
+                            | Op::CmpJmp { .. }
+                            | Op::Bin { .. }
+                            | Op::InstanceOf { .. }
+                            | Op::Unary { .. }
+                    )
+                ) {
+                    // (For the first tier, should it be compiled: this
+                    // one instruction, not "every instruction", which an
+                    // unknown end stands for.)
+                    all.entry(at).or_insert(Entry {
+                        at,
+                        end: at + 1,
+                        typed: false,
+                        native: false,
+                        dormant: true,
+                    });
+                }
+            }
         }
         all.into_values().collect()
     };
@@ -414,6 +488,9 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
         ) else {
             continue;
         };
+        if entry.dormant {
+            continue;
+        }
         let inst = &mut tape[entry.at];
         inst.op = super::TOp::Native;
         inst.a = index;
@@ -470,6 +547,9 @@ fn new_record(tape: &[Inst], entries: &[Entry], hot: usize) -> Option<Native> {
         block[HB_END] = entry.end;
         block[HB_WARM] = hot;
         block[HB_NATIVE] = usize::from(entry.native);
+        if entry.dormant {
+            block[HB_DEAD] = DORMANT;
+        }
     }
     Native::new(base)
 }
@@ -534,6 +614,7 @@ pub(super) unsafe fn enter(f: *mut Frame, ip: *const Inst) -> (usize, usize) {
 /// # Safety
 /// As [`enter`].
 #[inline]
+#[allow(clippy::too_many_lines)] // one way in for each kind of entry
 unsafe fn enter_out(f: *mut Frame, ip: *const Inst) -> Out {
     // SAFETY: the caller's contract. The instruction holds its own index,
     // the record of the code compiled from its tape and where its entry
@@ -549,6 +630,58 @@ unsafe fn enter_out(f: *mut Frame, ip: *const Inst) -> Out {
         if *block.add(HB_BAD) >= BAD_LIMIT {
             return retire(f, ip, record, block);
         }
+        // An instruction a typed loop is entered again at, after the
+        // interpreter ran what the loop left for: that loop's code, which
+        // goes on from here if all it relies on still holds.
+        let owner = *block.add(HB_OWNER) as *mut usize;
+        if !owner.is_null() {
+            let typed = *owner.add(HB_TYPED);
+            if typed != 0 && typed != TYPED_UNTRIED {
+                let code = std::mem::transmute::<usize, Code>(typed);
+                let r = code(st.cvs, st.tmps, st.lits, st.f, entry, record);
+                let stopped = tbase.add(r >> WHY_BITS);
+                #[allow(clippy::cast_possible_truncation)]
+                let why = (r & ((1 << WHY_BITS) - 1)) as u8;
+                return match why {
+                    WHY_POLL => Out {
+                        ip: stopped,
+                        at: tbase.add(*record.add(REC_AT)),
+                        why,
+                    },
+                    typed::WHY_MISS => {
+                        *owner.add(HB_MISS_AT) = r >> WHY_BITS;
+                        missed(f, owner);
+                        super::step_out(stopped)
+                    }
+                    typed::WHY_GENERIC => super::step_out(stopped),
+                    // Not a point the loop's code (compiled again since)
+                    // is entered at: nothing enters here any more.
+                    typed::WHY_NOT_TYPED if stopped == ip => {
+                        *block.add(HB_OWNER) = 0;
+                        if *block.add(HB_NATIVE) == 0 && *block.add(HB_TYPED) == 0 {
+                            retire(f, ip, record, block)
+                        } else {
+                            super::step_out(ip)
+                        }
+                    }
+                    // The types did not hold at the end of a round: the
+                    // next one, from the loop's head, is the interpreter's.
+                    _ => {
+                        not_typed(f, owner);
+                        super::step_out(stopped)
+                    }
+                };
+            }
+            if typed == 0 && *block.add(HB_NATIVE) == 0 && *block.add(HB_TYPED) == 0 {
+                // Its loop was given up: nothing enters here any more.
+                *block.add(HB_OWNER) = 0;
+                return retire(f, ip, record, block);
+            }
+            if *block.add(HB_NATIVE) == 0 && *block.add(HB_TYPED) == 0 {
+                // Its loop is being looked at again: the interpreter's op.
+                return super::step_out(ip);
+            }
+        }
         // A loop the second tier may take: its typed code, called from
         // here, with the interpreter going on wherever that leaves. The
         // first tier is then never compiled for the loop's sake (its code
@@ -556,7 +689,18 @@ unsafe fn enter_out(f: *mut Frame, ip: *const Inst) -> Out {
         let typed = *block.add(HB_TYPED);
         if typed != 0 {
             let code = if typed == TYPED_UNTRIED {
-                specialise(f, block)
+                let code = specialise(f, block);
+                if *block.add(HB_RETAPE) != 0 {
+                    // The loop's resume points are in a new tape: this
+                    // frame stops here once, to go on on it.
+                    *block.add(HB_RETAPE) = 0;
+                    return Out {
+                        ip,
+                        at: ip,
+                        why: WHY_POLL,
+                    };
+                }
+                code
             } else {
                 typed
             };
@@ -657,6 +801,28 @@ unsafe fn retire(f: *mut Frame, ip: *const Inst, record: *mut usize, block: *mut
             };
         }
         *block.add(HB_DEAD) = 1;
+        retape(f, record);
+    }
+    Out {
+        ip,
+        at: ip,
+        why: WHY_POLL,
+    }
+}
+
+/// Gives the op array of frame `f` a tape with the entry instructions of
+/// the entries of `record` that are in use now (not given up, not
+/// [`DORMANT`]): the record's copy of the tape with those. Frames in the
+/// middle of the old tape go on reading it (it is leaked, as the record
+/// is) until they stop.
+///
+/// # Safety
+/// `f` is the current frame, running the code `record` is of.
+unsafe fn retape(f: *mut Frame, record: *mut usize) {
+    // SAFETY: the caller's contract; the record's words are as
+    // `new_record` made them, and its copy of the tape has `REC_LEN`
+    // instructions.
+    unsafe {
         let pristine =
             std::slice::from_raw_parts(*record.add(REC_TAPE) as *const Inst, *record.add(REC_LEN));
         let mut tape = pristine.to_vec();
@@ -683,15 +849,21 @@ unsafe fn retire(f: *mut Frame, ip: *const Inst, record: *mut usize, block: *mut
                 *entry.add(HB_END),
             );
         }
-        // Leaked, as the record is: frames in the middle of the old tape
-        // go on reading it.
         let tape: &'static [Inst] = php_memlimit::persistent(|| Box::leak(tape.into_boxed_slice()));
         (&*f).code.tape.replace(tape);
     }
-    Out {
-        ip,
-        at: ip,
-        why: WHY_POLL,
+}
+
+/// The entry block of `record` for the instruction `at`, if it has one.
+///
+/// # Safety
+/// `record` is a record as `new_record` made it.
+unsafe fn block_at(record: *mut usize, at: usize) -> Option<*mut usize> {
+    // SAFETY: the caller's contract.
+    unsafe {
+        (0..*record.add(REC_COUNT))
+            .map(|k| record.add(REC_ENTRIES + HB_WORDS * k))
+            .find(|block| *block.add(HB_HEAD) == at)
     }
 }
 
@@ -765,18 +937,61 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
         };
         // What a `foreach` iterator yields now: floats or ints (by the
         // first element), and whether its keys are ints.
-        let each = |iter: u32| -> Option<(Option<bool>, bool)> {
-            let Some(crate::vm::ForeachIter::Array { arr, .. }) =
-                frame.iters.get(iter as usize)?.as_ref()
-            else {
-                return None;
+        let each = |iter: u32, at: usize| -> Option<(Option<bool>, bool)> {
+            // The iterator's array; or, of a `foreach` not started yet (one
+            // inside the loop), the array its variable holds now (the one
+            // of the last round, as a guess).
+            let started = match frame.iters.get(iter as usize)?.as_ref() {
+                Some(crate::vm::ForeachIter::Array { arr, .. }) => Some(arr),
+                Some(_) => return None,
+                None => None,
+            };
+            // (The `FeReset` of this iterator nearest before the step at
+            // `at`: an iterator slot may serve several loops.)
+            let subject = || {
+                let ops = frame.code.ops.get(..at)?;
+                let reset = ops
+                    .iter()
+                    .rev()
+                    .find(|op| matches!(**op, Op::FeReset { iter: i, .. } if i == iter))?;
+                std::iter::once(reset).find_map(|op| match *op {
+                    Op::FeReset {
+                        subject: Operand::Cv(c),
+                        kind: crate::opcode::ForeachKind::Value,
+                        iter: i,
+                        ..
+                    } if i == iter => match frame.cvs.get(c as usize)?.get()? {
+                        Value::Array(a) => Some(a),
+                        _ => None,
+                    },
+                    Op::FeReset {
+                        subject: Operand::Lit(l),
+                        kind: crate::opcode::ForeachKind::Value,
+                        iter: i,
+                        ..
+                    } if i == iter => match frame.code.literals.get(l as usize)? {
+                        Value::Array(a) => Some(a),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            };
+            let arr = match started {
+                Some(arr) => arr,
+                None => subject()?,
             };
             let (key, value) = arr.first()?;
-            let float = match value {
+            let kind = |value: &Value| match value {
                 Value::Int(_) => Some(false),
                 Value::Float(_) => Some(true),
                 _ => None,
             };
+            // Numbers of one type, as far as the first few elements show.
+            let float = kind(value).filter(|&float| {
+                arr.values()
+                    .take(32)
+                    .all(|value| kind(value) == Some(float))
+            });
             Some((float, matches!(key, php_runtime::ArrayKey::Int(_))))
         };
         // The builtin a call's name literal resolved to when it last ran
@@ -898,7 +1113,9 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 _ => None,
             }
         };
+        let resumable = |at: usize| block_at(record.cast_mut(), at).is_some();
         let seen = typed::Seen {
+            resumable: &resumable,
             constant: &constant,
             fast: *block.add(HB_FAILS) & NO_SHORT_CUTS == 0,
             slow: &slow,
@@ -914,8 +1131,25 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             this_write: &write_of_this,
             property: &property,
         };
-        let code = php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen));
-        let Some(code) = code else {
+        // (No loop waits under a hot count below 8, which is for tests:
+        // `PHPRUST_JIT=all`, `PHPRUST_JIT_HOT`.)
+        let options = crate::jit::options();
+        let waited =
+            *block.add(HB_FAILS) & WAITED != 0 || options.everything || options.hot_loop < 8;
+        let code =
+            php_memlimit::persistent(|| compile_typed(&frame.code, tape, head, &seen, waited));
+        let code = match code {
+            Some(Made::Wait(times)) => {
+                // Looked at again after that many more rounds, and then
+                // compiled.
+                *block.add(HB_FAILS) |= WAITED;
+                *block.add(HB_WARM) = times.saturating_mul(options.hot_loop as usize);
+                return 0;
+            }
+            Some(Made::Code(code, resumes)) => Some((code, resumes)),
+            None => None,
+        };
+        let Some((code, resumes)) = code else {
             // Not with these types: looked at again the next time the
             // code gets here (a variable that is an int on the first
             // round and a float from then on), a few times.
@@ -927,6 +1161,24 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
         };
         let state = code as usize;
         *block.add(HB_TYPED) = state;
+        // The instructions the loop is entered again at: their entries
+        // call this loop's code, and are in the tape from now on.
+        let mut changed = false;
+        for at in resumes {
+            if let Some(entry) = block_at(record.cast_mut(), at) {
+                if entry != block {
+                    *entry.add(HB_OWNER) = block as usize;
+                }
+                if *entry.add(HB_DEAD) != 0 {
+                    *entry.add(HB_DEAD) = 0;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            retape(f, record.cast_mut());
+            *block.add(HB_RETAPE) = 1;
+        }
         state
     }
 }
@@ -1112,6 +1364,407 @@ pub(super) unsafe extern "C" fn core_step(f: *mut Frame, at: usize) -> usize {
     // `fe_fetch`.
     let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
     crate::exec::hot::step(frame, &code.ops, &code.literals, at)
+}
+
+/// The comparison at `at` (`==`, `!=`, `===`, `!==`, `<`, `<=`: an
+/// `Op::Bin`, or the `CmpJmp` of a branch) for a typed loop, of two values
+/// that compare without the VM: any two under `===` and `!==`, and null,
+/// bools, ints, floats and strings under the others, but a float with a
+/// string (whose comparison may print the float, by the `precision`
+/// setting). Its bool goes into the op's temporary, the
+/// strings in temporaries it read are released, and the op after it is
+/// next (the jump op of a `CmpJmp`, which tests the bool). Returns
+/// `hot::DECLINED`, nothing changed, for anything else.
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn compare_step(f: *mut Frame, at: usize) -> usize {
+    use crate::exec::spec::{operand_simple, release_str_tmp_in};
+    use crate::opcode::BinKind;
+    use php_runtime::ops;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    let Some(
+        &(Op::Bin {
+            op: kind,
+            a: lhs,
+            b: rhs,
+            dst,
+        }
+        | Op::CmpJmp {
+            op: kind,
+            a: lhs,
+            b: rhs,
+            dst,
+            ..
+        }),
+    ) = code.ops.get(at)
+    else {
+        return crate::exec::hot::DECLINED;
+    };
+    if frame.tmps.len() <= dst as usize {
+        return crate::exec::hot::DECLINED;
+    }
+    // The interpreter's own short cut first (it releases the strings it
+    // read): same-type null, bools and strings, `===` of different types.
+    if let Some(r) = crate::exec::spec::cmp_simple_in(frame, kind, lhs, rhs) {
+        frame.tmps[dst as usize] = Value::Bool(r);
+        return at + 1;
+    }
+    let result = {
+        let (Some(x), Some(y)) = (operand_simple(frame, lhs), operand_simple(frame, rhs)) else {
+            return crate::exec::hot::DECLINED;
+        };
+        let scalar = |v: &Value| {
+            matches!(
+                v,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
+        };
+        // (`===` and `!==` of anything need no VM.)
+        let identity = matches!(kind, BinKind::Identical | BinKind::NotIdentical);
+        if !identity && (!scalar(x) || !scalar(y))
+            || matches!(
+                (x, y),
+                (Value::Float(_), Value::Str(_)) | (Value::Str(_), Value::Float(_))
+            )
+        {
+            return crate::exec::hot::DECLINED;
+        }
+        let mut ctx = php_runtime::CollectingContext::new();
+        let r = match kind {
+            BinKind::Identical => ops::is_identical(x, y),
+            BinKind::NotIdentical => ops::is_identical(x, y).map(|r| !r),
+            BinKind::Equal => ops::is_equal(x, y, &mut ctx),
+            BinKind::NotEqual => ops::is_not_equal(x, y, &mut ctx),
+            BinKind::Less => ops::is_smaller(x, y, &mut ctx),
+            BinKind::LessEqual => ops::is_smaller_or_equal(x, y, &mut ctx),
+            _ => return crate::exec::hot::DECLINED,
+        };
+        match r {
+            Ok(r) if ctx.take().is_empty() => r,
+            _ => return crate::exec::hot::DECLINED,
+        }
+    };
+    release_str_tmp_in(frame, lhs);
+    release_str_tmp_in(frame, rhs);
+    if let Some(slot) = frame.tmps.get_mut(dst as usize) {
+        *slot = Value::Bool(result);
+    }
+    at + 1
+}
+
+/// A truth test for a typed loop (`!a`, `(bool) a`, `JmpZ`, `JmpNz`,
+/// `JmpZEx`, `JmpNzEx`) of a temporary holding a string, which the
+/// interpreter's own step declines (its temporaries hold scalars there):
+/// the string's truth, the string released. Anything else as that step
+/// runs it ([`core_step`]). Returns the op to go on at, or
+/// `hot::DECLINED`, nothing changed.
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn truth_step(f: *mut Frame, at: usize) -> usize {
+    use crate::opcode::UnKind;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    let op = code.ops.get(at);
+    let Some(
+        &(Op::Unary {
+            op: UnKind::Not | UnKind::Bool,
+            a,
+            ..
+        }
+        | Op::JmpZ(a, _)
+        | Op::JmpNz(a, _)
+        | Op::JmpZEx { a, .. }
+        | Op::JmpNzEx { a, .. }),
+    ) = op
+    else {
+        return crate::exec::hot::DECLINED;
+    };
+    let Operand::Tmp(t) = a else {
+        // SAFETY: the caller's contract.
+        return unsafe { core_step(f, at) };
+    };
+    let Some(Value::Str(s)) = frame.tmps.get(t as usize) else {
+        // SAFETY: the caller's contract.
+        return unsafe { core_step(f, at) };
+    };
+    let truth = !(s.is_empty() || s.as_bytes() == b"0");
+    // The string released, and its truth where the op leaves it.
+    match *op.unwrap_or(&Op::Nop) {
+        Op::Unary { op: un, dst, .. } => {
+            if frame.tmps.len() <= dst as usize {
+                return crate::exec::hot::DECLINED;
+            }
+            frame.tmps[t as usize] = Value::Null;
+            frame.tmps[dst as usize] = Value::Bool(truth != (un == UnKind::Not));
+            at + 1
+        }
+        Op::JmpZ(_, target) | Op::JmpNz(_, target) => {
+            frame.tmps[t as usize] = Value::Null;
+            if truth == matches!(op, Some(Op::JmpNz(..))) {
+                target as usize
+            } else {
+                at + 1
+            }
+        }
+        Op::JmpZEx { dst, target, .. } | Op::JmpNzEx { dst, target, .. } => {
+            if frame.tmps.len() <= dst as usize {
+                return crate::exec::hot::DECLINED;
+            }
+            frame.tmps[t as usize] = Value::Null;
+            let when = matches!(op, Some(Op::JmpNzEx { .. }));
+            if truth == when {
+                frame.tmps[dst as usize] = Value::Bool(when);
+                target as usize
+            } else {
+                at + 1
+            }
+        }
+        _ => crate::exec::hot::DECLINED,
+    }
+}
+
+/// The start and the end of a `foreach` by value over an array, for a
+/// typed loop (a `foreach` inside it): `Op::FeReset` of a variable's
+/// (copied), a literal's or a temporary's (taken) array into the iterator,
+/// going on at the loop's end when it is empty; `Op::FeFree` of an
+/// iterator over an array someone else holds too (so that releasing it
+/// frees nothing, no destructor among it). Returns the op to go on at, or
+/// `hot::DECLINED`, nothing changed (an object, what is no array, an
+/// undefined variable: the VM's).
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn foreach_step(f: *mut Frame, at: usize) -> usize {
+    use crate::exec::hot::DECLINED;
+    use crate::vm::ForeachIter;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    match code.ops.get(at) {
+        Some(&Op::FeReset {
+            subject,
+            kind: crate::opcode::ForeachKind::Value,
+            iter,
+            end,
+            ..
+        }) => {
+            if !matches!(frame.iters.get(iter as usize), Some(None)) {
+                return DECLINED;
+            }
+            let arr = match subject {
+                Operand::Cv(c) => {
+                    match frame.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+                        Some(Value::Array(a)) => a.clone(),
+                        Some(Value::Reference(r)) => match r.get() {
+                            Value::Array(a) => a,
+                            _ => return DECLINED,
+                        },
+                        _ => return DECLINED,
+                    }
+                }
+                Operand::Lit(l) => match code.literals.get(l as usize) {
+                    Some(Value::Array(a)) => a.clone(),
+                    _ => return DECLINED,
+                },
+                Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
+                    Some(slot @ Value::Array(_)) => match std::mem::take(slot) {
+                        Value::Array(a) => a,
+                        _ => return DECLINED,
+                    },
+                    _ => return DECLINED,
+                },
+                _ => return DECLINED,
+            };
+            if arr.is_empty() {
+                return end as usize;
+            }
+            frame.iters[iter as usize] = Some(ForeachIter::Array { arr, pos: 0 });
+            at + 1
+        }
+        Some(&Op::FeFree { iter }) => match frame.iters.get(iter as usize) {
+            Some(None) => at + 1,
+            Some(Some(ForeachIter::Array { arr, .. })) if arr.refcount() > 1 => {
+                frame.iters[iter as usize] = None;
+                at + 1
+            }
+            _ => DECLINED,
+        },
+        _ => DECLINED,
+    }
+}
+
+/// `$x instanceof Name` (`Op::InstanceOf`) for a typed loop, when the
+/// class the name resolved to is in the op array's cache and the value
+/// is a variable's (defined) or a temporary's that is no object or array
+/// (whose release could run a destructor): its bool goes into the op's
+/// temporary (which holds neither either), and the op after it is next.
+/// Returns `hot::DECLINED`, nothing changed, for anything else.
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn instanceof_step(f: *mut Frame, at: usize) -> usize {
+    use crate::exec::hot::DECLINED;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    let Some(&Op::InstanceOf {
+        a,
+        class: crate::opcode::ClassSpec::Named(lit),
+        dst,
+    }) = code.ops.get(at)
+    else {
+        return DECLINED;
+    };
+    let Some(class) = code
+        .class_cache
+        .borrow()
+        .get(lit as usize)
+        .and_then(std::rc::Weak::upgrade)
+    else {
+        return DECLINED;
+    };
+    let owns = |v: &Value| matches!(v.deref(), Value::Object(_) | Value::Array(_));
+    let result = match a {
+        Operand::Cv(c) => match frame.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+            Some(v) => match v.deref() {
+                Value::Object(o) => crate::object::class_of(&o).is_subclass_of(&class),
+                _ => false,
+            },
+            None => return DECLINED,
+        },
+        Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+            Some(v) if !owns(v) => false,
+            _ => return DECLINED,
+        },
+        _ => return DECLINED,
+    };
+    match frame.tmps.get(dst as usize) {
+        Some(v) if !owns(v) => {}
+        _ => return DECLINED,
+    }
+    if let Operand::Tmp(t) = a {
+        if let Some(slot) = frame.tmps.get_mut(t as usize) {
+            *slot = Value::Null;
+        }
+    }
+    if let Some(slot) = frame.tmps.get_mut(dst as usize) {
+        *slot = Value::Bool(result);
+    }
+    at + 1
+}
+
+/// The op at `at` of an array literal (`Op::InitArray`, `Op::ArrayAdd`)
+/// for a typed loop, as the VM runs it, when it needs nothing of the VM:
+/// an element that is a literal, a temporary (taken) or a defined
+/// variable (copied), under an int or string key or the next one.
+/// Returns the op after it, or `hot::DECLINED`, nothing changed (an
+/// undefined variable, a key that warns or is no int or string, an
+/// element the array has no room for: the VM's).
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn array_step(f: *mut Frame, at: usize) -> usize {
+    use crate::exec::hot::DECLINED;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    match code.ops.get(at) {
+        Some(&Op::InitArray { dst }) => {
+            let Some(slot) = frame.tmps.get_mut(dst as usize) else {
+                return DECLINED;
+            };
+            *slot = Value::Array(php_runtime::ZArray::new());
+            at + 1
+        }
+        Some(&Op::ArrayAdd { arr, key, val }) => {
+            if !matches!(frame.tmps.get(arr as usize), Some(Value::Array(_))) {
+                return DECLINED;
+            }
+            // The key, as the VM makes it of a literal's.
+            let key = match key {
+                None => None,
+                Some(k) => {
+                    let value = match k {
+                        Operand::Lit(l) => code.literals.get(l as usize),
+                        Operand::Tmp(t) | Operand::TmpKeep(t) => frame.tmps.get(t as usize),
+                        Operand::Cv(c) => {
+                            frame.cvs.get(c as usize).and_then(crate::vm::CvSlot::get)
+                        }
+                        Operand::Unused => None,
+                    };
+                    let key = match value {
+                        Some(v @ (Value::Int(_) | Value::Str(_))) => {
+                            let mut diags = Vec::new();
+                            match crate::place::key_of(v, &mut diags, crate::exec::KeyCtx::Literal)
+                            {
+                                Ok(key) if diags.is_empty() => key,
+                                _ => return DECLINED,
+                            }
+                        }
+                        _ => return DECLINED,
+                    };
+                    Some((key, k))
+                }
+            };
+            // The element, as the VM reads it.
+            let value = match val {
+                Operand::Lit(l) => match code.literals.get(l as usize) {
+                    Some(v) => v.clone(),
+                    None => return DECLINED,
+                },
+                Operand::Cv(c) => {
+                    match frame.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+                        Some(v) => v.deref(),
+                        None => return DECLINED,
+                    }
+                }
+                Operand::TmpKeep(t) => match frame.tmps.get(t as usize) {
+                    Some(v) => v.deref(),
+                    None => return DECLINED,
+                },
+                Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
+                    Some(slot) => match std::mem::take(slot) {
+                        Value::Reference(r) => r.get(),
+                        v => v,
+                    },
+                    None => return DECLINED,
+                },
+                Operand::Unused => Value::Null,
+            };
+            let Some(Value::Array(array)) = frame.tmps.get_mut(arr as usize) else {
+                return DECLINED;
+            };
+            match key {
+                None => {
+                    if let Err(value) = array.make_mut().push(value) {
+                        // (No room: the VM's error. The element goes back.)
+                        if let Operand::Tmp(t) = val {
+                            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                                *slot = value;
+                            }
+                        }
+                        return DECLINED;
+                    }
+                }
+                Some((key, k)) => {
+                    array.make_mut().insert(key, value);
+                    // (A temporary key is read, and left null, after it.)
+                    if let Operand::Tmp(t) = k {
+                        if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                            *slot = Value::Null;
+                        }
+                    }
+                }
+            }
+            at + 1
+        }
+        _ => DECLINED,
+    }
 }
 
 /// The value the run-time cache of frame `f` holds for the constant the
@@ -1676,6 +2329,7 @@ impl Compiler {
                         // (Typed code it already has is called too.)
                         typed: *block.add(HB_TYPED) != 0,
                         native: *block.add(HB_NATIVE) != 0,
+                        dormant: *block.add(HB_DEAD) == DORMANT,
                     }
                 })
                 .collect();
@@ -1834,15 +2488,38 @@ unsafe fn compile(code: &OpArray, record: *mut usize) {
     }
 }
 
+/// Whether `PHPRUST_JIT_WHY` is set: why loops are not compiled is
+/// printed. (`2`: with the types at the instruction the analysis has no
+/// plan for.) Read once.
+pub(super) fn why() -> Option<u8> {
+    static WHY: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    *WHY.get_or_init(|| std::env::var_os("PHPRUST_JIT_WHY").map(|v| if v == "2" { 2 } else { 1 }))
+}
+
+/// What [`compile_typed`] made of a loop.
+enum Made {
+    /// Its code, and the instructions it may be entered again at.
+    Code(Code, Vec<usize>),
+    /// Nothing yet: it is to go this many times the hot count more rounds
+    /// first ([`typed::Loop::wait`]).
+    Wait(usize),
+}
+
 /// Compiles the loop of `tape` that starts at `head` for the types
-/// `snapshot` reports, when the second tier can.
+/// `snapshot` reports, when the second tier can (and, unless `waited`,
+/// the loop need not go on longer first).
 fn compile_typed(
     code: &OpArray,
     tape: &[Inst],
     head: usize,
     seen: &typed::Seen<'_>,
-) -> Option<Code> {
+    waited: bool,
+) -> Option<Made> {
     let lp = typed::analyse(tape, head, code, seen)?;
+    let wait = lp.wait();
+    if !waited && wait > 0 {
+        return Some(Made::Wait(wait));
+    }
     let compiled = COMPILER.with(|c| {
         let mut c = c.try_borrow_mut().ok()?;
         c.get_or_insert_with(|| Compiler::new().ok_or(()))
@@ -1858,7 +2535,7 @@ fn compile_typed(
         s.typed_loops += 1;
         s.code_bytes += size;
     });
-    Some(code)
+    Some(Made::Code(code, lp.resume_points()))
 }
 
 // ---------------------------------------------------------------------
@@ -2150,13 +2827,14 @@ impl<'a, 'b> Emit<'a, 'b> {
             .brif(compiled, call, &[compiled.into()], body, &[]);
         self.b.switch_to_block(call);
         let code = *self.b.block_params(call).first()?;
-        let zero = self.b.ins().iconst(types::I64, 0);
+        // (Entered at the loop's head.)
+        let head = self.b.ins().iconst(types::I64, i64::try_from(i).ok()?);
         let args = [
             self.cvs,
             self.tmps,
             self.litp,
             self.frame,
-            zero,
+            head,
             self.record,
         ];
         let made = self.b.ins().call_indirect(self.sigs.code, code, &args);

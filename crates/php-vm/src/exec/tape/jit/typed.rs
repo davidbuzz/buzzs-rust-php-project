@@ -38,7 +38,11 @@
 //!   and float, moves (a ternary's result), `a ?? b`, bools as values
 //!   (`a && b`, `!a`), a jump on a literal (`while (1)`), an assignment
 //!   used as an expression, `abs()`, the math builtins of one argument,
-//!   `intdiv()`, `min()` and `max()` ([`Analysis::math`]). A builtin's call
+//!   `intdiv()`, `min()` and `max()` of two ints or two floats
+//!   ([`Analysis::math`]). `/` of two ints holds its quotient as the type
+//!   it had the last time, leaving when it is the other, or as a float
+//!   either way where the next instruction makes one of it ([`IntDiv`]).
+//!   A builtin's call
 //!   with computed arguments makes no call at all: its arguments are kept
 //!   in variables until the `DoCall` ([`Plan::Arg`]), and if the loop gives
 //!   up in between, the whole call is redone by the interpreter
@@ -58,12 +62,21 @@
 //!   helper ([`Fast`]): a write falls back on its handler in place, a read that
 //!   misses is run outside the loop and, if it keeps missing, compiled as
 //!   the handler's call ([`WHY_MISS`]);
-//! * the step of a `foreach` over an array of numbers ([`Plan::Each`]);
+//! * the step of a `foreach` over an array of numbers, under int or other
+//!   keys ([`Plan::Each`]), or of anything ([`Plan::EachAny`]);
 //! * static property reads, writes and `isset`, which have no tape
-//!   instruction, through the interpreter's own cached fast path
-//!   ([`Plan::Ext`]);
-//! * a call by name of a small plain user function whose body is made of
-//!   the first group's instructions, inline ([`Inlined`], [`Plan::Bind`]):
+//!   instruction, through the interpreter's own cached fast path; the
+//!   frame-local ops on values that are no numbers (concatenation,
+//!   interpolation, assignments of strings); comparisons with them,
+//!   through `super::compare_step` (all of them [`Plan::Ext`]);
+//! * what the loop cannot run itself, `echo` or a builtin's or function's
+//!   call it does not compute or inline: left for the interpreter to run,
+//!   the loop being entered again after it behind a test of the types it
+//!   relies on there ([`Plan::Out`]), when enough of the loop is its own;
+//! * a call by name of a small plain user function, static method or
+//!   method whose body is made of the first group's instructions (the math
+//!   builtins' calls included), getters and setters of `$this`'s declared
+//!   properties, inline ([`Inlined`], [`Plan::Bind`]):
 //!   the function's instructions become instructions of the loop, after
 //!   the tape's own, on variables that are in no frame. It has no frame
 //!   to stop in: whatever gives up inside it has the whole call redone by
@@ -73,6 +86,8 @@
 //! met then; a loop the analysis cannot type is looked at a few times
 //! (its variables may settle after the first round) and then left to the
 //! first tier, or, with that off, to the interpreter (`super::retire`).
+//! `PHPRUST_JIT_WHY=1` prints why a loop was not compiled: the first
+//! instruction it has no plan or no code for, or the rule that kept it.
 
 // One arm a plan kind, one function a concern, here as in the tape: an
 // arm merged with its neighbour, or a table split to fit a line count,
@@ -246,6 +261,40 @@ fn compare_test(e: u8, a_float: bool, b_float: bool) -> Option<Test> {
     })
 }
 
+/// What runs an op of the interpreter's in a typed loop ([`Plan::Ext`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExtStep {
+    /// One of the interpreter's core ops (`hot::step`, through
+    /// `super::core_step`: an assignment of a value that is no number).
+    Core,
+    /// One of `hot::step_ext`'s (`super::fe_fetch`).
+    Ext,
+    /// A comparison of values that are no numbers (`super::compare_step`).
+    Compare,
+    /// An array literal's start or element (`super::array_step`).
+    Array,
+    /// `instanceof` of a class by name (`super::instanceof_step`).
+    InstanceOf,
+    /// A truth test of what is no number (`super::truth_step`).
+    Truth,
+    /// The start or end of a `foreach` in the loop (`super::foreach_step`).
+    Foreach,
+}
+
+/// How a typed loop holds the quotient of two ints ([`Plan::Div`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IntDiv {
+    /// As an int: it was exact the last time; the loop is left (a miss,
+    /// `super::missed`) when it is not.
+    Exact,
+    /// As a float: it was not exact the last time; the loop is left when
+    /// it is.
+    Inexact,
+    /// As a float either way (an exact one converted), for an instruction
+    /// that makes a float of it whatever it is.
+    Float,
+}
+
 /// The operator code of `/` in a scalar-family instruction.
 const E_DIV: u8 = 0;
 
@@ -336,6 +385,45 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
         }
         | Op::Free(Operand::Tmp(_))
         | Op::AssignCv { dst: None, .. } => true,
+        // A comparison (with something that is no number, also run as it
+        // is).
+        Op::Bin {
+            op:
+                crate::opcode::BinKind::Equal
+                | crate::opcode::BinKind::NotEqual
+                | crate::opcode::BinKind::Identical
+                | crate::opcode::BinKind::NotIdentical
+                | crate::opcode::BinKind::Less
+                | crate::opcode::BinKind::LessEqual,
+            ..
+        }
+        | Op::CmpJmp { .. } => true,
+        // An array literal, `instanceof` of a class by name, the start and
+        // end of a `foreach` by value.
+        Op::FeReset {
+            kind: crate::opcode::ForeachKind::Value,
+            ..
+        }
+        | Op::FeFree { .. }
+        | Op::InitArray { .. }
+        | Op::ArrayAdd { .. }
+        | Op::InstanceOf {
+            class: crate::opcode::ClassSpec::Named(_),
+            ..
+        } => true,
+        // A call: one of the math functions' is computed, a user
+        // function's, static method's or method's may run inline
+        // ([`Inlined`]: which only shows when the loop is looked at), and
+        // any other is left to the interpreter, like `echo`, with the loop
+        // entered again after it ([`Plan::Out`]).
+        Op::Echo(_)
+        | Op::InitFCall { .. }
+        | Op::InitDynCall { .. }
+        | Op::InitMethodCall { .. }
+        | Op::InitStaticCall { .. }
+        | Op::New { .. }
+        | Op::Send { .. }
+        | Op::DoCall { .. } => true,
         Op::Cast {
             kind: CastKind::Int | CastKind::Float,
             ..
@@ -346,30 +434,7 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             };
             call.dst.is_some() && computed(name.as_bytes(), usize::from(call.argc))
         }
-        // A call by a name that cannot be a namespaced function, with
-        // computed arguments: its `InitFCall`, its `Send`s and its
-        // `DoCall`. One of those math functions' is computed; a user
-        // function's may run inline ([`Inlined`]), which only shows when
-        // the loop is looked at (the function need not exist yet).
-        Op::InitFCall { fallback: None, .. }
-        // A static method's or a method's call by name, likewise.
-        | Op::InitStaticCall {
-            class:
-                crate::opcode::ClassSpec::Named(_)
-                | crate::opcode::ClassSpec::SelfClass
-                | crate::opcode::ClassSpec::Parent
-                | crate::opcode::ClassSpec::Static,
-            name: Operand::Lit(_),
-        }
-        | Op::InitMethodCall {
-            obj: Operand::Cv(_) | Operand::Unused,
-            name: Operand::Lit(_),
-        }
-        | Op::Send {
-            src: ArgSrc::Val(_) | ArgSrc::CallResult(_) | ArgSrc::Place(_),
-        }
-        | Op::DoCall { .. }
-        | Op::Abs { .. }
+        Op::Abs { .. }
         // Bools as values: the middle of `a && b`, `!a`, `(bool) a`; a
         // jump on a literal (`while (1)`); an assignment used as an
         // expression; and a `return`, where the loop is left.
@@ -399,6 +464,7 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
         }
         | Op::AssignStaticProp { dst: None, .. }
         | Op::IssetStaticProp { .. }
+        | Op::FeFreeOnReturn { .. }
         | Op::Return { .. } => true,
         _ => false,
     }
@@ -431,10 +497,19 @@ const VIRTUAL_AT: i32 = SLOT as i32 * 16;
 
 /// The variable of an inlined function's slot `slot` ([`VIRTUAL_AT`]).
 fn virtual_slot(slot: SlotRef) -> SlotRef {
+    if is_arg_slot(slot) {
+        // (The argument variables of its calls are the loop's.)
+        return slot;
+    }
     SlotRef {
         tmp: slot.tmp,
         at: -(VIRTUAL_AT + slot.at),
     }
+}
+
+/// Whether the variable is one of the argument variables ([`arg_slot`]).
+fn is_arg_slot(slot: SlotRef) -> bool {
+    slot.tmp && slot.at < 0 && slot.at > -VIRTUAL_AT
 }
 
 /// The inlined function's slot a variable stands for, when it is one.
@@ -494,6 +569,8 @@ pub(super) struct Inlined {
     first: usize,
     func: std::rc::Rc<crate::func::UserFunction>,
     tape: Box<[Inst]>,
+    /// The builtin calls the function makes ([`call_sites`]).
+    sites: Vec<Site>,
 }
 
 /// The variable the `k`-th argument of a builtin call is kept in between
@@ -627,11 +704,14 @@ enum Plan {
         dst: SlotRef,
         next: usize,
     },
-    /// `dst = a / b` with a float among the operands.
+    /// `dst = a / b` with a float among the operands; or, with `ints`, of
+    /// two ints, whose quotient is an int when it is exact and a float
+    /// otherwise ([`IntDiv`]).
     Div {
         a: Opnd,
         b: Opnd,
         dst: SlotRef,
+        ints: Option<IntDiv>,
         next: usize,
     },
     /// `dst = (float) a` or `dst = (int) a`; a temporary operand is left
@@ -664,9 +744,11 @@ enum Plan {
         consume: Option<SlotRef>,
         next: usize,
     },
-    /// `dst = max(a, b)` or `min(a, b)` of two ints.
+    /// `dst = max(a, b)` or `min(a, b)` of two ints, or of two floats
+    /// (`float`).
     Pick {
         max: bool,
+        float: bool,
         a: Opnd,
         b: Opnd,
         dst: SlotRef,
@@ -770,6 +852,18 @@ enum Plan {
         value: Opnd,
         next: usize,
     },
+    /// An op, or a whole call from the op that starts it to its `DoCall`,
+    /// that the loop cannot run (`echo`, a builtin's call, a function's
+    /// that cannot run inline): the loop is left here for the interpreter
+    /// to run it, and entered again at `resume`, the instruction after it
+    /// ([`Loop::resumes`]), behind a test of every type it relies on
+    /// there. `result` is the temporary the call's result is in then, with
+    /// the type it is expected to have (`None`: anything).
+    Out {
+        resume: usize,
+        result: Option<(SlotRef, Option<Ty>)>,
+        consume: Option<SlotRef>,
+    },
     /// The loop is left for good here (a `return`): the interpreter's.
     Leave,
     /// A family instruction run by its own handler, on the frame (which is
@@ -789,7 +883,9 @@ enum Plan {
         end: usize,
         full: usize,
         value: (SlotRef, bool),
-        key: Option<SlotRef>,
+        /// The key's slot, and whether the array's keys are ints (tracked
+        /// as numbers); anything else ([`Ty::Any`]) is the step's to store.
+        key: Option<(SlotRef, bool)>,
         /// The temporaries the element went through.
         consumed: [Option<SlotRef>; 2],
     },
@@ -822,10 +918,10 @@ enum Plan {
     /// from where it got to otherwise (a read that went into its
     /// temporary, not into the variable of the `AssignCv` after it).
     Ext {
-        /// Whether the op is one of the interpreter's core ops
-        /// (`hot::step`, through `super::core_step`: an assignment of a
-        /// value that is no number) and not one of `hot::step_ext`'s.
-        core: bool,
+        /// What runs the op.
+        step: ExtStep,
+        /// Where the loop goes on when the op jumps (a truth jump).
+        alt: Option<usize>,
         result: Option<(SlotRef, Ty)>,
         /// The variable the op leaves holding anything ([`Ty::Any`]).
         any: Option<SlotRef>,
@@ -1043,10 +1139,17 @@ impl Plan {
                 dst: v(dst),
                 next: next + base,
             },
-            Plan::Div { a, b, dst, next } => Plan::Div {
+            Plan::Div {
+                a,
+                b,
+                dst,
+                ints,
+                next,
+            } => Plan::Div {
                 a: a.inlined(),
                 b: b.inlined(),
                 dst: v(dst),
+                ints,
                 next: next + base,
             },
             Plan::Conv {
@@ -1075,12 +1178,14 @@ impl Plan {
             },
             Plan::Pick {
                 max,
+                float,
                 a,
                 b,
                 dst,
                 next,
             } => Plan::Pick {
                 max,
+                float,
                 a: a.inlined(),
                 b: b.inlined(),
                 dst: v(dst),
@@ -1220,8 +1325,14 @@ impl Plan {
                 value: value.inlined(),
                 next: next + base,
             },
-            Plan::Arg { .. }
-            | Plan::Bind { .. }
+            Plan::Arg { k, value, next, .. } => Plan::Arg {
+                k,
+                value: value.inlined(),
+                consume: None,
+                next: next + base,
+            },
+            Plan::Bind { .. }
+            | Plan::Out { .. }
             | Plan::Leave
             | Plan::Call(_)
             | Plan::Each { .. }
@@ -1262,6 +1373,7 @@ impl Plan {
             | Plan::Each { .. }
             | Plan::EachAny { .. }
             | Plan::ThisPut { .. }
+            | Plan::Out { .. }
             | Plan::Ext { .. } => false,
         }
     }
@@ -1270,6 +1382,7 @@ impl Plan {
     fn successors(&self) -> [Option<usize>; 3] {
         match *self {
             Plan::Jmp { to } | Plan::Bind { to, .. } => [Some(to), None, None],
+            Plan::Out { resume, .. } => [Some(resume), None, None],
             Plan::Cmp { taken, fall, .. }
             | Plan::IncCmp { taken, fall, .. }
             | Plan::Truth { taken, fall, .. } => [Some(taken), Some(fall), None],
@@ -1283,9 +1396,8 @@ impl Plan {
             Plan::EachAny {
                 end, step, full, ..
             } => [Some(step), Some(full), Some(end)],
-            Plan::Ext { next, .. } | Plan::ThisProp { next, .. } | Plan::ThisPut { next, .. } => {
-                [Some(next), None, None]
-            }
+            Plan::Ext { next, alt, .. } => [Some(next), alt, None],
+            Plan::ThisProp { next, .. } | Plan::ThisPut { next, .. } => [Some(next), None, None],
             Plan::Int2 { next, .. }
             | Plan::Conv { next, .. }
             | Plan::Math { next, .. }
@@ -1434,12 +1546,22 @@ impl Plan {
                     st.insert(tmp, Ty::Plain);
                 }
                 st.insert(value.0, num(value.1));
-                if let Some(key) = key {
-                    st.insert(key, Ty::Int);
+                if let Some((key, int)) = key {
+                    st.insert(key, if int { Ty::Int } else { Ty::Any });
                 }
             }
             // (By the way out: [`Plan::out`].)
             Plan::EachAny { .. } | Plan::ThisPut { .. } => {}
+            Plan::Out {
+                result, consume, ..
+            } => {
+                if let Some(tmp) = consume {
+                    st.insert(tmp, Ty::Plain);
+                }
+                if let Some((slot, ty)) = result {
+                    st.insert(slot, ty.unwrap_or(Ty::Any));
+                }
+            }
             Plan::ThisProp { dst, float, .. } => {
                 st.insert(dst, num(float));
             }
@@ -1470,8 +1592,17 @@ impl Plan {
                     st.insert(slot, Ty::Any);
                 }
             }
-            Plan::Int2 { dst, .. } | Plan::Pick { dst, .. } | Plan::AbsInt { dst, .. } => {
+            Plan::Int2 { dst, .. }
+            | Plan::Pick {
+                dst, float: false, ..
+            }
+            | Plan::AbsInt { dst, .. } => {
                 st.insert(dst, Ty::Int);
+            }
+            Plan::Pick {
+                dst, float: true, ..
+            } => {
+                st.insert(dst, Ty::Float);
             }
             Plan::Arg {
                 k, value, consume, ..
@@ -1495,8 +1626,8 @@ impl Plan {
                 }
                 st.insert(dst, num(to_float));
             }
-            Plan::Div { dst, .. } => {
-                st.insert(dst, Ty::Float);
+            Plan::Div { dst, ints, .. } => {
+                st.insert(dst, num(ints != Some(IntDiv::Exact)));
             }
             Plan::Arith { a, b, dst, .. } => {
                 st.insert(dst, num(a.float || b.float));
@@ -1553,6 +1684,9 @@ pub(super) struct Loop {
     /// (`super::user_is`; the name may be another function's in another
     /// request). (A method's is checked at each call, [`Plan::Bind`].)
     inlined: Vec<(usize, usize)>,
+    /// Where the loop is entered again after the interpreter ran what it
+    /// left for ([`Plan::Out`]): the instruction, and the types there.
+    resumes: Vec<(usize, State)>,
     /// The class scopes (by address, 0 for none) the loop's inlined
     /// method calls were resolved in: the frame's, checked at the loop's
     /// entry (`super::scope_is`).
@@ -1560,6 +1694,48 @@ pub(super) struct Loop {
 }
 
 impl Loop {
+    /// How many times the hot count more rounds the loop is to go before
+    /// it is compiled: 0 for one that runs its instructions itself, more
+    /// the more of them are the interpreter's (its steps and what the loop
+    /// leaves for), whose rounds gain little on what compiling costs
+    /// (about a million instructions).
+    /// The weight of the interpreter's part of the loop, and the number of
+    /// its instructions that are its own. (A handler's call, or one of the
+    /// helpers of the frame, costs what the interpreter's op does; a step
+    /// of the interpreter's run from here more, and a way out and back in
+    /// about a hundred instructions.)
+    fn shares(&self) -> (usize, usize) {
+        let weight = |plan: &Plan| match plan {
+            Plan::Ext {
+                step: ExtStep::Core | ExtStep::Ext,
+                ..
+            } => 1,
+            Plan::Out { .. } => 2,
+            _ => 0,
+        };
+        let theirs = self.plans.values().map(|(plan, _)| weight(plan)).sum();
+        let own = self
+            .plans
+            .values()
+            .filter(|(plan, _)| weight(plan) == 0)
+            .count();
+        (theirs, own)
+    }
+
+    pub(super) fn wait(&self) -> usize {
+        let (theirs, own) = self.shares();
+        // A round waited costs about 300 instructions (the entry, and the
+        // op at the head on its slow path): at most as long as compiling
+        // would have cost, about 3,000 rounds (as renting skis until their
+        // price is paid, then buying).
+        (theirs * 16 / own.max(1)).min(48)
+    }
+
+    /// The instructions the loop may be entered again at ([`Plan::Out`]).
+    pub(super) fn resume_points(&self) -> Vec<usize> {
+        self.resumes.iter().map(|(at, _)| *at).collect()
+    }
+
     /// The type of `slot` in `st`.
     fn ty(&self, st: &State, slot: SlotRef) -> Option<Ty> {
         st.get(&slot).or_else(|| self.entry.get(&slot)).copied()
@@ -1596,7 +1772,7 @@ pub(super) struct Seen<'a> {
     /// values are floats or ints (`None`: something else, by its first
     /// element), and whether its keys are ints; `None` when it is not
     /// over an array, or the array is empty.
-    pub(super) each: &'a dyn Fn(u32) -> Option<(Option<bool>, bool)>,
+    pub(super) each: &'a dyn Fn(u32, usize) -> Option<(Option<bool>, bool)>,
     /// The name of the builtin the function-name literal (by index)
     /// resolved to when its call last ran; `None` when it has not run, or
     /// calls may not be skipped (observers).
@@ -1619,6 +1795,9 @@ pub(super) struct Seen<'a> {
     /// write's place in the method's code, whether it also reads: `op=`,
     /// `++`), on a hit of the method's property cache.
     pub(super) this_write: &'a dyn Fn(usize, usize, u32, bool) -> Option<(u32, u32)>,
+    /// Whether the code can be entered at the instruction (by index): the
+    /// tape has an entry for it (`super::install`).
+    pub(super) resumable: &'a dyn Fn(usize) -> bool,
     /// For the method call started by the op (by index): the receiver's
     /// variable (`usize::MAX` for `$this`), and the addresses of the class
     /// of the object it holds now and of the frame's class scope (0:
@@ -1663,6 +1842,14 @@ struct Analysis<'a> {
     inline: bool,
     /// Which of `inl` have been entered ([`Plan::Bind`]).
     bound: Vec<bool>,
+    /// While an inlined function's instruction is planned: the function's
+    /// code (whose call cache names the builtins it calls), and the depth
+    /// of its call among the loop's (its own calls' arguments come after
+    /// those of the calls around it, [`Self::arg_base`]).
+    callee: Option<(&'a OpArray, usize)>,
+    /// The calls (by their first op) the loop was to make itself and is
+    /// not to after all ([`analyse`]): the interpreter's.
+    demoted: Vec<usize>,
 }
 
 impl<'a> Analysis<'a> {
@@ -1803,20 +1990,42 @@ impl<'a> Analysis<'a> {
             .find(|c| i >= c.base && i < c.base + c.tape.len())?;
         let at = i - callee.base;
         let code = &callee.func.code;
+        // (With the argument variables of the calls it makes, which are no
+        // slots of any frame either.)
         let local: State = st
             .iter()
-            .filter_map(|(slot, ty)| Some((real_slot(*slot)?, *ty)))
+            .filter_map(|(slot, ty)| {
+                let slot = if is_arg_slot(*slot) {
+                    *slot
+                } else {
+                    real_slot(*slot)?
+                };
+                Some((slot, *ty))
+            })
             .collect();
+        // The depth of the call: its own arguments are in the function's
+        // variables by now, and its calls' go where they were.
+        let depth = self
+            .sites
+            .iter()
+            .find(|site| site.init == callee.init)
+            .map_or(0, |site| {
+                self.sites
+                    .iter()
+                    .filter(|outer| outer.init < site.init && outer.call > site.call)
+                    .count()
+            });
         // The function's view, for one instruction.
         let saved = (
             std::mem::replace(&mut self.tape, &callee.tape),
             std::mem::replace(&mut self.lits, &code.literals),
             std::mem::replace(&mut self.places, &code.places),
             std::mem::replace(&mut self.ops, &code.ops),
-            std::mem::take(&mut self.sites),
+            std::mem::replace(&mut self.sites, callee.sites.clone()),
             std::mem::take(&mut self.entry),
         );
         self.inline = true;
+        self.callee = Some((code, depth));
         // What the function returns here, if it does: a number, a bool, or
         // (`None`) something else.
         let mut returned: Option<Option<Returned>> = None;
@@ -1874,6 +2083,7 @@ impl<'a> Analysis<'a> {
             },
         };
         self.inline = false;
+        self.callee = None;
         (
             self.tape,
             self.lits,
@@ -1925,6 +2135,105 @@ impl<'a> Analysis<'a> {
             return None;
         }
         plan.inlined(callee.base)
+    }
+
+    /// `dst = a / b` of two ints ([`Plan::Div`] with [`IntDiv`]): a
+    /// float either way when the next instruction makes a float of it;
+    /// else an int quotient when the variable it goes into holds an int
+    /// now (the loop has gone round), a float otherwise. Those not in an
+    /// inlined function nor among a call's arguments, where a miss would
+    /// have the whole call redone and not be counted; nor in a loop whose
+    /// short cuts kept missing.
+    fn int_div(
+        &mut self,
+        st: &State,
+        i: usize,
+        a: Opnd,
+        b: Opnd,
+        dst: SlotRef,
+        next: usize,
+    ) -> Option<Plan> {
+        if let Num::Int(0 | -1) = b.num {
+            // (Always the interpreter's: an error, or a float for the
+            // smallest int.)
+            return None;
+        }
+        let ints = if dst.tmp && self.floats(st, dst, next) {
+            IntDiv::Float
+        } else {
+            if self.inline
+                || !self.seen.fast
+                || self.sites.iter().any(|site| site.init < i && i < site.call)
+            {
+                return None;
+            }
+            let now = st.get(&dst).copied().or_else(|| (self.seen.snapshot)(dst));
+            if now == Some(Ty::Int) {
+                IntDiv::Exact
+            } else {
+                IntDiv::Inexact
+            }
+        };
+        Some(Plan::Div {
+            a,
+            b,
+            dst,
+            ints: Some(ints),
+            next,
+        })
+    }
+
+    /// Whether instruction `at` reads the temporary `t` as a float, the
+    /// same whether it holds an int or that int as a float: `+`, `-`, `*`
+    /// or `/` with a float, `op=` of a float variable, a math function's
+    /// argument, `(float)`.
+    fn floats(&mut self, st: &State, t: SlotRef, at: usize) -> bool {
+        let Some(inst) = self.tape.get(at).copied() else {
+            return false;
+        };
+        let is_t = |kind: u8, x: u32| kind == KT && tmp(x) == Some(t);
+        // The other operand, a float.
+        let other_float =
+            |an: &mut Self, kind: u8, x: u32| an.operand(st, kind, x).is_some_and(|o| o.float);
+        match inst.op.shape() {
+            Shape::ArithTmp { ka, kb, .. } | Shape::ArithCv { ka, kb, .. } => {
+                (is_t(ka, inst.a) && other_float(self, kb, inst.b))
+                    || (is_t(kb, inst.b) && other_float(self, ka, inst.a))
+            }
+            Shape::AssignOp { kb, .. } => {
+                is_t(kb, inst.b)
+                    && cv(inst.a)
+                        .and_then(|var| self.number(st, var))
+                        .is_some_and(|o| o.float)
+            }
+            _ => match self.ops.get(at) {
+                Some(&Op::Cast {
+                    kind: CastKind::Float,
+                    a: Operand::Tmp(src),
+                    ..
+                }) => src.checked_mul(SLOT_U32).and_then(tmp) == Some(t),
+                Some(&Op::Send {
+                    src: ArgSrc::Val(Operand::Tmp(src)),
+                }) if src.checked_mul(SLOT_U32).and_then(tmp) == Some(t) => {
+                    // The only argument of a math function's call.
+                    self.sites
+                        .iter()
+                        .find(|site| site.sends == [at])
+                        .filter(|site| site.kind == SiteKind::Func)
+                        .and_then(|site| self.builtin(site.name))
+                        .is_some_and(|name| name != b"abs" && math_fn(&name).is_some())
+                }
+                _ => {
+                    // `/` with a float.
+                    matches!(inst.op, TOp::NumBinT | TOp::NumBinC | TOp::NumAssignOpC)
+                        && inst.e == E_DIV
+                        && inst.op != TOp::NumAssignOpC
+                        && ((is_t(inst.k >> 4, inst.a) && other_float(self, inst.k & 0xf, inst.b))
+                            || (is_t(inst.k & 0xf, inst.b)
+                                && other_float(self, inst.k >> 4, inst.a)))
+                }
+            },
+        }
     }
 
     /// Instruction `at` of the method `callee` (whose tape, places and
@@ -2043,16 +2352,124 @@ impl<'a> Analysis<'a> {
         }
     }
 
+    /// Whether the loop makes the call `site` itself: a math builtin's it
+    /// computes, or a user function's it runs inline, and likewise every
+    /// call among its arguments (a call the interpreter must make cannot
+    /// be inside one it does not know of).
+    fn site_inline(&self, st: &State, site: &Site) -> bool {
+        if !self.inline && self.demoted.contains(&site.init) {
+            return false;
+        }
+        let own = match self.inlined_site(site.init) {
+            // (Not in a loop whose calls kept turning out to be of other
+            // functions, `super::missed`; and the object's variable is
+            // one the loop does not track.)
+            Some((_, callee)) => {
+                self.seen.fast
+                    && match callee.kind {
+                        SiteKind::Method(Operand::Cv(var)) => var
+                            .checked_mul(SLOT_U32)
+                            .and_then(cv)
+                            .is_some_and(|slot| self.untracked(st, slot)),
+                        _ => true,
+                    }
+            }
+            None => {
+                site.kind == SiteKind::Func
+                    && self
+                        .builtin(site.name)
+                        .is_some_and(|name| computed(&name, site.sends.len()))
+            }
+        };
+        own && self
+            .sites
+            .iter()
+            .filter(|inner| inner.init > site.init && inner.call < site.call)
+            .all(|inner| self.site_inline(st, inner))
+    }
+
+    /// The call `site` as the interpreter's ([`Plan::Out`]): left at the
+    /// op that starts it, entered again after its `DoCall`. Its result is
+    /// expected to be of the type the variable it is assigned to holds
+    /// now (the loop has gone round), when that is a number or a bool.
+    fn out_of_call(&mut self, st: &State, site: &Site) -> Option<Plan> {
+        let resume = site.call + 1;
+        let result = match (self.ops.get(site.init)?, self.ops.get(site.call)?) {
+            // (`new`: the object, in the temporary of the op itself.)
+            (&Op::New { dst, .. }, _) => Some((tmp(dst.checked_mul(SLOT_U32)?)?, None)),
+            (_, &Op::DoCall { dst: Some(t) }) => {
+                let slot = tmp(t.checked_mul(SLOT_U32)?)?;
+                let guess = match self.ops.get(resume) {
+                    Some(&Op::AssignCv {
+                        cv: var,
+                        val: Operand::Tmp(src),
+                        dst: None,
+                    }) if src == t => (self.seen.snapshot)(cv(var.checked_mul(SLOT_U32)?)?)
+                        .filter(|ty| matches!(ty, Ty::Int | Ty::Float | Ty::Bool)),
+                    _ => None,
+                };
+                // Or what it holds now (the last round's result, which an
+                // `op=` or an operator does not release).
+                let guess = guess.or_else(|| {
+                    (self.seen.snapshot)(slot)
+                        .filter(|ty| matches!(ty, Ty::Int | Ty::Float | Ty::Bool))
+                });
+                // (A slot the loop tracks, so that it has a variable.)
+                let guess = guess.filter(|_| self.ty(st, slot).is_some());
+                Some((slot, guess))
+            }
+            (_, Op::DoCall { dst: None }) => None,
+            _ => return None,
+        };
+        self.out(resume, result, None)
+    }
+
+    /// [`Plan::Out`] with the loop entered again at `resume`, when the
+    /// code can be entered there.
+    fn out(
+        &mut self,
+        resume: usize,
+        result: Option<(SlotRef, Option<Ty>)>,
+        consume: Option<SlotRef>,
+    ) -> Option<Plan> {
+        if self.inline || resume >= self.real || !(self.seen.resumable)(resume) {
+            return None;
+        }
+        Some(Plan::Out {
+            resume,
+            result,
+            consume,
+        })
+    }
+
     /// The first argument variable of the call `site`: those of its depth
     /// among the calls around it (an outer call's arguments are kept
     /// while an inner call runs). `None` beyond [`MAX_DEPTH`].
     fn arg_base(&self, site: &Site) -> Option<usize> {
-        let depth = self
-            .sites
-            .iter()
-            .filter(|outer| outer.init < site.init && outer.call > site.call)
-            .count();
+        let depth = self.callee.map_or(0, |(_, depth)| depth)
+            + self
+                .sites
+                .iter()
+                .filter(|outer| outer.init < site.init && outer.call > site.call)
+                .count();
         (depth < MAX_DEPTH).then_some(depth * MAX_ARGS)
+    }
+
+    /// The name of the builtin the function-name literal `name` of the
+    /// code at hand (the loop's, or an inlined function's) resolved to
+    /// when its call last ran ([`Seen::builtin`]).
+    fn builtin(&self, name: u32) -> Option<Vec<u8>> {
+        let Some((code, _)) = self.callee else {
+            return (self.seen.builtin)(name);
+        };
+        if crate::jit::calls_are_observed() {
+            return None;
+        }
+        let cache = code.fcall_cache.try_borrow().ok()?;
+        match &cache.get(name as usize)?.as_ref()?.func {
+            crate::opcode::CachedFuncKind::Builtin(b) => Some(b.name.as_bytes().to_vec()),
+            crate::opcode::CachedFuncKind::User(_) => None,
+        }
     }
 
     /// The call site `inl` has for the `InitFCall` at `init`, and its index.
@@ -2087,7 +2504,8 @@ impl<'a> Analysis<'a> {
                     return None;
                 }
                 return (i + 1 < self.tape.len()).then_some(Plan::Ext {
-                    core: true,
+                    alt: None,
+                    step: ExtStep::Core,
                     result: None,
                     any: Some(dst),
                     consume: [Some(src), None, None, None],
@@ -2155,7 +2573,16 @@ impl<'a> Analysis<'a> {
                 }
                 if a.float || b.float {
                     // Of these operators only `/` takes a float.
-                    return (inst.e == E_DIV).then_some(Plan::Div { a, b, dst, next });
+                    return (inst.e == E_DIV).then_some(Plan::Div {
+                        a,
+                        b,
+                        dst,
+                        ints: None,
+                        next,
+                    });
+                }
+                if inst.e == E_DIV {
+                    return self.int_div(st, i, a, b, dst, next);
                 }
                 // An int quotient is an int or a float by its value: not
                 // typed.
@@ -2763,7 +3190,7 @@ impl<'a> Analysis<'a> {
                 })
             }
             Op::FramelessICall(call) => {
-                let name = (self.seen.builtin)(call.name)?;
+                let name = self.builtin(call.name)?;
                 let dst = temp(call.dst?)?;
                 let mut args = Vec::new();
                 for operand in &call.vals[..usize::from(call.argc).min(MAX_ARGS + 1)] {
@@ -2889,7 +3316,8 @@ impl<'a> Analysis<'a> {
                 // cannot take the value: it too must own nothing.)
                 self.ty(st, temp(dst)?)?;
                 (next < self.tape.len()).then_some(Plan::Ext {
-                    core: false,
+                    alt: None,
+                    step: ExtStep::Ext,
                     any: None,
                     result: Some((slot, ty)),
                     consume: [None; MAX_CONSUMED],
@@ -2905,7 +3333,8 @@ impl<'a> Analysis<'a> {
                 let dst = temp(dst)?;
                 self.ty(st, dst)?;
                 Some(Plan::Ext {
-                    core: false,
+                    alt: None,
+                    step: ExtStep::Ext,
                     any: None,
                     result: Some((dst, Ty::Bool)),
                     consume: [None; MAX_CONSUMED],
@@ -2938,7 +3367,8 @@ impl<'a> Analysis<'a> {
                     _ => return None,
                 };
                 Some(Plan::Ext {
-                    core: false,
+                    alt: None,
+                    step: ExtStep::Ext,
                     any: None,
                     result: None,
                     consume: [consume, None, None, None],
@@ -2946,7 +3376,9 @@ impl<'a> Analysis<'a> {
                     next,
                 })
             }
-            Op::Return { .. } => Some(Plan::Leave),
+            // (A `return` in a `foreach`: the iterator's release before
+            // it.)
+            Op::Return { .. } | Op::FeFreeOnReturn { .. } => Some(Plan::Leave),
             // `abs()` as its own op: over the two ops that were its
             // `Send` and `DoCall`, and with `to` straight into the variable
             // of the `AssignCv` after them, which is then skipped too.
@@ -2963,27 +3395,26 @@ impl<'a> Analysis<'a> {
             // A builtin call with computed arguments: nothing to do at
             // its `InitFCall`, each `Send` keeps its argument, the
             // `DoCall` computes.
-            Op::InitFCall { .. } | Op::InitStaticCall { .. } | Op::InitMethodCall { .. } => {
-                let site = self.sites.iter().find(|site| site.init == i)?;
-                if let Some((_, callee)) = self.inlined_site(i) {
-                    // (Not in a loop whose calls kept turning out to be
-                    // of other functions: `super::missed`.)
-                    if !self.seen.fast {
-                        return None;
-                    }
-                    // The object's variable: one the loop does not track.
-                    if let SiteKind::Method(Operand::Cv(var)) = callee.kind {
-                        if !self.untracked(st, cv(var.checked_mul(SLOT_U32)?)?) {
-                            return None;
-                        }
-                    }
+            Op::InitFCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::New { .. } => {
+                let site = self.sites.iter().find(|site| site.init == i)?.clone();
+                // Computed or run inline, with every call among its
+                // arguments; or the interpreter's, the whole of it.
+                if self.site_inline(st, &site) {
                     return Some(Plan::Jmp { to: next });
                 }
-                if site.kind != SiteKind::Func {
-                    return None;
-                }
-                let name = (self.seen.builtin)(site.name)?;
-                computed(&name, site.sends.len()).then_some(Plan::Jmp { to: next })
+                self.out_of_call(st, &site)
+            }
+            // `echo`: the interpreter's.
+            &Op::Echo(val) => {
+                let consume = match val {
+                    Operand::Tmp(t) => Some(temp(t)?),
+                    _ => None,
+                };
+                self.out(i + 1, None, consume)
             }
             Op::Send { src } => {
                 let (site, k) = self.sites.iter().find_map(|site| {
@@ -2996,7 +3427,7 @@ impl<'a> Analysis<'a> {
                     if site.kind != SiteKind::Func {
                         return None;
                     }
-                    let name = (self.seen.builtin)(site.name)?;
+                    let name = self.builtin(site.name)?;
                     if !computed(&name, site.sends.len()) {
                         return None;
                     }
@@ -3053,7 +3484,7 @@ impl<'a> Analysis<'a> {
                 if site.kind != SiteKind::Func {
                     return None;
                 }
-                let name = (self.seen.builtin)(site.name)?;
+                let name = self.builtin(site.name)?;
                 let mut args = Vec::new();
                 let first = self.arg_base(&site)?;
                 for k in 0..site.sends.len().min(MAX_ARGS + 1) {
@@ -3138,8 +3569,10 @@ impl<'a> Analysis<'a> {
                     next,
                 })
             }
-            (b"min" | b"max", &[a, b]) if !a.float && !b.float => Some(Plan::Pick {
+            // (Of an int and a float, the one picked: an int or a float.)
+            (b"min" | b"max", &[a, b]) if a.float == b.float => Some(Plan::Pick {
                 max: name == b"max",
+                float: a.float,
                 a,
                 b,
                 dst,
@@ -3190,7 +3623,9 @@ impl<'a> Analysis<'a> {
         if self.inline || (self.seen.slow)(i) {
             return None;
         }
-        let (_, int_keys) = (self.seen.each)(iter)?;
+        // (No iterator yet: a `foreach` inside the loop, whose array is
+        // not known.)
+        let (_, int_keys) = (self.seen.each)(iter, i).unwrap_or((None, false));
         let assigned = |an: &Self, at: usize, t: u32| match an.ops.get(at) {
             Some(&Op::AssignCv {
                 cv: to,
@@ -3246,6 +3681,19 @@ impl<'a> Analysis<'a> {
     }
 
     fn each_step(&mut self, st: &State, i: usize) -> Option<Plan> {
+        // (What the numbers' step asked of the slots is forgotten when it
+        // cannot be had: a loop variable still holding the last round's
+        // string.)
+        let saved = self.entry.clone();
+        if let Some(plan) = self.each_num(st, i) {
+            return Some(plan);
+        }
+        self.entry = saved;
+        self.each_any(st, i)
+    }
+
+    /// [`Self::each_step`] over an array of numbers ([`Plan::Each`]).
+    fn each_num(&mut self, st: &State, i: usize) -> Option<Plan> {
         let &Op::FeFetch {
             iter,
             end,
@@ -3255,10 +3703,8 @@ impl<'a> Analysis<'a> {
         else {
             return None;
         };
-        let (float, int_keys) = (self.seen.each)(iter)?;
-        let Some(float) = float else {
-            return self.each_any(st, i);
-        };
+        let (float, int_keys) = (self.seen.each)(iter, i)?;
+        let float = float?;
         // The variable the `AssignCv` at `at` copies temporary `t` into.
         let assigned = |an: &Self, at: usize, t: u32| match an.ops.get(at) {
             Some(&Op::AssignCv {
@@ -3281,7 +3727,6 @@ impl<'a> Analysis<'a> {
         };
         let key = match key {
             None => None,
-            Some(_) if !int_keys => return None,
             // Its assignment only runs with the value's.
             Some(k) => Some(
                 match assigned(self, full, k).filter(|_| consumed[0].is_some()) {
@@ -3294,16 +3739,24 @@ impl<'a> Analysis<'a> {
                 },
             ),
         };
-        // All of them own nothing now, so the op's stores release nothing.
-        for slot in [Some(value), key, consumed[0], consumed[1]]
+        if key.is_some() && !int_keys && consumed[1].is_none() {
+            // A key that is no int left in its temporary, which then holds
+            // anything: as for elements that are no numbers.
+            return None;
+        }
+        // All of them own nothing now, so the op's stores release nothing;
+        // but a key that is no int (a string), which the step releases.
+        let tracked_key = key.filter(|_| int_keys);
+        for slot in [Some(value), tracked_key, consumed[0], consumed[1]]
             .into_iter()
             .flatten()
         {
             self.ty(st, slot)?;
         }
+        let key = key.map(|slot| (slot, int_keys));
         let end = end as usize;
         (full < self.tape.len() && end < self.tape.len()).then_some(Plan::Each {
-            slim: self.seen.fast && !(self.seen.slow)(i),
+            slim: self.seen.fast && !(self.seen.slow)(i) && int_keys,
             iter,
             end,
             full,
@@ -3499,6 +3952,266 @@ impl<'a> Analysis<'a> {
             }
             Some(())
         };
+        // A comparison with something that is no number (a string, null,
+        // what the loop does not track): its bool, read back. (A
+        // `CmpJmp` stores it and goes on to its jump op, which tests it.)
+        if let Op::Bin { op: cmp, a, b, dst }
+        | Op::CmpJmp {
+            op: cmp, a, b, dst, ..
+        } = op
+        {
+            // (Two numbers are compared by the loop itself.)
+            let number = |ty: Option<Ty>| matches!(ty, Some(Ty::Int | Ty::Float | Ty::Bool));
+            let no_number = |o: &Operand| match *o {
+                Operand::Lit(l) => !matches!(
+                    self.lits.get(l as usize),
+                    Some(Value::Int(_) | Value::Float(_) | Value::Bool(_))
+                ),
+                Operand::Cv(c) => var(c).is_some_and(|slot| {
+                    !number(
+                        st.get(&slot)
+                            .or_else(|| self.entry.get(&slot))
+                            .copied()
+                            .or_else(|| (self.seen.snapshot)(slot)),
+                    )
+                }),
+                Operand::Tmp(t) => temp(t).is_some_and(|slot| {
+                    !number(st.get(&slot).or_else(|| self.entry.get(&slot)).copied())
+                }),
+                _ => false,
+            };
+            let comparison = matches!(
+                cmp,
+                BinKind::Equal
+                    | BinKind::NotEqual
+                    | BinKind::Identical
+                    | BinKind::NotIdentical
+                    | BinKind::Less
+                    | BinKind::LessEqual
+            );
+            if comparison {
+                if !(no_number(a) || no_number(b)) {
+                    return None;
+                }
+                take(&[*a, *b])?;
+                let dst = temp(*dst)?;
+                if i + 1 >= self.tape.len() {
+                    return None;
+                }
+                // A slot of the loop's, with a variable for the bool. (What
+                // it holds before is released by the op: when that is
+                // anything, nothing is asked of it on entry.)
+                if self.ty(st, dst).is_none() {
+                    self.entry.entry(dst).or_insert(Ty::Any);
+                }
+                if (self.seen.slow)(i) {
+                    // Its step kept declining (a float with a string, an
+                    // object): the interpreter's op, which stores the bool
+                    // and goes on to the jump op (or, of numbers, jumps).
+                    if consume[1].is_some() {
+                        return None;
+                    }
+                    return self.out(i + 1, Some((dst, Some(Ty::Bool))), consume[0]);
+                }
+                return Some(Plan::Ext {
+                    alt: None,
+                    step: ExtStep::Compare,
+                    result: Some((dst, Ty::Bool)),
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+        }
+        // The truth of something that is no number (a string, an array,
+        // null, what the loop does not track): `!a`, `(bool) a` into a
+        // bool, read back; a jump on it, which the loop goes on after.
+        let no_number = |o: Operand| match o {
+            Operand::Lit(l) => !matches!(
+                self.lits.get(l as usize),
+                Some(Value::Int(_) | Value::Float(_) | Value::Bool(_))
+            ),
+            Operand::Cv(c) => var(c).is_some_and(|slot| self.untracked(st, slot)),
+            // (Of a type not known, or anything.)
+            Operand::Tmp(t) => temp(t).is_some_and(|slot| {
+                !matches!(
+                    st.get(&slot).or_else(|| self.entry.get(&slot)),
+                    Some(Ty::Int | Ty::Float | Ty::Bool)
+                )
+            }),
+            _ => false,
+        };
+        match *op {
+            Op::Unary {
+                op: UnKind::Not | UnKind::Bool,
+                a,
+                dst,
+            } if no_number(a) => {
+                take(&[a])?;
+                let dst = temp(dst)?;
+                if i + 1 >= self.tape.len() {
+                    return None;
+                }
+                if self.ty(st, dst).is_none() {
+                    self.entry.entry(dst).or_insert(Ty::Any);
+                }
+                if (self.seen.slow)(i) {
+                    return self.out(i + 1, Some((dst, Some(Ty::Bool))), consume[0]);
+                }
+                return Some(Plan::Ext {
+                    alt: None,
+                    step: ExtStep::Truth,
+                    result: Some((dst, Ty::Bool)),
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+            // `a && b`, `a || b`: the bool is stored when the jump is
+            // taken. (Its temporary owns nothing either way, of a type not
+            // known: as consumed.)
+            Op::JmpZEx { a, dst, target } | Op::JmpNzEx { a, dst, target } if no_number(a) => {
+                take(&[a])?;
+                let target = target as usize;
+                if (self.seen.slow)(i) || i + 1 >= self.tape.len() || target >= self.tape.len() {
+                    return None;
+                }
+                let dst = temp(dst)?;
+                self.ty(st, dst)?;
+                *consume.iter_mut().find(|c| c.is_none())? = Some(dst);
+                return Some(Plan::Ext {
+                    alt: Some(target),
+                    step: ExtStep::Truth,
+                    result: None,
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+            Op::JmpZ(a, target) | Op::JmpNz(a, target) if no_number(a) => {
+                take(&[a])?;
+                let target = target as usize;
+                if (self.seen.slow)(i) || i + 1 >= self.tape.len() || target >= self.tape.len() {
+                    return None;
+                }
+                return Some(Plan::Ext {
+                    alt: Some(target),
+                    step: ExtStep::Truth,
+                    result: None,
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+            _ => {}
+        }
+        // The start and end of a `foreach` by value inside the loop.
+        match *op {
+            Op::FeReset {
+                subject,
+                kind: crate::opcode::ForeachKind::Value,
+                end,
+                ..
+            } => {
+                take(&[subject])?;
+                let end = end as usize;
+                // (Over an empty literal: never into the loop.)
+                if let Operand::Lit(l) = subject {
+                    if matches!(self.lits.get(l as usize), Some(Value::Array(a)) if a.is_empty())
+                        && end < self.tape.len()
+                    {
+                        return Some(Plan::Jmp { to: end });
+                    }
+                }
+                if (self.seen.slow)(i) || i + 1 >= self.tape.len() || end >= self.tape.len() {
+                    return None;
+                }
+                return Some(Plan::Ext {
+                    alt: Some(end),
+                    step: ExtStep::Foreach,
+                    result: None,
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+            Op::FeFree { .. } => {
+                if (self.seen.slow)(i) || i + 1 >= self.tape.len() {
+                    return None;
+                }
+                return Some(Plan::Ext {
+                    alt: None,
+                    step: ExtStep::Foreach,
+                    result: None,
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
+            _ => {}
+        }
+        // `instanceof` of a class by name: its bool, read back.
+        if let &Op::InstanceOf {
+            a,
+            class: crate::opcode::ClassSpec::Named(_),
+            dst,
+        } = op
+        {
+            take(&[a])?;
+            let dst = temp(dst)?;
+            if i + 1 >= self.tape.len() {
+                return None;
+            }
+            if self.ty(st, dst).is_none() {
+                self.entry.entry(dst).or_insert(Ty::Any);
+            }
+            if (self.seen.slow)(i) {
+                // (Its step kept declining: the interpreter's op.)
+                return self.out(i + 1, Some((dst, Some(Ty::Bool))), consume[0]);
+            }
+            return Some(Plan::Ext {
+                alt: None,
+                step: ExtStep::InstanceOf,
+                result: Some((dst, Ty::Bool)),
+                any: None,
+                consume,
+                after: i + 1,
+                next: i + 1,
+            });
+        }
+        // An array literal: its start and its elements, into its
+        // temporary.
+        let array = match *op {
+            Op::InitArray { dst } => Some(temp(dst)?),
+            Op::ArrayAdd { arr, key, val } => {
+                take(&[val])?;
+                if let Some(key) = key {
+                    take(&[key])?;
+                }
+                Some(temp(arr)?)
+            }
+            _ => None,
+        };
+        if let Some(array) = array {
+            if (self.seen.slow)(i) || i + 1 >= self.tape.len() {
+                return None;
+            }
+            return Some(Plan::Ext {
+                alt: None,
+                step: ExtStep::Array,
+                result: None,
+                any: Some(array),
+                consume,
+                after: i + 1,
+                next: i + 1,
+            });
+        }
         let written = match op {
             Op::Bin {
                 op: BinKind::Arith(BinaryOp::Concat),
@@ -3534,6 +4247,30 @@ impl<'a> Analysis<'a> {
                 take(&[*operand])?;
                 None
             }
+            // A value that is no number into a temporary (a branch of
+            // `?:`): a string, null or array literal, or a variable that
+            // holds anything.
+            &Op::Move {
+                src: Operand::Lit(l),
+                dst,
+            } if !matches!(
+                self.lits.get(l as usize),
+                Some(Value::Int(_) | Value::Float(_) | Value::Bool(_))
+            ) =>
+            {
+                Some(temp(dst)?)
+            }
+            &Op::Move {
+                src: Operand::Cv(from),
+                dst,
+            } if self.untracked(st, var(from)?) => Some(temp(dst)?),
+            &Op::Move {
+                src: src @ Operand::Tmp(from),
+                dst,
+            } if any(temp(from)?) => {
+                take(&[src])?;
+                Some(temp(dst)?)
+            }
             // A literal that is no number, into a variable; or anything
             // into a variable that holds anything.
             &Op::AssignCv {
@@ -3558,7 +4295,12 @@ impl<'a> Analysis<'a> {
             return None;
         }
         (i + 1 < self.tape.len()).then_some(Plan::Ext {
-            core: crate::exec::hot::is_core(op),
+            alt: None,
+            step: if crate::exec::hot::is_core(op) {
+                ExtStep::Core
+            } else {
+                ExtStep::Ext
+            },
             result: None,
             any: written,
             consume,
@@ -3702,6 +4444,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             base: tape.len() + INLINE_SPAN * inl.len(),
             argc: site.sends.len(),
             first: func.plain_first_op(site.sends.len()),
+            sites: call_sites(&func.code.ops),
             func,
             tape: callee,
         });
@@ -3719,6 +4462,8 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         real: tape.len(),
         inline: false,
         bound: vec![false; inl.len()],
+        callee: None,
+        demoted: Vec::new(),
     };
     // The loop's instructions: from its head to its last jump back.
     let last = (head..tape.len()).rev().find(|i| {
@@ -3735,13 +4480,56 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     ins.insert(head, State::new());
     let mut work = vec![head];
     let mut visits = 0;
+    let mut attempts = 0;
     while let Some(i) = work.pop() {
         visits += 1;
         if visits > MAX_VISITS || ins.len() > MAX_REGION {
             return None;
         }
         let before = ins.get(&i)?.clone();
-        let plan = an.plan(&before, i)?;
+        let Some(plan) = an.plan(&before, i) else {
+            // Inside a call the loop was to make itself (an argument that
+            // is no number, an inlined function's instruction it has no
+            // form for): looked at again with that call the interpreter's
+            // ([`Plan::Out`]).
+            let site = if i < tape.len() {
+                an.sites
+                    .iter()
+                    .filter(|site| site.init < i && i <= site.call)
+                    .max_by_key(|site| site.init)
+                    .map(|site| site.init)
+            } else {
+                inl.iter()
+                    .find(|c| i >= c.base && i < c.base + c.tape.len())
+                    .map(|c| c.init)
+            };
+            if let Some(init) = site.filter(|init| !an.demoted.contains(init)) {
+                attempts += 1;
+                if attempts <= 8 {
+                    an.demoted.push(init);
+                    an.entry = State::new();
+                    an.consts.clear();
+                    an.bound = vec![false; inl.len()];
+                    ins.clear();
+                    ins.insert(head, State::new());
+                    work = vec![head];
+                    visits = 0;
+                    continue;
+                }
+            }
+            if super::why().is_some() {
+                let op = if i < tape.len() {
+                    code.ops.get(i)
+                } else {
+                    None
+                };
+                eprintln!("jit: loop at {head}: no plan for instruction {i}: {op:?}");
+                if super::why() == Some(2) {
+                    eprintln!("jit:   with {before:?}");
+                }
+            }
+            return None;
+        };
         for to in plan.successors().into_iter().flatten() {
             if !inside(to) {
                 // The jump back to the head, or a way out of the loop.
@@ -3761,9 +4549,15 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             }
         }
     }
+    let why = super::why().is_some();
     let mut plans = BTreeMap::new();
     for (i, st) in ins {
-        let plan = an.plan(&st, i)?;
+        let Some(plan) = an.plan(&st, i) else {
+            if why {
+                eprintln!("jit: loop at {head}: no plan for instruction {i} on the second look");
+            }
+            return None;
+        };
         plans.insert(i, (plan, st));
     }
     // The calls the loop computes: their arguments must be redoable.
@@ -3775,6 +4569,11 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         for at in site.init + 1..=site.call {
             if let Some((plan, _)) = plans.get(&at) {
                 if !plan.redoable() {
+                    if why {
+                        eprintln!(
+                            "jit: loop at {head}: instruction {at} is among the arguments of a call and cannot be redone"
+                        );
+                    }
                     return None;
                 }
             }
@@ -3834,10 +4633,43 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         }
         std::mem::forget(func);
     }
+    // Where the loop comes back in after what it leaves to the
+    // interpreter. Leaving and coming back costs about what a hundred
+    // instructions do: only worth it around enough work the loop does
+    // itself (an inlined call, a `foreach`, or half a dozen instructions
+    // for each time).
+    let mut resumes: Vec<(usize, State)> = Vec::new();
+    let mut outs = 0;
+    for (plan, _) in plans.values() {
+        if let Plan::Out { resume: at, .. } = *plan {
+            outs += 1;
+            if !resumes.iter().any(|(known, _)| *known == at) {
+                resumes.push((at, plans.get(&at)?.1.clone()));
+            }
+        }
+    }
+    if outs > 0 {
+        let heavy = plans.values().any(|(plan, _)| {
+            matches!(
+                plan,
+                Plan::Bind { .. } | Plan::Each { .. } | Plan::EachAny { .. }
+            )
+        });
+        if !heavy && plans.len() < 7 * outs {
+            if super::why().is_some() {
+                eprintln!(
+                    "jit: loop at {head}: {outs} ways out to the interpreter, {} instructions",
+                    plans.len()
+                );
+            }
+            return None;
+        }
+    }
     let lp = Loop {
         head,
         entry: an.entry,
         plans,
+        resumes,
         resume,
         consts: an.consts,
         real: tape.len(),
@@ -3849,6 +4681,17 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     let repeats = lp.plans.values().any(|(plan, st)| {
         plan.successors().contains(&Some(head)) && lp.may_repeat(&plan.out(st, head))
     });
+    if !repeats && super::why().is_some() {
+        eprintln!("jit: loop at {head}: no round can follow another with these types");
+        if super::why() == Some(2) {
+            eprintln!("jit:   entry {:?}", lp.entry);
+            for (plan, st) in lp.plans.values() {
+                if plan.successors().contains(&Some(head)) {
+                    eprintln!("jit:   round's end {:?}", plan.out(st, head));
+                }
+            }
+        }
+    }
     repeats.then_some(lp)
 }
 
@@ -4035,7 +4878,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
-    let &[cvs, tmps, _lits, frame, _entry, record] = params.as_slice() else {
+    let &[cvs, tmps, _lits, frame, at, record] = params.as_slice() else {
         return None;
     };
     let mut handler_sig = Signature::new(b.func.signature.call_conv);
@@ -4105,10 +4948,96 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         blocks,
         pending: Vec::new(),
     };
+    // Entered again after the interpreter ran what the loop left for
+    // ([`Plan::Out`]): at that instruction, when everything the loop
+    // relies on there still holds; else the interpreter goes on.
+    for (resume, st) in &lp.resumes {
+        let (here, next, stale) = (e.b.create_block(), e.b.create_block(), e.b.create_block());
+        e.b.set_cold_block(stale);
+        let is =
+            e.b.ins()
+                .icmp_imm(IntCC::Equal, at, i64::try_from(*resume).ok()?);
+        e.b.ins().brif(is, here, &[], next, &[]);
+        e.b.switch_to_block(here);
+        // The entry types, as far as the loop has not changed them by
+        // then. (An inlined function's variables are not live here.)
+        let mut types = lp.entry.clone();
+        for (slot, ty) in st {
+            if slot.at >= 0 && types.contains_key(slot) {
+                types.insert(*slot, *ty);
+            }
+        }
+        enter_checks(&mut e, &types, none_tag, stale)?;
+        let target = *e.blocks.get(resume)?;
+        e.b.ins().jump(target, &[]);
+        e.b.switch_to_block(stale);
+        e.ret(*resume, WHY_GENERIC);
+        e.b.switch_to_block(next);
+    }
+    {
+        // Entered anywhere but at the head or at one of this code's
+        // resume points: at a point an earlier compilation of the loop
+        // resumed at, which this one does not. The interpreter goes on
+        // there (and not at the head, in the middle of a round), and the
+        // point is given up: [`WHY_NOT_TYPED`] at the point itself, which
+        // it otherwise only names with the head.
+        let (here, elsewhere) = (e.b.create_block(), e.b.create_block());
+        e.b.set_cold_block(elsewhere);
+        let is =
+            e.b.ins()
+                .icmp_imm(IntCC::Equal, at, i64::try_from(lp.head).ok()?);
+        e.b.ins().brif(is, here, &[], elsewhere, &[]);
+        e.b.switch_to_block(elsewhere);
+        let shifted = e.b.ins().ishl_imm(at, i64::from(WHY_BITS));
+        let packed = e.b.ins().bor_imm(shifted, i64::from(WHY_NOT_TYPED));
+        e.b.ins().return_(&[packed]);
+        e.b.switch_to_block(here);
+    }
     // The guards: what the analysis assumed of the frame.
     let bail = e.b.create_block();
     e.b.set_cold_block(bail);
-    for (slot, ty) in &lp.entry {
+    enter_checks(&mut e, &lp.entry, none_tag, bail)?;
+    let head = *e.blocks.get(&lp.head)?;
+    e.b.ins().jump(head, &[]);
+    e.b.switch_to_block(bail);
+    e.ret(lp.head, WHY_NOT_TYPED);
+
+    for (i, (plan, st)) in &lp.plans {
+        e.b.switch_to_block(*e.blocks.get(i)?);
+        if e.inst(*i, plan, st).is_none() {
+            if super::why().is_some() {
+                eprintln!(
+                    "jit: loop at {}: no code for instruction {i}: {plan:?}",
+                    lp.head
+                );
+            }
+            return None;
+        }
+        while let Some((block, what)) = e.pending.pop() {
+            e.b.switch_to_block(block);
+            match what {
+                Pending::Edge { from, to, repeat } => e.go(from, to, repeat)?,
+                Pending::Deopt(at) => {
+                    let at = lp.resume.get(&at).copied().unwrap_or(at);
+                    e.ret(at, WHY_GENERIC);
+                }
+            }
+        }
+    }
+    e.b.seal_all_blocks();
+    e.b.finalize();
+    Some(())
+}
+
+/// Emits what the code checks and loads where it is entered: the types
+/// `types` of the slots it tracks (the loop's entry types at its head, the
+/// types at the instruction where it is entered again), the functions it
+/// runs inline, the scope of its method calls, the constants it was
+/// compiled with; then the numbers and bools of those slots into their
+/// variables. Any check that fails goes to `bail`.
+fn enter_checks(e: &mut Emit<'_, '_>, types: &State, none_tag: u8, bail: Block) -> Option<()> {
+    let lp = e.lp;
+    for (slot, ty) in types {
         let base = e.base(*slot);
         let tag = e.b.ins().load(types::I8, mem(), base, slot.at);
         let ok = match ty {
@@ -4182,7 +5111,7 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         e.b.switch_to_block(next);
     }
     // The numbers the loop starts with, into their variables.
-    for (slot, ty) in &lp.entry {
+    for (slot, ty) in types {
         let base = e.base(*slot);
         let (int, float) = *e.vars.get(slot)?;
         match ty {
@@ -4206,27 +5135,6 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
             Ty::Plain | Ty::Any => {}
         }
     }
-    let head = *e.blocks.get(&lp.head)?;
-    e.b.ins().jump(head, &[]);
-    e.b.switch_to_block(bail);
-    e.ret(lp.head, WHY_NOT_TYPED);
-
-    for (i, (plan, st)) in &lp.plans {
-        e.b.switch_to_block(*e.blocks.get(i)?);
-        e.inst(*i, plan, st)?;
-        while let Some((block, what)) = e.pending.pop() {
-            e.b.switch_to_block(block);
-            match what {
-                Pending::Edge { from, to, repeat } => e.go(from, to, repeat)?,
-                Pending::Deopt(at) => {
-                    let at = lp.resume.get(&at).copied().unwrap_or(at);
-                    e.ret(at, WHY_GENERIC);
-                }
-            }
-        }
-    }
-    e.b.seal_all_blocks();
-    e.b.finalize();
     Some(())
 }
 
@@ -4802,6 +5710,9 @@ impl Emit<'_, '_> {
         let repeat = self.lp.may_repeat(&out);
         match *plan {
             Plan::Jmp { to } => self.go(i, to, repeat)?,
+            // The interpreter's from here; the code is entered again at
+            // `resume` ([`Loop::resumes`]).
+            Plan::Out { .. } => self.ret(i, WHY_GENERIC),
             Plan::Bind {
                 check,
                 args,
@@ -4926,7 +5837,73 @@ impl Emit<'_, '_> {
                 self.write(st, dst, false, r)?;
                 self.go(i, next, repeat)?;
             }
-            Plan::Div { a, b, dst, next } => {
+            Plan::Div {
+                a,
+                b,
+                dst,
+                ints: Some(ints),
+                next,
+            } => {
+                let (x, y) = (self.int(a)?, self.int(b)?);
+                // A zero divisor throws, and the smallest int by -1 is a
+                // float: the generic op's.
+                let deopt = self.deopt(i);
+                let [nonzero, divisible, ok, miss] = std::array::from_fn(|_| self.b.create_block());
+                self.b.set_cold_block(miss);
+                let by_zero = self.b.ins().icmp_imm(IntCC::Equal, y, 0);
+                self.b.ins().brif(by_zero, deopt, &[], nonzero, &[]);
+                self.b.switch_to_block(nonzero);
+                let by_minus_one = self.b.ins().icmp_imm(IntCC::Equal, y, -1);
+                let deopt = self.deopt(i);
+                self.b.ins().brif(by_minus_one, deopt, &[], divisible, &[]);
+                self.b.switch_to_block(divisible);
+                let rem = self.b.ins().srem(x, y);
+                let is_exact = self.b.ins().icmp_imm(IntCC::Equal, rem, 0);
+                let r = match ints {
+                    IntDiv::Exact | IntDiv::Inexact => {
+                        let exact = ints == IntDiv::Exact;
+                        if exact {
+                            self.b.ins().brif(is_exact, ok, &[], miss, &[]);
+                        } else {
+                            self.b.ins().brif(is_exact, miss, &[], ok, &[]);
+                        }
+                        self.b.switch_to_block(miss);
+                        self.ret(i, WHY_MISS);
+                        self.b.switch_to_block(ok);
+                        if exact {
+                            self.b.ins().sdiv(x, y)
+                        } else {
+                            let fx = self.b.ins().fcvt_from_sint(types::F64, x);
+                            let fy = self.b.ins().fcvt_from_sint(types::F64, y);
+                            self.b.ins().fdiv(fx, fy)
+                        }
+                    }
+                    // The int quotient, made a float, or the quotient of
+                    // the floats.
+                    IntDiv::Float => {
+                        // (`miss` is the way of an exact one, here.)
+                        let inexact = self.b.create_block();
+                        self.b.append_block_param(ok, types::F64);
+                        self.b.ins().brif(is_exact, miss, &[], inexact, &[]);
+                        self.b.switch_to_block(miss);
+                        let q = self.b.ins().sdiv(x, y);
+                        let q = self.b.ins().fcvt_from_sint(types::F64, q);
+                        self.b.ins().jump(ok, &[q.into()]);
+                        self.b.switch_to_block(inexact);
+                        let fx = self.b.ins().fcvt_from_sint(types::F64, x);
+                        let fy = self.b.ins().fcvt_from_sint(types::F64, y);
+                        let r = self.b.ins().fdiv(fx, fy);
+                        self.b.ins().jump(ok, &[r.into()]);
+                        self.b.switch_to_block(ok);
+                        *self.b.block_params(ok).first()?
+                    }
+                };
+                self.write(st, dst, ints != IntDiv::Exact, r)?;
+                self.go(i, next, repeat)?;
+            }
+            Plan::Div {
+                a, b, dst, next, ..
+            } => {
                 let (x, y) = (self.float(a)?, self.float(b)?);
                 // A zero divisor (also -0.0) throws: the generic op's.
                 let zero = self.b.ins().f64const(0.0);
@@ -5114,6 +6091,7 @@ impl Emit<'_, '_> {
             }
             Plan::Pick {
                 max,
+                float: false,
                 a,
                 b,
                 dst,
@@ -5130,6 +6108,28 @@ impl Emit<'_, '_> {
                 self.write(st, dst, false, r)?;
                 self.go(i, next, repeat)?;
             }
+            // As the two-argument `max()` / `min()` (`frameless_minmax`):
+            // the first when it is at least the second (smaller than it),
+            // the second when either is NAN.
+            Plan::Pick {
+                max,
+                float: true,
+                a,
+                b,
+                dst,
+                next,
+            } => {
+                let (x, y) = (self.float(a)?, self.float(b)?);
+                let cc = if max {
+                    FloatCC::GreaterThanOrEqual
+                } else {
+                    FloatCC::LessThan
+                };
+                let first = self.b.ins().fcmp(cc, x, y);
+                let r = self.b.ins().select(first, x, y);
+                self.write(st, dst, true, r)?;
+                self.go(i, next, repeat)?;
+            }
             Plan::Each {
                 slim,
                 iter,
@@ -5144,7 +6144,7 @@ impl Emit<'_, '_> {
                 if slim {
                     let base = self.base(value.0);
                     let value_at = self.b.ins().iadd_imm(base, i64::from(value.0.at));
-                    let key_at = match key {
+                    let key_at = match key.map(|(key, _)| key) {
                         Some(key) => {
                             let base = self.base(key);
                             self.b.ins().iadd_imm(base, i64::from(key.at))
@@ -5179,7 +6179,7 @@ impl Emit<'_, '_> {
                     let ty = if value.1 { types::F64 } else { types::I64 };
                     let v = self.b.ins().load(ty, mem(), base, value.0.at + PAYLOAD_AT);
                     self.b.def_var(if value.1 { fl } else { int }, v);
-                    if let Some(key) = key {
+                    if let Some((key, _)) = key {
                         let base = self.base(key);
                         let (int, _) = *self.vars.get(&key)?;
                         let v = self
@@ -5245,7 +6245,7 @@ impl Emit<'_, '_> {
                 // The element, read back behind a test of its type.
                 self.b.switch_to_block(fetched);
                 self.read_back(value.0, num_ty(value.1), full)?;
-                if let Some(key) = key {
+                if let Some((key, true)) = key {
                     self.read_back(key, Ty::Int, full)?;
                 }
                 self.go(i, full, repeat)?;
@@ -5468,16 +6468,21 @@ impl Emit<'_, '_> {
                 self.ret_at(next, WHY_GENERIC);
             }
             Plan::Ext {
-                core,
+                step,
+                alt,
                 result,
                 after,
                 next,
                 ..
             } => {
-                let step = if core {
-                    super::core_step as super::Step as usize
-                } else {
-                    super::fe_fetch as super::Step as usize
+                let step = match step {
+                    ExtStep::Core => super::core_step as super::Step as usize,
+                    ExtStep::Ext => super::fe_fetch as super::Step as usize,
+                    ExtStep::Compare => super::compare_step as super::Step as usize,
+                    ExtStep::Array => super::array_step as super::Step as usize,
+                    ExtStep::InstanceOf => super::instanceof_step as super::Step as usize,
+                    ExtStep::Truth => super::truth_step as super::Step as usize,
+                    ExtStep::Foreach => super::foreach_step as super::Step as usize,
                 };
                 #[allow(clippy::cast_possible_wrap)]
                 let callee = self.b.ins().iconst(types::I64, step as i64);
@@ -5507,9 +6512,23 @@ impl Emit<'_, '_> {
                     .icmp_imm(IntCC::Equal, got, i64::try_from(next).ok()?);
                 self.b.ins().brif(whole, as_planned, &[], other, &[]);
                 // Done, but not into the variable: the first tier's from
-                // the `AssignCv`.
+                // the `AssignCv` (or from where the op went: a `CmpJmp`
+                // of numbers jumps). A jump the loop takes itself.
                 self.b.switch_to_block(other);
-                self.ret(after, WHY_GENERIC);
+                if let Some(alt) = alt {
+                    let (jumped, elsewhere) = (self.b.create_block(), self.b.create_block());
+                    let to_alt = self
+                        .b
+                        .ins()
+                        .icmp_imm(IntCC::Equal, got, i64::try_from(alt).ok()?);
+                    self.b.ins().brif(to_alt, jumped, &[], elsewhere, &[]);
+                    self.b.switch_to_block(jumped);
+                    self.poll(i, alt)?;
+                    self.go(i, alt, repeat)?;
+                    self.b.switch_to_block(elsewhere);
+                }
+                let _ = after;
+                self.ret_at(got, WHY_GENERIC);
                 self.b.switch_to_block(as_planned);
                 // The poll `run_tape` makes after the op.
                 self.poll(i, next)?;
