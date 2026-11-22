@@ -413,9 +413,12 @@ impl Validator {
             } else if d.name.eq_ignore_case("encoding") {
                 if !first(false) {
                     return err(
-                        "Encoding declaration pragma must be the very first statement in the script",
+                        "Encoding declaration must be the very first statement in the script",
                         line,
                     );
+                }
+                if body.is_some() {
+                    return err("Encoding declaration must not use block mode", line);
                 }
             } else if d.name.eq_ignore_case("strict_types") {
                 if !first(true) {
