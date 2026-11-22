@@ -124,8 +124,6 @@ candidates for `perf/bench` and for work.
 
 ## D. Housekeeping
 
-- [ ] Contribution policy (FEATURE_GAP 0%): CONTRIBUTING.md, code of conduct, security
-  policy, before taking external contributions.
 - [ ] Update this file after each evidence run.
 - Rules that stay: never push unless the owner asks (`git push davidbuzz master`); JIT
   knobs are `BUZZS_*` (`BUZZS_JIT=0` off, `BUZZS_JIT_DEBUG=1` reports, `BUZZS_JIT_HOT=<n>`
