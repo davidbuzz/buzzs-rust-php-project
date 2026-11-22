@@ -140,6 +140,20 @@ pub struct CgiInfo {
     /// set; `fcgi_loadenv()` visits them newest first. `None` for a plain
     /// CGI request, whose environment is the process environment.
     pub fcgi_env: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    /// A response the SAPI gives instead of running the script (FPM's
+    /// status and ping pages, "File not found.", "Access denied.").
+    pub reply: Option<CgiReply>,
+}
+
+/// A response made without running a script.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CgiReply {
+    /// `SG(sapi_headers).http_response_code`.
+    pub status: i32,
+    /// Header lines (`sapi_add_header_ex`), replacing earlier ones.
+    pub headers: Vec<Vec<u8>>,
+    /// The body (`PUTS`).
+    pub body: Vec<u8>,
 }
 
 impl CgiInfo {
@@ -165,6 +179,16 @@ pub trait FastCgiStreams: std::fmt::Debug {
     fn stderr(&self, data: &[u8]) -> bool;
     /// `fcgi_flush(request, 0)`: sends what is buffered.
     fn flush(&self) -> bool;
+    /// `fcgi_is_closed()`, or the request ended through `finish`.
+    fn is_finished(&self) -> bool {
+        false
+    }
+    /// `fcgi_end()` and `fcgi_close(request, 0, 0)` for
+    /// `fastcgi_finish_request()`: `false` when the request already ended.
+    /// Output written afterwards is dropped.
+    fn finish(&self) -> bool {
+        false
+    }
 }
 
 thread_local! {
@@ -687,6 +711,53 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value(CGI_SAPI_NAME))
 }
 
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
+fn php_sapi_name_fpm(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(str_value(FPM_SAPI_NAME))
+}
+
+/// `fastcgi_finish_request()` (`fpm_main.c`): the output buffers end and
+/// the headers go out, then the `FastCGI` request ends while the script
+/// goes on; `false` when it had already ended.
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
+fn fastcgi_finish_request(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(ctx) = current() else {
+        return Ok(Value::Bool(false));
+    };
+    let Some(fcgi) = ctx.fcgi.clone() else {
+        return Ok(Value::Bool(false));
+    };
+    if fcgi.is_finished() {
+        return Ok(Value::Bool(false));
+    }
+    php_support::output::end_all(vm);
+    vm.flush_stdout();
+    call_header_callback(vm, &ctx);
+    ctx.send_headers();
+    vm.headers_sent = true;
+    Ok(Value::Bool(fcgi.finish()))
+}
+
+thread_local! {
+    /// `fpm_get_status()`'s implementation: the `php-fpm` binary reads its
+    /// scoreboard.
+    static FPM_STATUS: Cell<Option<NativeFn>> = const { Cell::new(None) };
+}
+
+/// Installs `fpm_get_status()`'s implementation.
+pub fn set_fpm_status_hook(f: NativeFn) {
+    FPM_STATUS.with(|c| c.set(Some(f)));
+}
+
+/// `fpm_get_status()`: the pool's status as an array, `false` outside a
+/// request.
+fn fpm_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match FPM_STATUS.with(Cell::get) {
+        Some(f) => f(vm, a),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
 /// `sapi_cgi_log_message()`: the message and a newline on stderr, or
 /// in an `FCGI_STDERR` record under `FastCGI` with `fastcgi.logging`.
 fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -852,6 +923,21 @@ impl Extension for Rfc1867Constants {
 /// `cgi_sapi_module.name`.
 pub const CGI_SAPI_NAME: &str = "cgi-fcgi";
 
+/// `cgi_sapi_module.name` of `fpm_main.c`.
+pub const FPM_SAPI_NAME: &str = "fpm-fcgi";
+
+/// The INI entries of `fpm_main.c` (`PHP_INI_BEGIN`), as [`CGI_INI`].
+const FPM_INI: &[(&str, Option<&str>, bool, bool)] = &[
+    ("cgi.rfc2616_headers", Some("0"), true, true),
+    ("cgi.nph", Some("0"), true, true),
+    ("cgi.fix_pathinfo", Some("1"), false, true),
+    ("cgi.discard_path", Some("0"), false, true),
+    ("fastcgi.script_path_encoded", Some("1"), false, true),
+    ("fastcgi.logging", Some("1"), false, true),
+    ("fastcgi.error_header", None, false, false),
+    ("fpm.config", None, false, false),
+];
+
 /// The `cgi` module's INI entries (`PHP_INI_BEGIN` of `cgi_main.c`):
 /// name, default, whether `PHP_INI_ALL` (else `PHP_INI_SYSTEM`), boolean.
 const CGI_INI: &[(&str, Option<&str>, bool, bool)] = &[
@@ -872,11 +958,16 @@ const CGI_INI: &[(&str, Option<&str>, bool, bool)] = &[
 pub struct CliServerModule {
     /// Register as the CGI SAPI.
     pub cgi: bool,
+    /// Register as the FPM SAPI (`sapi/fpm/fpm/fpm_main.c`, a fork of the
+    /// CGI SAPI): with `cgi`.
+    pub fpm: bool,
 }
 
 impl Extension for CliServerModule {
     fn name(&self) -> &'static str {
-        if self.cgi {
+        if self.fpm {
+            FPM_SAPI_NAME
+        } else if self.cgi {
             CGI_SAPI_NAME
         } else {
             "cli_server"
@@ -888,7 +979,12 @@ impl Extension for CliServerModule {
         m.vm().response_header_hook = Some(add_response_header);
         m.vm().parse_body_hook = Some(crate::vars::parse_body);
         if self.cgi {
-            for &(name, default, all, boolean) in CGI_INI {
+            let (table, module) = if self.fpm {
+                (FPM_INI, FPM_SAPI_NAME)
+            } else {
+                (CGI_INI, CGI_SAPI_NAME)
+            };
+            for &(name, default, all, boolean) in table {
                 m.ini(IniDirective::new(
                     name,
                     default,
@@ -898,7 +994,7 @@ impl Extension for CliServerModule {
                     } else {
                         ModifyHandler::String
                     },
-                    CGI_SAPI_NAME,
+                    module,
                 ));
             }
         } else {
@@ -930,7 +1026,9 @@ impl Extension for CliServerModule {
         for (name, v) in UPLOAD_ERR {
             m.constant(name, Value::Int(*v));
         }
-        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.cgi {
+        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.fpm {
+            (FPM_SAPI_NAME, php_sapi_name_fpm, error_log_cgi)
+        } else if self.cgi {
             (CGI_SAPI_NAME, php_sapi_name_cgi, error_log_cgi)
         } else {
             ("cli-server", php_sapi_name, error_log)
@@ -960,8 +1058,13 @@ impl Extension for CliServerModule {
                 log,
             )
             .function_static("apache_request_headers(): array", apache_request_headers)
-            .function_static("getallheaders(): array", apache_request_headers)
-            .function_static("apache_response_headers(): array", apache_response_headers);
+            .function_static("getallheaders(): array", apache_request_headers);
+        if self.fpm {
+            m.function_static("fastcgi_finish_request(): bool", fastcgi_finish_request)
+                .function_static("fpm_get_status(): array|false", fpm_get_status);
+        } else {
+            m.function_static("apache_response_headers(): array", apache_response_headers);
+        }
         if self.cgi {
             m.function_static(
                 "getenv(?string $name = null, bool $local_only = false): array|string|false",
@@ -1226,6 +1329,17 @@ fn run_request_inner(
 /// fails), the change to the script's directory (`php_execute_script`,
 /// unless `-C`), then the script and request shutdown.
 fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
+    if let Some(reply) = &cgi.reply {
+        if reply.status != 200 {
+            let _ = ctx.header_op(HeaderOp::SetStatus(reply.status));
+        }
+        for h in &reply.headers {
+            let _ = ctx.header_op(HeaderOp::Replace(h, 0));
+        }
+        vm.output(&reply.body);
+        finish(vm, ctx, Ok(()));
+        return;
+    }
     let path = ctx.request.path_translated.clone().unwrap_or_default();
     let (src, shown) = if let Some(src) = &cgi.source {
         (src.clone(), b"Standard input code".to_vec())

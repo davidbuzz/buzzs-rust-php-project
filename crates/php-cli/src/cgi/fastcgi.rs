@@ -700,7 +700,8 @@ impl Connection {
     /// `fcgi_write()`: `data` as records of type `kind`, buffered up to
     /// [`OUT_BUF`] bytes.
     fn write_records(&self, kind: u8, data: &[u8]) -> bool {
-        if data.is_empty() {
+        // After `fastcgi_finish_request()` the script's output goes nowhere.
+        if data.is_empty() || self.ended.get() {
             return true;
         }
         if self.out_hdr.get().is_some_and(|(_, t)| t != kind) {
@@ -778,7 +779,21 @@ impl FastCgiStreams for Connection {
     }
 
     fn flush(&self) -> bool {
-        self.flush_out(false)
+        self.ended.get() || self.flush_out(false)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.is_closed() || self.ended.get()
+    }
+
+    fn finish(&self) -> bool {
+        if self.is_finished() {
+            return false;
+        }
+        let ok = self.flush_out(true);
+        self.ended.set(true);
+        self.close(false);
+        ok
     }
 }
 
