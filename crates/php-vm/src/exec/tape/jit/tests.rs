@@ -581,8 +581,9 @@ fn numeric_loops_get_typed_code() {
 
 #[test]
 fn loops_the_second_tier_leaves_alone() {
-    // An array of strings: its elements are not numbers.
-    typed_is("<?php $a = ['x', 'y', 'z']; for ($i = 0; $i < 3; $i++) { $t = $a[$i]; $n = $i * 2; } echo $t, $n;", 0);
+    // (An array of strings is no reason any more: its elements are read
+    // by the handler and not looked at.)
+    typed_is("<?php $a = ['x', 'y', 'z']; for ($i = 0; $i < 3; $i++) { $t = $a[$i]; $n = $i * 2; } echo $t, $n;", 1);
     // A string operand when the loop is first reached.
     typed_is(
         "<?php $u = '5'; $s = 0; for ($i = 0; $i < 9; $i++) { $s = $s + $u; } var_dump($s);",
@@ -1512,6 +1513,39 @@ function s10($list) { foreach ($list as $i => $o) { $o->setN($i); $o->hit(); } $
 function s11($o, $k) { $s = 0; for ($i = 0; $i < $k; $i++) { $s += max($o->setRet($i), 3) + abs($o->calcThenSet(-$i)); } return [$s, $o->n]; }
 $list = []; for ($i = 0; $i < 30; $i++) { $list[] = new W; }
 foreach ([40, 6] as $k) { var_export([s1(new W, $k), s2(new W, $k), s3(new W, $k), s4(new W, $k), s5(new W, $k), s6(new W, $k), s7(new W, $k), s8(new W, $k), s9(new W, $k), s10($list), s11(new W, $k)]); }
+echo "\n";
+"#,
+    );
+}
+
+#[test]
+fn loops_that_build_strings_and_read_string_fields_are_compiled() {
+    typed_at_least(
+        "<?php function t($rows) { $out = ''; $total = 0; foreach ($rows as $i => $row) { $out .= $row['name'] . ','; $line = \"<$i>\" . $row['name']; $total += $row['price'] + strlen($line); } return [$out, $total]; } $rows = []; for ($i = 0; $i < 30; $i++) { $rows[] = ['name' => 'n' . $i, 'price' => $i * 3]; } var_dump(t($rows), t($rows), t([]));",
+        1,
+    );
+    // `.=`, `.`, interpolation, `(string)`, a string that is reset, copied
+    // and becomes an int or an array; string, array and object fields of
+    // rows and objects read into variables and temporaries; numbers
+    // concatenated (a float is formatted by the interpreter).
+    three(
+        r#"<?php
+class Pr { public $name; public $price; public $tags = ['a', 'b']; function __construct($n, $p) { $this->name = $n; $this->price = $p; } function label() { return 1; } }
+function c1($rows) { $out = ''; $total = 0; foreach ($rows as $row) { $out .= $row['name'] . ','; $total += $row['price']; } return [$out, $total]; }
+function c2($rows) { $out = ''; foreach ($rows as $i => $row) { $out .= "<td>{$row['name']}</td><td>$i</td>"; } return $out; }
+function c3($items) { $out = ''; $t = 0.0; foreach ($items as $it) { $line = $it->name . ': ' . $it->price; $out .= $line . "\n"; $t += $it->price * 2; } return [$out, $t]; }
+function c4($n) { $s = ''; for ($i = 0; $i < $n; $i++) { $s = $s . $i . '-'; if ($i % 7 == 0) { $s = ''; } } return $s; }
+function c5($n) { $a = 'x'; $b = ''; for ($i = 0; $i < $n; $i++) { $b = $a; $a = $b . 'y'; $c = (string)$i; $a .= $c; } return [$a, $b, strlen($a)]; }
+function c6($rows) { $n = 0; $last = null; foreach ($rows as $row) { $name = $row['name']; $n += strlen($name); $last = $row; $tags = $row['tags'] ?? null; } return [$n, $last['name'], $tags]; }
+function c7($items) { $n = 0; foreach ($items as $it) { $t = $it->tags; $n += count($t) + $it->label(); $nm = $it->name; $n += strlen($nm); } return $n; }
+function c8($n) { $s = ''; for ($i = 0; $i < $n; $i++) { $f = $i * 0.5; $s .= $f . ' ' . ($i % 3 == 0 ? 'fizz' : $i) . ';'; } return $s; }
+function c9($rows) { $out = []; $k = 0; foreach ($rows as $row) { $key = 'k' . $row['price']; $k += strlen($key); } return $k; }
+function c10($n) { $s = 'a'; for ($i = 0; $i < $n; $i++) { $s .= 'b'; $t = $s; $t .= 'c'; if ($i == 5) { $s = 5; } if ($i == 9) { $s = [1]; } if ($i == 10) { $s = 'z'; } } return [$s, $t]; }
+$rows = []; $items = [];
+for ($i = 0; $i < 40; $i++) { $rows[] = ['name' => 'n' . $i, 'price' => $i * 3, 'tags' => [$i]]; $items[] = new Pr('p' . $i, $i + 0.25); }
+foreach ([1, 2] as $round) {
+  try { var_export([c1($rows), c2($rows), c3($items), c4(40), c5(40), c6($rows), c7($items), c8(40), c9($rows), c1([]), c3([$items[0]])]); var_export(c10(40)); } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+}
 echo "\n";
 "#,
     );

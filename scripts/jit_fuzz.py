@@ -156,6 +156,10 @@ class Gen:
                               f'{v} = {self.pick(STATICS)};', f'{self.pick(STATICS)} = {self.atom()};',
                               f'{self.pick(["$o", "$fo"])}->ax({self.atom()});', f'{self.pick(["$o", "$fo"])}->bump();',
                               f'$o->su({self.expr()});', f'{v} = $o->sr({self.atom()});',
+                              # Strings: built, copied, read from rows.
+                              f"$s .= $z['s'] . {self.atom()};", f'$s = "<{{$i}}>" . $fs;', f'$fs = $s . {self.atom()};',
+                              f"$fs = $z['s']; {v} = strlen($fs) + {self.atom()};", f'$s = (string)({self.expr()});',
+                              f'{v} = strlen($s . {self.atom()});',
                               f'{self.pick(STATICS[:2])} = {v};', f'{v} = {self.pick(STATICS[:2])};',
                               f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',

@@ -1766,6 +1766,11 @@ impl Compiler {
             Emit::run(b, sigs, self.none_tag, of, tape, entries)
         };
         let built = handlers.as_ref().map(|_| ());
+        if built.is_none() {
+            // The builder was dropped in the middle of a function: its
+            // context must not leak into the next one.
+            self.builder_ctx = FunctionBuilderContext::new();
+        }
         let (code, size) = self.finish(built)?;
         Some((code, handlers?, size))
     }
@@ -1777,8 +1782,12 @@ impl Compiler {
             let b = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
             typed::emit(b, lp, self.none_tag)
         };
-        if built.is_none() && std::env::var_os("PHPRUST_JIT_STATS").is_some() {
-            eprintln!("jit: no code for {lp:?}");
+        if built.is_none() {
+            // As in `compile_code`: a builder dropped half way.
+            self.builder_ctx = FunctionBuilderContext::new();
+            if std::env::var_os("PHPRUST_JIT_STATS").is_some() {
+                eprintln!("jit: no code for {lp:?}");
+            }
         }
         self.finish(built)
     }

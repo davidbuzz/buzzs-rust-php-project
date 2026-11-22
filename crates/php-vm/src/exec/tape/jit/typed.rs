@@ -319,6 +319,23 @@ fn math_fn(name: &[u8]) -> Option<Math> {
 pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
     match op {
         Op::Move { src, .. } => !matches!(src, Operand::Unused),
+        // The interpreter's frame-local ops on strings, run as they are
+        // ([`Analysis::opaque`]).
+        Op::Bin {
+            op: crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Concat),
+            ..
+        }
+        | Op::BinAssignCv {
+            op: crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Concat),
+            ..
+        }
+        | Op::Rope { .. }
+        | Op::Cast {
+            kind: CastKind::String,
+            ..
+        }
+        | Op::Free(Operand::Tmp(_))
+        | Op::AssignCv { dst: None, .. } => true,
         Op::Cast {
             kind: CastKind::Int | CastKind::Float,
             ..
@@ -812,8 +829,8 @@ enum Plan {
         result: Option<(SlotRef, Ty)>,
         /// The variable the op leaves holding anything ([`Ty::Any`]).
         any: Option<SlotRef>,
-        /// The temporary the op consumes (left null by it).
-        consume: Option<SlotRef>,
+        /// The temporaries the op consumes (left null by it).
+        consume: [Option<SlotRef>; MAX_CONSUMED],
         /// The instruction after the op itself.
         after: usize,
         next: usize,
@@ -864,6 +881,10 @@ struct Call {
     /// Temporaries the handler may consume: they own nothing afterwards,
     /// and nothing more is known of them.
     consumed: [Option<SlotRef>; MAX_CONSUMED],
+    /// Slots the handler may leave holding anything ([`Ty::Any`]: a read
+    /// of an element or property that is no number, into its temporary
+    /// or the variable of the `AssignCv` folded into it).
+    any: [Option<SlotRef>; 2],
     /// A short cut tried before the handler.
     fast: Option<Fast>,
 }
@@ -1428,7 +1449,7 @@ impl Plan {
                 consume,
                 ..
             } => {
-                if let Some(tmp) = consume {
+                for tmp in consume.into_iter().flatten() {
                     st.insert(tmp, Ty::Plain);
                 }
                 if let Some(var) = any {
@@ -1444,6 +1465,9 @@ impl Plan {
                 }
                 if let Some((slot, ty)) = call.result {
                     st.insert(slot, ty);
+                }
+                for slot in call.any.into_iter().flatten() {
+                    st.insert(slot, Ty::Any);
                 }
             }
             Plan::Int2 { dst, .. } | Plan::Pick { dst, .. } | Plan::AbsInt { dst, .. } => {
@@ -2066,10 +2090,15 @@ impl<'a> Analysis<'a> {
                     core: true,
                     result: None,
                     any: Some(dst),
-                    consume: Some(src),
+                    consume: [Some(src), None, None, None],
                     after: i + 1,
                     next: i + 1,
                 });
+            }
+        }
+        if !self.inline {
+            if let Some(plan) = self.opaque(st, i) {
+                return Some(plan);
             }
         }
         let inst = *self.tape.get(i)?;
@@ -2356,6 +2385,7 @@ impl<'a> Analysis<'a> {
             jump: None,
             result: None,
             consumed: [None; MAX_CONSUMED],
+            any: [None; 2],
             fast: None,
         };
         // The array variable of a `dims` instruction: one the loop does
@@ -2392,11 +2422,11 @@ impl<'a> Analysis<'a> {
                             cv: inst.a,
                             lit: inst.b,
                         });
-                        ty == Ty::Float
+                        Some(ty == Ty::Float)
                     }
                     _ => {
                         call.fast = index.map(|index| Fast::Get { array, index });
-                        self.element_float(inst.a, 1)?
+                        self.element_float(inst.a, 1)
                     }
                 };
                 let dst = u32::try_from(inst.p).ok()?;
@@ -2406,10 +2436,10 @@ impl<'a> Analysis<'a> {
             // into it. The element's type is what the key holds now.
             TOp::FetchDimSC => {
                 array(self)?;
-                let float = match (self.seen.keyed)(inst.a, inst.b)? {
-                    Ty::Int => false,
-                    Ty::Float => true,
-                    Ty::Bool | Ty::Plain | Ty::Any => return None,
+                let float = match (self.seen.keyed)(inst.a, inst.b) {
+                    Some(Ty::Int) => Some(false),
+                    Some(Ty::Float) => Some(true),
+                    _ => None,
                 };
                 call.fast = Some(Fast::GetKey {
                     cv: inst.a,
@@ -2422,7 +2452,7 @@ impl<'a> Analysis<'a> {
             TOp::FetchDimsC => {
                 let array = array(self)?;
                 let dims = self.place_dims(st, &mut call, inst.a, inst.d)?;
-                let float = self.element_float(inst.a, dims.len())?;
+                let float = self.element_float(inst.a, dims.len());
                 if let [Some(i), Some(j)] = dims[..] {
                     call.fast = Some(Fast::Get2 { array, i, j });
                 }
@@ -2519,10 +2549,10 @@ impl<'a> Analysis<'a> {
             // it holds now.
             TOp::FetchObjProp | TOp::FetchObjPropTo => {
                 self.object_place(st, inst.a)?;
-                let float = match (self.seen.property)(inst.a)? {
-                    Ty::Int => false,
-                    Ty::Float => true,
-                    Ty::Bool | Ty::Plain | Ty::Any => return None,
+                let float = match (self.seen.property)(inst.a) {
+                    Some(Ty::Int) => Some(false),
+                    Some(Ty::Float) => Some(true),
+                    _ => None,
                 };
                 let to = if inst.op == TOp::FetchObjPropTo {
                     inst.d
@@ -2530,7 +2560,7 @@ impl<'a> Analysis<'a> {
                     u32::MAX
                 };
                 self.fetched(st, &mut call, i, to, inst.b, float)?;
-                if self.cached_place(inst.a) {
+                if float.is_some() && self.cached_place(inst.a) {
                     call.fast = Some(Fast::PropGet { place: inst.a });
                 }
             }
@@ -2862,7 +2892,7 @@ impl<'a> Analysis<'a> {
                     core: false,
                     any: None,
                     result: Some((slot, ty)),
-                    consume: None,
+                    consume: [None; MAX_CONSUMED],
                     after: i + 1,
                     next,
                 })
@@ -2878,7 +2908,7 @@ impl<'a> Analysis<'a> {
                     core: false,
                     any: None,
                     result: Some((dst, Ty::Bool)),
-                    consume: None,
+                    consume: [None; MAX_CONSUMED],
                     after: next,
                     next,
                 })
@@ -2911,7 +2941,7 @@ impl<'a> Analysis<'a> {
                     core: false,
                     any: None,
                     result: None,
-                    consume,
+                    consume: [consume, None, None, None],
                     after: next,
                     next,
                 })
@@ -3329,7 +3359,10 @@ impl<'a> Analysis<'a> {
     /// index `index`, which must own nothing.
     fn consume(&mut self, st: &State, call: &mut Call, index: u32) -> Option<SlotRef> {
         let slot = tmp(index.checked_mul(SLOT_U32)?)?;
-        self.ty(st, slot)?;
+        // (What holds anything is the handler's to take, too.)
+        if st.get(&slot).or_else(|| self.entry.get(&slot)) != Some(&Ty::Any) {
+            self.ty(st, slot)?;
+        }
         *call.consumed.iter_mut().find(|c| c.is_none())? = Some(slot);
         Some(slot)
     }
@@ -3409,10 +3442,28 @@ impl<'a> Analysis<'a> {
         i: usize,
         to: u32,
         dst: u32,
-        float: bool,
+        float: Option<bool>,
     ) -> Option<()> {
+        let dst = tmp(dst.checked_mul(SLOT_U32)?)?;
+        let Some(float) = float else {
+            // Not a number (a string, an array, an object, or nothing the
+            // loop could tell): the handler stores it, releasing what was
+            // there, and the loop does not look at it. With a folded
+            // `AssignCv`, either the variable has it (the jump) or the
+            // temporary (and the `AssignCv` is next, an instruction of
+            // the loop like any other).
+            if self.inline {
+                return None;
+            }
+            call.fast = None;
+            call.any[0] = Some(dst);
+            if to != u32::MAX {
+                call.any[1] = Some(cv(to.checked_mul(SLOT_U32)?)?);
+                call.jump = Some(self.target(i)?);
+            }
+            return Some(());
+        };
         if to == u32::MAX {
-            let dst = tmp(dst.checked_mul(SLOT_U32)?)?;
             self.ty(st, dst)?;
             call.result = Some((dst, num_ty(float)));
         } else {
@@ -3423,6 +3474,97 @@ impl<'a> Analysis<'a> {
             call.fall = None;
         }
         Some(())
+    }
+
+    /// Instruction `i` when it is one of the interpreter's frame-local ops
+    /// on values that are no numbers, run as it is ([`Plan::Ext`]): a
+    /// concatenation, a string interpolation, a cast to string, the
+    /// release of a temporary, and an assignment of a string or array
+    /// literal or of a variable that holds anything. What it writes is
+    /// [`Ty::Any`] from then on; the temporaries it reads are consumed.
+    fn opaque(&mut self, st: &State, i: usize) -> Option<Plan> {
+        use crate::opcode::BinKind;
+        use php_runtime::BinaryOp;
+        let any = |slot: SlotRef| st.get(&slot).or_else(|| self.entry.get(&slot)) == Some(&Ty::Any);
+        let temp = |t: u32| tmp(t.checked_mul(SLOT_U32)?);
+        let var = |c: u32| cv(c.checked_mul(SLOT_U32)?);
+        let op = self.ops.get(i)?;
+        // The temporaries among the operands, which the op consumes.
+        let mut consume = [None; MAX_CONSUMED];
+        let mut take = |operands: &[Operand]| -> Option<()> {
+            for operand in operands {
+                if let Operand::Tmp(t) = operand {
+                    *consume.iter_mut().find(|c| c.is_none())? = Some(temp(*t)?);
+                }
+            }
+            Some(())
+        };
+        let written = match op {
+            Op::Bin {
+                op: BinKind::Arith(BinaryOp::Concat),
+                a,
+                b,
+                dst,
+            }
+            // (A string is no number: it goes to the temporary, and the
+            // `AssignCv` after the op stores it.)
+            | Op::BinAssignCv {
+                op: BinKind::Arith(BinaryOp::Concat),
+                a,
+                b,
+                dst,
+                ..
+            } => {
+                take(&[*a, *b])?;
+                Some(temp(*dst)?)
+            }
+            Op::Rope { parts, dst } => {
+                take(parts)?;
+                Some(temp(*dst)?)
+            }
+            Op::Cast {
+                kind: CastKind::String,
+                a,
+                dst,
+            } => {
+                take(&[*a])?;
+                Some(temp(*dst)?)
+            }
+            Op::Free(operand @ Operand::Tmp(_)) => {
+                take(&[*operand])?;
+                None
+            }
+            // A literal that is no number, into a variable; or anything
+            // into a variable that holds anything.
+            &Op::AssignCv {
+                cv: to,
+                val: Operand::Lit(l),
+                dst: None,
+            } if any(var(to)?)
+                || matches!(self.lits.get(l as usize), Some(Value::Str(_) | Value::Array(_))) =>
+            {
+                Some(var(to)?)
+            }
+            // A variable that holds anything (or what the loop does not
+            // track: a string, an array, an object), copied.
+            &Op::AssignCv {
+                cv: to,
+                val: Operand::Cv(from),
+                dst: None,
+            } if any(var(to)?) || self.untracked(st, var(from)?) => Some(var(to)?),
+            _ => return None,
+        };
+        if (self.seen.slow)(i) {
+            return None;
+        }
+        (i + 1 < self.tape.len()).then_some(Plan::Ext {
+            core: crate::exec::hot::is_core(op),
+            result: None,
+            any: written,
+            consume,
+            after: i + 1,
+            next: i + 1,
+        })
     }
 
     /// Merges the types `new` into `cur` (two ways into one instruction):
