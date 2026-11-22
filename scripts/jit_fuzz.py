@@ -168,6 +168,8 @@ class Gen:
                               f"$s .= $z['s'] . {self.atom()};", f'$s = "<{{$i}}>" . $fs;', f'$fs = $s . {self.atom()};',
                               f"$fs = $z['s']; {v} = strlen($fs) + {self.atom()};", f'$s = (string)({self.expr()});',
                               f'{v} = strlen($s . {self.atom()});',
+                              # Frameless builtin calls the loop leaves to the interpreter.
+                              f"{v} = strpos($s . {self.atom()}, 'b') !== false ? 1 : 0;", f"{v} = str_contains($fs, 'c') === true ? {self.atom()} : 2;",
                               # Array literals.
                               f"{v} = count([{self.var()}, 'k' => {self.atom()}, $s, {self.var()} % 4 => 1]) + {self.atom()};",
                               # What the loop leaves to the interpreter and comes back after.
@@ -175,6 +177,7 @@ class Gen:
                               f'{v} = in_array({self.atom()}, $p) ? 1 : 2;', f'{v} = strlen(strrev($s));',
                               f'{v} = count(array_keys($q)) + {self.atom()};', f'{v} = (int)round({self.expr()});',
                               f'{self.pick(STATICS[:2])} = {v};', f'{v} = {self.pick(STATICS[:2])};',
+                              f'{self.pick(STATICS)}++;', f'{v} = {self.pick(STATICS)}--;', f'{v} += ++{self.pick(STATICS)};',
                               f'{self.pick(KEYED[:3])} = {self.atom()};',
                               f'{v} = {self.pick(PROPS)} {self.pick(ARITH[:3])} {self.pick(CONSTS)};',
                               f'$o->f = {self.expr()};', '$o->x++;', f'$o->x = {self.atom()};',
@@ -242,7 +245,9 @@ class Gen:
         if k < 0.2:
             subject = self.pick(['$p', '$q', '$m[0]', '$m[1]', '$m', '[1, 2, 3]',
                                  # Numbers under string keys (and an int one).
-                                 "['a' => 3, 'b' => -1, 'c' => 7, 9 => 2]", "['x' => 1.5, 'y' => -2.5]"])
+                                 "['a' => 3, 'b' => -1, 'c' => 7, 9 => 2]", "['x' => 1.5, 'y' => -2.5]",
+                                 # The outer foreach's element (an array of $m's, or no array), nested rows, mixed values.
+                                 '$fv', '[[1, 2], [3], []]', '$z'])
             head = self.pick(['foreach ({} as $fv)', 'foreach ({} as $fk => $fv)']).format(subject)
             self.depth -= 1
             self.loops -= 1

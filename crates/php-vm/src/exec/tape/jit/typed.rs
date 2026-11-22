@@ -279,6 +279,8 @@ enum ExtStep {
     Truth,
     /// The start or end of a `foreach` in the loop (`super::foreach_step`).
     Foreach,
+    /// `A::$p++` and its kin (`super::incdec_static_step`).
+    IncDecStatic,
 }
 
 /// How a typed loop holds the quotient of two ints ([`Plan::Div`]).
@@ -365,7 +367,7 @@ fn math_fn(name: &[u8]) -> Option<Math> {
 /// [`Analysis::op_plan`], with the types): a move of a number, a cast to
 /// int or float, a frameless call of a math function. A loop with such ops
 /// is compiled for the second tier's sake alone (`super::install`).
-pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
+pub(super) fn plannable_op(op: &Op, _lits: &[Value]) -> bool {
     match op {
         Op::Move { src, .. } => !matches!(src, Operand::Unused),
         // The interpreter's frame-local ops on strings, run as they are
@@ -405,6 +407,8 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             ..
         }
         | Op::FeFree { .. }
+        // (Of a static property.)
+        | Op::IncDec { .. }
         | Op::InitArray { .. }
         | Op::ArrayAdd { .. }
         | Op::InstanceOf {
@@ -428,12 +432,8 @@ pub(super) fn plannable_op(op: &Op, lits: &[Value]) -> bool {
             kind: CastKind::Int | CastKind::Float,
             ..
         } => true,
-        Op::FramelessICall(call) => {
-            let Some(Value::Str(name)) = lits.get(call.name as usize) else {
-                return false;
-            };
-            call.dst.is_some() && computed(name.as_bytes(), usize::from(call.argc))
-        }
+        // (Computed, or left to the interpreter.)
+        Op::FramelessICall(call) => call.dst.is_some(),
         Op::Abs { .. }
         // Bools as values: the middle of `a && b`, `!a`, `(bool) a`; a
         // jump on a literal (`while (1)`); an assignment used as an
@@ -3190,13 +3190,47 @@ impl<'a> Analysis<'a> {
                 })
             }
             Op::FramelessICall(call) => {
-                let name = self.builtin(call.name)?;
                 let dst = temp(call.dst?)?;
-                let mut args = Vec::new();
-                for operand in &call.vals[..usize::from(call.argc).min(MAX_ARGS + 1)] {
-                    args.push(self.op_number(st, *operand)?.0);
+                let computed = (|| {
+                    let name = self.builtin(call.name)?;
+                    if !computed(&name, usize::from(call.argc)) {
+                        return None;
+                    }
+                    let mut args = Vec::new();
+                    for operand in &call.vals[..usize::from(call.argc).min(MAX_ARGS + 1)] {
+                        args.push(self.op_number(st, *operand)?.0);
+                    }
+                    self.math(st, &name, &args, Some(dst), next)
+                })();
+                if computed.is_some() {
+                    return computed;
                 }
-                self.math(st, &name, &args, Some(dst), next)
+                // Any other builtin's (`strpos($s, 'a')`): the
+                // interpreter's call, the loop entered again after it, its
+                // result expected to be of the type its temporary holds
+                // now (the last round's).
+                // (The variable it is assigned to a little further on holds
+                // it still.)
+                let held = self
+                    .ops
+                    .get(next..(next + 8).min(self.ops.len()))
+                    .unwrap_or(&[])
+                    .iter()
+                    .find_map(|op| match *op {
+                        Op::AssignCv {
+                            cv: to,
+                            val: Operand::Tmp(t),
+                            ..
+                        } if Some(t) == call.dst => to.checked_mul(SLOT_U32).and_then(cv),
+                        _ => None,
+                    })
+                    .unwrap_or(dst);
+                let guess = (self.seen.snapshot)(held)
+                    .filter(|ty| matches!(ty, Ty::Int | Ty::Float | Ty::Bool));
+                if self.ty(st, dst).is_none() {
+                    self.entry.entry(dst).or_insert(Ty::Any);
+                }
+                self.out(next, Some((dst, guess)), None)
             }
             &Op::JmpZEx { a, dst, target } | &Op::JmpNzEx { a, dst, target } => {
                 let dst = temp(dst)?;
@@ -3990,7 +4024,32 @@ impl<'a> Analysis<'a> {
                     | BinKind::LessEqual
             );
             if comparison {
-                if !(no_number(a) || no_number(b)) {
+                // (Also a bool, which the loop's own comparisons do not
+                // take: `$pos !== false`, `$b === true`.)
+                let kind = |o: &Operand| match *o {
+                    Operand::Lit(l) => match self.lits.get(l as usize) {
+                        Some(Value::Bool(_)) => Some(true),
+                        Some(Value::Int(_) | Value::Float(_)) => Some(false),
+                        _ => None,
+                    },
+                    Operand::Cv(c) => var(c)
+                        .and_then(|slot| st.get(&slot).or_else(|| self.entry.get(&slot)).copied())
+                        .and_then(|ty| match ty {
+                            Ty::Bool => Some(true),
+                            Ty::Int | Ty::Float => Some(false),
+                            _ => None,
+                        }),
+                    Operand::Tmp(t) => temp(t)
+                        .and_then(|slot| st.get(&slot).or_else(|| self.entry.get(&slot)).copied())
+                        .and_then(|ty| match ty {
+                            Ty::Bool => Some(true),
+                            Ty::Int | Ty::Float => Some(false),
+                            _ => None,
+                        }),
+                    _ => None,
+                };
+                let a_bool = kind(a) == Some(true) || kind(b) == Some(true);
+                if !(no_number(a) || no_number(b) || a_bool) {
                     return None;
                 }
                 take(&[*a, *b])?;
@@ -4156,6 +4215,52 @@ impl<'a> Analysis<'a> {
             }
             _ => {}
         }
+        // `A::$p++` and its kin: as a statement, or its value (the number
+        // the property holds now, of the type it has) read back.
+        if let &Op::IncDec { place, dst, .. } = op {
+            let static_prop = self.places.get(place as usize).is_some_and(|p| {
+                matches!(p.base, PlaceBase::StaticProp { .. }) && p.segs.is_empty()
+            });
+            if !static_prop || i + 1 >= self.tape.len() {
+                return None;
+            }
+            if (self.seen.slow)(i) {
+                // (Its step kept declining, a typed property: the
+                // interpreter's op, the loop entered again after it.)
+                let result = match dst {
+                    Some(d) => {
+                        let slot = temp(d)?;
+                        if self.ty(st, slot).is_none() {
+                            self.entry.entry(slot).or_insert(Ty::Any);
+                        }
+                        Some((slot, (self.seen.statik)(place)))
+                    }
+                    None => None,
+                };
+                return self.out(i + 1, result, None);
+            }
+            let result = match dst {
+                None => None,
+                Some(d) => {
+                    let ty = match (self.seen.statik)(place)? {
+                        ty @ (Ty::Int | Ty::Float) => ty,
+                        Ty::Bool | Ty::Plain | Ty::Any => return None,
+                    };
+                    let slot = temp(d)?;
+                    self.ty(st, slot)?;
+                    Some((slot, ty))
+                }
+            };
+            return Some(Plan::Ext {
+                alt: None,
+                step: ExtStep::IncDecStatic,
+                result,
+                any: None,
+                consume,
+                after: i + 1,
+                next: i + 1,
+            });
+        }
         // `instanceof` of a class by name: its bool, read back.
         if let &Op::InstanceOf {
             a,
@@ -4184,6 +4289,38 @@ impl<'a> Analysis<'a> {
                 after: i + 1,
                 next: i + 1,
             });
+        }
+        // A number into a variable that holds what it owns (a string, an
+        // array): the interpreter's assignment, which releases that; the
+        // number read back.
+        if let &Op::AssignCv {
+            cv: to,
+            val: Operand::Lit(l),
+            dst: None,
+        } = op
+        {
+            let ty = match self.lits.get(l as usize) {
+                Some(Value::Int(_)) => Some(Ty::Int),
+                Some(Value::Float(_)) => Some(Ty::Float),
+                Some(Value::Bool(_)) => Some(Ty::Bool),
+                _ => None,
+            };
+            let slot = var(to)?;
+            if let Some(ty) = ty.filter(|_| self.untracked(st, slot)) {
+                if (self.seen.slow)(i) || i + 1 >= self.tape.len() {
+                    return None;
+                }
+                self.entry.entry(slot).or_insert(Ty::Any);
+                return Some(Plan::Ext {
+                    alt: None,
+                    step: ExtStep::Core,
+                    result: Some((slot, ty)),
+                    any: None,
+                    consume,
+                    after: i + 1,
+                    next: i + 1,
+                });
+            }
         }
         // An array literal: its start and its elements, into its
         // temporary.
@@ -4273,12 +4410,15 @@ impl<'a> Analysis<'a> {
             }
             // A literal that is no number, into a variable; or anything
             // into a variable that holds anything.
+            // (Also a number into a variable that holds what it owns: a
+            // string, an array, which the assignment releases.)
             &Op::AssignCv {
                 cv: to,
                 val: Operand::Lit(l),
                 dst: None,
             } if any(var(to)?)
-                || matches!(self.lits.get(l as usize), Some(Value::Str(_) | Value::Array(_))) =>
+                || matches!(self.lits.get(l as usize), Some(Value::Str(_) | Value::Array(_)))
+                || self.untracked(st, var(to)?) =>
             {
                 Some(var(to)?)
             }
@@ -6483,6 +6623,7 @@ impl Emit<'_, '_> {
                     ExtStep::InstanceOf => super::instanceof_step as super::Step as usize,
                     ExtStep::Truth => super::truth_step as super::Step as usize,
                     ExtStep::Foreach => super::foreach_step as super::Step as usize,
+                    ExtStep::IncDecStatic => super::incdec_static_step as super::Step as usize,
                 };
                 #[allow(clippy::cast_possible_wrap)]
                 let callee = self.b.ins().iconst(types::I64, step as i64);

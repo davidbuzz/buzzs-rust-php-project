@@ -456,6 +456,8 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
                             | Op::Bin { .. }
                             | Op::InstanceOf { .. }
                             | Op::Unary { .. }
+                            | Op::FramelessICall(_)
+                            | Op::IncDec { .. }
                     )
                 ) {
                     // (For the first tier, should it be compiled: this
@@ -1598,6 +1600,68 @@ pub(super) unsafe extern "C" fn foreach_step(f: *mut Frame, at: usize) -> usize 
     }
 }
 
+/// `A::$p++` and its kin (`Op::IncDec` of a static property by name) for
+/// a typed loop, on a hit of the place's cache, as the VM's fast path
+/// does it: an untyped property holding an int (that does not overflow)
+/// or a float is updated in its cell, the old or new value going to the
+/// op's temporary when it has one. Returns the op after it, or
+/// `hot::DECLINED`, nothing changed (a typed property, a reference, a
+/// miss, anything else: the VM's).
+///
+/// # Safety
+/// As [`core_step`].
+pub(super) unsafe extern "C" fn incdec_static_step(f: *mut Frame, at: usize) -> usize {
+    use crate::exec::hot::DECLINED;
+    // SAFETY: the caller's contract; the op array outlives the op, as in
+    // `fe_fetch`.
+    let (frame, code) = unsafe { (&mut *f, &*std::rc::Rc::as_ptr(&(*f).code)) };
+    let Some(&Op::IncDec { place, kind, dst }) = code.ops.get(at) else {
+        return DECLINED;
+    };
+    match code.places.get(place as usize) {
+        Some(p)
+            if matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. })
+                && p.segs.is_empty() => {}
+        _ => return DECLINED,
+    }
+    if dst.is_some_and(|d| frame.tmps.len() <= d as usize) {
+        return DECLINED;
+    }
+    let Some((cell, false)) = crate::rtcache::static_place_cell_in(frame, place) else {
+        return DECLINED;
+    };
+    let Ok(mut slot) = cell.try_borrow_mut() else {
+        return DECLINED;
+    };
+    let result = match &mut *slot {
+        Value::Int(cur) => {
+            let old = *cur;
+            let new = if kind.is_inc() {
+                old.checked_add(1)
+            } else {
+                old.checked_sub(1)
+            };
+            let Some(new) = new else {
+                return DECLINED;
+            };
+            *cur = new;
+            Value::Int(if kind.is_post() { old } else { new })
+        }
+        Value::Float(cur) => {
+            let old = *cur;
+            let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+            *cur = new;
+            Value::Float(if kind.is_post() { old } else { new })
+        }
+        _ => return DECLINED,
+    };
+    drop(slot);
+    if let Some(d) = dst {
+        frame.tmps[d as usize] = result;
+    }
+    at + 1
+}
+
 /// `$x instanceof Name` (`Op::InstanceOf`) for a typed loop, when the
 /// class the name resolved to is in the op array's cache and the value
 /// is a variable's (defined) or a temporary's that is no object or array
@@ -2366,6 +2430,17 @@ impl Compiler {
                 .ok()?;
             // `PHPRUST_JIT_DUMP`: the machine code, for whoever tunes it.
             let dump = std::env::var_os("PHPRUST_JIT_DUMP").is_some();
+            if std::env::var_os("PHPRUST_JIT_CLIF").is_some() {
+                let f = &self.ctx.func;
+                eprintln!(
+                    "jit: clif {} blocks, {} insts",
+                    f.layout.blocks().count(),
+                    f.layout
+                        .blocks()
+                        .map(|b| f.layout.block_insts(b).count())
+                        .sum::<usize>()
+                );
+            }
             self.ctx.set_disasm(dump);
             if let Err(error) = self.module.define_function(id, &mut self.ctx) {
                 // (Said with the counters: `jit::report_if_asked`.)

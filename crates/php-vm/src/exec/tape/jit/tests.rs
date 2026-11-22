@@ -1817,3 +1817,38 @@ echo h(), "\n";
 "#,
     );
 }
+
+#[test]
+fn typed_loops_leave_frameless_calls_and_compare_bools() {
+    // `strpos()` (a frameless call the loop does not compute: the
+    // interpreter's, its result's type guessed from the variable it goes
+    // into), `!== false`, `=== true` of a bool, a number assigned over a
+    // string or an array.
+    typed_at_least(
+        r#"<?php
+function f($m) { $n = 0; $x = "str";
+    foreach ($m as $s) { if (($p = strpos($s, "a")) !== false) { $n += $p + 1; } if ($p === false) { $n += 100; }
+        $b = $n > 5; if ($b === true) { $n++; } if ($b == 1) { $n++; } $x = 5; $n += $x; $x = [1]; $n += count($x); $n ^= 3; }
+    return $n; }
+for ($r = 0; $r < 4; $r++) { var_dump(f(['ab', 'xay', 'zzz', 'a', '', 'ba']), f(['q'])); }
+"#,
+        1,
+    );
+}
+
+#[test]
+fn typed_loops_count_static_properties() {
+    // `self::$s++` and its kin on untyped properties (ints, a float, one
+    // that overflows), as values too; a typed one, whose step declines:
+    // the interpreter's op, the loop entered again after it.
+    typed_at_least(
+        r#"<?php
+class C { public static $s = 0; public static $f = 0.5; public static int $t = 0; public static $m = PHP_INT_MAX - 40;
+    static function run($n) { $a = 0.0;
+        for ($i = 0; $i < $n; $i++) { self::$s++; $a += self::$s++ + ++self::$s; --self::$f; $b = self::$f--; $a += $b; self::$t++; C::$m++; }
+        return [$a, self::$s, self::$f, self::$t, C::$m]; } }
+var_dump(C::run(60), C::run(10));
+"#,
+        1,
+    );
+}
