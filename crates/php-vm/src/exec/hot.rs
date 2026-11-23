@@ -50,7 +50,7 @@ use super::spec::{
     num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
+use crate::opcode::{cmp_outcome, BinKind, CastKind, ClassSpec, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
 
@@ -134,6 +134,10 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFetch { .. }
+            | Op::InstanceOf {
+                class: ClassSpec::Named(_),
+                ..
+            }
     )
 }
 
@@ -670,6 +674,18 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             };
             set_dst_in(f, dst, Value::Bool(r));
         }
+        // `ZEND_INSTANCEOF` of a named class the run-time cache has found
+        // before (the generic op fills it; it never autoloads).
+        Op::InstanceOf {
+            a,
+            class: ClassSpec::Named(lit),
+            dst,
+        } => {
+            let Some(r) = instanceof_in(f, lits, a, lit) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Bool(r));
+        }
         // `ZEND_ISSET_ISEMPTY_CV`.
         Op::Isset { place, dst } => {
             let Some(r) = isset_cv_in(f, place, false) else {
@@ -944,6 +960,55 @@ fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<
             let r = matches(mask, &v);
             discard_unrooted(Some(v));
             Some(r)
+        }
+        Operand::Cv(_) | Operand::Unused => None,
+    }
+}
+
+/// `a instanceof B` for class literal `lit` resolved before (the op
+/// array's class cache), with the operand read as `Vm::read` reads it: a
+/// defined compiled variable (behind a reference: the referenced value),
+/// a literal, or a temporary (consumed). Anything but an object is no
+/// instance. `None` when the class is not cached yet or the variable is
+/// undefined (the generic op warns) or attached to a symbol table.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+    let cls = f
+        .code
+        .class_cache
+        .try_borrow()
+        .ok()?
+        .get(lit as usize)?
+        .upgrade()?;
+    let test = |v: &Value| -> Option<bool> {
+        Some(match v {
+            Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),
+            Value::Reference(r) => match &*r.try_borrow()? {
+                Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),
+                _ => false,
+            },
+            _ => false,
+        })
+    };
+    match a {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            test(f.cvs.get(cv as usize).and_then(CvSlot::get)?)
+        }
+        Operand::Lit(i) => test(lits.get(i as usize)?),
+        Operand::TmpKeep(t) => test(f.tmps.get(t as usize)?),
+        Operand::Tmp(t) => {
+            let v = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let r = test(&v);
+            if r.is_none() {
+                // Put back for the generic op.
+                if let Some(slot) = f.tmps.get_mut(t as usize) {
+                    *slot = v;
+                }
+                return None;
+            }
+            discard_unrooted(Some(v));
+            r
         }
         Operand::Cv(_) | Operand::Unused => None,
     }
