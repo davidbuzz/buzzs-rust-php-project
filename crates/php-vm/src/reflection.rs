@@ -401,12 +401,12 @@ pub(crate) fn dn(n: &ZStr) -> String {
 pub(crate) fn set_name_props(o: &Obj, name: Option<&ZStr>, class: Option<&ZStr>) {
     let cls = object::class_of(o).clone();
     let d = object::data(o);
-    if let (Some(n), Some(pi)) = (name, cls.prop_map.get(&ZStr::from("name"))) {
+    if let (Some(n), Some(pi)) = (name, cls.prop_map.get(b"name".as_slice())) {
         if let Some(s) = d.slots.borrow_mut().get_mut(pi.slot as usize) {
             *s = Some(Value::Str(n.clone()));
         }
     }
-    if let (Some(c), Some(pi)) = (class, cls.prop_map.get(&ZStr::from("class"))) {
+    if let (Some(c), Some(pi)) = (class, cls.prop_map.get(b"class".as_slice())) {
         if let Some(s) = d.slots.borrow_mut().get_mut(pi.slot as usize) {
             *s = Some(Value::Str(c.clone()));
         }
@@ -431,10 +431,25 @@ pub(crate) fn new_refl(
     name: Option<&ZStr>,
     cname: Option<&ZStr>,
 ) -> VmResult<Value> {
-    let Some(cls) = vm.find_class(class.as_bytes()) else {
-        return Err(vm.make_throw("Error", &format!("Class \"{class}\" not found")));
-    };
-    let o = vm.instantiate_unchecked(&cls)?;
+    let cls = refl_class(vm, class)?;
+    new_refl_of(vm, &cls, r, name, cname)
+}
+
+/// The reflection class named `class`, for [`new_refl_of`].
+pub(crate) fn refl_class(vm: &mut Vm, class: &str) -> VmResult<Rc<Class>> {
+    vm.find_class(class.as_bytes())
+        .ok_or_else(|| vm.make_throw("Error", &format!("Class \"{class}\" not found")))
+}
+
+/// [`new_refl`] of a class already looked up (a loop creating many).
+pub(crate) fn new_refl_of(
+    vm: &mut Vm,
+    cls: &Rc<Class>,
+    r: Refl,
+    name: Option<&ZStr>,
+    cname: Option<&ZStr>,
+) -> VmResult<Value> {
+    let o = vm.instantiate_unchecked(cls)?;
     set_name_props(&o, name, cname);
     object::set_internal(&o, r);
     Ok(Value::Object(o))
@@ -461,10 +476,21 @@ pub(crate) fn class_value(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Value> {
 
 /// `reflection_method_factory`.
 pub(crate) fn method_value(vm: &mut Vm, m: &Rc<Method>, class: &Rc<Class>) -> VmResult<Value> {
+    let refl = refl_class(vm, "ReflectionMethod")?;
+    method_value_of(vm, &refl, m, class)
+}
+
+/// [`method_value`] with the `ReflectionMethod` class looked up.
+pub(crate) fn method_value_of(
+    vm: &mut Vm,
+    refl: &Rc<Class>,
+    m: &Rc<Method>,
+    class: &Rc<Class>,
+) -> VmResult<Value> {
     let scope = m.scope();
-    new_refl(
+    new_refl_of(
         vm,
-        "ReflectionMethod",
+        refl,
         Refl::Function(FnRef::method(m, class)),
         Some(&m.name),
         Some(&scope.name),
