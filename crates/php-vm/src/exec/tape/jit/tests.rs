@@ -1915,6 +1915,29 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn foreach_over_string_keys_and_op_assign_under_them() {
+    // String, numeric-string and int keys; a key variable holding an
+    // object (its destructor), an array, a reference; `op=` under the key
+    // of another table, missing keys, elements that are no numbers.
+    both(
+        r#"<?php
+class D { function __destruct() { echo "D\n"; } }
+function f($n) {
+    $h = []; for ($i = 0; $i < $n; $i++) { $h["k$i"] = $i; $h[$i * 3] = 0.5; $h["7$i"] = -$i; }
+    $s = 0; $ks = ""; foreach ($h as $k => $v) { $s += $v; $ks .= $k; }
+    $key = new D; $t = 0; foreach ($h as $key => $v) { $t += $v; } var_dump($key);
+    $key = [1, 2]; foreach ($h as $key => $v) { $t += $v; }
+    $r = "x"; $kk = &$r; foreach ($h as $kk => $v) { $t += $v; } var_dump($r);
+    $h2 = []; foreach ($h as $k => $v) { $h2[$k] = 0; } $h2["k1"] = "7"; $z = 3; $h2["k2"] = &$z; unset($h2["k3"]);
+    for ($j = 0; $j < 3; $j++) { foreach ($h as $k => $v) { $h2[$k] += $v; $h2[$k] *= 2; } }
+    return [$s, $ks, $t, $h2, $z];
+}
+var_dump(f(30), f(2));
+"#,
+    );
+}
+
+#[test]
 fn typed_loops_write_numbers_into_hash_tables() {
     // Keys in descending and scattered order, overwrites, string keys, a
     // reference element, a `foreach` by reference over the table, a copy

@@ -1051,6 +1051,16 @@ enum Fast {
         value: Opnd,
         consume: Option<SlotRef>,
     },
+    /// The same under the key another variable holds, not a number the
+    /// loop has (a `foreach`'s string key: `dims::jit_op_key`); `key` is
+    /// that variable's slot.
+    OpKey {
+        array: i32,
+        key: i32,
+        op: usize,
+        value: Opnd,
+        consume: Option<SlotRef>,
+    },
     /// A read of the number under a string literal's key (the variable's
     /// and the literal's indexes) of the array a variable holds
     /// (`dims::jit_get_key`).
@@ -3137,14 +3147,29 @@ impl<'a> Analysis<'a> {
                 };
                 let (value, consume) = self.value(st, &mut call, value_kind, inst.p)?;
                 // The operator codes of `dims::op_code`: `+ - *`.
-                if let (Some(index), Some(value), 0..=2) = (index, value, inst.e) {
-                    call.fast = Some(Fast::Op {
-                        array,
-                        index,
-                        op: usize::from(inst.e),
-                        value,
-                        consume,
-                    });
+                match (index, value, inst.e) {
+                    (Some(index), Some(value), 0..=2) => {
+                        call.fast = Some(Fast::Op {
+                            array,
+                            index,
+                            op: usize::from(inst.e),
+                            value,
+                            consume,
+                        });
+                    }
+                    // A key that is no number the loop has, in another
+                    // variable.
+                    (None, Some(value), 0..=2) if inst.k & 7 == DIM_CV && inst.b != inst.a => {
+                        let key = cv(inst.b.checked_mul(SLOT_U32)?)?;
+                        call.fast = Some(Fast::OpKey {
+                            array,
+                            key: key.at,
+                            op: usize::from(inst.e),
+                            value,
+                            consume,
+                        });
+                    }
+                    _ => {}
                 }
             }
             // `$cv[d1][d2]... op= val`.
@@ -4084,7 +4109,8 @@ impl<'a> Analysis<'a> {
         let key = key.map(|slot| (slot, int_keys));
         let end = end as usize;
         (full < self.tape.len() && end < self.tape.len()).then_some(Plan::Each {
-            slim: self.seen.fast && !(self.seen.slow)(i) && int_keys,
+            // (A key that is no int is a variable's here: `each_num_key`.)
+            slim: self.seen.fast && !(self.seen.slow)(i),
             iter,
             end,
             full,
@@ -5346,6 +5372,8 @@ type GetNum2 = unsafe extern "C" fn(*const Option<Value>, i64, i64, *mut Value) 
 /// `dims::jit_set_num2`.
 type SetNum2 = unsafe extern "C" fn(*mut Option<Value>, i64, i64, usize, u64) -> usize;
 /// `dims::jit_op_num`.
+type OpKey =
+    unsafe extern "C" fn(*mut Option<Value>, *const Option<Value>, usize, usize, u64) -> usize;
 type OpNum = unsafe extern "C" fn(*mut Option<Value>, i64, usize, usize, u64) -> usize;
 /// `super::user_is`.
 type UserIs = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize) -> usize;
@@ -6027,6 +6055,7 @@ impl Emit<'_, '_> {
             Fast::Set { value, consume, .. }
             | Fast::Set2 { value, consume, .. }
             | Fast::Op { value, consume, .. }
+            | Fast::OpKey { value, consume, .. }
             | Fast::PropSet { value, consume, .. }
             | Fast::PropOp { value, consume, .. } => {
                 let (tag, bits) = if value.float {
@@ -6057,6 +6086,13 @@ impl Emit<'_, '_> {
                         let op = self.b.ins().iconst(types::I64, i64::try_from(op).ok()?);
                         let helper = dims::jit_op_num as OpNum as usize;
                         (helper, vec![array, self.int(index)?, op, tag, bits])
+                    }
+                    Fast::OpKey { array, key, op, .. } => {
+                        let array = self.b.ins().iadd_imm(cvs, i64::from(array));
+                        let key = self.b.ins().iadd_imm(cvs, i64::from(key));
+                        let op = self.b.ins().iconst(types::I64, i64::try_from(op).ok()?);
+                        let helper = dims::jit_op_key as OpKey as usize;
+                        (helper, vec![array, key, op, tag, bits])
                     }
                     Fast::PropSet {
                         key: Some((cv, class, slot)),
@@ -6922,10 +6958,11 @@ impl Emit<'_, '_> {
                         None => self.b.ins().iconst(types::I64, 0),
                     };
                     let iter = self.b.ins().iconst(types::I64, i64::from(iter));
-                    let r = self.helper(
-                        super::each_num as EachNum as usize,
-                        &[self.frame, iter, value_at, key_at],
-                    )?;
+                    let helper = match key {
+                        Some((_, false)) => super::each_num_key as EachNum as usize,
+                        _ => super::each_num as EachNum as usize,
+                    };
+                    let r = self.helper(helper, &[self.frame, iter, value_at, key_at])?;
                     let [fetched, miss, not_end, other, slow] =
                         std::array::from_fn(|_| self.b.create_block());
                     for cold in [other, slow] {
@@ -6949,7 +6986,7 @@ impl Emit<'_, '_> {
                     let ty = if value.1 { types::F64 } else { types::I64 };
                     let v = self.b.ins().load(ty, mem(), base, value.0.at + PAYLOAD_AT);
                     self.b.def_var(if value.1 { fl } else { int }, v);
-                    if let Some((key, _)) = key {
+                    if let Some((key, true)) = key {
                         let base = self.base(key);
                         let (int, _) = *self.vars.get(&key)?;
                         let v = self

@@ -875,7 +875,6 @@ pub(super) unsafe extern "C" fn jit_op_num(
     tag: usize,
     bits: u64,
 ) -> usize {
-    use crate::exec::Num;
     // The array the variable holds, directly or through a reference.
     let mut through;
     // SAFETY: the caller's contract.
@@ -896,6 +895,14 @@ pub(super) unsafe extern "C" fn jit_op_num(
     let Some(slot) = arr.get_mut_unshared().and_then(|t| t.get_packed_mut(i)) else {
         return 0;
     };
+    op_number(slot, op, tag, bits)
+}
+
+/// `slot op= number` ([`jit_op_num`]'s `op`, `tag` and `bits`) for a
+/// `slot` that holds a number. Returns 1, or 0 with nothing changed.
+#[cfg(feature = "jit")]
+fn op_number(slot: &mut Value, op: usize, tag: usize, bits: u64) -> usize {
+    use crate::exec::Num;
     let x = match slot {
         Value::Int(x) => Num::Int(*x),
         Value::Float(x) => Num::Float(*x),
@@ -919,6 +926,63 @@ pub(super) unsafe extern "C" fn jit_op_num(
     // A number over a number: nothing to release.
     std::mem::forget(std::mem::replace(slot, r));
     1
+}
+
+/// [`jit_op_num`] under the key a variable holds (its slot `key`): a
+/// string, found as `zend_symtable_find` finds it (a numeric string is the
+/// int key), or an int; `$cv[$key] op= number` in a `foreach` over the
+/// keys of a hash table. Returns 1, or 0 with nothing changed (a missing
+/// element, one that is no number: the handler's).
+///
+/// # Safety
+/// `array` and `key` point at compiled variables' slots of the current
+/// frame.
+#[cfg(feature = "jit")]
+pub(super) unsafe extern "C" fn jit_op_key(
+    array: *mut Option<Value>,
+    key: *const Option<Value>,
+    op: usize,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // (`$a[$a] op= ...`: not one slot both mutably and not.)
+    if std::ptr::eq(array.cast_const(), key) {
+        return 0;
+    }
+    // SAFETY: the caller's contract; the slots are distinct, so this
+    // borrow and the array's do not overlap.
+    let key = match unsafe { &*key } {
+        Some(Value::Str(s)) => Ok(s),
+        Some(Value::Int(i)) => Err(*i),
+        _ => return 0,
+    };
+    let mut through;
+    // SAFETY: the caller's contract.
+    let arr = match unsafe { &mut *array } {
+        Some(Value::Array(arr)) => arr,
+        Some(Value::Reference(r)) => {
+            let Some(target) = r.try_borrow_mut() else {
+                return 0;
+            };
+            through = target;
+            let Value::Array(arr) = &mut *through else {
+                return 0;
+            };
+            arr
+        }
+        _ => return 0,
+    };
+    let Some(tbl) = arr.get_mut_unshared() else {
+        return 0;
+    };
+    let slot = match key {
+        Ok(s) => tbl.get_sym_zstr_mut(s),
+        Err(i) => tbl.get_int_mut(i),
+    };
+    match slot {
+        Some(slot) => op_number(slot, op, tag, bits),
+        None => 0,
+    }
 }
 
 /// `Op::FetchDimsCv`: `$cv[d1][d2]...` read (`fetch_dims_cv_in`), as

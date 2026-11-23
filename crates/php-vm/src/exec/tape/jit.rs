@@ -2367,6 +2367,54 @@ pub(super) unsafe extern "C" fn each_num(
     tag
 }
 
+/// [`each_num`] over an array whose keys are not all ints (a hash table
+/// with string keys): the next element, a number, goes to the slot
+/// `value`, and its key, whatever it is, to the variable's slot `key`,
+/// whose old value is released (only when that is nothing, a scalar or a
+/// string, whose release runs no code; anything else is [`fe_fetch`]'s).
+/// Returns as [`each_num`].
+///
+/// # Safety
+/// As [`each_num`]; `key` points at a variable's slot of the frame.
+pub(super) unsafe extern "C" fn each_num_key(
+    f: *mut Frame,
+    iter: usize,
+    value: *mut Value,
+    key: *mut Value,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let frame = unsafe { &mut *f };
+    let Some(Some(crate::vm::ForeachIter::Array { arr, pos })) = frame.iters.get_mut(iter) else {
+        return 0;
+    };
+    // SAFETY: the caller's contract (a variable's slot, which is an
+    // `Option<Value>`); the slot is not borrowed (the frame's variables
+    // are only touched through the frame, borrowed here for its iterator
+    // alone).
+    let slot = unsafe { &mut *key.cast::<Option<Value>>() };
+    if !matches!(
+        slot,
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
+    ) {
+        return 0;
+    }
+    let Some((at, v, k)) = arr.fe_fetch_with_key(*pos) else {
+        return 1;
+    };
+    let (v, tag) = match v {
+        Value::Int(x) => (Value::Int(*x), 2),
+        Value::Float(x) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    *pos = at + 1;
+    // SAFETY: the caller's contract: nothing to release in the value's
+    // slot, and a variable's slot holding a number has that number's
+    // layout.
+    unsafe { std::ptr::write(value, v) };
+    drop(slot.replace(k));
+    tag
+}
+
 // ---------------------------------------------------------------------
 // The layout the code relies on
 // ---------------------------------------------------------------------
