@@ -1915,6 +1915,16 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn an_unused_func_num_args_is_nothing() {
+    both(
+        r#"<?php
+function g($a, $b = 2) { $s = 0; for ($i = 0; $i < 50; $i++) { func_num_args(); $s += $i; } return [$s, func_num_args()]; }
+var_dump(g(1), g(1, 2), g(1, 2, 3));
+"#,
+    );
+}
+
+#[test]
 fn closures_in_variables_run_inline() {
     // A variable switched between closures, closures with something
     // bound to them (`use`, `$this`, a scope), one made from a callable, a

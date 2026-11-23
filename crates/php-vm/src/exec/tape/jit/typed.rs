@@ -466,6 +466,9 @@ pub(super) fn plannable_op(op: &Op, _lits: &[Value]) -> bool {
         | Op::IssetStaticProp { .. }
         | Op::FeFreeOnReturn { .. }
         | Op::Return { .. } => true,
+        // `func_num_args();`, its result unused: nothing to do (the op is
+        // only compiled in a function).
+        Op::FuncNumArgs { dst: None } => true,
         _ => false,
     }
 }
@@ -3686,6 +3689,8 @@ impl<'a> Analysis<'a> {
                 }
                 self.out_of_call(st, &site)
             }
+            // `func_num_args();`: nothing to do ([`plannable_op`]).
+            Op::FuncNumArgs { dst: None } => Some(Plan::Jmp { to: next }),
             // `echo`: the interpreter's.
             &Op::Echo(val) => {
                 let consume = match val {
