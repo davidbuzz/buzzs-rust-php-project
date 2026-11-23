@@ -2466,8 +2466,8 @@ impl Vm {
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
     /// Only the shape the call workloads return through — an untyped
-    /// user function returning a plain scalar into a caller temporary
-    /// holding a scalar — runs here, small and without spilled registers;
+    /// user function returning a scalar, null, a string or such a literal
+    /// into a caller temporary holding a scalar — runs here, small and without spilled registers;
     /// anything else goes to [`Vm::return_generic`], which repeats the
     /// tests for it (the operand shape is dispatched before this
     /// function's prologue, so the common fallbacks do not pay it twice).
@@ -2478,7 +2478,7 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
-        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_)) {
+        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_)) {
             return self.return_generic(val, base, ip);
         }
         if self.observer.enabled {
@@ -2522,24 +2522,22 @@ impl Vm {
                 },
                 RetTarget::Discard => None,
             };
+            // A scalar, null or a string: none is a possible cycle root,
+            // so it moves out (a literal is copied) without changing what
+            // `gc::frame_released` records.
             let v = match val {
                 Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
-                    Some(slot)
-                        if matches!(
-                            slot.get(),
-                            Some(Value::Int(_) | Value::Bool(_) | Value::Float(_))
-                        ) =>
-                    {
+                    Some(slot) if slot.get().is_some_and(returns_directly) => {
                         slot.as_mut().take()?
                     }
                     _ => return self.return_generic(val, base, ip),
                 },
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
-                    Some(slot)
-                        if matches!(slot, Value::Int(_) | Value::Bool(_) | Value::Float(_)) =>
-                    {
-                        std::mem::take(slot)
-                    }
+                    Some(slot) if returns_directly(slot) => std::mem::take(slot),
+                    _ => return self.return_generic(val, base, ip),
+                },
+                Operand::Lit(l) => match frame.code.literals.get(l as usize) {
+                    Some(lit) if returns_directly(lit) => clone_value(lit),
                     _ => return self.return_generic(val, base, ip),
                 },
                 _ => return self.return_generic(val, base, ip),
@@ -2549,10 +2547,11 @@ impl Vm {
             // The store runs before the `gc` step: the value's register
             // is then dead across the out-of-line `frame_released` call
             // (it only reads the frame and the caller's `$this`, and the
-            // frame is released after both). The slot held a scalar and
-            // the value is one: neither has anything to drop.
+            // frame is released after both). The slot held a scalar:
+            // nothing to drop. A discarded string is released.
             match dst {
                 Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
+                None if matches!(v, Value::Str(_)) => drop(v),
                 None => std::mem::forget(v),
             }
             gc_on_release(frame, caller);
@@ -5151,6 +5150,17 @@ fn root_released_args(args: &[Option<Value>]) {
 /// Whether `v` is a scalar, whose release does nothing.
 #[inline(always)]
 #[allow(clippy::inline_always)] // one tag test per return
+/// A value [`Vm::return_simple`] returns as it is: a scalar, null or a
+/// string (no possible cycle root, nothing for `gc::frame_released`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per return
+fn returns_directly(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    )
+}
+
 fn is_scalar(v: &Value) -> bool {
     matches!(
         v,
