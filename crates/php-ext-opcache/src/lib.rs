@@ -1112,6 +1112,15 @@ fn lookup(
         });
         if let Some(unit) = hit {
             unit.clear_runtime_caches();
+            // As a file cache hit: what compiling the script set up in this
+            // request (`__COMPILER_HALT_OFFSET__`, the auto-globals it
+            // uses, the anonymous class counter) is set up again; a long-
+            // running worker reset it since the script was cached. A unit
+            // whose anonymous classes were named for another counter is
+            // compiled again.
+            if !vm.install_cached_unit(&unit, filename) {
+                return Ok(None);
+            }
             if vm.ini_bool("opcache.record_warnings") {
                 vm.emit_compile_warnings(&unit, filename)?;
             }
@@ -1381,6 +1390,10 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
     };
     unit.clear_runtime_caches();
     let filename = ZStr::from(key.as_bytes());
+    // See `lookup`: the request state compiling the script set up.
+    if !vm.install_cached_unit(&unit, &filename) {
+        return Ok(None);
+    }
     if vm.ini_bool("opcache.record_warnings") {
         vm.emit_compile_warnings(&unit, &filename)?;
     }
