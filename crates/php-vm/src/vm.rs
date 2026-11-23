@@ -2371,8 +2371,11 @@ pub struct Vm {
     /// Shared empty variable store for builtin frames.
     pub empty_vars: Rc<RefCell<VarStore>>,
     /// Active `__get`/`__set`/`__isset`/`__unset` guards: (object handle,
-    /// property name, kind).
-    pub prop_guards: HashSet<(u32, ZStr, u8)>,
+    /// property name, kind). One insert and one remove per magic access,
+    /// so hashed with [`crate::class::FxHasher`]: the set only holds the
+    /// guards of the accesses in progress.
+    pub prop_guards:
+        HashSet<(u32, ZStr, u8), std::hash::BuildHasherDefault<crate::class::FxHasher>>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the

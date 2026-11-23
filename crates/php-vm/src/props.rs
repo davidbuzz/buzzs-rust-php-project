@@ -216,25 +216,31 @@ impl Vm {
                             .contains(&(instance.handle(), name.clone(), kind))
                     })
             })
+            // A proxy's guard covers its instance: the frames' `$this` are
+            // tested for being the proxy first, which nearly none is, and
+            // only then looked up in the set.
             || self
                 .frames
                 .iter()
                 .filter_map(|f| f.this.as_ref())
                 .any(|this| {
-                    self.prop_guards
-                        .contains(&(this.handle(), name.clone(), kind))
-                        && object::data(this)
-                            .lazy
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|info| {
-                                info.proxy
-                                    && info.initialized
-                                    && info
-                                        .instance
-                                        .as_ref()
-                                        .is_some_and(|instance| Obj::ptr_eq(instance, o))
-                            })
+                    object::data(this)
+                        .lazy
+                        .try_borrow()
+                        .ok()
+                        .as_deref()
+                        .and_then(Option::as_ref)
+                        .is_some_and(|info| {
+                            info.proxy
+                                && info.initialized
+                                && info
+                                    .instance
+                                    .as_ref()
+                                    .is_some_and(|instance| Obj::ptr_eq(instance, o))
+                        })
+                        && self
+                            .prop_guards
+                            .contains(&(this.handle(), name.clone(), kind))
                 })
     }
 
