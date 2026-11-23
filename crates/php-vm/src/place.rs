@@ -45,11 +45,18 @@ pub(crate) enum RBase {
     Undef(ZStr),
 }
 
+/// Entries of [`Vm::global_slot_cache`] (a power of two).
+pub(crate) const GLOBAL_SLOT_CACHE: usize = 64;
+
 /// A generic write to a place that starts at compiled variable `cv` of
 /// the running function `frame` (see [`Vm::with_cv_symtab`]).
 pub(crate) struct CvRoot {
     frame: usize,
     cv: u32,
+    /// The place goes into the variable (`$a[...]`, `$a->...`): a plain
+    /// array or object may be wrapped for the walk. A write to the
+    /// variable itself walks it only when it already is a reference.
+    wrap: bool,
     /// Set once the walk reaches the variable ([`Vm::resolve_base`]).
     walk: Option<CvWalk>,
 }
@@ -1773,6 +1780,7 @@ impl Vm {
                 frame,
                 cv,
                 walk: Some(w),
+                ..
             }) = std::mem::replace(&mut self.cv_root, prev)
             {
                 self.leave_cv_walk(frame, cv, w);
@@ -1830,27 +1838,35 @@ impl Vm {
 
     /// The [`CvRoot`] of a generic write to place `pid` of frame `fidx`
     /// (whose table is not attached): the frame is a function's and the
-    /// place goes into a compiled variable (`$a[...]`, `$a->...`). A write
-    /// to the variable itself (`unset($a)`, `$a =& $b`) keeps the table
-    /// walk: what it releases is the variable's value, which the GC and the
-    /// destructors must see as itself, not as a reference.
+    /// place starts at a compiled variable. A write to the variable itself
+    /// (`++$n`, `unset($a)`, `$a =& $b`) takes it only when the variable
+    /// already is a reference (a `static` or `global` one): a plain value
+    /// it releases must reach the GC and the destructors as itself, not
+    /// wrapped in a reference.
     fn cv_root_of(&self, fidx: usize, pid: PlaceId) -> Option<CvRoot> {
         let f = self.frames.get(fidx)?;
         if f.kind != crate::vm::FrameKind::Function {
             return None;
         }
         let place = f.code.places.get(pid as usize)?;
-        if place.segs.is_empty() {
+        let PlaceBase::Cv(cv) = &place.base else {
+            return None;
+        };
+        let wrap = !place.segs.is_empty();
+        if !wrap
+            && !matches!(
+                f.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get),
+                Some(Value::Reference(_))
+            )
+        {
             return None;
         }
-        match &place.base {
-            PlaceBase::Cv(cv) => Some(CvRoot {
-                frame: fidx,
-                cv: *cv,
-                walk: None,
-            }),
-            _ => None,
-        }
+        Some(CvRoot {
+            frame: fidx,
+            cv: *cv,
+            wrap,
+            walk: None,
+        })
     }
 
     /// The private table [`Vm::resolve_base`] walks compiled variable `cv`
@@ -1867,7 +1883,7 @@ impl Vm {
         if let Some(w) = &root.walk {
             return Some(w.store.clone());
         }
-        let w = self.enter_cv_walk(root.frame, cv)?;
+        let w = self.enter_cv_walk(root.frame, cv, root.wrap)?;
         let store = w.store.clone();
         if let Some(root) = self.cv_root.as_mut() {
             root.walk = Some(w);
@@ -1876,7 +1892,7 @@ impl Vm {
     }
 
     /// Starts a [`CvWalk`] of compiled variable `cv` of frame `fidx`.
-    fn enter_cv_walk(&mut self, fidx: usize, cv: u32) -> Option<CvWalk> {
+    fn enter_cv_walk(&mut self, fidx: usize, cv: u32, wrap: bool) -> Option<CvWalk> {
         let f = self.frames.get_mut(fidx)?;
         if f.symtab_attached {
             return None;
@@ -1886,7 +1902,7 @@ impl Vm {
         let slot = f.cvs.get_mut(cv as usize)?;
         let (r, wrapped) = match slot.get()? {
             Value::Reference(r) => (r.clone(), false),
-            Value::Array(_) | Value::Object(_) => {
+            Value::Array(_) | Value::Object(_) if wrap => {
                 let r = PhpRef::new(slot.set(None)?);
                 slot.set(Some(Value::Reference(r.clone())));
                 (r, true)
@@ -5231,12 +5247,55 @@ impl Vm {
     pub(crate) fn global_ref(&mut self, name: &[u8]) -> PhpRef {
         self.attach_globals_symbol_table();
         let g = self.globals.clone();
+        let idx = g.borrow_mut().find_or_add(name) as usize;
+        self.global_slot_ref(&g, idx)
+    }
+
+    /// [`Vm::global_ref`] for a `global $name` statement, whose name is a
+    /// literal of the op array: the slot found is remembered by the
+    /// literal's address. A hit is checked against the name the slot has
+    /// (the global table's slots never move while it lives; a reused
+    /// address or a new table fails the check).
+    pub(crate) fn global_ref_lit(&mut self, name: &ZStr) -> PhpRef {
+        self.attach_globals_symbol_table();
+        let g = self.globals.clone();
+        let bytes = name.as_bytes();
+        let addr = bytes.as_ptr() as usize;
+        let e = (addr >> 3) & (GLOBAL_SLOT_CACHE - 1);
+        let (ca, ci) = self.global_slot_cache[e];
+        let idx = {
+            let mut st = g.borrow_mut();
+            if ca == addr
+                && st
+                    .names
+                    .get(ci as usize)
+                    .is_some_and(|n| n.as_bytes() == bytes)
+                && (ci as usize) < st.slots.len()
+            {
+                ci as usize
+            } else {
+                let i = st.find_or_add(bytes);
+                self.global_slot_cache[e] = (addr, i);
+                i as usize
+            }
+        };
+        self.global_slot_ref(&g, idx)
+    }
+
+    /// The reference global slot `idx` of `g` becomes (or already is). The
+    /// global-scope frames are brought up to date only when the slot
+    /// changed (a new variable, or a value that just became a reference).
+    fn global_slot_ref(&mut self, g: &Rc<RefCell<VarStore>>, idx: usize) -> PhpRef {
         let mut st = g.borrow_mut();
-        let idx = st.find_or_add(name) as usize;
-        let slot = st.slots[idx].get_or_insert(Value::Null);
-        let r = slot.make_ref();
+        let Some(slot) = st.slots.get_mut(idx) else {
+            unreachable!("find_or_add sized the table");
+        };
+        let was_ref = matches!(slot, Some(Value::Reference(_)));
+        let r = slot.get_or_insert(Value::Null).make_ref();
         drop(st);
-        self.sync_global_frames();
+        if !was_ref {
+            self.sync_global_frames();
+        }
         r
     }
 }

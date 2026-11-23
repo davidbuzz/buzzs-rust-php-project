@@ -3851,13 +3851,23 @@ impl Vm {
             &b.params[nparams - 1]
         };
         let Some(ty) = &p.ty else { return Ok(()) };
-        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
-        let pname = p.name.to_string_lossy();
         let ctx = TypeCtx {
             scope: call.scope.as_ref(),
             called: call.called.as_ref(),
             strict,
-            internal_arg: Some((&fname, i + 1, &pname)),
+            internal_arg: Some(crate::typecheck::InternalArg {
+                func: b,
+                argn: i + 1,
+                param: &p.name,
+            }),
+        };
+        // The function's and the parameter's display names, for the
+        // messages only (most calls need neither).
+        let names = |vm: &Self| {
+            (
+                vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref()),
+                p.name.to_string_lossy(),
+            )
         };
         if ty.mask & crate::types::mask::CALLABLE != 0
             && !ty.has_classes()
@@ -3872,6 +3882,7 @@ impl Vm {
                 if !why.contains("not found") {
                     let _ = self.zend_is_callable(v, false)?;
                 }
+                let (fname, pname) = names(self);
                 let nul = if ty.allows_null() { " or null" } else { "" };
                 return Err(self.make_throw(
                     "TypeError",
@@ -3884,6 +3895,7 @@ impl Vm {
             return Ok(());
         }
         if !self.verify_type(ty, v, &ctx)? {
+            let (fname, pname) = names(self);
             let msg = if ty.mask & crate::types::mask::CALLABLE != 0
                 && !ty.has_classes()
                 && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0

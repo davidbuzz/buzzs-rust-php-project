@@ -1848,7 +1848,7 @@ impl Vm {
                     }
                     Op::Global { cv, name } => {
                         let n = self.lit_str(*name);
-                        let r = self.global_ref(n.as_bytes());
+                        let r = self.global_ref_lit(&n);
                         self.cv_bind(*cv, Value::Reference(r));
                         Flow::Next
                     }

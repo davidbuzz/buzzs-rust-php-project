@@ -302,6 +302,7 @@ impl Vm {
             trampoline_entry: None,
             cv_root: None,
             cv_scratch: None,
+            global_slot_cache: [(0, 0); crate::place::GLOBAL_SLOT_CACHE],
             source_filter: None,
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),

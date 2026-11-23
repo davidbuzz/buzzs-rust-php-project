@@ -2507,6 +2507,9 @@ pub struct Vm {
     pub(crate) cv_root: Option<crate::place::CvRoot>,
     /// The private table kept for the next [`Vm::cv_root`].
     pub(crate) cv_scratch: Option<Rc<RefCell<VarStore>>>,
+    /// `global $name` slots by the address of the name literal (see
+    /// `Vm::global_ref_lit`): (address, slot of the global table).
+    pub(crate) global_slot_cache: [(usize, u32); crate::place::GLOBAL_SLOT_CACHE],
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
     /// Current mbstring encoding/substitution settings.
