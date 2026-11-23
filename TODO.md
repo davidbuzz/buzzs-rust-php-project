@@ -89,9 +89,17 @@ candidates for `perf/bench` and for work.
   22.0 M -> 1.9 M instructions; php-src 0.1 M). That exposed state that outlived the
   request (SPL's autoloader registry, 6599a1a1; objects freed after the store reset,
   6ab1cde9) and state dropped that php-src keeps (opcache's scripts, e2a8ca7e; PCRE's
-  compiled patterns, 282cffca). Still to do: compare every extension's thread-local state
-  and its `RINIT`/`RSHUTDOWN` resets with php-src's; the remaining 1.8 M instructions of
-  an empty request (`request_reset` rebuilds tables such as `CallBufs` and `ExtState`).
+  compiled patterns, 282cffca). 24 Nov: resource numbers restart per request, and
+  request startup and shutdown follow `php_request_startup()` (the execution timer was
+  never armed from INI, counted wall time and had no hard timeout; 4f90f9c0); caches
+  keyed by a class or document address that outlived the object (SPL, DOM) and openssl
+  callables kept past the request. The check: every php-src test script run in order on
+  one `php -S` against a fresh server per script (scripts whose two fresh runs agree);
+  still to do: act on its differences, and the remaining 1.8 M instructions of an empty
+  request (`request_reset` rebuilds tables such as `CallBufs` and `ExtState`).
+- [ ] openssl: a TLS stream connected with crypto enabled hands `NULL` to its PSK and
+  session callbacks (ext/openssl/tests/close_in_psk_client_cb_UAF.phpt): the handshake
+  runs before the stream exists; php-src allocates the stream (and its resource) first.
 - [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
   frame is swapped onto the stack and back; the rest is the builtin-method call machinery
   around `send()` and the nested `execute()`).
