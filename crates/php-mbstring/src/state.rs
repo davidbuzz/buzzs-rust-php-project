@@ -353,7 +353,11 @@ impl MbState {
     /// handler) followed by `PHP_RINIT`, for a worker serving its next
     /// request. What this request's input handling recorded before RINIT
     /// (the `http_input_identify*` encodings, `php_hash_environment()`
-    /// runs first) and the compiled-pattern cache are kept.
+    /// runs first) is kept, and so are the regex default options and
+    /// syntax: `MBREX(regex_default_options)`/`_syntax` are module globals
+    /// no request resets (`mb_regex_set_options()` outlives its request in
+    /// php-src too). The regex encodings come from the INI, as the
+    /// internal encoding's update handler sets them.
     pub fn restore_ini(&mut self, settings: &[(&str, &[u8])]) {
         let mut fresh = Self::with_ini(settings);
         fresh.diagnostics.clear();
@@ -362,7 +366,8 @@ impl MbState {
         fresh.http_input_identify_post = self.http_input_identify_post;
         fresh.http_input_identify_cookie = self.http_input_identify_cookie;
         fresh.http_input_identify_string = self.http_input_identify_string;
-        fresh.regex = std::mem::take(&mut self.regex);
+        fresh.regex.default_options = self.regex.default_options;
+        fresh.regex.default_syntax = self.regex.default_syntax;
         *self = fresh;
     }
 
@@ -1185,6 +1190,24 @@ mod tests {
         );
         assert_eq!(s.mb_http_input(None).unwrap(), HttpInput::False);
         assert_eq!(s.mb_substitute_character_get(), SubstituteChar::Char(63));
+    }
+
+    /// A worker's next request starts with the regex encoding of the INI
+    /// (an earlier request's `mb_regex_encoding()` and runtime
+    /// `mbstring.internal_encoding` are undone), and keeps the default
+    /// regex options, which are module globals in php-src
+    /// (`ext/mbstring/tests/bug69151.phpt` after `php_gr_jp_10830` on one
+    /// php -S matched "\x80" as a single-byte character).
+    #[test]
+    fn restore_ini_resets_the_regex_encoding_and_keeps_its_options() {
+        let mut s = MbState::with_ini(&[]);
+        s.ini_set_internal_encoding(Some(b"ISO-8859-1"));
+        s.mb_regex_encoding_set(b"EUC-JP").unwrap();
+        s.mb_regex_set_options(Some(b"i")).unwrap();
+        s.request_shutdown();
+        s.restore_ini(&[]);
+        assert_eq!(s.mb_regex_encoding_get(), "UTF-8");
+        assert_eq!(s.mb_regex_set_options(None).unwrap(), "ir");
     }
 
     #[test]

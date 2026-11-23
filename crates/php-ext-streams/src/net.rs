@@ -820,26 +820,26 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         conn.context.clone_from(&listener.context);
         let r = hook(vm, &mut listener, conn, timeout);
         cell.replace_stream(listener);
-        let r = match r? {
+        let accepted = match r? {
             // The server handshake runs once the connection is a resource
             // (`php_openssl_tcp_sockop_accept()` allocates it first).
-            Ok(s) => {
-                let v = res::new_stream(s, None);
+            Ok(stream) => {
+                let client = res::new_stream(stream, None);
                 match transport.and_then(|t| t.connect) {
-                    Some(connect) => match finish_connect(vm, &v, connect)? {
-                        Ok(()) => Ok(v),
+                    Some(connect) => match finish_connect(vm, &client, connect)? {
+                        Ok(()) => Ok(client),
                         Err(xport::ConnectError {
                             thrown: Some(t), ..
                         }) => return Err(t),
                         Err(e) => Err(e.error),
                     },
-                    None => Ok(v),
+                    None => Ok(client),
                 }
             }
             Err(e) => Err(e),
         };
-        return match r {
-            Ok(v) => Ok(v),
+        return match accepted {
+            Ok(client) => Ok(client),
             Err(e) => {
                 vm.php_warning(&format!("Accept failed: {}", e.shown()))?;
                 Ok(Value::Bool(false))
