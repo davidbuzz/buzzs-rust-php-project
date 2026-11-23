@@ -2156,6 +2156,19 @@ impl Vm {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
         let global = self.writes_global_table(&base);
+        if global {
+            // The running frame of the global scope (an included file's
+            // code) has written its compiled variables without mirroring
+            // them in the table (the fast paths): they go there first, as
+            // a write to a variable of its own brings them up to date
+            // (`resolve_base`), or the sync after the write would take the
+            // table's older values back into them.
+            let globals = Rc::clone(&self.globals);
+            let f = self.frame_mut();
+            if f.symtab_attached && Rc::ptr_eq(&f.vars, &globals) {
+                f.sync_cvs_to_symtab();
+            }
+        }
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         self.frame_mut().sync_from_symbol_table();

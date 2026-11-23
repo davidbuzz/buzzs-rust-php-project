@@ -331,11 +331,7 @@ pub(crate) fn this_refl(vm: &mut Vm, a: &Args) -> VmResult<Refl> {
 /// `f` gets the object's state borrowed, where [`refl`] copies its handles
 /// (four reference counts up and down again for each getter's call). `f`
 /// must not reach the VM (the state stays borrowed while it runs).
-pub(crate) fn with_this_fn<R>(
-    vm: &mut Vm,
-    a: &Args,
-    f: impl FnOnce(&FnRef) -> R,
-) -> VmResult<R> {
+pub(crate) fn with_this_fn<R>(vm: &mut Vm, a: &Args, f: impl FnOnce(&FnRef) -> R) -> VmResult<R> {
     let got = a.this.as_ref().and_then(|o| {
         object::internal::<Refl, _>(o, |r| match r {
             Refl::Function(func) => Some(f(func)),

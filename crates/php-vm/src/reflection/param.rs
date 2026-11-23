@@ -255,7 +255,9 @@ fn rp_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(super::function::param_doc_comment(vm, &f, idx).map_or(Value::Bool(false), Value::Str))
 }
 fn rp_get_position(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(i64::try_from(with_param(vm, a, |_, idx, _| idx)?).unwrap_or(0)))
+    Ok(Value::Int(
+        i64::try_from(with_param(vm, a, |_, idx, _| idx)?).unwrap_or(0),
+    ))
 }
 fn rp_is_optional(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(with_param(vm, a, |f, idx, _| {
@@ -275,7 +277,9 @@ fn has_default(p: &ParamInfo, f: &FnRef, idx: usize) -> bool {
 }
 
 fn rp_has_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(with_param(vm, a, |f, idx, p| has_default(p, f, idx))?))
+    Ok(Value::Bool(with_param(vm, a, |f, idx, p| {
+        has_default(p, f, idx)
+    })?))
 }
 
 fn no_default(vm: &mut Vm) -> crate::vm::Throw {
