@@ -3576,6 +3576,7 @@ impl Vm {
         let here = std::ptr::addr_of!(marker) as usize;
         if self.native_stack_base == 0 || here > self.native_stack_base {
             self.native_stack_base = here;
+            crate::jit::set_stack_floor(self.native_stack_floor());
             return false;
         }
         let used = self.native_stack_base - here;
@@ -3591,6 +3592,7 @@ impl Vm {
                 };
                 let t = (self.ini.get_long("zend.max_allowed_stack_size"), reserved);
                 self.stack_limit_ini = Some(t);
+                crate::jit::set_stack_floor(self.native_stack_floor());
                 t
             }
         };
@@ -3614,10 +3616,33 @@ impl Vm {
         used > budget.min(hard)
     }
 
+    /// The lowest address [`Self::native_stack_exhausted`] lets the
+    /// native stack reach, from the base it measures from (0 when that is
+    /// not known yet, or no limit is set).
+    fn native_stack_floor(&mut self) -> usize {
+        if self.native_stack_base == 0 {
+            return 0;
+        }
+        let (max, reserved) = self.stack_limit_ini.unwrap_or((0, 48 << 10));
+        let hard = self
+            .native_stack_size
+            .saturating_sub((self.native_stack_size / 8).max(256 << 10));
+        let budget = if max > 0 {
+            usize::try_from(max)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(reserved)
+                .saturating_mul(crate::fiber::STACK_SCALE)
+        } else {
+            hard.saturating_sub(reserved)
+        };
+        self.native_stack_base.saturating_sub(budget.min(hard))
+    }
+
     /// Declares the native stack size of the thread running the VM (the
     /// CLI's large VM stack); the default assumes 8 MiB.
     pub fn set_native_stack_size(&mut self, bytes: usize) {
         self.native_stack_size = bytes;
+        crate::jit::set_stack_floor(self.native_stack_floor());
     }
 }
 

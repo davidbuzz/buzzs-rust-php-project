@@ -881,6 +881,18 @@ enum Plan {
     },
     /// The loop is left for good here (a `return`): the interpreter's.
     Leave,
+    /// A call of the function whose code this is ([`FuncMode`]), with the
+    /// ints in argument variables `args..args + argc`: its code run again,
+    /// on slots of its own on the native stack, and the int it returns
+    /// into `dst`. Anything else (the code giving up, a result that is no
+    /// int, the stack's limit, a safe point due) has the whole call redone
+    /// by the interpreter, from its start ([`Loop::resume`]).
+    SelfCall {
+        args: usize,
+        argc: usize,
+        dst: Option<SlotRef>,
+        next: usize,
+    },
     /// A family instruction run by its own handler, on the frame (which is
     /// exact). What the handler leaves in a slot the loop tracks is read
     /// back from it.
@@ -1363,6 +1375,7 @@ impl Plan {
             Plan::Bind { .. }
             | Plan::Out { .. }
             | Plan::Leave
+            | Plan::SelfCall { .. }
             | Plan::Call(_)
             | Plan::Each { .. }
             | Plan::EachAny { .. }
@@ -1388,6 +1401,8 @@ impl Plan {
                 dst.tmp
             }
             Plan::Assign2 { .. } => false,
+            // (Its function changes nothing outside its own slots.)
+            Plan::SelfCall { dst, .. } => dst.is_none_or(|dst| dst.tmp),
             Plan::Arith { dst, .. }
             | Plan::Int2 { dst, .. }
             | Plan::Div { dst, .. }
@@ -1405,6 +1420,44 @@ impl Plan {
             | Plan::ThisPut { .. }
             | Plan::Out { .. }
             | Plan::Ext { .. } => false,
+        }
+    }
+
+    /// Whether the instruction's code runs on the slots it is given alone:
+    /// no handler, helper or step of the interpreter's, which would see
+    /// the frame rather than the slots of a call [`Plan::SelfCall`] made.
+    fn pure(&self) -> bool {
+        match self {
+            Plan::Jmp { .. }
+            | Plan::Cmp { .. }
+            | Plan::IncCmp { .. }
+            | Plan::Truth { .. }
+            | Plan::Arith { .. }
+            | Plan::Int2 { .. }
+            | Plan::Div { .. }
+            | Plan::Conv { .. }
+            | Plan::Math { .. }
+            | Plan::Pick { .. }
+            | Plan::AbsInt { .. }
+            | Plan::Const { .. }
+            | Plan::Copy { .. }
+            | Plan::Compare { .. }
+            | Plan::SetBool { .. }
+            | Plan::JmpEx { .. }
+            | Plan::Assign2 { .. }
+            | Plan::Arg { .. }
+            | Plan::Unsent { .. }
+            | Plan::Step { .. }
+            | Plan::Leave
+            | Plan::SelfCall { .. } => true,
+            Plan::Bind { .. }
+            | Plan::Out { .. }
+            | Plan::Call(_)
+            | Plan::Each { .. }
+            | Plan::EachAny { .. }
+            | Plan::Ext { .. }
+            | Plan::ThisProp { .. }
+            | Plan::ThisPut { .. } => false,
         }
     }
 
@@ -1434,6 +1487,7 @@ impl Plan {
             | Plan::AbsInt { next, .. }
             | Plan::Arg { next, .. }
             | Plan::Unsent { next, .. }
+            | Plan::SelfCall { next, .. }
             | Plan::Pick { next, .. }
             | Plan::Div { next, .. }
             | Plan::Arith { next, .. }
@@ -1646,6 +1700,11 @@ impl Plan {
             Plan::Unsent { k, .. } => {
                 st.insert(arg_slot(k), Ty::Plain);
             }
+            Plan::SelfCall { dst, .. } => {
+                if let Some(dst) = dst {
+                    st.insert(dst, Ty::Int);
+                }
+            }
             Plan::Math { dst, .. } => {
                 st.insert(dst, Ty::Float);
             }
@@ -1725,9 +1784,58 @@ pub(super) struct Loop {
     /// method calls were resolved in: the frame's, checked at the loop's
     /// entry (`super::scope_is`).
     scopes: Vec<usize>,
+    /// For the code of a function as a whole, which calls itself: how.
+    func: Option<FuncMode>,
+}
+
+/// The typed code of a function that calls itself (`fib($n - 1)`,
+/// [`crate::opcode::OpArray::self_calls`]), entered at its first op after
+/// its parameters' and left at its `return`s ([`Plan::Leave`]). A call of
+/// itself ([`Plan::SelfCall`]) runs the same code on slots of its own,
+/// made on the native stack: entered with the lowest stack address it may
+/// reach for `at` (an address, above any instruction's number), it reports
+/// the `return` it left at, whose value the caller reads from those
+/// slots. Every instruction is [`Plan::pure`].
+pub(super) struct FuncMode {
+    /// The `return`s: each one's instruction and the int it returns.
+    returns: Vec<(usize, Returns)>,
+    /// The function's variables and temporaries.
+    cvs: usize,
+    tmps: usize,
+    /// Where the code's address is put once it is made (leaked).
+    pub(super) cell: &'static std::cell::Cell<usize>,
+}
+
+/// What a `return` of a [`FuncMode`] function returns.
+#[derive(Clone, Copy, Debug)]
+enum Returns {
+    /// The number in a slot (an int, checked by the caller).
+    Slot(SlotRef),
+    /// An int literal.
+    Int(i64),
+    /// Anything else: the call is the interpreter's.
+    Other,
+}
+
+impl std::fmt::Debug for FuncMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FuncMode")
+            .field("returns", &self.returns)
+            .field("cvs", &self.cvs)
+            .field("tmps", &self.tmps)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Loop {
+    /// Tells a function's code ([`FuncMode`]) where it is, for its calls
+    /// of itself: before it first runs.
+    pub(super) fn made_at(&self, addr: usize) {
+        if let Some(func) = &self.func {
+            func.cell.set(addr);
+        }
+    }
+
     /// How many times the hot count more rounds the loop is to go before
     /// it is compiled: 0 for one that runs its instructions itself, more
     /// the more of them are the interpreter's (its steps and what the loop
@@ -1836,6 +1944,10 @@ pub(super) struct Seen<'a> {
     /// a plain declaration (no references, no statics, no variadic) of at
     /// most [`INLINE_OPS`] ops, and calls are not observed.
     pub(super) user: &'a dyn Fn(usize, usize) -> Option<std::rc::Rc<crate::func::UserFunction>>,
+    /// Whether the call started by the op (by index) with that many
+    /// arguments calls the frame's own function, every parameter passed
+    /// and untyped ([`Plan::SelfCall`]).
+    pub(super) self_call: &'a dyn Fn(usize, usize) -> bool,
     /// For a method that may run inline: the type of the number a property
     /// read of `$this` in it holds now (the op that starts the method's
     /// call, the method's address, the read's place in the method's code),
@@ -1915,6 +2027,9 @@ struct Analysis<'a> {
     /// The calls (by their first op) the loop was to make itself and is
     /// not to after all ([`analyse`]): the interpreter's.
     demoted: Vec<usize>,
+    /// The calls (by their first op) of the function itself, in the code
+    /// of a function as a whole ([`FuncMode`]).
+    self_sites: Vec<usize>,
 }
 
 impl<'a> Analysis<'a> {
@@ -2439,11 +2554,13 @@ impl<'a> Analysis<'a> {
                         _ => true,
                     }
             }
+            // (A call of the function itself: [`Plan::SelfCall`].)
             None => {
-                site.kind == SiteKind::Func
-                    && self
-                        .site_builtin(site)
-                        .is_some_and(|name| computed(&name, site.sends.len()))
+                self.self_sites.contains(&site.init)
+                    || site.kind == SiteKind::Func
+                        && self
+                            .site_builtin(site)
+                            .is_some_and(|name| computed(&name, site.sends.len()))
             }
         };
         own && self
@@ -3551,6 +3668,10 @@ impl<'a> Analysis<'a> {
             | Op::InitDynCall { .. }
             | Op::New { .. } => {
                 let site = self.sites.iter().find(|site| site.init == i)?.clone();
+                // A call of the function itself: made by its `DoCall`.
+                if self.self_sites.contains(&site.init) && !self.demoted.contains(&site.init) {
+                    return Some(Plan::Jmp { to: next });
+                }
                 // Computed or run inline, with every call among its
                 // arguments; or the interpreter's, the whole of it.
                 if self.site_inline(st, &site) {
@@ -3573,7 +3694,7 @@ impl<'a> Analysis<'a> {
                 if k >= MAX_ARGS {
                     return None;
                 }
-                if self.inlined_site(site.init).is_none() {
+                if self.inlined_site(site.init).is_none() && !self.self_sites.contains(&site.init) {
                     if site.kind != SiteKind::Func {
                         return None;
                     }
@@ -3616,6 +3737,28 @@ impl<'a> Analysis<'a> {
             &Op::DoCall { dst } => {
                 let site = self.sites.iter().find(|site| site.call == i)?.clone();
                 let args = self.arg_base(&site)?;
+                if self.self_sites.contains(&site.init) {
+                    // Ints, each kept since its `Send`.
+                    for k in 0..site.sends.len() {
+                        if self.number(st, arg_slot(args + k))?.float {
+                            return None;
+                        }
+                    }
+                    let dst = match dst {
+                        Some(dst) => {
+                            let dst = temp(dst)?;
+                            self.ty(st, dst)?;
+                            Some(dst)
+                        }
+                        None => None,
+                    };
+                    return Some(Plan::SelfCall {
+                        args,
+                        argc: site.sends.len(),
+                        dst,
+                        next,
+                    });
+                }
                 if let Some((k, callee)) = self.inlined_site(site.init) {
                     // Every argument a number, kept since its `Send`, that
                     // its parameter's type takes as it is.
@@ -4690,9 +4833,37 @@ fn literal(lits: &[Value], x: u32) -> Option<Opnd> {
 /// follow another with the same types.
 pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_>) -> Option<Loop> {
     let sites = call_sites(&code.ops);
+    // The code of a function as a whole, entered at its first op after
+    // its parameters' ([`FuncMode`]), with the calls of itself it makes.
+    let func_mode = code.self_calls
+        && head
+            == code
+                .ops
+                .iter()
+                .take_while(|op| matches!(op, Op::Recv { .. }))
+                .count();
+    // (Not once its calls kept giving up, `super::missed`: a recursion
+    // deeper than the stack lets the code go, say.)
+    let self_sites: Vec<usize> = if func_mode && seen.fast {
+        sites
+            .iter()
+            .filter(|site| {
+                site.kind == SiteKind::Func
+                    && !site.fallback
+                    && site.sends.len() <= MAX_ARGS
+                    && (seen.self_call)(site.init, site.sends.len())
+            })
+            .map(|site| site.init)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if func_mode && self_sites.is_empty() {
+        return None;
+    }
     // The calls of user functions from the head on that may run inline.
     let mut inl: Vec<Inlined> = Vec::new();
-    for site in &sites {
+    for site in sites.iter().filter(|_| !func_mode) {
         if site.init < head
             || site.sends.len() > MAX_ARGS
             || site.kind == SiteKind::Other
@@ -4743,16 +4914,23 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         prop_scopes: Vec::new(),
         callee: None,
         demoted: Vec::new(),
+        self_sites,
     };
     // The loop's instructions: from its head to its last jump back.
-    let last = (head..tape.len()).rev().find(|i| {
+    let back = (head..tape.len()).rev().find(|i| {
         (an.target(*i) == Some(head) && jumps(&tape[*i]))
             || matches!(
                 code.ops.get(*i),
                 Some(&(Op::JmpNz(Operand::Lit(_), to) | Op::JmpZ(Operand::Lit(_), to)))
                     if to as usize == head
             )
-    })?;
+    });
+    // (A function's: all of it, a loop at its start not.)
+    let last = match (func_mode, back) {
+        (false, back) => back?,
+        (true, None) => tape.len().checked_sub(1)?,
+        (true, Some(_)) => return None,
+    };
     // (An inlined function's instructions are after the tape's own.)
     let inside = |i: usize| (i > head && i <= last) || i >= tape.len();
     let mut ins: BTreeMap<usize, State> = BTreeMap::new();
@@ -4944,6 +5122,52 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             return None;
         }
     }
+    let func = if func_mode {
+        // Nothing that sees the frame, which a call of itself has not.
+        if let Some((at, _)) = plans.iter().find(|(_, (plan, _))| !plan.pure()) {
+            if super::why().is_some() {
+                eprintln!("jit: function at {head}: instruction {at} needs the frame");
+            }
+            return None;
+        }
+        if !an.consts.is_empty() || !scopes.is_empty() || !inlined.is_empty() {
+            return None;
+        }
+        let returns = code
+            .ops
+            .iter()
+            .enumerate()
+            .filter_map(|(at, op)| match *op {
+                Op::Return { val } => Some((
+                    at,
+                    match val {
+                        Operand::Cv(c) => c
+                            .checked_mul(SLOT_U32)
+                            .and_then(cv)
+                            .map_or(Returns::Other, Returns::Slot),
+                        Operand::Tmp(t) | Operand::TmpKeep(t) => t
+                            .checked_mul(SLOT_U32)
+                            .and_then(tmp)
+                            .map_or(Returns::Other, Returns::Slot),
+                        Operand::Lit(l) => match code.literals.get(l as usize) {
+                            Some(Value::Int(n)) => Returns::Int(*n),
+                            _ => Returns::Other,
+                        },
+                        Operand::Unused => Returns::Other,
+                    },
+                )),
+                _ => None,
+            })
+            .collect();
+        Some(FuncMode {
+            returns,
+            cvs: code.cv_names.len(),
+            tmps: code.num_tmps as usize,
+            cell: Box::leak(Box::new(std::cell::Cell::new(0))),
+        })
+    } else {
+        None
+    };
     let lp = Loop {
         head,
         entry: an.entry,
@@ -4955,12 +5179,13 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         virtuals,
         inlined,
         scopes,
+        func,
     };
     // Worth it only if some round can follow another.
     let repeats = lp.plans.values().any(|(plan, st)| {
         plan.successors().contains(&Some(head)) && lp.may_repeat(&plan.out(st, head))
     });
-    if !repeats && super::why().is_some() {
+    if !repeats && lp.func.is_none() && super::why().is_some() {
         eprintln!("jit: loop at {head}: no round can follow another with these types");
         if super::why() == Some(2) {
             eprintln!("jit:   entry {:?}", lp.entry);
@@ -4971,7 +5196,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             }
         }
     }
-    repeats.then_some(lp)
+    (repeats || lp.func.is_some()).then_some(lp)
 }
 
 /// Whether nothing can give up from instruction `from` of an inlined
@@ -5134,8 +5359,15 @@ struct Emit<'a, 'b> {
     lp: &'a Loop,
     cvs: V,
     tmps: V,
+    lits: V,
     frame: V,
     record: V,
+    /// The code's own signature ([`Plan::SelfCall`]).
+    code_sig: SigRef,
+    /// The variable of [`FuncMode`]'s stack limit.
+    limit: Option<Variable>,
+    /// The tag of an undefined variable.
+    none_tag: u8,
     /// The address of the safe-point flag, loaded once (the loop polls it
     /// on every round).
     flag: V,
@@ -5161,9 +5393,11 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
-    let &[cvs, tmps, _lits, frame, at, record] = params.as_slice() else {
+    let &[cvs, tmps, lits, frame, at, record] = params.as_slice() else {
         return None;
     };
+    // This code's own signature, for a call of itself ([`Plan::SelfCall`]).
+    let code_sig = b.import_signature(b.func.signature.clone());
     let mut handler_sig = Signature::new(b.func.signature.call_conv);
     handler_sig
         .params
@@ -5231,6 +5465,13 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
             }
         }
     }
+    // The lowest stack address the calls of itself may reach
+    // ([`FuncMode`]).
+    let limit = lp.func.as_ref().map(|_| {
+        let var = Variable::from_u32(u32::try_from(n).unwrap_or(u32::MAX));
+        b.declare_var(var, types::I64);
+        var
+    });
     let flag = b
         .ins()
         .load(types::I64, mem().with_readonly(), record, rec_at(REC_FLAG)?);
@@ -5240,8 +5481,12 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         lp,
         cvs,
         tmps,
+        lits,
         frame,
         record,
+        code_sig,
+        limit,
+        none_tag,
         flag,
         handler_sig,
         helper_sigs,
@@ -5249,6 +5494,30 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         vars,
         blocks,
         pending: Vec::new(),
+    };
+    // A function's code ([`FuncMode`]), entered from a call of itself
+    // with the stack's limit for `at` (an address: above any number of an
+    // instruction), or from the interpreter, which has the limit made.
+    let at = match limit {
+        Some(var) => {
+            let nested =
+                e.b.ins()
+                    .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, at, 1 << 32);
+            let (outer, inner, join) = (e.b.create_block(), e.b.create_block(), e.b.create_block());
+            e.b.ins().brif(nested, inner, &[], outer, &[]);
+            e.b.switch_to_block(inner);
+            e.b.def_var(var, at);
+            e.b.ins().jump(join, &[]);
+            e.b.switch_to_block(outer);
+            let zero = e.b.ins().iconst(types::I64, 0);
+            let made = e.helper(super::stack_limit as UserIs as usize, &[frame, zero, zero])?;
+            e.b.def_var(var, made);
+            e.b.ins().jump(join, &[]);
+            e.b.switch_to_block(join);
+            let head = e.b.ins().iconst(types::I64, i64::try_from(lp.head).ok()?);
+            e.b.ins().select(nested, head, at)
+        }
+        None => at,
     };
     // Entered again after the interpreter ran what the loop left for
     // ([`Plan::Out`]): at that instruction, when everything the loop
@@ -5864,6 +6133,123 @@ impl Emit<'_, '_> {
     }
 
     /// Calls the array helper at `addr` with `args`; its result.
+    /// [`Plan::SelfCall`] at instruction `i`.
+    #[allow(clippy::too_many_arguments)]
+    fn self_call(
+        &mut self,
+        i: usize,
+        args: usize,
+        argc: usize,
+        dst: Option<SlotRef>,
+        next: usize,
+        repeat: bool,
+        st: &State,
+    ) -> Option<()> {
+        let func = self.lp.func.as_ref()?;
+        // Given up: the whole call the interpreter's, a miss counted.
+        let from = self.lp.resume.get(&i).copied()?;
+        let fail = self.b.create_block();
+        self.b.set_cold_block(fail);
+        // A safe point due: the interpreter's to take.
+        let due = self
+            .b
+            .ins()
+            .load(types::I8, MemFlags::new().with_notrap(), self.flag, 0);
+        let go = self.b.create_block();
+        self.b.ins().brif(due, fail, &[], go, &[]);
+        self.b.switch_to_block(go);
+        // The callee's slots, below which its own frame goes: not under
+        // the limit.
+        let size = (func.cvs + func.tmps).max(1) * SLOT;
+        let slots = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            u32::try_from(size).ok()?,
+            4,
+        ));
+        let base = self.b.ins().stack_addr(types::I64, slots, 0);
+        let limit = self.b.use_var(self.limit?);
+        let low = self.b.ins().icmp(IntCC::UnsignedLessThan, base, limit);
+        let room = self.b.create_block();
+        self.b.ins().brif(low, fail, &[], room, &[]);
+        self.b.switch_to_block(room);
+        // Undefined variables, null temporaries, then the arguments.
+        let undefined = self.b.ins().iconst(types::I8, i64::from(self.none_tag));
+        let null = self.b.ins().iconst(types::I8, i64::from(TAG_NULL));
+        for k in 0..func.cvs + func.tmps {
+            let tag = if k < func.cvs { undefined } else { null };
+            self.b
+                .ins()
+                .store(mem(), tag, base, off(u32::try_from(k * SLOT).ok()?)?);
+        }
+        let int = self.b.ins().iconst(types::I8, i64::from(TAG_INT));
+        for k in 0..argc {
+            let (var, _) = *self.vars.get(&arg_slot(args + k))?;
+            let v = self.b.use_var(var);
+            let at = off(u32::try_from(k * SLOT).ok()?)?;
+            self.b.ins().store(mem(), int, base, at);
+            self.b.ins().store(mem(), v, base, at + PAYLOAD_AT);
+        }
+        let tmps = self
+            .b
+            .ins()
+            .iadd_imm(base, i64::try_from(func.cvs * SLOT).ok()?);
+        #[allow(clippy::cast_possible_wrap)]
+        let cell = self.b.ins().iconst(types::I64, func.cell.as_ptr() as i64);
+        let code = self.b.ins().load(types::I64, mem(), cell, 0);
+        let call = self.b.ins().call_indirect(
+            self.code_sig,
+            code,
+            &[base, tmps, self.lits, self.frame, limit, self.record],
+        );
+        let r = *self.b.inst_results(call).first()?;
+        let left = self.b.ins().ushr_imm(r, i64::from(WHY_BITS));
+        // The `return` it left at, and the int that returns.
+        let done = self.b.create_block();
+        self.b.append_block_param(done, types::I64);
+        for &(at, returns) in &func.returns {
+            let here = self.b.create_block();
+            let other = self.b.create_block();
+            let is = self
+                .b
+                .ins()
+                .icmp_imm(IntCC::Equal, left, i64::try_from(at).ok()?);
+            self.b.ins().brif(is, here, &[], other, &[]);
+            self.b.switch_to_block(here);
+            match returns {
+                Returns::Int(n) => {
+                    let v = self.b.ins().iconst(types::I64, n);
+                    self.b.ins().jump(done, &[v.into()]);
+                }
+                Returns::Slot(slot) => {
+                    let from = if slot.tmp { tmps } else { base };
+                    let tag = self.b.ins().uload8(types::I64, mem(), from, slot.at);
+                    let ok = self.b.ins().icmp_imm(IntCC::Equal, tag, i64::from(TAG_INT));
+                    let read = self.b.create_block();
+                    self.b.ins().brif(ok, read, &[], fail, &[]);
+                    self.b.switch_to_block(read);
+                    let v = self
+                        .b
+                        .ins()
+                        .load(types::I64, mem(), from, slot.at + PAYLOAD_AT);
+                    self.b.ins().jump(done, &[v.into()]);
+                }
+                Returns::Other => {
+                    self.b.ins().jump(fail, &[]);
+                }
+            }
+            self.b.switch_to_block(other);
+        }
+        self.b.ins().jump(fail, &[]);
+        self.b.switch_to_block(fail);
+        self.ret(from, WHY_MISS);
+        self.b.switch_to_block(done);
+        let v = *self.b.block_params(done).first()?;
+        if let Some(dst) = dst {
+            self.write(st, dst, false, v)?;
+        }
+        self.go(i, next, repeat)
+    }
+
     fn helper(&mut self, addr: usize, args: &[V]) -> Option<V> {
         #[allow(clippy::cast_possible_wrap)]
         let callee = self.b.ins().iconst(types::I64, addr as i64);
@@ -6271,6 +6657,12 @@ impl Emit<'_, '_> {
             }
             Plan::Call(call) => self.call(i, &call, &out)?,
             Plan::Leave => self.ret(i, WHY_GENERIC),
+            Plan::SelfCall {
+                args,
+                argc,
+                dst,
+                next,
+            } => self.self_call(i, args, argc, dst, next, repeat, st)?,
             Plan::Compare {
                 a,
                 b,

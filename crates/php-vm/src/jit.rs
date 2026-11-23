@@ -139,6 +139,27 @@ pub fn options() -> Options {
 }
 
 thread_local! {
+    /// The lowest native stack address this thread's VM lets its code
+    /// reach (`Vm::native_stack_exhausted`'s budget, from where the VM
+    /// first ran on this stack); 0 while unknown.
+    static STACK_FLOOR: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Sets [`stack_floor`] (`Vm::native_stack_exhausted`, and the switches to
+/// and from a fiber's stack).
+pub(crate) fn set_stack_floor(floor: usize) {
+    STACK_FLOOR.with(|f| f.set(floor));
+}
+
+/// The lowest native stack address code may use on this thread, 0 when
+/// not known yet: compiled code that calls itself stops calling itself
+/// above it.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) fn stack_floor() -> usize {
+    STACK_FLOOR.with(Cell::get)
+}
+
+thread_local! {
     /// Whether this thread's VM has observers installed.
     static OBSERVED: Cell<bool> = const { Cell::new(false) };
 }

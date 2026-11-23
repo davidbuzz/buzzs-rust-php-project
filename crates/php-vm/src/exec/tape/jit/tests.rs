@@ -1915,6 +1915,33 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn functions_that_call_themselves_run_their_own_code() {
+    // Ints that overflow, float results, a modulo by zero, recursions a
+    // few hundred deep, one with a loop, a self-call with a default, a
+    // string, a bool, no `return` value.
+    both(
+        r#"<?php
+function fibo($n) { return $n < 2 ? 1 : fibo($n - 2) + fibo($n - 1); }
+function ack($m, $n) { if ($m == 0) return $n + 1; if ($n == 0) return ack($m - 1, 1); return ack($m - 1, ack($m, $n - 1)); }
+function ov($n) { return $n <= 0 ? PHP_INT_MAX - 5 : ov($n - 1) + 1; }
+function fl($n) { return $n < 1 ? 0.5 : fl($n - 1) + 1; }
+function mix($n) { if ($n > 50) return 1.5; return $n <= 0 ? 0 : mix($n - 1) + 2; }
+function dz($n) { return $n == 0 ? 1 % $n : dz($n - 1) + 1; }
+function sum($n) { return $n == 0 ? 0 : $n + sum($n - 1); }
+function lp($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $i; } return $n <= 0 ? $s : $s + lp($n - 1); }
+function opt($a, $b = 7) { return $a <= 0 ? $b : opt($a - 1) + 1; }
+function str($n) { return $n <= 0 ? "x" : str($n - 1) . "y"; }
+function boo($n) { return $n <= 0 ? true : boo($n - 1); }
+function un($n) { if ($n > 0) { return un($n - 1) + 1; } }
+for ($r = 0; $r < 3; $r++) {
+    var_dump(fibo(15), ack(2, 3), ov(3), ov(10), fl(5), mix(10), mix(60), sum(300), lp(20), opt(5), opt(5, 1), str(5), boo(5), un(4), sum(3.0));
+    try { var_dump(dz(10)); } catch (DivisionByZeroError $e) { echo $e->getMessage(), " ", $e->getLine(), "\n"; }
+}
+"#,
+    );
+}
+
+#[test]
 fn a_literal_sent_to_an_untyped_parameter_inline_is_not_copied() {
     // Parameters left unread, overwritten, returned, tested, or typed (a
     // `TypeError`), with literals of every kind.

@@ -486,7 +486,10 @@ impl Compiler<'_> {
         let r = self.compile_body_inner(spec, body);
         let f = self.fns.pop().expect("fn ctx");
         let (params, required, return_type, ctx_uses) = r?;
-        let code = self.finish_fn(f)?;
+        let mut code = self.finish_fn(f)?;
+        if spec.kind == FnKind::Function {
+            code.self_calls = calls_itself(&code, spec.name.as_bytes());
+        }
         let mut fl = 0;
         if spec.kind == FnKind::Closure {
             fl |= flags::CLOSURE;
@@ -2921,4 +2924,20 @@ fn is_scalar_only(t: &crate::types::TypeDecl) -> bool {
     use crate::types::mask;
     let scalars = mask::NULL | mask::BOOL | mask::LONG | mask::DOUBLE | mask::STRING;
     t.mask != 0 && t.mask & !scalars == 0 && t.classes.is_empty() && t.intersections.is_empty()
+}
+
+/// Whether `code`, a function's named `name`, calls the function by that
+/// name ([`crate::opcode::OpArray::self_calls`]): a call by a qualified
+/// name, or an unqualified one outside a namespace (no global fallback).
+fn calls_itself(code: &crate::opcode::OpArray, name: &[u8]) -> bool {
+    let name = name.strip_prefix(b"\\").unwrap_or(name);
+    code.ops.iter().any(|op| match *op {
+        Op::InitFCall {
+            name: lit,
+            fallback: None,
+            ..
+        } => matches!(code.literals.get(lit as usize),
+            Some(Value::Str(s)) if s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes()).eq_ignore_ascii_case(name)),
+        _ => false,
+    })
 }

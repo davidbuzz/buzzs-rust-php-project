@@ -1423,6 +1423,10 @@ pub struct OpArray {
     /// Monomorphic call-site cache of method calls (`InitMethodCall`),
     /// indexed by instruction pointer (op index).
     pub method_cache: RefCell<Vec<Option<MethodCallCacheEntry>>>,
+    /// Whether this is a function's code that calls the function by its
+    /// own name (`fib($n - 1)`): the JIT may compile it as a whole, the
+    /// call running its own code (`exec/tape/jit/typed.rs`).
+    pub self_calls: bool,
     /// The instructions pre-decoded for the frame-local loop, built when
     /// the op array first runs there (`exec/tape.rs`). `ops` must not
     /// change once it exists.

@@ -384,7 +384,11 @@ impl Vm {
             std::mem::replace(&mut self.native_stack_base, 0),
             std::mem::replace(&mut self.native_stack_size, fiber_stack),
         );
+        // (Not known on the fiber's stack until its first check there.)
+        let saved_floor = crate::jit::stack_floor();
+        crate::jit::set_stack_floor(0);
         let finished = co.resume();
+        crate::jit::set_stack_floor(saved_floor);
         self.native_stack_base = saved_stack.0;
         self.native_stack_size = saved_stack.1;
         // `fiber` and, when it was suspended from inside fibers it started

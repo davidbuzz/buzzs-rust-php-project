@@ -102,6 +102,10 @@ class Gen:
         if k < 0.076:
             lit = self.pick(['"s"', "'0'", '""', '[1, 2]', '[]', 'null'])
             return f'{self.pick(["hu", "ht", "hq", "hr"])}({lit}, {self.expr(d + 1)})'
+        # Functions that call themselves (a few dozen deep at most).
+        if k < 0.082:
+            f, bound = self.pick([("hrec", 40), ("hfib", 14)])
+            return f'{f}((int)({self.expr(d + 1)}) % {bound}, {self.expr(d + 1)})'
         # Static methods and methods of `$o`, likewise.
         if k < 0.085:
             return f'{self.pick(["P::sm", "$o->im", "P::sd", "$o->gsum", "$fo->gsum"])}({self.expr(d + 1)})'
@@ -306,7 +310,9 @@ class Gen:
                    # Builtins a typed loop computes, in functions it runs inline.
                    'function hm0($x) { return sqrt(abs($x)) + floor($x * 0.5); } function hm1($x) { return max($x, 3) - intdiv($x, 2); } '
                    'function hu($s, $x) { return $x + 1; } function ht(string $s, $x) { return $x * 2; } '
-                   'function hq($s, $x) { return $s ? $x : 1; } function hr($s, $x) { return $s; }')
+                   'function hq($s, $x) { return $s ? $x : 1; } function hr($s, $x) { return $s; } '
+                   'function hrec($n, $k) { return $n <= 0 ? $k : hrec($n - 1, $k + $n % 3) * 1; } '
+                   'function hfib($n, $k) { if ($n < 2) { return $n + $k; } return hfib($n - 1, $k) - hfib($n - 2, 1) + 1; }')
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'static function sm($x) { return $x + 2; } function im($x) { return $x * 3; } '

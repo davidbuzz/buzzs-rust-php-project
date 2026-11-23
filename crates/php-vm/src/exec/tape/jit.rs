@@ -400,6 +400,24 @@ pub(super) fn install(code: &OpArray, tape: &mut [Inst]) {
             }
         }
     }
+    // A function that calls itself by name: typed code for the whole of
+    // it, entered at its first op after its parameters' (where a call with
+    // every argument passed starts), the calls running that code again
+    // ([`typed::analyse`]). Not when a loop starts there.
+    let mut typed_heads = typed_heads;
+    if options.registers && code.self_calls {
+        let first = code
+            .ops
+            .iter()
+            .take_while(|op| matches!(op, Op::Recv { .. }))
+            .count();
+        if first < code.ops.len()
+            && !typed_heads.iter().any(|(head, _)| *head == first)
+            && !heads.iter().any(|(head, _)| *head == first)
+        {
+            typed_heads.push((first, tape.len() - 1));
+        }
+    }
     let typed_at = |at: usize| typed_heads.iter().find(|(head, _)| *head == at).copied();
     let entries: Vec<Entry> = if options.everything {
         // Every instruction the code does something for.
@@ -1026,6 +1044,23 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 && func.code.ops.len() <= typed::INLINE_OPS;
             plain.then_some(func)
         };
+        // Whether the call started at `init` with `argc` arguments calls
+        // the frame's own function, every parameter passed and untyped
+        // (`typed::Plan::SelfCall`).
+        let self_call = |init: usize, argc: usize| -> bool {
+            use crate::func::{flags, CallShape};
+            if crate::jit::calls_are_observed() {
+                return false;
+            }
+            callee_at(frame, init).is_some_and(|func| {
+                std::rc::Rc::ptr_eq(&func.code, &frame.code)
+                    && func.call_shape() == CallShape::UNTYPED
+                    && argc == func.params.len()
+                    && func.flags & (flags::CLOSURE | flags::RETURN_REF) == 0
+                    && func.uses.is_empty()
+                    && func.code.try_table.is_empty()
+            })
+        };
         // What a property read of an inlined method holds now.
         let prop_of_this = |init: usize, func: usize, pid: u32| -> Option<(typed::Ty, u32)> {
             // SAFETY: `func` is the address of a function the analysis
@@ -1132,6 +1167,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             each: &each,
             builtin: &builtin,
             user: &user,
+            self_call: &self_call,
             this_prop: &prop_of_this,
             receiver: &receiver,
             this_write: &write_of_this,
@@ -1985,6 +2021,24 @@ fn receiver_in(f: &Frame, recv: usize) -> Option<&php_runtime::Obj> {
     }
 }
 
+/// For the typed code of a function that calls itself
+/// (`typed::Plan::SelfCall`), on its entry from the interpreter: the
+/// lowest stack address its calls of itself may reach, some way above the
+/// VM's floor ([`crate::jit::stack_floor`]), or a quarter of a megabyte
+/// below here while that is not known.
+pub(super) unsafe extern "C" fn stack_limit(_f: *mut Frame, _a: usize, _b: usize) -> usize {
+    let marker = 0u8;
+    let here = std::ptr::addr_of!(marker) as usize;
+    let floor = crate::jit::stack_floor();
+    let limit = if floor == 0 {
+        here.saturating_sub(256 << 10)
+    } else {
+        floor.saturating_add(64 << 10)
+    };
+    // (Above `here` there is no room at all: the first call gives up.)
+    limit.min(here)
+}
+
 /// For a typed loop, at a method's call it runs inline: whether the
 /// receiver ([`receiver_in`]) is an object of the class at address
 /// `class`, the one the loop resolved the method for (kept alive for
@@ -2618,6 +2672,7 @@ fn compile_typed(
         crate::jit::record(|s| s.failed += 1);
         return None;
     };
+    lp.made_at(code as usize);
     crate::jit::record(|s| {
         s.typed_loops += 1;
         s.code_bytes += size;

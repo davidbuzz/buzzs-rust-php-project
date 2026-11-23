@@ -1050,6 +1050,7 @@ impl Compiler<'_> {
             rt_cache: crate::rtcache::RuntimeCache::default(),
             prop_cache: std::cell::RefCell::default(),
             method_cache: std::cell::RefCell::default(),
+            self_calls: false,
             tape: crate::exec::tape::Tape::default(),
         };
         // Optimizer passes run when opcache.optimization_level is nonzero
