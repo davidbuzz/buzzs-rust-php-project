@@ -750,6 +750,15 @@ enum Plan {
         consume: Option<SlotRef>,
         next: usize,
     },
+    /// The send of a literal that is not a number (`hallo("hallo")`) to
+    /// an untyped parameter of a function the loop runs inline: nothing
+    /// is copied, and the argument variable `k` is [`Ty::Plain`], which no
+    /// instruction reads (a function that reads the parameter is not run
+    /// inline after all).
+    Unsent {
+        k: usize,
+        next: usize,
+    },
     /// `dst = max(a, b)` or `min(a, b)` of two ints, or of two floats
     /// (`float`).
     Pick {
@@ -1347,6 +1356,10 @@ impl Plan {
                 consume: None,
                 next: next + base,
             },
+            Plan::Unsent { k, next } => Plan::Unsent {
+                k,
+                next: next + base,
+            },
             Plan::Bind { .. }
             | Plan::Out { .. }
             | Plan::Leave
@@ -1367,6 +1380,7 @@ impl Plan {
             | Plan::Cmp { .. }
             | Plan::Truth { .. }
             | Plan::Arg { .. }
+            | Plan::Unsent { .. }
             | Plan::Bind { .. }
             | Plan::ThisProp { .. }
             | Plan::Leave => true,
@@ -1419,6 +1433,7 @@ impl Plan {
             | Plan::Math { next, .. }
             | Plan::AbsInt { next, .. }
             | Plan::Arg { next, .. }
+            | Plan::Unsent { next, .. }
             | Plan::Pick { next, .. }
             | Plan::Div { next, .. }
             | Plan::Arith { next, .. }
@@ -1627,6 +1642,9 @@ impl Plan {
                     st.insert(tmp, Ty::Plain);
                 }
                 st.insert(arg_slot(k), num(value.float));
+            }
+            Plan::Unsent { k, .. } => {
+                st.insert(arg_slot(k), Ty::Plain);
             }
             Plan::Math { dst, .. } => {
                 st.insert(dst, Ty::Float);
@@ -3564,6 +3582,7 @@ impl<'a> Analysis<'a> {
                         return None;
                     }
                 }
+                let (pos, init) = (k, site.init);
                 let k = self.arg_base(site)? + k;
                 let operand = match *src {
                     // (A call's result is a value to a parameter that is
@@ -3579,7 +3598,14 @@ impl<'a> Analysis<'a> {
                     },
                     ArgSrc::TempPlace(_) => return None,
                 };
-                let (value, consume) = self.op_number(st, operand)?;
+                let Some((value, consume)) = self.op_number(st, operand) else {
+                    // A literal of another kind, to a function run inline
+                    // that takes it as it is ([`Plan::Unsent`]).
+                    let (_, callee) = self.inlined_site(init)?;
+                    let param = callee.func.params.get(pos)?;
+                    return (matches!(operand, Operand::Lit(_)) && param.ty.is_none())
+                        .then_some(Plan::Unsent { k, next });
+                };
                 Some(Plan::Arg {
                     k,
                     value,
@@ -3594,8 +3620,12 @@ impl<'a> Analysis<'a> {
                     // Every argument a number, kept since its `Send`, that
                     // its parameter's type takes as it is.
                     for k in 0..site.sends.len() {
-                        let arg = self.number(st, arg_slot(args + k))?;
                         let param = callee.func.params.get(k)?;
+                        // Not sent ([`Plan::Unsent`]): untyped.
+                        if st.get(&arg_slot(args + k)) == Some(&Ty::Plain) && param.ty.is_none() {
+                            continue;
+                        }
+                        let arg = self.number(st, arg_slot(args + k))?;
                         if !takes(param.ty.as_ref(), num_ty(arg.float)) {
                             return None;
                         }
@@ -6065,7 +6095,10 @@ impl Emit<'_, '_> {
                     let float = match self.lp.ty(st, arg)? {
                         Ty::Int => false,
                         Ty::Float => true,
-                        Ty::Bool | Ty::Plain | Ty::Any => return None,
+                        // Not sent ([`Plan::Unsent`]): the parameter is
+                        // `Plain` too, nothing to copy.
+                        Ty::Plain => continue,
+                        Ty::Bool | Ty::Any => return None,
                     };
                     let (int, fl) = *self.vars.get(&arg)?;
                     let v = self.b.use_var(if float { fl } else { int });
@@ -6391,6 +6424,7 @@ impl Emit<'_, '_> {
                 self.write(st, dst, false, r)?;
                 self.go(i, next, repeat)?;
             }
+            Plan::Unsent { next, .. } => self.go(i, next, repeat)?,
             Plan::Arg {
                 k,
                 value,

@@ -97,6 +97,11 @@ class Gen:
             return f'{self.pick(["h0", "h2", "h4", "h5", "h6", "h7", "h9", "hm0", "hm1"])}({self.expr(d + 1)})'
         if k < 0.07:
             return f'{self.pick(["h1", "h3", "h7", "h9"])}({self.expr(d + 1)}, {self.expr(d + 1)})'
+        # A literal that is not a number for a parameter the function
+        # ignores, takes typed, tests or returns.
+        if k < 0.076:
+            lit = self.pick(['"s"', "'0'", '""', '[1, 2]', '[]', 'null'])
+            return f'{self.pick(["hu", "ht", "hq", "hr"])}({lit}, {self.expr(d + 1)})'
         # Static methods and methods of `$o`, likewise.
         if k < 0.085:
             return f'{self.pick(["P::sm", "$o->im", "P::sd", "$o->gsum", "$fo->gsum"])}({self.expr(d + 1)})'
@@ -299,7 +304,9 @@ class Gen:
                    'function h6(int $x): int { return $x + 3; } function h7(float $x, $y = 2): float { return $x * $y; } '
                    'function h8($a, $b) { return $a <= $b; } function h9(int|float $x, int $k = 5): int|float { return $x - $k; } '
                    # Builtins a typed loop computes, in functions it runs inline.
-                   'function hm0($x) { return sqrt(abs($x)) + floor($x * 0.5); } function hm1($x) { return max($x, 3) - intdiv($x, 2); }')
+                   'function hm0($x) { return sqrt(abs($x)) + floor($x * 0.5); } function hm1($x) { return max($x, 3) - intdiv($x, 2); } '
+                   'function hu($s, $x) { return $x + 1; } function ht(string $s, $x) { return $x * 2; } '
+                   'function hq($s, $x) { return $s ? $x : 1; } function hr($s, $x) { return $s; }')
         out.append('class P { const CI = 5; const CF = 0.25; const CB = false; public $x; public $f = 0.5; '
                    'public int $n = 1; public int|float $u = 2; static $sx = 1; static $sf = 0.5; static int $st = 2; '
                    'static function sm($x) { return $x + 2; } function im($x) { return $x * 3; } '

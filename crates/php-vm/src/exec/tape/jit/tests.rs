@@ -1915,6 +1915,26 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn a_literal_sent_to_an_untyped_parameter_inline_is_not_copied() {
+    // Parameters left unread, overwritten, returned, tested, or typed (a
+    // `TypeError`), with literals of every kind.
+    both(
+        r#"<?php
+function hallo($a) {} function ret($a) { return $a; } function over($a, $n) { $a = $n * 2; return $a; }
+function typed(int $a) { return 1; } function cnt($a, $b) { return $b + 1; } function dflt($a, $b = 3) { return $b; }
+function isn($a) { return isset($a) ? 1 : 0; } function nul($a) { return $a === null ? 1 : 2; } function tru($a) { return $a ? 5 : 6; }
+function f($n) { $s = 0; $r = [];
+    for ($i = 0; $i < $n; $i++) { hallo("hallo"); $s += cnt("x", $i); $s += over("y", $i); $s += dflt([1, 2]); $s += isn("q"); $s += nul(null); $s += tru(""); $s += tru("0"); $s += tru("a"); hallo(null); hallo([1]); }
+    $r[] = $s;
+    for ($i = 0; $i < $n; $i++) { $r[] = ret("s$i"); $r[] = ret("lit"); }
+    try { for ($i = 0; $i < $n; $i++) { $s += typed(5); $s += typed("x"); } } catch (TypeError $e) { $r[] = $e->getMessage(); }
+    $r[] = $s; return $r; }
+var_dump(f(20), f(3));
+"#,
+    );
+}
+
+#[test]
 fn a_temporary_written_on_one_path_is_a_variable_on_the_other() {
     // `$c` is copied into the ternary's temporary on one path, the string
     // is written there on the other; the copy's temporary is in no
