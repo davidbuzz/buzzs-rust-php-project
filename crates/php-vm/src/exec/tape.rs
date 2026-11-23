@@ -1727,6 +1727,29 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 fresh = false;
                 vm.return_simple(val, base, at + 1).is_some()
             }
+            // `ZEND_FRAMELESS_ICALL_n` in place, as `Vm::run`'s pre-match
+            // runs it (`Vm::frameless_icall_op`), and the tape goes on past
+            // the `Nop`s of the call ops it replaced, instead of a way out
+            // to `Vm::run` and back for each such call.
+            Some(Op::FramelessICall(fc)) => {
+                flush(vm, &mut prep);
+                fresh = false;
+                match vm.frameless_icall_op(fc, at + 1) {
+                    Some(Ok(())) => {
+                        let next = at + usize::from(fc.argc) + 2;
+                        if crate::interrupt::safe_point_due() {
+                            return (next | switched, at);
+                        }
+                        ip = next;
+                        continue 'frames;
+                    }
+                    Some(Err(t)) => {
+                        vm.tape_throw = Some(t);
+                        return (at | switched, hot::THREW);
+                    }
+                    None => false,
+                }
+            }
             _ => false,
         };
         if !changed {
