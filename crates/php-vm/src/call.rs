@@ -5147,9 +5147,6 @@ fn root_released_args(args: &[Option<Value>]) {
     }
 }
 
-/// Whether `v` is a scalar, whose release does nothing.
-#[inline(always)]
-#[allow(clippy::inline_always)] // one tag test per return
 /// A value [`Vm::return_simple`] returns as it is: a scalar, null or a
 /// string (no possible cycle root, nothing for `gc::frame_released`).
 #[inline(always)]
@@ -5161,6 +5158,9 @@ fn returns_directly(v: &Value) -> bool {
     )
 }
 
+/// Whether `v` is a scalar, whose release does nothing.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per return
 fn is_scalar(v: &Value) -> bool {
     matches!(
         v,

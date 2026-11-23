@@ -113,6 +113,39 @@ impl std::fmt::Debug for VarNames {
     }
 }
 
+/// Records slot `slot` of compiled variable `cv` (of `ncv`) in a frame's
+/// [`Frame::symtab_slots`]. The list stays empty (nothing allocated) while
+/// every variable is at its own index, as in a function's own table; the
+/// first one elsewhere fills in the ones before it.
+#[inline]
+fn record_slot(slots: &mut Vec<u32>, cv: usize, slot: u32, ncv: usize) {
+    if slots.is_empty() {
+        if slot as usize == cv {
+            return;
+        }
+        slots.reserve(ncv);
+        slots.extend((0..cv).map(|i| u32::try_from(i).unwrap_or(u32::MAX)));
+    }
+    slots.push(slot);
+}
+
+/// The attached table's slot of compiled variable `cv` named `name`: from
+/// `slots` (the frame's [`Frame::symtab_slots`]) when they are this
+/// table's, else by name.
+#[inline]
+fn mapped_slot(
+    slots: &[u32],
+    valid: bool,
+    st: &mut VarStore,
+    cv: usize,
+    name: &ZStr,
+) -> Option<u32> {
+    match slots.get(cv) {
+        Some(&s) if valid && (s as usize) < st.slots.len() => Some(s),
+        _ => st.find_cv_z(cv, name),
+    }
+}
+
 /// Whether `a` and `b` are the same handle (or equal scalars): a frame's
 /// compiled variable that already holds its symbol-table slot's value.
 #[inline]
@@ -1088,6 +1121,13 @@ pub struct Frame {
     pub cvs: Vec<CvSlot>,
     /// Whether a symbol table has been attached.
     pub symtab_attached: bool,
+    /// The attached table's slot of each compiled variable, as
+    /// [`Frame::attach_symbol_table`] found them, for the table at
+    /// `symtab_slots_of` (a table's slots never move while it lives): an
+    /// included file's variables are not where the global table has its
+    /// names, and each synchronisation would look them up by name.
+    pub(crate) symtab_slots: Vec<u32>,
+    pub(crate) symtab_slots_of: *const RefCell<VarStore>,
     /// Variables / attached symbol table.
     pub vars: Rc<RefCell<VarStore>>,
     /// Extra named args.
@@ -1294,6 +1334,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs: Vec::with_capacity(8),
             symtab_attached: false,
+            symtab_slots: Vec::new(),
+            symtab_slots_of: std::ptr::null(),
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
@@ -1483,6 +1525,8 @@ impl Frame {
             calls: Vec::new(),
             cvs: Vec::new(),
             symtab_attached: false,
+            symtab_slots: Vec::new(),
+            symtab_slots_of: std::ptr::null(),
             vars: empty_vars.clone(),
             named: Vec::new(),
             args: Vec::new(),
@@ -1923,11 +1967,22 @@ impl Frame {
         // which would order them after variables created before that.
         let add_names = symtab_attached || matches!(kind, FrameKind::Main);
         let mut cvs = Vec::with_capacity(ncv);
+        // An attached frame's slots, as `attach_symbol_table` records them.
+        let mut symtab_slots = Vec::new();
+        let symtab_slots_of = if symtab_attached {
+            Rc::as_ptr(&vars)
+        } else {
+            std::ptr::null()
+        };
         {
             let mut st = vars.borrow_mut();
             for name in &code.cv_names {
                 let val = if add_names {
-                    let slot = st.find_or_add(name.as_bytes()) as usize;
+                    let slot = st.find_or_add(name.as_bytes());
+                    if symtab_attached {
+                        record_slot(&mut symtab_slots, cvs.len(), slot, ncv);
+                    }
+                    let slot = slot as usize;
                     st.slots.get(slot).cloned().flatten()
                 } else {
                     st.find(name.as_bytes())
@@ -1958,6 +2013,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs,
             symtab_attached,
+            symtab_slots,
+            symtab_slots_of,
             vars,
             named: Vec::new(),
             args: Vec::with_capacity(8),
@@ -2001,8 +2058,12 @@ impl Frame {
                 st.slots.resize(self.code.cv_names.len(), None);
             }
         }
+        self.symtab_slots.clear();
+        self.symtab_slots_of = Rc::as_ptr(&self.vars);
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let slot = st.find_or_add_cv(i, name.as_bytes()) as usize;
+            let slot = st.find_or_add_cv(i, name.as_bytes());
+            record_slot(&mut self.symtab_slots, i, slot, self.code.cv_names.len());
+            let slot = slot as usize;
             if slot < st.slots.len() {
                 if let Some(val) = self.cvs.get(i).and_then(CvSlot::get) {
                     st.slots[slot] = Some(val.clone());
@@ -2025,9 +2086,10 @@ impl Frame {
             return;
         }
         self.symtab_attached = false;
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let Some(idx) = st.find_cv_z(i, name) else {
+            let Some(idx) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) else {
                 continue;
             };
             let Some(sv) = st.slots.get_mut(idx as usize) else {
@@ -2049,9 +2111,10 @@ impl Frame {
         if !self.symtab_attached {
             return;
         }
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv_z(i, name) {
+            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
                 let Some(cv) = self.cvs.get_mut(i) else {
                     continue;
                 };
@@ -2073,9 +2136,10 @@ impl Frame {
         if !self.symtab_attached {
             return;
         }
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv_z(i, name) {
+            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     // A CV that is `None` was never assigned in this frame
@@ -2111,16 +2175,9 @@ impl Frame {
     #[inline(never)]
     fn unsync_cv_from_symtab_slow(&self, cv: u32) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = if st
-                .names
-                .get(cv as usize)
-                .is_some_and(|n| n.as_bytes() == name.as_bytes())
-            {
-                Some(cv)
-            } else {
-                st.find(name.as_bytes())
-            };
+            let idx = mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name);
             if let Some(idx) = idx {
                 let idx = idx as usize;
                 if idx < st.slots.len() {
@@ -2179,15 +2236,11 @@ impl Frame {
     #[inline(never)]
     fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = if st
-                .names
-                .get(cv as usize)
-                .is_some_and(|n| n.as_bytes() == name.as_bytes())
-            {
-                cv
-            } else {
-                st.find_or_add(name.as_bytes())
+            let idx = match mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name) {
+                Some(i) => i,
+                None => st.find_or_add(name.as_bytes()),
             };
             let idx = idx as usize;
             if idx < st.slots.len() {
