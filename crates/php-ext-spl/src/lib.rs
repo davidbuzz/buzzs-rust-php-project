@@ -39,6 +39,9 @@ impl Extension for Spl {
         // resources; it was registered earlier, and the hooks run in
         // reverse): see `files::shutdown`.
         m.on_request_shutdown(files::shutdown);
+        // `PHP_RINIT(spl)`: the autoloader registry is the request's (a
+        // server process runs many requests on one thread).
+        m.on_request_startup(|_| php_spl::functions::reset_request());
     }
 }
 
