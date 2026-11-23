@@ -101,7 +101,15 @@ impl Vm {
             *c.defaults.borrow_mut() = None;
             c.enum_cases.borrow_mut().clear();
         }
-        self.classes.retain(|_, c| c.flags & cflags::INTERNAL != 0);
+        // An internal class stays under its own name only: an alias of one
+        // (`class_alias('stdClass', 'foo')`) is the request's, like every
+        // entry php-src's `shutdown_executor()` discards past the startup
+        // classes. Kept, it would make the next request's `class foo {}`
+        // "Cannot redeclare class stdClass".
+        self.classes.retain(|key, c| {
+            c.flags & cflags::INTERNAL != 0
+                && key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes())
+        });
         self.class_order.retain(|name| {
             self.classes
                 .get(name)
@@ -260,6 +268,27 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// An alias of an internal class is the request's: kept, the next
+    /// request's `class foo {}` failed with "Cannot redeclare class
+    /// stdClass" (a long-running php -S, after
+    /// `Zend/tests/class_alias/class_alias_006.phpt`).
+    #[test]
+    fn request_reset_drops_aliases_of_internal_classes() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(b"<?php class_alias('stdclass', 'foo');", "req1.php");
+        assert!(vm.classes.get(&ZStr::from("foo")).is_some());
+        vm.request_reset();
+        assert!(vm.classes.get(&ZStr::from("foo")).is_none(), "alias kept");
+        assert!(
+            vm.classes.get(&ZStr::from("stdclass")).is_some(),
+            "stdClass dropped"
+        );
+        sink.0.borrow_mut().clear();
+        vm.run_script(b"<?php class foo {} echo get_class(new foo);", "req2.php");
+        assert_eq!(sink.0.borrow().as_slice(), b"foo");
     }
 
     #[test]
