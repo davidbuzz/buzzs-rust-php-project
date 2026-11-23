@@ -632,7 +632,7 @@ impl Vm {
 /// [`crate::call::float_builtin_eval`]). `arg` already has the shape
 /// [`frameless_args`] accepts for `class`; `None` for every other call.
 #[inline]
-fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Value> {
+pub(crate) fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Value> {
     match (class, arg?) {
         (fl::ABS, Value::Int(i)) if *i != i64::MIN => Some(Value::Int(i.abs())),
         (fl::ABS, Value::Float(x)) => Some(Value::Float(x.abs())),

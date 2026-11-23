@@ -412,8 +412,9 @@ impl Builtin {
     /// passed by value and have the declared types, can run as the tape's
     /// direct internal call (`exec/tape/calls.rs`): no parameter is passed
     /// by reference, the function is neither deprecated nor
-    /// `#[\NoDiscard]` (diagnostics before the call), and it has no
-    /// frameless class (`special::frameless_call` decides those calls).
+    /// `#[\NoDiscard]` (diagnostics before the call). (One with a
+    /// frameless class runs frameless there when its arguments allow,
+    /// as `special::frameless_call` decides.)
     /// Worked out once.
     #[inline]
     pub(crate) fn plain_call(&self) -> PlainCall {
@@ -428,7 +429,7 @@ impl Builtin {
     #[cold]
     #[inline(never)]
     fn plain_call_slow(&self) -> PlainCall {
-        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::FRAMELESS) == 0
+        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
             && !self.signature().params.iter().any(|p| p.by_ref);
         let kind = if !plain {
             PlainCall::No

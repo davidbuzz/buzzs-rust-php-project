@@ -190,9 +190,11 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     if live == 0 || live > 50_000 {
         return None;
     }
+    // (No pooled frame at this depth yet: one, as the generic call would
+    // push. The caller looks the current frame up again after the call.)
+    vm.frames.pool_above(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        // No pooled frame at this depth yet: the generic call pushes one.
         return None;
     };
     let func = {
@@ -747,6 +749,16 @@ pub(super) fn call_native(
         if caller.calls.len() != prep.calls_len || frame.args.len() != n {
             return Err(prep);
         }
+        // php-src's frameless internal call, where no frame can be seen
+        // (arguments the handler takes as they are, an int for a float
+        // too, and none of the function's error conditions holds:
+        // `special::frameless_call`), as the generic call makes it.
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class != 0 && crate::special::frameless_args(class, &frame.args) {
+            let b = Rc::clone(b);
+            drop(prep);
+            return Ok(call_frameless(vm, &b, class, dst, caller_ip));
+        }
         // The types zpp accepts as they are (`call_builtin_impl`'s
         // positional fast path); anything else is coerced or rejected
         // there.
@@ -863,6 +875,82 @@ pub(super) fn call_native(
             }
         }
     }))
+}
+
+/// [`call_native`] of a builtin that runs frameless: its arguments, moved
+/// out of the pooled frame's buffer (which stays with the frame), go to the
+/// handler as the generic frameless call passes them
+/// (`Vm::call_builtin_frameless`), or the result is had without it
+/// (`special::frameless_inline`); no frame is pushed.
+fn call_frameless(
+    vm: &mut Vm,
+    b: &Rc<Builtin>,
+    class: u32,
+    dst: Option<u32>,
+    caller_ip: usize,
+) -> VmResult<()> {
+    let live = vm.frames.live;
+    // `SAVE_OPLINE()`: the handler may report the caller's line.
+    vm.frames.vec[live - 1].ip = caller_ip;
+    vm.magic_call_name = None;
+    let args = &mut vm.frames.vec[live].args;
+    let quick = if args.len() == 1 {
+        crate::special::frameless_inline(b.name.as_bytes(), class, args[0].as_ref())
+    } else {
+        None
+    };
+    let r = if let Some(v) = quick {
+        for arg in args.iter_mut() {
+            drop(arg.take());
+        }
+        args.clear();
+        vm.check_interrupt().map(|()| v)
+    } else {
+        let mut values = vm.call_bufs.values.pop().unwrap_or_default();
+        let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
+        let args = &mut vm.frames.vec[live].args;
+        values.reserve(args.len());
+        for arg in args.iter_mut() {
+            values.push(arg.take().unwrap_or_default());
+            passed.push(true);
+        }
+        args.clear();
+        let nparams = b.params.len();
+        while values.len() < nparams {
+            let i = values.len();
+            match vm.builtin_default(b, i) {
+                Some(d) if i >= b.required as usize => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        vm.pending_call_dst = dst;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(b)),
+        };
+        let mut r = (b.handler)(vm, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = vm.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args { values, passed, .. } = args;
+        vm.put_val_vec(values);
+        vm.put_bool_vec(passed);
+        r
+    };
+    r.map(|v| match dst {
+        Some(d) => vm.set_tmp(d, v),
+        None => drop(v),
+    })
 }
 
 /// The bound variables of the frame's closure (`use`), copied into their

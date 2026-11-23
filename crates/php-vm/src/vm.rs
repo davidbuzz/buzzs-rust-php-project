@@ -742,6 +742,22 @@ impl FrameStack {
         &mut self.vec[idx]
     }
 
+    /// Appends an empty pooled frame at the depth above the stack's top
+    /// when there is none (the one [`Self::push_builtin`] would append),
+    /// for the tape's direct calls, which ready a pooled frame. (A
+    /// function that only makes frameless calls never pushes one.) The
+    /// frames may move.
+    #[inline]
+    pub(crate) fn pool_above(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) {
+        if self.live == self.vec.len() {
+            self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
+        }
+    }
+
     /// Releases the builtin frame on top of the stack in place
     /// ([`Frame::clear_builtin_for_reuse`]), keeping it in the pool.
     #[inline]
