@@ -148,6 +148,16 @@ impl VarStore {
         }
     }
 
+    /// Empties the table and gives it the compiled-variable names of
+    /// `code` (a private table reused for the next walk, see
+    /// `Vm::with_cv_symtab`).
+    pub(crate) fn reset_for(&mut self, code: &Rc<OpArray>) {
+        self.names.share(code);
+        self.index = None;
+        self.slots.clear();
+        self.slots.resize(code.cv_names.len(), None);
+    }
+
     fn build_index(&mut self) {
         if self.index.is_none() {
             let mut m = NameMap::default();
@@ -2441,6 +2451,12 @@ pub struct Vm {
     /// The `__call`/`__callStatic` frame entered with a `memory_limit`
     /// violation pending: backtraces show it as the trampoline it still is.
     pub(crate) trampoline_entry: Option<usize>,
+    /// The compiled variable of the running function whose generic write
+    /// walk works on a private one-slot table instead of the function's
+    /// symbol table (see `Vm::with_cv_symtab`).
+    pub(crate) cv_root: Option<crate::place::CvRoot>,
+    /// The private table kept for the next [`Vm::cv_root`].
+    pub(crate) cv_scratch: Option<Rc<RefCell<VarStore>>>,
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
     /// Current mbstring encoding/substitution settings.

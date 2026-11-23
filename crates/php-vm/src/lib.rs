@@ -300,6 +300,8 @@ impl Vm {
             include_opener: None,
             including: None,
             trampoline_entry: None,
+            cv_root: None,
+            cv_scratch: None,
             source_filter: None,
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),

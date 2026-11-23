@@ -45,6 +45,30 @@ pub(crate) enum RBase {
     Undef(ZStr),
 }
 
+/// A generic write to a place that starts at compiled variable `cv` of
+/// the running function `frame` (see [`Vm::with_cv_symtab`]).
+pub(crate) struct CvRoot {
+    frame: usize,
+    cv: u32,
+    /// Set once the walk reaches the variable ([`Vm::resolve_base`]).
+    walk: Option<CvWalk>,
+}
+
+/// The walk of a [`CvRoot`] on `store`, a private table holding only the
+/// variable, instead of on the function's symbol table. While it runs, the
+/// variable is the reference `r`, so whatever looks at the function's
+/// variables meanwhile (a backtrace's arguments) sees the value being
+/// written.
+pub(crate) struct CvWalk {
+    /// The function's own table, which identifies the frame afterwards.
+    vars: *const RefCell<VarStore>,
+    store: Rc<RefCell<VarStore>>,
+    r: PhpRef,
+    /// `r` was made for the walk: the variable held a plain array or
+    /// object, which no symbol table and no other variable can reach.
+    wrapped: bool,
+}
+
 /// A resolved path segment.
 #[derive(Clone, Debug)]
 pub(crate) enum RSeg {
@@ -1727,12 +1751,33 @@ impl Vm {
     /// `$GLOBALS`, an include, ...), so the compiled-variable fast paths
     /// keep owning their values (refcount 1, nothing to mirror). php-src
     /// never needs a table for `$cv[...]`; its CV slots are the variables.
+    ///
+    /// In a function, a defined variable is walked from a private one-slot
+    /// table instead ([`CvRoot`]): no copy of the function's other
+    /// variables into its table and back for each `$a[$k] = $v`.
     #[inline]
     fn with_cv_symtab<R>(&mut self, pid: PlaceId, op: impl FnOnce(&mut Self) -> R) -> R {
         let Some((fidx, vars)) = self.cv_symtab_frame(pid) else {
             return op(self);
         };
+        let root = self.cv_root_of(fidx, pid);
+        let pending = root.is_some();
+        let prev = if pending {
+            std::mem::replace(&mut self.cv_root, root)
+        } else {
+            None
+        };
         let r = op(self);
+        if pending {
+            if let Some(CvRoot {
+                frame,
+                cv,
+                walk: Some(w),
+            }) = std::mem::replace(&mut self.cv_root, prev)
+            {
+                self.leave_cv_walk(frame, cv, w);
+            }
+        }
         if let Some(f) = self.frames.get_mut(fidx) {
             // The same frame (a fiber switch inside the access could have
             // moved the stack): otherwise the table just stays attached.
@@ -1746,6 +1791,144 @@ impl Vm {
             }
         }
         r
+    }
+
+    /// The [`CvRoot`] of a generic write to place `pid` of frame `fidx`
+    /// (whose table is not attached): the frame is a function's and the
+    /// place goes into a compiled variable (`$a[...]`, `$a->...`). A write
+    /// to the variable itself (`unset($a)`, `$a =& $b`) keeps the table
+    /// walk: what it releases is the variable's value, which the GC and the
+    /// destructors must see as itself, not as a reference.
+    fn cv_root_of(&self, fidx: usize, pid: PlaceId) -> Option<CvRoot> {
+        let f = self.frames.get(fidx)?;
+        if f.kind != crate::vm::FrameKind::Function {
+            return None;
+        }
+        let place = f.code.places.get(pid as usize)?;
+        if place.segs.is_empty() {
+            return None;
+        }
+        match &place.base {
+            PlaceBase::Cv(cv) => Some(CvRoot {
+                frame: fidx,
+                cv: *cv,
+                walk: None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The private table [`Vm::resolve_base`] walks compiled variable `cv`
+    /// of the running frame from, when a [`CvRoot`] covers it: made on the
+    /// first call, from a variable holding an array, an object or a
+    /// reference. `None` sends the walk to the symbol table (an undefined
+    /// variable, `false`, a scalar: their messages and conversions are the
+    /// table walk's).
+    fn cv_root_store(&mut self, cv: u32) -> Option<Rc<RefCell<VarStore>>> {
+        let root = self.cv_root.as_ref()?;
+        if root.cv != cv || root.frame + 1 != self.frames.len() {
+            return None;
+        }
+        if let Some(w) = &root.walk {
+            return Some(w.store.clone());
+        }
+        let w = self.enter_cv_walk(root.frame, cv)?;
+        let store = w.store.clone();
+        if let Some(root) = self.cv_root.as_mut() {
+            root.walk = Some(w);
+        }
+        Some(store)
+    }
+
+    /// Starts a [`CvWalk`] of compiled variable `cv` of frame `fidx`.
+    fn enter_cv_walk(&mut self, fidx: usize, cv: u32) -> Option<CvWalk> {
+        let f = self.frames.get_mut(fidx)?;
+        if f.symtab_attached {
+            return None;
+        }
+        let code = f.code.clone();
+        let vars = Rc::as_ptr(&f.vars);
+        let slot = f.cvs.get_mut(cv as usize)?;
+        let (r, wrapped) = match slot.get()? {
+            Value::Reference(r) => (r.clone(), false),
+            Value::Array(_) | Value::Object(_) => {
+                let r = PhpRef::new(slot.set(None)?);
+                slot.set(Some(Value::Reference(r.clone())));
+                (r, true)
+            }
+            _ => return None,
+        };
+        // Kept for the next walk: like php-src's preallocated tables, not
+        // part of `memory_get_usage()`.
+        let store = match self.cv_scratch.take() {
+            Some(s) if Rc::strong_count(&s) == 1 => s,
+            _ => php_memlimit::persistent(|| Rc::new(RefCell::new(VarStore::default()))),
+        };
+        php_memlimit::persistent(|| store.borrow_mut().reset_for(&code));
+        if let Some(s) = store.borrow_mut().slots.get_mut(cv as usize) {
+            *s = Some(Value::Reference(r.clone()));
+        }
+        Some(CvWalk {
+            vars,
+            store,
+            r,
+            wrapped,
+        })
+    }
+
+    /// Ends a [`CvWalk`]: the variable takes what the private slot holds
+    /// now (another reference after `=&`, nothing after `unset()`), and a
+    /// reference made for the walk that nothing else took becomes the
+    /// plain value again. The value leaves the reference before any handle
+    /// of it is dropped, so no handle release records it as a possible
+    /// cycle root.
+    fn leave_cv_walk(&mut self, frame: usize, cv: u32, w: CvWalk) {
+        let CvWalk {
+            vars,
+            store,
+            r,
+            wrapped,
+        } = w;
+        let after = store
+            .borrow_mut()
+            .slots
+            .get_mut(cv as usize)
+            .and_then(Option::take);
+        // Kept for the next walk (or let go) outside `memory_get_usage()`,
+        // as it was made.
+        let keep = &mut self.cv_scratch;
+        php_memlimit::persistent(move || {
+            if Rc::strong_count(&store) == 1 {
+                *keep = Some(store);
+            }
+        });
+        // The same frame: a fiber switch inside the walk could have moved
+        // the stack (the variable then just stays a reference).
+        let Some(f) = self
+            .frames
+            .get_mut(frame)
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+        else {
+            return;
+        };
+        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+            return;
+        };
+        let new = match after {
+            Some(Value::Reference(now)) if PhpRef::ptr_eq(&now, &r) => {
+                // Held by the private slot, the variable and `r` only.
+                let ours = matches!(slot.get(), Some(Value::Reference(c)) if PhpRef::ptr_eq(c, &r));
+                if !wrapped || !ours || r.refcount() != 3 {
+                    return;
+                }
+                let v = r.set(Value::Null);
+                drop(now);
+                Some(v)
+            }
+            other => other,
+        };
+        let old = slot.set(new);
+        drop(old);
     }
 
     /// `place = $cv` where `$cv` may hold a reference ([`Vm::place_assign_cv_ref_impl`]).
@@ -1997,6 +2180,11 @@ impl Vm {
     ) -> VmResult<RBase> {
         Ok(match base {
             PlaceBase::Cv(cv) => {
+                if self.cv_root.is_some() {
+                    if let Some(store) = self.cv_root_store(*cv) {
+                        return Ok(RBase::Var(store, *cv as usize));
+                    }
+                }
                 // The walk works on the symbol table's slot: attach it (the
                 // entry points undo that afterwards, see
                 // [`Vm::with_cv_symtab`]) or bring it up to date.
@@ -2166,10 +2354,17 @@ impl Vm {
     /// Runs a write operation on a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
+        // A walk from the private table of a plain local variable
+        // ([`CvRoot`]) changed no symbol table: nothing to bring back.
+        let private = matches!(&base, RBase::Var(s, _)
+            if self.cv_root.as_ref().and_then(|r| r.walk.as_ref())
+                .is_some_and(|w| w.wrapped && Rc::ptr_eq(&w.store, s)));
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
-        self.frame_mut().sync_from_symbol_table();
-        self.sync_global_frames();
+        if !private {
+            self.frame_mut().sync_from_symbol_table();
+            self.sync_global_frames();
+        }
         r
     }
 
