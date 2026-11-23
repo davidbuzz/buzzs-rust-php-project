@@ -131,6 +131,10 @@ impl Vm {
                     *k.value.borrow_mut() = None;
                 }
                 *c.defaults.borrow_mut() = None;
+                // `Closure`'s first-class-callable cache (`f(...)`, see
+                // `closure.rs`): its closures are the request's objects, and
+                // a function of the next request may have the same name.
+                c.enum_cases.borrow_mut().clear();
             }
         }
 
@@ -289,6 +293,23 @@ mod tests {
         sink.0.borrow_mut().clear();
         vm.run_script(b"<?php class foo {} echo get_class(new foo);", "req2.php");
         assert_eq!(sink.0.borrow().as_slice(), b"foo");
+    }
+
+    /// `f(...)` of the next request's `func` is not the closure the cache
+    /// kept for the previous request's `func` (Zend/tests/closures/
+    /// `closure_061` then `gh8083` on one php -S).
+    #[test]
+    fn request_reset_empties_the_first_class_callable_cache() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(b"<?php function func($arg) {} $c = func(...);", "req1.php");
+        vm.request_reset();
+        sink.0.borrow_mut().clear();
+        vm.run_script(
+            b"<?php function func() {} echo (new ReflectionFunction(func(...)))->getNumberOfParameters();",
+            "req2.php",
+        );
+        assert_eq!(sink.0.borrow().as_slice(), b"0");
     }
 
     #[test]

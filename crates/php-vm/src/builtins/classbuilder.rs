@@ -466,7 +466,10 @@ impl ClassBuilder {
                     ty: None,
                     class: name.clone(),
                     cell: Rc::new(RefCell::new(v.clone())),
-                    default: None,
+                    // `default_static_members_table`: what a long-running
+                    // worker's `request_reset` puts back (`$staticIntProp`
+                    // of `_ZendTestClass` read as uninitialized after it).
+                    default: Some(ConstExpr::Value(v.clone())),
                     initialized: Rc::new(Cell::new(true)),
                     doc_comment: None,
                 };

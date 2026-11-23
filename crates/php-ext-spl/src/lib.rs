@@ -46,6 +46,7 @@ impl Extension for Spl {
         m.on_request_startup(|_| {
             php_spl::functions::reset_request();
             hooks::reset_bases();
+            files::request_startup();
         });
     }
 }

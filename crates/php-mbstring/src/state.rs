@@ -348,6 +348,24 @@ impl MbState {
         s
     }
 
+    /// The state for the INI values in force after a request's changes
+    /// were undone (`zend_ini_deactivate()`, which runs each entry's update
+    /// handler) followed by `PHP_RINIT`, for a worker serving its next
+    /// request. What this request's input handling recorded before RINIT
+    /// (the `http_input_identify*` encodings, `php_hash_environment()`
+    /// runs first) and the compiled-pattern cache are kept.
+    pub fn restore_ini(&mut self, settings: &[(&str, &[u8])]) {
+        let mut fresh = Self::with_ini(settings);
+        fresh.diagnostics.clear();
+        fresh.http_input_identify = self.http_input_identify;
+        fresh.http_input_identify_get = self.http_input_identify_get;
+        fresh.http_input_identify_post = self.http_input_identify_post;
+        fresh.http_input_identify_cookie = self.http_input_identify_cookie;
+        fresh.http_input_identify_string = self.http_input_identify_string;
+        fresh.regex = std::mem::take(&mut self.regex);
+        *self = fresh;
+    }
+
     /// `PHP_RINIT`: reset the per-request "current" values from the INI ones.
     pub fn request_startup(&mut self) {
         self.current_internal_encoding = self.internal_encoding;

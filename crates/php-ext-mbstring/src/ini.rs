@@ -98,17 +98,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 /// `MINIT` + `RINIT`: builds the state from the startup INI values and
 /// reports the handlers' diagnostics as `PHP Startup` errors.
 pub(crate) fn startup(vm: &mut Vm) {
-    let mut settings: Vec<(&str, Vec<u8>)> = Vec::new();
-    for name in CORE_HOOKED.iter().chain(HANDLED.iter()) {
-        if let Some(v) = vm.ini.raw(name) {
-            settings.push((name, v.to_vec()));
-        }
-    }
-    let refs: Vec<(&str, &[u8])> = settings.iter().map(|(k, v)| (*k, v.as_slice())).collect();
-    let mut st = MbState::with_ini(&refs);
-    if let Some(v) = raw(vm, "mbstring.http_output_conv_mimetypes") {
-        st.ini_set("mbstring.http_output_conv_mimetypes", Some(&v), false);
-    }
+    let mut st = state_from_ini(vm);
     let diags = st.take_diagnostics();
     state::replace(st);
     // Startup errors are displayed before the request: they do not count
@@ -128,6 +118,52 @@ pub(crate) fn startup(vm: &mut Vm) {
         );
     }
     vm.headers_sent = headers_sent;
+}
+
+/// The INI values the module state is made from.
+fn ini_settings(vm: &Vm) -> Vec<(&'static str, Vec<u8>)> {
+    let mut settings: Vec<(&str, Vec<u8>)> = Vec::new();
+    for name in CORE_HOOKED.iter().chain(HANDLED.iter()) {
+        if let Some(v) = vm.ini.raw(name) {
+            settings.push((name, v.to_vec()));
+        }
+    }
+    settings
+}
+
+/// The module state for the INI values in force: `MINIT` from the
+/// startup values, then `PHP_RINIT`'s "current" values.
+fn state_from_ini(vm: &Vm) -> MbState {
+    let settings = ini_settings(vm);
+    let refs: Vec<(&str, &[u8])> = settings.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+    let mut st = MbState::with_ini(&refs);
+    if let Some(v) = raw(vm, "mbstring.http_output_conv_mimetypes") {
+        st.ini_set("mbstring.http_output_conv_mimetypes", Some(&v), false);
+    }
+    st
+}
+
+/// `PHP_RINIT(mbstring)` after the previous request's INI changes were
+/// undone: php-src's `zend_ini_deactivate()` runs each entry's update
+/// handler as it restores the value (`mbstring.language`,
+/// `mbstring.internal_encoding`, `mbstring.substitute_character`, ...),
+/// and RINIT resets the "current" values (`mb_internal_encoding()`,
+/// `mb_substitute_character()`, `mb_detect_order()`) from them. Here
+/// the VM restores the values without the handlers, so the state is
+/// made again from them ([`MbState::restore_ini`], which keeps what the
+/// request's input handling recorded). Diagnostics were reported at
+/// startup.
+pub(crate) fn request_startup(vm: &mut Vm) {
+    let settings = ini_settings(vm);
+    let refs: Vec<(&str, &[u8])> = settings.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+    let mimetypes = raw(vm, "mbstring.http_output_conv_mimetypes");
+    state::with(|st| {
+        st.restore_ini(&refs);
+        if let Some(v) = mimetypes {
+            st.ini_set("mbstring.http_output_conv_mimetypes", Some(&v), false);
+        }
+        let _ = st.take_diagnostics();
+    });
 }
 
 /// Stores a value without running any handler (`zend_alter_ini_entry` from

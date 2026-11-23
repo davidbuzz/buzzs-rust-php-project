@@ -94,6 +94,13 @@ fn module_startup(vm: &mut Vm) {
 /// `RINIT`: resolves the module/serializer and honours
 /// `session.auto_start`.
 fn request_startup(vm: &mut Vm) {
+    // `SID` is a request constant (php-src registers it without
+    // `CONST_PERSISTENT`, so it goes with the request): the one the
+    // previous request of a long-running worker defined is gone, and so is
+    // its deprecation.
+    let sid = php_runtime::ZStr::from("SID");
+    vm.constants.remove(&sid);
+    vm.deprecated_constants.remove(&sid);
     set_phase(Phase::RequestStartup);
     let err = with_host(vm, |h| {
         let r = php_session::request_startup(h);
