@@ -45,6 +45,23 @@ pub(crate) enum RBase {
     Undef(ZStr),
 }
 
+/// A place walk's compiled variable of a function frame, reached through
+/// a stand-in table that holds only that variable ([`Vm::with_cv_symtab`]):
+/// `resolve_base` moves the variable's value into `store` and the walk
+/// works on its one slot; afterwards the value moves back into the CV
+/// slot. php-src's walks work on the CV slot itself; a function's other
+/// variables cannot be reached by the code a walk may run (`offsetSet()`,
+/// `__set()`, destructors, error handlers) except through references,
+/// which stay shared, so only this one variable has to leave its slot.
+pub(crate) struct CvWalk {
+    /// The compiled variable.
+    pub(crate) cv: u32,
+    /// The frame's symbol table, which identifies the frame.
+    pub(crate) vars: *const RefCell<VarStore>,
+    /// The stand-in table.
+    pub(crate) store: Rc<RefCell<VarStore>>,
+}
+
 /// A resolved path segment.
 #[derive(Clone, Debug)]
 pub(crate) enum RSeg {
@@ -1709,6 +1726,73 @@ impl Vm {
         })
     }
 
+    /// The base variable of place `pid` when the walk can reach it through
+    /// a [`CvWalk`] (see [`Vm::with_cv_symtab`]): frame `fidx` is a
+    /// function's, and neither an operand of the place nor `also` is the
+    /// variable.
+    #[inline]
+    fn cv_walk_target(&self, fidx: usize, pid: PlaceId, also: Option<u32>) -> Option<u32> {
+        let f = self.frames.get(fidx)?;
+        if f.kind != crate::vm::FrameKind::Function {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        let PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        let reads_base = also == Some(cv)
+            || p.segs.iter().any(
+                |s| matches!(s, Seg::Dim(Operand::Cv(c)) | Seg::Prop(Operand::Cv(c)) if *c == cv),
+            );
+        (!reads_base).then_some(cv)
+    }
+
+    /// Runs `op` with variable `cv` of the frame whose table is `vars`
+    /// reached through a stand-in table ([`CvWalk`]), and moves the value
+    /// back into the variable afterwards, also when `op` failed.
+    fn with_cv_walk<R>(
+        &mut self,
+        cv: u32,
+        vars: *const RefCell<VarStore>,
+        op: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let store = self.cv_walk_pool.pop().unwrap_or_default();
+        let outer = self.cv_walk.replace(CvWalk {
+            cv,
+            vars,
+            store: Rc::clone(&store),
+        });
+        let r = op(self);
+        self.cv_walk = outer;
+        let taken = {
+            let mut st = store.borrow_mut();
+            st.holds_single().then(|| st.take_single())
+        };
+        if let Some(v) = taken {
+            // The frame is found by its table: a fiber switch during the
+            // walk can have moved it on the stack. It is the running one
+            // unless the walk was left for good (a fiber that never
+            // resumes), and then the value goes with the table.
+            if let Some(f) = self
+                .frames
+                .iter_mut()
+                .rev()
+                .find(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            {
+                if let Some(slot) = f.cvs.get(cv as usize) {
+                    if let Some(old) = slot.set(v) {
+                        // Nothing else had the slot while the value was out.
+                        crate::gc::possible_root(&old);
+                    }
+                }
+            }
+        }
+        if Rc::strong_count(&store) == 1 {
+            self.cv_walk_pool.push(store);
+        }
+        r
+    }
+
     /// Runs the generic access `op` to place `pid`, then detaches the
     /// symbol table it attached to reach a compiled variable
     /// ([`Vm::cv_symtab_frame`]): a frame's table stays attached only when
@@ -1716,11 +1800,27 @@ impl Vm {
     /// `$GLOBALS`, an include, ...), so the compiled-variable fast paths
     /// keep owning their values (refcount 1, nothing to mirror). php-src
     /// never needs a table for `$cv[...]`; its CV slots are the variables.
+    ///
+    /// In a function's frame the walk does without the table when it can
+    /// ([`CvWalk`]): the base variable is the only one the walk writes, so
+    /// it alone goes to a stand-in table, instead of a copy of every
+    /// variable into the frame's table and back after each write. Not when
+    /// the walk reads the variable again after reaching it: an offset or
+    /// property name operand that is the variable, or `also`, the variable
+    /// an operation reads during the walk (the source of `= $cv`).
     #[inline]
-    fn with_cv_symtab<R>(&mut self, pid: PlaceId, op: impl FnOnce(&mut Self) -> R) -> R {
+    fn with_cv_symtab<R>(
+        &mut self,
+        pid: PlaceId,
+        also: Option<u32>,
+        op: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let Some((fidx, vars)) = self.cv_symtab_frame(pid) else {
             return op(self);
         };
+        if let Some(cv) = self.cv_walk_target(fidx, pid, also) {
+            return self.with_cv_walk(cv, vars, op);
+        }
         let r = op(self);
         if let Some(f) = self.frames.get_mut(fidx) {
             // The same frame (a fiber switch inside the access could have
@@ -1739,27 +1839,27 @@ impl Vm {
 
     /// `place = $cv` where `$cv` may hold a reference ([`Vm::place_assign_cv_ref_impl`]).
     pub(crate) fn place_assign_cv_ref(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_assign_cv_ref_impl(pid, cv))
+        self.with_cv_symtab(pid, Some(cv), |vm| vm.place_assign_cv_ref_impl(pid, cv))
     }
 
     /// `place = v`.
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_assign_impl(pid, v))
+        self.with_cv_symtab(pid, None, |vm| vm.place_assign_impl(pid, v))
     }
 
     /// `place = $cv` with `$cv` undefined ([`Vm::place_assign_undef_cv_impl`]).
     pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_assign_undef_cv_impl(pid, cv))
+        self.with_cv_symtab(pid, Some(cv), |vm| vm.place_assign_undef_cv_impl(pid, cv))
     }
 
     /// `++place` etc.
     pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_incdec_impl(pid, kind))
+        self.with_cv_symtab(pid, None, |vm| vm.place_incdec_impl(pid, kind))
     }
 
     /// `place =& v`.
     pub(crate) fn place_assign_ref(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_assign_ref_impl(pid, v))
+        self.with_cv_symtab(pid, None, |vm| vm.place_assign_ref_impl(pid, v))
     }
 
     /// Makes a place a reference.
@@ -1767,7 +1867,7 @@ impl Vm {
         if let Some(r) = self.cv_make_ref_fast(pid) {
             return Ok(r);
         }
-        self.with_cv_symtab(pid, |vm| vm.place_make_ref_impl(pid))
+        self.with_cv_symtab(pid, None, |vm| vm.place_make_ref_impl(pid))
     }
 
     /// `&$cv` (`ZEND_SEND_REF`, `ZEND_MAKE_REF` of a plain compiled
@@ -1801,7 +1901,7 @@ impl Vm {
 
     /// `unset(place)`.
     pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
-        self.with_cv_symtab(pid, |vm| vm.place_unset_impl(pid))
+        self.with_cv_symtab(pid, None, |vm| vm.place_unset_impl(pid))
     }
 
     /// `place op= v`.
@@ -1814,7 +1914,7 @@ impl Vm {
         if let Some(r) = self.assign_op_cv_scalar(pid, op, &v) {
             return r;
         }
-        self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v, None))
+        self.with_cv_symtab(pid, None, |vm| vm.place_assign_op_impl(pid, op, v, None))
     }
 
     /// `$cv op= v` (`ZEND_ASSIGN_OP` on a compiled variable) without the
@@ -1894,7 +1994,7 @@ impl Vm {
         op: BinaryOp,
         cv: u32,
     ) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| {
+        self.with_cv_symtab(pid, Some(cv), |vm| {
             vm.place_assign_op_impl(pid, op, Value::Null, Some(cv))
         })
     }
@@ -1971,6 +2071,28 @@ impl Vm {
         Ok((base, segs))
     }
 
+    /// The base of a walk to variable `cv` of the running frame through
+    /// the stand-in table of the [`CvWalk`] in progress, the variable's
+    /// value moved there the first time; `None` when no walk of this
+    /// variable is in progress.
+    fn cv_walk_base(&mut self, cv: u32) -> Option<RBase> {
+        let walk = self.cv_walk.as_ref()?;
+        let f = self.frames.last()?;
+        if walk.cv != cv || !std::ptr::eq(Rc::as_ptr(&f.vars), walk.vars) || f.symtab_attached {
+            return None;
+        }
+        let store = Rc::clone(&walk.store);
+        {
+            let mut st = store.borrow_mut();
+            if !st.holds_single() {
+                let name = f.code.cv_names.get(cv as usize)?.clone();
+                let value = f.cvs.get(cv as usize).and_then(|s| s.set(None));
+                st.hold_single(name, value);
+            }
+        }
+        Some(RBase::Var(store, 0))
+    }
+
     /// Resolves a place's base: the variable, `$this`, a static property
     /// cell or a temporary (reading the name operands of `$$n`/`A::$n`).
     /// `quiet` is `BP_VAR_IS`: an undeclared or inaccessible static
@@ -1986,6 +2108,9 @@ impl Vm {
     ) -> VmResult<RBase> {
         Ok(match base {
             PlaceBase::Cv(cv) => {
+                if let Some(base) = self.cv_walk_base(*cv) {
+                    return Ok(base);
+                }
                 // The walk works on the symbol table's slot: attach it (the
                 // entry points undo that afterwards, see
                 // [`Vm::with_cv_symtab`]) or bring it up to date.
@@ -2856,6 +2981,31 @@ impl Vm {
         }
     }
 
+    /// [`WOp::AssignOp`] on variable slot `idx` of `store`: the current
+    /// value (an undefined variable warns and is null), the operation, and
+    /// the result assigned.
+    fn write_var_root_assign_op(
+        &mut self,
+        store: &Rc<RefCell<VarStore>>,
+        idx: usize,
+        op: BinaryOp,
+        rhs: Value,
+    ) -> VmResult<Value> {
+        let cur = {
+            let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
+            match cur {
+                Some(v) => v,
+                None => {
+                    let name = store.borrow().names[idx].clone();
+                    self.warning(&crate::exec::undefined_var_msg(&name))?;
+                    Value::Null
+                }
+            }
+        };
+        let nv = self.assign_op_value(op, &cur, &rhs)?;
+        self.write_var_root(store, idx, WOp::Assign(nv))
+    }
+
     fn write_var_root(
         &mut self,
         store: &Rc<RefCell<VarStore>>,
@@ -2902,21 +3052,22 @@ impl Vm {
                     }
                 }
             }
-            WOp::AssignOp(op, rhs) => {
-                let cur = {
-                    let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
-                    match cur {
-                        Some(v) => v,
-                        None => {
-                            let name = store.borrow().names[idx].clone();
-                            self.warning(&crate::exec::undefined_var_msg(&name))?;
-                            Value::Null
-                        }
+            // `$a += $b` of two arrays (`add_function_array` with result ==
+            // op1): the union is made in the variable's own array, which is
+            // separated first only if something else shares it, instead of
+            // in a copy. Nothing is released and no user code runs.
+            WOp::AssignOp(BinaryOp::Add, Value::Array(rhs)) => {
+                let mut st = store.borrow_mut();
+                if let Some(Some(Value::Array(a))) = st.slots.get_mut(idx) {
+                    if !ZArray::ptr_eq(a, &rhs) {
+                        a.make_mut().merge(&rhs, false);
                     }
-                };
-                let nv = self.assign_op_value(op, &cur, &rhs)?;
-                self.write_var_root(store, idx, WOp::Assign(nv))
+                    return Ok(Value::Array(a.clone()));
+                }
+                drop(st);
+                self.write_var_root_assign_op(store, idx, BinaryOp::Add, Value::Array(rhs))
             }
+            WOp::AssignOp(op, rhs) => self.write_var_root_assign_op(store, idx, op, rhs),
             WOp::MakeRef => {
                 let mut st = store.borrow_mut();
                 let slot = st.slots[idx].get_or_insert(Value::Null);
@@ -3728,6 +3879,13 @@ impl Vm {
             }
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
+        }
+        // `$a += $b` of two arrays: `write_var_root` makes the union in the
+        // variable's own array.
+        if let (BinaryOp::Add, Value::Array(_), RBase::Var(store, idx)) = (op, &v, &base) {
+            if matches!(store.borrow().slots.get(*idx), Some(Some(Value::Array(_)))) {
+                return self.write_place(base, &segs, WOp::AssignOp(op, v));
+            }
         }
         // Fast path: a plain variable holding an int or float
         // (`ZEND_ASSIGN_OP` on a CV): no destructor, reference or type

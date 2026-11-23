@@ -314,6 +314,15 @@ impl Vm {
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::default(),
+            cv_walk: None,
+            // One stand-in table with its buffers, made up front so the
+            // first walk does not move `memory_get_usage()` (php-src's
+            // walks need no allocation).
+            cv_walk_pool: vec![{
+                let mut st = crate::vm::VarStore::with_names(&[php_runtime::ZStr::empty()]);
+                let _ = st.take_single();
+                std::rc::Rc::new(std::cell::RefCell::new(st))
+            }],
             observer: crate::observer::ObserverState::default(),
             user_opcode_handlers: Vec::new(),
         }

@@ -137,6 +137,33 @@ impl VarStore {
         }
     }
 
+    /// Makes this the table of the one variable `name` holding `value`:
+    /// the stand-in table of a place walk on a function's compiled
+    /// variable (`Vm::with_cv_symtab`). Keeps the buffers.
+    pub(crate) fn hold_single(&mut self, name: ZStr, value: Option<Value>) {
+        self.slots.clear();
+        self.slots.push(value);
+        self.names.shared = None;
+        self.names.owned.clear();
+        self.names.owned.push(name);
+        self.index = None;
+    }
+
+    /// Whether [`VarStore::hold_single`] filled this table.
+    pub(crate) fn holds_single(&self) -> bool {
+        self.names.shared.is_none() && self.names.owned.len() == 1 && self.slots.len() == 1
+    }
+
+    /// Empties a table [`VarStore::hold_single`] filled, returning the
+    /// variable's value.
+    pub(crate) fn take_single(&mut self) -> Option<Value> {
+        let v = self.slots.pop().flatten();
+        self.slots.clear();
+        self.names.owned.clear();
+        self.index = None;
+        v
+    }
+
     /// A store for the compiled variables of `code`, sharing their names
     /// with the op array (a php-src frame reads `op_array->vars`).
     #[must_use]
@@ -2376,6 +2403,12 @@ pub struct Vm {
     /// guards of the accesses in progress.
     pub prop_guards:
         HashSet<(u32, ZStr, u8), std::hash::BuildHasherDefault<crate::class::FxHasher>>,
+    /// The compiled variable of a function frame that the place walk now
+    /// starting is to reach through a one-variable stand-in table instead
+    /// of the frame's whole symbol table ([`crate::place::CvWalk`]).
+    pub(crate) cv_walk: Option<crate::place::CvWalk>,
+    /// Stand-in tables of finished walks, for reuse.
+    pub(crate) cv_walk_pool: Vec<Rc<RefCell<VarStore>>>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
