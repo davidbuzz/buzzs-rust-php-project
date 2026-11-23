@@ -305,7 +305,7 @@ fn is_real_closure(f: &FnRef) -> bool {
 }
 
 fn rf_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(this_fn(vm, a)?.name()))
+    Ok(Value::Str(super::with_this_fn(vm, a, FnRef::name)?))
 }
 fn rf_get_short_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
@@ -381,8 +381,8 @@ fn rf_has_tentative_return_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 macro_rules! rf_bool {
     ($name:ident, |$f:ident| $e:expr) => {
         fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            let $f = this_fn(vm, a)?;
-            Ok(Value::Bool($e))
+            // (Read in place: `with_this_fn`.)
+            Ok(Value::Bool(super::with_this_fn(vm, a, |$f| $e)?))
         }
     };
 }
@@ -397,7 +397,7 @@ rf_bool!(rf_is_user, |f| f.is_user());
 rf_bool!(rf_is_deprecated, |f| f.func.flags() & flags::DEPRECATED
     != 0);
 rf_bool!(rf_is_static, |f| f.flags() & flags::STATIC != 0);
-rf_bool!(rf_is_anonymous, |f| is_real_closure(&f));
+rf_bool!(rf_is_anonymous, |f| is_real_closure(f));
 
 fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
@@ -454,6 +454,23 @@ fn rf_get_file_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // A user function or method without attributes (no closure, so no
+    // `__call` trampoline's): its arguments checked as for any, read in
+    // place.
+    let none = super::with_this_fn(vm, a, |f| {
+        f.closure.is_none() && matches!(&f.func, Func::User(u) if u.attributes.is_empty())
+    })?;
+    if none {
+        return super::attribute::attributes_array_decl(
+            vm,
+            &[],
+            super::target::FUNCTION,
+            None,
+            None,
+            false,
+            a,
+        );
+    }
     let f = this_fn(vm, a)?;
     let scope = f.scope(vm);
     let t = if scope.is_some() && !is_real_closure(&f) {

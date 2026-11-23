@@ -327,6 +327,49 @@ pub(crate) fn this_refl(vm: &mut Vm, a: &Args) -> VmResult<Refl> {
     }
 }
 
+/// [`this_refl`] of a function's or method's reflection, read in place:
+/// `f` gets the object's state borrowed, where [`refl`] copies its handles
+/// (four reference counts up and down again for each getter's call). `f`
+/// must not reach the VM (the state stays borrowed while it runs).
+pub(crate) fn with_this_fn<R>(
+    vm: &mut Vm,
+    a: &Args,
+    f: impl FnOnce(&FnRef) -> R,
+) -> VmResult<R> {
+    let got = a.this.as_ref().and_then(|o| {
+        object::internal::<Refl, _>(o, |r| match r {
+            Refl::Function(func) => Some(f(func)),
+            _ => None,
+        })
+        .flatten()
+    });
+    got.ok_or_else(|| {
+        vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )
+    })
+}
+
+/// [`with_this_fn`] of any reflection object: `f` gives `None` for one
+/// of another kind than it reads (the error of [`this_refl`]).
+pub(crate) fn with_this_refl<R>(
+    vm: &mut Vm,
+    a: &Args,
+    f: impl FnOnce(&Refl) -> Option<R>,
+) -> VmResult<R> {
+    let got = a
+        .this
+        .as_ref()
+        .and_then(|o| object::internal::<Refl, _>(o, |r| f(r)).flatten());
+    got.ok_or_else(|| {
+        vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )
+    })
+}
+
 /// A string value.
 pub(crate) fn zs(s: &str) -> Value {
     Value::Str(ZStr::from(s))

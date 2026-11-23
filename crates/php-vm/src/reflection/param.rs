@@ -19,6 +19,40 @@ use php_parser::ast::{ClassRef, ExprKind, MagicConst, MemberName, NameKind};
 use php_runtime::{ArrayKey, Value, ZStr};
 use std::rc::Rc;
 
+/// The declaration of a parameter the function does not have.
+fn missing_param() -> ParamInfo {
+    ParamInfo {
+        name: ZStr::empty(),
+        by_ref: false,
+        variadic: false,
+        ty: None,
+        has_default: false,
+        default_text: None,
+        promote: 0,
+        sensitive: false,
+        default_expr: None,
+        attributes: Vec::new(),
+    }
+}
+
+/// [`this_param`] read in place: `g` gets the function, the position and
+/// the declaration borrowed, where `this_param` copies them (the whole
+/// declaration, type and default included, for each getter's call). `g`
+/// must not reach the VM.
+fn with_param<R>(
+    vm: &mut Vm,
+    a: &Args,
+    g: impl FnOnce(&FnRef, usize, &ParamInfo) -> R,
+) -> VmResult<R> {
+    super::with_this_refl(vm, a, |r| match r {
+        Refl::Param { f, idx } => Some(match f.func.params().get(*idx) {
+            Some(p) => g(f, *idx, p),
+            None => g(f, *idx, &missing_param()),
+        }),
+        _ => None,
+    })
+}
+
 fn this_param(vm: &mut Vm, a: &Args) -> VmResult<(FnRef, usize, ParamInfo)> {
     match this_refl(vm, a)? {
         Refl::Param { f, idx } => {
@@ -27,18 +61,7 @@ fn this_param(vm: &mut Vm, a: &Args) -> VmResult<(FnRef, usize, ParamInfo)> {
                 .params()
                 .get(idx)
                 .cloned()
-                .unwrap_or_else(|| ParamInfo {
-                    name: ZStr::empty(),
-                    by_ref: false,
-                    variadic: false,
-                    ty: None,
-                    has_default: false,
-                    default_text: None,
-                    promote: 0,
-                    sensitive: false,
-                    default_expr: None,
-                    attributes: Vec::new(),
-                });
+                .unwrap_or_else(missing_param);
             Ok((f, idx, p))
         }
         _ => Err(vm.make_throw(
@@ -225,18 +248,19 @@ fn rp_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn rp_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(this_param(vm, a)?.2.name))
+    Ok(Value::Str(with_param(vm, a, |_, _, p| p.name.clone())?))
 }
 fn rp_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, idx, _) = this_param(vm, a)?;
     Ok(super::function::param_doc_comment(vm, &f, idx).map_or(Value::Bool(false), Value::Str))
 }
 fn rp_get_position(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(i64::try_from(this_param(vm, a)?.1).unwrap_or(0)))
+    Ok(Value::Int(i64::try_from(with_param(vm, a, |_, idx, _| idx)?).unwrap_or(0)))
 }
 fn rp_is_optional(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, idx, _) = this_param(vm, a)?;
-    Ok(Value::Bool(idx >= f.func.required() as usize))
+    Ok(Value::Bool(with_param(vm, a, |f, idx, _| {
+        idx >= f.func.required() as usize
+    })?))
 }
 
 /// Whether the parameter has a default value (`RECV_INIT` / arginfo default).
@@ -251,8 +275,7 @@ fn has_default(p: &ParamInfo, f: &FnRef, idx: usize) -> bool {
 }
 
 fn rp_has_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, idx, p) = this_param(vm, a)?;
-    Ok(Value::Bool(has_default(&p, &f, idx)))
+    Ok(Value::Bool(with_param(vm, a, |f, idx, p| has_default(p, f, idx))?))
 }
 
 fn no_default(vm: &mut Vm) -> crate::vm::Throw {
@@ -409,7 +432,7 @@ fn rp_get_default_constant_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn rp_has_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(this_param(vm, a)?.2.ty.is_some()))
+    Ok(Value::Bool(with_param(vm, a, |_, _, p| p.ty.is_some())?))
 }
 fn rp_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, p) = this_param(vm, a)?;
@@ -420,23 +443,26 @@ fn rp_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 fn rp_allows_null(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_none_or(TypeDecl::allows_null)))
+    Ok(Value::Bool(with_param(vm, a, |_, _, p| {
+        p.ty.as_ref().is_none_or(TypeDecl::allows_null)
+    })?))
 }
 fn rp_by_ref(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(this_param(vm, a)?.2.by_ref))
+    Ok(Value::Bool(with_param(vm, a, |_, _, p| p.by_ref)?))
 }
 fn rp_by_val(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, _, p) = this_param(vm, a)?;
-    // `ZEND_SEND_PREFER_REF` parameters of internal functions accept both.
-    let prefer_ref = !f.func.is_user() && p.by_ref && p.promote & crate::opcode::PREFER_REF != 0;
-    Ok(Value::Bool(!p.by_ref || prefer_ref))
+    Ok(Value::Bool(with_param(vm, a, |f, _, p| {
+        // `ZEND_SEND_PREFER_REF` parameters of internal functions accept both.
+        let prefer_ref =
+            !f.func.is_user() && p.by_ref && p.promote & crate::opcode::PREFER_REF != 0;
+        !p.by_ref || prefer_ref
+    })?))
 }
 fn rp_is_variadic(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(this_param(vm, a)?.2.variadic))
+    Ok(Value::Bool(with_param(vm, a, |_, _, p| p.variadic)?))
 }
 fn rp_is_promoted(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let promote = this_param(vm, a)?.2.promote & !crate::opcode::NATIVE_PARAM_BITS;
+    let promote = with_param(vm, a, |_, _, p| p.promote)? & !crate::opcode::NATIVE_PARAM_BITS;
     Ok(Value::Bool(promote != 0))
 }
 fn rp_is_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -452,6 +478,28 @@ fn rp_is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })))
 }
 fn rp_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // A parameter without attributes (the common case, the container's
+    // autowiring asks each one): its arguments checked as for any, read in
+    // place instead of a copy of the parameter's declaration.
+    let none = super::with_this_refl(vm, a, |r| match r {
+        Refl::Param { f, idx } => Some(
+            f.func
+                .params()
+                .get(*idx)
+                .is_none_or(|p| p.attributes.is_empty()),
+        ),
+        _ => None,
+    })?;
+    if none {
+        return super::attribute::attributes_array_in(
+            vm,
+            &[],
+            super::target::PARAMETER,
+            None,
+            None,
+            a,
+        );
+    }
     let (f, _, p) = this_param(vm, a)?;
     let scope = f.scope(vm);
     super::attribute::attributes_array_in(

@@ -1690,7 +1690,36 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             vm.push_simple_ucall(dst, at + 1)
                         }
                     },
-                    None => vm.push_simple_ucall(dst, at + 1),
+                    None => {
+                        let ok = vm.push_simple_ucall(dst, at + 1);
+                        if !ok && pending_builtin(vm) {
+                            // `ZEND_DO_ICALL` of a builtin the generic call
+                            // path makes (a method of a builtin class, a
+                            // function its `InitFCall` left pending): run
+                            // here as `Vm::run`'s generic `DoCall` arm runs
+                            // it, instead of a way out to `Vm::run` and back.
+                            fresh = false;
+                            if let Some(f) = vm.frames.last_mut() {
+                                f.ip = at + 1;
+                            }
+                            match vm.op_do_call(dst) {
+                                Ok(false) => {
+                                    if crate::interrupt::safe_point_due() {
+                                        return ((at + 1) | switched, at);
+                                    }
+                                    ip = at + 1;
+                                    continue 'frames;
+                                }
+                                Ok(true) => true,
+                                Err(t) => {
+                                    vm.tape_throw = Some(t);
+                                    return (at | switched, hot::THREW);
+                                }
+                            }
+                        } else {
+                            ok
+                        }
+                    }
                 }
             }
             Some(&Op::Return { val }) => {
@@ -1717,6 +1746,15 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         ip = f.ip;
         code = Rc::as_ptr(&f.code);
     }
+}
+
+/// Whether the current frame's newest pending call is of a builtin.
+#[inline]
+fn pending_builtin(vm: &Vm) -> bool {
+    vm.frames
+        .last()
+        .and_then(|f| f.calls.last())
+        .is_some_and(|c| matches!(c.func, crate::func::Func::Builtin(_)))
 }
 
 /// Turns a prepared call back into the generic pending call
