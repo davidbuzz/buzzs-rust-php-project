@@ -62,15 +62,33 @@ The deliverable is met on the 31 inputs. These are shapes real applications run 
 inputs do not cover, measured 21 Nov in instructions per loop iteration (ours / C);
 candidates for `perf/bench` and for work.
 
+- [ ] Ordinary (not loop-hot) code, measured 23 Nov by `perf/interp/run.sh`: instructions
+  per operation with our JIT off, ours / C 8.5. Calls: a plain call 1,141 / 172, a method
+  1,339 / 225, a static method 1,088 / 182, a closure 1,284 / 257, defaults filled in
+  1,799 / 216, `new` with a constructor 3,323 / 755; `call_user_func_array()` 6,206 / 553
+  (the builtin -> nested `execute()` path; `PendingCall` moves show as `memmove`);
+  `func_get_args()` 3,860 / 513; `is_callable()` 3,122 / 370. Variables: `static $n` 4,104
+  / 264, `global $g` 2,044 / 262, `compact()`+`extract()` 17,990 / 1,277. Builtins: the
+  frameless wrapper `frameless_icall_op` costs ~340 per call (`trim` 1,140 / 285); `implode`
+  3,357 / 615 is mostly its own UTF-8 tracking; `preg_match` 4,775 / 597; `instanceof`
+  446 / 59. Element and property reads and writes are near or under C. A large framework
+  page (warm opcache, one process) runs 1,706 M instructions against C's 251 M; its
+  profile is flat: the generic interpreter paths, the call protocol and hash-table work.
 - [ ] Code that runs with an attached symbol table (the top level of an included file, a
-  function that uses `include`, `extract()`, `compact()` or `$$var`), measured 23 Nov
-  with 300 other variables in scope: an array write in a loop 19.9 ms against C's 1.9
-  (5.8 / 1.8 in a plain function), 200,000 calls of a small function 35.9 / 2.8 (0.6 /
-  2.8). The compiled variables and the table are copied back and forth
-  (`Frame::sync_from_symbol_table` walks every variable on each generic write and on each
-  return into the frame; `attach_symbol_table`/`detach_symbol_table`, `VarStore::find`):
-  18% of a large framework page's time. php-src points the attached frame's CVs into the
-  table (`IS_INDIRECT`), so nothing is synchronised.
+  function that uses `include`, `extract()`, `compact()` or `$$var`), 300 other variables
+  in scope: an array write in a loop 12.0 ms against C's 2.1 (19.9 before 23 Nov's fixes;
+  5.3 / 2.0 in a plain function), 200,000 calls of a small function 33.5 / 3.1 (0.6 / 2.7
+  in a function: those calls take the generic `op_send`/`push_simple_ucall` path, not the
+  tape's). 23 Nov removed the table round trip of writes in functions (024a945a), the
+  global re-synchronisation after writes that do not touch `$GLOBALS` (7bf94dc6) and the
+  name lookups of included files' frames (ff8f6d01); php-src points the attached frame's
+  CVs into the table (`IS_INDIRECT`), so nothing is synchronised at all.
+- [ ] Per-process state built per request: php-cgi's FastCGI loop and php-fpm make a new
+  VM (module startup) for every request, `php -S` prepares the next one while idle;
+  php-src does module startup once per process. Until 23 Nov `php -S` forked per request,
+  which hid caches dropped at request end that php-src keeps (opcache's scripts,
+  e2a8ca7e; PCRE's compiled patterns, 282cffca): check the other extensions' `RSHUTDOWN`
+  resets against php-src's.
 - [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
   frame is swapped onto the stack and back; the rest is the builtin-method call machinery
   around `send()` and the nested `execute()`).
