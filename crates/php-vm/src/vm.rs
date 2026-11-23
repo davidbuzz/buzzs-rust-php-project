@@ -598,6 +598,13 @@ pub struct FrameStack {
     pub(crate) live: usize,
 }
 
+/// The released frames the stack keeps for reuse after a recursion
+/// unwound ([`FrameStack::trim_pool`]): a recursion whose depth swings by
+/// hundreds of frames (Zend/bench.php's `Ack()`) reuses them instead of
+/// freeing and building them again on every swing, as php-src's VM stack
+/// keeps its 256 KiB page until the stack unwinds past it.
+const SPARE_FRAMES: usize = 1024;
+
 impl FrameStack {
     pub fn new() -> Self {
         Self {
@@ -794,18 +801,19 @@ impl FrameStack {
     pub(crate) fn pop_cleared_top(&mut self) {
         if self.live > 0 {
             self.live -= 1;
-            if self.vec.len() > self.live + 128 {
+            if self.vec.len() > self.live + 2 * SPARE_FRAMES {
                 self.trim_pool();
             }
         }
     }
 
-    /// Cuts the pool of released frames back to 128 spare frames
-    /// ([`FrameStack::pop_cleared_top`] after a deep recursion unwound).
+    /// Cuts the pool of released frames back to [`SPARE_FRAMES`] spare
+    /// frames ([`FrameStack::pop_cleared_top`] after a deep recursion
+    /// unwound, by twice that).
     #[cold]
     #[inline(never)]
     fn trim_pool(&mut self) {
-        self.vec.truncate(self.live + 128);
+        self.vec.truncate(self.live + SPARE_FRAMES);
     }
 
     /// Frees the released frames kept in `vec[live..]` for reuse.
