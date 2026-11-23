@@ -1915,6 +1915,35 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn closures_in_variables_run_inline() {
+    // A variable switched between closures, closures with something
+    // bound to them (`use`, `$this`, a scope), one made from a callable, a
+    // name, null.
+    both(
+        r#"<?php
+class K { public $v = 3; function mk() { return fn($x) => $x + $this->v; } static function st() { return fn($x) => $x * 2; } }
+function f($n) {
+    $f = fn($x) => $x; $g = function ($x) { return $x * 3; }; $k = 5; $u = function ($x) use ($k) { return $x + $k; };
+    $m = (new K)->mk(); $st = K::st(); $sl = strlen(...); $b = Closure::bind(fn($x) => $x - 1, null, K::class);
+    $s = 0; $t = 0.0; $r = [];
+    for ($i = 0; $i < $n; $i++) { $s += $f(1); $s += $g($i); $t += $f(0.5); }
+    $r[] = $s; $r[] = $t;
+    for ($i = 0; $i < $n; $i++) { $h = $i % 4 == 0 ? $g : $f; $s += $h($i); }
+    $r[] = $s;
+    for ($i = 0; $i < $n; $i++) { $h = [$f, $u, $m, $st, $sl, $b][$i % 6]; $s += $i % 6 == 4 ? $h("abc") : $h($i); }
+    $r[] = $s;
+    for ($i = 0; $i < $n; $i++) { $f2 = fn($x) => $x + $i; $s += $f2(1); }
+    $r[] = $s;
+    try { for ($i = 0; $i < $n; $i++) { $s += $f($i); if ($i == 30) { $f = "strtoupper"; } } } catch (TypeError $e) { $r[] = $e->getMessage(); }
+    $r[] = $s;
+    return $r;
+}
+var_dump(f(60), f(5));
+"#,
+    );
+}
+
+#[test]
 fn functions_that_call_themselves_run_their_own_code() {
     // Ints that overflow, float results, a modulo by zero, recursions a
     // few hundred deep, one with a loop, a self-call with a default, a

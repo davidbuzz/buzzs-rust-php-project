@@ -607,6 +607,8 @@ pub(super) enum SiteKind {
     Static,
     /// `$cv->f()` or `$this->f()` (`Operand::Unused`), the method by name.
     Method(Operand),
+    /// `$cv()`: a closure the variable holds (`super::closure_is`).
+    Closure(u32),
     /// Any other call: nothing the second tier computes or inlines.
     Other,
 }
@@ -636,6 +638,9 @@ fn call_sites(ops: &[Op]) -> Vec<Site> {
                 obj: obj @ (Operand::Cv(_) | Operand::Unused),
                 name: Operand::Lit(name),
             } => Some((SiteKind::Method(*obj), *name)),
+            Op::InitDynCall {
+                callee: Operand::Cv(var),
+            } => Some((SiteKind::Closure(*var), 0)),
             Op::InitDynCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
@@ -824,8 +829,10 @@ enum Plan {
         /// For a method's call: the receiver's variable (`usize::MAX` for
         /// `$this`) and the address of the class the method was resolved
         /// for, checked at every call (`super::class_is`: the object may
-        /// be of another class each time).
-        check: Option<(usize, usize)>,
+        /// be of another class each time); for a closure's, the variable
+        /// and the function's address (`super::closure_is`). The helper's
+        /// address first.
+        check: Option<(usize, usize, usize)>,
         /// The first of its argument variables ([`Analysis::arg_base`]).
         args: usize,
         argc: usize,
@@ -2547,7 +2554,7 @@ impl<'a> Analysis<'a> {
             Some((_, callee)) => {
                 self.seen.fast
                     && match callee.kind {
-                        SiteKind::Method(Operand::Cv(var)) => var
+                        SiteKind::Method(Operand::Cv(var)) | SiteKind::Closure(var) => var
                             .checked_mul(SLOT_U32)
                             .and_then(cv)
                             .is_some_and(|slot| self.untracked(st, slot)),
@@ -3775,8 +3782,19 @@ impl<'a> Analysis<'a> {
                     }
                     *self.bound.get_mut(k)? = true;
                     let code = &callee.func.code;
-                    let check = matches!(callee.kind, SiteKind::Method(_))
-                        .then_some((callee.recv.0, callee.recv.1));
+                    let check = match callee.kind {
+                        SiteKind::Method(_) => Some((
+                            super::class_is as UserIs as usize,
+                            callee.recv.0,
+                            callee.recv.1,
+                        )),
+                        SiteKind::Closure(var) => Some((
+                            super::closure_is as UserIs as usize,
+                            var as usize,
+                            std::rc::Rc::as_ptr(&callee.func) as usize,
+                        )),
+                        _ => None,
+                    };
                     return Some(Plan::Bind {
                         check,
                         args,
@@ -5085,7 +5103,8 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
             if !scopes.contains(&callee.recv.2) {
                 scopes.push(callee.recv.2);
             }
-        } else {
+        } else if !matches!(callee.kind, SiteKind::Closure(_)) {
+            // (A closure's is checked at each call, [`Plan::Bind`].)
             inlined.push((callee.init, std::rc::Rc::as_ptr(&func) as usize));
         }
         std::mem::forget(func);
@@ -6459,14 +6478,14 @@ impl Emit<'_, '_> {
                 // A method's call: of this method still, for the object
                 // there is now. If not, the whole call is the
                 // interpreter's, and the miss is counted.
-                if let Some((recv, class)) = check {
+                if let Some((helper, recv, class)) = check {
                     #[allow(clippy::cast_possible_wrap)]
                     let operands = [
                         self.frame,
                         self.b.ins().iconst(types::I64, recv as i64),
                         self.b.ins().iconst(types::I64, class as i64),
                     ];
-                    let same = self.helper(super::class_is as UserIs as usize, &operands)?;
+                    let same = self.helper(helper, &operands)?;
                     let (ok, other) = (self.b.create_block(), self.b.create_block());
                     self.b.set_cold_block(other);
                     self.b.ins().brif(same, ok, &[], other, &[]);

@@ -102,6 +102,9 @@ class Gen:
         if k < 0.076:
             lit = self.pick(['"s"', "'0'", '""', '[1, 2]', '[]', 'null'])
             return f'{self.pick(["hu", "ht", "hq", "hr"])}({lit}, {self.expr(d + 1)})'
+        # Closures in variables (switched now and then, `stmt`).
+        if k < 0.079:
+            return self.pick([f'$cf({self.expr(d + 1)})', f'$cg({self.expr(d + 1)}, {self.expr(d + 1)})'])
         # Functions that call themselves (a few dozen deep at most).
         if k < 0.082:
             f, bound = self.pick([("hrec", 40), ("hfib", 14)])
@@ -163,6 +166,9 @@ class Gen:
         k2 = self.r.random()
         if k2 < 0.04:
             return f'{v} = {self.cond()};'
+        if k2 < 0.043:
+            return self.pick(['$cf = fn($x) => $x - 3;', '$cf = fn($x) => $x * 0.5;', '$cf = "abs";',
+                              '$cg = fn($a, $b) => $a * $b;', '$cf = fn($x) => $x + $k;'])
         if k2 < 0.07:
             return f'{v} = ({self.var()} = {self.expr()}) {self.pick(["+", "-", "*"])} {self.atom()};'
         if k2 < 0.12:
@@ -292,6 +298,7 @@ class Gen:
         return (f'function {name}($x, $y, $n, $p, $q, $m, $o) {{ $s = "abc"; $i = 0; $j = 0; $k = 0; $w = 0; '
                 f'$fv = 0; $fk = 0; $z = ["k" => 3, "f" => 1.5, "s" => "x"]; '
                 f'$fo = $o; $fs = ""; $os = [new P(1), $o, new P(2.5), new P(4)]; $ss = ["a", "bcd", "", "ef"]; '
+                f'$cf = fn($x) => $x * 2 + 1; $cg = function ($a, $b) {{ return $a - $b; }}; '
                 f'{inits} {body} return {RESULT}; }}')
 
     def program(self):

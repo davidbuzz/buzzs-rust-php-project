@@ -1037,7 +1037,9 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             let plain = matches!(func.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
                 && argc <= func.params.len()
                 && argc >= func.required as usize
-                && func.flags & flags::CLOSURE == 0
+                // (A closure's only by a variable's call: `plain_closure`.)
+                && (func.flags & flags::CLOSURE == 0
+                    || matches!(frame.code.ops.get(init), Some(Op::InitDynCall { .. })))
                 && func.uses.is_empty()
                 && func.hook_prop.is_none()
                 && func.code.try_table.is_empty()
@@ -1246,7 +1248,12 @@ unsafe extern "C" fn missed(f: *mut Frame, block: *mut usize) -> usize {
         // and no inlined calls.)
         let call = matches!(
             (&*f).code.ops.get(site.1),
-            Some(Op::InitFCall { .. } | Op::InitStaticCall { .. } | Op::InitMethodCall { .. })
+            Some(
+                Op::InitFCall { .. }
+                    | Op::InitStaticCall { .. }
+                    | Op::InitMethodCall { .. }
+                    | Op::InitDynCall { .. }
+            )
         );
         let count = MISSES.with(|m| {
             let mut m = m.borrow_mut();
@@ -1936,6 +1943,12 @@ fn callee_at(f: &Frame, init: usize) -> Option<std::rc::Rc<crate::func::UserFunc
             ref class,
             name: Operand::Lit(name),
         } => crate::rtcache::static_call_user_in(f, class, name),
+        Op::InitDynCall {
+            callee: Operand::Cv(cv),
+        } => match f.cvs.get(cv as usize)?.get()? {
+            Value::Object(object) => plain_closure(object),
+            _ => None,
+        },
         Op::InitMethodCall {
             obj,
             name: Operand::Lit(lit),
@@ -2011,6 +2024,50 @@ unsafe fn this_prop(f: &Frame, init: usize, func: usize, pid: u32) -> Option<(Va
 /// The object the variable with index `recv` of frame `f` holds, or with
 /// `usize::MAX` its `$this`: the receiver of a method's call.
 #[inline]
+/// The function of `object` when that is a `Closure` a typed loop may run
+/// inline: of a user function, with nothing bound to it (no `use`d
+/// variables, no `$this`, no class scope) and not made from a callable
+/// (`Closure::fromCallable`, `f(...)`).
+fn plain_closure(object: &php_runtime::Obj) -> Option<std::rc::Rc<crate::func::UserFunction>> {
+    use crate::closure::ClosureData;
+    use crate::func::Func;
+    if crate::object::class_of(object).lc_name.as_bytes() != b"closure" {
+        return None;
+    }
+    crate::object::internal::<ClosureData, _>(object, |d| {
+        let plain = d.vars.is_empty()
+            && d.this.is_none()
+            && d.scope.is_none()
+            && d.called.is_none()
+            && !d.fake
+            && d.magic_name.is_none()
+            && d.partial_inner.is_none();
+        match &d.func {
+            Func::User(func) if plain => Some(std::rc::Rc::clone(func)),
+            _ => None,
+        }
+    })
+    .flatten()
+}
+
+/// For a typed loop, at a closure's call it runs inline: whether the
+/// variable `cv` holds a closure of the function at address `func` with
+/// nothing bound to it ([`plain_closure`]; the closure the loop was
+/// compiled for, or another of the same function).
+///
+/// # Safety
+/// `f` is the current frame.
+pub(super) unsafe extern "C" fn closure_is(f: *mut Frame, cv: usize, func: usize) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(Some(Value::Object(object))) = f.cvs.get(cv).map(crate::vm::CvSlot::get) else {
+        return 0;
+    };
+    usize::from(
+        plain_closure(object).is_some_and(|code| std::rc::Rc::as_ptr(&code) as usize == func),
+    )
+}
+
 fn receiver_in(f: &Frame, recv: usize) -> Option<&php_runtime::Obj> {
     if recv == usize::MAX {
         return f.this.as_ref();
