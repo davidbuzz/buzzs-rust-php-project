@@ -2474,7 +2474,7 @@ impl Vm {
         ip: usize,
     ) -> Option<crate::exec::Flow> {
         if !matches!(val, Operand::Cv(_) | Operand::Tmp(_)) {
-            return self.return_generic(val, base, ip);
+            return self.return_generic::<false>(val, base, ip);
         }
         if self.observer.enabled {
             return None;
@@ -2499,7 +2499,7 @@ impl Vm {
                 return None;
             }
             if uf.return_type.is_some() {
-                return self.return_generic(val, base, ip);
+                return self.return_generic::<false>(val, base, ip);
             }
             // A declared return type (checked by `return_generic`'s
             // `return_accepts`) is left to it: coercion rules may
@@ -2513,7 +2513,7 @@ impl Vm {
             let dst = match frame.ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => Some(slot),
-                    _ => return self.return_generic(val, base, ip),
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
                 RetTarget::Discard => None,
             };
@@ -2527,7 +2527,7 @@ impl Vm {
                     {
                         slot.as_mut().take()?
                     }
-                    _ => return self.return_generic(val, base, ip),
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
                     Some(slot)
@@ -2535,9 +2535,9 @@ impl Vm {
                     {
                         std::mem::take(slot)
                     }
-                    _ => return self.return_generic(val, base, ip),
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
-                _ => return self.return_generic(val, base, ip),
+                _ => return self.return_generic::<false>(val, base, ip),
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
@@ -2562,22 +2562,42 @@ impl Vm {
         Some(crate::exec::Flow::Reload)
     }
 
-    /// The generic `ZEND_RETURN` of [`Vm::return_simple`]: any frame or
-    /// result shape the direct path leaves, with the value's slot order
-    /// (`set_tmp` releasing the result slot after the frame) it keeps.
-    #[inline(never)]
-    #[allow(clippy::too_many_lines)] // the direct path's shape, in full
-    fn return_generic(
+    /// `ZEND_RETURN` from the frame a nested execution started with
+    /// (`base`: a callback called by a builtin, `zend_call_function`):
+    /// [`Vm::return_generic`]'s direct return, whose result is the
+    /// execution's (`Flow::Done`) instead of going to a caller's slot.
+    /// `None`, having changed nothing, for any frame or value it leaves to
+    /// the generic `Return`.
+    pub(crate) fn return_at_base(
         &mut self,
         val: Operand,
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
+        self.return_generic::<true>(val, base, ip)
+    }
+
+    /// The generic `ZEND_RETURN` of [`Vm::return_simple`]: any frame or
+    /// result shape the direct path leaves, with the value's slot order
+    /// (`set_tmp` releasing the result slot after the frame) it keeps.
+    /// With `AT_BASE`, of the frame `base` itself ([`Vm::return_at_base`]);
+    /// otherwise of a frame above it.
+    #[inline(never)]
+    #[allow(clippy::too_many_lines)] // the direct path's shape, in full
+    fn return_generic<const AT_BASE: bool>(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<crate::exec::Flow> {
+        // A parameter of the type, so the ordinary return compiles to the
+        // tests it had before (it is every call's return).
+        let at_base = AT_BASE;
         if self.observer.enabled {
             return None;
         }
         let fidx = self.frames.live.checked_sub(1)?;
-        if fidx <= base {
+        if fidx < base || (fidx == base) != at_base || fidx == 0 {
             return None;
         }
         let (v, ret) = {
@@ -2667,6 +2687,8 @@ impl Vm {
             // value in the slot is released after the frame, by `set_tmp`
             // below, as before.
             let v = match ret {
+                // The execution's result: no caller slot.
+                _ if at_base => Some(v),
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
@@ -2689,6 +2711,9 @@ impl Vm {
         let Some(v) = v else {
             return Some(crate::exec::Flow::Reload);
         };
+        if at_base {
+            return Some(crate::exec::Flow::Done(v));
+        }
         match ret {
             RetTarget::Tmp(t) => self.set_tmp(t, v),
             // An unused result (`g();`): a scalar owns nothing, so the

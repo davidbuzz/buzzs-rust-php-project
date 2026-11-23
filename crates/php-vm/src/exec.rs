@@ -1991,17 +1991,23 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    // `Vm::return_simple` declined above.
+                    // `Vm::return_simple` declined above (or the tape did);
+                    // the frame the execution started with may still return
+                    // directly.
                     Op::Return { val } => {
-                        let v = match val {
-                            Operand::Unused => None,
-                            Operand::Cv(cv) => match self.return_undefined_typed_cv(*cv)? {
-                                Some(v) => Some(v),
-                                None => Some(self.read(*val)?),
-                            },
-                            o => Some(self.read(*o)?),
-                        };
-                        self.op_return(v, base)?
+                        if let Some(done) = self.return_at_base(*val, base, ip) {
+                            done
+                        } else {
+                            let v = match val {
+                                Operand::Unused => None,
+                                Operand::Cv(cv) => match self.return_undefined_typed_cv(*cv)? {
+                                    Some(v) => Some(v),
+                                    None => Some(self.read(*val)?),
+                                },
+                                o => Some(self.read(*o)?),
+                            };
+                            self.op_return(v, base)?
+                        }
                     }
                     Op::ReturnByRefValue { val } => {
                         let unused = *val == Operand::Unused;
