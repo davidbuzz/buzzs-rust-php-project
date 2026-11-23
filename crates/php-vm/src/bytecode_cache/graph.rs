@@ -21,7 +21,7 @@
 //! ref: `ext/opcache/zend_file_cache.c` (`zend_file_cache_serialize_op_array`,
 //! `zend_file_cache_serialize_class`, `zend_file_cache_serialize_func`)
 
-use super::codec::{Codec, DResult, DecodeError, EResult, Reader, Writer};
+use super::codec::{prealloc, Codec, DResult, DecodeError, EResult, Reader, Writer};
 use crate::class::{
     AttributeInfo, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl, PropHooks,
     TraitRule,
@@ -425,11 +425,11 @@ impl Decoder<'_, '_> {
 
     fn attributes(&mut self) -> DResult<Vec<AttributeInfo>> {
         let n = self.r.count()?;
-        let mut out = Vec::with_capacity(n);
+        let mut out = prealloc(n);
         for _ in 0..n {
             let name = self.r.zstr()?;
             let arg_count = self.r.count()?;
-            let mut args = Vec::with_capacity(arg_count);
+            let mut args = prealloc(arg_count);
             for _ in 0..arg_count {
                 let arg_name = Option::decode(self.r)?;
                 args.push((arg_name, self.expr()?));
@@ -455,7 +455,7 @@ impl Decoder<'_, '_> {
 
     fn params(&mut self) -> DResult<Vec<ParamInfo>> {
         let n = self.r.count()?;
-        let mut out = Vec::with_capacity(n);
+        let mut out = prealloc(n);
         for _ in 0..n {
             out.push(ParamInfo {
                 name: self.r.zstr()?,
@@ -478,7 +478,7 @@ impl Decoder<'_, '_> {
         if let Some(c) = self.code.lookup(id)? {
             return Ok(c);
         }
-        let code = Rc::new(OpArray {
+        let mut code = OpArray {
             ops: Vec::decode(self.r)?,
             lines: Vec::decode(self.r)?,
             literals: Vec::decode(self.r)?,
@@ -500,11 +500,14 @@ impl Decoder<'_, '_> {
             prop_cache: RefCell::new(Vec::new()),
             method_cache: RefCell::new(Vec::new()),
             tape: crate::exec::tape::Tape::default(),
-        });
+        };
         if code.lines.len() != code.ops.len() {
             return Err(DecodeError("line table does not match ops"));
         }
-        Ok(self.code.fill(id, code))
+        if !references_in_range(&mut code) {
+            return Err(DecodeError("operand or jump target out of range"));
+        }
+        Ok(self.code.fill(id, Rc::new(code)))
     }
 
     fn function(&mut self) -> DResult<Rc<UserFunction>> {
@@ -570,7 +573,7 @@ impl Decoder<'_, '_> {
         let traits = Vec::decode(self.r)?;
         let trait_rules = Vec::decode(self.r)?;
         let n = self.r.count()?;
-        let mut consts = Vec::with_capacity(n);
+        let mut consts = prealloc(n);
         for _ in 0..n {
             consts.push(ConstDecl {
                 name: self.r.zstr()?,
@@ -584,7 +587,7 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
-        let mut props = Vec::with_capacity(n);
+        let mut props = prealloc(n);
         for _ in 0..n {
             props.push(PropDecl {
                 name: self.r.zstr()?,
@@ -602,7 +605,7 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
-        let mut methods = Vec::with_capacity(n);
+        let mut methods = prealloc(n);
         for _ in 0..n {
             methods.push(MethodDecl {
                 name: self.r.zstr()?,
@@ -611,12 +614,12 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
-        let mut cases = Vec::with_capacity(n);
+        let mut cases = prealloc(n);
         for _ in 0..n {
             cases.push((self.r.zstr()?, self.opt_expr()?, self.r.u32()?));
         }
         let n = self.r.count()?;
-        let mut case_attributes = Vec::with_capacity(n);
+        let mut case_attributes = prealloc(n);
         for _ in 0..n {
             case_attributes.push(self.attributes()?);
         }
@@ -658,17 +661,17 @@ impl Decoder<'_, '_> {
             self.filled[idx] = true;
             let table = self.tables[idx].clone();
             let n = self.r.count()?;
-            let mut functions = Vec::with_capacity(n);
+            let mut functions = prealloc(n);
             for _ in 0..n {
                 functions.push(self.function()?);
             }
             let n = self.r.count()?;
-            let mut classes = Vec::with_capacity(n);
+            let mut classes = prealloc(n);
             for _ in 0..n {
                 classes.push(self.class()?);
             }
             let n = self.r.count()?;
-            let mut attrs = Vec::with_capacity(n);
+            let mut attrs = prealloc(n);
             for _ in 0..n {
                 attrs.push(self.attr_list()?);
             }
@@ -850,4 +853,35 @@ impl Codec for ClosureUse {
             implicit: r.bool()?,
         })
     }
+}
+
+/// Whether every operand and jump target of `code` refers to something it
+/// has: a literal, a compiled variable, a temporary or an instruction. The
+/// checksum catches a damaged entry, not one written inconsistently (a
+/// codec bug, or a file put in the cache directory); a reference past its
+/// table would fail when the script runs, in the interpreter or in code the
+/// JIT compiled from it, where a refused entry is only a cache miss. php-src
+/// trusts an entry whose checksum holds (`zend_file_cache_script_load`).
+pub(super) fn references_in_range(code: &mut OpArray) -> bool {
+    use crate::opcode::Operand;
+    let literals = code.literals.len();
+    let cvs = code.cv_names.len();
+    let tmps = code.num_tmps as usize;
+    let ops = code.ops.len();
+    let mut ok = true;
+    for op in &mut code.ops {
+        crate::compiler::optimizer::for_each_operand_mut(op, |o| {
+            ok &= match *o {
+                Operand::Cv(i) => (i as usize) < cvs,
+                Operand::Tmp(i) | Operand::TmpKeep(i) => (i as usize) < tmps,
+                Operand::Lit(i) => (i as usize) < literals,
+                Operand::Unused => true,
+            };
+        });
+        crate::compiler::optimizer::for_each_label_mut(op, |l| ok &= (*l as usize) < ops);
+        if !ok {
+            return false;
+        }
+    }
+    true
 }

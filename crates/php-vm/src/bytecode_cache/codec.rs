@@ -174,7 +174,7 @@ impl<'a> Reader<'a> {
             strings: Vec::new(),
         };
         let n = table.count()?;
-        let mut strings = Vec::with_capacity(n.min(1 << 20));
+        let mut strings = prealloc(n);
         for _ in 0..n {
             let flags = table.u8()?;
             let bytes = table.bytes()?;
@@ -439,6 +439,18 @@ impl<T: Codec> Codec for Option<T> {
     }
 }
 
+/// The most elements a decoder reserves room for before it has read them.
+/// A length is bounded by the input left ([`Reader::count`]), but an
+/// element takes far more memory than its shortest encoding, so a corrupt
+/// length in a short entry could still reserve a lot; past this, a vector
+/// grows as its elements are actually decoded (each consumes input).
+pub(crate) const PREALLOC_LIMIT: usize = 1024;
+
+/// A vector with room for `n` decoded elements, up to [`PREALLOC_LIMIT`].
+pub(crate) fn prealloc<T>(n: usize) -> Vec<T> {
+    Vec::with_capacity(n.min(PREALLOC_LIMIT))
+}
+
 impl<T: Codec> Codec for Vec<T> {
     fn encode(&self, w: &mut Writer) -> EResult {
         w.count(self.len());
@@ -446,7 +458,7 @@ impl<T: Codec> Codec for Vec<T> {
     }
     fn decode(r: &mut Reader<'_>) -> DResult<Self> {
         let n = r.count()?;
-        let mut out = Vec::with_capacity(n);
+        let mut out = prealloc(n);
         for _ in 0..n {
             out.push(T::decode(r)?);
         }
@@ -661,7 +673,7 @@ fn decode_array(r: &mut Reader<'_>) -> DResult<ZArray> {
     let packed = r.bool()?;
     let next_free = r.i64()?;
     let count = r.count()?;
-    let mut array = ZArray::with_capacity(count);
+    let mut array = ZArray::with_capacity(count.min(PREALLOC_LIMIT));
     {
         let table = array.make_mut();
         for _ in 0..count {

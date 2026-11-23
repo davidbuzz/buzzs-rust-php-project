@@ -136,6 +136,29 @@ mod tests {
         __halt_compiler(); trailing data
     ";
 
+    /// An entry whose checksum holds but whose operands or jumps point
+    /// past their tables is refused (a cache miss), not run.
+    #[test]
+    fn references_past_their_tables_are_refused() {
+        use crate::opcode::{Op, OpArray, Operand};
+        let check = |ops: Vec<Op>, num_tmps: u32| {
+            let lines = vec![1; ops.len()];
+            let mut code = OpArray {
+                ops,
+                lines,
+                num_tmps,
+                ..OpArray::default()
+            };
+            graph::references_in_range(&mut code)
+        };
+        let mv = |src| Op::Move { src, dst: 0 };
+        assert!(check(vec![mv(Operand::Tmp(0)), Op::Jmp(0)], 1));
+        assert!(!check(vec![mv(Operand::Tmp(1))], 1), "temporary");
+        assert!(!check(vec![mv(Operand::Cv(0))], 1), "compiled variable");
+        assert!(!check(vec![mv(Operand::Lit(0))], 1), "literal");
+        assert!(!check(vec![Op::Jmp(1)], 0), "jump target");
+    }
+
     #[test]
     fn units_roundtrip_byte_for_byte() {
         for level in [0, DEFAULT_OPTIMIZATION_LEVEL] {
