@@ -231,8 +231,12 @@ fn has_enclosed_stream(s: &Stream) -> bool {
 /// Registers the enclosed-stream resource of `cell`, numbered right after
 /// the enclosing stream's (`php_stream_memory_create()` inside
 /// `php_stream_temp_create()`).
-fn register_enclosed(cell: &Rc<StreamCell>) {
-    let inner = Resource::new(STREAM, Some(Box::new(EnclosedRes(Rc::downgrade(cell)))));
+fn register_enclosed(cell: &Rc<StreamCell>, number: Option<i64>) {
+    let data: Box<dyn std::any::Any> = Box::new(EnclosedRes(Rc::downgrade(cell)));
+    let inner = match number {
+        Some(n) => Resource::with_handle(n, STREAM, Some(data)),
+        None => Resource::new(STREAM, Some(data)),
+    };
     ENCLOSED.with(|m| {
         let mut m = m.borrow_mut();
         if m.len() >= ENCLOSED_PRUNE_AT.with(Cell::get) {
@@ -296,6 +300,7 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
         stream.context = None;
     }
     let id = stream.id();
+    let number = stream.resource_number();
     let encloses = has_enclosed_stream(&stream);
     let cell = Rc::new(StreamCell {
         ctx_keep: RefCell::new(stream.context.as_ref().and_then(ctx_cell_of_lib)),
@@ -312,11 +317,16 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
     } else {
         STREAM
     };
-    let r = Resource::new(ty, Some(Box::new(StreamRes(Rc::clone(&cell)))));
+    // The number the stream took when it was allocated (`php_stream_alloc`).
+    let data: Box<dyn std::any::Any> = Box::new(StreamRes(Rc::clone(&cell)));
+    let r = match number {
+        Some(n) => Resource::with_handle(n, ty, Some(data)),
+        None => Resource::new(ty, Some(data)),
+    };
     cell.handle.set(r.handle());
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
     if encloses {
-        register_enclosed(&cell);
+        register_enclosed(&cell, number.map(|n| n + 1));
     }
     Value::Resource(r)
 }

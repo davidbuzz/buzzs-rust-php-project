@@ -47,6 +47,11 @@ thread_local! {
     /// (opcache's `persistent_compile_file` falls back to the original
     /// `compile_file` for it, bug #64482).
     static UNCACHEABLE_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The file about to be compiled was read directly, where C opens it as
+    /// a stream (`php_stream_open_for_zend_ex`), which takes a resource
+    /// number: taken when the file is compiled, not when a script cache
+    /// serves it (opcache does not open a file it has cached).
+    static NUMBER_ON_COMPILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
@@ -225,6 +230,14 @@ impl Vm {
         php_parser::parse_with_encoding(src, &opts, &encoding)
     }
 
+    /// Compiles a file read directly from disk ([`NUMBER_ON_COMPILE`]).
+    fn compile_read_file(&mut self, src: Rc<[u8]>, path: &ZStr) -> VmResult<CompileOutcome> {
+        NUMBER_ON_COMPILE.with(|c| c.set(true));
+        let r = self.compile_source(src, path, false, true);
+        NUMBER_ON_COMPILE.with(|c| c.set(false));
+        r
+    }
+
     /// Parses and compiles source code, calling the compile hook for files.
     pub(crate) fn compile_source(
         &mut self,
@@ -253,6 +266,9 @@ impl Vm {
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
+        if NUMBER_ON_COMPILE.with(|c| c.replace(false)) && !is_eval {
+            let _ = php_runtime::Resource::take_number();
+        }
         let parsed = self.parse_source(&src, is_eval, skip_shebang);
         let program = match parsed {
             Ok(p) => p,
@@ -694,7 +710,15 @@ impl Vm {
                 Err(t) => return self.handle_top_throw(t),
             }
         };
-        let unit = match self.compile_source(Rc::from(src), path, is_eval, !is_eval) {
+        // The CLI opens its script as a `FILE *` (`cli_seek_file_begin`);
+        // the other SAPIs pass a file name, which compiling opens as a
+        // stream.
+        let compiled = if is_eval || self.sapi_is_cli() {
+            self.compile_source(Rc::from(src), path, is_eval, !is_eval)
+        } else {
+            self.compile_read_file(Rc::from(src), path)
+        };
+        let unit = match compiled {
             Ok(CompileOutcome::Ok(u)) => u,
             Ok(CompileOutcome::ParseError(e)) => {
                 self.report_uncaught(&e);
@@ -910,7 +934,7 @@ impl Vm {
             self.included.push(real_z.clone());
         }
         let src = self.filter_source(&real_z, src)?;
-        let unit = match self.compile_source(Rc::from(src), &real_z, false, true)? {
+        let unit = match self.compile_read_file(Rc::from(src), &real_z)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -1051,7 +1075,7 @@ impl Vm {
                 .as_os_str()
                 .as_bytes(),
         );
-        let unit = match self.compile_source(Rc::from(src), &p, false, true)? {
+        let unit = match self.compile_read_file(Rc::from(src), &p)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return self.handle_top_throw(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),

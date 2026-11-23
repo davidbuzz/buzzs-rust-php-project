@@ -385,6 +385,7 @@ impl Vm {
             self.ini.get_long("output_buffering"),
             self.ini.get_bool("implicit_flush"),
         );
+        self.activate();
         for hook in self.startup_hooks.clone() {
             hook(self);
         }
@@ -393,8 +394,15 @@ impl Vm {
         if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
             php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
         }
-        let t = self.ini.get_long("max_execution_time");
-        self.set_time_limit(t);
+    }
+
+    /// The engine's part of `php_request_startup()`, for a SAPI that runs
+    /// the other steps itself: `zend_activate()` (the collector's
+    /// `gc_reset()`) and the request's execution timer
+    /// ([`Vm::request_timer`]).
+    pub fn activate(&mut self) {
+        gc::mark_activated();
+        self.request_timer();
     }
 
     /// Request shutdown: runs shutdown functions, destructors, extension
@@ -407,6 +415,7 @@ impl Vm {
     /// Runs a script and performs request shutdown; returns the exit status.
     pub fn run_script(&mut self, src: &[u8], path: &str) -> i32 {
         self.request_startup();
+        self.script_timer();
         let p = ZStr::from(path);
         let mut r = Ok(());
         let prepend = self
@@ -496,6 +505,9 @@ impl Vm {
         self.flush_stdout();
         self.end_usage = php_memlimit::real_usage();
         php_memlimit::request_end();
+        // php_request_shutdown(): zend_unset_timeout(), so a long-running
+        // worker's timer does not run between requests.
+        interrupt::arm_timer(0, 0);
         self.exit_status
     }
 

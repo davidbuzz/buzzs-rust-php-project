@@ -16,6 +16,7 @@ php-stdarr = { path = "../php-stdarr" }
 php-stdstr = { path = "../php-stdstr" }
 php-hash = { path = "../php-hash" }
 php-memlimit = { path = "../php-memlimit" }
+libc = "0.2"
 
 [lints]
 workspace = true

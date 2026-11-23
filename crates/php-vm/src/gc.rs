@@ -1180,6 +1180,13 @@ pub(crate) fn request_startup(enable: bool) {
     set_enabled(enable);
 }
 
+/// Starts `gc_status()['application_time']` at request startup, as
+/// `gc_reset()` sets `GC_G(activated_at)` from `zend_activate()`; a worker
+/// serving many requests would otherwise count from its first one.
+pub(crate) fn mark_activated() {
+    with_state(|s| s.activated_at = Instant::now());
+}
+
 /// Statistics reported by `gc_status()` (`zend_gc_status`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GcStatus {

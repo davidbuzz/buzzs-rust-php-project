@@ -293,6 +293,7 @@ pub(crate) fn invalidate_settings() {
 
 /// Installs the library hooks (output, executing file name).
 pub fn install_hooks() {
+    php_streams::stream::set_resource_number_hook(Some(php_runtime::Resource::take_number));
     state::set_hooks(state::Hooks {
         output: Some(Box::new(|data: &[u8]| {
             let data = data.to_vec();

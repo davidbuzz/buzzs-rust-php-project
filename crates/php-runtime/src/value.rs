@@ -877,12 +877,20 @@ impl Resource {
     /// Creates a resource with the next free handle number of this thread.
     #[must_use]
     pub fn new(type_name: impl Into<ZStr>, data: Option<Box<dyn Any>>) -> Self {
-        let handle = NEXT_RESOURCE_ID.with(|c| {
+        Self::with_handle(Self::take_number(), type_name, data)
+    }
+
+    /// Takes the next free handle number of this thread
+    /// (`zend_hash_next_free_element(&EG(regular_list))`), for a resource
+    /// created later with [`Resource::with_handle`] or one C registers and
+    /// frees inside a call (the stream `file_get_contents()` opens).
+    #[must_use]
+    pub fn take_number() -> i64 {
+        NEXT_RESOURCE_ID.with(|c| {
             let h = c.get();
             c.set(h + 1);
             h
-        });
-        Self::with_handle(handle, type_name, data)
+        })
     }
 
     /// Sets the next handle number allocated by [`Resource::new`].

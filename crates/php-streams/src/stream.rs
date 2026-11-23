@@ -285,9 +285,21 @@ pub struct WrapperInfo {
 /// released (`php_io_poll_stream_notify_close()`).
 pub type CloseHook = std::rc::Rc<dyn Fn(u64)>;
 
+/// Takes the next resource number for a new stream.
+pub type ResourceNumberHook = fn() -> i64;
+
 thread_local! {
     static NEXT_STREAM_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     static CLOSE_HOOK: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) };
+    static RESOURCE_NUMBER_HOOK: std::cell::Cell<Option<ResourceNumberHook>> = const { std::cell::Cell::new(None) };
+}
+
+/// Installs the hook that numbers new streams. `php_stream_alloc()`
+/// registers every stream as a resource, also one a function opens for
+/// itself and closes before it returns (`file_get_contents()`, `copy()`,
+/// `scandir()`), so each takes a `Resource id #N` when it is allocated.
+pub fn set_resource_number_hook(hook: Option<ResourceNumberHook>) {
+    RESOURCE_NUMBER_HOOK.with(|h| h.set(hook));
 }
 
 /// Installs the stream close hook.
@@ -335,6 +347,9 @@ pub struct Stream {
     /// `stream->wrapperdata` set by a built-in wrapper (the `http://`
     /// response headers); user-space wrapper objects are VM-side.
     pub wrapper_data: Option<Value>,
+    /// The resource number taken when the stream was allocated (0 when no
+    /// numbering hook is installed).
+    resource_number: i64,
     /// `wrapper->wops->stream_closer`, run once after the stream's own
     /// close (the `ftp://` wrapper reads the transfer result from its
     /// control connection and sends `QUIT`).
@@ -394,6 +409,9 @@ impl Stream {
             lock_flag: 0,
             is_include: false,
             wrapper_data: None,
+            resource_number: RESOURCE_NUMBER_HOOK
+                .with(std::cell::Cell::get)
+                .map_or(0, |f| f()),
             closer: None,
         }
     }
@@ -401,6 +419,20 @@ impl Stream {
     /// The stream id (used for `Value::Stream`, user filter `$this->stream`).
     pub fn id(&self) -> u64 {
         self.state.id
+    }
+
+    /// The resource number this stream took when it was allocated.
+    #[must_use]
+    pub fn resource_number(&self) -> Option<i64> {
+        (self.resource_number > 0).then_some(self.resource_number)
+    }
+
+    /// Gives this stream the number an inner stream allocated before it
+    /// took, for a stream C allocates before its inner one.
+    pub(crate) fn take_number_of(&mut self, inner: &Stream) {
+        if inner.resource_number > 0 {
+            self.resource_number = inner.resource_number;
+        }
     }
 
     /// Installs the wrapper's `stream_closer`, run after the stream's own

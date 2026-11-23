@@ -652,6 +652,9 @@ impl Extension for Apache2Handler {
             for c in ["STDIN", "STDOUT", "STDERR"] {
                 vm.constants.remove(c.as_bytes());
             }
+            // Only the CLI registers them (`cli_register_file_handles`): the
+            // request's resources are numbered from #1, as C's are.
+            php_runtime::Resource::set_next_handle(1);
             // Defined unattributed (not through `m.constant`), so that
             // `get_defined_constants(true)` files them under `Core`, like
             // the other engine constants.

@@ -1016,14 +1016,14 @@ impl Extension for CliServerModule {
         }
         {
             let vm = m.vm();
-            // cli-server has no STDIN/STDOUT/STDERR constants.  The stream
-            // resources own descriptors 0-2, so dropping them would close
-            // the server's console: keep them alive, unreachable.
+            // cli-server, CGI and FPM have no STDIN/STDOUT/STDERR: only the
+            // CLI registers them (`cli_register_file_handles`). The streams
+            // are `NO_CLOSE`, so dropping them leaves descriptors 0-2 open;
+            // the request's resources are numbered from #1, as C's are.
             for c in ["STDIN", "STDOUT", "STDERR"] {
-                if let Some(v) = vm.constants.remove(c.as_bytes()) {
-                    std::mem::forget(v);
-                }
+                vm.constants.remove(c.as_bytes());
             }
+            php_runtime::Resource::set_next_handle(1);
             if let Some(b) = vm.native_function("error_log") {
                 ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
             }
@@ -1246,6 +1246,9 @@ fn run_request_inner(
     let ob = vm.ini.get_long("output_buffering");
     let implicit_flush = vm.ini.get_bool("implicit_flush");
     php_support::output::request_startup(vm, None, ob, implicit_flush);
+    // zend_activate() and zend_set_timeout(): the collector's clock and
+    // the execution timer start with every request.
+    vm.activate();
     if vm.ini_bool("expose_php") {
         let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
         let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
@@ -1307,6 +1310,8 @@ fn run_request_inner(
             let _ = std::env::set_current_dir(dir);
         }
         r = if let Ok(src) = std::fs::read(p) {
+            // php_execute_script(): max_execution_time after max_input_time.
+            vm.script_timer();
             execute_script(vm, &src, &path)
         } else {
             let msg = format!(
@@ -1401,6 +1406,8 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
         }
         (src, path.clone())
     };
+    // php_execute_script(): max_execution_time after max_input_time.
+    vm.script_timer();
     let r = execute_script(vm, &src, &shown);
     // FPM: "if (EG(exit_status) == 255)" the `fastcgi.error_header` line
     // replaces the status while the headers are not sent.

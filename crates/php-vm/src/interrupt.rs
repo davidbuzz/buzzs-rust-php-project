@@ -50,7 +50,8 @@
 //! the call-boundary poll `Vm::check_interrupt`.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use php_runtime::Value;
@@ -258,10 +259,9 @@ fn last_execution_on_thread() {
     SAFE_POINT.thread_left();
 }
 
-/// Set by the timer thread when `max_execution_time` elapsed.
+/// Set by the timer thread when `max_execution_time` elapsed
+/// (`EG(timed_out)`).
 static TIMED_OUT: AtomicBool = AtomicBool::new(false);
-/// Generation of the armed timer (re-arming cancels older timers).
-static TIMER_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Asks the executor to run the interrupt handlers at its next safe point
 /// (`zend_atomic_bool_store(&EG(vm_interrupt), true)`). Safe to call from
@@ -300,52 +300,189 @@ pub struct UserTick {
     pub(crate) calling: bool,
 }
 
-/// `(Re)arms` the execution-time limit: after `seconds` (0 = none) the
+/// Nanoseconds per second.
+const NS: i64 = 1_000_000_000;
+
+/// The execution timer (`zend_set_timeout()`): armed by the executing
+/// thread, checked by the process's watchdog thread ([`watchdog`]).
+///
+/// Like php-src's `ITIMER_PROF` timer on Linux it counts the process's CPU
+/// time, so a script blocked in `sleep()` or on I/O does not time out.
+struct TimerCells {
+    /// The process CPU time, in nanoseconds, at which the timer expires;
+    /// 0 when disarmed.
+    deadline: AtomicI64,
+    /// `EG(hard_timeout)`: each expiry re-arms the timer for that many
+    /// seconds (0: it disarms).
+    hard: AtomicI64,
+    /// `EG(timeout_seconds)` of the armed timer, for the hard timeout's
+    /// message.
+    secs: AtomicI64,
+}
+
+impl TimerCells {
+    const fn new() -> Self {
+        Self {
+            deadline: AtomicI64::new(0),
+            hard: AtomicI64::new(0),
+            secs: AtomicI64::new(0),
+        }
+    }
+}
+
+static TIMER: TimerCells = TimerCells::new();
+
+/// This process's watchdog thread: the process id it runs in (threads do
+/// not survive `fork()`, so a forked child starts its own) and its handle.
+static WATCHDOG: Mutex<Option<(u32, std::thread::Thread)>> = Mutex::new(None);
+
+/// `(Re)arms` the execution-time limit (`zend_unset_timeout()` then
+/// `zend_set_timeout()`): after `seconds` of CPU time (0 = none) the
 /// executor raises "Maximum execution time of N seconds exceeded".
 ///
 /// `hard` is `hard_timeout`: like `zend_timeout_handler`, each expiry
 /// re-arms the timer for that many seconds, so code that still runs after
-/// the timeout fatal (shutdown functions, destructors) times out again.
-/// php-src kills the process (exit 124) when that second expiry finds the
-/// first one still unhandled; this timer counts wall-clock time rather than
-/// `ITIMER_PROF` CPU time (a blocking builtin is not burning CPU), so it
-/// stops instead.
+/// the timeout fatal (shutdown functions, destructors) times out again,
+/// and an expiry that finds the previous one still unhandled (the executor
+/// is stuck in native code) ends the process ([`hard_timeout_exit`]).
 pub(crate) fn arm_timer(seconds: i64, hard: i64) {
-    let gen = TIMER_GEN.fetch_add(1, Ordering::AcqRel) + 1;
     TIMED_OUT.store(false, Ordering::Release);
-    let Ok(secs) = u64::try_from(seconds) else {
+    // `zend_set_timeout_ex()`: an out-of-range limit sets no timer.
+    if seconds <= 0 || seconds > 999_999_999 {
+        TIMER.deadline.store(0, Ordering::Release);
+        return;
+    }
+    let Some(now) = process_cpu_ns() else {
         return;
     };
-    if secs == 0 {
-        return;
-    }
-    let hard = u64::try_from(hard).unwrap_or(0);
-    let _ = std::thread::Builder::new()
-        .name("php-timeout".into())
-        .spawn(move || {
-            let mut wait = secs;
-            loop {
-                std::thread::sleep(Duration::from_secs(wait));
-                match timer_expired(&TIMER_GEN, &TIMED_OUT, gen, hard) {
-                    Some(next) => wait = next,
-                    None => return,
-                }
-            }
-        });
+    TIMER.secs.store(seconds, Ordering::Relaxed);
+    TIMER.hard.store(hard.max(0), Ordering::Relaxed);
+    // Release: the watchdog that sees the deadline sees the two above.
+    let deadline = now.saturating_add(seconds.saturating_mul(NS)).max(1);
+    TIMER.deadline.store(deadline, Ordering::Release);
+    wake_watchdog();
 }
 
-/// One expiry of the timer armed as generation `gen`
-/// (`zend_timeout_handler`): flags the timeout and requests an interrupt
-/// unless the timer was re-armed since or the previous timeout is still
-/// pending. Returns the seconds until the next expiry (`hard_timeout`), or
-/// `None` when the timer thread should stop.
-fn timer_expired(current: &AtomicU64, timed_out: &AtomicBool, gen: u64, hard: u64) -> Option<u64> {
-    if current.load(Ordering::Acquire) != gen || timed_out.load(Ordering::Acquire) {
-        return None;
+/// Starts this process's watchdog thread, or wakes it to read a new
+/// deadline.
+fn wake_watchdog() {
+    let pid = std::process::id();
+    let mut w = WATCHDOG.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((p, t)) = w.as_ref() {
+        if *p == pid {
+            t.unpark();
+            return;
+        }
+    }
+    if let Ok(h) = std::thread::Builder::new()
+        .name("php-timeout".into())
+        .spawn(watchdog)
+    {
+        *w = Some((pid, h.thread().clone()));
+    }
+}
+
+/// The watchdog thread: sleeps until the armed deadline and performs each
+/// expiry ([`timer_tick`]).
+fn watchdog() {
+    loop {
+        let Some(now) = process_cpu_ns() else {
+            std::thread::park();
+            continue;
+        };
+        match timer_tick(&TIMER, &TIMED_OUT, now) {
+            Tick::Idle => std::thread::park(),
+            // CPU time runs no faster than the clock while one thread is
+            // busy: waking after the CPU time left is never late for it,
+            // and an early wake checks again.
+            Tick::Wait(ns) => {
+                std::thread::park_timeout(Duration::from_nanos(u64::try_from(ns).unwrap_or(0)));
+            }
+            Tick::Fired => request_interrupt(),
+            Tick::Kill { secs, hard } => hard_timeout_exit(secs, hard),
+        }
+    }
+}
+
+/// What the watchdog found at one check of the timer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tick {
+    /// Disarmed: wait to be re-armed.
+    Idle,
+    /// Not expired: check again in that many nanoseconds.
+    Wait(i64),
+    /// Expired: the timeout is flagged for the executor.
+    Fired,
+    /// Expired while the previous expiry is still unhandled: the hard
+    /// timeout.
+    Kill { secs: i64, hard: i64 },
+}
+
+/// One check of the timer at process CPU time `now`; when it expired,
+/// `zend_timeout_handler()`: re-arms it for `hard_timeout` (or disarms it)
+/// and flags the timeout, or reports the hard timeout when the previous
+/// expiry is still flagged.
+fn timer_tick(t: &TimerCells, timed_out: &AtomicBool, now: i64) -> Tick {
+    let deadline = t.deadline.load(Ordering::Acquire);
+    if deadline == 0 {
+        return Tick::Idle;
+    }
+    if now < deadline {
+        return Tick::Wait(deadline - now);
+    }
+    let hard = t.hard.load(Ordering::Relaxed);
+    let next = if hard > 0 {
+        now.saturating_add(hard.saturating_mul(NS)).max(1)
+    } else {
+        0
+    };
+    // A re-arm since the load wins: check its deadline instead.
+    if t.deadline
+        .compare_exchange(deadline, next, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Tick::Wait(0);
+    }
+    if timed_out.load(Ordering::Acquire) {
+        return Tick::Kill {
+            secs: t.secs.load(Ordering::Relaxed),
+            hard,
+        };
     }
     timed_out.store(true, Ordering::Release);
-    request_interrupt();
-    (hard > 0).then_some(hard)
+    Tick::Fired
+}
+
+/// The hard timeout (`zend_timeout_handler()` finding `EG(timed_out)` still
+/// set): writes the "(terminated)" fatal to standard error and ends the
+/// process with status 124 at once. php-src reads the executing file and
+/// line from the stuck thread; this thread cannot read the executor's
+/// state, so it reports them as php-src does when nothing executes.
+fn hard_timeout_exit(secs: i64, hard: i64) -> ! {
+    let msg = format!(
+        "\nFatal error: Maximum execution time of {secs}+{hard} seconds exceeded (terminated) in Unknown on line 0\n"
+    );
+    // SAFETY: write(2) reads `msg.len()` bytes from the live buffer `msg`;
+    // a short or failed write is ignored, as `zend_quiet_write()` does.
+    // Writing to descriptor 2 directly takes no lock the stuck thread
+    // might hold (`std::io::stderr()` would).
+    let _ = unsafe { libc::write(2, msg.as_ptr().cast(), msg.len()) };
+    // SAFETY: _exit(2) ends the process without running exit handlers or
+    // destructors, which could wait for locks the stuck thread holds; it
+    // is what `zend_timeout_handler()` calls.
+    unsafe { libc::_exit(124) }
+}
+
+/// The CPU time of the whole process in nanoseconds (what `ITIMER_PROF`
+/// counts).
+fn process_cpu_ns() -> Option<i64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime writes only into the timespec we own.
+    let r = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &raw mut ts) };
+    (r == 0).then(|| ts.tv_sec.saturating_mul(NS).saturating_add(ts.tv_nsec))
 }
 
 impl Vm {
@@ -418,6 +555,29 @@ impl Vm {
             i += 1;
         }
         Ok(())
+    }
+
+    /// `php_request_startup()`'s `zend_set_timeout()`: `max_input_time`
+    /// limits the request startup (reading the input) unless it is -1, in
+    /// which case `max_execution_time` covers it; [`Vm::script_timer`]
+    /// then hands over to `max_execution_time` when the script starts.
+    pub fn request_timer(&mut self) {
+        let input = self.ini.get_long("max_input_time");
+        let t = if input == -1 {
+            self.ini.get_long("max_execution_time")
+        } else {
+            input
+        };
+        self.set_time_limit(t);
+    }
+
+    /// `php_execute_script()`: after a `max_input_time` startup phase
+    /// ([`Vm::request_timer`]), the script runs under `max_execution_time`.
+    pub fn script_timer(&mut self) {
+        if self.ini.get_long("max_input_time") != -1 {
+            let t = self.ini.get_long("max_execution_time");
+            self.set_time_limit(t);
+        }
     }
 
     /// `set_time_limit()` / `max_execution_time` (`zend_set_timeout`):
@@ -585,9 +745,10 @@ pub(crate) fn set_time_limit(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult
 #[cfg(test)]
 mod tests {
     use super::{
-        request_interrupt, timer_expired, ExecutionGuard, SafePoint, EXECUTION_DEPTH, INTERRUPT,
+        process_cpu_ns, request_interrupt, timer_tick, ExecutionGuard, SafePoint, Tick, TimerCells,
+        EXECUTION_DEPTH, INTERRUPT, NS,
     };
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn safe_point_flag_is_cleared_only_without_sources() {
@@ -661,23 +822,62 @@ mod tests {
 
     #[test]
     fn timer_rearms_for_hard_timeout_after_a_handled_timeout() {
-        let gen = AtomicU64::new(7);
+        let t = TimerCells::new();
         let timed_out = AtomicBool::new(false);
+        let arm = |deadline: i64, hard: i64| {
+            t.secs.store(1, Ordering::Relaxed);
+            t.hard.store(hard, Ordering::Relaxed);
+            t.deadline.store(deadline, Ordering::Release);
+        };
+        // Disarmed: nothing to wait for.
+        assert_eq!(timer_tick(&t, &timed_out, 5), Tick::Idle);
+        arm(10 * NS, 2);
+        // Not expired: wait for the CPU time left.
+        assert_eq!(timer_tick(&t, &timed_out, 4 * NS), Tick::Wait(6 * NS));
         // First expiry: flagged, re-armed for hard_timeout.
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
+        assert_eq!(timer_tick(&t, &timed_out, 10 * NS), Tick::Fired);
         assert!(timed_out.load(Ordering::Acquire));
-        // Not handled yet: the timer stops (php-src would hard-kill).
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), None);
-        // Handled (zend_timeout clears the flag): it fires again.
+        assert_eq!(t.deadline.load(Ordering::Acquire), 12 * NS);
+        // Handled (zend_timeout clears the flag): it fires again, so a
+        // shutdown function times out too (tests/lang/045).
         timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
-        // hard_timeout=0: one expiry only.
+        assert_eq!(timer_tick(&t, &timed_out, 12 * NS), Tick::Fired);
+        // Not handled: the hard timeout.
+        assert_eq!(
+            timer_tick(&t, &timed_out, 14 * NS),
+            Tick::Kill { secs: 1, hard: 2 }
+        );
+        // hard_timeout=0: one expiry, then disarmed.
         timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 0), None);
-        assert!(timed_out.load(Ordering::Acquire));
-        // Re-armed since (set_time_limit): the old timer does nothing.
-        timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 6, 2), None);
+        arm(20 * NS, 0);
+        assert_eq!(timer_tick(&t, &timed_out, 21 * NS), Tick::Fired);
+        assert_eq!(timer_tick(&t, &timed_out, 99 * NS), Tick::Idle);
+    }
+
+    #[test]
+    fn a_rearm_during_the_check_wins() {
+        let t = TimerCells::new();
+        let timed_out = AtomicBool::new(false);
+        t.deadline.store(10 * NS, Ordering::Release);
+        // The check read 10 s; set_time_limit() moved it before the swap.
+        let seen = t.deadline.load(Ordering::Acquire);
+        t.deadline.store(50 * NS, Ordering::Release);
+        assert!(t
+            .deadline
+            .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err());
+        assert_eq!(timer_tick(&t, &timed_out, 11 * NS), Tick::Wait(39 * NS));
         assert!(!timed_out.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn process_cpu_time_advances() {
+        let a = process_cpu_ns().expect("cpu clock");
+        let mut x = 0u64;
+        for i in 0..2_000_000u64 {
+            x = std::hint::black_box(x.wrapping_add(i));
+        }
+        let b = process_cpu_ns().expect("cpu clock");
+        assert!(b > a, "{a} -> {b} ({x})");
     }
 }

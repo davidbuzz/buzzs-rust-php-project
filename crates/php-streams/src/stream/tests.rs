@@ -229,3 +229,22 @@ fn chunk_size_option() {
     assert_eq!(m.set_chunk_size(100), 8192);
     assert_eq!(m.set_chunk_size(5), 100);
 }
+
+#[test]
+fn streams_take_a_resource_number_when_allocated() {
+    thread_local! {
+        static NEXT: std::cell::Cell<i64> = const { std::cell::Cell::new(7) };
+    }
+    fn next() -> i64 {
+        NEXT.with(|n| n.replace(n.get() + 1))
+    }
+    assert_eq!(memory_create(TempMode::Default).resource_number(), None);
+    set_resource_number_hook(Some(next));
+    let a = memory_create(TempMode::Default);
+    let b = memory_create(TempMode::Default);
+    set_resource_number_hook(None);
+    assert_eq!(
+        (a.resource_number(), b.resource_number()),
+        (Some(7), Some(8))
+    );
+}

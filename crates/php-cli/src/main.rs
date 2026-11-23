@@ -775,18 +775,11 @@ fn release(vm: Vm, how: Release) {
     }
 }
 
-/// `php_request_startup()` (what `Vm::run_script` does before running).
+/// `php_request_startup()`: output buffering, `zend_activate()`, the
+/// execution timer (`max_execution_time` from `-d` or php.ini), RINIT and
+/// memory_limit accounting.
 fn request_startup(vm: &mut Vm) {
-    let ob = vm.ini_long("output_buffering");
-    let flush = vm.ini_bool("implicit_flush");
-    php_support::output::request_startup(vm, None, ob, flush);
-    for hook in vm.startup_hooks.clone() {
-        hook(vm);
-    }
-    let limit = u64::try_from(vm.ini_long("memory_limit")).unwrap_or(u64::MAX);
-    if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
-        php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
-    }
+    vm.request_startup();
 }
 
 /// Runs PHP code for an informational mode (`-i`, `-m`, `--r*`); `args`
@@ -1190,6 +1183,7 @@ fn resolve_path(vm: &Vm, name: &[u8]) -> Option<Vec<u8>> {
 /// `auto_append_file`, and request shutdown.
 fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
     request_startup(vm);
+    vm.script_timer();
     let extra = |vm: &mut Vm, directive: &str| -> Result<(), Throw> {
         let name = vm.ini_string(directive).unwrap_or_default();
         if name.is_empty() {

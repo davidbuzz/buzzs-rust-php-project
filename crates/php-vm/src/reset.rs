@@ -189,6 +189,9 @@ impl Vm {
         crate::interrupt::clear_interrupt();
         crate::gc::request_startup(self.ini.get_bool("zend.enable_gc"));
         crate::object::set_destructors_enabled(true);
+        // `zend_init_rsrc_list()`: every request numbers its resources from
+        // `Resource id #1` (the request's streams were closed at shutdown).
+        php_runtime::Resource::set_next_handle(1);
 
         // 12. Execution state.
         self.frames.clear();
