@@ -647,11 +647,16 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
     };
     let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
     let same = {
-        let lhs = operand_simple(f, a)?;
-        let rhs = operand_simple(f, b)?;
+        let lhs = cmp_operand(f, a)?;
+        let rhs = cmp_operand(f, b)?;
         match (lhs, rhs) {
             (Value::Null, Value::Null) => true,
             (Value::Bool(p), Value::Bool(q)) => p == q,
+            // `$x !== []`: two arrays one of which is empty are equal,
+            // and identical, exactly when both are.
+            (Value::Array(x), Value::Array(y)) if x.is_empty() || y.is_empty() => {
+                x.is_empty() && y.is_empty()
+            }
             (Value::Str(s), Value::Str(t)) => {
                 let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
                 if !eq && !identity {
@@ -667,9 +672,36 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
             }
         }
     };
-    release_str_tmp_in(f, a);
-    release_str_tmp_in(f, b);
+    release_cmp_tmp(f, a);
+    release_cmp_tmp(f, b);
     Some(same != negate)
+}
+
+/// [`operand_simple`] for [`cmp_simple_in`], which also takes a consumed
+/// temporary holding an array whose release frees nothing it holds: one
+/// shared with another holder (a property or variable just read) or an
+/// empty one ([`release_cmp_tmp`] releases it).
+#[inline]
+fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
+    if let Operand::Tmp(t) = op {
+        if let Some(v @ Value::Array(a)) = f.tmps.get(t as usize) {
+            return (a.refcount() > 1 || a.is_empty()).then_some(v);
+        }
+    }
+    operand_simple(f, op)
+}
+
+/// Releases what a consumed temporary operand of [`cmp_simple_in`] holds:
+/// a string ([`release_str_tmp_in`]) or an array [`cmp_operand`] took.
+#[inline]
+fn release_cmp_tmp(f: &mut Frame, op: Operand) {
+    if let Operand::Tmp(t) = op {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if matches!(slot, Value::Str(_) | Value::Array(_)) {
+                *slot = Value::Null;
+            }
+        }
+    }
 }
 
 impl Vm {
