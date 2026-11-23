@@ -664,10 +664,9 @@ pub(super) fn enter(
     if uf.call_shape() == CallShape::TYPED {
         for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
             if let Some(ty) = &p.ty {
-                if !ty.is_mixed()
-                    && !slot
-                        .get()
-                        .is_some_and(|v| accepts_without_coercion(ty.mask, v))
+                if !slot
+                    .get()
+                    .is_some_and(|v| crate::call::param_accepts(ty, v))
                 {
                     return Err(prep);
                 }

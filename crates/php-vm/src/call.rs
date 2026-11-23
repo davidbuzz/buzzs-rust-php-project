@@ -3006,12 +3006,9 @@ impl Vm {
                 .enumerate()
                 .all(|(i, p)| match &p.ty {
                     None => true,
-                    Some(ty) => {
-                        ty.is_mixed()
-                            || inline_args[i]
-                                .as_ref()
-                                .map_or(false, |v| accepts_without_coercion(ty.mask, v))
-                    }
+                    Some(ty) => inline_args[i]
+                        .as_ref()
+                        .is_some_and(|v| param_accepts(ty, v)),
                 })
         {
             if args.capacity() > 0 {
@@ -4868,11 +4865,7 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         // out-of-line `try_fold` call per check.
         for (p, arg) in uf.params.iter().zip(&call.inline_args[..n]) {
             if let Some(ty) = &p.ty {
-                if !ty.is_mixed()
-                    && !arg
-                        .as_ref()
-                        .is_some_and(|v| accepts_without_coercion(ty.mask, v))
-                {
+                if !arg.as_ref().is_some_and(|v| param_accepts(ty, v)) {
                     return false;
                 }
             }
@@ -5315,6 +5308,32 @@ fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> R
 /// Finds `::` in a callable string.
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
+}
+
+/// Whether a user function's parameter of type `ty` takes `v` as it is
+/// (`zend_check_type` without coercion): [`accepts_without_coercion`], or
+/// an object of a class the type names (the class, a parent or an
+/// interface, by name: nothing is loaded), for a union of class names
+/// without `self`/`parent` and without intersections. The plain call paths
+/// take only such arguments; a class-typed parameter (`Request $r`) sent
+/// every call of its function the generic way.
+#[inline]
+pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
+    if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
+        return true;
+    }
+    match v {
+        Value::Object(o) if ty.intersections.is_empty() => {
+            let class = object::class_of(o);
+            // The names lower-cased as the class table keys them
+            // (`TypeDecl::classes` keeps them as written).
+            ty.class_refs().classes.iter().any(|c| match c {
+                crate::types::ClassRef::Named(lc) => class.instance_of_name(lc.as_bytes()),
+                crate::types::ClassRef::Scope | crate::types::ClassRef::Parent => false,
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
