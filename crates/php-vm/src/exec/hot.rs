@@ -50,7 +50,9 @@ use super::spec::{
     num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, CastKind, ClassSpec, IncDecKind, Op, Operand, UnKind};
+use crate::opcode::{
+    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, Op, Operand, UnKind,
+};
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
 
@@ -134,6 +136,11 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFetch { .. }
+            | Op::FeReset {
+                kind: ForeachKind::Value,
+                ..
+            }
+            | Op::FeFree { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
                 ..
@@ -849,9 +856,93 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             Some(false) => ip = end as usize,
             None => return DECLINED,
         },
+        // `FE_RESET_R` of an array, and `FE_FREE` of its iterator.
+        Op::FeReset {
+            subject,
+            kind: ForeachKind::Value,
+            iter,
+            end,
+            ..
+        } => match fe_reset_array_in(f, lits, subject, iter) {
+            Some(true) => {}
+            Some(false) => ip = end as usize,
+            None => return DECLINED,
+        },
+        Op::FeFree { iter } => {
+            if !fe_free_array_in(f, iter) {
+                return DECLINED;
+            }
+        }
         _ => return DECLINED,
     }
     ip
+}
+
+/// `FE_RESET_R` (`foreach` by value) of an array, read as `Vm::read`
+/// reads the subject (a defined compiled variable, behind a reference the
+/// referenced array, a literal, or a temporary, consumed): iterator `iter`
+/// gets a handle of the array (`true`), or, for an empty array, nothing
+/// and the loop is skipped (`false`). `None`, having changed nothing, for
+/// anything else (objects, the warning of a non-iterable value or of an
+/// undefined variable, an occupied iterator slot: the generic op).
+#[inline]
+fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32) -> Option<bool> {
+    if f.iters.get(iter as usize)?.is_some() {
+        return None;
+    }
+    let arr = match subject {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+                Value::Array(a) => a.clone(),
+                Value::Reference(r) => match &*r.try_borrow()? {
+                    Value::Array(a) => a.clone(),
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        Operand::Lit(i) => match lits.get(i as usize)? {
+            Value::Array(a) => a.clone(),
+            _ => return None,
+        },
+        Operand::Tmp(t) => {
+            let slot = f.tmps.get_mut(t as usize)?;
+            if !matches!(slot, Value::Array(_)) {
+                return None;
+            }
+            let Value::Array(a) = std::mem::take(slot) else {
+                return None;
+            };
+            a
+        }
+        _ => return None,
+    };
+    if arr.is_empty() {
+        // The handle goes (a temporary's array is released with it).
+        drop(arr);
+        return Some(false);
+    }
+    if let Some(slot) = f.iters.get_mut(iter as usize) {
+        *slot = Some(crate::vm::ForeachIter::Array { arr, pos: 0 });
+    }
+    Some(true)
+}
+
+/// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`
+/// releases nothing else for it); `false` for any other iterator.
+#[inline]
+fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            drop(slot.take());
+            true
+        }
+        None => true,
+        Some(_) => false,
+    }
 }
 
 /// [`concat_in`] (`ZEND_CONCAT` of strings and integers, for the `Bin`
