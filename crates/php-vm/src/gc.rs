@@ -683,8 +683,11 @@ fn released_array(a: &php_runtime::ZArray) {
     if !with_state(|s| !s.protected).unwrap_or(false) {
         return;
     }
-    let mut pending: Vec<&php_runtime::ZArray> = vec![a];
-    while let Some(arr) = pending.pop() {
+    // The array itself is walked first without a work list: `vec![a]`
+    // allocated one for every array released (most hold no nested array).
+    let mut pending: Vec<&php_runtime::ZArray> = Vec::new();
+    let mut next = Some(a);
+    while let Some(arr) = next.take().or_else(|| pending.pop()) {
         for v in arr.values() {
             match v {
                 Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
