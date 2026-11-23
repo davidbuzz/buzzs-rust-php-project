@@ -164,7 +164,8 @@ pub(super) fn operand_simple(f: &Frame, op: Operand) -> Option<&Value> {
 }
 
 /// `zend_is_true` of `v` when it needs neither a diagnostic nor a copy:
-/// null, bool, int, a non-NaN float, a string or an array. References,
+/// null, bool, int, a non-NaN float, a string, an array or an object
+/// whose class has no cast handler ([`object_truth`]). References, other
 /// objects and resources give `None`.
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot JmpZ/JmpNz truth check in the dispatch pre-match
@@ -176,8 +177,21 @@ pub(super) fn plain_truth(v: &Value) -> Option<bool> {
         Value::Float(x) if !x.is_nan() => Some(*x != 0.0),
         Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
         Value::Array(a) => Some(!a.is_empty()),
+        Value::Object(o) => object_truth(o),
         _ => None,
     }
+}
+
+/// `zend_is_true` of an object: `true` unless its class casts objects
+/// itself (`cast_object`, as `SimpleXML` and GMP do: `None`, the generic
+/// path asks it). Out of line: the inlined truth tests stay small.
+#[inline(never)]
+fn object_truth(o: &php_runtime::Obj) -> Option<bool> {
+    crate::object::class_of(o)
+        .hooks
+        .as_ref()
+        .is_none_or(|h| h.cast.is_none())
+        .then_some(true)
 }
 
 /// [`plain_truth`] of a variable slot (`None` = undefined: generic path).
