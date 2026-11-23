@@ -657,12 +657,16 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
             (Value::Array(x), Value::Array(y)) if x.is_empty() || y.is_empty() => {
                 x.is_empty() && y.is_empty()
             }
+            // `===` compares the bytes; `==` is the generic comparison's
+            // `zendi_smart_streq` (numeric strings compare as numbers),
+            // which needs no diagnostic.
             (Value::Str(s), Value::Str(t)) => {
-                let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
-                if !eq && !identity {
-                    return None;
-                }
-                eq
+                ZStr::ptr_eq(s, t)
+                    || if identity {
+                        s.as_bytes() == t.as_bytes()
+                    } else {
+                        php_runtime::ops::smart_streq(s.as_bytes(), t.as_bytes())
+                    }
             }
             (lhs, rhs) => {
                 if !identity || std::mem::discriminant(lhs) == std::mem::discriminant(rhs) {
@@ -715,11 +719,10 @@ impl Vm {
     }
 
     /// `==`, `!=`, `===`, `!==` on operands that are not both numbers,
-    /// without conversions (`zend_is_identical`, the byte-equal case of
-    /// `zend_fast_equal_strings`): same-type null, bool and string pairs,
-    /// and `===`/`!==` of two different types (false/true). Byte-unequal
-    /// strings under `==`/`!=` may still be numerically equal and go
-    /// generic, as do arrays, objects, resources and references (also when
+    /// without conversions (`zend_is_identical`, `zend_fast_equal_strings`):
+    /// same-type null, bool and string pairs, two arrays one of which is
+    /// empty, and `===`/`!==` of two different types (false/true). Other
+    /// arrays, objects, resources and references go generic (also when
     /// only one operand is one of those and it sits in a consumed
     /// temporary, see [`operand_simple`]). A consumed temporary holding a
     /// string is released, as the generic read would (`FREE_OP1`/`FREE_OP2`).
