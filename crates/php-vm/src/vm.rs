@@ -1590,9 +1590,22 @@ impl Frame {
             || self.statics.is_some()
             || !self.tmps.is_empty()
             || !self.cvs.is_empty()
-            || !Rc::ptr_eq(&self.vars, empty_vars)
         {
             return false;
+        }
+        // The variable store: the shared empty one, or the frame's own
+        // kept from a pooled user frame (emptied, as
+        // `clear_builtin_for_reuse` leaves it), which the generic release
+        // would only empty again.
+        if !Rc::ptr_eq(&self.vars, empty_vars) {
+            let Some(vs) = Rc::get_mut(&mut self.vars).map(RefCell::get_mut) else {
+                return false;
+            };
+            if !vs.slots.is_empty() {
+                return false;
+            }
+            vs.names.clear();
+            vs.index = None;
         }
         clear_arg_buffer(&mut self.args);
         clear_opt(&mut self.func);
