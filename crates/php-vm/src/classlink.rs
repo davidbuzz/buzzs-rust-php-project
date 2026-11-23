@@ -3521,6 +3521,7 @@ fn build_class(
         static_map,
         methods,
         method_order,
+        reflection_methods: std::cell::OnceCell::new(),
         magic,
         defaults: RefCell::new(None),
         backing: decl.backing,

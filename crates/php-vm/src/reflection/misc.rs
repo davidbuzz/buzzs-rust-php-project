@@ -1471,6 +1471,7 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             static_map: NameMap::default(),
             methods,
             method_order: order,
+            reflection_methods: std::cell::OnceCell::new(),
             magic,
             defaults: RefCell::new(None),
             backing: Some(mask::STRING),

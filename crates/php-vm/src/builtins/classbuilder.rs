@@ -524,6 +524,7 @@ impl ClassBuilder {
                 static_map,
                 methods,
                 method_order: order,
+                reflection_methods: std::cell::OnceCell::new(),
                 magic,
                 defaults: RefCell::new(None),
                 backing: self.enum_backing.mask(),

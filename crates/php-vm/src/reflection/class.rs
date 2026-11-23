@@ -423,7 +423,7 @@ fn rc_get_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, obj) = this_class_obj(vm, a)?;
     let filter = filter_arg(a, 0x7f);
     let mut out = Vec::new();
-    for m in order::methods(&c) {
+    for m in order::methods(&c).iter() {
         if m.visibility() == flags::PRIVATE && !Rc::ptr_eq(&m.scope(), &c) {
             continue;
         }

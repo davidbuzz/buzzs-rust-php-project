@@ -452,6 +452,12 @@ pub struct Class {
     pub methods: NameMap<Rc<Method>>,
     /// Method order (lower-case names) for `get_class_methods`.
     pub method_order: Vec<ZStr>,
+    /// The methods in php-src's `function_table` order, for reflection
+    /// (`reflection::order::methods`), worked out on first use: the
+    /// methods of a class never change once it is linked, and the order
+    /// was otherwise worked out again, the parents' included, for each
+    /// `ReflectionClass::getMethods()`.
+    pub reflection_methods: std::cell::OnceCell<Rc<[Rc<Method>]>>,
     /// Magic methods.
     pub magic: Magic,
     /// Default slot values, resolved on first instantiation.
