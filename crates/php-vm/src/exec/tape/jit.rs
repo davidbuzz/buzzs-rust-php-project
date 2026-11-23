@@ -1034,7 +1034,10 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
                 return None;
             }
             let func = callee_at(frame, init)?;
+            // (Not one with a `foreach`: run inline it has no frame of its
+            // own, and its iterators would be the loop's frame's.)
             let plain = matches!(func.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
+                && func.code.num_iters == 0
                 && argc <= func.params.len()
                 && argc >= func.required as usize
                 // (A closure's only by a variable's call: `plain_closure`.)
@@ -1057,6 +1060,7 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
             callee_at(frame, init).is_some_and(|func| {
                 std::rc::Rc::ptr_eq(&func.code, &frame.code)
                     && func.call_shape() == CallShape::UNTYPED
+                    && func.code.num_iters == 0
                     && argc == func.params.len()
                     && func.flags & (flags::CLOSURE | flags::RETURN_REF) == 0
                     && func.uses.is_empty()
