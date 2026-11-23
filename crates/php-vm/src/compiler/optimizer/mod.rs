@@ -1372,6 +1372,24 @@ mod tests {
         );
     }
 
+    /// Pass 13 keeps an append made in a loop, as php-src's DCE does (an
+    /// append may throw): with it gone, `while (true) { $a[] = 'x'; }`
+    /// became an empty endless loop instead of reaching memory_limit
+    /// (Zend/tests/oom_error_get_last.phpt at the default level).
+    #[test]
+    fn appends_in_a_loop_are_kept() {
+        let unit = compile_src(
+            "<?php function f() { $a = []; while (true) { $a[] = 'x'; } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.cv_names.iter().any(|n| n.as_bytes() == b"a") && code.ops.len() > 1,
+            "the append was removed: {:?}",
+            code.ops
+        );
+    }
+
     /// Pass 9 renumbers the value and key temporaries of `FE_FETCH` with
     /// every other use of them (gh24577, jit/gh12527).
     #[test]

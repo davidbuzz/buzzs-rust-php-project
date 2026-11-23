@@ -1168,6 +1168,17 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             }
         }
     }
+    // The backward jumps, as (target, jump) pairs: an op between the two
+    // runs in a loop.
+    let mut back_edges = Vec::new();
+    for (j, op) in op_array.ops.iter().enumerate() {
+        super::for_each_label_mut(&mut op.clone(), |l| {
+            if (*l as usize) <= j {
+                back_edges.push((*l as usize, j));
+            }
+        });
+    }
+    let in_loop = |at: usize| back_edges.iter().any(|&(t, j)| t <= at && at <= j);
     let dim_ok = |seg: &Seg| match seg {
         Seg::Append => true,
         Seg::Dim(Operand::Lit(l)) => matches!(
@@ -1203,10 +1214,17 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
                 (PlaceBase::Cv(cv), [seg]) => {
                     // An append goes only with a constant value (sccp.c
                     // keeps `ASSIGN_DIM ... NEXT` of a value it does not
-                    // know) and when it cannot throw.
+                    // know), when it cannot throw, and outside a loop.
+                    // `zend_may_throw()` counts every append as throwing
+                    // ("the next element is already occupied"), so dce.c
+                    // keeps it; only SCCP drops one, when it knows the whole
+                    // array, which a loop's phi of the array never is.  A
+                    // loop that only appends then runs into memory_limit, as
+                    // in php-src (`oom_error_get_last`), not forever.
                     let append_ok = !matches!(seg, Seg::Append)
                         || (matches!(val, Operand::Lit(_))
-                            && has_room.get(*cv as usize).copied().unwrap_or(false));
+                            && has_room.get(*cv as usize).copied().unwrap_or(false)
+                            && !in_loop(at));
                     array_only.get(*cv as usize).copied().unwrap_or(false)
                         && dim_ok(seg)
                         && append_ok
