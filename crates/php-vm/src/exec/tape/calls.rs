@@ -247,7 +247,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
                 return None;
             }
             ready_frame(frame, &uf);
-            let limit = uf.params.len().min(MAX_ARGS);
+            let limit = uf.plain_params().min(MAX_ARGS);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
@@ -399,7 +399,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit: uf.plain_params().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len,
@@ -500,7 +500,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     frame.scope = scope;
     frame.called = called_class;
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit: uf.plain_params().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -558,7 +558,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     frame.closure = if d.fake { None } else { Some(o.clone()) };
     drop(internal);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit: uf.plain_params().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -636,7 +636,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     frame.called = Some(cls);
     crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit: uf.plain_params().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -743,7 +743,7 @@ pub(super) fn enter(
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
     };
-    if n < uf.required as usize || n > uf.params.len() {
+    if n < uf.required as usize || n > uf.plain_params() {
         return Err(prep);
     }
     let (callers, pool) = vm.frames.vec.split_at_mut(live);

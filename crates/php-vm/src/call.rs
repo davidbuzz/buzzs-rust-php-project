@@ -4757,15 +4757,16 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
     use crate::func::CallShape;
     let shape = uf.call_shape();
-    // `n <= params.len() <= cv_names.len()` (the shape), so every argument
-    // has its compiled variable.
+    // `n <= plain_params() <= params.len() <= cv_names.len()` (the shape),
+    // so every argument has its compiled variable, and a trailing variadic
+    // parameter gets none (its `RECV_VARIADIC` collects nothing).
     if shape == CallShape::NOT_PLAIN
         || !call.args.is_empty()
         || !call.named.is_empty()
         || call.magic_name.is_some()
         || call.pfa.is_some()
         || n < uf.required as usize
-        || n > uf.params.len()
+        || n > uf.plain_params()
         || n > call.inline_args.len()
     {
         return false;

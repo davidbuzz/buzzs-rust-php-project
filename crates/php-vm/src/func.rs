@@ -150,6 +150,8 @@ pub struct CallShape {
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
     first_ops: [Cell<u32>; FIRST_OPS],
+    /// [`UserFunction::plain_params`]; filled with `kind`.
+    plain_params: Cell<u32>,
 }
 
 /// Passed-argument counts with a precomputed first op ([`CallShape`]):
@@ -161,8 +163,9 @@ impl CallShape {
     /// Not worked out yet.
     const UNKNOWN: u8 = 0;
     /// Deprecated, `#[\NoDiscard]`, body-less or a generator, with static
-    /// variables, foreach or finally slots, a by-reference or variadic
-    /// parameter, or more parameters than compiled variables.
+    /// variables, foreach or finally slots, a by-reference parameter, or
+    /// more parameters than compiled variables. (A trailing variadic
+    /// parameter is plain: [`UserFunction::plain_params`].)
     pub const NOT_PLAIN: u8 = 1;
     /// Plain, and no parameter has a type other than `mixed`.
     pub const UNTYPED: u8 = 2;
@@ -193,6 +196,20 @@ impl UserFunction {
         s
     }
 
+    /// How many arguments a plain call (`Vm::push_simple_ucall`) passes
+    /// at most: one per parameter, but none to a trailing variadic one
+    /// (`...$args`), whose `RECV_VARIADIC` then runs in the callee and
+    /// collects nothing (the frame's arguments are the passed ones, each
+    /// in its parameter's compiled variable). A call with more arguments
+    /// takes the generic path, which keeps the extra ones.
+    /// Read from the call shape: valid once [`UserFunction::call_shape`]
+    /// found a plain declaration (each plain path asks that first).
+    #[inline]
+    pub(crate) fn plain_params(&self) -> usize {
+        debug_assert!(self.call_shape.kind.get() > CallShape::NOT_PLAIN);
+        self.call_shape.plain_params.get() as usize
+    }
+
     /// Where a plain call (`Vm::push_simple_ucall`) of this function with
     /// `n` passed arguments starts: `first_op_after_recv` of its code,
     /// read from the table [`UserFunction::call_shape`] filled for a plain
@@ -216,10 +233,18 @@ impl UserFunction {
             // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
-            || self.params.iter().any(|p| p.variadic || p.by_ref)
+            || self.params.iter().any(|p| p.by_ref)
+            // A variadic parameter only last (as the parser has it): a plain
+            // call passes it nothing ([`UserFunction::plain_params`]).
+            || self.params.iter().rev().skip(1).any(|p| p.variadic)
         {
             return CallShape::NOT_PLAIN;
         }
+        let plain = self.params.len() - usize::from(self.params.last().is_some_and(|p| p.variadic));
+        let Ok(plain) = u32::try_from(plain) else {
+            return CallShape::NOT_PLAIN;
+        };
+        self.call_shape.plain_params.set(plain);
         for (n, slot) in self.call_shape.first_ops.iter().enumerate() {
             slot.set(first_op_after_recv(&self.code, n));
         }
