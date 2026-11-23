@@ -7,7 +7,7 @@
 //! documented next to the type.  The rest of the crate only sees safe Rust.
 
 use core::ffi::c_void;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::ptr::NonNull;
 
 use pcre2_sys as sys;
@@ -308,11 +308,59 @@ impl Drop for MatchContext {
     }
 }
 
-/// Match data (ovector + mark) sized for one pattern.
+thread_local! {
+    /// The match context of the last match that finished, with its limits
+    /// and JIT flag: php-src keeps one (`PCRE_G(mctx)`) instead of making
+    /// one per call.
+    static CONTEXT_POOL: RefCell<Option<(u32, u32, bool, MatchContext)>> =
+        const { RefCell::new(None) };
+    /// The match data of the last match that finished (php-src's
+    /// `PCRE_G(mdata)`), reused by a pattern with as many groups or fewer.
+    static DATA_POOL: RefCell<Option<MatchData>> = const { RefCell::new(None) };
+}
+
+impl MatchContext {
+    /// [`MatchContext::new`], reusing the pooled context when its limits
+    /// and JIT flag are these: a match no longer allocates and frees one.
+    /// A match started while another one runs (from a callback) makes its
+    /// own.
+    pub(crate) fn pooled(match_limit: u32, depth_limit: u32, jit: bool) -> Option<Self> {
+        let hit = CONTEXT_POOL.with(|p| {
+            let mut p = p.try_borrow_mut().ok()?;
+            match p.take() {
+                Some((m, d, j, ctx)) if m == match_limit && d == depth_limit && j == jit => {
+                    Some(ctx)
+                }
+                other => {
+                    *p = other;
+                    None
+                }
+            }
+        });
+        hit.or_else(|| Self::new(match_limit, depth_limit, jit))
+    }
+
+    /// Hands a context made by [`MatchContext::pooled`] back to the pool
+    /// (it is freed when the pool already holds one).
+    pub(crate) fn recycle(self, match_limit: u32, depth_limit: u32, jit: bool) {
+        CONTEXT_POOL.with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                if p.is_none() {
+                    *p = Some((match_limit, depth_limit, jit, self));
+                }
+            }
+        });
+    }
+}
+
+/// Match data (ovector + mark) for one pattern: `pairs` pairs of offsets
+/// are the pattern's (its groups and the whole match); the block may hold
+/// more (`capacity`) when it was made for a pattern with more groups.
 #[derive(Debug)]
 pub(crate) struct MatchData {
     ptr: NonNull<sys::pcre2_match_data_8>,
     pairs: usize,
+    capacity: usize,
 }
 
 impl MatchData {
@@ -324,7 +372,44 @@ impl MatchData {
         })?;
         // SAFETY: ptr is valid match data.
         let pairs = unsafe { sys::pcre2_get_ovector_count_8(ptr.as_ptr()) } as usize;
-        Some(Self { ptr, pairs })
+        Some(Self {
+            ptr,
+            pairs,
+            capacity: pairs,
+        })
+    }
+
+    /// [`MatchData::for_code`] for a pattern with `pairs` pairs (its
+    /// capture count plus one), reusing the pooled block when it has room
+    /// for them: `pcre2_match()` fills as many pairs as the pattern has and
+    /// only those are read.
+    pub(crate) fn pooled(code: &Code, pairs: usize) -> Option<Self> {
+        let hit = DATA_POOL.with(|p| {
+            let mut p = p.try_borrow_mut().ok()?;
+            match p.take() {
+                Some(mut md) if md.capacity >= pairs => {
+                    md.pairs = pairs;
+                    Some(md)
+                }
+                other => {
+                    *p = other;
+                    None
+                }
+            }
+        });
+        hit.or_else(|| Self::for_code(code))
+    }
+
+    /// Hands match data back to the pool, keeping the larger block when
+    /// the pool already holds one.
+    pub(crate) fn recycle(self) {
+        DATA_POOL.with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                if p.as_ref().is_none_or(|old| old.capacity < self.capacity) {
+                    *p = Some(self);
+                }
+            }
+        });
     }
 
     /// Runs `pcre2_match()` (which itself dispatches to JIT code when the
