@@ -5182,6 +5182,25 @@ pub(super) fn emit(mut b: FunctionBuilder<'_>, lp: &Loop, none_tag: u8) -> Optio
         b.declare_var(float, types::F64);
         vars.insert(*slot, (int, float));
     }
+    // The slots the loop only meets written on the way (a temporary an
+    // earlier instruction of the round wrote, the one that wrote it on
+    // another path: `$c ? 'x' : $n`), not in its entry: theirs too. Like
+    // the entry's, each is defined where the loop writes or loads it.
+    let mut n = 2 * (lp.entry.len() + ARG_VARS + lp.virtuals.len());
+    for (_, st) in lp.plans.values() {
+        for slot in st.keys() {
+            if slot.at >= 0 && !vars.contains_key(slot) {
+                let (int, float) = (
+                    Variable::from_u32(u32::try_from(n).ok()?),
+                    Variable::from_u32(u32::try_from(n + 1).ok()?),
+                );
+                b.declare_var(int, types::I64);
+                b.declare_var(float, types::F64);
+                vars.insert(*slot, (int, float));
+                n += 2;
+            }
+        }
+    }
     let flag = b
         .ins()
         .load(types::I64, mem().with_readonly(), record, rec_at(REC_FLAG)?);

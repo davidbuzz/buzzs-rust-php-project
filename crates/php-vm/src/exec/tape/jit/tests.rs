@@ -1913,3 +1913,18 @@ var_dump(f(100), f(20));
 "#,
     );
 }
+
+#[test]
+fn a_temporary_written_on_one_path_is_a_variable_on_the_other() {
+    // `$c` is copied into the ternary's temporary on one path, the string
+    // is written there on the other; the copy's temporary is in no
+    // entry state, only in the states the round reaches it with.
+    both(
+        r#"<?php
+function f($q, $s) { $a = 1; $c = 1; $f = 0; $g = 0; $j = 0;
+    foreach (['x' => 1.5, 'y' => -2.5] as $fk => $fv) { $b = 64; for ($i = 0; $i <= 27; ++$i) { $f += 3; $g = ($j < $b ? 'x' : $c); $c = count($q) + strlen($s); ++$a; } $j += 40; }
+    return [$a, $c, $f, $g, $j]; }
+for ($r = 0; $r < 3; $r++) { var_dump(f([1, 2], "abc")); }
+"#,
+    );
+}
