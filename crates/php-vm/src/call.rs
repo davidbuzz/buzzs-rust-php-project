@@ -5038,6 +5038,31 @@ fn push_call_in_place(calls: &mut Vec<PendingCall>, make: impl FnOnce() -> Pendi
     calls.extend(std::iter::once_with(make));
 }
 
+/// `ZEND_INIT_NS_FCALL_BY_NAME` on the running frame `frame` (an
+/// unqualified function called from namespaced code) when the run-time
+/// cache resolves it, looked up as [`Vm::op_init_fcall`] looks it up: the
+/// call site's own slot `site` (its global fallback, cached there), else
+/// the namespaced name's. The pending call is not a direct one. Returns
+/// `false`, having changed nothing, on a miss (the generic op resolves
+/// the name and fills the cache). Frame-local, like [`init_fcall_in`], so
+/// the tape starts such calls without leaving.
+pub(crate) fn init_ns_fcall_in(frame: &mut Frame, name: u32, site: usize) -> bool {
+    let cached = {
+        let cache = frame.code.fcall_cache.borrow();
+        match cache.get(site).and_then(Option::as_ref) {
+            Some(entry) => entry.get(),
+            None => cache
+                .get(name as usize)
+                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get)),
+        }
+    };
+    let Some(func) = cached else {
+        return false;
+    };
+    push_call_in_place(&mut frame.calls, move || PendingCall::new(func));
+    true
+}
+
 /// [`Vm::init_fcall_fast`] on the running frame `frame`: `ZEND_INIT_FCALL`
 /// of a call site without a global fallback whose function is in the
 /// run-time cache, the pending call built in place in `frame.calls`.

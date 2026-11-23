@@ -118,7 +118,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::TypeCheck { .. }
             | Op::Isset { .. }
             | Op::Empty { .. }
-            | Op::InitFCall { fallback: None, .. }
+            | Op::InitFCall { .. }
             | Op::Send { .. }
             | Op::Free(Operand::Tmp(_))
             | Op::FetchDimCv { .. }
@@ -716,6 +716,17 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             ..
         } => {
             if !crate::call::init_fcall_in(f, name) {
+                return DECLINED;
+            }
+        }
+        // `ZEND_INIT_NS_FCALL_BY_NAME`: the site's cache slot is past the
+        // literals, at the op's `ip` (`Vm::fallback_site_slot`).
+        Op::InitFCall {
+            name,
+            fallback: Some(_),
+            ..
+        } => {
+            if !crate::call::init_ns_fcall_in(f, name, lits.len() + at + 1) {
                 return DECLINED;
             }
         }
