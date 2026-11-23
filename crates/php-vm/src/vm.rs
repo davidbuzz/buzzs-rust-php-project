@@ -1979,9 +1979,12 @@ impl Frame {
             for name in &code.cv_names {
                 let val = if add_names {
                     let slot = st.find_or_add(name.as_bytes());
-                    if symtab_attached {
-                        record_slot(&mut symtab_slots, cvs.len(), slot, ncv);
-                    }
+                    // The main script's slots too, though its table is
+                    // attached later (`attach_symbol_table` reuses the
+                    // list's room): recording them on the first generic
+                    // access (an `unset()` at the top level) would
+                    // allocate mid-script (bug79881).
+                    record_slot(&mut symtab_slots, cvs.len(), slot, ncv);
                     let slot = slot as usize;
                     st.slots.get(slot).cloned().flatten()
                 } else {
