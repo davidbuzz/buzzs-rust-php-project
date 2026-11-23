@@ -501,9 +501,10 @@ struct Job {
 /// php-src's server runs them in its own process (`php_request_startup()`
 /// to `php_request_shutdown()` in `php_cli_server_dispatch()`): what a
 /// request leaves in the process, opcache's scripts among it, is there for
-/// the next one. Each request gets a VM of its own, made (module startup)
-/// while the thread waits for the request; the thread has the large stack
-/// requests need.
+/// the next one. Module startup runs once, for the thread's VM; after each
+/// request the VM is reset to its start-of-request state
+/// ([`php_vm::Vm::request_reset`], as `mod_php` does), not built again. The
+/// thread has the large stack requests need.
 #[derive(Debug)]
 struct PhpThread {
     jobs: mpsc::Sender<Job>,
@@ -523,10 +524,11 @@ impl PhpThread {
             .stack_size(256 << 20)
             .spawn(move || {
                 let mut vm = crate::sapi::prepare_vm(&config);
+                let slot = vm.slot.clone();
                 let _ = ready_tx.send(());
                 while let Ok(job) = jrx.recv() {
                     let ctx = Rc::new(RequestCtx::new(job.request, job.stream, job.addr));
-                    let (outcome, used) =
+                    let (outcome, mut used) =
                         crate::sapi::run_request(vm, &ctx, &config, job.is_static);
                     if outcome == Outcome::Done {
                         // The response is complete: the client sees EOF now,
@@ -538,9 +540,12 @@ impl PhpThread {
                     if dtx.send(outcome).is_err() {
                         break;
                     }
-                    drop(used);
                     drop(ctx);
-                    vm = crate::sapi::prepare_vm(&config);
+                    used.request_reset();
+                    vm = crate::sapi::PreparedVm {
+                        vm: used,
+                        slot: slot.clone(),
+                    };
                 }
             })
             .ok()?;
