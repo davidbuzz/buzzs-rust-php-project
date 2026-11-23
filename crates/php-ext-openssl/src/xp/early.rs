@@ -173,7 +173,7 @@ pub(crate) fn handshake(
                     let data = Value::Str(ZStr::from(&buf[..n]));
                     let stream = super::sess::current_stream();
                     php_ext_streams::bridge::with_vm(|vm| {
-                        if let Err(t) = vm.call_value(&cb, vec![stream, data]) {
+                        if let Err(t) = super::sess::call_guarded(vm, &cb, vec![stream, data]) {
                             php_ext_streams::bridge::set_pending(t);
                         }
                     });

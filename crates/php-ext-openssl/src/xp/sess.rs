@@ -108,6 +108,26 @@ fn call(cb: &Value, args: Vec<Value>) -> Option<Value> {
     .flatten()
 }
 
+/// Calls a PHP callback of the running operation with
+/// `PHP_STREAM_FLAG_NO_FCLOSE` set on its stream: `fclose()` refuses the
+/// stream the callback gets (it is in use).
+pub(crate) fn call_guarded(vm: &mut Vm, cb: &Value, args: Vec<Value>) -> VmResult<Value> {
+    let id = CURRENT.with(Cell::get);
+    php_streams::user::without_fclose(id, || vm.call_value(cb, args))
+}
+
+/// [`call`] with [`call_guarded`]'s flag.
+fn call_no_fclose(cb: &Value, args: Vec<Value>) -> Option<Value> {
+    php_ext_streams::bridge::with_vm(|vm| match call_guarded(vm, cb, args) {
+        Ok(v) => Some(v),
+        Err(t) => {
+            php_ext_streams::bridge::set_pending(t);
+            None
+        }
+    })
+    .flatten()
+}
+
 /// `php_openssl_validate_and_allocate_session_callback`.
 fn validate(vm: &mut Vm, name: &str, cb: &Value, persistent: bool) -> Option<Value> {
     if persistent {
@@ -146,7 +166,7 @@ fn new_session_cb(b: &mut SslContextBuilder, id: usize) {
             php_ext_streams::bridge::with_vm(|vm| crate::session::session_value(vm, session).ok())
                 .flatten();
         if let Some(obj) = obj {
-            let _ = call(&cb, vec![stream, obj]);
+            let _ = call_no_fclose(&cb, vec![stream, obj]);
         }
     });
 }
@@ -282,7 +302,7 @@ pub(crate) fn setup_server(
                 let cb = callback(id, |c| c.get_cb.clone())?;
                 let stream = current_stream();
                 let sid = Value::Str(php_runtime::ZStr::from(sid));
-                let ret = call(&cb, vec![stream, sid])?;
+                let ret = call_no_fclose(&cb, vec![stream, sid])?;
                 if let Some(s) = crate::session::session_of(&ret) {
                     s
                 } else {

@@ -374,22 +374,33 @@ pub type MetaData = Vec<(String, Value)>;
 impl Stream {
     /// `php_stream_alloc()`.
     pub fn new(ops: Box<dyn StreamOps>, mode: &str) -> Self {
-        let detect = crate::state::settings().auto_detect_line_endings;
-        let mut s = Self::alloc(ops, mode);
-        if detect {
-            s.state.flags |= flags::DETECT_EOL;
-        }
-        s
+        let number = RESOURCE_NUMBER_HOOK
+            .with(std::cell::Cell::get)
+            .map_or(0, |f| f());
+        Self::alloc(ops, mode, number)
     }
 
-    fn alloc(ops: Box<dyn StreamOps>, mode: &str) -> Self {
+    /// `php_stream_alloc()` of a stream that takes the place of one
+    /// allocated for it first (a transport that connects or accepts
+    /// through a plain socket stream, then wraps its descriptor): it keeps
+    /// that stream's resource `number` instead of taking one, as php-src
+    /// allocates a single stream.
+    pub fn new_numbered(ops: Box<dyn StreamOps>, mode: &str, number: Option<i64>) -> Self {
+        match number {
+            Some(n) => Self::alloc(ops, mode, n),
+            None => Self::new(ops, mode),
+        }
+    }
+
+    fn alloc(ops: Box<dyn StreamOps>, mode: &str, resource_number: i64) -> Self {
+        let detect = crate::state::settings().auto_detect_line_endings;
         Stream {
             ops,
             state: StreamState {
                 id: fresh_id(),
                 eof: false,
                 fatal_error: false,
-                flags: 0,
+                flags: if detect { flags::DETECT_EOL } else { 0 },
                 wrapper_label: "stream",
                 has_buffered_data: false,
                 last_errno: 0,
@@ -409,9 +420,7 @@ impl Stream {
             lock_flag: 0,
             is_include: false,
             wrapper_data: None,
-            resource_number: RESOURCE_NUMBER_HOOK
-                .with(std::cell::Cell::get)
-                .map_or(0, |f| f()),
+            resource_number,
             closer: None,
         }
     }

@@ -103,7 +103,7 @@ fn call_psk_cb(cb: &Value, identity: Option<&[u8]>) -> Result<Option<PskValue>, 
         if let Some(id) = identity {
             args.push(Value::Str(ZStr::from(id)));
         }
-        let ret = match vm.call_value(cb, args) {
+        let ret = match super::sess::call_guarded(vm, cb, args) {
             Ok(v) => v,
             Err(t) => {
                 php_ext_streams::bridge::set_pending(t);

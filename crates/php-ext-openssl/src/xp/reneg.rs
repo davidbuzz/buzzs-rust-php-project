@@ -106,7 +106,7 @@ fn limit_handshake(key: usize) {
             return false;
         }
         let stream = super::sess::current_stream();
-        match vm.call_value(&cb, vec![stream]) {
+        match super::sess::call_guarded(vm, &cb, vec![stream]) {
             Ok(Value::Bool(true)) => true,
             Ok(_) => false,
             Err(t) => {

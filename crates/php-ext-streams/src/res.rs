@@ -342,6 +342,19 @@ pub fn new_persistent(stream: Stream, pid: Option<String>) -> Value {
     v
 }
 
+/// Closes the stream of resource `v`, which failed to come up (a
+/// connection whose TLS handshake failed: `php_stream_close()` in
+/// `php_stream_xport_create()` once the stream had its resource).
+pub fn close_failed(v: &Value) {
+    let Value::Resource(r) = v else {
+        return;
+    };
+    if let Some(mut s) = cell_of(r).and_then(|c| c.take()) {
+        s.close();
+    }
+    drop(r.close());
+}
+
 /// `php_stream_from_persistent_id()`: the live stream opened with `pid`.
 pub fn persistent_stream(pid: &str) -> Option<Value> {
     let id = PERSISTENT.with(|m| m.borrow().get(pid).copied())?;

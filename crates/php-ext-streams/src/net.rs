@@ -17,7 +17,7 @@ use php_streams::stream::{
 };
 use php_streams::transports;
 use php_streams::value::Value as SValue;
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
 use php_streams::context::ContextRef;
@@ -237,7 +237,9 @@ fn ssl_options(ctx: Option<&ContextRef>) -> Value {
     Value::Array(ZArray::new())
 }
 
-/// `php_stream_xport_create()`: a client or server stream for `address`.
+/// `php_stream_xport_create()`: a client or server stream for `address`,
+/// set up completely (a stream that is no resource: the TLS handshake's
+/// callbacks get `null` for it).
 pub(crate) fn xport_create(
     vm: &mut Vm,
     address: &str,
@@ -247,11 +249,114 @@ pub(crate) fn xport_create(
     persistent_id: Option<String>,
     ctx: Option<ContextRef>,
 ) -> VmResult<Result<Stream, XportError>> {
+    let (r, hook) = xport_open(vm, address, timeout, server, flags, persistent_id, ctx)?;
+    let Some(hook) = hook else {
+        return Ok(r);
+    };
+    let mut s = match r {
+        Ok(s) => s,
+        Err(e) => return Ok(Err(e)),
+    };
+    let r = hook(vm, &mut s);
+    if !matches!(r, Ok(Ok(()))) {
+        s.close();
+    }
+    match r? {
+        Ok(()) => Ok(Ok(s)),
+        Err(xport::ConnectError {
+            thrown: Some(t), ..
+        }) => {
+            // C reports the connect failure before the exception surfaces.
+            vm.php_warning(&format!("Unable to connect to {address} (Unknown error)"))?;
+            Err(t)
+        }
+        Err(e) => Ok(Err(e.error)),
+    }
+}
+
+/// A client connection from [`xport_connect`].
+pub(crate) enum Connected {
+    /// The stream resource.
+    Stream(Value),
+    /// The connection failed: the error, and the exception to throw once
+    /// the caller has reported the failure (a PHP callback of the
+    /// handshake threw).
+    Failed(XportError, Option<Throw>),
+}
+
+/// `php_stream_xport_create()` for a client that connects
+/// (`stream_socket_client()`, `fsockopen()`): the stream is a resource
+/// before the transport finishes connecting (the TLS handshake of `ssl://`
+/// & co., whose callbacks get the stream, see [`xport::ConnectHook`]), and
+/// is closed again when that fails.
+pub(crate) fn xport_connect(
+    vm: &mut Vm,
+    address: &str,
+    timeout: Option<Duration>,
+    flags: i64,
+    persistent_id: Option<String>,
+    ctx: Option<ContextRef>,
+) -> VmResult<Connected> {
+    let pid = persistent_id.clone();
+    let (r, hook) = xport_open(vm, address, timeout, false, flags, persistent_id, ctx)?;
+    let s = match r {
+        Ok(s) => s,
+        Err(e) => return Ok(Connected::Failed(e, None)),
+    };
+    let v = res::new_persistent(s, pid);
+    let Some(hook) = hook else {
+        return Ok(Connected::Stream(v));
+    };
+    Ok(match finish_connect(vm, &v, hook)? {
+        Ok(()) => Connected::Stream(v),
+        Err(e) => Connected::Failed(e.error, e.thrown),
+    })
+}
+
+/// Runs a transport's [`xport::ConnectHook`] on the stream of resource
+/// `v`; a failure closes the stream (`php_stream_close()`).
+fn finish_connect(
+    vm: &mut Vm,
+    v: &Value,
+    hook: xport::ConnectHook,
+) -> VmResult<Result<(), xport::ConnectError>> {
+    let Some(cell) = (match v {
+        Value::Resource(r) => res::cell_of(r),
+        _ => None,
+    }) else {
+        return Ok(Ok(()));
+    };
+    let r = match cell.get() {
+        Some(mut s) => hook(vm, &mut s),
+        None => Ok(Ok(())),
+    };
+    if !matches!(r, Ok(Ok(()))) {
+        res::close_failed(v);
+    }
+    r
+}
+
+/// [`xport_create`] up to what is left to do once the stream is a
+/// resource: the transport's [`xport::ConnectHook`], for a client.
+fn xport_open(
+    vm: &mut Vm,
+    address: &str,
+    timeout: Option<Duration>,
+    server: bool,
+    flags: i64,
+    persistent_id: Option<String>,
+    ctx: Option<ContextRef>,
+) -> VmResult<(Result<Stream, XportError>, Option<xport::ConnectHook>)> {
+    let hook = if server {
+        None
+    } else {
+        xport::find(&xport::split_scheme(address).0).and_then(|t| t.connect)
+    };
     let (scheme, rest) = xport::split_scheme(address);
     let kind = XportKind::of_scheme(&scheme);
     let opts = match SockOpts::from_context(ctx.as_ref(), kind, server) {
         Ok(o) => o,
-        Err(message) => return Ok(Err(XportError { errno: 0, message })),
+        Err(message) => return Ok((Err(XportError { errno: 0, message }), None)),
     };
     let r = xport_create_inner(
         vm,
@@ -265,7 +370,7 @@ pub(crate) fn xport_create(
         ctx,
         &opts,
     )?;
-    Ok(r.map(|mut s| {
+    let r = r.map(|mut s| {
         // Options settable on the created socket (keepalive, linger,
         // buffers); bind-time ones were applied before `bind()` where this
         // module creates the socket.
@@ -273,7 +378,8 @@ pub(crate) fn xport_create(
             opts.apply(fd);
         }
         s
-    }))
+    });
+    Ok((r, hook))
 }
 
 /// [`xport_create`] after the `socket` context options were validated.
@@ -406,17 +512,22 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
     if let Some(v) = pid.as_deref().and_then(res::persistent_stream) {
         return Ok(v);
     }
-    match xport_create(vm, &target, timeout, false, 4, pid.clone(), ctx)? {
-        Ok(s) => Ok(res::new_persistent(s, pid)),
-        Err(e) => {
+    match xport_connect(vm, &target, timeout, 4, pid, ctx)? {
+        Connected::Stream(v) => Ok(v),
+        Connected::Failed(e, thrown) => {
             // `%s` stops at an embedded NUL.
             let shown = host_s.split('\0').next().unwrap_or_default();
             vm.php_warning(&format!(
                 "Unable to connect to {shown}:{port} ({})",
-                e.message
+                e.shown()
             ))?;
+            if let Some(t) = thrown {
+                return Err(t);
+            }
             set_ref(a, 2, Value::Int(i64::from(e.errno)));
-            set_ref(a, 3, bytes(e.message.as_bytes()));
+            if !e.message.is_empty() {
+                set_ref(a, 3, bytes(e.message.as_bytes()));
+            }
             Ok(Value::Bool(false))
         }
     }
@@ -442,16 +553,21 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(v) = pid.as_deref().and_then(res::persistent_stream) {
         return Ok(v);
     }
-    match xport_create(vm, &addr, timeout, false, flags, pid.clone(), ctx)? {
-        Ok(s) => Ok(res::new_persistent(s, pid)),
-        Err(e) => {
+    match xport_connect(vm, &addr, timeout, flags, pid, ctx)? {
+        Connected::Stream(v) => Ok(v),
+        Connected::Failed(e, thrown) => {
             vm.php_warning(&format!(
                 "Unable to connect to {} ({})",
                 addslashes(&addr),
-                e.message
+                e.shown()
             ))?;
+            if let Some(t) = thrown {
+                return Err(t);
+            }
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
-            set_ref(a, 2, bytes(e.message.as_bytes()));
+            if !e.message.is_empty() {
+                set_ref(a, 2, bytes(e.message.as_bytes()));
+            }
             Ok(Value::Bool(false))
         }
     }
@@ -550,9 +666,11 @@ fn stream_socket_server(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match xport_create(vm, &addr, None, true, flags, None, ctx)? {
         Ok(s) => Ok(res::new_stream(s, None)),
         Err(e) => {
-            vm.php_warning(&format!("Unable to connect to {addr} ({})", e.message))?;
+            vm.php_warning(&format!("Unable to connect to {addr} ({})", e.shown()))?;
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
-            set_ref(a, 2, bytes(e.message.as_bytes()));
+            if !e.message.is_empty() {
+                set_ref(a, 2, bytes(e.message.as_bytes()));
+            }
             Ok(Value::Bool(false))
         }
     }
@@ -694,20 +812,39 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     let mut conn = sock_stream(owned, label, Some(default_timeout(vm)));
-    if let Some(hook) = xport::server_transport(cell.id()).and_then(|t| t.accept) {
+    let transport = xport::server_transport(cell.id());
+    if let Some(hook) = transport.and_then(|t| t.accept) {
         let Some(mut listener) = cell.take() else {
             return Ok(Value::Bool(false));
         };
         conn.context.clone_from(&listener.context);
         let r = hook(vm, &mut listener, conn, timeout);
         cell.replace_stream(listener);
-        match r? {
-            Ok(s) => return Ok(res::new_stream(s, None)),
-            Err(e) => {
-                vm.php_warning(&format!("Accept failed: {}", e.message))?;
-                return Ok(Value::Bool(false));
+        let r = match r? {
+            // The server handshake runs once the connection is a resource
+            // (`php_openssl_tcp_sockop_accept()` allocates it first).
+            Ok(s) => {
+                let v = res::new_stream(s, None);
+                match transport.and_then(|t| t.connect) {
+                    Some(connect) => match finish_connect(vm, &v, connect)? {
+                        Ok(()) => Ok(v),
+                        Err(xport::ConnectError {
+                            thrown: Some(t), ..
+                        }) => return Err(t),
+                        Err(e) => Err(e.error),
+                    },
+                    None => Ok(v),
+                }
             }
-        }
+            Err(e) => Err(e),
+        };
+        return match r {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                vm.php_warning(&format!("Accept failed: {}", e.shown()))?;
+                Ok(Value::Bool(false))
+            }
+        };
     }
     Ok(res::new_stream(conn, None))
 }

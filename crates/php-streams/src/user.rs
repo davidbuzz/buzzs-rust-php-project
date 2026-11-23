@@ -475,6 +475,18 @@ pub fn in_guarded_call(id: u64) -> bool {
     GUARDED.with(|g| g.borrow().contains(&id)) || crate::filter::user::filtering_eof(id).is_some()
 }
 
+/// Runs `f` with stream `id` flagged `PHP_STREAM_FLAG_NO_FCLOSE` for
+/// `fclose()`: a PHP callback that the stream's own operation calls (the
+/// TLS handshake's PSK and session callbacks) cannot close it.
+pub fn without_fclose<R>(id: u64, f: impl FnOnce() -> R) -> R {
+    GUARDED.with(|g| g.borrow_mut().push(id));
+    let r = f();
+    GUARDED.with(|g| {
+        g.borrow_mut().pop();
+    });
+    r
+}
+
 impl UserStreamOps {
     /// The wrapper object (`wrapper_data` in the meta data).
     pub fn object(&self) -> &dyn UserStreamObject {

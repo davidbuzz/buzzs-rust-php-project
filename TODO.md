@@ -97,9 +97,6 @@ candidates for `perf/bench` and for work.
   one `php -S` against a fresh server per script (scripts whose two fresh runs agree);
   still to do: act on its differences, and the remaining 1.8 M instructions of an empty
   request (`request_reset` rebuilds tables such as `CallBufs` and `ExtState`).
-- [ ] openssl: a TLS stream connected with crypto enabled hands `NULL` to its PSK and
-  session callbacks (ext/openssl/tests/close_in_psk_client_cb_UAF.phpt): the handshake
-  runs before the stream exists; php-src allocates the stream (and its resource) first.
 - [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
   frame is swapped onto the stack and back; the rest is the builtin-method call machinery
   around `send()` and the nested `execute()`).
@@ -163,9 +160,6 @@ candidates for `perf/bench` and for work.
   - `ext/fileinfo` gh25051, hwpx_mime: master's bundled libmagic database (5.48, format
     21; the system libmagic 5.45 reads format 18) gives `font/ttf` for TrueType and
     detects HWPX/NuGet zips; port its entries into `php-fileinfo`'s overlay.
-  - `ext/openssl` close_in_psk_client_cb_UAF: the stream is no resource yet while
-    `stream_socket_client()` runs the TLS handshake (C registers it when the stream is
-    allocated), so `psk_client_cb` gets `null` instead of the stream.
 
 ## D. Housekeeping
 

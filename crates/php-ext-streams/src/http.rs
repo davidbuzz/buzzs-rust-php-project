@@ -95,7 +95,7 @@ impl HttpEnv for VmEnv {
         });
         match r {
             Some(Ok(Ok(s))) => Ok(s),
-            Some(Ok(Err(e))) => Err(Some(e.message.into_bytes())),
+            Some(Ok(Err(e))) => Err((!e.message.is_empty()).then(|| e.message.into_bytes())),
             Some(Err(t)) => {
                 bridge::set_pending(t);
                 Err(None)

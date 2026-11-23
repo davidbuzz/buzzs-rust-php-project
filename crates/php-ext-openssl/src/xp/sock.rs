@@ -95,6 +95,9 @@ pub(crate) struct TlsOps {
     pub(crate) early_send: Option<Vec<u8>>,
     /// `early_data_offset`.
     pub(crate) early_offset: usize,
+    /// The handshake of a connection with crypto enabled on connect, left
+    /// for when its stream is a resource ([`super::handshake`]).
+    pub(crate) handshake: Option<super::Handshake>,
 }
 
 impl std::fmt::Debug for TlsOps {
@@ -217,6 +220,7 @@ impl TlsOps {
             early_state: super::early::State::None,
             early_send: None,
             early_offset: 0,
+            handshake: None,
         }
     }
 
