@@ -66,8 +66,11 @@ impl Vm {
         if !self.in_shutdown {
             self.in_shutdown = true;
             self.run_shutdown_hooks();
-            self.in_shutdown = false;
         }
+        // The next request starts with the executor up (`zend_activate()`),
+        // whatever this one's shutdown (`Vm::ini_deactivate`) left.
+        self.in_shutdown = false;
+        self.executor_active = true;
 
         // 1. User functions: clear static variables, then retain only internal functions.
         for f in self.functions.values() {
@@ -174,8 +177,8 @@ impl Vm {
             self.sync_ini(n);
         }
 
-        // 10. Handle counter & object store.
-        crate::object::reset_store();
+        // 10. Handle counter & object store: emptied last (below), once
+        // nothing of the request holds an object any more.
 
         // 11. Extensions and runtime subsystems.
         crate::auto_globals::reset();
@@ -218,6 +221,20 @@ impl Vm {
         self.observer = crate::observer::ObserverState::default();
         self.user_opcode_handlers.clear();
         self.ext = crate::builtins::ExtState::default();
+        // What a request in progress holds, as a fresh VM starts it: a
+        // throw the tape left for its caller (an out-of-memory error in a
+        // shutdown function), the include being opened, a trampoline being
+        // entered, a write walk's variable, a resolved callable argument.
+        self.tape_throw = None;
+        self.bailouts = 0;
+        self.including = None;
+        self.trampoline_entry = None;
+        self.cv_root = None;
+        self.checked_callable = None;
+        // Last: an aborted shutdown (a fatal error in a shutdown function)
+        // leaves the request's objects to the drops above, which put their
+        // handles back on the store's free list.
+        crate::object::reset_store();
     }
 }
 

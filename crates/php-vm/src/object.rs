@@ -764,9 +764,13 @@ fn release_store_slot(handle: u32, anchor: Option<u32>) {
     let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
             let s = &mut *s;
-            if let Some(slot) = s.objects.get_mut((handle as usize).wrapping_sub(1)) {
-                *slot = None;
-            }
+            let Some(slot) = s.objects.get_mut((handle as usize).wrapping_sub(1)) else {
+                // An object of a store emptied since (a request reset that
+                // an aborted shutdown left objects behind for): its handle
+                // is none of this store's.
+                return;
+            };
+            *slot = None;
             if anchor.is_none() && s.followers.is_empty() {
                 // `ZEND_OBJECTS_STORE_ADD_TO_FREE_LIST`: the head of the
                 // free list. `ObjectStore::grow` keeps room for every
