@@ -1365,6 +1365,7 @@ dependencies = [
  "php-stdarr",
  "php-stdstr",
  "php-support",
+ "twox-hash",
 ]
 
 [[package]]
