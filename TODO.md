@@ -164,6 +164,40 @@ candidates for `perf/bench` and for work.
 ## D. Housekeeping
 
 - [ ] Update this file after each evidence run.
+- [ ] CI: reuse what php-src's GitHub Actions do (reviewed 24 Nov in `modules/php-src/.github`
+  at the pin: `workflows/test-suite.yml`, `actions/*`). Our CI so far is
+  `.github/workflows/aarch64-linux.yml`. Worth taking, roughly in this order:
+  - The variants of a test run (`actions/test-linux`): the suite again with
+    `-d opcache.enable_cli=1`, and with `--repeat 2` (every test twice in one process: the
+    per-request state; `php --repeat` and the runner's `--repeat` exist); run-tests.php's
+    `-g FAIL,BORK,LEAK,XLEAK --offline --show-slow 1000 --set-timeout 120` and the
+    environment `SKIP_IO_CAPTURE_TESTS=1 STACK_LIMIT_DEFAULTS_CHECK=1
+    RUN_RESOURCE_HEAVY_TESTS=1`.
+  - `OPCACHE_VARIATION`: the file cache primed, then used (after shared memory, and with
+    `opcache.file_cache_only=1` both ways). The runner needs `--file-cache-prime` and
+    `--file-cache-use` (run-tests.php sets `opcache.file_cache`, `opcache.record_warnings=1`,
+    `opcache.jit=0`, `opcache.validate_timestamps=0` when using, and skips the opcache tests).
+  - The host setup that turns on tests that skip here (`actions/apt-x64`, `setup-x64`):
+    the `de_DE` locale (`language-pack-de`, `locale-gen de_DE`: ext/ctype
+    lc_ctype_inheritance), MySQL 8.4 as a service (mysqli and pdo_mysql against MySQL as
+    well as MariaDB), the Caddy server for HTTP tests (`actions/setup-caddy`), newer
+    library versions on a newer image (libsodium >= 1.0.19 for AEGIS/ML-KEM).
+  - The 32-bit job (`LINUX_X32`): the 32-bit-only tests that skip here, on an
+    `i686-unknown-linux-gnu` build.
+  - `COMMUNITY`: the test suites of real projects run on the built `php` (AMPHP, Laravel,
+    ReactPHP, Revolt, Symfony, PHPUnit, ...: `git clone --depth 1`, `composer install
+    --ignore-platform-req=php+`, `vendor/bin/phpunit`), and the Symfony demo with preloading.
+  - `BENCHMARKING`: `benchmark/benchmark.php` counts instructions under valgrind for
+    `Zend/bench.php` and two framework applications through `php-cgi` (50 warm-ups, 50 runs),
+    and php-src keeps every commit's numbers in `php/benchmarking-data`: a C baseline per
+    commit to compare `perf/bench` with.
+  - Scheduling (`workflows/test.yml`, `.github/matrix.php`): a nightly run of every job;
+    pull-request labels (`CI: All jobs`) select the heavy ones.
+  - Later: sanitizer jobs (ours would be nightly Rust's address sanitizer over the FFI
+    code), macOS, Alpine (musl) and FreeBSD builds, the stale-PR and labeler workflows.
+    Not applicable: stub/arginfo verification (`verify-generated-files`), the
+    bundled-library checks, Windows builds, the C unit tests, the self-hosted benchmark
+    (`real-time-benchmark.yml`).
 - Rules that stay: never push unless the owner asks (`git push davidbuzz master`); JIT
   knobs are `BUZZS_*` (`BUZZS_JIT=0` off, `BUZZS_JIT_DEBUG=1` reports, `BUZZS_JIT_HOT=<n>`
   compiles a loop after n back edges instead of 1,000); after a JIT change also run the
