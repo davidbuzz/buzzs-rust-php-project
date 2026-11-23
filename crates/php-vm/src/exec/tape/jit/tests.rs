@@ -107,7 +107,8 @@ fn layout_probe_holds() {
 
 #[test]
 fn compiler_starts_on_this_host() {
-    assert!(Compiler::new().is_some());
+    assert!(Compiler::new(false).is_some());
+    assert!(Compiler::new(true).is_some());
 }
 
 #[test]
@@ -178,7 +179,7 @@ fn compiled_code_reports_where_it_stopped() {
         })
         .collect();
     let native = new_record(&tape, &entries, 1).expect("record");
-    let mut compiler = Compiler::new().expect("compiler");
+    let mut compiler = Compiler::new(false).expect("compiler");
     // SAFETY: the record was just made for this tape.
     let size = unsafe { compiler.compile_into(code, native.as_ptr()) }.expect("code");
     assert!(size > 0);

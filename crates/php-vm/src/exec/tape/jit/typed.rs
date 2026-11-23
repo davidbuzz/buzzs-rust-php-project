@@ -1728,6 +1728,24 @@ impl Loop {
         (theirs, own)
     }
 
+    /// Whether the loop's code is to be optimised (Cranelift's e-graph
+    /// pass): when it does float arithmetic, which that pass makes faster
+    /// (the Mandelbrot loop's code, 4% fewer instructions; `$x *= 1.0001`,
+    /// 3 instructions of 18 a round); for anything else it costs a
+    /// quarter of the compile time and makes no code faster.
+    pub(super) fn optimised(&self) -> bool {
+        let floats = self
+            .plans
+            .values()
+            .filter(|(plan, _)| match plan {
+                Plan::Arith { a, b, .. } => a.float || b.float,
+                Plan::Div { ints: None, .. } | Plan::Math { .. } => true,
+                _ => false,
+            })
+            .count();
+        floats > 0
+    }
+
     pub(super) fn wait(&self) -> usize {
         let (theirs, own) = self.shares();
         // A round waited costs about 300 instructions (the entry, and the

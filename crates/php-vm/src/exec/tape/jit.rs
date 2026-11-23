@@ -2338,10 +2338,15 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn new() -> Option<Compiler> {
+    /// With `speed`, Cranelift's optimisations (the e-graph pass): worth
+    /// it for float arithmetic, and a quarter of the compile time and no
+    /// faster code for the rest ([`typed::Loop::optimised`]).
+    fn new(speed: bool) -> Option<Compiler> {
         let none_tag = probe()?;
         let mut flags = settings::builder();
-        flags.set("opt_level", "speed").ok()?;
+        flags
+            .set("opt_level", if speed { "speed" } else { "none" })
+            .ok()?;
         // What `JITModule` requires of the code.
         flags.set("use_colocated_libcalls", "false").ok()?;
         flags.set("is_pic", "false").ok()?;
@@ -2536,6 +2541,8 @@ thread_local! {
     /// This thread's compiler, made when the first tape gets hot; `Err`
     /// when it cannot be made (an unsupported host, or [`probe`] failed).
     static COMPILER: RefCell<Option<Result<Compiler, ()>>> = const { RefCell::new(None) };
+    /// The same, optimising, for the typed loops worth it.
+    static OPTIMISING: RefCell<Option<Result<Compiler, ()>>> = const { RefCell::new(None) };
 }
 
 /// Compiles the tape of the record `record`, a tape of `code`; the record
@@ -2549,7 +2556,7 @@ unsafe fn compile(code: &OpArray, record: *mut usize) {
     let compiled = COMPILER.with(|c| {
         let mut c = c.try_borrow_mut().ok()?;
         let compiler = c
-            .get_or_insert_with(|| Compiler::new().ok_or(()))
+            .get_or_insert_with(|| Compiler::new(false).ok_or(()))
             .as_mut()
             .ok()?;
         // SAFETY: the caller's contract.
@@ -2596,9 +2603,10 @@ fn compile_typed(
     if !waited && wait > 0 {
         return Some(Made::Wait(wait));
     }
-    let compiled = COMPILER.with(|c| {
+    let speed = lp.optimised();
+    let compiled = (if speed { &OPTIMISING } else { &COMPILER }).with(|c| {
         let mut c = c.try_borrow_mut().ok()?;
-        c.get_or_insert_with(|| Compiler::new().ok_or(()))
+        c.get_or_insert_with(|| Compiler::new(speed).ok_or(()))
             .as_mut()
             .ok()?
             .compile_typed(&lp)
