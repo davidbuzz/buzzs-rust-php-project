@@ -119,6 +119,10 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::Isset { .. }
             | Op::Empty { .. }
             | Op::InitFCall { .. }
+            | Op::InitMethodCall {
+                name: Operand::Lit(_),
+                ..
+            }
             | Op::InitStaticCall {
                 class: ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
                 name: Operand::Lit(_),
@@ -720,6 +724,16 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             ..
         } => {
             if !crate::call::init_fcall_in(f, name) {
+                return DECLINED;
+            }
+        }
+        // `$obj->f()` on the site's method cache hit (a call the tape
+        // prepares has its own instruction).
+        Op::InitMethodCall {
+            obj,
+            name: Operand::Lit(lit),
+        } => {
+            if !crate::call::init_method_call_in(f, obj, lit, at) {
                 return DECLINED;
             }
         }

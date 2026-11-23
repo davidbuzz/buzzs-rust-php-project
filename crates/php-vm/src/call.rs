@@ -624,77 +624,7 @@ impl Vm {
         let Some(frame) = self.frames.last_mut() else {
             return false;
         };
-        let o = match obj {
-            Operand::Cv(cv) if !frame.symtab_attached => {
-                match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                    Some(Value::Object(o)) => o,
-                    _ => return false,
-                }
-            }
-            Operand::Tmp(t) => match frame.tmps.get(t as usize) {
-                Some(Value::Object(o)) => o,
-                _ => return false,
-            },
-            // `$this->name()` (op1 `IS_UNUSED`): the frame's `$this`.
-            Operand::Unused => match frame.this.as_ref() {
-                Some(o) => o,
-                None => return false,
-            },
-            _ => return false,
-        };
-        let cls = object::class_of(o);
-        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
-            return false;
-        }
-        let cls_addr = Rc::as_ptr(cls) as usize;
-        let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-        let hit = match frame.code.method_cache.borrow().get(slot) {
-            Some(Some(cached))
-                if cached.class_addr == cls_addr
-                    && cached.scope_addr == scope_addr
-                    && cached.name_lit == Some(lit) =>
-            {
-                cached.func.get().map(|func| {
-                    (
-                        func,
-                        cached
-                            .method_scope
-                            .as_ref()
-                            .and_then(std::rc::Weak::upgrade),
-                        cached.is_static,
-                    )
-                })
-            }
-            _ => None,
-        };
-        let Some((func, scope, is_static)) = hit else {
-            return false;
-        };
-        let called = Rc::clone(cls);
-        // The call's `$this`: a copy of the variable's object, or the
-        // temporary's handle itself, moved out as the read's
-        // `std::mem::take` moves it (`ZEND_CALL_RELEASE_THIS` without an
-        // `addref`/`release` pair: the call owns the operand's reference).
-        // A static method's call takes none: the temporary's handle is
-        // released after the push (the last handle of the object goes as
-        // it goes there, its destructor left to the safe point after the
-        // instruction).
-        let (this, released) = match obj {
-            Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
-                Some(Value::Object(held)) if !is_static => (Some(held), None),
-                other => (None, other),
-            },
-            _ if is_static => (None, None),
-            _ => (Some(o.clone()), None),
-        };
-        push_call_in_place(&mut frame.calls, move || PendingCall {
-            this,
-            scope,
-            called: Some(called),
-            ..PendingCall::new(func)
-        });
-        drop(released);
-        true
+        init_method_call_in(frame, obj, lit, slot)
     }
 
     /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
@@ -5044,6 +4974,86 @@ pub(crate) fn init_relative_static_in(
         called: Some(called),
         ..PendingCall::new(func)
     });
+    true
+}
+
+/// [`Vm::init_method_call_fast`] on the running frame `frame`, the op at
+/// `slot` (its index): `$obj->name()` on the site's method cache hit, the
+/// pending call pushed in place. Returns `false`, having changed nothing,
+/// on a miss. Frame-local, so the dispatch loop's hot block
+/// (`exec/hot.rs`) runs it as well.
+#[inline]
+pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slot: usize) -> bool {
+    let o = match obj {
+        Operand::Cv(cv) if !frame.symtab_attached => {
+            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o,
+                _ => return false,
+            }
+        }
+        Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+            Some(Value::Object(o)) => o,
+            _ => return false,
+        },
+        // `$this->name()` (op1 `IS_UNUSED`): the frame's `$this`.
+        Operand::Unused => match frame.this.as_ref() {
+            Some(o) => o,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let cls = object::class_of(o);
+    if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+        return false;
+    }
+    let cls_addr = Rc::as_ptr(cls) as usize;
+    let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let hit = match frame.code.method_cache.borrow().get(slot) {
+        Some(Some(cached))
+            if cached.class_addr == cls_addr
+                && cached.scope_addr == scope_addr
+                && cached.name_lit == Some(lit) =>
+        {
+            cached.func.get().map(|func| {
+                (
+                    func,
+                    cached
+                        .method_scope
+                        .as_ref()
+                        .and_then(std::rc::Weak::upgrade),
+                    cached.is_static,
+                )
+            })
+        }
+        _ => None,
+    };
+    let Some((func, scope, is_static)) = hit else {
+        return false;
+    };
+    let called = Rc::clone(cls);
+    // The call's `$this`: a copy of the variable's object, or the
+    // temporary's handle itself, moved out as the read's
+    // `std::mem::take` moves it (`ZEND_CALL_RELEASE_THIS` without an
+    // `addref`/`release` pair: the call owns the operand's reference).
+    // A static method's call takes none: the temporary's handle is
+    // released after the push (the last handle of the object goes as
+    // it goes there, its destructor left to the safe point after the
+    // instruction).
+    let (this, released) = match obj {
+        Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
+            Some(Value::Object(held)) if !is_static => (Some(held), None),
+            other => (None, other),
+        },
+        _ if is_static => (None, None),
+        _ => (Some(o.clone()), None),
+    };
+    push_call_in_place(&mut frame.calls, move || PendingCall {
+        this,
+        scope,
+        called: Some(called),
+        ..PendingCall::new(func)
+    });
+    drop(released);
     true
 }
 
