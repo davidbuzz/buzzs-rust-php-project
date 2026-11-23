@@ -146,6 +146,12 @@ pub type IncludeOpenerFn = fn(&mut Vm, &[u8], &str) -> VmResult<IncludeOpen>;
 /// includes), e.g. phar stubs (`zend_compile_file` override).
 pub type SourceFilterFn = fn(&mut Vm, &ZStr, Vec<u8>) -> VmResult<Vec<u8>>;
 
+/// Whether the installed [`SourceFilterFn`] may rewrite the source of the
+/// script at a path. A script cache serves a script without reading it
+/// only when the filter would leave it alone; without a probe it is
+/// assumed to rewrite anything.
+pub type SourceFilterProbeFn = fn(&ZStr) -> bool;
+
 /// Owned script list and current mbstring internal/substitution settings.
 #[derive(Clone, Debug)]
 pub struct ScriptEncodingSettings {
@@ -1006,6 +1012,12 @@ impl Vm {
     /// Installs a source filter run before compiling scripts.
     pub fn set_source_filter(&mut self, f: SourceFilterFn) {
         self.source_filter = Some(f);
+    }
+
+    /// Installs the probe telling which scripts the source filter may
+    /// rewrite ([`SourceFilterProbeFn`]).
+    pub fn set_source_filter_probe(&mut self, f: SourceFilterProbeFn) {
+        self.source_filter_probe = Some(f);
     }
 
     /// Installs mbstring's request-state provider for all parser entry paths.

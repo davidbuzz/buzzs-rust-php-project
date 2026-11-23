@@ -69,14 +69,20 @@ pub(crate) fn note_compiled(name: &[u8]) -> bool {
     let Some(i) = index(name) else {
         return false;
     };
-    let i = u8::try_from(i).unwrap_or(u8::MAX);
+    note_compiled_index(u8::try_from(i).unwrap_or(u8::MAX));
+    true
+}
+
+/// Remembers the auto-global at index `i` of [`AUTO_GLOBAL_NAMES`] as
+/// named by compiled code; a cached unit replays its recorded indices
+/// through this (`zend_accel_set_auto_globals`).
+pub(crate) fn note_compiled_index(i: u8) {
     COMPILED.with(|c| {
         let mut c = c.borrow_mut();
         if !c.contains(&i) {
             c.push(i);
         }
     });
-    true
 }
 
 /// The armed (not yet created) auto-globals of a request.
@@ -230,14 +236,16 @@ impl Vm {
     }
 
     /// Runs the armed callbacks of the auto-globals the last compilation
-    /// named (what `zend_auto_global_check` does during compilation).
-    pub(crate) fn activate_compiled_auto_globals(&mut self) {
+    /// named (what `zend_auto_global_check` does during compilation), and
+    /// returns their indices for the compiled unit's metadata.
+    pub(crate) fn activate_compiled_auto_globals(&mut self) -> Vec<u8> {
         let seen = COMPILED.with(|c| std::mem::take(&mut *c.borrow_mut()));
-        for i in seen {
+        for &i in &seen {
             if let Some(name) = AUTO_GLOBAL_NAMES.get(usize::from(i)) {
                 self.is_auto_global(name);
             }
         }
+        seen
     }
 }
 

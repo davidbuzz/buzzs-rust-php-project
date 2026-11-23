@@ -2571,6 +2571,8 @@ pub struct Vm {
     pub(crate) global_slot_cache: [(usize, u32); crate::place::GLOBAL_SLOT_CACHE],
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
+    /// Which scripts the source filter may rewrite.
+    pub source_filter_probe: Option<crate::ext::SourceFilterProbeFn>,
     /// Current mbstring encoding/substitution settings.
     pub(crate) script_encoding_provider: Option<crate::ext::ScriptEncodingFn>,
     /// Source ASTs retained with their original compile-time encoding semantics.

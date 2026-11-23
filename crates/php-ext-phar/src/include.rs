@@ -13,7 +13,9 @@ use php_phar::include::{self as pinc, CompileSource};
 use php_runtime::ZStr;
 use php_streams::diag::{self, Severity};
 use php_streams::wrapper::{REPORT_ERRORS, STREAM_OPEN_FOR_INCLUDE, USE_PATH};
-use php_vm::ext::{IncludeOpen, IncludeOpenerFn, SourceFilterFn, Throw, VmResult};
+use php_vm::ext::{
+    IncludeOpen, IncludeOpenerFn, SourceFilterFn, SourceFilterProbeFn, Throw, VmResult,
+};
 use php_vm::Vm;
 
 use crate::util::executed;
@@ -21,6 +23,7 @@ use crate::util::executed;
 thread_local! {
     static PREV_OPENER: Cell<Option<IncludeOpenerFn>> = const { Cell::new(None) };
     static PREV_FILTER: Cell<Option<SourceFilterFn>> = const { Cell::new(None) };
+    static PREV_PROBE: Cell<Option<SourceFilterProbeFn>> = const { Cell::new(None) };
     /// The construct of the include being opened (`include`,
     /// `require_once`...), for warnings raised by the source filter.
     static KIND: Cell<&'static str> = const { Cell::new("include") };
@@ -37,8 +40,20 @@ fn kind_static(kind: &str) -> &'static str {
 pub fn install(vm: &mut Vm) {
     PREV_OPENER.with(|c| c.set(vm.include_opener));
     PREV_FILTER.with(|c| c.set(vm.source_filter));
+    PREV_PROBE.with(|c| c.set(vm.source_filter_probe));
     vm.set_include_opener(opener);
     vm.set_source_filter(filter);
+    vm.set_source_filter_probe(filter_probe);
+}
+
+/// Which scripts [`filter`] may rewrite: a phar run or included by its
+/// file name (the marker test of `phar_compile_file`), and whatever the
+/// filter installed before may rewrite (anything, if it has no probe).
+fn filter_probe(path: &ZStr) -> bool {
+    let prev = PREV_FILTER.with(Cell::get).is_some()
+        && PREV_PROBE.with(Cell::get).is_none_or(|probe| probe(path));
+    let name = path.as_bytes();
+    prev || (pinc::has_marker_in_filename(name) && !has_scheme(name))
 }
 
 fn is_phar_url(p: &[u8]) -> bool {

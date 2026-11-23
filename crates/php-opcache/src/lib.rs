@@ -13,6 +13,46 @@ pub mod shared_index;
 
 use std::collections::HashMap;
 
+/// The sizes of opcache's script hash table (`zend_accelerator_hash.c`):
+/// `opcache.max_accelerated_files` is rounded up to the next of them.
+const PRIME_NUMBERS: [usize; 18] = [
+    5, 11, 19, 53, 107, 223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130_987, 262_237,
+    524_521, 1_048_793,
+];
+
+/// The number of scripts the cache holds for `opcache.max_accelerated_files`
+/// (`zend_accel_hash_init`: the next size in the prime table; a larger
+/// value is kept as is).
+#[must_use]
+pub fn accel_hash_size(max_accelerated_files: usize) -> usize {
+    PRIME_NUMBERS
+        .iter()
+        .copied()
+        .find(|&p| max_accelerated_files <= p)
+        .unwrap_or(max_accelerated_files)
+}
+
+/// `MIN_FREE_MEMORY`: when a script does not fit and less than this is
+/// left, the cache counts as full (`SHARED_ALLOC_FAILED`).
+pub const MIN_FREE_MEMORY: usize = 64 * 1024;
+
+/// Why [`ScriptCache::insert`] did not store a script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertRefused {
+    /// The cache is full until it is reset (`ZSMMG(memory_exhausted)`);
+    /// scripts are compiled without being cached.
+    Full,
+    /// No more entries in the hash table (`zend_accel_hash_is_full`).
+    HashFull,
+    /// The script does not fit into `opcache.memory_consumption`.
+    OutOfMemory {
+        /// The script's size.
+        size: usize,
+        /// The memory left.
+        free: usize,
+    },
+}
+
 /// Preload statistics tracking for opcache.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PreloadStats {
@@ -55,8 +95,19 @@ pub enum CacheLookup<'a, T> {
 /// The in-memory compiled script cache.
 #[derive(Debug)]
 pub struct ScriptCache<T> {
-    /// Cached scripts keyed by full canonical path.
+    /// Cached scripts keyed by full canonical path. Changed only through
+    /// the methods, which keep [`ScriptCache::used_memory`] in step.
     pub scripts: HashMap<String, ScriptEntry<T>>,
+    /// The number of scripts the cache holds (`max_cached_keys`).
+    pub max_cached_keys: usize,
+    /// The memory the scripts may take (`opcache.memory_consumption`);
+    /// 0 for no limit.
+    pub memory_limit: usize,
+    /// The memory the cached scripts take.
+    used_memory: usize,
+    /// Whether the cache refuses new scripts (`ZSMMG(memory_exhausted)`,
+    /// reported as `cache_full`) until it is reset.
+    pub full: bool,
     /// Timestamp when this cache was started.
     pub start_time: i64,
     /// Timestamp of last cache reset (0 if never reset).
@@ -507,10 +558,22 @@ impl<T> ScriptCache<T> {
             misses: 0,
             manual_restarts: 0,
             max_accelerated_files,
+            max_cached_keys: accel_hash_size(max_accelerated_files),
+            memory_limit: 0,
+            used_memory: 0,
+            full: false,
             preload_stats: None,
             jit_buffer: None,
             jit_traces: None,
         }
+    }
+
+    /// Applies `opcache.max_accelerated_files` and the memory the scripts
+    /// may take (`memory_limit`, 0 for none).
+    pub fn configure(&mut self, max_accelerated_files: usize, memory_limit: usize) {
+        self.max_accelerated_files = max_accelerated_files;
+        self.max_cached_keys = accel_hash_size(max_accelerated_files);
+        self.memory_limit = memory_limit;
     }
 
     /// Resets the cache, evicting all cached scripts (preserving preloaded scripts if present).
@@ -524,6 +587,8 @@ impl<T> ScriptCache<T> {
         } else {
             self.scripts.clear();
         }
+        self.used_memory = self.scripts.values().map(|e| e.memory_consumption).sum();
+        self.full = false;
         if let Some(ref mut buf) = self.jit_buffer {
             buf.reset();
         }
@@ -604,42 +669,84 @@ impl<T> ScriptCache<T> {
         }
     }
 
-    /// Looks up a script by path, performing timestamp revalidation if needed.
+    /// Looks up a script by path, revalidating its timestamp when due
+    /// (`validate_timestamp_and_record`): with `validate_timestamps`, a
+    /// script is checked on every lookup if `revalidate_freq` is 0, else
+    /// once `revalidate_freq` seconds have passed since its last check.
+    /// `current_mtime` is called only then, so a lookup between checks
+    /// costs no `stat`. An entry with timestamp 0 (preloaded) is never
+    /// checked. A script whose time changed, or cannot be determined, is
+    /// evicted ([`CacheLookup::Stale`]).
     pub fn get(
         &mut self,
         path: &str,
-        current_mtime: i64,
+        current_mtime: impl FnOnce() -> Option<i64>,
         validate_timestamps: bool,
         revalidate_freq: i64,
         now: i64,
     ) -> CacheLookup<'_, T> {
-        let is_stale = if let Some(entry) = self.scripts.get(path) {
-            validate_timestamps
-                && (now - entry.last_revalidate) >= revalidate_freq
-                && entry.timestamp != current_mtime
-        } else {
-            false
+        let Some(entry) = self.scripts.get(path) else {
+            self.misses += 1;
+            return CacheLookup::Miss;
         };
-        if is_stale {
-            self.scripts.remove(path);
+        let due = validate_timestamps
+            && entry.timestamp != 0
+            && (revalidate_freq == 0
+                || now > entry.last_revalidate.saturating_add(revalidate_freq));
+        if due && current_mtime() != Some(entry.timestamp) {
+            self.remove(path);
             self.misses += 1;
             return CacheLookup::Stale;
         }
-        if let Some(entry) = self.scripts.get_mut(path) {
-            if validate_timestamps && (now - entry.last_revalidate) >= revalidate_freq {
-                entry.last_revalidate = now;
-            }
-            entry.hits += 1;
-            entry.last_used = now;
-            self.hits += 1;
-            return CacheLookup::Hit(&entry.unit);
+        let Some(entry) = self.scripts.get_mut(path) else {
+            return CacheLookup::Miss;
+        };
+        if due {
+            entry.last_revalidate = now;
         }
-        self.misses += 1;
-        CacheLookup::Miss
+        entry.hits += 1;
+        entry.last_used = now;
+        self.hits += 1;
+        CacheLookup::Hit(&entry.unit)
     }
 
-    /// Inserts a newly compiled script into the cache.
-    pub fn insert(&mut self, path: String, mtime: i64, memory: usize, now: i64, unit: T) {
+    /// Inserts a newly compiled script into the cache, as
+    /// `cache_script_in_shared_memory` does: not when the cache is full
+    /// (it then stays full until reset), the hash table has no entry left
+    /// (`max_cached_keys`), or the script does not fit into
+    /// `memory_limit`; the cache counts as full when less than
+    /// [`MIN_FREE_MEMORY`] is left then. A script already cached is
+    /// replaced.
+    ///
+    /// # Errors
+    /// Why the script was not stored.
+    pub fn insert(
+        &mut self,
+        path: String,
+        mtime: i64,
+        memory: usize,
+        now: i64,
+        unit: T,
+    ) -> Result<(), InsertRefused> {
+        let replaced = self.scripts.get(&path).map_or(0, |e| e.memory_consumption);
+        if self.full {
+            return Err(InsertRefused::Full);
+        }
+        if !self.scripts.contains_key(&path) && self.scripts.len() >= self.max_cached_keys {
+            self.full = true;
+            return Err(InsertRefused::HashFull);
+        }
+        if self.memory_limit > 0 {
+            let free = self
+                .memory_limit
+                .saturating_sub(self.used_memory - replaced);
+            if memory > free {
+                if free < MIN_FREE_MEMORY {
+                    self.full = true;
+                }
+                return Err(InsertRefused::OutOfMemory { size: memory, free });
+            }
+        }
         let entry = ScriptEntry {
             full_path: path.clone(),
             timestamp: mtime,
@@ -649,7 +756,16 @@ impl<T> ScriptCache<T> {
             memory_consumption: memory,
             unit,
         };
+        self.used_memory = self.used_memory - replaced + memory;
         self.scripts.insert(path, entry);
+        Ok(())
+    }
+
+    /// Removes a script, releasing its memory.
+    fn remove(&mut self, path: &str) {
+        if let Some(e) = self.scripts.remove(path) {
+            self.used_memory -= e.memory_consumption;
+        }
     }
 
     /// Invalidates a cached script. Returns true if an entry was invalidated.
@@ -663,7 +779,7 @@ impl<T> ScriptCache<T> {
         if let Some(entry) = self.scripts.get(path) {
             if force || !validate_timestamps || current_mtime.map_or(true, |m| m != entry.timestamp)
             {
-                self.scripts.remove(path);
+                self.remove(path);
                 return true;
             }
             return false;
@@ -688,7 +804,7 @@ impl<T> ScriptCache<T> {
 
     /// Returns the total memory consumed by cached scripts.
     pub fn total_memory_consumption(&self) -> usize {
-        self.scripts.values().map(|e| e.memory_consumption).sum()
+        self.used_memory
     }
 
     /// Returns the hit rate percentage (0.0 to 100.0).
@@ -891,6 +1007,147 @@ mod tests {
         assert!(JitConfig::parse("2254").is_err());
         // Invalid: non-digit
         assert!(JitConfig::parse("abcd").is_err());
+    }
+
+    #[test]
+    fn max_accelerated_files_is_rounded_up_to_a_hash_size() {
+        assert_eq!(accel_hash_size(200), 223);
+        assert_eq!(accel_hash_size(10000), 16229);
+        assert_eq!(accel_hash_size(16229), 16229);
+        assert_eq!(accel_hash_size(1_000_000), 1_048_793);
+        assert_eq!(accel_hash_size(2_000_000), 2_000_000);
+    }
+
+    #[test]
+    fn a_full_hash_table_refuses_scripts_until_reset() {
+        let mut cache: ScriptCache<u8> = ScriptCache::new(5);
+        assert_eq!(cache.max_cached_keys, 5);
+        for i in 0..5 {
+            assert_eq!(cache.insert(format!("/{i}.php"), 1, 10, 0, 0), Ok(()));
+        }
+        // Replacing a cached script needs no new entry.
+        assert_eq!(cache.insert("/0.php".into(), 2, 10, 0, 0), Ok(()));
+        assert_eq!(
+            cache.insert("/5.php".into(), 1, 10, 0, 0),
+            Err(InsertRefused::HashFull)
+        );
+        assert!(cache.full);
+        // Full until reset, even after a script was invalidated.
+        assert!(cache.invalidate("/0.php", true, None, true));
+        assert_eq!(
+            cache.insert("/6.php".into(), 1, 10, 0, 0),
+            Err(InsertRefused::Full)
+        );
+        cache.reset();
+        assert!(!cache.full);
+        assert_eq!(cache.insert("/6.php".into(), 1, 10, 0, 0), Ok(()));
+    }
+
+    #[test]
+    fn scripts_must_fit_into_the_memory_limit() {
+        let mut cache: ScriptCache<u8> = ScriptCache::new(100);
+        cache.configure(100, 200 * 1024);
+        assert_eq!(cache.insert("/a.php".into(), 1, 100 * 1024, 0, 0), Ok(()));
+        assert_eq!(cache.total_memory_consumption(), 100 * 1024);
+        // Too large, but enough left for smaller scripts: not full.
+        assert_eq!(
+            cache.insert("/b.php".into(), 1, 150 * 1024, 0, 0),
+            Err(InsertRefused::OutOfMemory {
+                size: 150 * 1024,
+                free: 100 * 1024
+            })
+        );
+        assert!(!cache.full);
+        // A replacement may use the memory of the script it replaces.
+        assert_eq!(cache.insert("/a.php".into(), 2, 190 * 1024, 0, 0), Ok(()));
+        assert_eq!(cache.total_memory_consumption(), 190 * 1024);
+        // Less than MIN_FREE_MEMORY left: full.
+        assert!(matches!(
+            cache.insert("/c.php".into(), 1, 20 * 1024, 0, 0),
+            Err(InsertRefused::OutOfMemory { .. })
+        ));
+        assert!(cache.full);
+        // Invalidation releases memory.
+        assert!(cache.invalidate("/a.php", true, None, true));
+        assert_eq!(cache.total_memory_consumption(), 0);
+    }
+
+    #[test]
+    fn lookups_stat_only_when_revalidation_is_due() {
+        let stats = std::cell::Cell::new(0);
+        let mtime = |m: i64| {
+            let stats = &stats;
+            move || {
+                stats.set(stats.get() + 1);
+                Some(m)
+            }
+        };
+        let mut cache: ScriptCache<u8> = ScriptCache::new(100);
+        assert!(matches!(
+            cache.get("/a.php", mtime(5), true, 2, 100),
+            CacheLookup::Miss
+        ));
+        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        // Within revalidate_freq (2 s): no stat, even if the file changed.
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 101),
+            CacheLookup::Hit(7)
+        ));
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 102),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 0);
+        // Due (now > last check + freq): stat, unchanged, checked again.
+        assert!(matches!(
+            cache.get("/a.php", mtime(5), true, 2, 103),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 1);
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 105),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 1);
+        // Due and changed: evicted.
+        assert!(matches!(
+            cache.get("/a.php", mtime(6), true, 2, 106),
+            CacheLookup::Stale
+        ));
+        assert_eq!(stats.get(), 2);
+        assert!(!cache.is_cached("/a.php"));
+    }
+
+    #[test]
+    fn lookups_stat_every_time_without_revalidate_freq_and_never_without_validation() {
+        let stats = std::cell::Cell::new(0);
+        let unknown = || {
+            stats.set(stats.get() + 1);
+            None
+        };
+        let mut cache: ScriptCache<u8> = ScriptCache::new(100);
+        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        assert!(matches!(
+            cache.get("/a.php", || Some(5), true, 0, 100),
+            CacheLookup::Hit(7)
+        ));
+        assert!(matches!(
+            cache.get("/a.php", unknown, false, 0, 200),
+            CacheLookup::Hit(7)
+        ));
+        assert_eq!(stats.get(), 0);
+        // A script that can no longer be stat'ed is evicted.
+        assert!(matches!(
+            cache.get("/a.php", unknown, true, 0, 200),
+            CacheLookup::Stale
+        ));
+        assert_eq!(stats.get(), 1);
+        // Preloaded scripts (timestamp 0) are not checked.
+        cache.insert("/p.php".into(), 0, 1, 100, 8);
+        assert!(matches!(
+            cache.get("/p.php", || Some(9), true, 0, 300),
+            CacheLookup::Hit(8)
+        ));
     }
 
     #[test]
