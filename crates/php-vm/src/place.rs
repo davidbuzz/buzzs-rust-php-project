@@ -1793,6 +1793,16 @@ impl Vm {
         r
     }
 
+    /// Whether a write walk from `base` runs on the private table of a
+    /// plain local variable ([`CvWalk`]): it changes no symbol table, so
+    /// no frame needs synchronising afterwards.
+    #[inline]
+    fn cv_walk_private(&self, base: &RBase) -> bool {
+        matches!(base, RBase::Var(s, _)
+            if self.cv_root.as_ref().and_then(|r| r.walk.as_ref())
+                .is_some_and(|w| w.wrapped && Rc::ptr_eq(&w.store, s)))
+    }
+
     /// The [`CvRoot`] of a generic write to place `pid` of frame `fidx`
     /// (whose table is not attached): the frame is a function's and the
     /// place goes into a compiled variable (`$a[...]`, `$a->...`). A write
@@ -2354,11 +2364,7 @@ impl Vm {
     /// Runs a write operation on a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
-        // A walk from the private table of a plain local variable
-        // ([`CvRoot`]) changed no symbol table: nothing to bring back.
-        let private = matches!(&base, RBase::Var(s, _)
-            if self.cv_root.as_ref().and_then(|r| r.walk.as_ref())
-                .is_some_and(|w| w.wrapped && Rc::ptr_eq(&w.store, s)));
+        let private = self.cv_walk_private(&base);
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         if !private {
@@ -4317,10 +4323,13 @@ impl Vm {
                 drop(base2);
                 self.write_cached_container(&obj, idx, &segs, WOp::Assign(nv))
             } else {
+                let private = self.cv_walk_private(&base2);
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
-                self.frame_mut().sync_from_symbol_table();
-                self.sync_global_frames();
+                if !private {
+                    self.frame_mut().sync_from_symbol_table();
+                    self.sync_global_frames();
+                }
                 r
             };
             if let Some(q) = quiet {

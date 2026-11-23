@@ -113,6 +113,24 @@ impl std::fmt::Debug for VarNames {
     }
 }
 
+/// Whether `a` and `b` are the same handle (or equal scalars): a frame's
+/// compiled variable that already holds its symbol-table slot's value.
+#[inline]
+fn same_handle(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Str(x), Value::Str(y)) => ZStr::ptr_eq(x, y),
+        (Value::Array(x), Value::Array(y)) => php_runtime::ZArray::ptr_eq(x, y),
+        (Value::Object(x), Value::Object(y)) => Obj::ptr_eq(x, y),
+        (Value::Resource(x), Value::Resource(y)) => php_runtime::Resource::ptr_eq(x, y),
+        (Value::Reference(x), Value::Reference(y)) => PhpRef::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
 /// A variable table (symbol table): compiled variables plus dynamically
 /// created ones.
 #[derive(Debug, Default)]
@@ -203,6 +221,26 @@ impl VarStore {
             }
         }
         self.find(name)
+    }
+
+    /// [`VarStore::find_cv`] for a name that is usually the very string
+    /// the table holds (the op array's own `cv_names`): compared by
+    /// pointer before by bytes.
+    #[inline]
+    pub fn find_cv_z(&mut self, cv: usize, name: &ZStr) -> Option<u32> {
+        if self
+            .names
+            .get(cv)
+            .is_some_and(|n| ZStr::ptr_eq(n, name) || n.as_bytes() == name.as_bytes())
+        {
+            if self.slots.len() <= cv {
+                self.slots.resize(self.names.len().max(cv + 1), None);
+            }
+            if let Ok(i) = u32::try_from(cv) {
+                return Some(i);
+            }
+        }
+        self.find(name.as_bytes())
     }
 
     /// [`VarStore::find_cv`], creating the slot when the name is missing.
@@ -1989,7 +2027,7 @@ impl Frame {
         self.symtab_attached = false;
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let Some(idx) = st.find_cv(i, name.as_bytes()) else {
+            let Some(idx) = st.find_cv_z(i, name) else {
                 continue;
             };
             let Some(sv) = st.slots.get_mut(idx as usize) else {
@@ -2005,18 +2043,26 @@ impl Frame {
     }
 
     /// Synchronizes CV slots from the attached symbol table (`zend_detach_symbol_table`).
+    /// A CV already holding the slot's value (the same handle) is left as
+    /// it is: most are, when the table is synchronised after each write.
     pub fn sync_from_symbol_table(&mut self) {
         if !self.symtab_attached {
             return;
         }
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
-                let val = st.slots.get(slot as usize).cloned().flatten();
-                if let Some(cv) = self.cvs.get_mut(i) {
-                    if let Some(old) = cv.set(val) {
-                        crate::gc::release_duplicate(old);
-                    }
+            if let Some(slot) = st.find_cv_z(i, name) {
+                let Some(cv) = self.cvs.get_mut(i) else {
+                    continue;
+                };
+                let table = st.slots.get(slot as usize).and_then(Option::as_ref);
+                match (cv.get(), table) {
+                    (None, None) => continue,
+                    (Some(a), Some(b)) if same_handle(a, b) => continue,
+                    _ => {}
+                }
+                if let Some(old) = cv.set(table.cloned()) {
+                    crate::gc::release_duplicate(old);
                 }
             }
         }
@@ -2029,17 +2075,21 @@ impl Frame {
         }
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
+            if let Some(slot) = st.find_cv_z(i, name) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     // A CV that is `None` was never assigned in this frame
                     // (e.g. cleared by `clear_cv_for_symtab_slot` ahead of an
                     // in-place mutation of the shared slot); it must not wipe
                     // a live global slot that another frame still owns.
-                    if let Some(val) = self.cvs.get(i).and_then(CvSlot::get_clone) {
-                        if let Some(old) = std::mem::replace(&mut st.slots[slot], Some(val)) {
-                            crate::gc::release_duplicate(old);
-                        }
+                    let Some(cv) = self.cvs.get(i).and_then(CvSlot::get) else {
+                        continue;
+                    };
+                    if st.slots[slot].as_ref().is_some_and(|t| same_handle(t, cv)) {
+                        continue;
+                    }
+                    if let Some(old) = std::mem::replace(&mut st.slots[slot], Some(cv.clone())) {
+                        crate::gc::release_duplicate(old);
                     }
                 }
             }
