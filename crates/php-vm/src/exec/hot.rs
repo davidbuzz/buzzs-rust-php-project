@@ -141,6 +141,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFree { .. }
+            | Op::RecvInit { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
                 ..
@@ -873,6 +874,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             }
         }
+        // `RECV_INIT` of a parameter the call did not pass, whose default
+        // is a literal (the `RecvDefault` right after it).
+        Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
+            Some(next) => ip = next,
+            None => return DECLINED,
+        },
         _ => return DECLINED,
     }
     ip
@@ -926,6 +933,58 @@ fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32)
         *slot = Some(crate::vm::ForeachIter::Array { arr, pos: 0 });
     }
     Some(true)
+}
+
+/// `RECV_INIT` at `at` of parameter `n` into compiled variable `cv` when
+/// the call passed no argument for it and the op after it binds a literal
+/// default (`RecvDefault` of a literal, which `Vm::op_recv_default` checks
+/// against the declared type): the variable gets a copy of the literal and
+/// the `ip` after the `RecvDefault` is returned. `None`, having changed
+/// nothing, when the argument was passed (or left a named-argument gap),
+/// the default is computed by code, the parameter is by reference, its
+/// type would coerce or reject the literal, or the variable is not the
+/// undefined slot of a frame without a symbol table.
+#[inline]
+fn recv_literal_default_in(
+    f: &mut Frame,
+    ops: &[Op],
+    lits: &[Value],
+    at: usize,
+    n: u32,
+    cv: u32,
+) -> Option<usize> {
+    let Some(&Op::RecvDefault {
+        n: dn,
+        cv: dcv,
+        val: Operand::Lit(lit),
+    }) = ops.get(at + 1)
+    else {
+        return None;
+    };
+    if dn != n || dcv != cv || f.symtab_attached || (n as usize) < f.args.len() {
+        return None;
+    }
+    let value = lits.get(lit as usize)?;
+    if matches!(value, Value::Reference(_)) {
+        return None;
+    }
+    let param = f.ufunc.as_ref()?.params.get(n as usize)?;
+    if param.by_ref {
+        return None;
+    }
+    if let Some(ty) = &param.ty {
+        if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
+            return None;
+        }
+    }
+    let slot = f.cvs.get(cv as usize)?;
+    if slot.get().is_some() {
+        return None;
+    }
+    let old = slot.set(Some(crate::call::clone_value(value)));
+    debug_assert!(old.is_none());
+    drop(old);
+    Some(at + 2)
 }
 
 /// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`
