@@ -83,12 +83,15 @@ candidates for `perf/bench` and for work.
   global re-synchronisation after writes that do not touch `$GLOBALS` (7bf94dc6) and the
   name lookups of included files' frames (ff8f6d01); php-src points the attached frame's
   CVs into the table (`IS_INDIRECT`), so nothing is synchronised at all.
-- [ ] Per-process state built per request: php-cgi's FastCGI loop and php-fpm make a new
-  VM (module startup) for every request, `php -S` prepares the next one while idle;
-  php-src does module startup once per process. Until 23 Nov `php -S` forked per request,
-  which hid caches dropped at request end that php-src keeps (opcache's scripts,
-  e2a8ca7e; PCRE's compiled patterns, 282cffca): check the other extensions' `RSHUTDOWN`
-  resets against php-src's.
+- [ ] Per-request state in long-running workers: since 23 Nov `php -S` (72a3245f),
+  php-cgi's FastCGI loop and php-fpm (c3825834) keep one VM per worker and reset it
+  (`Vm::request_reset`, as mod_php did) instead of a new VM per request (a one-line page
+  22.0 M -> 1.9 M instructions; php-src 0.1 M). That exposed state that outlived the
+  request (SPL's autoloader registry, 6599a1a1; objects freed after the store reset,
+  6ab1cde9) and state dropped that php-src keeps (opcache's scripts, e2a8ca7e; PCRE's
+  compiled patterns, 282cffca). Still to do: compare every extension's thread-local state
+  and its `RINIT`/`RSHUTDOWN` resets with php-src's; the remaining 1.8 M instructions of
+  an empty request (`request_reset` rebuilds tables such as `CallBufs` and `ExtState`).
 - [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
   frame is swapped onto the stack and back; the rest is the builtin-method call machinery
   around `send()` and the nested `execute()`).
