@@ -312,10 +312,7 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
-            optimization_level: if self.ini.get_bool("opcache.enable")
-                && (self.ini.get_bool("opcache.enable_cli")
-                    || self.ini.get_bool("opcache.file_cache_only"))
-            {
+            optimization_level: if self.opcache_optimizes() {
                 // A zend_long whose low 32 bits are the passes: `-1` is all.
                 u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
                     .unwrap_or(0)
@@ -399,12 +396,28 @@ impl Vm {
         Ok(CompileOutcome::Ok(unit))
     }
 
+    /// `accel_sapi_is_cli()`: the CLI and phpdbg, the SAPIs whose opcache
+    /// `opcache.enable_cli` switches. The web SAPIs (`cli-server`,
+    /// `cgi-fcgi`, `fpm-fcgi`, `apache2handler`) need `opcache.enable` alone.
+    pub fn sapi_is_cli(&self) -> bool {
+        self.constants.get(b"PHP_SAPI".as_slice()).is_none_or(
+            |v| matches!(v, Value::Str(s) if matches!(s.as_bytes(), b"cli" | b"phpdbg")),
+        )
+    }
+
+    /// opcache compiles (and optimizes) this request's scripts: it is on
+    /// for this SAPI, or caches to files only.
+    fn opcache_optimizes(&self) -> bool {
+        self.ini.get_bool("opcache.enable")
+            && (!self.sapi_is_cli()
+                || self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+    }
+
     /// `opcache.opt_debug_level` asks for the op arrays of the scripts
     /// opcache optimizes (`ZEND_DUMP_AFTER_OPTIMIZER` and the DFA bits).
     pub(crate) fn opcache_dumps(&self) -> bool {
-        self.ini.get_bool("opcache.enable")
-            && (self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
+        self.opcache_optimizes()
             && self.ini.get_long("opcache.opt_debug_level")
                 & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
                     | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS

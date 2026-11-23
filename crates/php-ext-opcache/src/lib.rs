@@ -65,7 +65,8 @@ impl Extension for Opcache {
     }
 
     /// `accel_startup` in the parent of a pre-forking server: the restart
-    /// counters are shared with the workers forked next (GH-8739).
+    /// counters are shared with the workers forked next (GH-8739). Only
+    /// `php -S` calls this, a web SAPI, so `opcache.enable_cli` does not apply.
     fn process_startup(&self, ini: &[(String, String)]) {
         let setting = |name: &str, default: bool| {
             ini.iter()
@@ -78,7 +79,7 @@ impl Extension for Opcache {
                     )
                 })
         };
-        if setting("opcache.enable", true) && setting("opcache.enable_cli", false) {
+        if setting("opcache.enable", true) {
             php_opcache::shared_index::init_restarts();
         }
     }
@@ -757,10 +758,14 @@ fn ensure_system_id(vm: &Vm) {
     file_cache::set_system_id(file_cache::compute_system_id(names));
 }
 
+/// `opcache.enable_cli` for the CLI and phpdbg, always on for the web
+/// SAPIs: the `accel_startup` check "Opcode Caching is disabled for CLI".
+fn enabled_for_sapi(vm: &Vm) -> bool {
+    vm.ini_bool("opcache.enable_cli") || !vm.sapi_is_cli()
+}
+
 fn is_opcache_enabled(vm: &Vm) -> bool {
-    let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
-    enable && enable_cli
+    vm.ini_bool("opcache.enable") && enabled_for_sapi(vm)
 }
 
 fn get_ini_string(vm: &Vm, name: &str) -> String {
@@ -919,12 +924,12 @@ fn opcache_compile_hook(
     sync_preload_stats();
 
     let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
+    let for_sapi = enabled_for_sapi(vm);
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
     ensure_system_id(vm);
 
-    if !enable || (!enable_cli && !file_cache_only) {
+    if !enable || (!for_sapi && !file_cache_only) {
         return vm.compile_source_default(src, filename, false, skip_shebang);
     }
     // The index the processes forked from this one share (opened before
@@ -1508,7 +1513,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let filename_z = a.str(0);
 
     let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+        && (enabled_for_sapi(vm) || vm.ini_bool("opcache.file_cache_only"));
     if !enabled {
         let (file, line) = vm.current_location();
         let file_s = file.to_string_lossy();
@@ -1901,7 +1906,7 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let filename_z = a.str(0);
     let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+        && (enabled_for_sapi(vm) || vm.ini_bool("opcache.file_cache_only"));
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
     ensure_system_id(vm);
     if !enabled || file_cache_dir.is_empty() {
