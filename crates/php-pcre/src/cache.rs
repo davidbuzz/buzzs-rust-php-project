@@ -74,33 +74,56 @@ impl Default for MatchConfig {
     }
 }
 
-/// FNV-1a over the cache key.
+/// The hash of a cache key: rustc's `FxHasher` mixing, a word of eight
+/// bytes per step, with a final 128-bit multiply fold so that the high bits
+/// the table's probe tags come from depend on every byte.
 ///
 /// Every `preg_*` call looks its pattern up, so the hash is on the hot path
 /// of tight matching loops; `SipHash`'s flooding resistance buys nothing for
 /// keys that are the script's own pattern literals (PHP hashes them with
-/// plain DJBX33A) and costs most of a cache hit.
-#[derive(Debug, Clone, Copy)]
+/// plain DJBX33A), and a byte-at-a-time hash (FNV-1a, used before) cost
+/// four instructions a byte of the pattern on every call.
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PatternHasher(u64);
 
-impl Default for PatternHasher {
-    fn default() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
+/// rustc's `FxHasher` multiplier.
+const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+/// The multiplier of the final fold (`rustc-hash` 2's `K`).
+const FOLD: u64 = 0xf1_35_7a_ea_2e_62_a9_c5;
+
+impl PatternHasher {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(SEED);
     }
 }
 
 impl Hasher for PatternHasher {
+    #[allow(clippy::cast_possible_truncation)] // folds the 128-bit product
     fn finish(&self) -> u64 {
-        self.0
+        let p = u128::from(self.0) * u128::from(FOLD);
+        (p as u64) ^ ((p >> 64) as u64)
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let mut h = self.0;
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(c);
+            self.add(u64::from_le_bytes(word));
         }
-        self.0 = h;
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut word = [0u8; 8];
+            word[..rest.len()].copy_from_slice(rest);
+            // The length keeps "a" and "a\0" apart.
+            self.add(u64::from_le_bytes(word) ^ ((rest.len() as u64) << 56));
+        }
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
     }
 }
 
@@ -396,12 +419,27 @@ mod tests {
     }
 
     #[test]
-    fn pattern_hasher_is_fnv1a() {
-        let mut h = PatternHasher::default();
-        h.write(b"");
-        assert_eq!(h.finish(), 0xcbf2_9ce4_8422_2325);
-        h.write(b"a");
-        assert_eq!(h.finish(), 0xaf63_dc4c_8601_ec8c);
+    fn pattern_hasher_tells_keys_apart() {
+        let hash = |key: &[u8]| {
+            let mut h = PatternHasher::default();
+            std::hash::Hash::hash(key, &mut h);
+            h.finish()
+        };
+        let keys: [&[u8]; 8] = [
+            b"",
+            b"a",
+            b"a\0",
+            b"/x/",
+            b"/x/i",
+            b"/abcdefgh/",
+            b"/abcdefgh/u",
+            b"/abcdefgi/",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for k in keys {
+            assert!(seen.insert(hash(k)), "collision for {k:?}");
+        }
+        assert_eq!(hash(b"/x/"), hash(b"/x/"));
     }
 
     #[test]
