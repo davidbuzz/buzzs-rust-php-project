@@ -201,10 +201,8 @@ pub(crate) fn fastcgi_request(
         ini: ini.clone(),
         extensions: extensions::all,
     };
-    let mut prepared = new_prepared_vm(cfg, ini);
-    if let Some(f) = hooks.vm_setup {
-        f(&mut prepared.vm);
-    }
+    let mut prepared = worker_vm(cfg, &ini, hooks.vm_setup);
+    let slot = prepared.slot.clone();
     for name in &hooks.locked {
         // `fpm_php_zend_ini_alter_master()` with `ZEND_INI_SYSTEM`: the
         // entry's `modifiable` becomes `PHP_INI_SYSTEM`.
@@ -260,8 +258,43 @@ pub(crate) fn fastcgi_request(
     vm.ini_deactivate();
     conn.finish_request(false);
     drop(ctx);
-    drop(vm);
+    keep_worker_vm(ini, PreparedVm { vm, slot });
     done
+}
+
+/// A worker's VM and the INI settings it was made from.
+type KeptVm = (Vec<(String, String)>, PreparedVm);
+
+thread_local! {
+    /// The FastCGI worker's VM between requests (see [`worker_vm`]).
+    static WORKER_VM: RefCell<Option<KeptVm>> = const { RefCell::new(None) };
+}
+
+/// The VM for a `FastCGI` request: the worker's from its earlier requests
+/// when it was made from the same INI settings (module startup runs once
+/// per process, as in php-src), else a new one, set up by `setup`.
+fn worker_vm(cfg: &Config, ini: &[(String, String)], setup: Option<fn(&mut Vm)>) -> PreparedVm {
+    let kept = WORKER_VM
+        .with(|w| w.borrow_mut().take())
+        .filter(|(made_from, _)| made_from.as_slice() == ini)
+        .map(|(_, p)| p);
+    if let Some(p) = kept {
+        return p;
+    }
+    let mut p = new_prepared_vm(cfg, ini.to_vec());
+    if let Some(f) = setup {
+        f(&mut p.vm);
+    }
+    p
+}
+
+/// `php_request_shutdown()` for the worker: its VM goes back to its
+/// start-of-request state for the next request (`Vm::request_reset`, as
+/// `mod_php` and `php -S` do), without the connection's log hook.
+fn keep_worker_vm(ini: Vec<(String, String)>, mut prepared: PreparedVm) {
+    prepared.vm.log_hook = None;
+    prepared.vm.request_reset();
+    WORKER_VM.with(|w| *w.borrow_mut() = Some((ini, prepared)));
 }
 
 /// A directory's `.user.ini` entries and when they expire
