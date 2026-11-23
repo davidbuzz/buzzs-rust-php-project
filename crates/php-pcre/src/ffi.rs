@@ -247,6 +247,31 @@ impl Drop for JitStack {
     }
 }
 
+/// Whether the byte after the non-empty `bytes` would be on another page:
+/// their end is a multiple of 4096 (every page size is). PCRE2's
+/// vectorised scans (aarch64 NEON, libpcre2 10.46) read the aligned
+/// 16-byte block at the current position even when it is the subject's
+/// end; php-src's subjects always have a readable NUL there (a
+/// `zend_string` is terminated), but a byte string here may end right
+/// before an unmapped page, and such a scan then faults: an intermittent
+/// crash of the Laravel app's feature tests, depending on where the
+/// allocator put a subject.
+#[inline]
+pub(crate) fn ends_on_page_boundary(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && (bytes.as_ptr() as usize).wrapping_add(bytes.len()) % 4096 == 0
+}
+
+/// `bytes` followed by a NUL, in a buffer of its own: the subject's bytes
+/// with a readable byte after them (see [`ends_on_page_boundary`]).
+#[cold]
+#[inline(never)]
+fn padded_copy(bytes: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(bytes.len() + 1);
+    v.extend_from_slice(bytes);
+    v.push(0);
+    v
+}
+
 thread_local! {
     static JIT_STACK: OnceCell<Option<JitStack>> = const { OnceCell::new() };
 }
@@ -447,10 +472,23 @@ impl MatchData {
         options: u32,
         ctx: &MatchContext,
     ) -> i32 {
+        // A subject that ends on a page boundary is matched in a copy with
+        // a byte after it ([`ends_on_page_boundary`]); the offsets PCRE2
+        // reports are relative to the subject, so the copy is invisible.
+        let padded;
+        let subject = if ends_on_page_boundary(subject) {
+            padded = padded_copy(subject);
+            &padded[..subject.len()]
+        } else {
+            subject
+        };
         // SAFETY: all pointers are valid for the duration of the call; the
         // subject slice is live (an empty one is given a real address, see
-        // `nonempty_ptr`) and its exact length is passed; PCRE2 checks
-        // `start` against the length itself (PCRE2_ERROR_BADOFFSET).
+        // `nonempty_ptr`, and the byte after a non-empty one is readable,
+        // see above) and its exact length is passed; PCRE2 checks `start`
+        // against the length itself (PCRE2_ERROR_BADOFFSET). Nothing keeps
+        // the subject's address past the call (only the ovector's offsets
+        // and the mark, which is in the pattern, are read afterwards).
         unsafe {
             sys::pcre2_match_8(
                 code.ptr.as_ptr(),
