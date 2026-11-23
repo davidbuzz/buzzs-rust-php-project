@@ -135,13 +135,21 @@ impl CtConstants {
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
+        type Memo = Option<(std::rc::Weak<crate::class::NameMap<Value>>, u64)>;
         thread_local! {
-            static MEMO: std::cell::Cell<(usize, u64)> = const { std::cell::Cell::new((0, 0)) };
+            /// The table last fingerprinted and its fingerprint. The table
+            /// is held weakly: that keeps its allocation, so a table built
+            /// later cannot have its address and take its fingerprint.
+            static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
         }
-        let key = Rc::as_ptr(&self.0) as usize;
-        let (memo_key, memo) = MEMO.with(std::cell::Cell::get);
-        if memo_key == key {
-            return memo;
+        let memo = MEMO.with(|m| {
+            m.borrow()
+                .as_ref()
+                .filter(|(table, _)| std::ptr::eq(table.as_ptr(), Rc::as_ptr(&self.0)))
+                .map(|(_, fp)| *fp)
+        });
+        if let Some(fp) = memo {
+            return fp;
         }
         let mut entries: Vec<(&[u8], &Value)> =
             self.0.iter().map(|(k, v)| (k.as_bytes(), v)).collect();
@@ -160,7 +168,7 @@ impl CtConstants {
             }
         }
         let fp = h.finish();
-        MEMO.with(|m| m.set((key, fp)));
+        MEMO.with(|m| *m.borrow_mut() = Some((Rc::downgrade(&self.0), fp)));
         fp
     }
 }
