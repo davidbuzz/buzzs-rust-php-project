@@ -16,8 +16,8 @@
 use super::codec::{Codec, DResult, DecodeError, EResult, Reader, Writer};
 use crate::opcode::{
     ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, FramelessCall, IncDecKind,
-    IncludeKind, LiveTmp, MatchKey, MatchTable, Op, Operand, Place, PlaceBase, Seg, StaticVarDecl,
-    TryEntry, UnKind,
+    IncludeKind, LiveTmp, MatchKey, MatchTable, NullChain, Op, Operand, Place, PlaceBase, Seg,
+    StaticVarDecl, TryEntry, UnKind,
 };
 
 /// The integer type an enum tag is written as.
@@ -208,6 +208,15 @@ struct_codec!(FramelessCall {
     vals,
     argc,
     dst,
+    init_back,
+    send_back,
+});
+
+enum_codec!(NullChain: u8 {
+    Expr = 0,
+    Quiet = 1,
+    Isset = 2,
+    Empty = 3,
 });
 
 enum_codec!(ForeachKind: u8 {
@@ -273,7 +282,7 @@ enum_codec!(Op: u16 {
         JmpNzEx { a, dst, target } = 15,
         JmpSet { a, dst, target } = 16,
         Coalesce { a, dst, target } = 17,
-        JmpNull { a, dst, target } = 18,
+        JmpNull { a, dst, target, chain } = 18,
         AssignCv { cv, val, dst } = 19,
         Assign { place, val, dst } = 20,
         AssignOp { place, op, val, dst } = 21,
@@ -327,7 +336,7 @@ enum_codec!(Op: u16 {
         InstanceOf { a, class, dst } = 69,
         Clone { a, dst } = 70,
         FuncNumArgs { dst } = 71,
-        FuncGetArgs { dst } = 72,
+        FuncGetArgs { dst, skip } = 72,
         Strlen { a, dst } = 73,
         Count { a, dst, sizeof } = 74,
         TypeCheck { a, mask, dst } = 75,

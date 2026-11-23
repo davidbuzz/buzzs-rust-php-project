@@ -151,21 +151,48 @@ impl Encoder<'_> {
         if !new {
             return Ok(());
         }
-        code.ops.encode(self.w)?;
-        code.lines.encode(self.w)?;
-        code.literals.encode(self.w)?;
-        code.places.encode(self.w)?;
-        code.cv_names.encode(self.w)?;
-        self.w.u32(code.num_tmps);
-        self.w.u32(code.num_iters);
-        self.w.u32(code.num_finally);
-        self.w.u32(code.num_statics);
-        code.static_vars.encode(self.w)?;
-        code.try_table.encode(self.w)?;
-        code.live_tmps.encode(self.w)?;
-        self.w.zstr(&code.filename);
-        self.w.bool(code.strict_types);
-        self.table(&code.decls);
+        // Every field, so a new one is a compile error here until it is
+        // encoded (or named as a run-time cache, rebuilt empty on decode).
+        let OpArray {
+            ops,
+            lines,
+            literals,
+            places,
+            cv_names,
+            num_tmps,
+            num_iters,
+            num_finally,
+            num_statics,
+            static_vars,
+            try_table,
+            live_tmps,
+            filename,
+            strict_types,
+            decls,
+            dropped_tmps,
+            fcall_cache: _,
+            class_cache: _,
+            rt_cache: _,
+            prop_cache: _,
+            method_cache: _,
+            tape: _,
+        } = &**code;
+        ops.encode(self.w)?;
+        lines.encode(self.w)?;
+        literals.encode(self.w)?;
+        places.encode(self.w)?;
+        cv_names.encode(self.w)?;
+        self.w.u32(*num_tmps);
+        self.w.u32(*num_iters);
+        self.w.u32(*num_finally);
+        self.w.u32(*num_statics);
+        static_vars.encode(self.w)?;
+        try_table.encode(self.w)?;
+        live_tmps.encode(self.w)?;
+        self.w.zstr(filename);
+        self.w.bool(*strict_types);
+        self.table(decls);
+        dropped_tmps.encode(self.w)?;
         Ok(())
     }
 
@@ -494,6 +521,7 @@ impl Decoder<'_, '_> {
             filename: self.r.zstr()?,
             strict_types: self.r.bool()?,
             decls: self.table()?,
+            dropped_tmps: Vec::decode(self.r)?,
             fcall_cache: RefCell::new(Vec::new()),
             class_cache: RefCell::new(Vec::new()),
             rt_cache: crate::rtcache::RuntimeCache::default(),
