@@ -3526,6 +3526,11 @@ impl Vm {
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
+        // A resolution left by an earlier builtin's callable argument is
+        // not this call's.
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
         let ctor_this = if call.is_ctor {
             call.this.clone()
         } else {
@@ -3874,7 +3879,18 @@ impl Vm {
             && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
             && !(ty.allows_null() && v.is_null())
         {
-            if let Err(why) = self.zend_is_callable(v, true)? {
+            let resolved = self.zend_is_callable(v, true)?;
+            if let Ok(call) = resolved {
+                // `Z_PARAM_FUNC` hands the resolution to the function
+                // (`zend_fcall_info_cache`): `call_user_func[_array]()`
+                // takes it instead of resolving the callable again, when
+                // resolving it cannot raise a callable deprecation.
+                if plain_callable(v) {
+                    self.checked_callable = Some((v.clone(), call));
+                }
+                return Ok(());
+            }
+            if let Err(why) = resolved {
                 // `Z_PARAM_FUNC` checks without suppressing the callable
                 // deprecations; a valid callable emits them when the
                 // function resolves it, an invalid one here (a class that
@@ -5054,6 +5070,37 @@ fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
                 && !rt.is_never()
                 && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
         }
+    }
+}
+
+/// A callable whose resolution raises no deprecation, with or without
+/// them suppressed: a function name, a closure or invokable object, or an
+/// object with a plain method name (`self::`/`parent::`/`static::` forms
+/// and `Class::method` strings are left out).
+fn plain_callable(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => !s.as_bytes().contains(&b':'),
+        Value::Object(_) => true,
+        Value::Array(a) => {
+            a.len() == 2
+                && matches!(
+                    a.get(&php_runtime::ArrayKey::Int(0)),
+                    Some(Value::Object(_))
+                )
+                && matches!(a.get(&php_runtime::ArrayKey::Int(1)),
+                    Some(Value::Str(m)) if !m.as_bytes().contains(&b':'))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `a` and `b` are the same callable value (the same handle).
+pub(crate) fn same_callable(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Str(x), Value::Str(y)) => ZStr::ptr_eq(x, y),
+        (Value::Object(x), Value::Object(y)) => php_runtime::Obj::ptr_eq(x, y),
+        (Value::Array(x), Value::Array(y)) => php_runtime::ZArray::ptr_eq(x, y),
+        _ => false,
     }
 }
 

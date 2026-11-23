@@ -1824,7 +1824,14 @@ fn cuf_call(
     // (frameless here), whose unused result triggers `#[\NoDiscard]`.
     let discarded =
         vm.pending_call_dst.is_none() && vm.frames.last().is_some_and(|f| f.builtin_name.is_none());
-    let call = match vm.zend_is_callable(cb, false) {
+    // The resolution the callable argument's check made (see
+    // `coerce_builtin_arg`), when it was this callable's.
+    let checked = vm
+        .checked_callable
+        .take()
+        .filter(|(v, _)| crate::call::same_callable(v, cb))
+        .map(|(_, call)| call);
+    let call = match checked.map_or_else(|| vm.zend_is_callable(cb, false), |c| Ok(Ok(c))) {
         Ok(Ok(call)) => call,
         Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
         Err(Throw::Exception(prev))

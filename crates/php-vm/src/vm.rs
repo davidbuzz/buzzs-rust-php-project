@@ -2507,6 +2507,9 @@ pub struct Vm {
     pub(crate) cv_root: Option<crate::place::CvRoot>,
     /// The private table kept for the next [`Vm::cv_root`].
     pub(crate) cv_scratch: Option<Rc<RefCell<VarStore>>>,
+    /// The resolution of the running builtin's callable argument, made by
+    /// its parameter check, for `call_user_func[_array]()` to take.
+    pub(crate) checked_callable: Option<(Value, PendingCall)>,
     /// `global $name` slots by the address of the name literal (see
     /// `Vm::global_ref_lit`): (address, slot of the global table).
     pub(crate) global_slot_cache: [(usize, u32); crate::place::GLOBAL_SLOT_CACHE],
