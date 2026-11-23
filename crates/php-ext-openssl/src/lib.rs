@@ -99,6 +99,9 @@ impl Extension for OpenSsl {
         crypto::register(m);
         smime::register(m);
         xp::register();
-        m.on_request_shutdown(state::reset);
+        m.on_request_shutdown(|vm| {
+            state::reset(vm);
+            xp::reset_request();
+        });
     }
 }

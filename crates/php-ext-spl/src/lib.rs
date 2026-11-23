@@ -41,7 +41,12 @@ impl Extension for Spl {
         m.on_request_shutdown(files::shutdown);
         // `PHP_RINIT(spl)`: the autoloader registry is the request's (a
         // server process runs many requests on one thread).
-        m.on_request_startup(|_| php_spl::functions::reset_request());
+        // The class cache of the `create_object` hook too (class addresses
+        // are reused from one request to the next).
+        m.on_request_startup(|_| {
+            php_spl::functions::reset_request();
+            hooks::reset_bases();
+        });
     }
 }
 

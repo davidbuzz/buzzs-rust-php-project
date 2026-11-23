@@ -69,6 +69,12 @@ thread_local! {
     static IDENTITIES: RefCell<HashMap<usize, Vec<u8>>> = RefCell::new(HashMap::new());
 }
 
+/// Forgets this request's callables and identities ([`super::reset_request`]).
+pub(super) fn reset_request() {
+    REGISTRY.with(|r| r.borrow_mut().clear());
+    IDENTITIES.with(|m| m.borrow_mut().clear());
+}
+
 fn callbacks_of_ssl(ssl: *const SSL) -> Callbacks {
     // SAFETY: `ssl` is the live handle OpenSSL passed to the callback.
     let ctx = unsafe { openssl_sys::SSL_get_SSL_CTX(ssl) } as usize;

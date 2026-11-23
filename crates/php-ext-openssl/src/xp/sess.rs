@@ -71,6 +71,12 @@ pub(crate) fn take_pending() -> Option<Throw> {
     PENDING.with(|p| p.borrow_mut().take())
 }
 
+/// Forgets this request's callables ([`super::reset_request`]).
+pub(super) fn reset_request() {
+    REGISTRY.with(|r| r.borrow_mut().clear());
+    CURRENT.with(|c| c.set(0));
+}
+
 fn register(cbs: Callbacks) -> usize {
     REGISTRY.with(|r| {
         let mut r = r.borrow_mut();

@@ -42,6 +42,11 @@ thread_local! {
     static CALLBACKS: RefCell<HashMap<usize, Value>> = RefCell::new(HashMap::new());
 }
 
+/// Forgets this request's callables ([`super::reset_request`]).
+pub(super) fn reset_request() {
+    CALLBACKS.with(|c| c.borrow_mut().clear());
+}
+
 /// `php_openssl_setup_client_early_data`: the payload, or `Err(())` after
 /// queueing the `TypeError`.
 pub(crate) fn client_payload(vm: &mut Vm, opts: &SslOpts) -> Result<Option<Vec<u8>>, ()> {

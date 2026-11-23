@@ -61,8 +61,20 @@ fn filesystem_destroy(vm: &mut Vm, o: &Obj) -> VmResult<()> {
 
 thread_local! {
     /// The stateful SPL base of each class seen by [`create`], keyed by
-    /// the class address (classes live for the whole request).
-    static BASES: RefCell<HashMap<usize, Option<&'static str>>> = RefCell::new(HashMap::new());
+    /// the class address. A class lives for its request only, so the map
+    /// is emptied at every request startup ([`reset_bases`]): the next
+    /// request of a long-running worker may reuse the address for another
+    /// class. It has room for the classes of a typical request from the
+    /// start, so the first `new` of an SPL class does not allocate while
+    /// the script runs (no `memory_get_usage()` delta: php-src keeps the
+    /// handler in each class's `create_object`).
+    static BASES: RefCell<HashMap<usize, Option<&'static str>>> =
+        RefCell::new(HashMap::with_capacity(64));
+}
+
+/// Empties the class cache of [`create`] for a new request (`PHP_RINIT`).
+pub(crate) fn reset_bases() {
+    BASES.with(|m| m.borrow_mut().clear());
 }
 
 /// The nearest stateful SPL ancestor of `cls` (or `cls` itself).

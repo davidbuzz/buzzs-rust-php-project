@@ -18,9 +18,19 @@ use crate::run;
 use crate::state::{bind_node_object, dom_object, to_dom, to_value, DomIter, DomState};
 
 thread_local! {
-    /// Class (by address) → built-in DOM class it derives from.
+    /// Class (by address) → built-in DOM class it derives from. A class
+    /// lives for its request only, so the map is emptied at every request
+    /// startup ([`reset_builtin_cache`]): the next request of a
+    /// long-running worker may reuse the address for another class. It
+    /// has room for a typical request's classes from the start, so the
+    /// first DOM object of a script does not allocate it.
     static BUILTIN: std::cell::RefCell<std::collections::HashMap<usize, Option<&'static str>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+        std::cell::RefCell::new(std::collections::HashMap::with_capacity(64));
+}
+
+/// Empties [`builtin_of_class`]'s cache for a new request.
+pub(crate) fn reset_builtin_cache() {
+    BUILTIN.with(|m| m.borrow_mut().clear());
 }
 
 /// The built-in DOM class a class derives from.

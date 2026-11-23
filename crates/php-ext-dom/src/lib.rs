@@ -295,6 +295,9 @@ impl Extension for Dom {
             import_simplexml,
         );
         php_ext_xsl::access::register(&xsl::ACCESS);
+        // The class cache of the object hooks is the request's (class
+        // addresses are reused from one request to the next).
+        m.on_request_startup(|_| hooks::reset_builtin_cache());
     }
 }
 

@@ -21,6 +21,19 @@ mod reneg;
 mod sess;
 mod sock;
 
+/// `RSHUTDOWN`: forgets the PHP callables (session, PSK and early-data
+/// callbacks) and PSK identities registered for this request's contexts.
+/// php-src keeps them with the stream and frees them when it closes;
+/// every stream that has them is closed by the end of the request
+/// (persistent streams cannot have them), and a long-running worker's
+/// next request must neither keep them alive nor find them under a
+/// reused `SSL_CTX` address.
+pub(crate) fn reset_request() {
+    psk::reset_request();
+    sess::reset_request();
+    early::reset_request();
+}
+
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{BorrowedFd, FromRawFd};
 use std::time::{Duration, Instant};
