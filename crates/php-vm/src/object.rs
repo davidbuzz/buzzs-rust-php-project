@@ -617,6 +617,53 @@ pub(crate) fn prewarm_store() {
     STORE.with(|_| {});
 }
 
+/// `zend_objects_store_free_object_storage()` at the end of a request.
+///
+/// What is still alive once the request's variables, frames and tables are
+/// released is what the request leaked to cycles. php-src frees it with
+/// the request's memory; kept, it would grow a long-running worker by every
+/// request, and the next request's collector would find (and count) it.
+/// With destructors off (`zend_objects_store_mark_destructed`: the shutdown
+/// destructors have run, or a fatal error skipped them), the properties and
+/// native state of every live object are released in reverse handle order
+/// (`free_obj`), which frees each cycle through an object; then the
+/// references the collector buffered are emptied, which frees the cycles of
+/// arrays and references alone.
+pub(crate) fn free_object_storage() {
+    let live = live_objects();
+    let refs = php_runtime::ref_roots::take();
+    if live.is_empty() && refs.is_empty() {
+        return;
+    }
+    for o in &live {
+        let d = data(o);
+        d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+    }
+    for o in live.iter().rev() {
+        let d = data(o);
+        // Everything is taken out before anything is released; the
+        // objects themselves are freed once `live` goes.
+        let slots: Vec<Option<Value>> = d
+            .slots
+            .try_borrow_mut()
+            .map(|mut s| s.iter_mut().map(Option::take).collect())
+            .unwrap_or_default();
+        let dynamic = d.dynamic.try_borrow_mut().ok().and_then(|mut t| t.take());
+        let internal = d.internal.try_borrow_mut().ok().and_then(|mut t| t.take());
+        let lazy = d.lazy.try_borrow_mut().ok().and_then(|mut t| t.take());
+        drop((slots, dynamic, internal, lazy));
+    }
+    for r in &refs {
+        if let Value::Reference(r) = r {
+            drop(r.set(Value::Null));
+        }
+    }
+    drop(refs);
+    drop(live);
+    // The references the releases above buffered.
+    drop(php_runtime::ref_roots::take());
+}
+
 /// Resets the thread-local object store and handle counters for a new request.
 pub fn reset_store() {
     STORE.with(|s| *s.borrow_mut() = ObjectStore::default());

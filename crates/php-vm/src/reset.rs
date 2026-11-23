@@ -61,6 +61,7 @@ impl Vm {
     /// drops user functions, classes and constants, resets superglobals,
     /// statics, autoloaders, error handlers, output buffers, headers, INI,
     /// handle counter and extension state.
+    #[allow(clippy::too_many_lines)] // php_request_shutdown()'s steps, in order
     pub fn request_reset(&mut self) {
         // Ensure request shutdown hooks ran if not already completed.
         if !self.in_shutdown {
@@ -189,8 +190,8 @@ impl Vm {
             self.sync_ini(n);
         }
 
-        // 10. Handle counter & object store: emptied last (below), once
-        // nothing of the request holds an object any more.
+        // 10. Handle counter, object store and collector: emptied last
+        // (below), once nothing of the request holds an object any more.
 
         // 11. Extensions and runtime subsystems.
         crate::auto_globals::reset();
@@ -199,7 +200,6 @@ impl Vm {
         crate::typed_refs::reset();
         crate::builtins::dump::reset();
         crate::interrupt::clear_interrupt();
-        crate::gc::request_startup(self.ini.get_bool("zend.enable_gc"));
         crate::object::set_destructors_enabled(true);
         // `zend_init_rsrc_list()`: every request numbers its resources from
         // `Resource id #1` (the request's streams were closed at shutdown).
@@ -248,7 +248,11 @@ impl Vm {
         self.checked_callable = None;
         // Last: an aborted shutdown (a fatal error in a shutdown function)
         // leaves the request's objects to the drops above, which put their
-        // handles back on the store's free list.
+        // handles back on the store's free list. What the request leaked to
+        // cycles is freed with it, then the collector starts over
+        // (`gc_reset()`), without the roots those releases buffered.
+        crate::object::free_object_storage();
+        crate::gc::request_startup(self.ini.get_bool("zend.enable_gc"));
         crate::object::reset_store();
     }
 }
@@ -283,11 +287,11 @@ mod tests {
         let sink = Sink::default();
         let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
         vm.run_script(b"<?php class_alias('stdclass', 'foo');", "req1.php");
-        assert!(vm.classes.get(&ZStr::from("foo")).is_some());
+        assert!(vm.classes.contains_key(&ZStr::from("foo")));
         vm.request_reset();
-        assert!(vm.classes.get(&ZStr::from("foo")).is_none(), "alias kept");
+        assert!(!vm.classes.contains_key(&ZStr::from("foo")), "alias kept");
         assert!(
-            vm.classes.get(&ZStr::from("stdclass")).is_some(),
+            vm.classes.contains_key(&ZStr::from("stdclass")),
             "stdClass dropped"
         );
         sink.0.borrow_mut().clear();
@@ -309,6 +313,40 @@ mod tests {
             b"<?php function func() {} echo (new ReflectionFunction(func(...)))->getNumberOfParameters();",
             "req2.php",
         );
+        assert_eq!(sink.0.borrow().as_slice(), b"0");
+    }
+
+    /// What a request leaked to cycles (through properties, a reference to
+    /// the object itself, an array holding a reference to itself) is freed
+    /// by the reset, and the next request's collector finds none of it
+    /// (`gc_collect_cycles()` gave 60 on the php -S that ran such a
+    /// script before; php-src frees it with the request's memory).
+    #[test]
+    fn request_reset_frees_what_the_request_leaked_to_cycles() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            b"<?php class N { public $p; }
+            for ($i = 0; $i < 3; $i++) {
+                $a = new N; $b = new N; $a->p = $b; $b->p = $a;
+                $o = new N; $o->p = &$o;
+                $r = [new N]; $r[] = &$r;
+            }
+            unset($a, $b, $o, $r);",
+            "req1.php",
+        );
+        let leaked: Vec<php_runtime::ObjWeak> = crate::object::live_objects()
+            .iter()
+            .map(php_runtime::Obj::downgrade)
+            .collect();
+        assert_eq!(leaked.len(), 8, "three pairs and the last two self-cycles");
+        vm.request_reset();
+        assert!(
+            leaked.iter().all(|w| w.upgrade().is_none()),
+            "a cycle outlived its request"
+        );
+        sink.0.borrow_mut().clear();
+        vm.run_script(b"<?php echo gc_collect_cycles();", "req2.php");
         assert_eq!(sink.0.borrow().as_slice(), b"0");
     }
 
