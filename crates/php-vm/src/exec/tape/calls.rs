@@ -317,7 +317,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     }
     let cls_addr = Rc::as_ptr(cls) as usize;
     let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-    let (uf, scope, is_static) = {
+    let (func, scope, is_static) = {
         let cache = caller.code.method_cache.borrow();
         let cached = cache.get(slot)?.as_ref()?;
         if cached.class_addr != cls_addr
@@ -326,17 +326,21 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
         {
             return None;
         }
-        let Some(Func::User(uf)) = cached.func.get() else {
-            return None;
-        };
         (
-            uf,
+            cached.func.get()?,
             cached
                 .method_scope
                 .as_ref()
                 .and_then(std::rc::Weak::upgrade),
             cached.is_static,
         )
+    };
+    let uf = match func {
+        Func::User(uf) => uf,
+        Func::Builtin(b) => {
+            let called_class = Rc::clone(cls);
+            return prepare_native_method(caller, frame, obj, b, scope, is_static, called_class);
+        }
     };
     if uf.call_shape() == CallShape::NOT_PLAIN {
         return None;
@@ -363,6 +367,60 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     Some(Prepared {
         limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
+        n: 0,
+        calls_len,
+        fcall: false,
+        closure: false,
+        ctor: false,
+    })
+}
+
+/// [`prepare_method`] of a builtin method (`ReflectionMethod::getName()`)
+/// whose call is plain: called by [`call_native`] like a builtin function,
+/// with `$this` (taken as [`prepare_method`] takes it) and the scopes on
+/// the pooled frame. Out of line, so that the user method's path keeps
+/// its code.
+#[inline(never)]
+fn prepare_native_method(
+    caller: &mut crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    obj: Operand,
+    b: Rc<Builtin>,
+    scope: Option<Rc<crate::class::Class>>,
+    is_static: bool,
+    called_class: Rc<crate::class::Class>,
+) -> Option<Prepared> {
+    if b.plain_call() != PlainCall::Named || !frame.args.is_empty() {
+        return None;
+    }
+    let (this, released) = match obj {
+        Operand::Tmp(t) => match caller.tmps.get_mut(t as usize).map(std::mem::take) {
+            Some(Value::Object(held)) if !is_static => (Some(held), None),
+            other => (None, other),
+        },
+        _ if is_static => (None, None),
+        Operand::Cv(cv) => match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(Value::Object(o)) => (Some(o.clone()), None),
+            _ => return None,
+        },
+        Operand::Unused => (Some(caller.this.clone()?), None),
+        _ => return None,
+    };
+    // Past the declared parameters only into a variadic one (else the
+    // generic call reports the count).
+    let limit = if b.flags & flags::VARIADIC != 0 {
+        MAX_ARGS
+    } else {
+        b.signature().params.len().min(MAX_ARGS)
+    };
+    frame.this = this;
+    frame.scope = scope;
+    frame.called = Some(called_class);
+    let calls_len = caller.calls.len();
+    drop(released);
+    Some(Prepared {
+        limit,
+        callee: Callee::Native(b, PlainCall::Named),
         n: 0,
         calls_len,
         fcall: false,
@@ -809,12 +867,18 @@ pub(super) fn call_native(
     vm.pending_call_dst = dst;
     vm.magic_call_name = None;
     let handler = b.handler;
+    // A method's `$this` and called scope, readied on the frame by
+    // `prepare_method` (a function's frame has none).
+    let (this, called) = {
+        let frame = &vm.frames.vec[live];
+        (frame.this.clone(), frame.called.clone())
+    };
     let mut args = Args {
         values,
         passed,
         named: Vec::new(),
-        this: None,
-        called: None,
+        this,
+        called,
         func: Some(b),
     };
     let mut r = handler(vm, &mut args);
@@ -844,6 +908,16 @@ pub(super) fn call_native(
     // stays with the pooled frame for the next call at this depth.
     if vm.frames.live > live + 1 {
         vm.frames.truncate(live + 1);
+    }
+    if vm.frames.live == live + 1 {
+        // A method's `$this` and scopes go first, as `pop_frames_to`
+        // releases them with the frame.
+        let frame = &mut vm.frames.vec[live];
+        if frame.this.is_some() || frame.scope.is_some() || frame.called.is_some() {
+            frame.this = None;
+            frame.scope = None;
+            frame.called = None;
+        }
     }
     if vm.frames.live == live + 1 && vm.frames.vec[live].release_native(&vm.empty_vars) {
         vm.frames.pop_cleared_top();
@@ -910,10 +984,15 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
     let uf = match prep.callee {
         Callee::User(uf) => uf,
         Callee::Native(b, _) => {
-            // `InitFCall` and the `Send`s of the generic protocol: a direct
-            // call with its arguments inline. The frame was not readied.
+            // `InitFCall` (or `InitMethodCall`) and the `Send`s of the
+            // generic protocol: a direct call (a method's: with `$this`
+            // and its scopes) with its arguments inline. The frame was not
+            // readied.
             let mut call = PendingCall {
-                direct: true,
+                direct: prep.fcall,
+                this: frame.this.take(),
+                scope: frame.scope.take(),
+                called: frame.called.take(),
                 ..PendingCall::new(Func::Builtin(b))
             };
             for (arg, sent) in call.inline_args.iter_mut().zip(frame.args.drain(..)) {
