@@ -794,7 +794,11 @@ macro_rules! tape_ops {
                     TOp::AssignT => {
                         let s = st.tmps.add(inst.b as usize).cast::<Value>();
                         let d = st.cvs.add(inst.a as usize).cast::<Option<Value>>();
-                        if !is_scalar(&*s)
+                        // Any value but a reference moves out of the
+                        // temporary (a string, an array or an object as
+                        // well: `hot::assign_cv_in` moves them); the
+                        // variable's old value must own nothing.
+                        if matches!(&*s, Value::Reference(_))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
                             return step_out(ip);
