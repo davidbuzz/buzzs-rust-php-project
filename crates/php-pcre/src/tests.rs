@@ -361,3 +361,32 @@ fn no_address_space_growth() {
         "VmSize grew from {before} kB to {after} kB"
     );
 }
+
+/// An empty subject or pattern reaches PCRE2 at a real address: its
+/// vectorised scans (aarch64 NEON in libpcre2 10.46) read the aligned
+/// 16-byte block around the subject pointer first, which faulted at
+/// address 0 for an empty slice's dangling `0x1` (php-src passes
+/// `ZSTR_VAL` of the empty string, a real address).
+#[test]
+fn empty_subjects_and_patterns_are_matched_at_a_real_address() {
+    for jit in [true, false] {
+        let mut pcre = Pcre::new();
+        pcre.set_jit(jit);
+        for (pattern, want) in [
+            (&b"/\\0/i"[..], 0),
+            (b"/a/", 0),
+            (b"/x?/", 1),
+            (b"/^$/", 1),
+            (b"//", 1),
+        ] {
+            let re = pcre.compile(pattern).expect("compiles");
+            let o = match_one(&re, &pcre.config(), b"", false, 0, 0);
+            assert_eq!(
+                o.result.ok(),
+                Some(want),
+                "{} (jit: {jit})",
+                String::from_utf8_lossy(pattern)
+            );
+        }
+    }
+}

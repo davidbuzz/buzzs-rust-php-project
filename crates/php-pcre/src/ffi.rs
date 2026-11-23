@@ -107,12 +107,12 @@ impl Code {
         unsafe { sys::pcre2_set_compile_extra_options_8(ctx, extra_options) };
         let mut errcode: i32 = 0;
         let mut erroffset: usize = 0;
-        // SAFETY: pattern pointer/length describe a live slice (an empty
-        // slice's dangling pointer is fine with length 0); the out-params are
+        // SAFETY: pattern pointer/length describe a live slice (an empty one
+        // is given a real address, see `nonempty_ptr`); the out-params are
         // valid stack locations; ctx is valid.
         let code = unsafe {
             sys::pcre2_compile_8(
-                pattern.as_ptr(),
+                nonempty_ptr(pattern),
                 pattern.len(),
                 options,
                 &raw mut errcode,
@@ -308,6 +308,31 @@ impl Drop for MatchContext {
     }
 }
 
+/// Sixteen readable bytes on a 16-byte boundary, the address an empty
+/// subject or pattern is passed as ([`nonempty_ptr`]).
+#[repr(align(16))]
+struct EmptyBytes([u8; 16]);
+
+/// See [`EmptyBytes`].
+static EMPTY_BYTES: EmptyBytes = EmptyBytes([0; 16]);
+
+/// `bytes.as_ptr()`, except that an empty slice gives the address of
+/// [`EMPTY_BYTES`] instead of Rust's dangling non-null pointer (`0x1` for
+/// bytes). PCRE2's vectorised scans (aarch64 NEON, libpcre2 10.46) read the
+/// aligned 16-byte block around the subject pointer before they look at
+/// the length: harmless for any real address (the block is on the same
+/// page), a fault at address 0 for `0x1`, which crashed every match
+/// against an empty string where such a scan applies (`preg_match('/\0/i',
+/// '')`).
+#[inline]
+fn nonempty_ptr(bytes: &[u8]) -> *const u8 {
+    if bytes.is_empty() {
+        EMPTY_BYTES.0.as_ptr()
+    } else {
+        bytes.as_ptr()
+    }
+}
+
 thread_local! {
     /// The match context of the last match that finished, with its limits
     /// and JIT flag: php-src keeps one (`PCRE_G(mctx)`) instead of making
@@ -423,12 +448,13 @@ impl MatchData {
         ctx: &MatchContext,
     ) -> i32 {
         // SAFETY: all pointers are valid for the duration of the call; the
-        // subject slice is live and its exact length is passed; PCRE2 checks
+        // subject slice is live (an empty one is given a real address, see
+        // `nonempty_ptr`) and its exact length is passed; PCRE2 checks
         // `start` against the length itself (PCRE2_ERROR_BADOFFSET).
         unsafe {
             sys::pcre2_match_8(
                 code.ptr.as_ptr(),
-                subject.as_ptr(),
+                nonempty_ptr(subject),
                 subject.len(),
                 start,
                 options,
