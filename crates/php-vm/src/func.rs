@@ -211,7 +211,9 @@ impl UserFunction {
         if self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR)
             != 0
             || self.code.num_statics != 0
-            || self.code.num_iters != 0
+            // (A `foreach` is no reason: the frame's iterators are sized
+            // and released by the plain call's paths as by the generic
+            // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
             || self.params.iter().any(|p| p.variadic || p.by_ref)

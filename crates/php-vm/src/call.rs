@@ -2335,8 +2335,8 @@ impl Vm {
             // `FrameStack::push_in_place`.
             if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
-                && frame.iters.is_empty()
-                && frame.fins.is_empty()
+                && frame.iters.len() == code.num_iters as usize
+                && frame.fins.len() == code.num_finally as usize
             {
                 frame.reinit_same_call(code, FrameKind::Function);
             } else {
@@ -2993,7 +2993,6 @@ impl Vm {
         // closure object sits in it.
         if !uf.is_generator()
             && uf.code.num_statics == 0
-            && uf.code.num_iters == 0
             && uf.code.num_finally == 0
             && named.is_empty()
             && !self.has_observers()
