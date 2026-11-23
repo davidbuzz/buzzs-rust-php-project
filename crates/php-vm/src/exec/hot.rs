@@ -1290,12 +1290,31 @@ fn take_bool(f: &mut Frame, op: Operand) -> Option<bool> {
                 std::mem::forget(std::mem::take(slot));
                 Some(b)
             } else {
-                None
+                take_truth_other(slot)
             }
         }
         Operand::Cv(cv) => f.peek_cv(cv, slot_truth),
         _ => None,
     }
+}
+
+/// [`take_bool`] of a temporary holding anything but a bool, out of line:
+/// the truth of a value whose release frees nothing a destructor could
+/// hang on (null, an int, a non-NaN float, a string, and an array that
+/// another holder shares or that is empty: `if ($this->items)`,
+/// `if (array_filter(...))` of an empty result), consumed as the generic
+/// read consumes it. `None`, the slot untouched, for anything else (an
+/// object, or an array whose release may free one, is released by the
+/// generic op, with the destructor that may run).
+#[inline(never)]
+fn take_truth_other(slot: &mut Value) -> Option<bool> {
+    let b = match &*slot {
+        Value::Array(a) if a.refcount() > 1 || a.is_empty() => !a.is_empty(),
+        Value::Str(_) | Value::Null | Value::Int(_) | Value::Float(_) => plain_truth(slot)?,
+        _ => return None,
+    };
+    *slot = Value::Null;
+    Some(b)
 }
 
 /// The truth of an operand that needs neither a diagnostic nor a
@@ -1915,7 +1934,7 @@ fn move_in(f: &mut Frame, src: Operand, dst: u32) -> bool {
 #[allow(clippy::inline_always)]
 fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Cv(cv) = a else {
-        return None;
+        return coalesce_tmp_in(f, a, dst);
     };
     let v = f.peek_cv(cv, |slot| match slot {
         None | Some(Value::Null) => None,
@@ -1928,6 +1947,32 @@ fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Some(v) = v else {
         return Some(false);
     };
+    put_tmp(&mut f.tmps[dst as usize], v);
+    Some(true)
+}
+
+/// [`coalesce_in`] of a temporary (`$a['k'] ?? $d`, `f() ?? $d`), out of
+/// line: a value other than null moves into `dst` (jump), null falls
+/// through, as the generic op's read consumes it. `None`, nothing changed,
+/// for a reference and for a `dst` holding a value to release (the
+/// generic op releases it).
+#[inline(never)]
+fn coalesce_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
+    let Operand::Tmp(t) = a else {
+        return None;
+    };
+    match f.tmps.get(t as usize)? {
+        Value::Null => return Some(false),
+        Value::Reference(_) => return None,
+        _ => {}
+    }
+    if !matches!(
+        f.tmps.get(dst as usize)?,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        return None;
+    }
+    let v = std::mem::take(&mut f.tmps[t as usize]);
     put_tmp(&mut f.tmps[dst as usize], v);
     Some(true)
 }
