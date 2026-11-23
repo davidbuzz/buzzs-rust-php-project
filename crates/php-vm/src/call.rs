@@ -2383,14 +2383,11 @@ impl Vm {
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
-            if uf.return_type.is_some() {
-                return self.return_generic::<false>(val, base, ip);
-            }
-            // A declared return type (checked by `return_generic`'s
-            // `return_accepts`) is left to it: coercion rules may
-            // rewrite the value (int 3 returned from a `: string`
-            // function gives "3"), which the direct path must not skip.
-            // So are references, arrays and objects (copied, not moved,
+            let rt = uf.return_type.as_ref();
+            // A value its declared return type does not take as it is
+            // (`return_accepts`) is left to `return_generic`: coercion
+            // rules may rewrite it (int 3 returned from a `: string`
+            // function gives "3"), or it fails. So are references, arrays and objects (copied, not moved,
             // for `gc::frame_released`), and a caller's result slot that
             // holds anything but a scalar (released after the frame).
             // Every test comes before the value moves out of its slot:
@@ -2402,13 +2399,23 @@ impl Vm {
                 },
                 RetTarget::Discard => None,
             };
+            // A string moves as a scalar does: it has no destructor to run
+            // and nothing for `gc::frame_released` to record.
             let v = match val {
                 Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
                     Some(slot)
                         if matches!(
                             slot.get(),
-                            Some(Value::Int(_) | Value::Bool(_) | Value::Float(_))
-                        ) =>
+                            Some(
+                                Value::Int(_)
+                                    | Value::Bool(_)
+                                    | Value::Float(_)
+                                    | Value::Null
+                                    | Value::Str(_)
+                            )
+                        ) && slot
+                            .get()
+                            .is_some_and(|v| rt.is_none() || return_accepts(rt, v)) =>
                     {
                         slot.as_mut().take()?
                     }
@@ -2416,7 +2423,14 @@ impl Vm {
                 },
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
                     Some(slot)
-                        if matches!(slot, Value::Int(_) | Value::Bool(_) | Value::Float(_)) =>
+                        if matches!(
+                            slot,
+                            Value::Int(_)
+                                | Value::Bool(_)
+                                | Value::Float(_)
+                                | Value::Null
+                                | Value::Str(_)
+                        ) && (rt.is_none() || return_accepts(rt, slot)) =>
                     {
                         std::mem::take(slot)
                     }
@@ -2429,11 +2443,12 @@ impl Vm {
             // The store runs before the `gc` step: the value's register
             // is then dead across the out-of-line `frame_released` call
             // (it only reads the frame and the caller's `$this`, and the
-            // frame is released after both). The slot held a scalar and
-            // the value is one: neither has anything to drop.
+            // frame is released after both). The slot held a scalar: it
+            // has nothing to drop; an unused string result is released.
             match dst {
                 Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
-                None => std::mem::forget(v),
+                None if is_scalar(&v) => std::mem::forget(v),
+                None => drop(v),
             }
             gc_on_release(frame, caller);
             // `FrameStack::release_top` of the frame at hand: released in
