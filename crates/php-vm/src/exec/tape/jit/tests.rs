@@ -1915,6 +1915,27 @@ var_dump(f(100), f(20));
 }
 
 #[test]
+fn typed_loops_write_numbers_into_hash_tables() {
+    // Keys in descending and scattered order, overwrites, string keys, a
+    // reference element, a `foreach` by reference over the table, a copy
+    // that stays apart, the largest key.
+    both(
+        r#"<?php
+function f($n) {
+    $y = []; for ($i = $n - 1; $i >= 0; $i--) { $y[$i] = $i * 2; }
+    $z = ["a" => 1]; for ($i = 0; $i < $n; $i++) { $z[$i * 7 % 13 - 5] = $i; $z[$i % 3] = 0.5 * $i; }
+    $w = [5 => 1, 2 => 2]; $c = $w; for ($i = 0; $i < $n; $i++) { $w[$i] = $i; }
+    $q = [3 => 1, 1 => 0]; $x = 9; $q[7] = &$x; for ($i = 0; $i < $n; $i++) { $q[$i % 9] = $i; }
+    $p = [9 => 0, 8 => 0]; $out = []; foreach ($p as $k => &$v) { for ($i = 0; $i < $n; $i++) { $p[100 + $i] = $i; } $out[] = $k; if (count($out) > 3) break; } unset($v);
+    $h = [1 => 1, 0 => 0]; unset($h[1]); for ($i = 0; $i < $n; $i++) { $h[PHP_INT_MAX - $i] = $i; }
+    return [$y, $z, $w, $c, $q, $x, count($p), $out, $h];
+}
+var_dump(f(40), f(3));
+"#,
+    );
+}
+
+#[test]
 fn an_unused_func_num_args_is_nothing() {
     both(
         r#"<?php

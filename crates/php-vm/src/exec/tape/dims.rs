@@ -730,8 +730,11 @@ pub(super) unsafe extern "C" fn jit_set_num(
         discard_plain(std::mem::replace(slot, v));
         return 1;
     }
-    // The next element of a packed table (a hole or a hash table: the
-    // number is given back, and owns nothing).
+    if !tbl.is_packed() {
+        return hash_set_num(tbl, i, v);
+    }
+    // The next element of a packed table (a hole: the number is given
+    // back, and owns nothing).
     match tbl.assign_packed_int(i, v) {
         Ok(old) => {
             if let Some(old) = old {
@@ -741,6 +744,25 @@ pub(super) unsafe extern "C" fn jit_set_num(
         }
         Err(_) => 0,
     }
+}
+
+/// [`jit_set_num`] of a hash table with room for one more element: the
+/// key's element added or written over (`zend_hash_index_update`), nothing
+/// allocated (so no poll is due, as for a packed table's next element).
+/// Returns 1, or 0 with nothing changed. (Out of line: inlined, it made
+/// the packed table's path longer.)
+#[cfg(feature = "jit")]
+#[inline(never)]
+fn hash_set_num(tbl: &mut php_runtime::HashTable, i: i64, v: Value) -> usize {
+    if tbl.used() >= tbl.table_size() {
+        return 0;
+    }
+    let (slot, added) = tbl.lookup_ex(ArrayKey::Int(i));
+    if !added && !slot.is_plain() {
+        return 0;
+    }
+    discard_plain(std::mem::replace(slot, v));
+    1
 }
 
 /// [`jit_get_num`] of `$array[i][j]`: both arrays packed, the inner one
