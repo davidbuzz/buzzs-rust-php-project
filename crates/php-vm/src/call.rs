@@ -4906,10 +4906,15 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
 fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
     match rt {
         None => true,
+        // An object of a class the type names (`: Column`) is accepted by
+        // name as a parameter is ([`param_accepts`]); `self`, `static` and
+        // intersections are left to the generic check.
         Some(rt) => {
             !rt.is_void()
                 && !rt.is_never()
-                && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
+                && (rt.is_mixed()
+                    || accepts_without_coercion(rt.mask, v)
+                    || (matches!(v, Value::Object(_)) && param_accepts(rt, v)))
         }
     }
 }
