@@ -1803,6 +1803,31 @@ impl Vm {
                 .is_some_and(|w| w.wrapped && Rc::ptr_eq(&w.store, s)))
     }
 
+    /// Whether `store` is the global symbol table (`$GLOBALS`, the global
+    /// scope's variables): a write to its slots can leave the compiled
+    /// variables of the global-scope frames out of date. A function's own
+    /// table, its variables and objects are not in it; a `global $x`
+    /// binding brings those frames up to date when it is made
+    /// ([`Vm::global_ref`]), and writes through that reference reach the
+    /// value the frames share.
+    fn store_in_globals(&self, store: &Rc<RefCell<VarStore>>) -> bool {
+        Rc::ptr_eq(store, &self.globals)
+            || self
+                .frames
+                .first()
+                .is_some_and(|f| Rc::ptr_eq(&f.vars, store))
+    }
+
+    /// [`Vm::store_in_globals`] for the base of a write walk
+    /// (`$GLOBALS[...]` writes the global table too).
+    fn base_in_globals(&self, base: &RBase) -> bool {
+        match base {
+            RBase::Var(s, _) => self.store_in_globals(s),
+            RBase::Globals => true,
+            _ => false,
+        }
+    }
+
     /// The [`CvRoot`] of a generic write to place `pid` of frame `fidx`
     /// (whose table is not attached): the frame is a function's and the
     /// place goes into a compiled variable (`$a[...]`, `$a->...`). A write
@@ -2365,11 +2390,14 @@ impl Vm {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
         let private = self.cv_walk_private(&base);
+        let globals = self.base_in_globals(&base);
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         if !private {
             self.frame_mut().sync_from_symbol_table();
-            self.sync_global_frames();
+            if globals {
+                self.sync_global_frames();
+            }
         }
         r
     }
@@ -3633,7 +3661,9 @@ impl Vm {
                     drop(wop.resolve_deferred());
                     flush_deferred_ref_assigns();
                     self.frame_mut().sync_from_symbol_table();
-                    self.sync_global_frames();
+                    if self.store_in_globals(&store) {
+                        self.sync_global_frames();
+                    }
                     return r;
                 }
             }
@@ -3653,7 +3683,9 @@ impl Vm {
         };
         flush_deferred_ref_assigns();
         self.frame_mut().sync_from_symbol_table();
-        self.sync_global_frames();
+        if self.store_in_globals(&store) {
+            self.sync_global_frames();
+        }
         r
     }
 
@@ -3941,7 +3973,9 @@ impl Vm {
                     *slot = Some(nv.clone());
                 }
                 self.frame_mut().sync_from_symbol_table();
-                self.sync_global_frames();
+                if self.store_in_globals(store) {
+                    self.sync_global_frames();
+                }
                 return Ok(nv);
             }
         }
@@ -3962,7 +3996,9 @@ impl Vm {
                             let res = Value::Str(s.clone());
                             drop(st);
                             self.frame_mut().sync_from_symbol_table();
-                            self.sync_global_frames();
+                            if self.store_in_globals(store) {
+                                self.sync_global_frames();
+                            }
                             return Ok(res);
                         }
                         // `$s .= $s`: php-src extends the one string in
@@ -3979,12 +4015,16 @@ impl Vm {
                         let res = Value::Str(s.clone());
                         drop(st);
                         self.frame_mut().sync_from_symbol_table();
-                        self.sync_global_frames();
+                        if self.store_in_globals(store) {
+                            self.sync_global_frames();
+                        }
                         return Ok(res);
                     }
                     drop(st);
                     self.frame_mut().sync_from_symbol_table();
-                    self.sync_global_frames();
+                    if self.store_in_globals(store) {
+                        self.sync_global_frames();
+                    }
                 }
             }
         }
@@ -4266,7 +4306,9 @@ impl Vm {
         if segs.is_empty() {
             if let Some(r) = incdec_var_int_fast(&base, kind) {
                 self.frame_mut().sync_from_symbol_table();
-                self.sync_global_frames();
+                if self.base_in_globals(&base) {
+                    self.sync_global_frames();
+                }
                 return Ok(r);
             }
         }
@@ -4324,11 +4366,14 @@ impl Vm {
                 self.write_cached_container(&obj, idx, &segs, WOp::Assign(nv))
             } else {
                 let private = self.cv_walk_private(&base2);
+                let globals = self.base_in_globals(&base2);
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
                 if !private {
                     self.frame_mut().sync_from_symbol_table();
-                    self.sync_global_frames();
+                    if globals {
+                        self.sync_global_frames();
+                    }
                 }
                 r
             };
