@@ -1119,6 +1119,9 @@ unsafe extern "C" fn specialise(f: *mut Frame, block: *mut usize) -> usize {
         let resumable = |at: usize| block_at(record.cast_mut(), at).is_some();
         let seen = typed::Seen {
             resumable: &resumable,
+            prop_key: &|place: u32| crate::exec::spec::jit_prop_key(frame, place),
+            prop_key_w: &|place: u32| crate::exec::spec::jit_prop_key_w(frame, place),
+            prop_key_rw: &|place: u32| crate::exec::spec::jit_prop_key_rw(frame, place),
             constant: &constant,
             fast: *block.add(HB_FAILS) & NO_SHORT_CUTS == 0,
             slow: &slow,

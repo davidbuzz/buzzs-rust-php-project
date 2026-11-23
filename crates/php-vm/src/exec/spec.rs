@@ -53,7 +53,8 @@ pub(super) use dims::{
 };
 #[cfg(feature = "jit")]
 pub(super) use props::{
-    jit_prop_get, jit_prop_op, jit_prop_set, jit_slot_num, jit_slot_put, jit_this_prop_num,
+    jit_prop_get, jit_prop_get_at, jit_prop_key, jit_prop_key_rw, jit_prop_key_w, jit_prop_op,
+    jit_prop_op_at, jit_prop_set, jit_prop_set_at, jit_slot_num, jit_slot_put, jit_this_prop_num,
     jit_this_prop_slot,
 };
 pub(super) use props::{prop_op_in, read_hit};

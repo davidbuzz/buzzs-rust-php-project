@@ -1025,13 +1025,21 @@ enum Fast {
     /// (`dims::jit_get_key`).
     GetKey { cv: u32, lit: u32 },
     /// A read of the number in a declared property (the place's index)
-    /// on a property cache hit (`spec::jit_prop_get`).
-    PropGet { place: u32 },
+    /// on a property cache hit (`spec::jit_prop_get`); with `key`, the hit
+    /// the cache had when the loop was compiled (the object variable, the
+    /// class's address, the slot: `spec::jit_prop_get_at`).
+    PropGet {
+        place: u32,
+        key: Option<(u32, usize, u32)>,
+    },
     /// A write of a number into one, over a scalar (`spec::jit_prop_set`).
     PropSet {
         place: u32,
         value: Opnd,
         consume: Option<SlotRef>,
+        /// As [`Fast::PropGet`]'s, the slot with the types it accepts
+        /// (`spec::jit_prop_set_at`).
+        key: Option<(u32, usize, u64)>,
     },
     /// `op=` of a number on one (`spec::jit_prop_op`; `op` as
     /// [`Fast::Op`]'s, and 3 for `++`, 4 for `--`).
@@ -1040,6 +1048,8 @@ enum Fast {
         op: usize,
         value: Opnd,
         consume: Option<SlotRef>,
+        /// As [`Fast::PropSet`]'s (`spec::jit_prop_op_at`).
+        key: Option<(u32, usize, u64)>,
     },
     /// [`Fast::Get`] of `$cv[i][j]`.
     Get2 { array: i32, i: Opnd, j: Opnd },
@@ -1822,6 +1832,16 @@ pub(super) struct Seen<'a> {
     /// Whether the code can be entered at the instruction (by index): the
     /// tape has an entry for it (`super::install`).
     pub(super) resumable: &'a dyn Fn(usize) -> bool,
+    /// For a read place (by index) of the frame, the property cache's hit:
+    /// the object variable, the class's and slot, the scope's address
+    /// (`spec::jit_prop_key`).
+    pub(super) prop_key: &'a dyn Fn(u32) -> Option<(u32, usize, u32, usize)>,
+    /// The same of a write place (`spec::jit_prop_key_w`), the slot with
+    /// the types it accepts.
+    pub(super) prop_key_w: &'a dyn Fn(u32) -> Option<(u32, usize, u64, usize)>,
+    /// The same of a place read and written (`op=`, `++`:
+    /// `spec::jit_prop_key_rw`).
+    pub(super) prop_key_rw: &'a dyn Fn(u32) -> Option<(u32, usize, u64, usize)>,
     /// For the method call started by the op (by index): the receiver's
     /// variable (`usize::MAX` for `$this`), and the addresses of the class
     /// of the object it holds now and of the frame's class scope (0:
@@ -1866,6 +1886,9 @@ struct Analysis<'a> {
     inline: bool,
     /// Which of `inl` have been entered ([`Plan::Bind`]).
     bound: Vec<bool>,
+    /// The class scopes the keyed property reads were cached for
+    /// ([`Fast::PropGet`]), tested on entry as the methods' are.
+    prop_scopes: Vec<usize>,
     /// While an inlined function's instruction is planned: the function's
     /// code (whose call cache names the builtins it calls), and the depth
     /// of its call among the loop's (its own calls' arguments come after
@@ -3028,7 +3051,14 @@ impl<'a> Analysis<'a> {
                 };
                 self.fetched(st, &mut call, i, to, inst.b, float)?;
                 if float.is_some() && self.cached_place(inst.a) {
-                    call.fast = Some(Fast::PropGet { place: inst.a });
+                    // (The hit's scope is the frame's, tested on entry.)
+                    let key = (self.seen.prop_key)(inst.a).map(|(cv, class, slot, scope)| {
+                        if !self.prop_scopes.contains(&scope) {
+                            self.prop_scopes.push(scope);
+                        }
+                        (cv, class, slot)
+                    });
+                    call.fast = Some(Fast::PropGet { place: inst.a, key });
                 }
             }
             // `$obj->prop = val`, `op= val`, `++` & co., as statements (a
@@ -3061,12 +3091,38 @@ impl<'a> Analysis<'a> {
                     _ => (None, None),
                 };
                 if self.cached_place(place) {
+                    // The hit of `op=`, `++` and `--` (a read and a write),
+                    // its scope tested on entry.
+                    let key_rw = matches!(
+                        self.ops.get(inst.d as usize),
+                        Some(Op::AssignOpObjProp { .. } | Op::IncDecObjProp { .. })
+                    )
+                    .then(|| (self.seen.prop_key_rw)(place))
+                    .flatten()
+                    .map(|(cv, class, slot, scope)| {
+                        if !self.prop_scopes.contains(&scope) {
+                            self.prop_scopes.push(scope);
+                        }
+                        (cv, class, slot)
+                    });
                     call.fast = match (self.ops.get(inst.d as usize)?, number) {
-                        (Op::AssignObjProp { .. }, Some(value)) => Some(Fast::PropSet {
-                            place,
-                            value,
-                            consume,
-                        }),
+                        (Op::AssignObjProp { .. }, Some(value)) => {
+                            // (The hit's scope is the frame's, tested on
+                            // entry.)
+                            let key =
+                                (self.seen.prop_key_w)(place).map(|(cv, class, slot, scope)| {
+                                    if !self.prop_scopes.contains(&scope) {
+                                        self.prop_scopes.push(scope);
+                                    }
+                                    (cv, class, slot)
+                                });
+                            Some(Fast::PropSet {
+                                place,
+                                value,
+                                consume,
+                                key,
+                            })
+                        }
                         (Op::AssignOpObjProp { op, .. }, Some(value)) => {
                             let op = match *op {
                                 php_runtime::BinaryOp::Add => Some(0),
@@ -3079,6 +3135,7 @@ impl<'a> Analysis<'a> {
                                 op,
                                 value,
                                 consume,
+                                key: key_rw,
                             })
                         }
                         (Op::IncDecObjProp { kind, .. }, _) => Some(Fast::PropOp {
@@ -3089,6 +3146,7 @@ impl<'a> Analysis<'a> {
                                 float: false,
                             },
                             consume: None,
+                            key: key_rw,
                         }),
                         _ => None,
                     };
@@ -4652,6 +4710,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
         real: tape.len(),
         inline: false,
         bound: vec![false; inl.len()],
+        prop_scopes: Vec::new(),
         callee: None,
         demoted: Vec::new(),
     };
@@ -4788,7 +4847,7 @@ pub(super) fn analyse(tape: &[Inst], head: usize, code: &OpArray, seen: &Seen<'_
     // has the whole call redone, like one that stops among the arguments.
     let mut virtuals = Vec::new();
     let mut inlined = Vec::new();
-    let mut scopes = Vec::new();
+    let mut scopes = an.prop_scopes.clone();
     for (callee, _) in inl.iter().zip(&an.bound).filter(|(_, bound)| **bound) {
         if !matches!(plans.get(&callee.init), Some((Plan::Jmp { .. }, _))) {
             return None;
@@ -4991,6 +5050,10 @@ fn jumps(inst: &Inst) -> bool {
 type GetKey = unsafe extern "C" fn(*const crate::vm::Frame, usize, usize, *mut Value) -> usize;
 /// `spec::jit_prop_get`.
 type PropGet = unsafe extern "C" fn(*mut crate::vm::Frame, usize, *mut Value) -> usize;
+type PropSetAt =
+    unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64, usize, u64) -> usize;
+type PropGetAt =
+    unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, usize, *mut Value) -> usize;
 /// `spec::jit_prop_set`.
 type PropSet = unsafe extern "C" fn(*mut crate::vm::Frame, usize, usize, u64) -> usize;
 /// `spec::jit_prop_op`.
@@ -5577,7 +5640,18 @@ impl Emit<'_, '_> {
                         let helper = dims::jit_get_key as GetKey as usize;
                         (helper, vec![self.frame, cv, lit, dst])
                     }
-                    Fast::PropGet { place } => {
+                    Fast::PropGet {
+                        key: Some((cv, class, slot)),
+                        ..
+                    } => {
+                        let cv = self.b.ins().iconst(types::I64, i64::from(cv));
+                        #[allow(clippy::cast_possible_wrap)]
+                        let class = self.b.ins().iconst(types::I64, class as i64);
+                        let slot = self.b.ins().iconst(types::I64, i64::from(slot));
+                        let helper = crate::exec::spec::jit_prop_get_at as PropGetAt as usize;
+                        (helper, vec![self.frame, cv, class, slot, dst])
+                    }
+                    Fast::PropGet { place, key: None } => {
                         let place = self.b.ins().iconst(types::I64, i64::from(place));
                         let helper = crate::exec::spec::jit_prop_get as PropGet as usize;
                         (helper, vec![self.frame, place, dst])
@@ -5642,12 +5716,49 @@ impl Emit<'_, '_> {
                         let helper = dims::jit_op_num as OpNum as usize;
                         (helper, vec![array, self.int(index)?, op, tag, bits])
                     }
-                    Fast::PropSet { place, .. } => {
+                    Fast::PropSet {
+                        key: Some((cv, class, slot)),
+                        ..
+                    } => {
+                        let cv = self.b.ins().iconst(types::I64, i64::from(cv));
+                        #[allow(clippy::cast_possible_wrap)]
+                        let class = self.b.ins().iconst(types::I64, class as i64);
+                        #[allow(clippy::cast_possible_wrap)]
+                        let slot = self.b.ins().iconst(types::I64, slot as i64);
+                        let helper = crate::exec::spec::jit_prop_set_at as PropSetAt as usize;
+                        (helper, vec![self.frame, cv, class, slot, tag, bits])
+                    }
+                    Fast::PropSet {
+                        place, key: None, ..
+                    } => {
                         let place = self.b.ins().iconst(types::I64, i64::from(place));
                         let helper = crate::exec::spec::jit_prop_set as PropSet as usize;
                         (helper, vec![self.frame, place, tag, bits])
                     }
-                    Fast::PropOp { place, op, .. } => {
+                    Fast::PropOp {
+                        op,
+                        key: Some((cv, class, slot)),
+                        ..
+                    } => {
+                        let cv = self.b.ins().iconst(types::I64, i64::from(cv));
+                        #[allow(clippy::cast_possible_wrap)]
+                        let class = self.b.ins().iconst(types::I64, class as i64);
+                        #[allow(clippy::cast_possible_wrap)]
+                        let slot = self.b.ins().iconst(types::I64, slot as i64);
+                        let op = self
+                            .b
+                            .ins()
+                            .iconst(types::I64, i64::try_from(op << 8).ok()?);
+                        let op_tag = self.b.ins().bor(op, tag);
+                        let helper = crate::exec::spec::jit_prop_op_at as PropSetAt as usize;
+                        (helper, vec![self.frame, cv, class, slot, op_tag, bits])
+                    }
+                    Fast::PropOp {
+                        place,
+                        op,
+                        key: None,
+                        ..
+                    } => {
                         let place = self.b.ins().iconst(types::I64, i64::from(place));
                         let op = self.b.ins().iconst(types::I64, i64::try_from(op).ok()?);
                         let helper = crate::exec::spec::jit_prop_op as PropOp as usize;

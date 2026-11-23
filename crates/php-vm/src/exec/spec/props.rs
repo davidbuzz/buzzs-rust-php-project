@@ -625,6 +625,62 @@ pub(in crate::exec) unsafe extern "C" fn jit_prop_get(
     tag
 }
 
+/// For a typed loop of the JIT: what the property cache's read hit for
+/// place `pid` of frame `f` is, when its base is a compiled variable: the
+/// variable, the class's address, the property's slot, and the frame's
+/// class scope's address the entry is for ([`jit_prop_get_at`] reads the
+/// property with these, the loop testing the scope on entry).
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_prop_key(f: &Frame, pid: PlaceId) -> Option<(u32, usize, u32, usize)> {
+    let hit = hit_key(f, pid, PC_READ, PC_DYN)?;
+    if hit.base == PROP_CACHE_THIS {
+        return None;
+    }
+    Some((
+        hit.base,
+        hit.class,
+        u32::try_from(hit.slot).ok()?,
+        scope_addr(f),
+    ))
+}
+
+/// [`jit_prop_get`] with the cache's hit known when the loop was compiled
+/// ([`jit_prop_key`]): the number in slot `slot` of the object variable
+/// `cv` holds, when that is of the class at address `class` and not lazy.
+/// Returns its tag (2 an int, 3 a float), or 0, nothing stored.
+///
+/// # Safety
+/// As [`jit_prop_get`].
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_get_at(
+    f: *mut Frame,
+    cv: usize,
+    class: usize,
+    slot: usize,
+    dst: *mut Value,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(Some(Value::Object(o))) = f.cvs.get(cv).map(CvSlot::get) else {
+        return 0;
+    };
+    let od = object::data(o);
+    if Rc::as_ptr(&od.class) as usize != class || !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return 0;
+    }
+    let Ok(slots) = od.slots.try_borrow() else {
+        return 0;
+    };
+    let (v, tag) = match slots.get(slot) {
+        Some(Some(Value::Int(x))) => (Value::Int(*x), 2),
+        Some(Some(Value::Float(x))) => (Value::Float(*x), 3),
+        _ => return 0,
+    };
+    // SAFETY: the caller's contract: nothing to release in `dst`.
+    unsafe { std::ptr::write(dst, v) };
+    tag
+}
+
 /// For a method a typed loop of the JIT runs inline: the number in the
 /// declared property that place `pid` of the method's code `code` reads
 /// from `$this`, for `obj` as `$this` and the class at address `scope` as
@@ -805,6 +861,75 @@ pub(in crate::exec) unsafe extern "C" fn jit_prop_set(
     }
 }
 
+/// For a typed loop of the JIT: what the property cache's write hit for
+/// place `pid` of frame `f` is, when its base is a compiled variable: the
+/// variable, the class's address, the property's slot with the types it
+/// accepts (in the high 32 bits), and the scope's address.
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_prop_key_w(f: &Frame, pid: PlaceId) -> Option<(u32, usize, u64, usize)> {
+    let hit = hit_key(f, pid, PC_WRITE, PC_DYN)?;
+    if hit.base == PROP_CACHE_THIS {
+        return None;
+    }
+    let slot = u64::from(u32::try_from(hit.slot).ok()?);
+    Some((
+        hit.base,
+        hit.class,
+        slot | u64::from(hit.accept) << 32,
+        scope_addr(f),
+    ))
+}
+
+/// [`jit_prop_set`] with the cache's hit known when the loop was compiled
+/// ([`jit_prop_key_w`]): the number with tag `tag` (2 an int, 3 a float)
+/// and bits `bits` into the slot (`slot_accept`'s low 32 bits) of the
+/// object variable `cv` holds, when that is of the class at address
+/// `class`, not lazy, the property accepts the number and holds a scalar.
+/// Returns 1, or 0 with nothing changed.
+///
+/// # Safety
+/// As [`jit_prop_set`].
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_set_at(
+    f: *mut Frame,
+    cv: usize,
+    class: usize,
+    slot_accept: u64,
+    tag: usize,
+    bits: u64,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    #[allow(clippy::cast_possible_wrap)]
+    let new = if tag == 2 {
+        Value::Int(bits as i64)
+    } else {
+        Value::Float(f64::from_bits(bits))
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let (slot, accept) = (slot_accept as u32 as usize, (slot_accept >> 32) as u32);
+    if !accepts(accept, &new) {
+        return 0;
+    }
+    let Some(Some(Value::Object(o))) = f.cvs.get(cv).map(CvSlot::get) else {
+        return 0;
+    };
+    let od = object::data(o);
+    if Rc::as_ptr(&od.class) as usize != class || !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return 0;
+    }
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return 0;
+    };
+    match slots.get_mut(slot) {
+        Some(Some(cell @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))) => {
+            *cell = new;
+            1
+        }
+        _ => 0,
+    }
+}
+
 /// For a typed loop of the JIT: `op=` (`op` 0 for `+`, 1 for `-`, 2 for
 /// `*`) of the number with tag `tag` and bits `bits`, or `++` (`op` 3) or
 /// `--` (4), on the number in the declared property of place `pid` on a
@@ -844,6 +969,72 @@ pub(in crate::exec) unsafe extern "C" fn jit_prop_op(
         2 => assign_op_in(od, hit.slot, hit.accept, BinaryOp::Mul, rhs),
         3 => incdec_in(od, hit.slot, IncDecKind::PreInc),
         4 => incdec_in(od, hit.slot, IncDecKind::PreDec),
+        _ => None,
+    };
+    usize::from(done.is_some())
+}
+
+/// For a typed loop of the JIT: [`jit_prop_key_w`] of the hit `op=` and
+/// `++`/`--` take (a read and a write).
+#[cfg(feature = "jit")]
+pub(in crate::exec) fn jit_prop_key_rw(
+    f: &Frame,
+    pid: PlaceId,
+) -> Option<(u32, usize, u64, usize)> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
+    if hit.base == PROP_CACHE_THIS {
+        return None;
+    }
+    let slot = u64::from(u32::try_from(hit.slot).ok()?);
+    Some((
+        hit.base,
+        hit.class,
+        slot | u64::from(hit.accept) << 32,
+        scope_addr(f),
+    ))
+}
+
+/// [`jit_prop_op`] with the cache's hit known when the loop was compiled
+/// ([`jit_prop_key_rw`]): `op_tag` is the operator (its bits 8 up, as
+/// `jit_prop_op`'s `op`) and the tag of the number with bits `bits` (its
+/// low 8 bits), on the slot (`slot_accept`'s low 32 bits) of the object
+/// variable `cv` holds, when that is of the class at address `class` and
+/// not lazy. Returns 1, or 0 with nothing changed.
+///
+/// # Safety
+/// As [`jit_prop_op`].
+#[cfg(feature = "jit")]
+pub(in crate::exec) unsafe extern "C" fn jit_prop_op_at(
+    f: *mut Frame,
+    cv: usize,
+    class: usize,
+    slot_accept: u64,
+    op_tag: usize,
+    bits: u64,
+) -> usize {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &*f };
+    let Some(Some(Value::Object(o))) = f.cvs.get(cv).map(CvSlot::get) else {
+        return 0;
+    };
+    let od = object::data(o);
+    if Rc::as_ptr(&od.class) as usize != class || !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let (slot, accept) = (slot_accept as u32 as usize, (slot_accept >> 32) as u32);
+    #[allow(clippy::cast_possible_wrap)]
+    let rhs = if op_tag & 0xff == 2 {
+        Num::Int(bits as i64)
+    } else {
+        Num::Float(f64::from_bits(bits))
+    };
+    let done = match op_tag >> 8 {
+        0 => assign_op_in(od, slot, accept, BinaryOp::Add, rhs),
+        1 => assign_op_in(od, slot, accept, BinaryOp::Sub, rhs),
+        2 => assign_op_in(od, slot, accept, BinaryOp::Mul, rhs),
+        3 => incdec_in(od, slot, IncDecKind::PreInc),
+        4 => incdec_in(od, slot, IncDecKind::PreDec),
         _ => None,
     };
     usize::from(done.is_some())

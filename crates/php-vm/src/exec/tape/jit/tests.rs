@@ -1871,3 +1871,45 @@ var_dump(f(100), g(100));
         1,
     );
 }
+
+#[test]
+fn typed_loops_read_and_write_properties_by_the_hit_they_were_compiled_for() {
+    // Property reads and writes with the cache's hit fixed when the loop
+    // is compiled: objects of other classes (a subclass too) in the
+    // variable, a property that turns into a float, a string, is unset;
+    // typed and readonly properties; a private one read in a method and
+    // in closures bound to its class's scope and to none.
+    both(
+        r#"<?php
+class A { public $p = 1; private $q = 5; public int $t = 0; public float $f = 0.0; public readonly int $r;
+    function __construct() { $this->r = 1; }
+    function sumq($objs) { $s = 0; foreach ($objs as $o) { $s += $o->q; } return $s; } }
+class B { public $z = 0; public $p = 2.5; } class C extends A { public $p = 7; }
+function f($n) { $a = new A; $b = new B; $c = new C; $s = 0.0;
+    for ($i = 0; $i < $n; $i++) { $o = $i % 7 == 3 ? $b : ($i % 11 == 5 ? $c : $a); $s += $o->p; if ($i == 40) { $a->p = 1.5; } if ($i == 60) { $a->p = "9"; } if ($i == 80) { unset($a->p); $a->p = 4; } }
+    return $s; }
+function g($n) { $a = new A; $b = new B; $x = 1.5;
+    for ($i = 0; $i < $n; $i++) { $o = $i % 9 == 4 ? $b : $a; $o->p = $i; $a->t = $i; $a->f = $i * 0.5; if ($i == 50) { $a->p = [1]; } $a->f = $x; }
+    try { for ($i = 0; $i < $n; $i++) { $a->t = $i; if ($i == 30) { $a->t = 2.5; } } } catch (TypeError $e) { echo "TE ", $e->getMessage(), "\n"; }
+    try { for ($i = 0; $i < $n; $i++) { $a->t = $i; if ($i == 30) { $a->r = 5; } } } catch (Error $e) { echo "E ", $e->getMessage(), "\n"; }
+    return [$a->p, $a->t, $a->f, $b->p]; }
+var_dump(f(120), f(30), g(100));
+$a = new A; var_dump($a->sumq([new A, new A, new C, new A]));
+$h = function ($objs) { $s = 0; foreach ($objs as $o) { $s += $o->q; } return $s; };
+$bound = Closure::bind($h, null, A::class); var_dump($bound([new A, new A, new A, new A, new A]));
+try { var_dump($h([new A, new A])); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    // `op=`, `++` and `--` likewise: an int that overflows, a typed
+    // property given a float, another class's object, a string's `++`.
+    both(
+        r#"<?php
+class A { public $n = 0; public int $t = 0; public $s = "a"; public $m = PHP_INT_MAX - 50; } class B { public $n = 0.5; }
+function f($n) { $a = new A; $b = new B; $x = 2;
+    for ($i = 0; $i < $n; $i++) { $o = $i % 5 == 2 ? $b : $a; $o->n += $x; $o->n++; $a->t += 3; --$a->t; $a->m += 1; $a->s++; if ($i == 30) { $x = 0.25; } }
+    try { for ($i = 0; $i < $n; $i++) { $a->t += 1; if ($i == 20) { $a->t += 1.5; } } } catch (TypeError $e) { echo "TE\n"; }
+    return [$a->n, $a->t, $a->s, $a->m, $b->n]; }
+var_dump(f(100), f(20));
+"#,
+    );
+}
