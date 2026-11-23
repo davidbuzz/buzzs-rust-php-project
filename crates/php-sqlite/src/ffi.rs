@@ -273,6 +273,24 @@ impl std::fmt::Debug for Connection {
     }
 }
 
+/// Process-wide SQLite configuration, applied once before the library
+/// initialises (`sqlite3_config` is refused afterwards): memory statistics
+/// off (`SQLITE_CONFIG_MEMSTATUS`). With them on, every SQLite allocation
+/// and free takes the library's global memory mutex to keep counters that
+/// only `sqlite3_memory_used()`, `sqlite3_status()` and the soft/hard heap
+/// limits read, none of which PHP exposes.
+fn configure_library() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: `SQLITE_CONFIG_MEMSTATUS` takes one `int` argument. If the
+        // library is already initialised the call fails with
+        // `SQLITE_MISUSE` and changes nothing, which is harmless.
+        unsafe {
+            sys::sqlite3_config(sys::SQLITE_CONFIG_MEMSTATUS, c_int::from(0u8));
+        }
+    });
+}
+
 /// The error of a failed [`Connection::open`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpenError {
@@ -299,7 +317,20 @@ impl Drop for BusyGuard<'_> {
 
 impl Connection {
     /// `sqlite3_open_v2(filename, &db, flags, NULL)`.
+    ///
+    /// The handle is opened with `SQLITE_OPEN_NOMUTEX` unless the caller
+    /// asked for `SQLITE_OPEN_FULLMUTEX`: a [`Connection`] lives in an `Rc`,
+    /// so only the thread that opened it can use it, and the connection
+    /// mutex of SQLite's default serialized mode would be taken and released
+    /// around every API call for nothing (about 1.7% of a Laravel test run
+    /// on an in-memory database). The library's own global mutexes stay.
     pub fn open(filename: &[u8], flags: i32) -> Result<Rc<Connection>, OpenError> {
+        configure_library();
+        let flags = if flags & sys::SQLITE_OPEN_FULLMUTEX == 0 {
+            flags | sys::SQLITE_OPEN_NOMUTEX
+        } else {
+            flags
+        };
         let name = c_string(filename);
         let mut db: *mut sys::sqlite3 = ptr::null_mut();
         // SAFETY: valid C string and out pointer.
