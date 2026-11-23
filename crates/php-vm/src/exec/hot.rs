@@ -119,6 +119,10 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::Isset { .. }
             | Op::Empty { .. }
             | Op::InitFCall { .. }
+            | Op::InitStaticCall {
+                class: ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
+                name: Operand::Lit(_),
+            }
             | Op::Send { .. }
             | Op::Free(Operand::Tmp(_))
             | Op::FetchDimCv { .. }
@@ -716,6 +720,19 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             ..
         } => {
             if !crate::call::init_fcall_in(f, name) {
+                return DECLINED;
+            }
+        }
+        // `self::f()`, `parent::f()`, `static::f()` on the site's cache hit.
+        Op::InitStaticCall {
+            ref class,
+            name: Operand::Lit(lit),
+        } if matches!(
+            class,
+            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
+        ) =>
+        {
+            if !crate::call::init_relative_static_in(f, class, lit, at) {
                 return DECLINED;
             }
         }

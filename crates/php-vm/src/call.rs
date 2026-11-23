@@ -1312,53 +1312,8 @@ impl Vm {
         if f.kind == FrameKind::Builtin {
             return false;
         }
-        let Some(cls) = relative_spec_class(f, spec) else {
-            return false;
-        };
-        let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
         let slot = f.ip.wrapping_sub(1);
-        let hit = match f.code.method_cache.borrow().get(slot) {
-            Some(Some(e))
-                if e.class_addr == Rc::as_ptr(cls) as usize
-                    && e.scope_addr == scope_addr
-                    && e.name_lit == Some(lit) =>
-            {
-                match (
-                    e.func.get(),
-                    e.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
-                ) {
-                    (Some(func), Some(scope)) => Some((func, scope, e.is_static)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        let Some((func, scope, is_static)) = hit else {
-            return false;
-        };
-        let (this, called) = if is_static {
-            let called = match f.called.as_ref() {
-                Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
-                _ => Rc::clone(cls),
-            };
-            (None, called)
-        } else {
-            let Some(this) = f.this.as_ref() else {
-                return false;
-            };
-            let called = object::class_of(this);
-            if !called.is_subclass_of(cls) {
-                return false;
-            }
-            (Some(this.clone()), Rc::clone(called))
-        };
-        push_call_in_place(&mut f.calls, move || PendingCall {
-            this,
-            scope: Some(scope),
-            called: Some(called),
-            ..PendingCall::new(func)
-        });
-        true
+        init_relative_static_in(f, spec, lit, slot)
     }
 
     /// Fills the monomorphic slot of the running `self::name()` /
@@ -5030,6 +4985,66 @@ fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Clas
         ClassSpec::Static => f.called.as_ref(),
         _ => None,
     }
+}
+
+/// [`Vm::init_relative_static_call_cached`] on the running frame `f`, the
+/// op at `slot` (its index): `self::name()` / `parent::name()` /
+/// `static::name()` on the site's monomorphic cache hit, the pending call
+/// pushed in place. Returns `false`, having changed nothing, on a miss.
+/// Frame-local, so the dispatch loop's hot block (`exec/hot.rs`) runs it
+/// as well.
+pub(crate) fn init_relative_static_in(
+    f: &mut Frame,
+    spec: &ClassSpec,
+    lit: u32,
+    slot: usize,
+) -> bool {
+    let Some(cls) = relative_spec_class(f, spec) else {
+        return false;
+    };
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let hit = match f.code.method_cache.borrow().get(slot) {
+        Some(Some(e))
+            if e.class_addr == Rc::as_ptr(cls) as usize
+                && e.scope_addr == scope_addr
+                && e.name_lit == Some(lit) =>
+        {
+            match (
+                e.func.get(),
+                e.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+            ) {
+                (Some(func), Some(scope)) => Some((func, scope, e.is_static)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some((func, scope, is_static)) = hit else {
+        return false;
+    };
+    let (this, called) = if is_static {
+        let called = match f.called.as_ref() {
+            Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
+            _ => Rc::clone(cls),
+        };
+        (None, called)
+    } else {
+        let Some(this) = f.this.as_ref() else {
+            return false;
+        };
+        let called = object::class_of(this);
+        if !called.is_subclass_of(cls) {
+            return false;
+        }
+        (Some(this.clone()), Rc::clone(called))
+    };
+    push_call_in_place(&mut f.calls, move || PendingCall {
+        this,
+        scope: Some(scope),
+        called: Some(called),
+        ..PendingCall::new(func)
+    });
+    true
 }
 
 /// Appends the pending call `make` builds to `calls`, written straight
