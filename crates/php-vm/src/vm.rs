@@ -1133,10 +1133,9 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
         v.clear();
     }
     if n != 0 {
-        v.reserve(n);
-        for _ in 0..n {
-            v.push(make());
-        }
+        // `resize_with` stores the length once, after the loop; a `push`
+        // per element stored it every time (~9 instructions an element).
+        v.resize_with(n, make);
     }
 }
 
