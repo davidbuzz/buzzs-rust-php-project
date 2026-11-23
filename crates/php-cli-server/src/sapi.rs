@@ -1281,7 +1281,13 @@ fn run_request_inner(
     if let Some(router) = &cfg.router {
         let src = std::fs::read(std::ffi::OsStr::from_bytes(router)).unwrap_or_default();
         let src = crate::router::rewrite(&src).unwrap_or(src);
+        // `php_cli_server_dispatch_router()`: the working directory the
+        // router leaves is undone (requests share the process).
+        let old_cwd = std::env::current_dir().ok();
         r = execute_script(vm, &src, router);
+        if let Some(dir) = old_cwd {
+            let _ = std::env::set_current_dir(dir);
+        }
         let declined = r.is_ok() && ctx.router_declined.get();
         if !declined {
             finish(vm, ctx, r);
