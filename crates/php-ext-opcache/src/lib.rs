@@ -1020,10 +1020,10 @@ impl Probe {
 }
 
 thread_local! {
-    /// The script whose lookup [`opcache_precompiled_hook`] just missed:
-    /// the VM then reads and compiles it, and the compile hook need not
-    /// look it up again.
-    static LOOKUP_MISSED: std::cell::RefCell<Option<ZStr>> = const { std::cell::RefCell::new(None) };
+    /// The script whose lookup [`opcache_precompiled_hook`] just missed,
+    /// with its modification time then: the VM then reads and compiles
+    /// it, and the compile hook need not look it up again.
+    static LOOKUP_MISSED: std::cell::RefCell<Option<(ZStr, Option<i64>)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The key path of `filename`. The VM passes the opened path of a plain
@@ -1189,7 +1189,13 @@ fn opcache_precompiled_hook(
     };
     let unit = lookup(vm, &p, filename)?;
     if unit.is_none() {
-        LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some(filename.clone()));
+        // The time to cache the script under is taken now, before the VM
+        // reads the file, as `zend_get_file_handle_timestamp` precedes the
+        // read in `persistent_compile_file`: a write in between then makes
+        // the cached copy look older than the file, and it is compiled
+        // again, instead of the old source being cached under the new time.
+        let mtime = p.mtime();
+        LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some((filename.clone(), mtime)));
     }
     Ok(unit)
 }
@@ -1205,11 +1211,16 @@ fn opcache_compile_hook(
     let Some(p) = probe(vm, filename) else {
         return vm.compile_source_default(src, filename, false, skip_shebang);
     };
-    let just_missed = LOOKUP_MISSED.with(|m| {
+    let missed = LOOKUP_MISSED.with(|m| {
         m.borrow_mut()
             .take()
-            .is_some_and(|missed| missed.as_bytes() == filename.as_bytes())
+            .filter(|(missed, _)| missed.as_bytes() == filename.as_bytes())
     });
+    let just_missed = missed.is_some();
+    if let Some((_, before_read)) = missed {
+        // The time taken before the file was read.
+        let _ = p.mtime.set(before_read);
+    }
     if !just_missed {
         if let Some(unit) = lookup(vm, &p, filename)? {
             return Ok(CompileOutcome::Ok(unit));
