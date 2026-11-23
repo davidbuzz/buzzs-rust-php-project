@@ -62,6 +62,15 @@ The deliverable is met on the 31 inputs. These are shapes real applications run 
 inputs do not cover, measured 21 Nov in instructions per loop iteration (ours / C);
 candidates for `perf/bench` and for work.
 
+- [ ] Code that runs with an attached symbol table (the top level of an included file, a
+  function that uses `include`, `extract()`, `compact()` or `$$var`), measured 23 Nov
+  with 300 other variables in scope: an array write in a loop 19.9 ms against C's 1.9
+  (5.8 / 1.8 in a plain function), 200,000 calls of a small function 35.9 / 2.8 (0.6 /
+  2.8). The compiled variables and the table are copied back and forth
+  (`Frame::sync_from_symbol_table` walks every variable on each generic write and on each
+  return into the frame; `attach_symbol_table`/`detach_symbol_table`, `VarStore::find`):
+  18% of a large framework page's time. php-src points the attached frame's CVs into the
+  table (`IS_INDIRECT`), so nothing is synchronised.
 - [ ] Generators: `send()` 4,499 / 510, a `foreach` over a generator 2,556 / 450 (the
   frame is swapped onto the stack and back; the rest is the builtin-method call machinery
   around `send()` and the nested `execute()`).
