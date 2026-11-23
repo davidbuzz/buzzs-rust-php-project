@@ -569,9 +569,9 @@ macro_rules! tape_ops {
             CallSend,
             /// `Op::Jmp`.
             Jmp,
-            /// `Op::JmpZ` of a temporary holding a bool.
+            /// `Op::JmpZ` of a temporary (a bool, int or null on the tape).
             JmpZT,
-            /// `Op::JmpNz` of a temporary holding a bool.
+            /// `Op::JmpNz` of a temporary (as [`TOp::JmpZT`]).
             JmpNzT,
             /// `++$cv` / `$cv++`, result unused.
             IncC,
@@ -684,11 +684,16 @@ macro_rules! tape_ops {
                     TOp::Jmp => take_jump!(ip, inst),
                     TOp::JmpZT => {
                         let s = tmp_slot(st, inst.a);
-                        let Value::Bool(b) = *s else {
-                            return step_out(ip);
+                        // The values that need no release: a comparison's
+                        // bool, or the int of `count()`, `strlen()`, `&`, ...
+                        let b = match *s {
+                            Value::Bool(b) => b,
+                            Value::Int(i) => i != 0,
+                            Value::Null => false,
+                            _ => return step_out(ip),
                         };
-                        // Consumed, as `hot::take_bool` does (a bool:
-                        // nothing to release).
+                        // Consumed, as `hot::take_bool` does (nothing to
+                        // release).
                         std::ptr::write(s, Value::Null);
                         if b {
                             ip = ip.add(1);
@@ -698,8 +703,13 @@ macro_rules! tape_ops {
                     }
                     TOp::JmpNzT => {
                         let s = tmp_slot(st, inst.a);
-                        let Value::Bool(b) = *s else {
-                            return step_out(ip);
+                        // The values that need no release: a comparison's
+                        // bool, or the int of `count()`, `strlen()`, `&`, ...
+                        let b = match *s {
+                            Value::Bool(b) => b,
+                            Value::Int(i) => i != 0,
+                            Value::Null => false,
+                            _ => return step_out(ip),
                         };
                         std::ptr::write(s, Value::Null);
                         if b {
