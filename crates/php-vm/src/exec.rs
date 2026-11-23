@@ -1589,8 +1589,11 @@ impl Vm {
                         self.set_tmp(*dst, Value::Str(s));
                         Flow::Next
                     }
+                    // An array of its own (`zend_new_array`): the shared
+                    // empty array of `ZArray::new` would be copied by the
+                    // first `ArrayAdd`, and its handle dropped.
                     Op::InitArray { dst } => {
-                        self.set_tmp(*dst, Value::Array(ZArray::new()));
+                        self.set_tmp(*dst, Value::Array(ZArray::with_capacity(0)));
                         Flow::Next
                     }
                     Op::ArrayAdd { arr, key, val } => {
