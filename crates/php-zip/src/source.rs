@@ -191,6 +191,14 @@ impl StringSource {
                 0
             }
             ffi::ZIP_SOURCE_TELL_WRITE => to_i64(self.out_offset),
+            // Announced in the `SUPPORTS` bitmap for libzip >= 1.10: a
+            // capability marker the source only has to acknowledge (the
+            // data can be read again after a close). libzip 1.11 sends it
+            // when the archive is written, and the "not supported" answer
+            // the catch-all gave made every `close()` of an archive with
+            // such an entry fail ("Operation not supported").
+            #[cfg(libzip_1_10)]
+            ffi::ZIP_SOURCE_SUPPORTS_REOPEN => 0,
             ffi::ZIP_SOURCE_REMOVE => {
                 self.in_str = Vec::new();
                 self.in_offset = 0;
