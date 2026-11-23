@@ -1042,6 +1042,8 @@ tape_ops! {
         JmpNzC = (scalar::jmpnz_cv, 1, branch),
         NotJmpZC = (scalar::not_jmpz_cv, 2, branch),
         NotJmpNzC = (scalar::not_jmpnz_cv, 2, branch),
+        UnaryT = (scalar::unary_bool_tmp, 1, plain),
+        UnaryC = (scalar::unary_bool_cv, 1, plain),
         JmpZExC = (scalar::jmpz_ex_cv, 1, branch),
         JmpNzExC = (scalar::jmpnz_ex_cv, 1, branch),
         JmpZExT = (scalar::jmpz_ex_tmp, 1, branch),
