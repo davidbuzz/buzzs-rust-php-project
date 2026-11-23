@@ -194,6 +194,16 @@ impl Default for Pcre {
 }
 
 impl Pcre {
+    /// `RSHUTDOWN`: the request's state goes (the error code, pending
+    /// warnings, the `pcre.*` settings, read again by the next request);
+    /// the compiled patterns and the locale tables stay, as
+    /// `PCRE_G(pcre_cache)` lives as long as the process.
+    pub fn end_request(&mut self) {
+        self.config = MatchConfig::default();
+        self.last_error = crate::PregError::NoError;
+        self.warnings.clear();
+    }
+
     /// Fresh state with PHP's default INI values.
     pub fn new() -> Self {
         Self {
