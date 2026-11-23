@@ -11,7 +11,7 @@ use super::{
 };
 use super::{Num, KL};
 use crate::exec::spec::plain_truth;
-use crate::opcode::{BinKind, Op, OpArray, Operand};
+use crate::opcode::{BinKind, Op, OpArray, Operand, UnKind};
 use php_runtime::BinaryOp;
 
 /// The operators of [`num_bin_tmp`], by their code in an instruction's `e`:
@@ -48,6 +48,27 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             a: cv_off(code, cv)?,
             c: rel(code, i, target)?,
             ..plain(TOp::JmpNzC)
+        },
+        // `if (!$cv)`: the negation of a variable and the jump on it
+        // after it (`ZEND_BOOL_NOT` + `ZEND_JMPZ`/`ZEND_JMPNZ` of its
+        // result, which nothing else reads), as one jump on the variable;
+        // a jump to the second op still runs that op alone.
+        Op::Unary {
+            op: UnKind::Not,
+            a: Operand::Cv(cv),
+            dst,
+        } => match *code.ops.get(i + 1)? {
+            Op::JmpZ(Operand::Tmp(t), target) if t == dst => Inst {
+                a: cv_off(code, cv)?,
+                c: rel(code, i, target)?,
+                ..plain(TOp::NotJmpZC)
+            },
+            Op::JmpNz(Operand::Tmp(t), target) if t == dst => Inst {
+                a: cv_off(code, cv)?,
+                c: rel(code, i, target)?,
+                ..plain(TOp::NotJmpNzC)
+            },
+            _ => return None,
         },
         // `$cv = a op b` (the `Bin` and the `AssignCv` after it): the
         // variable is in `d`.
@@ -313,6 +334,31 @@ pub(super) unsafe fn jmpnz_cv(st: St, inst: &Inst) -> Br {
         Some(false) => Br::Fall,
         None => Br::Decline,
     }
+}
+
+/// `Op::Unary { op: Not, a: Cv }` and the `Op::JmpZ` of its result
+/// (`if (!$cv)`): jumps when the variable is true (its negation false);
+/// otherwise as [`jmpz_cv`].
+///
+/// # Safety
+/// As [`jmpz_cv`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn not_jmpz_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: as in `jmpz_cv`.
+    unsafe { jmpnz_cv(st, inst) }
+}
+
+/// `Op::Unary { op: Not, a: Cv }` and the `Op::JmpNz` of its result:
+/// jumps when the variable is false; otherwise as [`jmpz_cv`].
+///
+/// # Safety
+/// As [`jmpz_cv`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn not_jmpnz_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: as in `jmpz_cv`.
+    unsafe { jmpz_cv(st, inst) }
 }
 
 #[cfg(test)]

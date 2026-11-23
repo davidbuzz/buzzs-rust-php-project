@@ -1040,6 +1040,8 @@ tape_ops! {
         Nop = (scalar::nop, 1, plain),
         JmpZC = (scalar::jmpz_cv, 1, branch),
         JmpNzC = (scalar::jmpnz_cv, 1, branch),
+        NotJmpZC = (scalar::not_jmpz_cv, 2, branch),
+        NotJmpNzC = (scalar::not_jmpnz_cv, 2, branch),
         NumBinT = (scalar::num_bin_tmp, 1, plain_f),
         NumBinC = (scalar::num_bin_cv, 2, plain_f),
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
