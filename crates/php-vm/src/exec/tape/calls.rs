@@ -57,17 +57,50 @@ const MAX_ARGS: usize = 6;
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     match code.ops.get(i)? {
-        op if preparable(op) => Some(plain(TOp::CallInit)),
+        op if preparable(op) && stays_prepared(code, i) => Some(plain(TOp::CallInit)),
         // Only an argument of a call one of those started can go to a
         // prepared call; the others keep the generic `Send`, without the
         // detour.
         Op::Send { src }
-            if direct_src(code, src) && call_start(code, i).is_some_and(preparable) =>
+            if direct_src(code, src)
+                && call_start_at(code, i)
+                    .is_some_and(|s| preparable(&code.ops[s]) && stays_prepared(code, s)) =>
         {
             Some(plain(TOp::CallSend))
         }
         _ => None,
     }
+}
+
+/// Whether the call started at `start` can be made from its preparation
+/// to its `DoCall` without the tape giving it up: the ops in between are
+/// argument sends it makes itself and hot ops, and none starts a call of
+/// its own (an argument that is a call, `f(g($x))`, a send of another
+/// kind or an op the tape leaves at flushes the prepared call into a
+/// `PendingCall`, `materialize`, which cost more than the preparation
+/// saved). Such calls start the generic way.
+fn stays_prepared(code: &OpArray, start: usize) -> bool {
+    /// Ops scanned at most (a call with many computed arguments starts
+    /// the generic way).
+    const SCAN: usize = 24;
+    for op in code.ops.iter().skip(start + 1).take(SCAN) {
+        match op {
+            Op::DoCall { .. } => return true,
+            Op::Send { src } if direct_src(code, src) => {}
+            Op::Send { .. }
+            | Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. }
+            | Op::CallableConvert { .. }
+            | Op::CallablePartial { .. } => return false,
+            op if crate::exec::hot::is_hot(op) => {}
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Whether a call started by `op` may be prepared ([`prepare`],
@@ -94,13 +127,14 @@ fn preparable(op: &Op) -> bool {
     )
 }
 
-/// The op that started the call the `Send` at `i` passes an argument to:
+/// The index of the op that started the call the `Send` at `i` passes an
+/// argument to:
 /// the nearest call-starting op before it whose call is not finished
 /// before `i` (calls nest: an argument's own calls start and end in
 /// between). `None` when there is none (not expected).
-fn call_start(code: &OpArray, i: usize) -> Option<&Op> {
+fn call_start_at(code: &OpArray, i: usize) -> Option<usize> {
     let mut finished = 0usize;
-    for op in code.ops.get(..i)?.iter().rev() {
+    for (at, op) in code.ops.get(..i)?.iter().enumerate().rev() {
         match op {
             Op::DoCall { .. } | Op::CallableConvert { .. } | Op::CallablePartial { .. } => {
                 finished += 1;
@@ -112,7 +146,7 @@ fn call_start(code: &OpArray, i: usize) -> Option<&Op> {
             | Op::InitParentHook { .. }
             | Op::New { .. } => {
                 if finished == 0 {
-                    return Some(op);
+                    return Some(at);
                 }
                 finished -= 1;
             }
