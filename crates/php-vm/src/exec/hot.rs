@@ -998,17 +998,17 @@ fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<
         Operand::Lit(i) => test(lits.get(i as usize)?),
         Operand::TmpKeep(t) => test(f.tmps.get(t as usize)?),
         Operand::Tmp(t) => {
-            let v = std::mem::take(f.tmps.get_mut(t as usize)?);
-            let r = test(&v);
-            if r.is_none() {
+            let value = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let result = test(&value);
+            if result.is_none() {
                 // Put back for the generic op.
                 if let Some(slot) = f.tmps.get_mut(t as usize) {
-                    *slot = v;
+                    *slot = value;
                 }
                 return None;
             }
-            discard_unrooted(Some(v));
-            r
+            discard_unrooted(Some(value));
+            result
         }
         Operand::Cv(_) | Operand::Unused => None,
     }
