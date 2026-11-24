@@ -2132,6 +2132,9 @@ pub(super) fn enter(
     }
     // The `RECV`s of the passed arguments have nothing left to do.
     frame.ip = uf.plain_first_op(n);
+    if n < uf.params.len() {
+        bind_literal_defaults(frame, uf, n);
+    }
     if prep.closure {
         bind_closure_vars(frame);
     }
@@ -2140,6 +2143,54 @@ pub(super) fn enter(
     caller.ip = caller_ip;
     vm.frames.live = live + 1;
     Ok(())
+}
+
+/// The `RECV_INIT`s of the parameters from `n` on that the call did not
+/// pass, each followed by its `RecvDefault` of a literal the parameter
+/// accepts as it is (neither by reference nor variadic, the declared type
+/// taking the value without coercion): what `hot::recv_literal_default_in`
+/// does for each when the loop reaches it, done while the frame is readied
+/// (a tape exit and a `step_ext` dispatch per default otherwise). The
+/// frame's resume point moves past the ones bound; the first that does not
+/// qualify runs as before.
+fn bind_literal_defaults(frame: &mut crate::vm::Frame, uf: &UserFunction, n: usize) {
+    let code = &uf.code;
+    let mut ip = frame.ip;
+    for (i, p) in uf.params.iter().enumerate().skip(n) {
+        let (
+            Some(&Op::RecvInit { n: rn, cv, .. }),
+            Some(&Op::RecvDefault {
+                n: dn,
+                cv: dcv,
+                val: Operand::Lit(lit),
+            }),
+        ) = (code.ops.get(ip), code.ops.get(ip + 1))
+        else {
+            break;
+        };
+        if rn as usize != i || dn != rn || dcv != cv || p.by_ref || p.variadic {
+            break;
+        }
+        let Some(value) = code.literals.get(lit as usize) else {
+            break;
+        };
+        if matches!(value, Value::Reference(_))
+            || p.ty.as_ref().is_some_and(|ty| {
+                !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value))
+            })
+        {
+            break;
+        }
+        let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+            break;
+        };
+        if slot.get().is_some() {
+            break;
+        }
+        drop(slot.set(Some(clone_value(value))));
+        ip += 2;
+    }
+    frame.ip = ip;
 }
 
 /// `ZEND_DO_UCALL` of the prepared call when the function's whole body
