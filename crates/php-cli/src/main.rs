@@ -135,6 +135,13 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    // php-src's huge pages: only with USE_ZEND_ALLOC_HUGE_PAGES set (first,
+    // before the heap grows).
+    php_memlimit::set_huge_pages(php_memlimit::huge_pages_from_env(
+        std::env::var_os("USE_ZEND_ALLOC_HUGE_PAGES")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+    ));
     let on_main_thread = main_stack::ensure(&argv);
     memcap::limit_memory();
     php_memlimit::set_hard_limit_handler(hard_limit);
