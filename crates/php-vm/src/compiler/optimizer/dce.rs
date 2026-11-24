@@ -9,7 +9,7 @@
 //! - Redundant `Free(Tmp)` removal for dead temporaries.
 //! - Dead jump-to-next elimination.
 
-use super::{clear_def_tmp, def_tmp, for_each_operand_mut, for_each_place_operand_mut};
+use super::{clear_def_tmp, def_tmp, for_each_operand, for_each_place_operand};
 use crate::opcode::{
     BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, PlaceBase, Seg,
 };
@@ -541,8 +541,7 @@ pub(crate) fn remove_dead_entry_stores(
     let len = op_array.ops.len();
     let mut is_target = vec![false; len + 1];
     for op in &op_array.ops {
-        let mut op = op.clone();
-        super::for_each_label_mut(&mut op, |l| {
+        super::for_each_label(op, |l| {
             if let Some(slot) = is_target.get_mut(*l as usize) {
                 *slot = true;
             }
@@ -550,8 +549,7 @@ pub(crate) fn remove_dead_entry_stores(
     }
     let mentions = |op: &Op| {
         let mut cvs = Vec::new();
-        let mut op = op.clone();
-        super::compact::for_each_cv_mut(&mut op, |c| cvs.push(*c));
+        super::compact::for_each_cv(op, |c| cvs.push(*c));
         cvs
     };
 
@@ -632,7 +630,7 @@ pub(crate) fn remove_overwritten_arrays(
     let len = op_array.ops.len();
     let mut is_target = vec![false; len + 1];
     for op in &op_array.ops {
-        super::for_each_label_mut(&mut op.clone(), |l| {
+        super::for_each_label(op, |l| {
             if let Some(slot) = is_target.get_mut(*l as usize) {
                 *slot = true;
             }
@@ -679,10 +677,10 @@ pub(crate) fn remove_overwritten_arrays(
 /// The variables an op names, its place's included.
 fn mentioned_cvs(op_array: &OpArray, op: &Op) -> Vec<u32> {
     let mut cvs = Vec::new();
-    super::compact::for_each_cv_mut(&mut op.clone(), |c| cvs.push(*c));
+    super::compact::for_each_cv(op, |c| cvs.push(*c));
     super::compact::for_each_op_place(op, |p| {
         if let Some(place) = op_array.places.get(p as usize) {
-            super::compact::for_each_place_cv_mut(&mut place.clone(), |c| cvs.push(*c));
+            super::compact::for_each_place_cv(place, |c| cvs.push(*c));
         }
     });
     cvs
@@ -691,7 +689,7 @@ fn mentioned_cvs(op_array: &OpArray, op: &Op) -> Vec<u32> {
 /// Whether an op may go on anywhere but to the next op.
 fn leaves(op: &Op) -> bool {
     let mut jumps = false;
-    super::for_each_label_mut(&mut op.clone(), |_| jumps = true);
+    super::for_each_label(op, |_| jumps = true);
     jumps
         || matches!(
             op,
@@ -755,10 +753,9 @@ fn inert_array_ops(
     let mut ops = Vec::new();
     for at in (0..s).rev() {
         let op = &op_array.ops[at];
-        let mut copy = op.clone();
-        let mut named = def_tmp(op) == Some(t)
-            || super::array_build_tmp_mut(&mut copy).is_some_and(|a| *a == t);
-        for_each_operand_mut(&mut copy, |o| {
+        let mut named =
+            def_tmp(op) == Some(t) || super::array_build_tmp(op).is_some_and(|a| a == t);
+        for_each_operand(op, |o| {
             named |= matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
         });
         if !named {
@@ -837,8 +834,7 @@ fn pinned_cvs(op_array: &OpArray, ctx: &super::OptContext<'_>) -> Vec<bool> {
         }
     }
     for place in &op_array.places {
-        let mut place = place.clone();
-        super::compact::for_each_place_cv_mut(&mut place, |c| {
+        super::compact::for_each_place_cv(place, |c| {
             if let Some(slot) = pinned.get_mut(*c as usize) {
                 *slot = true;
             }
@@ -894,13 +890,12 @@ fn named_after(op_array: &OpArray, from: usize, cv: u32) -> bool {
         if std::mem::replace(&mut seen[i], true) {
             continue;
         }
-        let mut copy = op.clone();
         let mut names = false;
-        super::compact::for_each_cv_mut(&mut copy, |c| names |= *c == cv);
+        super::compact::for_each_cv(op, |c| names |= *c == cv);
         if names {
             return true;
         }
-        super::for_each_label_mut(&mut copy, |l| work.push(*l as usize));
+        super::for_each_label(op, |l| work.push(*l as usize));
         if !matches!(
             op,
             Op::Jmp(_)
@@ -963,8 +958,7 @@ fn overwritten_before_read(
 fn leftover_of(op: &Op) -> Option<Op> {
     let mut consumed = None;
     let mut extra = false;
-    let mut op_clone = op.clone();
-    for_each_operand_mut(&mut op_clone, |operand| {
+    for_each_operand(op, |operand| {
         if let Operand::Tmp(t) = operand {
             if consumed.replace(*t).is_some() {
                 extra = true;
@@ -1004,14 +998,13 @@ fn count_non_free_uses(op_array: &OpArray, counts: &mut [u32]) {
         if matches!(op, Op::Free(_)) {
             continue;
         }
-        let mut op_clone = op.clone();
         // Adding an element can throw or warn, so it keeps its array alive.
-        if let Some(t) = super::array_build_tmp_mut(&mut op_clone) {
-            if let Some(c) = counts.get_mut(*t as usize) {
+        if let Some(t) = super::array_build_tmp(op) {
+            if let Some(c) = counts.get_mut(t as usize) {
                 *c += 1;
             }
         }
-        for_each_operand_mut(&mut op_clone, |operand| match operand {
+        for_each_operand(op, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {
                 if let Some(c) = counts.get_mut(*t as usize) {
                     *c += 1;
@@ -1022,8 +1015,7 @@ fn count_non_free_uses(op_array: &OpArray, counts: &mut [u32]) {
     }
 
     for place in &op_array.places {
-        let mut place_clone = place.clone();
-        for_each_place_operand_mut(&mut place_clone, |operand| match operand {
+        for_each_place_operand(place, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {
                 if let Some(c) = counts.get_mut(*t as usize) {
                     *c += 1;
@@ -1153,7 +1145,7 @@ impl Assigned {
         // The opening straight line: every later op runs after it.
         let mut is_target = vec![false; op_array.ops.len() + 1];
         for op in &op_array.ops {
-            super::for_each_label_mut(&mut op.clone(), |l| {
+            super::for_each_label(op, |l| {
                 if let Some(slot) = is_target.get_mut(*l as usize) {
                     *slot = true;
                 }
@@ -1164,7 +1156,7 @@ impl Assigned {
                 break;
             }
             let mut jumps = false;
-            super::for_each_label_mut(&mut op.clone(), |_| jumps = true);
+            super::for_each_label(op, |_| jumps = true);
             if jumps
                 || matches!(
                     op,
@@ -1238,9 +1230,7 @@ fn drop_dead_array_builds(
             continue;
         }
         let adds: Vec<usize> = (0..op_array.ops.len())
-            .filter(|&j| {
-                super::array_build_tmp_mut(&mut op_array.ops[j].clone()).is_some_and(|t| *t == dst)
-            })
+            .filter(|&j| super::array_build_tmp(&op_array.ops[j]).is_some_and(|t| t == dst))
             .collect();
         // Another reader (an assignment, an argument, ...) keeps it.
         if non_free_uses.get(dst as usize).copied() != u32::try_from(adds.len()).ok() {
@@ -1312,7 +1302,7 @@ fn drop_dead_pair(
             continue;
         }
         let mut read = Vec::new();
-        for_each_operand_mut(&mut op.clone(), |operand| {
+        for_each_operand(op, |operand| {
             if let Operand::Tmp(t) = operand {
                 read.push(*t);
             }

@@ -90,9 +90,8 @@ fn is_top_level(func: &UserFunction, i: usize) -> bool {
         return false;
     }
     !func.code.ops.iter().enumerate().any(|(at, op)| {
-        let mut op = op.clone();
         let mut crossed = false;
-        crate::compiler::optimizer::for_each_label_mut(&mut op, |t| {
+        crate::compiler::optimizer::for_each_label(op, |t| {
             let t = *t as usize;
             if at.min(t) < i && i < at.max(t) {
                 crossed = true;
@@ -853,8 +852,7 @@ impl<'a> Lower<'a> {
     /// Whether op `i` reads temporary `t` (through any operand).
     fn reads_tmp(op: &Op, t: u32) -> bool {
         let mut found = false;
-        let mut op = op.clone();
-        crate::compiler::optimizer::for_each_operand_mut(&mut op, |o| {
+        crate::compiler::optimizer::for_each_operand(op, |o| {
             if matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t) {
                 found = true;
             }

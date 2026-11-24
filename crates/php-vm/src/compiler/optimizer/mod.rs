@@ -238,12 +238,10 @@ fn only_through_props(op_array: &OpArray, cv: u32, def: usize) -> bool {
             continue;
         }
         let mut named = false;
-        let mut copy = op.clone();
-        compact::for_each_cv_mut(&mut copy, |c| named |= *c == cv);
+        compact::for_each_cv(op, |c| named |= *c == cv);
         compact::for_each_op_place(op, |p| {
             if let Some(pl) = op_array.places.get(p as usize) {
-                let mut pl = pl.clone();
-                compact::for_each_place_cv_mut(&mut pl, |c| named |= *c == cv);
+                compact::for_each_place_cv(pl, |c| named |= *c == cv);
             }
         });
         if named {
@@ -317,14 +315,12 @@ fn fold_local_objects(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) 
     optimize_rounds(&mut trial, level, ctx);
     let still_named = trial.ops.iter().any(|op| {
         let mut named = false;
-        let mut copy = op.clone();
-        compact::for_each_cv_mut(&mut copy, |c| {
+        compact::for_each_cv(op, |c| {
             named |= objects.iter().any(|o| o.cv == *c);
         });
         compact::for_each_op_place(op, |p| {
             if let Some(pl) = trial.places.get(p as usize) {
-                let mut pl = pl.clone();
-                compact::for_each_place_cv_mut(&mut pl, |c| {
+                compact::for_each_place_cv(pl, |c| {
                     named |= objects.iter().any(|o| o.cv == *c);
                 });
             }
@@ -607,268 +603,326 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
 // Common Traversal & Utility Helpers
 // -----------------------------------------------------------------------------
 
-pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand)) {
-    match op {
-        Op::Nop => {}
-        Op::Move { src, .. } => f(src),
-        Op::Bin { a, b, .. } => {
-            f(a);
-            f(b);
-        }
-        Op::Unary { a, .. } => f(a),
-        Op::Cast { a, .. } => f(a),
-        Op::Rope { parts, .. } => {
-            for p in parts.iter_mut() {
-                f(p);
-            }
-        }
-        Op::InitArray { .. } => {}
-        Op::ArrayAdd { key, val, .. } => {
-            if let Some(k) = key {
-                f(k);
-            }
-            f(val);
-        }
-        Op::ArrayAddRef { key, .. } => {
-            if let Some(k) = key {
-                f(k);
-            }
-        }
-        Op::ArrayUnpack { src, .. } => f(src),
-        Op::ConstArrayUnpack { src, .. } => f(src),
-        Op::Jmp(_) => {}
-        Op::JmpZ(cond, _) | Op::JmpNz(cond, _) => f(cond),
-        Op::JmpZEx { a, .. }
-        | Op::JmpNzEx { a, .. }
-        | Op::JmpSet { a, .. }
-        | Op::Coalesce { a, .. }
-        | Op::JmpNull { a, .. } => f(a),
-        Op::AssignCv { val, .. } => f(val),
-        Op::Assign { val, .. } => f(val),
-        Op::AssignOp { val, .. } => f(val),
-        Op::IncDec { .. } => {}
-        Op::AssignRef { src, .. } => f(src),
-        Op::MakeRef { .. } => {}
-        Op::ListFetchRef { .. } => {}
-        Op::Fetch { .. } | Op::Isset { .. } | Op::Empty { .. } => {}
-        Op::ArrayKeyExists { array, .. } => match array {
-            ArgSrc::Val(op) | ArgSrc::CallResult(op) => f(op),
-            ArgSrc::Place(_) | ArgSrc::TempPlace(_) => {}
-        },
-        Op::Unset { .. } => {}
-        Op::Global { .. } => {}
-        Op::BindStatic { .. } => {}
-        Op::InitStatic { val, .. } => f(val),
-        Op::FetchThis { .. } => {}
-        Op::InitFCall { .. } => {}
-        Op::InitDynCall { callee } => f(callee),
-        Op::InitMethodCall { obj, name } => {
-            f(obj);
-            f(name);
-        }
-        Op::InitStaticCall { class, name } => {
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
-            }
-            f(name);
-        }
-        Op::InitParentHook { .. } => {}
-        Op::New { class, .. } => {
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
-            }
-        }
-        Op::Send { src } | Op::SendNamed { src, .. } => match src {
-            ArgSrc::Val(op) | ArgSrc::CallResult(op) => f(op),
-            ArgSrc::Place(_) | ArgSrc::TempPlace(_) => {}
-        },
-        Op::SendUnpack { src } => f(src),
-        Op::DoCall { .. } => {}
-        Op::CallableConvert { .. } => {}
-        Op::SendPlaceholder { .. } => {}
-        Op::CallablePartial { .. } => {}
-        Op::Recv { .. } | Op::RecvInit { .. } => {}
-        Op::RecvDefault { val, .. } => f(val),
-        Op::RecvVariadic { .. } => {}
-        Op::VerifyReturn { val } | Op::Return { val } | Op::ReturnByRefValue { val } => f(val),
-        Op::ReturnRef { .. } => {}
-        Op::GeneratorCreate => {}
-        Op::Yield { key, val, .. } => {
-            if let Some(k) = key {
-                f(k);
-            }
-            if let Some(v) = val {
-                f(v);
-            }
-        }
-        Op::YieldRef { key, .. } => {
-            if let Some(k) = key {
-                f(k);
-            }
-        }
-        Op::YieldByRefValue { key, val, .. } => {
-            if let Some(k) = key {
-                f(k);
-            }
-            f(val);
-        }
-        Op::YieldFrom { src, .. } => f(src),
-        Op::DeclareFunction(_) | Op::DeclareClass(_) | Op::DeclareAnonClass { .. } => {}
-        Op::MakeClosure { .. } => {}
-        Op::DeclareConst { val, .. } => f(val),
-        Op::FetchConst { .. } => {}
-        Op::FetchClassConst { class, name, .. } => {
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
-            }
-            f(name);
-        }
-        Op::FetchClassName { class, .. } => {
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
-            }
-        }
-        Op::InstanceOf { a, class, .. } => {
-            f(a);
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
-            }
-        }
-        Op::Clone { a, .. } => f(a),
-        Op::FuncNumArgs { .. } | Op::FuncGetArgs { .. } => {}
-        Op::Strlen { a, .. }
-        | Op::Count { a, .. }
-        | Op::TypeCheck { a, .. }
-        | Op::GetType { a, .. }
-        | Op::GetClass { a, .. } => f(a),
-        Op::GetCalledClass { .. } | Op::Defined { .. } => {}
-        Op::InArray { a, .. } => f(a),
-        Op::KeyExists { key, array, .. } => {
-            f(key);
-            f(array);
-        }
-        Op::Echo(op) | Op::Exit(op) | Op::Free(op) | Op::Throw(op) => f(op),
-        Op::Catch { .. } | Op::Rethrow => {}
-        Op::FastCall { .. } | Op::FastRet { .. } | Op::DiscardFinally { .. } => {}
-        Op::BeginSilence { .. } => {}
-        Op::EndSilence { saved } => f(saved),
-        Op::Include { a, .. } => f(a),
-        Op::FeReset { subject, .. } => f(subject),
-        Op::FeFetch { .. } | Op::FeFree { .. } | Op::FeFreeOnReturn { .. } => {}
-        Op::MatchError { subject } | Op::Match { subject, .. } => f(subject),
-        Op::TypeAssertArray { val, .. } => f(val),
-        Op::Ticks(_) | Op::Diag { .. } | Op::UserOpcode { .. } | Op::AssertCheck { .. } => {}
-        Op::ConstPropCheck { obj, name, .. } => {
-            f(obj);
-            f(name);
-        }
-        Op::ConstDimCheck { obj } => f(obj),
-        // Specialised ops
-        Op::Abs { src, .. } => f(src),
-        // Formed after the optimizer (`specialise::fuse_frameless_calls`):
-        // the `Send` operands and their in-place copies.
-        Op::FramelessICall(fc) => {
-            let fc = &mut **fc;
-            let n = usize::from(fc.argc);
-            for (src, val) in fc.args.iter_mut().zip(fc.vals.iter_mut()).take(n) {
-                if let ArgSrc::Val(op) | ArgSrc::CallResult(op) = src {
-                    f(op);
+/// Generates an operand visitor over `&Op` or `&mut Op` from one body, so
+/// the read-only form ([`for_each_operand`]) can never miss an operand the
+/// mutable one renumbers.
+macro_rules! operand_visitor {
+    ($(#[$doc:meta])* $name:ident, $iter:ident, $($m:tt)*) => {
+        $(#[$doc])*
+        pub(crate) fn $name(op: & $($m)* Op, mut f: impl FnMut(& $($m)* Operand)) {
+            match op {
+                Op::Nop => {}
+                Op::Move { src, .. } => f(src),
+                Op::Bin { a, b, .. } => {
+                    f(a);
+                    f(b);
                 }
-                f(val);
+                Op::Unary { a, .. } => f(a),
+                Op::Cast { a, .. } => f(a),
+                Op::Rope { parts, .. } => {
+                    for p in parts.$iter() {
+                        f(p);
+                    }
+                }
+                Op::InitArray { .. } => {}
+                Op::ArrayAdd { key, val, .. } => {
+                    if let Some(k) = key {
+                        f(k);
+                    }
+                    f(val);
+                }
+                Op::ArrayAddRef { key, .. } => {
+                    if let Some(k) = key {
+                        f(k);
+                    }
+                }
+                Op::ArrayUnpack { src, .. } => f(src),
+                Op::ConstArrayUnpack { src, .. } => f(src),
+                Op::Jmp(_) => {}
+                Op::JmpZ(cond, _) | Op::JmpNz(cond, _) => f(cond),
+                Op::JmpZEx { a, .. }
+                | Op::JmpNzEx { a, .. }
+                | Op::JmpSet { a, .. }
+                | Op::Coalesce { a, .. }
+                | Op::JmpNull { a, .. } => f(a),
+                Op::AssignCv { val, .. } => f(val),
+                Op::Assign { val, .. } => f(val),
+                Op::AssignOp { val, .. } => f(val),
+                Op::IncDec { .. } => {}
+                Op::AssignRef { src, .. } => f(src),
+                Op::MakeRef { .. } => {}
+                Op::ListFetchRef { .. } => {}
+                Op::Fetch { .. } | Op::Isset { .. } | Op::Empty { .. } => {}
+                Op::ArrayKeyExists { array, .. } => match array {
+                    ArgSrc::Val(op) | ArgSrc::CallResult(op) => f(op),
+                    ArgSrc::Place(_) | ArgSrc::TempPlace(_) => {}
+                },
+                Op::Unset { .. } => {}
+                Op::Global { .. } => {}
+                Op::BindStatic { .. } => {}
+                Op::InitStatic { val, .. } => f(val),
+                Op::FetchThis { .. } => {}
+                Op::InitFCall { .. } => {}
+                Op::InitDynCall { callee } => f(callee),
+                Op::InitMethodCall { obj, name } => {
+                    f(obj);
+                    f(name);
+                }
+                Op::InitStaticCall { class, name } => {
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                    f(name);
+                }
+                Op::InitParentHook { .. } => {}
+                Op::New { class, .. } => {
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                }
+                Op::Send { src } | Op::SendNamed { src, .. } => match src {
+                    ArgSrc::Val(op) | ArgSrc::CallResult(op) => f(op),
+                    ArgSrc::Place(_) | ArgSrc::TempPlace(_) => {}
+                },
+                Op::SendUnpack { src } => f(src),
+                Op::DoCall { .. } => {}
+                Op::CallableConvert { .. } => {}
+                Op::SendPlaceholder { .. } => {}
+                Op::CallablePartial { .. } => {}
+                Op::Recv { .. } | Op::RecvInit { .. } => {}
+                Op::RecvDefault { val, .. } => f(val),
+                Op::RecvVariadic { .. } => {}
+                Op::VerifyReturn { val } | Op::Return { val } | Op::ReturnByRefValue { val } => f(val),
+                Op::ReturnRef { .. } => {}
+                Op::GeneratorCreate => {}
+                Op::Yield { key, val, .. } => {
+                    if let Some(k) = key {
+                        f(k);
+                    }
+                    if let Some(v) = val {
+                        f(v);
+                    }
+                }
+                Op::YieldRef { key, .. } => {
+                    if let Some(k) = key {
+                        f(k);
+                    }
+                }
+                Op::YieldByRefValue { key, val, .. } => {
+                    if let Some(k) = key {
+                        f(k);
+                    }
+                    f(val);
+                }
+                Op::YieldFrom { src, .. } => f(src),
+                Op::DeclareFunction(_) | Op::DeclareClass(_) | Op::DeclareAnonClass { .. } => {}
+                Op::MakeClosure { .. } => {}
+                Op::DeclareConst { val, .. } => f(val),
+                Op::FetchConst { .. } => {}
+                Op::FetchClassConst { class, name, .. } => {
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                    f(name);
+                }
+                Op::FetchClassName { class, .. } => {
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                }
+                Op::InstanceOf { a, class, .. } => {
+                    f(a);
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                }
+                Op::Clone { a, .. } => f(a),
+                Op::FuncNumArgs { .. } | Op::FuncGetArgs { .. } => {}
+                Op::Strlen { a, .. }
+                | Op::Count { a, .. }
+                | Op::TypeCheck { a, .. }
+                | Op::GetType { a, .. }
+                | Op::GetClass { a, .. } => f(a),
+                Op::GetCalledClass { .. } | Op::Defined { .. } => {}
+                Op::InArray { a, .. } => f(a),
+                Op::KeyExists { key, array, .. } => {
+                    f(key);
+                    f(array);
+                }
+                Op::Echo(op) | Op::Exit(op) | Op::Free(op) | Op::Throw(op) => f(op),
+                Op::Catch { .. } | Op::Rethrow => {}
+                Op::FastCall { .. } | Op::FastRet { .. } | Op::DiscardFinally { .. } => {}
+                Op::BeginSilence { .. } => {}
+                Op::EndSilence { saved } => f(saved),
+                Op::Include { a, .. } => f(a),
+                Op::FeReset { subject, .. } => f(subject),
+                Op::FeFetch { .. } | Op::FeFree { .. } | Op::FeFreeOnReturn { .. } => {}
+                Op::MatchError { subject } | Op::Match { subject, .. } => f(subject),
+                Op::TypeAssertArray { val, .. } => f(val),
+                Op::Ticks(_) | Op::Diag { .. } | Op::UserOpcode { .. } | Op::AssertCheck { .. } => {}
+                Op::ConstPropCheck { obj, name, .. } => {
+                    f(obj);
+                    f(name);
+                }
+                Op::ConstDimCheck { obj } => f(obj),
+                // Specialised ops
+                Op::Abs { src, .. } => f(src),
+                // Formed after the optimizer (`specialise::fuse_frameless_calls`):
+                // the `Send` operands and their in-place copies.
+                Op::FramelessICall(fc) => {
+                    let fc = & $($m)* **fc;
+                    let n = usize::from(fc.argc);
+                    for (src, val) in fc.args.$iter().zip(fc.vals.$iter()).take(n) {
+                        if let ArgSrc::Val(op) | ArgSrc::CallResult(op) = src {
+                            f(op);
+                        }
+                        f(val);
+                    }
+                }
+                Op::CmpJmp { a, b, .. }
+                | Op::BinAssignCv { a, b, .. }
+                | Op::BinAssignCvCmpJmp { a, b, .. }
+                | Op::BinAssignCvJmp { a, b, .. } => {
+                    f(a);
+                    f(b);
+                }
+                Op::IncDecCv { .. } => {}
+                Op::AssignOpCv { val, .. }
+                | Op::AssignOpCvCmpJmp { val, .. }
+                | Op::AssignOpCvJmp { val, .. } => f(val),
+                Op::AssignOpDimCv { dim, val, .. } | Op::AssignDimCv { dim, val, .. } => {
+                    f(dim);
+                    f(val);
+                }
+                Op::IncDecDimCv { dim, .. } | Op::FetchDimCv { dim, .. } | Op::IssetDimCv { dim, .. } => {
+                    f(dim)
+                }
+                Op::FetchDimsCv { .. } => {}
+                Op::FetchStaticProp { .. } | Op::FetchGlobal { .. } => {}
+                Op::AssignStaticProp { val, .. } | Op::AssignOpStaticProp { val, .. } => f(val),
+                Op::IssetStaticProp { .. } => {}
+                Op::ConcatCv { val, .. } => f(val),
+                Op::AssignDimsCv { val, .. } => f(val),
+                Op::AssignOpDimsCv { val, .. } => f(val),
+                Op::FetchConstTo { .. } | Op::FetchClassConstTo { .. } => {}
+                Op::IncDecCvCmpJmp { .. } => {}
+                Op::FetchObjProp { .. } | Op::IncDecObjProp { .. } | Op::IssetObjProp { .. } => {}
+                Op::FetchObjPropDim { dim, .. }
+                | Op::IncDecObjPropDim { dim, .. }
+                | Op::IssetObjPropDim { dim, .. } => f(dim),
+                Op::AssignObjProp { val, .. } | Op::AssignOpObjProp { val, .. } => f(val),
+                Op::AssignObjPropDim { dim, val, .. } | Op::AssignOpObjPropDim { dim, val, .. } => {
+                    f(dim);
+                    f(val);
+                }
             }
         }
-        Op::CmpJmp { a, b, .. }
-        | Op::BinAssignCv { a, b, .. }
-        | Op::BinAssignCvCmpJmp { a, b, .. }
-        | Op::BinAssignCvJmp { a, b, .. } => {
-            f(a);
-            f(b);
-        }
-        Op::IncDecCv { .. } => {}
-        Op::AssignOpCv { val, .. }
-        | Op::AssignOpCvCmpJmp { val, .. }
-        | Op::AssignOpCvJmp { val, .. } => f(val),
-        Op::AssignOpDimCv { dim, val, .. } | Op::AssignDimCv { dim, val, .. } => {
-            f(dim);
-            f(val);
-        }
-        Op::IncDecDimCv { dim, .. } | Op::FetchDimCv { dim, .. } | Op::IssetDimCv { dim, .. } => {
-            f(dim)
-        }
-        Op::FetchDimsCv { .. } => {}
-        Op::FetchStaticProp { .. } | Op::FetchGlobal { .. } => {}
-        Op::AssignStaticProp { val, .. } | Op::AssignOpStaticProp { val, .. } => f(val),
-        Op::IssetStaticProp { .. } => {}
-        Op::ConcatCv { val, .. } => f(val),
-        Op::AssignDimsCv { val, .. } => f(val),
-        Op::AssignOpDimsCv { val, .. } => f(val),
-        Op::FetchConstTo { .. } | Op::FetchClassConstTo { .. } => {}
-        Op::IncDecCvCmpJmp { .. } => {}
-        Op::FetchObjProp { .. } | Op::IncDecObjProp { .. } | Op::IssetObjProp { .. } => {}
-        Op::FetchObjPropDim { dim, .. }
-        | Op::IncDecObjPropDim { dim, .. }
-        | Op::IssetObjPropDim { dim, .. } => f(dim),
-        Op::AssignObjProp { val, .. } | Op::AssignOpObjProp { val, .. } => f(val),
-        Op::AssignObjPropDim { dim, val, .. } | Op::AssignOpObjPropDim { dim, val, .. } => {
-            f(dim);
-            f(val);
-        }
-    }
+    };
 }
 
-pub(crate) fn for_each_place_operand_mut(place: &mut Place, mut f: impl FnMut(&mut Operand)) {
-    match &mut place.base {
-        PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::GlobalsArray => {}
-        PlaceBase::VarVar(op) | PlaceBase::Value(op) | PlaceBase::Global(op) => f(op),
-        PlaceBase::StaticProp { class, name } => {
-            if let ClassSpec::Dyn(c) = class {
-                f(c);
+operand_visitor!(
+    /// Visits every [`Operand`] of `op`, mutably.
+    for_each_operand_mut,
+    iter_mut,
+    mut
+);
+operand_visitor!(
+    /// Visits every [`Operand`] of `op` (what [`for_each_operand_mut`]
+    /// visits), without cloning it.
+    for_each_operand,
+    iter,
+);
+
+/// Generates a place-operand visitor over `&Place` or `&mut Place` from one
+/// body.
+macro_rules! place_operand_visitor {
+    ($(#[$doc:meta])* $name:ident, $($m:tt)*) => {
+        $(#[$doc])*
+        pub(crate) fn $name(place: & $($m)* Place, mut f: impl FnMut(& $($m)* Operand)) {
+            match & $($m)* place.base {
+                PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::GlobalsArray => {}
+                PlaceBase::VarVar(op) | PlaceBase::Value(op) | PlaceBase::Global(op) => f(op),
+                PlaceBase::StaticProp { class, name } => {
+                    if let ClassSpec::Dyn(c) = class {
+                        f(c);
+                    }
+                    f(name);
+                }
             }
-            f(name);
+            for seg in & $($m)* place.segs {
+                match seg {
+                    Seg::Dim(op) | Seg::Prop(op) => f(op),
+                    Seg::Append => {}
+                }
+            }
         }
-    }
-    for seg in &mut place.segs {
-        match seg {
-            Seg::Dim(op) | Seg::Prop(op) => f(op),
-            Seg::Append => {}
-        }
-    }
+    };
 }
 
-pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
-    match op {
-        Op::Jmp(t)
-        | Op::JmpZ(_, t)
-        | Op::JmpNz(_, t)
-        | Op::JmpZEx { target: t, .. }
-        | Op::JmpNzEx { target: t, .. }
-        | Op::JmpSet { target: t, .. }
-        | Op::Coalesce { target: t, .. }
-        | Op::JmpNull { target: t, .. }
-        | Op::BindStatic { skip: t, .. }
-        | Op::RecvInit { skip: t, .. }
-        | Op::Catch { next: t, .. }
-        | Op::FastCall { target: t, .. }
-        | Op::FeReset { end: t, .. }
-        | Op::FeFetch { end: t, .. }
-        | Op::FeFreeOnReturn { loop_at: t, .. }
-        | Op::AssertCheck { skip: t, .. }
-        | Op::CmpJmp { target: t, .. }
-        | Op::BinAssignCvJmp { target: t, .. }
-        | Op::AssignOpCvJmp { target: t, .. } => f(t),
-        Op::New { skip: t, .. } => {
-            if *t != 0 {
-                f(t);
+place_operand_visitor!(
+    /// Visits every [`Operand`] of `place`, mutably.
+    for_each_place_operand_mut,
+    mut
+);
+place_operand_visitor!(
+    /// Visits every [`Operand`] of `place` (what
+    /// [`for_each_place_operand_mut`] visits), without cloning it.
+    for_each_place_operand,
+);
+
+/// Generates a jump-target visitor over `&Op` or `&mut Op` from one body.
+macro_rules! label_visitor {
+    ($(#[$doc:meta])* $name:ident, $labels:ident, [$($wrap:tt)?], $($m:tt)*) => {
+        $(#[$doc])*
+        pub(crate) fn $name(op: & $($m)* Op, mut f: impl FnMut(& $($m)* Label)) {
+            match op {
+                Op::Jmp(t)
+                | Op::JmpZ(_, t)
+                | Op::JmpNz(_, t)
+                | Op::JmpZEx { target: t, .. }
+                | Op::JmpNzEx { target: t, .. }
+                | Op::JmpSet { target: t, .. }
+                | Op::Coalesce { target: t, .. }
+                | Op::JmpNull { target: t, .. }
+                | Op::BindStatic { skip: t, .. }
+                | Op::RecvInit { skip: t, .. }
+                | Op::Catch { next: t, .. }
+                | Op::FastCall { target: t, .. }
+                | Op::FeReset { end: t, .. }
+                | Op::FeFetch { end: t, .. }
+                | Op::FeFreeOnReturn { loop_at: t, .. }
+                | Op::AssertCheck { skip: t, .. }
+                | Op::CmpJmp { target: t, .. }
+                | Op::BinAssignCvJmp { target: t, .. }
+                | Op::AssignOpCvJmp { target: t, .. } => f(t),
+                Op::New { skip: t, .. } => {
+                    if *t != 0 {
+                        f(t);
+                    }
+                }
+                Op::Match { table, .. } => {
+                    for t in table.$labels() {
+                        f($($wrap)? t);
+                    }
+                }
+                _ => {}
             }
         }
-        Op::Match { table, .. } => {
-            for t in table.labels_mut() {
-                f(t);
-            }
-        }
-        _ => {}
-    }
+    };
 }
+
+label_visitor!(
+    /// Visits every jump target of `op`, mutably.
+    for_each_label_mut,
+    labels_mut,
+    [],
+    mut
+);
+label_visitor!(
+    /// Visits every jump target of `op` (what [`for_each_label_mut`]
+    /// visits), without cloning it.
+    for_each_label, labels, [&],
+);
 
 pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
     match op {
@@ -1022,6 +1076,18 @@ pub(crate) fn literals_equal(a: &Value, b: &Value) -> bool {
 /// `ZEND_ADD_ARRAY_UNPACK`): a raw tmp index rather than an [`Operand`], so
 /// [`for_each_operand_mut`] does not visit it. Every pass that counts, marks
 /// or renumbers temporaries must include it.
+/// The array temporary of an array-literal build step, read-only (see
+/// [`array_build_tmp_mut`]).
+pub(crate) fn array_build_tmp(op: &Op) -> Option<u32> {
+    match op {
+        Op::ArrayAdd { arr, .. }
+        | Op::ArrayAddRef { arr, .. }
+        | Op::ArrayUnpack { arr, .. }
+        | Op::ConstArrayUnpack { arr, .. } => Some(*arr),
+        _ => None,
+    }
+}
+
 pub(crate) fn array_build_tmp_mut(op: &mut Op) -> Option<&mut u32> {
     match op {
         Op::ArrayAdd { arr, .. }
@@ -1034,13 +1100,12 @@ pub(crate) fn array_build_tmp_mut(op: &mut Op) -> Option<&mut u32> {
 
 pub(crate) fn count_tmp_uses(op_array: &OpArray, counts: &mut [u32]) {
     for op in &op_array.ops {
-        if let Some(t) = array_build_tmp_mut(&mut op.clone()) {
-            if let Some(c) = counts.get_mut(*t as usize) {
+        if let Some(t) = array_build_tmp(op) {
+            if let Some(c) = counts.get_mut(t as usize) {
                 *c += 1;
             }
         }
-        let mut op_clone = op.clone();
-        for_each_operand_mut(&mut op_clone, |operand| match operand {
+        for_each_operand(op, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {
                 if let Some(c) = counts.get_mut(*t as usize) {
                     *c += 1;
@@ -1051,8 +1116,7 @@ pub(crate) fn count_tmp_uses(op_array: &OpArray, counts: &mut [u32]) {
     }
 
     for place in &op_array.places {
-        let mut place_clone = place.clone();
-        for_each_place_operand_mut(&mut place_clone, |operand| match operand {
+        for_each_place_operand(place, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {
                 if let Some(c) = counts.get_mut(*t as usize) {
                     *c += 1;
@@ -1568,8 +1632,7 @@ mod tests {
             }
         }
         for op in &code.ops {
-            let mut probe = op.clone();
-            for_each_operand_mut(&mut probe, |o| {
+            for_each_operand(op, |o| {
                 if let Operand::TmpKeep(k) = o {
                     assert!(
                         defined.get(*k as usize).copied().unwrap_or(false),
@@ -2075,18 +2138,16 @@ mod tests {
             }
         }
         let mut read = Vec::new();
-        let mut note = |operand: &mut Operand| {
+        let mut note = |operand: &Operand| {
             if let Operand::Tmp(t) | Operand::TmpKeep(t) = operand {
                 read.push(*t);
             }
         };
         for op in &code.ops {
-            let mut op = op.clone();
-            for_each_operand_mut(&mut op, &mut note);
+            for_each_operand(op, &mut note);
         }
         for place in &code.places {
-            let mut place = place.clone();
-            for_each_place_operand_mut(&mut place, &mut note);
+            for_each_place_operand(place, &mut note);
         }
         read.retain(|t| !defined.contains(t));
         read
