@@ -120,6 +120,8 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 ## Rules
 - Idiomatic, best-practice Rust: clippy pedantic clean, no `unsafe` unless justified in a comment (in practice only in FFI modules), no `unwrap()` in library code paths that can fail, thorough unit tests in every crate.
 - Match PHP output byte-for-byte: error/warning message text, line numbers, `var_dump` formatting, float printing.
+- Any user-visible divergence from the C implementation is a bug, whether or not a test covers it; the php-src tests are a sample of C's behaviour, not its spec. Internals no PHP program can observe (data structures, algorithms, caches, the JIT) may differ freely.
+- Behaviour the php-src `.phpt` suite does not cover still gets a test: a local Rust test is preferred over no test at all. When a change fixes or settles user-visible behaviour outside the suite (an INI value, an edge case of a ported C helper), add asserts for the cases, with the expected values taken from `/usr/bin/php8.5` (or the C source, where 8.5 and master differ), so a later change that makes some other test pass cannot quietly undo it.
 - Each crate owns its public API; coordinate via the types in `php-runtime`.
 - Track progress in `FEATURE_GAP.md` (update the % column for rows you advance; keep rows at 100% as the completion record).
 - Run `cargo fmt && cargo clippy --all-targets && cargo test` (scoped with `-p`) before declaring work done.
