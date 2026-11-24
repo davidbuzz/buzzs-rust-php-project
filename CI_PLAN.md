@@ -1,10 +1,13 @@
 # Plan: CI modelled on php-src's GitHub Actions
 
-Status: a plan, 24 Nov 2026, with the first pieces in place:
-- the per-push jobs `.github/workflows/x86_64-linux.yml` and `aarch64-linux.yml`;
-- the nightly run `.github/workflows/nightly.yml`.
-
-The nightly run has upstream's 01:00 UTC schedule and its `LINUX_X64` test steps (`RELEASE` with all four steps, `_REPEAT` and `DEBUG`), plus `LINUX_ARM64`. Its PHPT steps are informational and keep their JSON reports for the CI baseline. It is still a file of its own, not yet upstream's `test.yml` and `matrix.php` layout.
+Status, 25 Nov 2026: upstream's layout is in place, but no run of it has happened yet.
+- **Workflows:** `.github/matrix.php`, `.github/workflows/{test,test-suite,unit-tests,nightly-results}.yml` and `.github/actions/{apt-x64,setup-x64,setup-caddy,build-linux,test-linux}`.
+- **Jobs:** `LINUX_X64` (on pull requests `RELEASE`; nightly `DEBUG`, `RELEASE`, `_REPEAT` and `_VARIATION`, each with all four test steps), `LINUX_ARM64`, `OPCACHE_VARIATION`, `COMMUNITY`, `BENCHMARKING` (pull requests), `LATEST_STABLE_RUST` (nightly), `UNIT_TESTS_LINUX_X64`, and the nightly failure issue.
+- **The Rust compiler:** pinned at 1.95.0, except in `LATEST_STABLE_RUST`.
+- **Replaced:** the earlier `x86_64-linux.yml`, `aarch64-linux.yml` and `nightly.yml`.
+- **Still to do:**
+  - the runner's upstream flags (step 1 below). Until then `actions/test-linux` uses the runner's own equivalents, and `OPCACHE_VARIATION` spells out `--file-cache-prime`/`--file-cache-use` as INI settings;
+  - the CI environment list from the first runs (step 3).
 
 ## Principle
 
@@ -96,12 +99,12 @@ To keep the command line nearly identical, the runner gets upstream's spellings:
 
 ## Order of work
 
-1. The runner's upstream flags: the aliases, `--offline`, `-g`, `--show-slow`, `--file-cache-prime` and `--file-cache-use`, each with tests.
-2. `test.yml`, `matrix.php` and `test-suite.yml` with `LINUX_X64` (PR configuration), `UNIT_TESTS_LINUX_X64`, and `LINUX_ARM64` moved in. PHPT steps informational.
-3. The CI environment list from the first runs; then the PHPT steps gate.
-4. The nightly variations: `_REPEAT`, `_VARIATION`, `DEBUG`, the four test steps, and `OPCACHE_VARIATION`.
-5. `COMMUNITY`.
-6. `BENCHMARKING`.
+1. [ ] The runner's upstream flags: the aliases, `--offline`, `-g`, `--show-slow`, `--file-cache-prime` and `--file-cache-use`, each with tests.
+2. [x] `test.yml`, `matrix.php` and `test-suite.yml` with `LINUX_X64` (PR configuration), `UNIT_TESTS_LINUX_X64`, and `LINUX_ARM64` moved in. PHPT steps informational.
+3. [ ] The CI environment list from the first runs; then the PHPT steps gate.
+4. [x] The nightly variations: `_REPEAT`, `_VARIATION`, `DEBUG`, the four test steps, and `OPCACHE_VARIATION`.
+5. [x] `COMMUNITY`.
+6. [x] `BENCHMARKING`.
 7. Later: `LINUX_X32`, `MACOS`, `ALPINE`, `COVERAGE`, the upkeep workflows.
 
 ## Interesting, low priority
