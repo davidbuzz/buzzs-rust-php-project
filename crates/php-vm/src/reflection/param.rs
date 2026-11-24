@@ -635,7 +635,11 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method("__toString(): string", PUB, rp_to_string)
         .method("getDocComment(): string|false", PUB, rp_get_doc_comment)
-        .method("getName(): string", PUB, rp_get_name)
+        .method(
+            "getName(): string",
+            PUB | crate::func::flags::PURE,
+            rp_get_name,
+        )
         .method("isPassedByReference(): bool", PUB, rp_by_ref)
         .method("canBePassedByValue(): bool", PUB, rp_by_val)
         .method(

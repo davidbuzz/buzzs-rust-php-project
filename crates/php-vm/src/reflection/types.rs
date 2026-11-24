@@ -418,7 +418,11 @@ pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionNamedType")
         .extends(vm, "ReflectionType")
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
-        .method("getName(): string", PUB, rt_get_name)
+        .method(
+            "getName(): string",
+            PUB | crate::func::flags::PURE,
+            rt_get_name,
+        )
         .method("isBuiltin(): bool", PUB, rt_is_builtin)
         .register(vm);
     ClassBuilder::new("ReflectionUnionType")

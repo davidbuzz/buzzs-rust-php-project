@@ -1179,7 +1179,7 @@ pub(crate) fn register(vm: &mut Vm) {
             rc_construct,
         )
         .method("__toString(): string", PUB, rc_to_string)
-        .method("getName(): string", PUB, rc_get_name)
+        .method("getName(): string", PUB | flags::PURE, rc_get_name)
         .method("isInternal(): bool", PUB, rc_is_internal)
         .method("isUserDefined(): bool", PUB, rc_is_user)
         .method("isAnonymous(): bool", PUB, rc_is_anon)
@@ -1346,10 +1346,15 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method("inNamespace(): bool", PUB, rc_in_ns)
         .method("getNamespaceName(): string", PUB, rc_get_ns)
-        .method("getShortName(): string", PUB, rc_get_short_name)
+        .method(
+            "getShortName(): string",
+            PUB | flags::PURE,
+            rc_get_short_name,
+        )
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
-            PUB,
+            // Pure with at most a name (`calls::pure_args`).
+            PUB | crate::func::flags::PURE,
             rc_get_attributes,
         )
         .register(vm);

@@ -481,7 +481,7 @@ impl ClassBuilder {
             let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
                 let b = builtin_method(*sig, None, *f, *h);
-                let bfl = b.flags;
+                let bfl = b.flags & !flags::PURE;
                 let lc = b.name.to_ascii_lowercase();
                 let proto = parent
                     .as_ref()

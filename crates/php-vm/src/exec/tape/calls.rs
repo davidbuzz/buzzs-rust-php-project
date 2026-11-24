@@ -1624,6 +1624,174 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     })
 }
 
+/// `$obj->name(...)` of a pure builtin method ([`flags::PURE`]),
+/// `ZEND_INIT_METHOD_CALL` at `at` followed by `Send`s of literals or
+/// variables (by value, at most [`MAX_ARGS`]) and its `DoCall`: on the
+/// method cache hit [`prepare_method`] takes, the handler is called at
+/// once, without a pending call or a frame, with the arguments read in
+/// place (each accepted by its parameter as it is, as [`call_native`]
+/// checks them), the omitted parameters taking their declared defaults,
+/// and the caller's resume point that of the `DoCall`. A temporary `$this`
+/// is released after the call. Returns the op after the `DoCall`; `None`,
+/// nothing changed that shows, otherwise (the handler's error is dropped,
+/// and the call is made the usual way: its error and trace are the framed
+/// call's).
+pub(super) fn pure_method_now(
+    vm: &mut Vm,
+    ops: &[Op],
+    obj: Operand,
+    lit: u32,
+    at: usize,
+) -> Option<usize> {
+    // (A pending interrupt is the usual call's to service, after it.)
+    if vm.observer.enabled || crate::interrupt::safe_point_due() {
+        return None;
+    }
+    let mut sends = [Operand::Unused; MAX_ARGS];
+    let mut n = 0;
+    let (dst, done) = loop {
+        match ops.get(at + 1 + n)? {
+            Op::DoCall { dst } => break (*dst, at + 2 + n),
+            Op::Send {
+                src: ArgSrc::Val(op @ (Operand::Lit(_) | Operand::Cv(_))),
+            } if n < MAX_ARGS => {
+                sends[n] = *op;
+                n += 1;
+            }
+            // `ZEND_SEND_VAR_EX` of a plain variable (a method's parameters
+            // are not known when it is compiled): by value, the parameter
+            // being none by reference (tested below).
+            Op::Send {
+                src: ArgSrc::Place(pid),
+            } if n < MAX_ARGS => {
+                let cv = place_cv(&vm.frames.last()?.code, *pid)?;
+                sends[n] = Operand::Cv(cv);
+                n += 1;
+            }
+            _ => return None,
+        }
+    };
+    let (o, b, cls) = {
+        let caller = vm.frames.last()?;
+        let o = match obj {
+            Operand::Cv(cv) if !caller.symtab_attached => {
+                match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                    Some(Value::Object(o)) => o,
+                    _ => return None,
+                }
+            }
+            Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+                Some(Value::Object(o)) => o,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let cls = crate::object::class_of(o);
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return None;
+        }
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let (func, _scope, is_static) =
+            crate::call::method_entry_hit(&caller.code, at, cls_addr, scope_addr, lit)?;
+        let Func::Builtin(b) = func else {
+            return None;
+        };
+        if is_static || b.flags & flags::PURE == 0 || !pure_args(&b, n) {
+            return None;
+        }
+        (o.clone(), b, Rc::clone(cls))
+    };
+    let sig = b.signature();
+    let nparams = sig.params.len();
+    let required = sig.required as usize;
+    if n < required || (b.flags & flags::VARIADIC == 0 && n > nparams) {
+        return None;
+    }
+    // (No parameter, the commonest getter: no buffer to borrow.)
+    let (mut values, mut passed) = if nparams == 0 {
+        (Vec::new(), Vec::new())
+    } else {
+        (
+            vm.call_bufs.values.pop().unwrap_or_default(),
+            vm.call_bufs.passed.pop().unwrap_or_default(),
+        )
+    };
+    {
+        let caller = vm.frames.last()?;
+        for (i, op) in sends[..n].iter().enumerate() {
+            let v = match *op {
+                Operand::Lit(l) => caller.code.literals.get(l as usize).map(clone_value),
+                Operand::Cv(cv) if !caller.symtab_attached => cv_value(caller, cv),
+                _ => None,
+            };
+            let ok = v
+                .as_ref()
+                .zip(sig.params.get(i).or(sig.params.last()))
+                .is_some_and(|(v, p)| {
+                    !p.by_ref
+                        && p.ty.as_ref().is_none_or(|ty| {
+                            p.promote & crate::opcode::UNCHECKED_TYPE != 0
+                                || ty.is_mixed()
+                                || accepts_without_coercion(ty.mask, v)
+                        })
+                });
+            match v {
+                Some(v) if ok => {
+                    values.push(v);
+                    passed.push(true);
+                }
+                _ => {
+                    if values.capacity() > 0 {
+                        vm.put_val_vec(values);
+                        vm.put_bool_vec(passed);
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+    while values.len() < nparams {
+        let i = values.len();
+        match vm.builtin_default(&b, i) {
+            Some(d) if i >= required => {
+                values.push(d);
+                passed.push(false);
+            }
+            _ => break,
+        }
+    }
+    if let Some(caller) = vm.frames.last_mut() {
+        caller.ip = done;
+    }
+    let mut args = Args {
+        values,
+        passed,
+        named: Vec::new(),
+        this: Some(o),
+        called: Some(cls),
+        func: Some(Rc::clone(&b)),
+    };
+    let r = (b.handler)(vm, &mut args);
+    let Args { values, passed, .. } = args;
+    if values.capacity() > 0 {
+        vm.put_val_vec(values);
+        vm.put_bool_vec(passed);
+    }
+    let v = r.ok()?;
+    let caller = vm.frames.last_mut()?;
+    if let Operand::Tmp(t) = obj {
+        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+        Some(slot) => crate::exec::spec::put_tmp(slot, v),
+        None => drop(v),
+    }
+    Some(done)
+}
+
 /// `ZEND_INIT_STATIC_METHOD_CALL` of `Op::InitStaticCall { class:
 /// Named(_), name: Lit(_) }` at `at` in the current frame: on the call
 /// site's cache hit (`Vm::op_init_static_call`'s first case: the site's
@@ -2304,6 +2472,13 @@ pub(super) fn call_native(
     let Callee::Native(b, kind) = &prep.callee else {
         return Err(prep);
     };
+    // A pure method (`ReflectionMethod::getName()`): its handler without a
+    // frame of its own; on an error the call is made as below.
+    if b.flags & flags::PURE != 0 && pure_args(b, prep.n) {
+        if let Some(r) = call_pure(vm, b, prep.n, prep.calls_len, dst, caller_ip) {
+            return Ok(r);
+        }
+    }
     // A one-argument call `Vm::fast_builtin_call` evaluates without the
     // handler (`is_string()`, `count()`, ...): the same, in place.
     if prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
@@ -2469,6 +2644,118 @@ pub(super) fn call_native(
             }
         }
     }))
+}
+
+/// Whether a call of pure builtin `b` with `n` arguments is pure: always,
+/// but for `getAttributes()`, whose `$flags` with
+/// `ReflectionAttribute::IS_INSTANCEOF` look the filter class up (an
+/// autoloader runs user code): pure with at most the name.
+fn pure_args(b: &Builtin, n: usize) -> bool {
+    n <= 1 || !b.name.as_bytes().eq_ignore_ascii_case(b"getattributes")
+}
+
+/// The prepared call of a pure builtin method `b` ([`flags::PURE`]) made
+/// without its frame: the arguments sent into the pooled frame, checked as
+/// [`call_native`] checks them (anything a coercion would change declines),
+/// the declared defaults of the omitted trailing parameters after them,
+/// and the handler called with the readied `$this` and called scope while
+/// the caller is the current frame (its resume point saved first, as
+/// `SAVE_OPLINE()`: a notice reports the caller's line, as with the
+/// frame). On success the readied frame is emptied as its release would
+/// empty it, the interrupt check follows and the result goes to `dst`.
+/// `None`, having changed nothing that shows, when the arguments decline
+/// or the handler fails: its error is dropped (such a handler changed
+/// nothing before failing) and the call is made with its frame, so that
+/// the error and its trace are the framed call's.
+fn call_pure(
+    vm: &mut Vm,
+    b: &Rc<Builtin>,
+    n: usize,
+    calls_len: usize,
+    dst: Option<u32>,
+    caller_ip: usize,
+) -> Option<VmResult<()>> {
+    let live = vm.frames.live;
+    let sig = b.signature();
+    let nparams = sig.params.len();
+    let required = sig.required as usize;
+    if n < required || (b.flags & flags::VARIADIC == 0 && n > nparams) {
+        return None;
+    }
+    let mut values = vm.call_bufs.values.pop().unwrap_or_default();
+    let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
+    let (this, called) = {
+        let (callers, pool) = vm.frames.vec.split_at(live);
+        let (Some(caller), Some(frame)) = (callers.last(), pool.first()) else {
+            vm.put_val_vec(values);
+            vm.put_bool_vec(passed);
+            return None;
+        };
+        if caller.calls.len() != calls_len || frame.args.len() != n {
+            vm.put_val_vec(values);
+            vm.put_bool_vec(passed);
+            return None;
+        }
+        for (i, arg) in frame.args.iter().enumerate() {
+            let ok = match (arg, sig.params.get(i).or(sig.params.last())) {
+                (Some(v), Some(p)) => p.ty.as_ref().is_none_or(|ty| {
+                    !p.by_ref
+                        && (p.promote & crate::opcode::UNCHECKED_TYPE != 0
+                            || ty.is_mixed()
+                            || accepts_without_coercion(ty.mask, v))
+                }),
+                _ => false,
+            };
+            if !ok {
+                vm.put_val_vec(values);
+                vm.put_bool_vec(passed);
+                return None;
+            }
+            values.push(arg.as_ref().map_or(Value::Null, clone_value));
+        }
+        (frame.this.clone(), frame.called.clone())
+    };
+    passed.resize(n, true);
+    while values.len() < nparams {
+        let i = values.len();
+        match vm.builtin_default(b, i) {
+            Some(d) if i >= required => {
+                values.push(d);
+                passed.push(false);
+            }
+            _ => break,
+        }
+    }
+    vm.frames.vec[live - 1].ip = caller_ip;
+    let mut args = Args {
+        values,
+        passed,
+        named: Vec::new(),
+        this,
+        called,
+        func: Some(Rc::clone(b)),
+    };
+    let r = (b.handler)(vm, &mut args);
+    let Args { values, passed, .. } = args;
+    vm.put_val_vec(values);
+    vm.put_bool_vec(passed);
+    let v = r.ok()?;
+    {
+        let frame = &mut vm.frames.vec[live];
+        frame.args.clear();
+        frame.this = None;
+        frame.scope = None;
+        frame.called = None;
+    }
+    if let Err(e) = vm.check_interrupt() {
+        drop(v);
+        return Some(Err(e));
+    }
+    match dst {
+        Some(d) => vm.set_tmp(d, v),
+        None => drop(v),
+    }
+    Some(Ok(()))
 }
 
 /// The bound variables of the frame's closure (`use`), copied into their

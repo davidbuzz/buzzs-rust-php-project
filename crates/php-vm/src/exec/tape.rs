@@ -2229,6 +2229,12 @@ fn run_call(
             name: Operand::Lit(lit),
         }) => {
             flush(vm, prep);
+            // A pure builtin method with arguments at hand
+            // (`$m->getName()`, `$m->getAttributes(A::class)`): called at
+            // once, past its `DoCall`.
+            if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
+                return next;
+            }
             if let Some(call) = calls::prepare_method(vm, obj, lit, at) {
                 return send_and_enter(vm, prep, call, ops, at);
             }

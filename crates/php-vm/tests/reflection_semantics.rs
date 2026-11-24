@@ -472,3 +472,68 @@ foreach ((new \ReflectionMethod(Clazz::class, 'foo'))->getAttributes() as $attri
         "Attribute [ Test\\Attr ] {\n  - Arguments [4] {\n    Argument #0 [ Test\\strrev(...) ]\n    Argument #1 [ \\strrev(...) ]\n    Argument #2 [ \\Test\\Clazz::foo(...) ]\n    Argument #3 [ self::foo(...) ]\n  }\n}\n"
     );
 }
+
+/// Pure reflection getters (`flags::PURE`: `getName()`, `isStatic()`,
+/// `getShortName()`, `getAttributes()` with at most a name) are called
+/// without a frame; one that fails (an uninitialized `ReflectionMethod`,
+/// an invalid flag, `IS_INSTANCEOF` of a missing class) is made again
+/// with its frame, so the error and its trace are unchanged, and a user
+/// override is a user call. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn pure_reflection_getters() {
+    let src = r#"<?php
+namespace App;
+#[\Attribute] class Tag { function __construct(public $v = 1) {} }
+#[\Attribute] class Other {}
+class Base { #[Tag(2)] public static function sm() {} #[Tag] #[Other] public function im(int $a, ?string $b = null) {} private $p; public int $typed = 1; }
+class MyRM extends \ReflectionMethod { public function getName(): string { return "custom:" . parent::getName(); } }
+function run() {
+    $c = new \ReflectionClass(Base::class);
+    $uninit = (new \ReflectionClass(\ReflectionMethod::class))->newInstanceWithoutConstructor();
+    $tagName = Tag::class; $flagsI = \ReflectionAttribute::IS_INSTANCEOF;
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($c->getMethods() as $m) {
+            echo $m->getName(), ' ', var_export($m->isStatic(), true), ' ', $m->getShortName(), ' ', count($m->getAttributes()), ' ', count($m->getAttributes(Tag::class)), ' ', count($m->getAttributes($tagName)), ' ', count($m->getAttributes(Tag::class, $flagsI)), "\n";
+            foreach ($m->getParameters() as $p) { echo '  ', $p->getName(), ' ', $p->getType()?->getName(), "\n"; }
+        }
+        foreach ($c->getProperties() as $p) { echo $p->getName(), ' ', var_export($p->isStatic(), true), "\n"; }
+        echo $c->getName(), ' ', $c->getShortName(), ' ', count($c->getAttributes()), "\n";
+        echo (new MyRM(Base::class, 'im'))->getName(), "\n";
+        try { $uninit->getName(); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), ' @', $e->getTrace()[0]['function'] ?? '-', "\n"; }
+        try { $m->getAttributes(Tag::class, 99); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+        try { $m->getAttributes('NoSuchClass', $flagsI); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+        $x = $c->getMethod('im'); echo $x->getName(), "\n";
+        echo (new \ReflectionMethod(Base::class, 'sm'))->getName(), "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"sm true sm 1 1 1 1
+im false im 2 1 1 1
+  a int
+  b string
+p false
+typed false
+App\Base Base 0
+custom:im
+Error: Internal error: Failed to retrieve the reflection object @getName
+ReflectionFunctionAbstract::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Class "NoSuchClass" not found
+im
+sm
+sm true sm 1 1 1 1
+im false im 2 1 1 1
+  a int
+  b string
+p false
+typed false
+App\Base Base 0
+custom:im
+Error: Internal error: Failed to retrieve the reflection object @getName
+ReflectionFunctionAbstract::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Class "NoSuchClass" not found
+im
+sm
+"#;
+    assert_eq!(run(src), expected);
+}

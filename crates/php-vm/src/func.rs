@@ -36,6 +36,12 @@ pub mod flags {
     pub const PRIVATE: u32 = 1 << 2;
     /// Visibility mask.
     pub const VISIBILITY: u32 = PUBLIC | PROTECTED | PRIVATE;
+    /// A builtin method whose handler only reads its object and arguments
+    /// (calls no user code, looks at no frame, changes nothing before it
+    /// can fail): the tape calls it without a frame of its own, and on an
+    /// error makes the call again with its frame (`exec/tape/calls.rs`,
+    /// `call_pure`). Kept out of the method's own flags.
+    pub const PURE: u32 = 1 << 3;
     /// `static`
     pub const STATIC: u32 = 1 << 4;
     /// `final`

@@ -1050,7 +1050,7 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         .method("isUserDefined(): bool", PUB, rf_is_user)
         .method("isGenerator(): bool", PUB, rf_is_generator)
         .method("isVariadic(): bool", PUB, rf_is_variadic)
-        .method("isStatic(): bool", PUB, rf_is_static)
+        .method("isStatic(): bool", PUB | flags::PURE, rf_is_static)
         .method("getClosureThis(): ?object", PUB, rf_get_closure_this)
         .method(
             "getClosureScopeClass(): ?ReflectionClass",
@@ -1080,12 +1080,16 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             rf_get_extension_name,
         )
         .method("getFileName(): string|false", PUB, rf_get_file_name)
-        .method("getName(): string", PUB, rf_get_name)
+        .method("getName(): string", PUB | flags::PURE, rf_get_name)
         .method("getNamespaceName(): string", PUB, rf_get_ns)
         .method("getNumberOfParameters(): int", PUB, rf_num_params)
         .method("getNumberOfRequiredParameters(): int", PUB, rf_num_required)
         .method("getParameters(): array", PUB, rf_get_parameters)
-        .method("getShortName(): string", PUB, rf_get_short_name)
+        .method(
+            "getShortName(): string",
+            PUB | flags::PURE,
+            rf_get_short_name,
+        )
         .method("getStartLine(): int|false", PUB, rf_get_start_line)
         .method("getStaticVariables(): array", PUB, rf_get_static_variables)
         .method("returnsReference(): bool", PUB, rf_returns_ref)
@@ -1103,7 +1107,8 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         )
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
-            PUB,
+            // Pure with at most a name (`calls::pure_args`).
+            PUB | crate::func::flags::PURE,
             rf_get_attributes,
         )
         .register(vm);
