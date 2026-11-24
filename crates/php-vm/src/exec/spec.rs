@@ -675,6 +675,8 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
             (Value::Array(x), Value::Array(y)) if x.is_empty() || y.is_empty() => {
                 x.is_empty() && y.is_empty()
             }
+            // `===` of two objects (enum cases): the same object.
+            (Value::Object(x), Value::Object(y)) if identity => php_runtime::Obj::ptr_eq(x, y),
             // `===` compares the bytes; `==` is the generic comparison's
             // `zendi_smart_streq` (numeric strings compare as numbers),
             // which needs no diagnostic.
@@ -706,8 +708,11 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
 #[inline]
 fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
     if let Operand::Tmp(t) = op {
-        if let Some(v @ Value::Array(a)) = f.tmps.get(t as usize) {
-            return (a.refcount() > 1 || a.is_empty()).then_some(v);
+        match f.tmps.get(t as usize) {
+            Some(v @ Value::Array(a)) => return (a.refcount() > 1 || a.is_empty()).then_some(v),
+            // Another holder keeps it alive: its release runs no destructor.
+            Some(v @ Value::Object(o)) => return (o.refcount() > 1).then_some(v),
+            _ => {}
         }
     }
     operand_simple(f, op)
@@ -719,7 +724,7 @@ fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
 fn release_cmp_tmp(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
-            if matches!(slot, Value::Str(_) | Value::Array(_)) {
+            if matches!(slot, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
                 *slot = Value::Null;
             }
         }

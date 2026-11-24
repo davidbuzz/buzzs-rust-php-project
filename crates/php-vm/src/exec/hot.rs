@@ -1984,7 +1984,7 @@ fn coalesce_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
 #[allow(clippy::inline_always)]
 fn jmp_set_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Cv(cv) = a else {
-        return None;
+        return jmp_set_tmp_in(f, a, dst);
     };
     let found = f.peek_cv(cv, |slot| {
         let v = slot?;
@@ -1993,6 +1993,33 @@ fn jmp_set_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Some(v) = found else {
         return Some(false);
     };
+    put_tmp(&mut f.tmps[dst as usize], v);
+    Some(true)
+}
+
+/// [`jmp_set_in`] of a temporary (`f() ?: $d`), out of line: a true value
+/// moves into `dst` (jump); a false one (a scalar, a string or an empty
+/// array: its release frees nothing) is consumed and falls through, as
+/// the generic op's read consumes it. `None`, nothing changed, for a value
+/// whose truth needs a conversion or a warning and for a `dst` holding a
+/// value to release.
+#[inline(never)]
+fn jmp_set_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
+    let Operand::Tmp(t) = a else {
+        return None;
+    };
+    let truth = plain_truth(f.tmps.get(t as usize)?)?;
+    if !truth {
+        f.tmps[t as usize] = Value::Null;
+        return Some(false);
+    }
+    if !matches!(
+        f.tmps.get(dst as usize)?,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        return None;
+    }
+    let v = std::mem::take(&mut f.tmps[t as usize]);
     put_tmp(&mut f.tmps[dst as usize], v);
     Some(true)
 }
