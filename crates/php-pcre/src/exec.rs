@@ -15,6 +15,11 @@ use crate::{PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL};
 pub(crate) struct Exec<'a> {
     pub(crate) re: &'a Regex,
     pub(crate) subject: &'a [u8],
+    /// The subject with a readable byte after it, when it ends on a page
+    /// boundary ([`ffi::ends_on_page_boundary`]): made once here, and
+    /// matched in place of the subject by every [`Exec::run`] of the call.
+    /// The offsets PCRE2 reports are the same, so the copy is invisible.
+    padded: Option<Vec<u8>>,
     md: std::mem::ManuallyDrop<MatchData>,
     ctx: std::mem::ManuallyDrop<MatchContext>,
     /// The context's limits and JIT flag, for its return to the pool.
@@ -53,6 +58,7 @@ impl<'a> Exec<'a> {
         Some(Self {
             re,
             subject,
+            padded: ffi::ends_on_page_boundary(subject).then(|| ffi::padded_copy(subject)),
             md: std::mem::ManuallyDrop::new(md),
             ctx: std::mem::ManuallyDrop::new(ctx),
             limits,
@@ -80,8 +86,12 @@ impl<'a> Exec<'a> {
 
     /// `pcre2_match()` at `start` with `options`.
     pub(crate) fn run(&mut self, start: usize, options: u32) -> i32 {
+        let subject = match &self.padded {
+            Some(p) => &p[..self.subject.len()],
+            None => self.subject,
+        };
         self.md
-            .run(self.re.code(), self.subject, start, options, &self.ctx)
+            .run(self.re.code(), subject, start, options, &self.ctx)
     }
 
     /// Plain follow-up match (subject already validated).
