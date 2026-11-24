@@ -41,8 +41,10 @@
 
 mod counting;
 mod heap;
+mod huge_pages;
 mod limit;
 
+pub use huge_pages::{huge_pages_from_env, set_huge_pages};
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
@@ -109,7 +111,7 @@ pub fn tracked_from_env(use_zend_alloc: Option<&[u8]>, use_tracked_alloc: Option
 
 /// `ZEND_ATOL`/`strtol(s, NULL, 10)`: leading whitespace, optional sign,
 /// decimal digits; anything unparsable is 0.
-fn atol(s: &[u8]) -> i64 {
+pub(crate) fn atol(s: &[u8]) -> i64 {
     let s = s.trim_ascii_start();
     let (neg, digits) = match s.split_first() {
         Some((b'-', rest)) => (true, rest),
