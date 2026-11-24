@@ -101,7 +101,15 @@ fn make_entry(obj: &Obj, inf: Value) -> Value {
 /// `spl_object_hash` format.
 #[must_use]
 pub fn object_hash(obj: &Obj) -> ZStr {
-    ZStr::from(format!("{:016x}0000000000000000", obj.handle()))
+    // `%016zx` of the handle, then sixteen zeros, written without the
+    // formatting machinery (Laravel hashes objects in its hot paths).
+    let mut out = [b'0'; 32];
+    let mut h = u64::from(obj.handle());
+    for d in out[..16].iter_mut().rev() {
+        *d = b"0123456789abcdef"[(h & 15) as usize];
+        h >>= 4;
+    }
+    ZStr::from(&out[..])
 }
 
 /// `spl_object_storage_get_hash`.

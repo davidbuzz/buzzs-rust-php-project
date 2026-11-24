@@ -5,7 +5,7 @@
 
 use crate::host::VmHost;
 use php_runtime::{Value, ZStr};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
 use php_vm::vm::PendingCall;
 use php_vm::{ClassLoader, Vm};
 use std::sync::OnceLock;
@@ -198,6 +198,62 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
             .collect()
     });
     for sig in sigs {
-        m.function_static(sig.as_str(), call);
+        // The commonest ones answered without the generic dispatch (their
+        // unusual arguments still take it).
+        let handler: NativeFn = match sig.split('(').next() {
+            Some("spl_object_hash") => spl_object_hash,
+            Some("class_uses" | "class_implements" | "class_parents") => class_list,
+            _ => call,
+        };
+        m.function_static(sig.as_str(), handler);
     }
+}
+
+/// `spl_object_hash($object)` of an object (`php_spl::object_hash`), else
+/// the generic call (its type error).
+fn spl_object_hash(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Object(o) if a.values.len() == 1 => {
+            // (Deprecated since 8.6, as the generic call reports.)
+            if let Some(msg) = php_spl::classes::function_deprecation_message("spl_object_hash") {
+                vm.raise(8192, &msg)?;
+            }
+            Ok(Value::Str(php_spl::observer::object_hash(&o)))
+        }
+        _ => call(vm, a),
+    }
+}
+
+/// `class_uses()`, `class_implements()`, `class_parents()` of an object or
+/// of the name of a loaded class (written without a leading backslash), as
+/// `php_spl` lists them (the traits, interfaces or parents of the class's
+/// `ClassInfo`, keyed by name); anything else (an unloaded class to
+/// autoload or report, a type error) is the generic call's.
+fn class_list(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(f) = a.func.clone() else {
+        return call(vm, a);
+    };
+    let cls = match a.at(0) {
+        Value::Object(o) => php_vm::object::class_of(&o).clone(),
+        Value::Str(s) if !s.as_bytes().starts_with(b"\\") => match vm.find_class(s.as_bytes()) {
+            Some(c) => c,
+            None => return call(vm, a),
+        },
+        _ => return call(vm, a),
+    };
+    let name = f.name.as_bytes();
+    let names: Vec<php_runtime::ZStr> = if name.eq_ignore_ascii_case(b"class_uses") {
+        cls.traits.iter().map(|t| t.name.clone()).collect()
+    } else if name.eq_ignore_ascii_case(b"class_implements") {
+        cls.interfaces.iter().map(|i| i.name.clone()).collect()
+    } else {
+        std::iter::successors(cls.parent.clone(), |c| c.parent.clone())
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    let mut out = php_runtime::HashTable::new();
+    for n in names {
+        let _ = out.add(php_runtime::ArrayKey::Str(n.clone()), Value::Str(n));
+    }
+    Ok(Value::Array(php_runtime::ZArray::from_table(out)))
 }
