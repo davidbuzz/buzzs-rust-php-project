@@ -1165,6 +1165,7 @@ dependencies = [
  "libc",
  "php-lexer",
  "php-mbstring",
+ "php-memlimit",
 ]
 
 [[package]]

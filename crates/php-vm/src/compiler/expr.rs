@@ -952,30 +952,47 @@ impl Compiler<'_> {
         }
     }
 
-    fn compile_magic(&mut self, m: MagicConst, line: u32) -> Operand {
+    /// `zend_try_ct_eval_magic_const` for the magic constants whose value
+    /// does not depend on the function being compiled: `__LINE__`,
+    /// `__FILE__`, `__DIR__`, `__NAMESPACE__`, and `__CLASS__` outside a
+    /// trait (where it is resolved at run time: `None`). [`Self::try_fold`]
+    /// folds them, as `zend_eval_const_expr` does, so an expression or an
+    /// array literal built from them (Composer's
+    /// `__DIR__ . '/..' . '/x.php'` class maps) is one literal.
+    fn fold_magic(&self, m: MagicConst, line: u32) -> Option<Value> {
         let s: Vec<u8> = match m {
-            MagicConst::Line => return self.lit(Value::Int(i64::from(line))),
+            MagicConst::Line => return Some(Value::Int(i64::from(line))),
             MagicConst::File => self.filename.as_bytes().to_vec(),
-            MagicConst::Dir => {
-                let f = self.filename.as_bytes();
-                dirname(f)
-            }
+            MagicConst::Dir => dirname(self.filename.as_bytes()),
             MagicConst::Namespace => self.namespace.clone(),
-            MagicConst::Class => {
-                if let Some(c) = self.current_class() {
-                    if c.is_trait {
-                        let t = self.tmp();
-                        self.emit(Op::FetchClassName {
-                            class: ClassSpec::SelfClass,
-                            dst: t,
-                            const_expr: false,
-                        });
-                        return Operand::Tmp(t);
-                    }
-                    c.name.as_bytes().to_vec()
-                } else {
-                    Vec::new()
-                }
+            MagicConst::Class => match self.current_class() {
+                Some(c) if c.is_trait => return None,
+                Some(c) => c.name.as_bytes().to_vec(),
+                None => Vec::new(),
+            },
+            _ => return None,
+        };
+        Some(Value::Str(ZStr::from(s)))
+    }
+
+    fn compile_magic(&mut self, m: MagicConst, line: u32) -> Operand {
+        if let Some(v) = self.fold_magic(m, line) {
+            return self.lit(v);
+        }
+        let s: Vec<u8> = match m {
+            MagicConst::Line
+            | MagicConst::File
+            | MagicConst::Dir
+            | MagicConst::Namespace
+            | MagicConst::Class => {
+                // `__CLASS__` in a trait: the using class, at run time.
+                let t = self.tmp();
+                self.emit(Op::FetchClassName {
+                    class: ClassSpec::SelfClass,
+                    dst: t,
+                    const_expr: false,
+                });
+                return Operand::Tmp(t);
             }
             MagicConst::Trait => match self.current_class() {
                 Some(c) if c.is_trait => c.name.as_bytes().to_vec(),
@@ -3559,6 +3576,7 @@ impl Compiler<'_> {
                 Some(Value::Str(ZStr::from(out)))
             }
             ExprKind::ClassName(class) => self.fold_class_name(class),
+            ExprKind::MagicConst(m) => self.fold_magic(*m, e.span.line),
             _ => None,
         }
     }
