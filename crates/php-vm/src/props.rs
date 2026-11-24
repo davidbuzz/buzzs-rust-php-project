@@ -15,6 +15,71 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+/// The active `__get`/`__set`/`__isset`/`__unset` guards (`zend_get_property_guard`)
+/// and the readonly reinitialization markers of objects being cloned: (object
+/// handle, property name, kind) as a set. It only ever holds the guards of
+/// the magic accesses in progress (and a clone's markers until it is
+/// done), a handful at most, so a vector searched from its end costs less
+/// than hashing the name for every access (one insert and one removal per
+/// `__get` call).
+#[derive(Debug, Default)]
+pub struct GuardSet(Vec<(u32, ZStr, u8)>);
+
+impl GuardSet {
+    /// Whether no guard is active.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn position(&self, key: &(u32, ZStr, u8)) -> Option<usize> {
+        self.0
+            .iter()
+            .rposition(|k| k.0 == key.0 && k.2 == key.2 && k.1 == key.1)
+    }
+
+    /// Whether `key` is in the set.
+    #[inline]
+    pub fn contains(&self, key: &(u32, ZStr, u8)) -> bool {
+        !self.0.is_empty() && self.position(key).is_some()
+    }
+
+    /// Adds `key`; `false` when it was there already.
+    pub fn insert(&mut self, key: (u32, ZStr, u8)) -> bool {
+        if self.contains(&key) {
+            return false;
+        }
+        self.0.push(key);
+        true
+    }
+
+    /// Removes `key`; `false` when it was not there.
+    pub fn remove(&mut self, key: &(u32, ZStr, u8)) -> bool {
+        match self.position(key) {
+            Some(i) => {
+                self.0.swap_remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Keeps the guards `f` accepts.
+    pub fn retain(&mut self, f: impl FnMut(&(u32, ZStr, u8)) -> bool) {
+        self.0.retain(f);
+    }
+
+    /// The guards, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = &(u32, ZStr, u8)> {
+        self.0.iter()
+    }
+
+    /// Removes every guard (request shutdown).
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 /// Class flags that make `new` fail (`object_init_ex` checks them in one
 /// test before reporting which one applies).
 const NOT_INSTANTIABLE: u32 =
