@@ -133,6 +133,28 @@ candidates for `perf/bench` and for work.
 
 ## C. Conformance and features
 
+- [ ] SAPIs (from PR #9, whose `php-sapi` crate gave every SAPI one `RequestInfo`): the
+  SAPI-internal request structs (the CLI's `Request`, CGI's `RequestInfo`, the built-in
+  server's `Request`, Apache's accessors) still exist; move them onto `RequestInfo` with a
+  `SapiModule` trait after `sapi_module_struct`. `crates/php-vm/src/include.rs` still
+  resolves include paths with `std::fs::canonicalize`, not the realpath cache
+  (`tsrm_realpath`); measure before changing it, it is on the include path.
+- [ ] Startup warnings in php-cgi: an invalid INI value given with `-d` (`pcre.backtrack_limit
+  =xyz`) is reported before the output and as text; php-cgi 8.5 prints it after the output
+  and as HTML (`html_errors=1` in CGI).
+- [ ] The opcache file cache in file-cache-only mode serves the first cached copy of an
+  include the script rewrote within the same second
+  (`Zend/tests/partial_application/cache_freed_declaring_site_005`, with run-tests'
+  `opcache.file_update_protection=0` and `validate_timestamps=0`); check what php-src's
+  `zend_file_cache_script_load` does there.
+- [ ] A long-running `php -S` dies (`_exit(137)` from the memory limit's hard-limit path)
+  after scripts that exhaust a lowered `memory_limit` (`Zend/tests/oom_*`,
+  `json_decode_oom_utf8_substitute`); C ends only the request with "Allowed memory size
+  exhausted". Found by the shared-server check (every php-src test script in order on one
+  `php -S`), which otherwise showed 19 differences against fresh servers before
+  `c6419b5a` fixed 5 of them (mbstring regex state), 11 of them also in C's own `php -S`;
+  the rest: `Zend/tests/gc/bug70805*`, `generators/gh9801`. Run it again after this.
+
 - [ ] `gc_status()["roots"]` counts objects only: php-src also buffers an array whose count
   drops to a non-zero value (`$b = $a; unset($b);` is 1 root there, 0 here; `implode()`
   releases its array with `GC_TRY_DTOR_NO_REF`). `gc_collect_cycles()` results are not
