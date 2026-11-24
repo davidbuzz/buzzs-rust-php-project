@@ -36,9 +36,9 @@
 use super::super::{num_bin, Num};
 use super::{
     assign_dims, assign_op_dims, copy_value, cv_dim_hit_in, dim_int_in, dim_key_in, dim_ref_in,
-    dim_value_in, dims_value_in, discard_plain, isset_dim_in, plain_value_in, put_tmp,
-    release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char, table_dim,
-    table_dim_mut, write_keys_in, DimRef,
+    dim_value_in, dims_value_in, dims_value_is_in, discard_plain, isset_dim_in, plain_value_in,
+    put_tmp, release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char,
+    table_dim, table_dim_mut, write_keys_in, DimRef,
 };
 use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceId};
 use crate::vm::{CvSlot, ForeachIter, Frame, Vm};
@@ -144,6 +144,21 @@ pub(in crate::exec) fn fetch_dims_cv_in(
     to: Option<u32>,
 ) -> Option<bool> {
     let v = dims_value_in(f, cv, place)?;
+    release_place_str_tmps(f, place);
+    Some(store_fetched_in(f, dst, to, v))
+}
+
+/// [`fetch_dims_cv_in`] in `Is` mode (`$cv[d1][d2] ?? $d`): a missing
+/// element on the way is `null` (`dims_value_is_in`).
+#[inline(never)]
+pub(in crate::exec) fn fetch_dims_cv_is_in(
+    f: &mut Frame,
+    cv: u32,
+    place: PlaceId,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let v = dims_value_is_in(f, cv, place)?;
     release_place_str_tmps(f, place);
     Some(store_fetched_in(f, dst, to, v))
 }

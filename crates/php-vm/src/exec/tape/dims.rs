@@ -25,7 +25,7 @@ use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
     concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_cv_is_miss,
-    fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
+    fetch_dims_cv_in, fetch_dims_cv_is_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
 };
 use crate::opcode::{BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Seg};
 use crate::vm::{CvSlot, ForeachIter, Frame};
@@ -328,7 +328,11 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         Op::FetchDimsCv {
-            cv, place, dst, to, ..
+            cv,
+            place,
+            dst,
+            to,
+            mode,
         } => {
             dst_off(code, dst)?;
             let (to, c) = folded_assign(code, i, to)?;
@@ -337,6 +341,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 b: to,
                 c,
                 d: place_idx(code, place)?,
+                e: u8::from(mode == FetchMode::Is),
                 p: dst as usize,
                 ..plain(TOp::FetchDimsC)
             }
@@ -1279,7 +1284,14 @@ pub(super) unsafe fn fetch_dims_general(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
     let f = unsafe { &mut *frame };
     let to = (inst.b != NO_TO).then_some(inst.b);
-    fetched(fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to))
+    if let Some(r) = fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to) {
+        return fetched(Some(r));
+    }
+    // An `Is` read (`??`): a missing element is `null` (`inst.e`).
+    if inst.e != 0 {
+        return fetched(fetch_dims_cv_is_in(f, inst.a, inst.d, inst.p as u32, to));
+    }
+    Br::Decline
 }
 
 /// `Op::IssetDimCv`: `isset` / `empty` of `$cv[dim]` (`isset_dim_cv_in`).

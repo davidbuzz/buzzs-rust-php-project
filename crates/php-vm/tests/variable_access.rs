@@ -444,3 +444,107 @@ NULL0't''D''D'
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `$o->p[$k] ?? $d` of an element the array property lacks is `null` on
+/// the property cache's path (`ZEND_FETCH_OBJ_IS` + `ZEND_FETCH_DIM_IS`):
+/// public, private (from its class and a subclass) and referenced
+/// properties, a null or uninitialized typed property, an `ArrayAccess`
+/// object, `__get`. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_property_element_is_null() {
+    let src = r#"<?php
+class AA implements ArrayAccess { function offsetExists($o): bool { echo "exists($o) "; return $o === 'k'; } function offsetGet($o): mixed { echo "get($o) "; return 'aa'; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+class P {
+    public $a = ['k' => 1, 5 => 'five', 'n' => null];
+    private $priv = ['k' => 'p'];
+    public $nul = null;
+    public array $typed;
+    public $aa;
+    public $ref;
+    function __construct() { $this->aa = new AA; $x = ['k' => 'r']; $this->ref = &$x; }
+    function t() {
+        $keys = ['k', 'z', 5, '5', 'n', 6];
+        foreach ($keys as $k) {
+            echo var_export($this->a[$k] ?? 'D', true), var_export($this->priv[$k] ?? 'D', true), var_export($this->ref[$k] ?? 'D', true), ' ';
+        }
+        echo "\n", var_export($this->nul['k'] ?? 'N', true), var_export($this->typed['k'] ?? 'T', true), var_export($this->aa['k'] ?? 'A', true), var_export($this->aa['z'] ?? 'A', true), var_export($this->undef['k'] ?? 'U', true), "\n";
+    }
+}
+class Q extends P { function u() { return [$this->a['z'] ?? 'qd', $this->priv['k'] ?? 'nopriv']; } }
+class M { public $a = []; function __get($n) { echo "__get($n) "; return ['k' => 'm']; } }
+function run() {
+    $p = new P; $q = new Q; $m = new M;
+    for ($i = 0; $i < 2; $i++) {
+        $p->t(); var_export($q->u()); echo "\n";
+        echo var_export($p->a['z'] ?? 'out', true), var_export($m->zz['k'] ?? 'M', true), var_export($m->a['k'] ?? 'MA', true), "\n";
+        $p->a['z'] = $i; echo var_export($p->a['z'] ?? 'set', true), "\n"; unset($p->a['z']);
+    }
+}
+run();
+"#;
+    let expected = r#"1'p''r' 'D''D''D' 'five''D''D' 'five''D''D' 'D''D''D' 'D''D''D' 
+'N''T'exists(k) get(k) 'aa'exists(z) 'A''U'
+array (
+  0 => 'qd',
+  1 => 'nopriv',
+)
+'out'__get(zz) 'm''MA'
+0
+1'p''r' 'D''D''D' 'five''D''D' 'five''D''D' 'D''D''D' 'D''D''D' 
+'N''T'exists(k) get(k) 'aa'exists(z) 'A''U'
+array (
+  0 => 'qd',
+  1 => 'nopriv',
+)
+'out'__get(zz) 'm''MA'
+1
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `$cv[$a][$b] ?? $d` of an element missing on the way is `null` on the
+/// tape (a chain of `ZEND_FETCH_DIM_IS`): missing outer and inner keys,
+/// a `null` element or variable on the way, int and integer-string keys,
+/// references, a string on the way (the generic fetch). Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_nested_element_is_null() {
+    let src = r#"<?php
+function t() {
+    $o = new stdClass; $o->p = 1;
+    $inner = ['y' => 'iy'];
+    $a = ['x' => ['k' => 1, 'n' => null, 's' => 'str', 'o' => $o, 3 => [4 => 'deep']], 'nul' => null, 'r' => &$inner, 'e' => []];
+    $r = &$a;
+    $paths = [['x','k'], ['x','z'], ['y','z'], ['nul','z'], ['x','n'], ['x', 3], ['x', '3'], ['e', 0]];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($paths as [$p, $q]) {
+            echo var_export($a[$p][$q] ?? 'D', true), var_export($r[$p][$q] ?? 'D', true), ' ';
+        }
+        echo "\n", var_export($a['x'][3][4] ?? 'D', true), var_export($a['x'][3][5] ?? 'D', true), var_export($a['x']['n']['q'] ?? 'D', true), var_export($a['x']['s'][0] ?? 'D', true), var_export($a['x']['s']['q'] ?? 'D', true), var_export($a['r']['y'] ?? 'D', true), var_export($a['r']['z'] ?? 'D', true), var_export($undef['a']['b'] ?? 'U', true), "\n";
+    }
+}
+t();
+"#;
+    let expected = r#"11 'D''D' 'D''D' 'D''D' 'D''D' array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) 'D''D' 
+'deep''D''D''s''D''iy''D''U'
+11 'D''D' 'D''D' 'D''D' 'D''D' array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) 'D''D' 
+'deep''D''D''s''D''iy''D''U'
+"#;
+    assert_eq!(run(src), expected);
+}

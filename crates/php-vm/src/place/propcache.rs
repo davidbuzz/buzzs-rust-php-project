@@ -1060,6 +1060,21 @@ impl Vm {
         })
     }
 
+    /// [`Vm::prop_cache_read_elem`] in `Is` mode (`$o->p[k] ?? $d`,
+    /// `ZEND_FETCH_OBJ_IS` + `ZEND_FETCH_DIM_IS`): an array property that
+    /// has no element at `dim` gives `null`, without a notice. Anything
+    /// else the plain read would not take stays on the slow path.
+    pub(crate) fn prop_cache_read_elem_is(&self, pid: PlaceId, dim: &ArrayKey) -> Option<Value> {
+        self.probe_fill(pid, PC_READ, |key, _, data, code| {
+            with_value(key, data, code, |value| {
+                with_array(value, |arr| match arr.get(dim) {
+                    Some(elem) => Probe::Hit(deref_clone(elem)),
+                    None => Probe::Hit(Value::Null),
+                })
+            })
+        })
+    }
+
     /// Runs `access` on the entry of place `pid`'s last segment, named by
     /// literal `lit`, for `obj` (an object the place's walk reached): the
     /// cache slot php-src gives every `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.

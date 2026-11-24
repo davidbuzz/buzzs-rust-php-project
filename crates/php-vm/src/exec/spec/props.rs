@@ -759,7 +759,11 @@ impl Vm {
             return None;
         }
         let key = self.peek_dim_key(dim)?;
-        let v = self.prop_cache_read_elem(pid, &key)?;
+        let v = if mode == FetchMode::Is {
+            self.prop_cache_read_elem_is(pid, &key)?
+        } else {
+            self.prop_cache_read_elem(pid, &key)?
+        };
         self.release_tmp_str(dim);
         Some(self.store_fetched(dst, to, v))
     }

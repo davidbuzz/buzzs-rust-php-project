@@ -49,7 +49,7 @@ mod strings;
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
     fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_cv_is_miss, fetch_dims_cv_in,
-    incdec_dim_cv_in, isset_dim_cv_in,
+    fetch_dims_cv_is_in, incdec_dim_cv_in, isset_dim_cv_in,
 };
 pub(super) use props::{prop_op_in, read_hit};
 pub(super) use statics::{
@@ -431,6 +431,44 @@ fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
             return None;
         };
         cur = table_dim(a, key)?;
+    }
+    Some(match cur {
+        Value::Reference(r) => Value::clone(&*r.try_borrow()?),
+        v => v.clone(),
+    })
+}
+
+/// [`dims_value_in`] in `Is` mode (`$cv[d1][d2] ?? $d`, a chain of
+/// `ZEND_FETCH_DIM_IS`): an offset an array on the way lacks, or a `null`
+/// container, ends the walk with `null`, without a notice. Every offset
+/// must still peek as an int or a string and every container be an array
+/// (directly; the variable itself possibly through a reference) or `null`;
+/// anything else is left to the generic fetch (`None`).
+#[inline(never)]
+fn dims_value_is_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
+    let segs = &f.code.places.get(place as usize)?.segs;
+    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
+    let guard;
+    let mut cur = match slot {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = dim_ref_in(f, *dim)?;
+        match cur {
+            Value::Array(a) => match table_dim(a, key) {
+                Some(v) => cur = v,
+                None => return Some(Value::Null),
+            },
+            Value::Null => return Some(Value::Null),
+            _ => return None,
+        }
     }
     Some(match cur {
         Value::Reference(r) => Value::clone(&*r.try_borrow()?),
