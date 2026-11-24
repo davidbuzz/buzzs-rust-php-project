@@ -2112,16 +2112,25 @@ const LITERAL_SCAN: usize = 4096;
 /// literal once per element (Composer's 18k-entry class map took a second
 /// to decode).
 pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
-    /// An open literal: its `InitArray`, its first add (`Some(None)`: an
-    /// unpack came first), its element count and key kind.
+    /// What came first among a literal's elements.
+    enum First {
+        /// Nothing yet.
+        Nothing,
+        /// The add at this index.
+        Add(usize),
+        /// An unpack (which makes the table).
+        Unpack,
+    }
+    /// An open literal: its `InitArray`, its first element, its element
+    /// count and key kind.
     struct Open {
         start: usize,
-        first: Option<Option<usize>>,
+        first: First,
         count: u32,
         keys: u8,
     }
     let finish = |o: Open, tape: &mut [Inst]| {
-        if let Some(Some(f)) = o.first {
+        if let First::Add(f) = o.first {
             if let Some(inst) = tape.get_mut(f) {
                 if inst.op == TOp::ArrayAddT {
                     inst.d = o.count;
@@ -2136,7 +2145,7 @@ pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
             Op::InitArray { dst } => {
                 let fresh = Open {
                     start: i,
-                    first: None,
+                    first: First::Nothing,
                     count: 0,
                     keys: KEYS_NONE,
                 };
@@ -2151,8 +2160,8 @@ pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
                 if i - o.start > LITERAL_SCAN {
                     continue;
                 }
-                if o.first.is_none() {
-                    o.first = Some(Some(i));
+                if matches!(o.first, First::Nothing) {
+                    o.first = First::Add(i);
                 }
                 o.count = o.count.saturating_add(1);
                 let string = matches!(
@@ -2170,7 +2179,9 @@ pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
             }
             Op::ArrayUnpack { arr, .. } | Op::ConstArrayUnpack { arr, .. } => {
                 if let Some(o) = open.get_mut(arr) {
-                    o.first.get_or_insert(None);
+                    if matches!(o.first, First::Nothing) {
+                        o.first = First::Unpack;
+                    }
                 }
             }
             _ => {}
