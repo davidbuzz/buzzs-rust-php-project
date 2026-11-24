@@ -28,8 +28,10 @@
 //! word offset, `b.cond`/`cbz`/`cbnz` a 19-bit one (±1 MiB, far beyond the
 //! largest region).
 //!
-//! Only the rows [`supports`] accepts are emitted; a plan with any other
-//! row is refused, and the interpreter runs the loop.
+//! Only the rows [`supports`] accepts are emitted (every row class the
+//! x86-64 emitter has); a plan with any other row is refused, and the
+//! interpreter runs the loop. Functions compiled whole have their own
+//! entry stub and body ([`emit_native`]).
 
 // The backend speaks the parent's whole vocabulary: its plan types, row
 // classes, meta flags, layout constants and helpers.
@@ -50,6 +52,9 @@ const SCR: u32 = 21;
 const FRAME: u32 = 22;
 const POLL: u32 = 23;
 const ITER: u32 = 24;
+/// A function compiled whole: the entry stack pointer and the stack floor.
+const STACK_TOP: u32 = 25;
+const FLOOR: u32 = 26;
 /// The x86 emitter's `rax`, `r9` and `rcx`.
 const RA: u32 = 9;
 const RB: u32 = 10;
@@ -2102,20 +2107,24 @@ impl A64 {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             self.put(0x1400_0000 | (back as u32 & 0x03FF_FFFF));
         }
+        self.patch(fixups)
+    }
+
+    /// Patch the branches of `fixups` to their targets (`false`: a target
+    /// is missing or out of a branch's reach).
+    fn patch(&mut self, fixups: Vec<(usize, Fix, Target)>) -> bool {
         for (pos, fix, t) in fixups {
             let abs = match t {
-                Target::Head => self.head_pos,
-                Target::Label(j) => match self.labels.get(&j) {
-                    Some(&p) => p,
-                    None => return false,
-                },
-                Target::Stub(idx) => self.stubs[&idx],
-                Target::Side(idx) => self.sides[&idx],
-                Target::Poll(resume, row) => self.polls[&(resume, row)],
-                Target::Disarm(idx) => self.disms[&idx],
-                Target::Replan(idx) => self.replans[&idx],
-                Target::At(p) => p,
+                Target::Head => Some(self.head_pos),
+                Target::Label(j) => self.labels.get(&j).copied(),
+                Target::Stub(idx) => self.stubs.get(&idx).copied(),
+                Target::Side(idx) => self.sides.get(&idx).copied(),
+                Target::Poll(resume, row) => self.polls.get(&(resume, row)).copied(),
+                Target::Disarm(idx) => self.disms.get(&idx).copied(),
+                Target::Replan(idx) => self.replans.get(&idx).copied(),
+                Target::At(p) => Some(p),
             };
+            let Some(abs) = abs else { return false };
             let rel = sword(abs) - sword(pos);
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             match fix {
@@ -2130,6 +2139,191 @@ impl A64 {
         }
         true
     }
+
+    /// `bl t` (a function compiled whole calling its own body).
+    fn bl(&mut self, t: Target) {
+        self.fixups.push((self.code.len(), Fix::B26, t));
+        self.put(0x9400_0000);
+    }
+
+    /// `sub sp, sp, #imm` (`imm < 4096`).
+    fn sp_sub(&mut self, imm: u32) {
+        self.put(0xD100_03FF | ((imm & 0xFFF) << 10));
+    }
+
+    /// `add sp, sp, #imm` (`imm < 4096`).
+    fn sp_add(&mut self, imm: u32) {
+        self.put(0x9100_03FF | ((imm & 0xFFF) << 10));
+    }
+}
+
+// ------------------------------------------------- whole functions
+
+/// The `AArch64` code of a function compiled whole (the x86 `emit_native`'s
+/// shape): its entry stub, then its body, whose offset in bytes is the
+/// second word (`None`: a branch does not reach).
+///
+/// The entry stub is `extern "C" fn(a0..a5) -> TraceRet`. It saves `x19`,
+/// `x20`, `x23`, `x25`, `x26` (and `x24` for the pair), parks the entry
+/// stack pointer in `x25` (a bail drops every native frame by restoring
+/// it), the stack floor in `x26` and the poll address in `x23`, and calls
+/// the body with the arguments where they arrived (`x0`-`x5`). The body
+/// saves its frame record and the caller's slot bases, keeps its slots in
+/// a frame on the machine stack (`x19` the variables, `x20` the
+/// temporaries) and returns its result in `x0`. A `Send` pushes its value
+/// (16 bytes, keeping `sp` aligned); the call pops them into `x0`-`x5`.
+#[allow(clippy::too_many_lines)] // one function's code, top to bottom, as on x86-64
+pub(super) fn emit_native(plan: &NPlan) -> Option<(Vec<u8>, usize)> {
+    let dummy = Plan {
+        head: 0,
+        close: 0,
+        class: Vec::new(),
+        meta: Vec::new(),
+        guards: Vec::new(),
+        entries: Vec::new(),
+        span: Vec::new(),
+        calls: Vec::new(),
+        has_calls: false,
+        frame: false,
+        version_guard: false,
+        version: 0,
+    };
+    let mut em = A64::new(dummy, plan.tape.clone(), 0);
+    let n = plan.tape.len();
+    let (l_body, l_bail, l_exit, l_poll) = (n + 1, n + 2, n + 3, n + 4);
+    let bail = Target::Label(l_bail);
+    let poll = Target::Label(l_poll);
+    // ---- the entry stub
+    em.put(0xA9BC_7BFD); // stp x29, x30, [sp, #-64]!
+    em.put(0x9100_03FD); // mov x29, sp
+    for (k, r) in [(2u32, 19u32), (4, 23), (6, 25)] {
+        em.put(0xA900_0000 | (k << 15) | ((r + 1) << 10) | (SP << 5) | r);
+    }
+    em.put(0x9100_03F9); // mov x25, sp
+    em.mov_imm(T0, i64::from(NATIVE_STACK_BUDGET));
+    em.put(0xCB00_0000 | (T0 << 16) | (STACK_TOP << 5) | FLOOR); // sub x26, x25, x16
+    em.mov_imm(POLL, crate::interrupt::jit_poll_addr() as i64);
+    em.bl(Target::Label(l_body));
+    em.mov_reg(1, ZR); // done
+    em.set_label(l_exit);
+    for (k, r) in [(6u32, 25u32), (4, 23), (2, 19)] {
+        em.put(0xA940_0000 | (k << 15) | ((r + 1) << 10) | (SP << 5) | r);
+    }
+    em.put(0xA8C4_7BFD); // ldp x29, x30, [sp], #64
+    em.put(0xD65F_03C0); // ret
+    em.set_label(l_bail);
+    em.put(0x9100_033F); // mov sp, x25: every native frame is gone
+    em.mov_imm(1, 1); // declined
+    em.b(Target::Label(l_exit));
+    em.set_label(l_poll);
+    em.put(0x9100_033F); // mov sp, x25
+    em.mov_imm(1, 2); // declined for a safe point
+    em.b(Target::Label(l_exit));
+    // ---- the body
+    em.set_label(l_body);
+    let body = em.code.len() * 4;
+    #[allow(clippy::cast_possible_truncation)] // at most `NATIVE_MAX_SLOTS`
+    let frame = (16 * (plan.ncvs + plan.ntmps)) as u32;
+    #[allow(clippy::cast_possible_truncation)]
+    let tmps_at = (16 * plan.ncvs) as u32;
+    em.put(0xA9BF_7BFD); // stp x29, x30, [sp, #-16]!
+    em.put(0xA9BF_53F3); // stp x19, x20, [sp, #-16]!
+    em.sp_sub(frame);
+    em.put(0x9100_03F0); // mov x16, sp
+    em.cmp_x(T0, FLOOR);
+    em.bcond(LO, bail); // past the stack budget
+    em.poll(poll);
+    em.put(0x9100_03F3); // mov x19, sp
+    em.put(0x9100_0000 | (tmps_at << 10) | (SP << 5) | TMPS); // add x20, sp, #tmps
+    for k in 0..plan.nparams.min(NATIVE_MAX_ARGS) {
+        #[allow(clippy::cast_possible_truncation)]
+        let off = (k as u32) << SLOT_SHIFT;
+        #[allow(clippy::cast_possible_truncation)]
+        em.store_payload(k as u32, KC, off);
+    }
+    let order: Vec<usize> = (0..plan.rows.len())
+        .filter(|i| plan.rows[*i].is_some())
+        .collect();
+    let mut heads: Vec<usize> = Vec::new();
+    for &i in &order {
+        if let Some(row) = plan.rows[i] {
+            if let (_, Some(t)) = native_succs(i, row) {
+                if t <= i {
+                    heads.push(t);
+                }
+            }
+        }
+    }
+    for (pos, &i) in order.iter().enumerate() {
+        let Some(row) = plan.rows[i] else { continue };
+        let inst = plan.tape[i];
+        em.label(i);
+        if heads.contains(&i) {
+            em.poll(poll);
+        }
+        match row {
+            NRow::Op(c, m) => em.emit_op(c, m, &inst, bail),
+            NRow::Jmp(t) => em.b(Target::Label(t)),
+            NRow::Cmp(m, t) => {
+                em.operand(RA, m.ka, inst.a, m.lit_a);
+                em.operand(RB, m.kb, inst.b, m.lit_b);
+                em.cmp_x(RA, RB);
+                em.bcond(cond_of(jcc_for(m.mask).unwrap_or(0x85)), Target::Label(t));
+            }
+            NRow::IncCmp(m, t) => {
+                em.operand(RB, m.kb, inst.b, m.lit_b);
+                em.load_payload(RA, KC, inst.a);
+                em.step_ra(m.inc);
+                em.bcond(VS, bail);
+                em.store_payload(RA, KC, inst.a);
+                em.cmp_x(RA, RB);
+                em.bcond(cond_of(jcc_for(m.mask).unwrap_or(0x85)), Target::Label(t));
+            }
+            NRow::Move(a, dst) => {
+                em.operand(RA, a.kind, a.off, a.lit);
+                em.store_payload(RA, KT, dst);
+                em.store_tag(KT, dst, TAG_INT);
+            }
+            NRow::Ret(a) => {
+                em.operand(0, a.kind, a.off, a.lit);
+                em.sp_add(frame);
+                em.put(0xA8C1_53F3); // ldp x19, x20, [sp], #16
+                em.put(0xA8C1_7BFD); // ldp x29, x30, [sp], #16
+                em.put(0xD65F_03C0); // ret
+            }
+            NRow::Nop => {}
+            NRow::Push(a) => {
+                em.operand(RA, a.kind, a.off, a.lit);
+                em.put(0xF81F_0FE0 | RA); // str x9, [sp, #-16]!
+            }
+            NRow::Call { n, dst, body } => {
+                for k in (0..n.min(NATIVE_MAX_ARGS)).rev() {
+                    #[allow(clippy::cast_possible_truncation)]
+                    em.put(0xF841_07E0 | k as u32); // ldr x<k>, [sp], #16
+                }
+                if body == 0 {
+                    em.bl(Target::Label(l_body));
+                } else {
+                    em.mov_imm(T0, i64::try_from(body).unwrap_or(0));
+                    em.put(0xD63F_0000 | (T0 << 5)); // blr x16
+                }
+                if let Some(d) = dst {
+                    em.store_payload(0, KT, d);
+                    em.store_tag(KT, d, TAG_INT);
+                }
+            }
+        }
+        if let (Some(next), _) = native_succs(i, row) {
+            if order.get(pos + 1) != Some(&next) {
+                em.b(Target::Label(next));
+            }
+        }
+    }
+    let fixups = std::mem::take(&mut em.fixups);
+    if !em.patch(fixups) {
+        return None;
+    }
+    Some((em.bytes(), body))
 }
 
 /// Make freshly written code at `p .. p + len` visible to instruction
@@ -2561,5 +2755,71 @@ function c9() { $t = 0; for ($i = 0; $i < 4000; $i++) { $t += abs(sq($i % 7) - 2
 c9();
 ");
         assert_eq!(out, "int(16032000)\nint(3999)\nint(4001)\nint(16004000)\nint(8000)\nint(21333344000)\nint(16012000)\nint(8002000)\nint(8000)\nfloat(9.223372036854776E+18)\nint(7998000)\nint(64000)\nint(52016)\n");
+    }
+
+    /// Functions compiled whole (recursion, six arguments, a loop, `%`,
+    /// `abs`), and their declines (an overflow, a zero divisor), give the
+    /// interpreter's answers (`BUZZS_JIT=0`).
+    #[test]
+    fn functions_compiled_whole() {
+        let (out, _) = run(r"<?php
+function fib($n) { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
+var_dump(fib(22));
+function ack($m, $n) { if ($m == 0) return $n + 1; if ($n == 0) return ack($m - 1, 1); return ack($m - 1, ack($m, $n - 1)); }
+var_dump(ack(2, 300));
+function sum6($a, $b, $c, $d, $e, $f) { return $a + 2 * $b + 3 * $c + 4 * $d + 5 * $e + 6 * $f; }
+$t = 0; for ($i = 0; $i < 300; $i++) { $t += sum6($i, 1, 2, 3, 4, 5); } var_dump($t);
+function deep($n) { if ($n == 0) return 0; return 1 + deep($n - 1); }
+var_dump(deep(3000));
+function ovf($n) { if ($n == 0) return PHP_INT_MAX - 5; return 1 + ovf($n - 1); }
+for ($i = 0; $i < 200; $i++) { $r = ovf(3); } var_dump($r, ovf(10));
+function lp($n) { $s = 0; for ($i = 0; $i < $n; $i++) { $s += $i % 7; } return $s; }
+for ($i = 0; $i < 200; $i++) { $r = lp(100); } var_dump($r, lp(100000));
+function md($a, $b) { return $a % $b; }
+for ($i = 1; $i < 200; $i++) { $r = md(100, $i); } var_dump($r);
+try { var_dump(md(5, 0)); } catch (\Throwable $e) { echo get_class($e), PHP_EOL; }
+function ab($x) { return abs($x) - 3; }
+$t = 0; for ($i = -150; $i < 150; $i++) { $t += ab($i); } var_dump($t, ab(PHP_INT_MIN));
+");
+        assert_eq!(out, "int(17711)\nint(603)\nint(65850)\nint(3000)\nint(9223372036854775805)\nfloat(9.223372036854776E+18)\nint(295)\nint(299995)\nint(100)\nDivisionByZeroError\nint(21600)\nfloat(9.223372036854776E+18)\n");
+    }
+
+    /// A function compiled whole: the entry stub saves its registers and
+    /// calls the body, which saves its frame record and the caller's slot
+    /// bases, and `return $a` unwinds them.
+    #[test]
+    fn native_function_encoding() {
+        let ret = NRow::Ret(Arg {
+            kind: KC,
+            off: 0,
+            lit: 0,
+            chk: false,
+        });
+        let plan = NPlan {
+            rows: vec![Some(ret)],
+            ncvs: 1,
+            ntmps: 1,
+            nparams: 1,
+            tape: vec![Inst::plain(TOp::Exit), Inst::plain(TOp::Exit)],
+        };
+        let (code, body) = emit_native(&plan).expect("emitted");
+        let words: Vec<u32> = code
+            .chunks(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(
+            words[..6],
+            [0xA9BC7BFD, 0x910003FD, 0xA90153F3, 0xA90263F7, 0xA9036BF9, 0x910003F9]
+        );
+        let b = body / 4;
+        assert_eq!(
+            words[b..b + 3],
+            [0xA9BF7BFD, 0xA9BF53F3, 0xD10083FF] // stp x29, x30; stp x19, x20; sub sp, #32
+        );
+        // The last row: `return $a`.
+        assert_eq!(
+            words[words.len() - 5..],
+            [0xF9400660, 0x910083FF, 0xA8C153F3, 0xA8C17BFD, 0xD65F03C0]
+        );
     }
 }

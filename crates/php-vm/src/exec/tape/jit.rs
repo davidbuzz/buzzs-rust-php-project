@@ -20,7 +20,8 @@
 //! instruction against the whitelist (`Jmp`, `++`/`--`, the small-int
 //! and int-literal assignments, the fused comparison-and-branch, the
 //! fused `++`-compare, and the fused `+ - *` into a variable), and
-//! `emit` writes one region of x86-64 code that runs the whole loop,
+//! `emit` writes one region of x86-64 code (on AArch64 Linux, the `a64`
+//! backend's A64 code, from the same plan) that runs the whole loop,
 //! jumping back internally at the close. Nothing else is compiled in
 //! this version; a region with anything else in it is not compiled.
 //!
@@ -8742,15 +8743,18 @@ fn emit_native(plan: &NPlan) -> (Vec<u8>, usize) {
 
 /// Compile `uf` whole: its entry's address, or `None` when it is refused.
 fn compile_native(uf: &Rc<crate::func::UserFunction>) -> Option<usize> {
-    // The AArch64 backend does not compile whole functions (yet).
-    if cfg!(target_arch = "aarch64") || TRACES.load(Ordering::Relaxed) >= MAX_TRACES {
+    if TRACES.load(Ordering::Relaxed) >= MAX_TRACES {
         return None;
     }
     let _g = COMPILE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let plan = plan_native(uf)?;
-    let (code, body) = emit_native(&plan);
+    let (code, body) = if cfg!(target_arch = "aarch64") {
+        a64::emit_native(&plan)?
+    } else {
+        emit_native(&plan)
+    };
     let entry = place(&code)? as usize;
     TRACES.fetch_add(1, Ordering::Relaxed);
     uf.call_shape.native_body.set(entry + body);
