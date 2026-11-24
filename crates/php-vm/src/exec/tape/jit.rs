@@ -2920,6 +2920,14 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
     let dk = inst.k & 7;
     match inst.op {
         TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
+            // A string's offsets are the interpreter's: the row's helpers
+            // decline a variable that holds no array, so a trace would
+            // leave at this row in every iteration until it is switched
+            // off, its compile wasted (`read_str_offset` in
+            // Zend/micro_bench.php).
+            if matches!(cv_now(st, sb), Some(php_runtime::Value::Str(_))) {
+                return None;
+            }
             let (kb, slot, lit_b, _) = operand(dk, inst.b, true)?;
             // The destination: the variable of the folded `AssignCv`
             // (`inst.d`; the row then covers that op as well, as the
