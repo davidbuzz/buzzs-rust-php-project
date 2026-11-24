@@ -336,8 +336,8 @@ impl Serializer<'_> {
             Value::Null => self.buf.extend_from_slice(b"N;"),
             Value::Int(i) => put_long(&mut self.buf, i),
             Value::Float(f) => {
-                let p =
-                    i32::try_from(vm.ini_long("serialize_precision").clamp(-1, 1000)).unwrap_or(17);
+                // `php_gcvt(d, (int) PG(serialize_precision), ...)`.
+                let p = php_runtime::float::precision_digits(vm.ini_long("serialize_precision"));
                 self.buf.extend_from_slice(b"d:");
                 self.buf
                     .extend_from_slice(zend_gcvt(f, p, b'.', b'E').as_bytes());
