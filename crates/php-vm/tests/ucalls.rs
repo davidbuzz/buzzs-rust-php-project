@@ -846,7 +846,7 @@ function run() {
 }
 run();
 "#;
-    let expected = r#"pl||2|p,l pl|0|3|p,l,0 pl|0,x,y,z|6|p,l,0,x,y,z
+    let expected = r"pl||2|p,l pl|0|3|p,l,0 pl|0,x,y,z|6|p,l,0,x,y,z
 a: b:1+2+3 0:1 2:3
 D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
 pl||2|p,l pl|1|3|p,l,1 pl|1,x,y,z|6|p,l,1,x,y,z
@@ -855,7 +855,7 @@ D::m(): Argument #3 must be of type int, string given, called in t.php on line 1
 pl||2|p,l pl|2|3|p,l,2 pl|2,x,y,z|6|p,l,2,x,y,z
 a: b:1+2+3 0:1 2:3
 D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
-"#;
+";
     assert_eq!(run(src), expected);
 }
 
@@ -884,7 +884,7 @@ function run() {
 }
 run();
 "#;
-    let expected = r#"array (
+    let expected = r"array (
   0 => true,
   1 => true,
   2 => true,
@@ -929,6 +929,6 @@ array (
 TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
 strlen() expects exactly 1 argument, 0 given
 3
-"#;
+";
     assert_eq!(run(src), expected);
 }
