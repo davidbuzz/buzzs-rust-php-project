@@ -78,10 +78,10 @@ impl Vm {
             .as_bytes()
             .strip_prefix(b"\\")
             .unwrap_or(name.as_bytes());
-        let lc = ZStr::from(bytes.to_ascii_lowercase());
-        if let Some(c) = self.classes.get(&lc) {
-            return Ok(Some(c.clone()));
+        if let Some(c) = with_lc(bytes, |lc| self.classes.get(lc).cloned()) {
+            return Ok(Some(c));
         }
+        let lc = ZStr::from(bytes.to_ascii_lowercase());
         // `zend_lookup_class_ex`: a class being linked sits unlinked in the
         // class table: it is not found, and not autoloaded either.
         if unlinked_decl(bytes).is_some() {
@@ -94,9 +94,7 @@ impl Vm {
     /// Looks up a class without autoloading.
     pub fn find_class(&self, name: &[u8]) -> Option<Rc<Class>> {
         let bytes = name.strip_prefix(b"\\").unwrap_or(name);
-        self.classes
-            .get(&ZStr::from(bytes.to_ascii_lowercase()))
-            .cloned()
+        with_lc(bytes, |lc| self.classes.get(lc).cloned())
     }
 
     fn autoload(&mut self, name: &ZStr, lc: &ZStr) -> VmResult<()> {
@@ -3554,5 +3552,21 @@ fn build_class(
         doc_comment: decl.doc_comment.clone(),
         linked: Cell::new(true),
         hooks,
+    }
+}
+
+/// Calls `f` with `name` lower-cased (ASCII, as the class table keys
+/// names), in a buffer on the stack when it is short: a class lookup by
+/// name ([`Vm::lookup_class`], [`Vm::find_class`]) on a hit allocated
+/// two buffers (the lower-case copy and the string made of it) for a
+/// key the table is searched by as bytes.
+fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
+    let mut buf = [0u8; 128];
+    if let Some(lc) = buf.get_mut(..name.len()) {
+        lc.copy_from_slice(name);
+        lc.make_ascii_lowercase();
+        f(lc)
+    } else {
+        f(&name.to_ascii_lowercase())
     }
 }
