@@ -46,17 +46,15 @@ const SAPI_INI: &[(&str, &str)] = &[
     ("register_argc_argv", "0"),
 ];
 
-/// `ZEND_ATOL()`/`zend_atol`: leading integer with an optional `K`/`M`/`G`
-/// suffix.
-pub fn atol(s: &[u8]) -> i64 {
-    let s = s.trim_ascii();
-    let v = headers::strtol(s);
-    match s.last().map(u8::to_ascii_lowercase) {
-        Some(b'k') => v.saturating_mul(1024),
-        Some(b'm') => v.saturating_mul(1024 * 1024),
-        Some(b'g') => v.saturating_mul(1024 * 1024 * 1024),
-        _ => v,
-    }
+/// `post_max_size` of the settings `ini` (the last one counts), 8M when
+/// unset: `OnUpdateLong` reads it with `zend_ini_parse_quantity()`.
+fn post_max_size(ini: &[(String, String)]) -> i64 {
+    ini.iter()
+        .rev()
+        .find(|(k, _)| k == "post_max_size")
+        .map_or(8 * 1024 * 1024, |(_, v)| {
+            php_support::ini::parse_quantity(v.as_bytes()).0
+        })
 }
 
 /// The command line of a `php -S` invocation.
@@ -214,11 +212,7 @@ pub fn run(opts: &Options, extensions: ExtensionFactory) -> i32 {
     }
     let workers = server::startup_workers();
 
-    let post_max_size = ini
-        .iter()
-        .rev()
-        .find(|(k, _)| k == "post_max_size")
-        .map_or(8 * 1024 * 1024, |(_, v)| atol(v.as_bytes()));
+    let post_max_size = post_max_size(&ini);
     // The router path is resolved now so that a script changing the
     // working directory does not affect later requests.
     let router = opts.router.as_ref().map(|r| {
@@ -277,10 +271,13 @@ mod tests {
     }
 
     #[test]
-    fn atol_suffixes() {
-        assert_eq!(atol(b"8M"), 8 * 1024 * 1024);
-        assert_eq!(atol(b" 2k"), 2048);
-        assert_eq!(atol(b"10"), 10);
-        assert_eq!(atol(b"x"), 0);
+    fn post_max_size_is_a_quantity() {
+        let ini = |v: &str| vec![("post_max_size".to_owned(), v.to_owned())];
+        assert_eq!(post_max_size(&[]), 8 * 1024 * 1024);
+        assert_eq!(post_max_size(&ini("8M")), 8 * 1024 * 1024);
+        assert_eq!(post_max_size(&ini(" 2k")), 2048);
+        assert_eq!(post_max_size(&ini("10")), 10);
+        // zend_ini_parse_quantity() reads base prefixes; ZEND_ATOL() does not.
+        assert_eq!(post_max_size(&ini("0x100")), 256);
     }
 }
