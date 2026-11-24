@@ -64,6 +64,21 @@ fn precision_values_print_as_in_php_8_5() {
 }
 
 #[test]
+fn serialize_precision_values_serialize_as_in_php_8_5() {
+    for (value, want) in [
+        ("99999999999999999999", "d:0.1;"),
+        ("4294967296", "d:0.1;"),
+        ("17", "d:0.10000000000000001;"),
+    ] {
+        assert_eq!(
+            run_with("serialize_precision", value, "<?php echo serialize(0.1);"),
+            want,
+            "serialize_precision={value:?}"
+        );
+    }
+}
+
+#[test]
 fn serialize_precision_values_dump_as_in_php_8_5() {
     for (value, want) in [
         ("99999999999999999999", "float(0.1)\n"),

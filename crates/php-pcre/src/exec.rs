@@ -15,22 +15,53 @@ use crate::{PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL};
 pub(crate) struct Exec<'a> {
     pub(crate) re: &'a Regex,
     pub(crate) subject: &'a [u8],
-    md: MatchData,
-    ctx: MatchContext,
+    /// The subject with a readable byte after it, when it ends on a page
+    /// boundary ([`ffi::ends_on_page_boundary`]): made once here, and
+    /// matched in place of the subject by every [`Exec::run`] of the call.
+    /// The offsets PCRE2 reports are the same, so the copy is invisible.
+    padded: Option<Vec<u8>>,
+    md: std::mem::ManuallyDrop<MatchData>,
+    ctx: std::mem::ManuallyDrop<MatchContext>,
+    /// The context's limits and JIT flag, for its return to the pool.
+    limits: (u32, u32, bool),
     known_valid_utf8: bool,
 }
 
+impl Drop for Exec<'_> {
+    fn drop(&mut self) {
+        // SAFETY: both fields are taken exactly once, here, and never used
+        // again (the value is being dropped).
+        let (md, ctx) = unsafe {
+            (
+                std::mem::ManuallyDrop::take(&mut self.md),
+                std::mem::ManuallyDrop::take(&mut self.ctx),
+            )
+        };
+        md.recycle();
+        let (m, d, j) = self.limits;
+        ctx.recycle(m, d, j);
+    }
+}
+
 impl<'a> Exec<'a> {
-    /// Allocates match data and a match context; `None` on allocation failure
-    /// (PHP reports `PREG_INTERNAL_ERROR`).
+    /// Takes match data and a match context from the pool or allocates
+    /// them (they go back to the pool when the match is done); `None` on
+    /// allocation failure (PHP reports `PREG_INTERNAL_ERROR`).
     pub(crate) fn new(re: &'a Regex, cfg: &MatchConfig, subject: &'a [u8]) -> Option<Self> {
-        let md = MatchData::for_code(re.code())?;
-        let ctx = MatchContext::new(cfg.backtrack_limit, cfg.recursion_limit, cfg.jit)?;
+        let pairs = re.capture_count() + 1;
+        let md = MatchData::pooled(re.code(), pairs)?;
+        let limits = (cfg.backtrack_limit, cfg.recursion_limit, cfg.jit);
+        let Some(ctx) = MatchContext::pooled(limits.0, limits.1, limits.2) else {
+            md.recycle();
+            return None;
+        };
         Some(Self {
             re,
             subject,
-            md,
-            ctx,
+            padded: ffi::ends_on_page_boundary(subject).then(|| ffi::padded_copy(subject)),
+            md: std::mem::ManuallyDrop::new(md),
+            ctx: std::mem::ManuallyDrop::new(ctx),
+            limits,
             known_valid_utf8: cfg.known_valid_utf8,
         })
     }
@@ -55,8 +86,12 @@ impl<'a> Exec<'a> {
 
     /// `pcre2_match()` at `start` with `options`.
     pub(crate) fn run(&mut self, start: usize, options: u32) -> i32 {
+        let subject = match &self.padded {
+            Some(p) => &p[..self.subject.len()],
+            None => self.subject,
+        };
         self.md
-            .run(self.re.code(), self.subject, start, options, &self.ctx)
+            .run(self.re.code(), subject, start, options, &self.ctx)
     }
 
     /// Plain follow-up match (subject already validated).

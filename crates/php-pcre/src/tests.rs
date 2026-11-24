@@ -361,3 +361,128 @@ fn no_address_space_growth() {
         "VmSize grew from {before} kB to {after} kB"
     );
 }
+
+/// An empty subject or pattern reaches PCRE2 at a real address: its
+/// vectorised scans (aarch64 NEON in libpcre2 10.46) read the aligned
+/// 16-byte block around the subject pointer first, which faulted at
+/// address 0 for an empty slice's dangling `0x1` (php-src passes
+/// `ZSTR_VAL` of the empty string, a real address).
+#[test]
+fn empty_subjects_and_patterns_are_matched_at_a_real_address() {
+    for jit in [true, false] {
+        let mut pcre = Pcre::new();
+        pcre.set_jit(jit);
+        for (pattern, want) in [
+            (&b"/\\0/i"[..], 0),
+            (b"/a/", 0),
+            (b"/x?/", 1),
+            (b"/^$/", 1),
+            (b"//", 1),
+        ] {
+            let re = pcre.compile(pattern).expect("compiles");
+            let o = match_one(&re, &pcre.config(), b"", false, 0, 0);
+            assert_eq!(
+                o.result.ok(),
+                Some(want),
+                "{} (jit: {jit})",
+                String::from_utf8_lossy(pattern)
+            );
+        }
+    }
+}
+
+/// A subject whose last byte is the last byte of a page, with nothing
+/// readable after it: PCRE2's vectorised scans (aarch64 NEON) read the
+/// aligned 16-byte block at the subject's end, which is on the next page
+/// (an intermittent crash of the Laravel app's feature tests). The match
+/// runs from a copy with a byte after it, and reports the same results.
+#[test]
+fn subjects_ending_before_an_unreadable_page_are_matched() {
+    // SAFETY (test only): two fresh anonymous pages, the second made
+    // inaccessible; the subject is a slice of the first that ends where it
+    // ends. Both are unmapped at the end, after the last use of the slice.
+    unsafe {
+        let page = usize::try_from(libc::sysconf(libc::_SC_PAGESIZE)).expect("page size");
+        let base = libc::mmap(
+            std::ptr::null_mut(),
+            2 * page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert_ne!(base, libc::MAP_FAILED);
+        let base = base.cast::<u8>();
+        assert_eq!(
+            libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE),
+            0
+        );
+        let len = 100;
+        let start = base.add(page - len);
+        std::ptr::write_bytes(start, b'a', len);
+        let subject = std::slice::from_raw_parts(start, len);
+        assert!(super::ffi::ends_on_page_boundary(subject));
+        for jit in [true, false] {
+            let mut pcre = Pcre::new();
+            pcre.set_jit(jit);
+            for (pattern, offset, want) in [
+                (&b"/z/"[..], 0, 0),
+                (b"/\\0/i", 0, 0),
+                (b"/a$/", 0, 1),
+                (b"/b|c/", 90, 0),
+                (b"/a/", 100, 0),
+            ] {
+                let re = pcre.compile(pattern).expect("compiles");
+                let o = match_one(&re, &pcre.config(), subject, false, 0, offset);
+                assert_eq!(
+                    o.result.ok(),
+                    Some(want),
+                    "{} at {offset} (jit: {jit})",
+                    String::from_utf8_lossy(pattern)
+                );
+            }
+        }
+        assert_eq!(libc::munmap(base.cast(), 2 * page), 0);
+    }
+}
+
+/// A `preg_match_all()` over a subject that ends on a page boundary copies
+/// it once, not once per match: with a copy per match, a 2 MiB subject of
+/// 2 Mi matches (`ext/pcre/tests/oom_preg_match_all.phpt`) copied 2 MiB two
+/// million times and never finished.
+#[test]
+fn a_subject_ending_on_a_page_boundary_is_copied_once_per_call() {
+    // SAFETY (test only): two fresh anonymous pages, the second made
+    // inaccessible; the subject is a slice of the first that ends where it
+    // ends. Both are unmapped at the end, after the last use of the slice.
+    unsafe {
+        let page = usize::try_from(libc::sysconf(libc::_SC_PAGESIZE)).expect("page size");
+        let base = libc::mmap(
+            std::ptr::null_mut(),
+            2 * page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert_ne!(base, libc::MAP_FAILED);
+        let base = base.cast::<u8>();
+        assert_eq!(
+            libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE),
+            0
+        );
+        let len = 1000;
+        let start = base.add(page - len);
+        std::ptr::write_bytes(start, b'a', len);
+        let subject = std::slice::from_raw_parts(start, len);
+        assert!(super::ffi::ends_on_page_boundary(subject));
+        let re = Regex::compile(b"/a/").expect("compiles");
+        let cfg = MatchConfig::default();
+        let before = super::ffi::PADDED_COPIES.with(std::cell::Cell::get);
+        let o = match_all(&re, &cfg, subject, false, PREG_PATTERN_ORDER, 0);
+        assert_eq!(o.result.ok(), Some(1000));
+        let copies = super::ffi::PADDED_COPIES.with(std::cell::Cell::get) - before;
+        assert_eq!(copies, 1, "one copy for the call, not one per match");
+        assert_eq!(libc::munmap(base.cast(), 2 * page), 0);
+    }
+}

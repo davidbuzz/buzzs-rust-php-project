@@ -1022,7 +1022,8 @@ pub(crate) fn class_string(
     b.s(indent).s("  }\n");
     // Static methods.
     let methods: Vec<Rc<Method>> = order::methods(c)
-        .into_iter()
+        .iter()
+        .cloned()
         .filter(|m| m.visibility() != flags::PRIVATE || Rc::ptr_eq(&m.scope(), c))
         .collect();
     let smethods: Vec<&Rc<Method>> = methods.iter().filter(|m| m.is_static()).collect();

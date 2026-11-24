@@ -452,6 +452,12 @@ pub struct Class {
     pub methods: NameMap<Rc<Method>>,
     /// Method order (lower-case names) for `get_class_methods`.
     pub method_order: Vec<ZStr>,
+    /// The methods in php-src's `function_table` order, for reflection
+    /// (`reflection::order::methods`), worked out on first use: the
+    /// methods of a class never change once it is linked, and the order
+    /// was otherwise worked out again, the parents' included, for each
+    /// `ReflectionClass::getMethods()`.
+    pub reflection_methods: std::cell::OnceCell<Rc<[Rc<Method>]>>,
     /// Magic methods.
     pub magic: Magic,
     /// Default slot values, resolved on first instantiation.
@@ -540,6 +546,26 @@ impl Class {
                 return true;
             }
             c = p.parent.clone();
+        }
+        false
+    }
+
+    /// [`Class::instance_of_name`] of a class name as a script wrote it
+    /// (any case, an optional leading `\`): whether `self` is that class
+    /// or derives from or implements it. A name that is only an alias
+    /// (`class_alias`) does not match: the caller looks it up.
+    pub fn instance_of_name_ci(&self, name: &[u8]) -> bool {
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        let is = |c: &Class| c.lc_name.as_bytes().eq_ignore_ascii_case(name);
+        if is(self) || self.interfaces.iter().any(|i| is(i)) {
+            return true;
+        }
+        let mut c = self.parent.as_ref();
+        while let Some(p) = c {
+            if is(p) {
+                return true;
+            }
+            c = p.parent.as_ref();
         }
         false
     }

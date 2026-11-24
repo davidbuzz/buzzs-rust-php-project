@@ -229,7 +229,8 @@ impl Serializer {
                 .extend_from_slice(if *b { b"b:1;" } else { b"b:0;" }),
             Value::Int(i) => self.out.extend_from_slice(format!("i:{i};").as_bytes()),
             Value::Float(d) => {
-                let p = i32::try_from(ctx.serialize_precision().clamp(-1, 1000)).unwrap_or(17);
+                // `php_gcvt(d, (int) PG(serialize_precision), ...)`.
+                let p = crate::float::precision_digits(ctx.serialize_precision());
                 self.out.extend_from_slice(b"d:");
                 self.out
                     .extend_from_slice(zend_gcvt(*d, p, b'.', b'E').as_bytes());

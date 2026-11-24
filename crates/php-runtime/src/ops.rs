@@ -655,10 +655,14 @@ pub fn concat_assign(
 /// numeric, else bytewise. Returns -1, 0 or 1.
 #[must_use]
 pub fn smart_strcmp(s1: &[u8], s2: &[u8]) -> i32 {
-    if let (Some(n1), Some(n2)) = (
-        is_numeric_string_ex(s1, false),
-        is_numeric_string_ex(s2, false),
-    ) {
+    // As in `smart_streq`: a string starting above `'9'` is not numeric,
+    // and the second string is parsed only when the first one is.
+    if s1.first().is_some_and(|&c| c > b'9') || s2.first().is_some_and(|&c| c > b'9') {
+        return binary_strcmp(s1, s2).signum();
+    }
+    if let Some((n1, n2)) = is_numeric_string_ex(s1, false)
+        .and_then(|n1| is_numeric_string_ex(s2, false).map(|n2| (n1, n2)))
+    {
         let (o1, o2) = (n1.overflow, n2.overflow);
         let (d1, d2) = (n1.value.to_f64(), n2.value.to_f64());
         if !(o1 != 0 && o1 == o2 && d1 - d2 == 0.0) {
@@ -677,13 +681,19 @@ pub fn smart_strcmp(s1: &[u8], s2: &[u8]) -> i32 {
     binary_strcmp(s1, s2).signum()
 }
 
-/// `zendi_smart_streq`: `==` between two strings.
+/// `zendi_smart_streq`: `==` between two strings, behind the test of
+/// `zend_fast_equal_strings`: a string whose first byte is above `'9'`
+/// cannot be numeric (a numeric string starts with whitespace, a sign, a
+/// digit or a dot), so the bytes decide, and the second string is parsed
+/// only when the first one is numeric.
 #[must_use]
 pub fn smart_streq(s1: &[u8], s2: &[u8]) -> bool {
-    if let (Some(n1), Some(n2)) = (
-        is_numeric_string_ex(s1, false),
-        is_numeric_string_ex(s2, false),
-    ) {
+    if s1.first().is_some_and(|&c| c > b'9') || s2.first().is_some_and(|&c| c > b'9') {
+        return s1 == s2;
+    }
+    if let Some((n1, n2)) = is_numeric_string_ex(s1, false)
+        .and_then(|n1| is_numeric_string_ex(s2, false).map(|n2| (n1, n2)))
+    {
         let (o1, o2) = (n1.overflow, n2.overflow);
         let (d1, d2) = (n1.value.to_f64(), n2.value.to_f64());
         if !(o1 != 0 && o1 == o2 && d1 - d2 == 0.0) {

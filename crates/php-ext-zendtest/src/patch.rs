@@ -119,6 +119,7 @@ pub(crate) fn rebuild_class(
             magic: Magic::default(),
             methods,
             method_order: cls.method_order.clone(),
+            reflection_methods: std::cell::OnceCell::new(),
             defaults: RefCell::new(cls.defaults.borrow().clone()),
             backing: cls.backing,
             enum_cases: RefCell::new(cls.enum_cases.borrow().clone()),

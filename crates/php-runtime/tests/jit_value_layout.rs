@@ -4,6 +4,11 @@
 //! at offset 0 and an `Int`'s payload at offset 8. `php-vm`'s JIT guards
 //! compiled-variable slots by comparing that byte directly; if rustc
 //! ever lays `Value` out differently, this test fails first.
+//!
+//! x86-64 only: the trace JIT runs nowhere else, so other targets need not
+//! lay `Value` out this way. The AArch64 CI's build (rustc 1.100) does not:
+//! its `None` tag is 255, not 9.
+#![cfg(target_arch = "x86_64")]
 
 use php_runtime::{Obj, Value};
 

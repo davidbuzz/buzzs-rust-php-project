@@ -1178,6 +1178,7 @@ dependencies = [
 name = "php-pcre"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pcre2-sys",
 ]
 

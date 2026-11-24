@@ -52,7 +52,7 @@ jobs:
           test "$n" -lt 2000
 
       - name: Unit tests (heap, values, streams)
-        run: cargo test --release -p php-memlimit -p php-runtime -p php-streams
+        run: cargo test --release --no-fail-fast -p php-memlimit -p php-runtime -p php-streams
 
       # Informational until AArch64 has a baseline of its own: fibers are not supported
       # on AArch64 yet, so their tests fail here.

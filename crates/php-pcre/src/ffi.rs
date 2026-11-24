@@ -7,7 +7,7 @@
 //! documented next to the type.  The rest of the crate only sees safe Rust.
 
 use core::ffi::c_void;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::ptr::NonNull;
 
 use pcre2_sys as sys;
@@ -107,12 +107,12 @@ impl Code {
         unsafe { sys::pcre2_set_compile_extra_options_8(ctx, extra_options) };
         let mut errcode: i32 = 0;
         let mut erroffset: usize = 0;
-        // SAFETY: pattern pointer/length describe a live slice (an empty
-        // slice's dangling pointer is fine with length 0); the out-params are
+        // SAFETY: pattern pointer/length describe a live slice (an empty one
+        // is given a real address, see `nonempty_ptr`); the out-params are
         // valid stack locations; ctx is valid.
         let code = unsafe {
             sys::pcre2_compile_8(
-                pattern.as_ptr(),
+                nonempty_ptr(pattern),
                 pattern.len(),
                 options,
                 &raw mut errcode,
@@ -247,6 +247,42 @@ impl Drop for JitStack {
     }
 }
 
+/// Whether the byte after the non-empty `bytes` would be on another page:
+/// their end is a multiple of 4096 (every page size is). PCRE2's
+/// vectorised scans (aarch64 NEON, libpcre2 10.46) read the aligned
+/// 16-byte block at the current position even when it is the subject's
+/// end; php-src's subjects always have a readable NUL there (a
+/// `zend_string` is terminated), but a byte string here may end right
+/// before an unmapped page, and such a scan then faults: an intermittent
+/// crash of the Laravel app's feature tests, depending on where the
+/// allocator put a subject.
+#[inline]
+pub(crate) fn ends_on_page_boundary(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && (bytes.as_ptr() as usize).wrapping_add(bytes.len()) % 4096 == 0
+}
+
+/// `bytes` followed by a NUL, in a buffer of its own: the subject's bytes
+/// with a readable byte after them (see [`ends_on_page_boundary`]). Made
+/// once per `preg_*()` call (`Exec::new`), not once per match: a
+/// `preg_match_all()` over a subject that ends on a page boundary matches
+/// it again for every match it finds.
+#[cold]
+#[inline(never)]
+pub(crate) fn padded_copy(bytes: &[u8]) -> Vec<u8> {
+    #[cfg(test)]
+    PADDED_COPIES.with(|n| n.set(n.get() + 1));
+    let mut v = Vec::with_capacity(bytes.len() + 1);
+    v.extend_from_slice(bytes);
+    v.push(0);
+    v
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread made a [`padded_copy`] (the tests).
+    pub(crate) static PADDED_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 thread_local! {
     static JIT_STACK: OnceCell<Option<JitStack>> = const { OnceCell::new() };
 }
@@ -308,11 +344,84 @@ impl Drop for MatchContext {
     }
 }
 
-/// Match data (ovector + mark) sized for one pattern.
+/// Sixteen readable bytes on a 16-byte boundary, the address an empty
+/// subject or pattern is passed as ([`nonempty_ptr`]).
+#[repr(align(16))]
+struct EmptyBytes([u8; 16]);
+
+/// See [`EmptyBytes`].
+static EMPTY_BYTES: EmptyBytes = EmptyBytes([0; 16]);
+
+/// `bytes.as_ptr()`, except that an empty slice gives the address of
+/// [`EMPTY_BYTES`] instead of Rust's dangling non-null pointer (`0x1` for
+/// bytes). PCRE2's vectorised scans (aarch64 NEON, libpcre2 10.46) read the
+/// aligned 16-byte block around the subject pointer before they look at
+/// the length: harmless for any real address (the block is on the same
+/// page), a fault at address 0 for `0x1`, which crashed every match
+/// against an empty string where such a scan applies (`preg_match('/\0/i',
+/// '')`).
+#[inline]
+fn nonempty_ptr(bytes: &[u8]) -> *const u8 {
+    if bytes.is_empty() {
+        EMPTY_BYTES.0.as_ptr()
+    } else {
+        bytes.as_ptr()
+    }
+}
+
+thread_local! {
+    /// The match context of the last match that finished, with its limits
+    /// and JIT flag: php-src keeps one (`PCRE_G(mctx)`) instead of making
+    /// one per call.
+    static CONTEXT_POOL: RefCell<Option<(u32, u32, bool, MatchContext)>> =
+        const { RefCell::new(None) };
+    /// The match data of the last match that finished (php-src's
+    /// `PCRE_G(mdata)`), reused by a pattern with as many groups or fewer.
+    static DATA_POOL: RefCell<Option<MatchData>> = const { RefCell::new(None) };
+}
+
+impl MatchContext {
+    /// [`MatchContext::new`], reusing the pooled context when its limits
+    /// and JIT flag are these: a match no longer allocates and frees one.
+    /// A match started while another one runs (from a callback) makes its
+    /// own.
+    pub(crate) fn pooled(match_limit: u32, depth_limit: u32, jit: bool) -> Option<Self> {
+        let hit = CONTEXT_POOL.with(|p| {
+            let mut p = p.try_borrow_mut().ok()?;
+            match p.take() {
+                Some((m, d, j, ctx)) if m == match_limit && d == depth_limit && j == jit => {
+                    Some(ctx)
+                }
+                other => {
+                    *p = other;
+                    None
+                }
+            }
+        });
+        hit.or_else(|| Self::new(match_limit, depth_limit, jit))
+    }
+
+    /// Hands a context made by [`MatchContext::pooled`] back to the pool
+    /// (it is freed when the pool already holds one).
+    pub(crate) fn recycle(self, match_limit: u32, depth_limit: u32, jit: bool) {
+        CONTEXT_POOL.with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                if p.is_none() {
+                    *p = Some((match_limit, depth_limit, jit, self));
+                }
+            }
+        });
+    }
+}
+
+/// Match data (ovector + mark) for one pattern: `pairs` pairs of offsets
+/// are the pattern's (its groups and the whole match); the block may hold
+/// more (`capacity`) when it was made for a pattern with more groups.
 #[derive(Debug)]
 pub(crate) struct MatchData {
     ptr: NonNull<sys::pcre2_match_data_8>,
     pairs: usize,
+    capacity: usize,
 }
 
 impl MatchData {
@@ -324,7 +433,44 @@ impl MatchData {
         })?;
         // SAFETY: ptr is valid match data.
         let pairs = unsafe { sys::pcre2_get_ovector_count_8(ptr.as_ptr()) } as usize;
-        Some(Self { ptr, pairs })
+        Some(Self {
+            ptr,
+            pairs,
+            capacity: pairs,
+        })
+    }
+
+    /// [`MatchData::for_code`] for a pattern with `pairs` pairs (its
+    /// capture count plus one), reusing the pooled block when it has room
+    /// for them: `pcre2_match()` fills as many pairs as the pattern has and
+    /// only those are read.
+    pub(crate) fn pooled(code: &Code, pairs: usize) -> Option<Self> {
+        let hit = DATA_POOL.with(|p| {
+            let mut p = p.try_borrow_mut().ok()?;
+            match p.take() {
+                Some(mut md) if md.capacity >= pairs => {
+                    md.pairs = pairs;
+                    Some(md)
+                }
+                other => {
+                    *p = other;
+                    None
+                }
+            }
+        });
+        hit.or_else(|| Self::for_code(code))
+    }
+
+    /// Hands match data back to the pool, keeping the larger block when
+    /// the pool already holds one.
+    pub(crate) fn recycle(self) {
+        DATA_POOL.with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                if p.as_ref().is_none_or(|old| old.capacity < self.capacity) {
+                    *p = Some(self);
+                }
+            }
+        });
     }
 
     /// Runs `pcre2_match()` (which itself dispatches to JIT code when the
@@ -338,12 +484,17 @@ impl MatchData {
         ctx: &MatchContext,
     ) -> i32 {
         // SAFETY: all pointers are valid for the duration of the call; the
-        // subject slice is live and its exact length is passed; PCRE2 checks
-        // `start` against the length itself (PCRE2_ERROR_BADOFFSET).
+        // subject slice is live (an empty one is given a real address, see
+        // `nonempty_ptr`, and the byte after a non-empty one is readable:
+        // `Exec` passes a subject that ends on a page boundary as its
+        // `padded_copy`) and its exact length is passed; PCRE2 checks `start`
+        // against the length itself (PCRE2_ERROR_BADOFFSET). Nothing keeps
+        // the subject's address past the call (only the ovector's offsets
+        // and the mark, which is in the pattern, are read afterwards).
         unsafe {
             sys::pcre2_match_8(
                 code.ptr.as_ptr(),
-                subject.as_ptr(),
+                nonempty_ptr(subject),
                 subject.len(),
                 start,
                 options,

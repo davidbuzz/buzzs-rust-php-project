@@ -164,7 +164,8 @@ pub(super) fn operand_simple(f: &Frame, op: Operand) -> Option<&Value> {
 }
 
 /// `zend_is_true` of `v` when it needs neither a diagnostic nor a copy:
-/// null, bool, int, a non-NaN float, a string or an array. References,
+/// null, bool, int, a non-NaN float, a string, an array or an object
+/// whose class has no cast handler ([`object_truth`]). References, other
 /// objects and resources give `None`.
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot JmpZ/JmpNz truth check in the dispatch pre-match
@@ -176,8 +177,21 @@ pub(super) fn plain_truth(v: &Value) -> Option<bool> {
         Value::Float(x) if !x.is_nan() => Some(*x != 0.0),
         Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
         Value::Array(a) => Some(!a.is_empty()),
+        Value::Object(o) => object_truth(o),
         _ => None,
     }
+}
+
+/// `zend_is_true` of an object: `true` unless its class casts objects
+/// itself (`cast_object`, as `SimpleXML` and GMP do: `None`, the generic
+/// path asks it). Out of line: the inlined truth tests stay small.
+#[inline(never)]
+fn object_truth(o: &php_runtime::Obj) -> Option<bool> {
+    crate::object::class_of(o)
+        .hooks
+        .as_ref()
+        .is_none_or(|h| h.cast.is_none())
+        .then_some(true)
 }
 
 /// [`plain_truth`] of a variable slot (`None` = undefined: generic path).
@@ -447,6 +461,24 @@ fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
     }
 }
 
+/// [`plain_value_in`], and an array or an object as well (a handle added:
+/// `ZVAL_COPY` of the `OP_DATA` operand of `ZEND_ASSIGN_DIM`): the value
+/// an element write stores, which, unlike a plain value read elsewhere,
+/// needs no release where it is read.
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot OP_DATA operand read for AssignDimCv
+pub(super) fn dim_value_in(f: &Frame, op: Operand) -> Option<Value> {
+    let v = match op {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Lit(_) | Operand::Unused => return plain_value_in(f, op),
+    };
+    match v {
+        Value::Array(_) | Value::Object(_) => Some(v.clone()),
+        _ => plain_value_in(f, op),
+    }
+}
+
 /// The deepest dimension chain of [`Op::AssignDimsCv`] /
 /// [`Op::AssignOpDimsCv`] (the compiler's `MAX_WRITE_DIMS`).
 ///
@@ -631,17 +663,28 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
     };
     let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
     let same = {
-        let lhs = operand_simple(f, a)?;
-        let rhs = operand_simple(f, b)?;
+        let lhs = cmp_operand(f, a)?;
+        let rhs = cmp_operand(f, b)?;
         match (lhs, rhs) {
             (Value::Null, Value::Null) => true,
             (Value::Bool(p), Value::Bool(q)) => p == q,
+            // `$x !== []`: two arrays one of which is empty are equal,
+            // and identical, exactly when both are.
+            (Value::Array(x), Value::Array(y)) if x.is_empty() || y.is_empty() => {
+                x.is_empty() && y.is_empty()
+            }
+            // `===` of two objects (enum cases): the same object.
+            (Value::Object(x), Value::Object(y)) if identity => php_runtime::Obj::ptr_eq(x, y),
+            // `===` compares the bytes; `==` is the generic comparison's
+            // `zendi_smart_streq` (numeric strings compare as numbers),
+            // which needs no diagnostic.
             (Value::Str(s), Value::Str(t)) => {
-                let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
-                if !eq && !identity {
-                    return None;
-                }
-                eq
+                ZStr::ptr_eq(s, t)
+                    || if identity {
+                        s.as_bytes() == t.as_bytes()
+                    } else {
+                        php_runtime::ops::smart_streq(s.as_bytes(), t.as_bytes())
+                    }
             }
             (lhs, rhs) => {
                 if !identity || std::mem::discriminant(lhs) == std::mem::discriminant(rhs) {
@@ -651,9 +694,39 @@ pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) 
             }
         }
     };
-    release_str_tmp_in(f, a);
-    release_str_tmp_in(f, b);
+    release_cmp_tmp(f, a);
+    release_cmp_tmp(f, b);
     Some(same != negate)
+}
+
+/// [`operand_simple`] for [`cmp_simple_in`], which also takes a consumed
+/// temporary holding an array whose release frees nothing it holds: one
+/// shared with another holder (a property or variable just read) or an
+/// empty one ([`release_cmp_tmp`] releases it).
+#[inline]
+fn cmp_operand(f: &Frame, op: Operand) -> Option<&Value> {
+    if let Operand::Tmp(t) = op {
+        match f.tmps.get(t as usize) {
+            Some(v @ Value::Array(a)) => return (a.refcount() > 1 || a.is_empty()).then_some(v),
+            // Another holder keeps it alive: its release runs no destructor.
+            Some(v @ Value::Object(o)) => return (o.refcount() > 1).then_some(v),
+            _ => {}
+        }
+    }
+    operand_simple(f, op)
+}
+
+/// Releases what a consumed temporary operand of [`cmp_simple_in`] holds:
+/// a string ([`release_str_tmp_in`]) or an array [`cmp_operand`] took.
+#[inline]
+fn release_cmp_tmp(f: &mut Frame, op: Operand) {
+    if let Operand::Tmp(t) = op {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if matches!(slot, Value::Str(_) | Value::Array(_) | Value::Object(_)) {
+                *slot = Value::Null;
+            }
+        }
+    }
 }
 
 impl Vm {
@@ -667,11 +740,10 @@ impl Vm {
     }
 
     /// `==`, `!=`, `===`, `!==` on operands that are not both numbers,
-    /// without conversions (`zend_is_identical`, the byte-equal case of
-    /// `zend_fast_equal_strings`): same-type null, bool and string pairs,
-    /// and `===`/`!==` of two different types (false/true). Byte-unequal
-    /// strings under `==`/`!=` may still be numerically equal and go
-    /// generic, as do arrays, objects, resources and references (also when
+    /// without conversions (`zend_is_identical`, `zend_fast_equal_strings`):
+    /// same-type null, bool and string pairs, two arrays one of which is
+    /// empty, and `===`/`!==` of two different types (false/true). Other
+    /// arrays, objects, resources and references go generic (also when
     /// only one operand is one of those and it sits in a consumed
     /// temporary, see [`operand_simple`]). A consumed temporary holding a
     /// string is released, as the generic read would (`FREE_OP1`/`FREE_OP2`).
@@ -1056,6 +1128,11 @@ impl Vm {
     #[allow(clippy::inline_always)] // hot OP_DATA operand read in the dispatch pre-match
     pub(super) fn peek_plain_value(&self, op: Operand) -> Option<Value> {
         plain_value_in(self.frame(), op)
+    }
+
+    /// [`dim_value_in`] of the current frame.
+    pub(super) fn peek_dim_value(&self, op: Operand) -> Option<Value> {
+        dim_value_in(self.frame(), op)
     }
 
     /// The generic `Op::Assign { place, val, dst: None }`, the op

@@ -8,8 +8,7 @@
 //! - Pass 13: Remove unused variables (ZEND_OPTIMIZER_PASS_13)
 
 use super::{
-    def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, literals_equal,
-    OptContext,
+    def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, OptContext,
 };
 use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, Place, PlaceBase, Seg};
 use php_runtime::Value;
@@ -289,21 +288,24 @@ pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
     let old_literals = &op_array.literals;
     let mut unique_literals = Vec::new();
     let mut remap = Vec::with_capacity(old_literals.len());
+    // The first of the literals equal to each (`literals_equal`: the same
+    // kind and bits; anything else is equal to nothing), found by its key:
+    // comparing each literal with every one kept before it cost a file of
+    // a few thousand literals more than the rest of its compilation.
+    let mut first: std::collections::HashMap<LitKey<'_>, u32> =
+        std::collections::HashMap::with_capacity(old_literals.len());
 
     for old_val in old_literals {
-        let mut found = None;
-        for (new_idx, unique_val) in unique_literals.iter().enumerate() {
-            if literals_equal(old_val, unique_val) {
-                found = Some(new_idx as u32);
-                break;
-            }
-        }
-        if let Some(idx) = found {
+        let key = LitKey::of(old_val);
+        if let Some(&idx) = key.as_ref().and_then(|k| first.get(k)) {
             remap.push(idx);
         } else {
             let idx = unique_literals.len() as u32;
             unique_literals.push(old_val.clone());
             remap.push(idx);
+            if let Some(key) = key {
+                first.insert(key, idx);
+            }
         }
     }
 
@@ -344,6 +346,30 @@ pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
 
     op_array.literals = unique_literals;
     true
+}
+
+/// What [`literals_equal`] compares of a literal, hashable: `None` for a
+/// literal equal to no other (an array).
+#[derive(PartialEq, Eq, Hash)]
+enum LitKey<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(u64),
+    Str(&'a [u8]),
+}
+
+impl<'a> LitKey<'a> {
+    fn of(v: &'a Value) -> Option<Self> {
+        Some(match v {
+            Value::Null => LitKey::Null,
+            Value::Bool(b) => LitKey::Bool(*b),
+            Value::Int(i) => LitKey::Int(*i),
+            Value::Float(f) => LitKey::Float(f.to_bits()),
+            Value::Str(s) => LitKey::Str(s.as_bytes()),
+            _ => return None,
+        })
+    }
 }
 
 /// Visits every raw literal index an instruction holds outside its

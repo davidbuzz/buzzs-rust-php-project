@@ -732,9 +732,9 @@ macro_rules! tape_ops {
             VmOp,
             /// `Op::Jmp`.
             Jmp,
-            /// `Op::JmpZ` of a temporary holding a bool.
+            /// `Op::JmpZ` of a temporary (a bool, int or null on the tape).
             JmpZT,
-            /// `Op::JmpNz` of a temporary holding a bool.
+            /// `Op::JmpNz` of a temporary (as [`TOp::JmpZT`]).
             JmpNzT,
             /// `++$cv` / `$cv++`, result unused.
             IncC,
@@ -1037,7 +1037,11 @@ macro_rules! tape_ops {
                     TOp::AssignT => {
                         let s = st.tmps.add(inst.b as usize).cast::<Value>();
                         let d = st.cvs.add(inst.a as usize).cast::<Option<Value>>();
-                        if !is_scalar(&*s)
+                        // Any value but a reference moves out of the
+                        // temporary (a string, an array or an object as
+                        // well: `hot::assign_cv_in` moves them); the
+                        // variable's old value must own nothing.
+                        if matches!(&*s, Value::Reference(_))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
                             // As in `AssignC`.
@@ -1292,6 +1296,14 @@ tape_ops! {
         Nop = (scalar::nop, 1, plain),
         JmpZC = (scalar::jmpz_cv, 1, branch),
         JmpNzC = (scalar::jmpnz_cv, 1, branch),
+        NotJmpZC = (scalar::not_jmpz_cv, 2, branch),
+        NotJmpNzC = (scalar::not_jmpnz_cv, 2, branch),
+        UnaryT = (scalar::unary_bool_tmp, 1, plain),
+        UnaryC = (scalar::unary_bool_cv, 1, plain),
+        JmpZExC = (scalar::jmpz_ex_cv, 1, branch),
+        JmpNzExC = (scalar::jmpnz_ex_cv, 1, branch),
+        JmpZExT = (scalar::jmpz_ex_tmp, 1, branch),
+        JmpNzExT = (scalar::jmpnz_ex_tmp, 1, branch),
         NumBinT = (scalar::num_bin_tmp, 1, plain_f),
         NumBinC = (scalar::num_bin_cv, 2, plain_f),
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
@@ -2056,7 +2068,37 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             vm.tape_throw = Some(t);
                             return (at | switched, hot::THREW);
                         }
-                        None => vm.push_simple_ucall(dst, at + 1),
+                        None => {
+                            let ok = vm.push_simple_ucall(dst, at + 1);
+                            if !ok && pending_builtin(vm) {
+                                // `ZEND_DO_ICALL` of a builtin the generic
+                                // call path makes (a method of a builtin
+                                // class, a function its `InitFCall` left
+                                // pending): run here as `Vm::run`'s generic
+                                // `DoCall` arm runs it, instead of a way out
+                                // to `Vm::run` and back.
+                                fresh = false;
+                                if let Some(f) = vm.frames.last_mut() {
+                                    f.ip = at + 1;
+                                }
+                                match vm.op_do_call(dst) {
+                                    Ok(false) => {
+                                        if crate::interrupt::safe_point_due() {
+                                            return ((at + 1) | switched, at);
+                                        }
+                                        ip = at + 1;
+                                        continue 'frames;
+                                    }
+                                    Ok(true) => true,
+                                    Err(t) => {
+                                        vm.tape_throw = Some(t);
+                                        return (at | switched, hot::THREW);
+                                    }
+                                }
+                            } else {
+                                ok
+                            }
+                        }
                     },
                 }
             }
@@ -2084,6 +2126,15 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         ip = f.ip;
         code = Rc::as_ptr(&f.code);
     }
+}
+
+/// Whether the current frame's newest pending call is of a builtin.
+#[inline]
+fn pending_builtin(vm: &Vm) -> bool {
+    vm.frames
+        .last()
+        .and_then(|f| f.calls.last())
+        .is_some_and(|c| matches!(c.func, crate::func::Func::Builtin(_)))
 }
 
 /// `ZEND_FRAMELESS_ICALL_n` of the current frame's newest pending call

@@ -32,7 +32,15 @@ use php_runtime::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::rc::{Rc, Weak};
+
+/// A map keyed by object handle: [`crate::class::FxHasher`] (a multiply
+/// per key) instead of `SipHash`, which is ~100 instructions a lookup.
+/// Handles are not chosen by scripts, so the hash needs no protection
+/// against collisions; [`object_freed`] looks two of these up for every
+/// object freed once any weak reference or map exists.
+type HandleMap<V> = HashMap<u32, V, BuildHasherDefault<crate::class::FxHasher>>;
 
 const PUB: u32 = flags::PUBLIC;
 
@@ -54,10 +62,10 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     /// Referent handle → its `WeakReference` singleton (`EG(weakrefs)`,
     /// `ZEND_WEAKREF_TAG_REF`).
-    static REFS: RefCell<HashMap<u32, RefSlot>> = RefCell::new(HashMap::new());
+    static REFS: RefCell<HandleMap<RefSlot>> = RefCell::new(HandleMap::default());
     /// Key handle → maps that hold an entry for it
     /// (`ZEND_WEAKREF_TAG_MAP`).
-    static MAPS: RefCell<HashMap<u32, Vec<Weak<MapCell>>>> = RefCell::new(HashMap::new());
+    static MAPS: RefCell<HandleMap<Vec<Weak<MapCell>>>> = RefCell::new(HandleMap::default());
 }
 
 /// Resets weak reference state for a new request.
@@ -267,7 +275,7 @@ struct Entry {
 #[derive(Default)]
 struct MapState {
     entries: Vec<Option<Entry>>,
-    index: HashMap<u32, usize>,
+    index: HandleMap<usize>,
     /// Active iterators (positions must not move).
     iterators: usize,
     /// Position of an entry holding a transient reference.

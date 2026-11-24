@@ -224,8 +224,14 @@ pub(crate) fn props(vm: &Vm, c: &Rc<Class>) -> Vec<PropMeta> {
         .collect()
 }
 
-/// The methods of `c` (`function_table`) in php-src order.
-pub(crate) fn methods(c: &Rc<Class>) -> Vec<Rc<Method>> {
+/// The methods of `c` (`function_table`) in php-src order, worked out once
+/// per class ([`Class::reflection_methods`]).
+pub(crate) fn methods(c: &Rc<Class>) -> Rc<[Rc<Method>]> {
+    Rc::clone(c.reflection_methods.get_or_init(|| method_order(c).into()))
+}
+
+/// [`methods`] worked out.
+fn method_order(c: &Rc<Class>) -> Vec<Rc<Method>> {
     let mut order: Vec<ZStr> = Vec::new();
     let mut seen: HashSet<ZStr> = HashSet::new();
     let mut push = |lc: ZStr, order: &mut Vec<ZStr>| {
