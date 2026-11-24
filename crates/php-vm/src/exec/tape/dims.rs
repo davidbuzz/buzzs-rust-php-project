@@ -2106,20 +2106,29 @@ const LITERAL_SCAN: usize = 4096;
 /// KEYS_OTHER)`, a table that takes its shape from its first element, when
 /// the start is not within [`LITERAL_SCAN`] ops.
 fn literal_shape(code: &OpArray, i: usize, dst: u32) -> (u32, u8) {
-    let Some(start) = code
-        .ops
-        .get(..i)
-        .and_then(|before| {
-            before
-                .iter()
-                .rev()
-                .take(LITERAL_SCAN)
-                .position(|op| matches!(op, Op::InitArray { dst: d } if *d == dst))
-        })
-        .map(|back| i - 1 - back)
-    else {
+    // Only the literal's first element makes its table: a later one meets
+    // an earlier add to `dst` before the `InitArray`, and has no shape to
+    // carry (each element scanning the whole literal made a literal of n
+    // elements cost n times its length to decode: Composer's 18k-entry
+    // class map took a second).
+    let Some((back, Op::InitArray { .. })) = code.ops.get(..i).and_then(|before| {
+        before
+            .iter()
+            .rev()
+            .take(LITERAL_SCAN)
+            .enumerate()
+            .find(|(_, op)| match op {
+                Op::InitArray { dst: d } => *d == dst,
+                Op::ArrayAdd { arr, .. }
+                | Op::ArrayAddRef { arr, .. }
+                | Op::ArrayUnpack { arr, .. }
+                | Op::ConstArrayUnpack { arr, .. } => *arr == dst,
+                _ => false,
+            })
+    }) else {
         return (0, KEYS_OTHER);
     };
+    let start = i - 1 - back;
     let (mut count, mut keys) = (0u32, KEYS_NONE);
     for op in code.ops.iter().skip(start + 1).take(LITERAL_SCAN) {
         let key = match op {
