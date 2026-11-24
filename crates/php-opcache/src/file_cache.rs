@@ -17,7 +17,7 @@ pub const MAGIC: &[u8; 8] = b"OPCACHE\0";
 /// 32-character hexadecimal system id, matching php-src's `zend_system_id`.
 pub const SYSTEM_ID: &str = "817478635848e894c2598be6984e49ef";
 
-/// Header size: 8 (magic) + 32 (system_id) + 8 (mtime) + 8 (checksum) + 8 (len) = 64 bytes.
+/// Header size: 8 (magic) + 32 (`system_id`) + 8 (mtime) + 8 (checksum) + 8 (len) = 64 bytes.
 pub const HEADER_SIZE: usize = 64;
 
 /// Names the header layout and checksum in the system id, so entries

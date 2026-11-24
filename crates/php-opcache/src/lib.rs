@@ -1087,7 +1087,7 @@ mod tests {
             cache.get("/a.php", mtime(5), true, 2, 100),
             CacheLookup::Miss
         ));
-        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        assert!(cache.insert("/a.php".into(), 5, 1, 100, 7).is_ok());
         // Within revalidate_freq (2 s): no stat, even if the file changed.
         assert!(matches!(
             cache.get("/a.php", mtime(6), true, 2, 101),
@@ -1126,7 +1126,7 @@ mod tests {
             None
         };
         let mut cache: ScriptCache<u8> = ScriptCache::new(100);
-        cache.insert("/a.php".into(), 5, 1, 100, 7);
+        assert!(cache.insert("/a.php".into(), 5, 1, 100, 7).is_ok());
         assert!(matches!(
             cache.get("/a.php", || Some(5), true, 0, 100),
             CacheLookup::Hit(7)
@@ -1143,7 +1143,7 @@ mod tests {
         ));
         assert_eq!(stats.get(), 1);
         // Preloaded scripts (timestamp 0) are not checked.
-        cache.insert("/p.php".into(), 0, 1, 100, 8);
+        assert!(cache.insert("/p.php".into(), 0, 1, 100, 8).is_ok());
         assert!(matches!(
             cache.get("/p.php", || Some(9), true, 0, 300),
             CacheLookup::Hit(8)
