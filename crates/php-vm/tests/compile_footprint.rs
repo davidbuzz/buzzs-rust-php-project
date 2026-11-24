@@ -79,3 +79,32 @@ fn consuming_compile_releases_the_ast_while_compiling() {
     );
     assert!(peak_consumed < peak_borrowed);
 }
+
+/// A compiled op array keeps no more than 64 spare bytes per table
+/// (`pass_two` reallocates the opcodes to their count): a function of a
+/// loaded code base would otherwise hold up to twice its code.
+#[test]
+fn compiled_tables_give_back_their_spare_capacity() {
+    let mut src = b"<?php\n".to_vec();
+    for i in 0..300 {
+        writeln!(src, "$v{i} = 'literal {i}' . $v{i};").expect("writing to a Vec cannot fail");
+    }
+    let program = php_parser::parse(&src, &ParseOptions::default()).expect("source parses");
+    let opts = CompileOptions {
+        filename: ZStr::from("t.php"),
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(&src[..]), opts).expect("source compiles");
+    let code = &unit.main.code;
+    let spare = |cap: usize, len: usize, size: usize| (cap - len) * size;
+    assert!(
+        spare(
+            code.ops.capacity(),
+            code.ops.len(),
+            size_of::<php_vm::opcode::Op>()
+        ) < 64
+    );
+    assert!(spare(code.lines.capacity(), code.lines.len(), 4) < 64);
+    assert!(spare(code.literals.capacity(), code.literals.len(), 16) < 64);
+    assert!(spare(code.cv_names.capacity(), code.cv_names.len(), 8) < 64);
+}

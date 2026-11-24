@@ -1277,6 +1277,18 @@ impl Compiler<'_> {
         if reduced_to_literal {
             optimizer::dump::note_reduced_to_literal(&op_array);
         }
+        // `pass_two`'s `erealloc` of the opcodes (and literals) to their
+        // final count: what was pushed while compiling keeps up to twice
+        // its length, a cost every function of a code base pays for as long
+        // as it is loaded.
+        // (A few spare bytes are not worth the reallocation.)
+        trim(&mut op_array.ops);
+        trim(&mut op_array.lines);
+        trim(&mut op_array.literals);
+        trim(&mut op_array.places);
+        trim(&mut op_array.cv_names);
+        trim(&mut op_array.live_tmps);
+        trim(&mut op_array.static_vars);
         Ok(op_array)
     }
 
@@ -1605,6 +1617,13 @@ impl Compiler<'_> {
         let mut fs = table.functions.borrow_mut();
         fs.push(f);
         u32::try_from(fs.len() - 1).unwrap_or(u32::MAX)
+    }
+}
+
+/// Gives back `v`'s spare capacity when it is at least 64 bytes.
+fn trim<T>(v: &mut Vec<T>) {
+    if (v.capacity() - v.len()) * std::mem::size_of::<T>() >= 64 {
+        v.shrink_to_fit();
     }
 }
 
