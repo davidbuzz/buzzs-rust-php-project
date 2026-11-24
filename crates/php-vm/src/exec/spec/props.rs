@@ -813,7 +813,7 @@ impl Vm {
                 None => return false,
             }),
         };
-        let Some(v) = self.peek_plain_value(val) else {
+        let Some(v) = self.peek_dim_value(val) else {
             return false;
         };
         match self.prop_cache_assign_elem(pid, key.as_ref(), v) {

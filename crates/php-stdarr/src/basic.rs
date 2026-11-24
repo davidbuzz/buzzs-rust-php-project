@@ -350,6 +350,10 @@ fn search_key<'a, C: RuntimeContext + ?Sized>(
                 }
             }
             (Value::Str(a), Value::Str(b)) if strict => a == b,
+            // `ops::is_equal` of two strings, without its generic setup.
+            (Value::Str(a), Value::Str(b)) => {
+                ZStr::ptr_eq(a, b) || ops::smart_streq(a.as_bytes(), b.as_bytes())
+            }
             (Value::Int(_) | Value::Str(_), _) if strict => false,
             _ if strict => ops::is_identical(needle, v)?,
             _ => ops::is_equal(needle, v, ctx)?,

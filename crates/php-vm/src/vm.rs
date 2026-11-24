@@ -1272,12 +1272,10 @@ fn release_slot(v: Value) {
     }
 }
 
-/// Empties `v` and fills it with `n` values made by `make`: the
-/// `Vec::resize` of a pooled frame buffer, without the generic growth
-/// machinery (`extend_with`/`extend_trusted` cost ~45 instructions per
-/// call), for buffers that usually have the capacity already and a small
-/// `n` (the temporaries, iterators, finally slots and compiled variables
-/// of one function).
+/// Empties `v` and fills it with `n` values made by `make` (the
+/// temporaries, iterators, finally slots and compiled variables of one
+/// function, in a pooled frame buffer that usually has the capacity
+/// already).
 #[inline]
 pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
     // A recycled buffer is usually empty already (see `clear_frame_buffer`).
@@ -1285,10 +1283,9 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
         v.clear();
     }
     if n != 0 {
-        v.reserve(n);
-        for _ in 0..n {
-            v.push(make());
-        }
+        // `resize_with` stores the length once, after the loop; a `push`
+        // per element stored it every time (~9 instructions an element).
+        v.resize_with(n, make);
     }
 }
 
@@ -2624,8 +2621,11 @@ pub struct Vm {
     /// Shared empty variable store for builtin frames.
     pub empty_vars: Rc<RefCell<VarStore>>,
     /// Active `__get`/`__set`/`__isset`/`__unset` guards: (object handle,
-    /// property name, kind).
-    pub prop_guards: HashSet<(u32, ZStr, u8)>,
+    /// property name, kind). One insert and one remove per magic access,
+    /// so hashed with [`crate::class::FxHasher`]: the set only holds the
+    /// guards of the accesses in progress.
+    pub prop_guards:
+        HashSet<(u32, ZStr, u8), std::hash::BuildHasherDefault<crate::class::FxHasher>>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the

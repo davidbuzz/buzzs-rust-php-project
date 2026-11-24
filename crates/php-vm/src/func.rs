@@ -170,6 +170,8 @@ pub struct CallShape {
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
     first_ops: [Cell<u32>; FIRST_OPS],
+    /// [`UserFunction::plain_params`]; filled with `kind`.
+    plain_params: Cell<u32>,
     /// The machine code of a function compiled whole (`exec/tape/jit.rs`,
     /// "whole functions": a pure int function, its recursion included): 0
     /// while its plain calls are being counted, 1 once it was refused,
@@ -251,6 +253,17 @@ impl UserFunction {
         s
     }
 
+    /// How many arguments a plain call (`Vm::push_simple_ucall`) passes
+    /// at most: one per parameter (a function with a variadic parameter
+    /// is not plain, see [`CallShape::NOT_PLAIN`]). Read from the call
+    /// shape: valid once [`UserFunction::call_shape`] found a plain
+    /// declaration (each plain path asks that first).
+    #[inline]
+    pub(crate) fn plain_params(&self) -> usize {
+        debug_assert!(self.call_shape.kind.get() > CallShape::NOT_PLAIN);
+        self.call_shape.plain_params.get() as usize
+    }
+
     /// Where a plain call (`Vm::push_simple_ucall`) of this function with
     /// `n` passed arguments starts: `first_op_after_recv` of its code,
     /// read from the table [`UserFunction::call_shape`] filled for a plain
@@ -328,13 +341,22 @@ impl UserFunction {
         if self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR)
             != 0
             || self.code.num_statics != 0
-            || self.code.num_iters != 0
+            // (A `foreach` is no reason: the frame's iterators are sized
+            // and released by the plain call's paths as by the generic
+            // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
+            // A variadic parameter too: the plain paths of the JIT and the
+            // tape's whole-function calls bind every parameter from an
+            // argument (`plain_params` is then the parameter count).
             || self.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return CallShape::NOT_PLAIN;
         }
+        let Ok(plain) = u32::try_from(self.params.len()) else {
+            return CallShape::NOT_PLAIN;
+        };
+        self.call_shape.plain_params.set(plain);
         for (n, slot) in self.call_shape.first_ops.iter().enumerate() {
             slot.set(first_op_after_recv(&self.code, n));
         }
@@ -853,5 +875,18 @@ impl Args {
         self.func
             .as_ref()
             .map_or_else(String::new, |f| f.name.to_string_lossy())
+    }
+
+    /// [`Args::func_name`] borrowed instead of copied into a new `String`
+    /// (a builtin's name is ASCII; one that is not UTF-8 gives `""`): for
+    /// the builtins that pass their name along on every call (`count()`,
+    /// `array_key_exists()`, ...), where the copy was an allocation and a
+    /// UTF-8 scan per call.
+    #[must_use]
+    pub fn func_name_str(&self) -> &str {
+        self.func
+            .as_ref()
+            .and_then(|f| std::str::from_utf8(f.name.as_bytes()).ok())
+            .unwrap_or("")
     }
 }

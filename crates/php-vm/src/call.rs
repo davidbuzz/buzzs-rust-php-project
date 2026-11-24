@@ -627,77 +627,7 @@ impl Vm {
         let Some(frame) = self.frames.last_mut() else {
             return false;
         };
-        let o = match obj {
-            Operand::Cv(cv) if !frame.symtab_attached => {
-                match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                    Some(Value::Object(o)) => o,
-                    _ => return false,
-                }
-            }
-            Operand::Tmp(t) => match frame.tmps.get(t as usize) {
-                Some(Value::Object(o)) => o,
-                _ => return false,
-            },
-            // `$this->name()` (op1 `IS_UNUSED`): the frame's `$this`.
-            Operand::Unused => match frame.this.as_ref() {
-                Some(o) => o,
-                None => return false,
-            },
-            _ => return false,
-        };
-        let cls = object::class_of(o);
-        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
-            return false;
-        }
-        let cls_addr = Rc::as_ptr(cls) as usize;
-        let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-        let hit = match frame.code.method_cache.borrow().get(slot) {
-            Some(Some(cached))
-                if cached.class_addr == cls_addr
-                    && cached.scope_addr == scope_addr
-                    && cached.name_lit == Some(lit) =>
-            {
-                cached.func.get().map(|func| {
-                    (
-                        func,
-                        cached
-                            .method_scope
-                            .as_ref()
-                            .and_then(std::rc::Weak::upgrade),
-                        cached.is_static,
-                    )
-                })
-            }
-            _ => None,
-        };
-        let Some((func, scope, is_static)) = hit else {
-            return false;
-        };
-        let called = Rc::clone(cls);
-        // The call's `$this`: a copy of the variable's object, or the
-        // temporary's handle itself, moved out as the read's
-        // `std::mem::take` moves it (`ZEND_CALL_RELEASE_THIS` without an
-        // `addref`/`release` pair: the call owns the operand's reference).
-        // A static method's call takes none: the temporary's handle is
-        // released after the push (the last handle of the object goes as
-        // it goes there, its destructor left to the safe point after the
-        // instruction).
-        let (this, released) = match obj {
-            Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
-                Some(Value::Object(held)) if !is_static => (Some(held), None),
-                other => (None, other),
-            },
-            _ if is_static => (None, None),
-            _ => (Some(o.clone()), None),
-        };
-        push_call_in_place(&mut frame.calls, move || PendingCall {
-            this,
-            scope,
-            called: Some(called),
-            ..PendingCall::new(func)
-        });
-        drop(released);
-        true
+        init_method_call_in(frame, obj, lit, slot)
     }
 
     /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
@@ -722,27 +652,7 @@ impl Vm {
         let cls_addr = Rc::as_ptr(cls) as usize;
         let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
 
-        let hit = if let Some(Some(cached)) = f.code.method_cache.borrow().get(slot) {
-            if cached.class_addr == cls_addr
-                && cached.scope_addr == scope_addr
-                && cached.name_lit == Some(lit)
-            {
-                cached.func.get().map(|func| {
-                    (
-                        func,
-                        cached
-                            .method_scope
-                            .as_ref()
-                            .and_then(std::rc::Weak::upgrade),
-                        cached.is_static,
-                    )
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let hit = method_entry_hit(&f.code, slot, cls_addr, scope_addr, lit);
 
         if let Some((func, scope, is_static)) = hit {
             let called = cls.clone();
@@ -786,7 +696,17 @@ impl Vm {
             let size = f.code.ops.len().max(slot + 1);
             crate::rtcache::grow_slots(&mut cache, size, || None);
         }
-        cache[slot] = Some(entry);
+        // The entry of another class this one replaces becomes the site's
+        // second entry ([`method_entry_hit`]).
+        if let Some(old) = cache[slot].replace(entry) {
+            if old.class_addr != cls_addr {
+                let second = second_method_slot(&f.code, slot);
+                if cache.len() <= second {
+                    crate::rtcache::grow_slots(&mut cache, second + 1, || None);
+                }
+                cache[second] = Some(old);
+            }
+        }
         drop(cache);
 
         self.push_pending(PendingCall {
@@ -1315,53 +1235,8 @@ impl Vm {
         if f.kind == FrameKind::Builtin {
             return false;
         }
-        let Some(cls) = relative_spec_class(f, spec) else {
-            return false;
-        };
-        let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
         let slot = f.ip.wrapping_sub(1);
-        let hit = match f.code.method_cache.borrow().get(slot) {
-            Some(Some(e))
-                if e.class_addr == Rc::as_ptr(cls) as usize
-                    && e.scope_addr == scope_addr
-                    && e.name_lit == Some(lit) =>
-            {
-                match (
-                    e.func.get(),
-                    e.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
-                ) {
-                    (Some(func), Some(scope)) => Some((func, scope, e.is_static)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        let Some((func, scope, is_static)) = hit else {
-            return false;
-        };
-        let (this, called) = if is_static {
-            let called = match f.called.as_ref() {
-                Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
-                _ => Rc::clone(cls),
-            };
-            (None, called)
-        } else {
-            let Some(this) = f.this.as_ref() else {
-                return false;
-            };
-            let called = object::class_of(this);
-            if !called.is_subclass_of(cls) {
-                return false;
-            }
-            (Some(this.clone()), Rc::clone(called))
-        };
-        push_call_in_place(&mut f.calls, move || PendingCall {
-            this,
-            scope: Some(scope),
-            called: Some(called),
-            ..PendingCall::new(func)
-        });
-        true
+        init_relative_static_in(f, spec, lit, slot)
     }
 
     /// Fills the monomorphic slot of the running `self::name()` /
@@ -2338,8 +2213,8 @@ impl Vm {
             // `FrameStack::push_in_place`.
             if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
-                && frame.iters.is_empty()
-                && frame.fins.is_empty()
+                && frame.iters.len() == code.num_iters as usize
+                && frame.fins.len() == code.num_finally as usize
             {
                 frame.reinit_same_call(code, FrameKind::Function);
             } else {
@@ -2479,7 +2354,7 @@ impl Vm {
         ip: usize,
     ) -> Option<crate::exec::Flow> {
         if !matches!(val, Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_)) {
-            return self.return_generic(val, base, ip);
+            return self.return_generic::<false>(val, base, ip);
         }
         if self.observer.enabled {
             return None;
@@ -2503,14 +2378,11 @@ impl Vm {
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
-            if uf.return_type.is_some() {
-                return self.return_generic(val, base, ip);
-            }
-            // A declared return type (checked by `return_generic`'s
-            // `return_accepts`) is left to it: coercion rules may
-            // rewrite the value (int 3 returned from a `: string`
-            // function gives "3"), which the direct path must not skip.
-            // So are references, arrays and objects (copied, not moved,
+            let rt = uf.return_type.as_ref();
+            // A value its declared return type does not take as it is
+            // (`return_accepts`) is left to `return_generic`: coercion
+            // rules may rewrite it (int 3 returned from a `: string`
+            // function gives "3"), or it fails. So are references, arrays and objects (copied, not moved,
             // for `gc::frame_released`), and a caller's result slot that
             // holds anything but a scalar (released after the frame).
             // Every test comes before the value moves out of its slot:
@@ -2518,29 +2390,42 @@ impl Vm {
             let dst = match frame.ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => Some(slot),
-                    _ => return self.return_generic(val, base, ip),
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
                 RetTarget::Discard => None,
             };
             // A scalar, null or a string: none is a possible cycle root,
             // so it moves out (a literal is copied) without changing what
-            // `gc::frame_released` records.
+            // `gc::frame_released` records. With a declared return type,
+            // only a value the type takes as it is (`return_accepts`).
             let v = match val {
                 Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
-                    Some(slot) if slot.get().is_some_and(returns_directly) => {
+                    Some(slot)
+                        if slot.get().is_some_and(|v| {
+                            returns_directly(v) && (rt.is_none() || return_accepts(rt, v))
+                        }) =>
+                    {
                         slot.as_mut().take()?
                     }
-                    _ => return self.return_generic(val, base, ip),
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
-                    Some(slot) if returns_directly(slot) => std::mem::take(slot),
-                    _ => return self.return_generic(val, base, ip),
+                    Some(slot)
+                        if returns_directly(slot) && (rt.is_none() || return_accepts(rt, slot)) =>
+                    {
+                        std::mem::take(slot)
+                    }
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
                 Operand::Lit(l) => match frame.code.literals.get(l as usize) {
-                    Some(lit) if returns_directly(lit) => clone_value(lit),
-                    _ => return self.return_generic(val, base, ip),
+                    Some(lit)
+                        if returns_directly(lit) && (rt.is_none() || return_accepts(rt, lit)) =>
+                    {
+                        clone_value(lit)
+                    }
+                    _ => return self.return_generic::<false>(val, base, ip),
                 },
-                _ => return self.return_generic(val, base, ip),
+                _ => return self.return_generic::<false>(val, base, ip),
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
@@ -2566,22 +2451,42 @@ impl Vm {
         Some(crate::exec::Flow::Reload)
     }
 
-    /// The generic `ZEND_RETURN` of [`Vm::return_simple`]: any frame or
-    /// result shape the direct path leaves, with the value's slot order
-    /// (`set_tmp` releasing the result slot after the frame) it keeps.
-    #[inline(never)]
-    #[allow(clippy::too_many_lines)] // the direct path's shape, in full
-    fn return_generic(
+    /// `ZEND_RETURN` from the frame a nested execution started with
+    /// (`base`: a callback called by a builtin, `zend_call_function`):
+    /// [`Vm::return_generic`]'s direct return, whose result is the
+    /// execution's (`Flow::Done`) instead of going to a caller's slot.
+    /// `None`, having changed nothing, for any frame or value it leaves to
+    /// the generic `Return`.
+    pub(crate) fn return_at_base(
         &mut self,
         val: Operand,
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
+        self.return_generic::<true>(val, base, ip)
+    }
+
+    /// The generic `ZEND_RETURN` of [`Vm::return_simple`]: any frame or
+    /// result shape the direct path leaves, with the value's slot order
+    /// (`set_tmp` releasing the result slot after the frame) it keeps.
+    /// With `AT_BASE`, of the frame `base` itself ([`Vm::return_at_base`]);
+    /// otherwise of a frame above it.
+    #[inline(never)]
+    #[allow(clippy::too_many_lines)] // the direct path's shape, in full
+    fn return_generic<const AT_BASE: bool>(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<crate::exec::Flow> {
+        // A parameter of the type, so the ordinary return compiles to the
+        // tests it had before (it is every call's return).
+        let at_base = AT_BASE;
         if self.observer.enabled {
             return None;
         }
         let fidx = self.frames.live.checked_sub(1)?;
-        if fidx <= base {
+        if fidx < base || (fidx == base) != at_base || fidx == 0 {
             return None;
         }
         let (v, ret) = {
@@ -2671,6 +2576,8 @@ impl Vm {
             // value in the slot is released after the frame, by `set_tmp`
             // below, as before.
             let v = match ret {
+                // The execution's result: no caller slot.
+                _ if at_base => Some(v),
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
@@ -2693,6 +2600,9 @@ impl Vm {
         let Some(v) = v else {
             return Some(crate::exec::Flow::Reload);
         };
+        if at_base {
+            return Some(crate::exec::Flow::Done(v));
+        }
         match ret {
             RetTarget::Tmp(t) => self.set_tmp(t, v),
             // An unused result (`g();`): a scalar owns nothing, so the
@@ -2997,7 +2907,6 @@ impl Vm {
         // closure object sits in it.
         if !uf.is_generator()
             && uf.code.num_statics == 0
-            && uf.code.num_iters == 0
             && uf.code.num_finally == 0
             && named.is_empty()
             && !self.has_observers()
@@ -3011,12 +2920,9 @@ impl Vm {
                 .enumerate()
                 .all(|(i, p)| match &p.ty {
                     None => true,
-                    Some(ty) => {
-                        ty.is_mixed()
-                            || inline_args[i]
-                                .as_ref()
-                                .map_or(false, |v| accepts_without_coercion(ty.mask, v))
-                    }
+                    Some(ty) => inline_args[i]
+                        .as_ref()
+                        .is_some_and(|v| param_accepts(ty, v)),
                 })
         {
             if args.capacity() > 0 {
@@ -5026,15 +4932,16 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
     use crate::func::CallShape;
     let shape = uf.call_shape();
-    // `n <= params.len() <= cv_names.len()` (the shape), so every argument
-    // has its compiled variable.
+    // `n <= plain_params() <= params.len() <= cv_names.len()` (the shape),
+    // so every argument has its compiled variable, and a trailing variadic
+    // parameter gets none (its `RECV_VARIADIC` collects nothing).
     if shape == CallShape::NOT_PLAIN
         || !call.args.is_empty()
         || !call.named.is_empty()
         || call.magic_name.is_some()
         || call.pfa.is_some()
         || n < uf.required as usize
-        || n > uf.params.len()
+        || n > uf.plain_params()
         || n > call.inline_args.len()
     {
         return false;
@@ -5044,11 +4951,7 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         // out-of-line `try_fold` call per check.
         for (p, arg) in uf.params.iter().zip(&call.inline_args[..n]) {
             if let Some(ty) = &p.ty {
-                if !ty.is_mixed()
-                    && !arg
-                        .as_ref()
-                        .is_some_and(|v| accepts_without_coercion(ty.mask, v))
-                {
+                if !arg.as_ref().is_some_and(|v| param_accepts(ty, v)) {
                     return false;
                 }
             }
@@ -5064,10 +4967,15 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
 fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
     match rt {
         None => true,
+        // An object of a class the type names (`: Column`) is accepted by
+        // name as a parameter is ([`param_accepts`]); `self`, `static` and
+        // intersections are left to the generic check.
         Some(rt) => {
             !rt.is_void()
                 && !rt.is_never()
-                && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
+                && (rt.is_mixed()
+                    || accepts_without_coercion(rt.mask, v)
+                    || (matches!(v, Value::Object(_)) && param_accepts(rt, v)))
         }
     }
 }
@@ -5246,6 +5154,211 @@ pub(crate) fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<
     }
 }
 
+/// [`Vm::init_relative_static_call_cached`] on the running frame `f`, the
+/// op at `slot` (its index): `self::name()` / `parent::name()` /
+/// `static::name()` on the site's monomorphic cache hit, the pending call
+/// pushed in place. Returns `false`, having changed nothing, on a miss.
+/// Frame-local, so the dispatch loop's hot block (`exec/hot.rs`) runs it
+/// as well.
+pub(crate) fn init_relative_static_in(
+    f: &mut Frame,
+    spec: &ClassSpec,
+    lit: u32,
+    slot: usize,
+) -> bool {
+    let Some(cls) = relative_spec_class(f, spec) else {
+        return false;
+    };
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let hit = match f.code.method_cache.borrow().get(slot) {
+        Some(Some(e))
+            if e.class_addr == Rc::as_ptr(cls) as usize
+                && e.scope_addr == scope_addr
+                && e.name_lit == Some(lit) =>
+        {
+            match (
+                e.func.get(),
+                e.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+            ) {
+                (Some(func), Some(scope)) => Some((func, scope, e.is_static)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some((func, scope, is_static)) = hit else {
+        return false;
+    };
+    let (this, called) = if is_static {
+        let called = match f.called.as_ref() {
+            Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
+            _ => Rc::clone(cls),
+        };
+        (None, called)
+    } else {
+        let Some(this) = f.this.as_ref() else {
+            return false;
+        };
+        let called = object::class_of(this);
+        if !called.is_subclass_of(cls) {
+            return false;
+        }
+        (Some(this.clone()), Rc::clone(called))
+    };
+    push_call_in_place(&mut f.calls, move || PendingCall {
+        this,
+        scope: Some(scope),
+        called: Some(called),
+        ..PendingCall::new(func)
+    });
+    true
+}
+
+/// [`Vm::init_method_call_fast`] on the running frame `frame`, the op at
+/// `slot` (its index): `$obj->name()` on the site's method cache hit, the
+/// pending call pushed in place. Returns `false`, having changed nothing,
+/// on a miss. Frame-local, so the dispatch loop's hot block
+/// (`exec/hot.rs`) runs it as well.
+#[inline]
+pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slot: usize) -> bool {
+    let o = match obj {
+        Operand::Cv(cv) if !frame.symtab_attached => {
+            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o,
+                _ => return false,
+            }
+        }
+        Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+            Some(Value::Object(o)) => o,
+            _ => return false,
+        },
+        // `$this->name()` (op1 `IS_UNUSED`): the frame's `$this`.
+        Operand::Unused => match frame.this.as_ref() {
+            Some(o) => o,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let cls = object::class_of(o);
+    if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+        return false;
+    }
+    let cls_addr = Rc::as_ptr(cls) as usize;
+    let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let Some((func, scope, is_static)) =
+        method_entry_hit(&frame.code, slot, cls_addr, scope_addr, lit)
+    else {
+        return false;
+    };
+    let called = Rc::clone(cls);
+    // The call's `$this`: a copy of the variable's object, or the
+    // temporary's handle itself, moved out as the read's
+    // `std::mem::take` moves it (`ZEND_CALL_RELEASE_THIS` without an
+    // `addref`/`release` pair: the call owns the operand's reference).
+    // A static method's call takes none: the temporary's handle is
+    // released after the push (the last handle of the object goes as
+    // it goes there, its destructor left to the safe point after the
+    // instruction).
+    let (this, released) = match obj {
+        Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
+            Some(Value::Object(held)) if !is_static => (Some(held), None),
+            other => (None, other),
+        },
+        _ if is_static => (None, None),
+        _ => (Some(o.clone()), None),
+    };
+    push_call_in_place(&mut frame.calls, move || PendingCall {
+        this,
+        scope,
+        called: Some(called),
+        ..PendingCall::new(func)
+    });
+    drop(released);
+    true
+}
+
+/// A method call site's cached resolution for an object of the class at
+/// `cls_addr` called from the scope at `scope_addr` (the method, its
+/// declaring scope, whether it is static), when the site's
+/// [`OpArray::method_cache`] entry was filled for them. A site keeps two
+/// entries (php-src's is monomorphic; a call site that sees two classes in
+/// turn, `$item->render()` over a list of two kinds, missed every time):
+/// the first is tested inline; on a class mismatch the second is, and a
+/// hit there swaps the two ([`promote_method_entry`]).
+///
+/// [`OpArray::method_cache`]: crate::opcode::OpArray::method_cache
+#[inline(always)]
+#[allow(clippy::inline_always)] // the method call start's cache probe
+pub(crate) fn method_entry_hit(
+    code: &crate::opcode::OpArray,
+    slot: usize,
+    cls_addr: usize,
+    scope_addr: usize,
+    lit: u32,
+) -> Option<(Func, Option<Rc<Class>>, bool)> {
+    let other_class = {
+        let cache = code.method_cache.borrow();
+        match cache.get(slot) {
+            Some(Some(cached)) if cached.class_addr == cls_addr => {
+                return cached_method(cached, scope_addr, lit);
+            }
+            Some(Some(_)) => true,
+            _ => false,
+        }
+    };
+    if other_class && promote_method_entry(code, slot, cls_addr) {
+        let cache = code.method_cache.borrow();
+        return cached_method(cache.get(slot)?.as_ref()?, scope_addr, lit);
+    }
+    None
+}
+
+/// [`method_entry_hit`]'s test of an entry filled for the right class.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn cached_method(
+    cached: &crate::opcode::MethodCallCacheEntry,
+    scope_addr: usize,
+    lit: u32,
+) -> Option<(Func, Option<Rc<Class>>, bool)> {
+    if cached.scope_addr != scope_addr || cached.name_lit != Some(lit) {
+        return None;
+    }
+    cached.func.get().map(|func| {
+        (
+            func,
+            cached
+                .method_scope
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade),
+            cached.is_static,
+        )
+    })
+}
+
+/// Where call site `slot` keeps its second method cache entry: past the
+/// first entries of every op.
+fn second_method_slot(code: &crate::opcode::OpArray, slot: usize) -> usize {
+    code.ops.len() + slot
+}
+
+/// Swaps call site `slot`'s two method cache entries when the second one
+/// was filled for the class at `cls_addr` (see [`method_entry_hit`]).
+#[inline(never)]
+fn promote_method_entry(code: &crate::opcode::OpArray, slot: usize, cls_addr: usize) -> bool {
+    let Ok(mut cache) = code.method_cache.try_borrow_mut() else {
+        return false;
+    };
+    let second = second_method_slot(code, slot);
+    match cache.get(second) {
+        Some(Some(e)) if e.class_addr == cls_addr => {
+            cache.swap(slot, second);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Appends the pending call `make` builds to `calls`, written straight
 /// into the vector's spare slot: `extend` of a one-element trusted-length
 /// iterator reserves the room before `make` runs, so the call is not built
@@ -5255,6 +5368,31 @@ pub(crate) fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<
 #[allow(clippy::inline_always)] // the point is building in place
 fn push_call_in_place(calls: &mut Vec<PendingCall>, make: impl FnOnce() -> PendingCall) {
     calls.extend(std::iter::once_with(make));
+}
+
+/// `ZEND_INIT_NS_FCALL_BY_NAME` on the running frame `frame` (an
+/// unqualified function called from namespaced code) when the run-time
+/// cache resolves it, looked up as [`Vm::op_init_fcall`] looks it up: the
+/// call site's own slot `site` (its global fallback, cached there), else
+/// the namespaced name's. The pending call is not a direct one. Returns
+/// `false`, having changed nothing, on a miss (the generic op resolves
+/// the name and fills the cache). Frame-local, like [`init_fcall_in`], so
+/// the tape starts such calls without leaving.
+pub(crate) fn init_ns_fcall_in(frame: &mut Frame, name: u32, site: usize) -> bool {
+    let cached = {
+        let cache = frame.code.fcall_cache.borrow();
+        match cache.get(site).and_then(Option::as_ref) {
+            Some(entry) => entry.get(),
+            None => cache
+                .get(name as usize)
+                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get)),
+        }
+    };
+    let Some(func) = cached else {
+        return false;
+    };
+    push_call_in_place(&mut frame.calls, move || PendingCall::new(func));
+    true
 }
 
 /// [`Vm::init_fcall_fast`] on the running frame `frame`: `ZEND_INIT_FCALL`
@@ -5552,6 +5690,32 @@ fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> R
 /// Finds `::` in a callable string.
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
+}
+
+/// Whether a user function's parameter of type `ty` takes `v` as it is
+/// (`zend_check_type` without coercion): [`accepts_without_coercion`], or
+/// an object of a class the type names (the class, a parent or an
+/// interface, by name: nothing is loaded), for a union of class names
+/// without `self`/`parent` and without intersections. The plain call paths
+/// take only such arguments; a class-typed parameter (`Request $r`) sent
+/// every call of its function the generic way.
+#[inline]
+pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
+    if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
+        return true;
+    }
+    match v {
+        Value::Object(o) if ty.intersections.is_empty() => {
+            let class = object::class_of(o);
+            // The names lower-cased as the class table keys them
+            // (`TypeDecl::classes` keeps them as written).
+            ty.class_refs().classes.iter().any(|c| match c {
+                crate::types::ClassRef::Named(lc) => class.instance_of_name(lc.as_bytes()),
+                crate::types::ClassRef::Scope | crate::types::ClassRef::Parent => false,
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Whether `verify_type` would accept `v` for a type with mask `m` as-is:

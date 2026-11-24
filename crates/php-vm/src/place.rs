@@ -2407,6 +2407,19 @@ impl Vm {
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
         let private = self.cv_walk_private(&base);
         let globals = self.base_in_globals(&base);
+        if self.writes_global_table(&base) {
+            // The running frame of the global scope (an included file's
+            // code) has written its compiled variables without mirroring
+            // them in the table (the fast paths): they go there first, as
+            // a write to a variable of its own brings them up to date
+            // (`resolve_base`), or the sync after the write would take the
+            // table's older values back into them.
+            let table = Rc::clone(&self.globals);
+            let f = self.frame_mut();
+            if f.symtab_attached && Rc::ptr_eq(&f.vars, &table) {
+                f.sync_cvs_to_symtab();
+            }
+        }
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         if !private {
@@ -2416,6 +2429,23 @@ impl Vm {
             }
         }
         r
+    }
+
+    /// Whether a write to `base` goes into the global symbol table, whose
+    /// change the frames of the global scope then take into their compiled
+    /// variables ([`Vm::sync_global_frames`]): `$GLOBALS[...]`, or a
+    /// variable of the global table itself. Any other write (a function's
+    /// own variable, `$this`, a static property, a temporary) cannot change
+    /// it: a variable bound by `global $x` shares its value with the table
+    /// through a reference, which both see. Syncing every frame of the
+    /// global scope after each write cost the Laravel app's unit tests
+    /// about 2% of their instructions.
+    fn writes_global_table(&self, base: &RBase) -> bool {
+        match base {
+            RBase::Globals => true,
+            RBase::Var(store, _) => Rc::ptr_eq(store, &self.globals),
+            RBase::This(_) | RBase::Cell(_) | RBase::Value(_) | RBase::Undef(_) => false,
+        }
     }
 
     /// `quiet` drops the walk's deferred diagnostics: the write-back walk
@@ -3079,6 +3109,36 @@ impl Vm {
         }
     }
 
+    /// [`WOp::AssignOp`] on variable slot `idx` of `store`: the current
+    /// value (an undefined variable warns and is null, see
+    /// [`Vm::rw_undefined_var`]), the operation, and the result assigned.
+    fn write_var_root_assign_op(
+        &mut self,
+        store: &Rc<RefCell<VarStore>>,
+        idx: usize,
+        op: BinaryOp,
+        rhs: Value,
+    ) -> VmResult<Value> {
+        let mut held = None;
+        let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
+        let cur = if let Some(v) = cur {
+            v
+        } else {
+            let name = store.borrow().names[idx].clone();
+            held = self.rw_undefined_var(&name)?;
+            Value::Null
+        };
+        let nv = match self.assign_op_value(op, &cur, &rhs) {
+            Ok(nv) => nv,
+            Err(e) => return Err(held.unwrap_or(e)),
+        };
+        let r = self.write_var_root(store, idx, WOp::Assign(nv))?;
+        match held {
+            Some(t) => Err(t),
+            None => Ok(r),
+        }
+    }
+
     /// The "Undefined variable" warning of a read-modify-write of the
     /// undefined variable `name` (`$x op= v`, `$x++`). php-src has set the
     /// variable to null first (`_get_zval_cv_lookup_BP_VAR_RW`) and the
@@ -3140,26 +3200,22 @@ impl Vm {
                 }
                 Ok(Value::Null)
             }
-            WOp::AssignOp(op, rhs) => {
-                let mut held = None;
-                let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
-                let cur = if let Some(v) = cur {
-                    v
-                } else {
-                    let name = store.borrow().names[idx].clone();
-                    held = self.rw_undefined_var(&name)?;
-                    Value::Null
-                };
-                let nv = match self.assign_op_value(op, &cur, &rhs) {
-                    Ok(nv) => nv,
-                    Err(e) => return Err(held.unwrap_or(e)),
-                };
-                let r = self.write_var_root(store, idx, WOp::Assign(nv))?;
-                match held {
-                    Some(t) => Err(t),
-                    None => Ok(r),
+            // `$a += $b` of two arrays (`add_function_array` with result ==
+            // op1): the union is made in the variable's own array, which is
+            // separated first only if something else shares it, instead of
+            // in a copy. Nothing is released and no user code runs.
+            WOp::AssignOp(BinaryOp::Add, Value::Array(rhs)) => {
+                let mut st = store.borrow_mut();
+                if let Some(Some(Value::Array(a))) = st.slots.get_mut(idx) {
+                    if !ZArray::ptr_eq(a, &rhs) {
+                        a.make_mut().merge(&rhs, false);
+                    }
+                    return Ok(Value::Array(a.clone()));
                 }
+                drop(st);
+                self.write_var_root_assign_op(store, idx, BinaryOp::Add, Value::Array(rhs))
             }
+            WOp::AssignOp(op, rhs) => self.write_var_root_assign_op(store, idx, op, rhs),
             WOp::MakeRef => {
                 let mut st = store.borrow_mut();
                 let slot = st.slots[idx].get_or_insert(Value::Null);
@@ -3974,6 +4030,13 @@ impl Vm {
             }
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
+        }
+        // `$a += $b` of two arrays: `write_var_root` makes the union in the
+        // variable's own array.
+        if let (BinaryOp::Add, Value::Array(_), RBase::Var(store, idx)) = (op, &v, &base) {
+            if matches!(store.borrow().slots.get(*idx), Some(Some(Value::Array(_)))) {
+                return self.write_place(base, &segs, WOp::AssignOp(op, v));
+            }
         }
         // Fast path: a plain variable holding an int or float
         // (`ZEND_ASSIGN_OP` on a CV): no destructor, reference or type

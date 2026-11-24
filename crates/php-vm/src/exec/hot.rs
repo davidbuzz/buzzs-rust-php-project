@@ -50,7 +50,10 @@ use super::spec::{
     num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, NullChain, Op, Operand, UnKind};
+use crate::opcode::{
+    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, NullChain, Op, Operand,
+    UnKind,
+};
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
 
@@ -116,7 +119,15 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::TypeCheck { .. }
             | Op::Isset { .. }
             | Op::Empty { .. }
-            | Op::InitFCall { fallback: None, .. }
+            | Op::InitFCall { .. }
+            | Op::InitMethodCall {
+                name: Operand::Lit(_),
+                ..
+            }
+            | Op::InitStaticCall {
+                class: ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
+                name: Operand::Lit(_),
+            }
             | Op::Send { .. }
             | Op::Free(Operand::Tmp(_))
             | Op::FetchDimCv { .. }
@@ -134,6 +145,16 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFetch { .. }
+            | Op::FeReset {
+                kind: ForeachKind::Value,
+                ..
+            }
+            | Op::FeFree { .. }
+            | Op::RecvInit { .. }
+            | Op::InstanceOf {
+                class: ClassSpec::Named(_),
+                ..
+            }
     )
 }
 
@@ -675,6 +696,18 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             };
             set_dst_in(f, dst, Value::Bool(r));
         }
+        // `ZEND_INSTANCEOF` of a named class the run-time cache has found
+        // before (the generic op fills it; it never autoloads).
+        Op::InstanceOf {
+            a,
+            class: ClassSpec::Named(lit),
+            dst,
+        } => {
+            let Some(r) = instanceof_in(f, lits, a, lit) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Bool(r));
+        }
         // `ZEND_ISSET_ISEMPTY_CV`.
         Op::Isset { place, dst } => {
             let Some(r) = isset_cv_in(f, place, false) else {
@@ -697,6 +730,40 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             ..
         } => {
             if !crate::call::init_fcall_in(f, name) {
+                return DECLINED;
+            }
+        }
+        // `$obj->f()` on the site's method cache hit (a call the tape
+        // prepares has its own instruction).
+        Op::InitMethodCall {
+            obj,
+            name: Operand::Lit(lit),
+        } => {
+            if !crate::call::init_method_call_in(f, obj, lit, at) {
+                return DECLINED;
+            }
+        }
+        // `self::f()`, `parent::f()`, `static::f()` on the site's cache hit.
+        Op::InitStaticCall {
+            ref class,
+            name: Operand::Lit(lit),
+        } if matches!(
+            class,
+            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
+        ) =>
+        {
+            if !crate::call::init_relative_static_in(f, class, lit, at) {
+                return DECLINED;
+            }
+        }
+        // `ZEND_INIT_NS_FCALL_BY_NAME`: the site's cache slot is past the
+        // literals, at the op's `ip` (`Vm::fallback_site_slot`).
+        Op::InitFCall {
+            name,
+            fallback: Some(_),
+            ..
+        } => {
+            if !crate::call::init_ns_fcall_in(f, name, lits.len() + at + 1) {
                 return DECLINED;
             }
         }
@@ -838,9 +905,152 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             Some(false) => ip = end as usize,
             None => return DECLINED,
         },
+        // `FE_RESET_R` of an array, and `FE_FREE` of its iterator.
+        Op::FeReset {
+            subject,
+            kind: ForeachKind::Value,
+            iter,
+            end,
+            ..
+        } => match fe_reset_array_in(f, lits, subject, iter) {
+            Some(true) => {}
+            Some(false) => ip = end as usize,
+            None => return DECLINED,
+        },
+        Op::FeFree { iter } => {
+            if !fe_free_array_in(f, iter) {
+                return DECLINED;
+            }
+        }
+        // `RECV_INIT` of a parameter the call did not pass, whose default
+        // is a literal (the `RecvDefault` right after it).
+        Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
+            Some(next) => ip = next,
+            None => return DECLINED,
+        },
         _ => return DECLINED,
     }
     ip
+}
+
+/// `FE_RESET_R` (`foreach` by value) of an array, read as `Vm::read`
+/// reads the subject (a defined compiled variable, behind a reference the
+/// referenced array, a literal, or a temporary, consumed): iterator `iter`
+/// gets a handle of the array (`true`), or, for an empty array, nothing
+/// and the loop is skipped (`false`). `None`, having changed nothing, for
+/// anything else (objects, the warning of a non-iterable value or of an
+/// undefined variable, an occupied iterator slot: the generic op).
+#[inline]
+fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32) -> Option<bool> {
+    if f.iters.get(iter as usize)?.is_some() {
+        return None;
+    }
+    let arr = match subject {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+                Value::Array(a) => a.clone(),
+                Value::Reference(r) => match &*r.try_borrow()? {
+                    Value::Array(a) => a.clone(),
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        Operand::Lit(i) => match lits.get(i as usize)? {
+            Value::Array(a) => a.clone(),
+            _ => return None,
+        },
+        Operand::Tmp(t) => {
+            let slot = f.tmps.get_mut(t as usize)?;
+            if !matches!(slot, Value::Array(_)) {
+                return None;
+            }
+            let Value::Array(a) = std::mem::take(slot) else {
+                return None;
+            };
+            a
+        }
+        _ => return None,
+    };
+    if arr.is_empty() {
+        // The handle goes (a temporary's array is released with it).
+        drop(arr);
+        return Some(false);
+    }
+    if let Some(slot) = f.iters.get_mut(iter as usize) {
+        *slot = Some(crate::vm::ForeachIter::Array { arr, pos: 0 });
+    }
+    Some(true)
+}
+
+/// `RECV_INIT` at `at` of parameter `n` into compiled variable `cv` when
+/// the call passed no argument for it and the op after it binds a literal
+/// default (`RecvDefault` of a literal, which `Vm::op_recv_default` checks
+/// against the declared type): the variable gets a copy of the literal and
+/// the `ip` after the `RecvDefault` is returned. `None`, having changed
+/// nothing, when the argument was passed (or left a named-argument gap),
+/// the default is computed by code, the parameter is by reference, its
+/// type would coerce or reject the literal, or the variable is not the
+/// undefined slot of a frame without a symbol table.
+#[inline]
+fn recv_literal_default_in(
+    f: &mut Frame,
+    ops: &[Op],
+    lits: &[Value],
+    at: usize,
+    n: u32,
+    cv: u32,
+) -> Option<usize> {
+    let Some(&Op::RecvDefault {
+        n: dn,
+        cv: dcv,
+        val: Operand::Lit(lit),
+    }) = ops.get(at + 1)
+    else {
+        return None;
+    };
+    if dn != n || dcv != cv || f.symtab_attached || (n as usize) < f.args.len() {
+        return None;
+    }
+    let value = lits.get(lit as usize)?;
+    if matches!(value, Value::Reference(_)) {
+        return None;
+    }
+    let param = f.ufunc.as_ref()?.params.get(n as usize)?;
+    if param.by_ref {
+        return None;
+    }
+    if let Some(ty) = &param.ty {
+        if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
+            return None;
+        }
+    }
+    let value = crate::call::clone_value(value);
+    let slot = f.cvs.get_mut(cv as usize)?;
+    if slot.get().is_some() {
+        return None;
+    }
+    let old = slot.set(Some(value));
+    debug_assert!(old.is_none());
+    drop(old);
+    Some(at + 2)
+}
+
+/// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`
+/// releases nothing else for it); `false` for any other iterator.
+#[inline]
+fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            drop(slot.take());
+            true
+        }
+        None => true,
+        Some(_) => false,
+    }
 }
 
 /// [`concat_in`] (`ZEND_CONCAT` of strings and integers, for the `Bin`
@@ -954,6 +1164,55 @@ fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<
     }
 }
 
+/// `a instanceof B` for class literal `lit` resolved before (the op
+/// array's class cache), with the operand read as `Vm::read` reads it: a
+/// defined compiled variable (behind a reference: the referenced value),
+/// a literal, or a temporary (consumed). Anything but an object is no
+/// instance. `None` when the class is not cached yet or the variable is
+/// undefined (the generic op warns) or attached to a symbol table.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+    let cls = f
+        .code
+        .class_cache
+        .try_borrow()
+        .ok()?
+        .get(lit as usize)?
+        .upgrade()?;
+    let test = |v: &Value| -> Option<bool> {
+        Some(match v {
+            Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),
+            Value::Reference(r) => match &*r.try_borrow()? {
+                Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),
+                _ => false,
+            },
+            _ => false,
+        })
+    };
+    match a {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            test(f.cvs.get(cv as usize).and_then(CvSlot::get)?)
+        }
+        Operand::Lit(i) => test(lits.get(i as usize)?),
+        Operand::TmpKeep(t) => test(f.tmps.get(t as usize)?),
+        Operand::Tmp(t) => {
+            let value = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let result = test(&value);
+            if result.is_none() {
+                // Put back for the generic op.
+                if let Some(slot) = f.tmps.get_mut(t as usize) {
+                    *slot = value;
+                }
+                return None;
+            }
+            discard_unrooted(Some(value));
+            result
+        }
+        Operand::Cv(_) | Operand::Unused => None,
+    }
+}
+
 /// `isset($cv)` / `empty($cv)` (`ZEND_ISSET_ISEMPTY_CV`, which never
 /// warns) of a plain compiled variable of a frame without an attached
 /// symbol table, as `Vm::place_isset` decides it: undefined is not set
@@ -1038,12 +1297,31 @@ fn take_bool(f: &mut Frame, op: Operand) -> Option<bool> {
                 std::mem::forget(std::mem::take(slot));
                 Some(b)
             } else {
-                None
+                take_truth_other(slot)
             }
         }
         Operand::Cv(cv) => f.peek_cv(cv, slot_truth),
         _ => None,
     }
+}
+
+/// [`take_bool`] of a temporary holding anything but a bool, out of line:
+/// the truth of a value whose release frees nothing a destructor could
+/// hang on (null, an int, a non-NaN float, a string, and an array that
+/// another holder shares or that is empty: `if ($this->items)`,
+/// `if (array_filter(...))` of an empty result), consumed as the generic
+/// read consumes it. `None`, the slot untouched, for anything else (an
+/// object, or an array whose release may free one, is released by the
+/// generic op, with the destructor that may run).
+#[inline(never)]
+fn take_truth_other(slot: &mut Value) -> Option<bool> {
+    let b = match &*slot {
+        Value::Array(a) if a.refcount() > 1 || a.is_empty() => !a.is_empty(),
+        Value::Str(_) | Value::Null | Value::Int(_) | Value::Float(_) => plain_truth(slot)?,
+        _ => return None,
+    };
+    *slot = Value::Null;
+    Some(b)
 }
 
 /// The truth of an operand that needs neither a diagnostic nor a
@@ -1663,7 +1941,7 @@ fn move_in(f: &mut Frame, src: Operand, dst: u32) -> bool {
 #[allow(clippy::inline_always)]
 fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Cv(cv) = a else {
-        return None;
+        return coalesce_tmp_in(f, a, dst);
     };
     let v = f.peek_cv(cv, |slot| match slot {
         None | Some(Value::Null) => None,
@@ -1680,6 +1958,32 @@ fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     Some(true)
 }
 
+/// [`coalesce_in`] of a temporary (`$a['k'] ?? $d`, `f() ?? $d`), out of
+/// line: a value other than null moves into `dst` (jump), null falls
+/// through, as the generic op's read consumes it. `None`, nothing changed,
+/// for a reference and for a `dst` holding a value to release (the
+/// generic op releases it).
+#[inline(never)]
+fn coalesce_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
+    let Operand::Tmp(t) = a else {
+        return None;
+    };
+    match f.tmps.get(t as usize)? {
+        Value::Null => return Some(false),
+        Value::Reference(_) => return None,
+        _ => {}
+    }
+    if !matches!(
+        f.tmps.get(dst as usize)?,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        return None;
+    }
+    let v = std::mem::take(&mut f.tmps[t as usize]);
+    put_tmp(&mut f.tmps[dst as usize], v);
+    Some(true)
+}
+
 /// `?:` on a defined compiled variable whose truth needs no conversion
 /// (`ZEND_JMP_SET_SPEC_CV`): `Some(true)` (jump) with the value cloned
 /// into `dst` when truthy, `Some(false)` when falsy. `None` otherwise.
@@ -1687,7 +1991,7 @@ fn coalesce_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
 #[allow(clippy::inline_always)]
 fn jmp_set_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Operand::Cv(cv) = a else {
-        return None;
+        return jmp_set_tmp_in(f, a, dst);
     };
     let found = f.peek_cv(cv, |slot| {
         let v = slot?;
@@ -1696,6 +2000,33 @@ fn jmp_set_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     let Some(v) = found else {
         return Some(false);
     };
+    put_tmp(&mut f.tmps[dst as usize], v);
+    Some(true)
+}
+
+/// [`jmp_set_in`] of a temporary (`f() ?: $d`), out of line: a true value
+/// moves into `dst` (jump); a false one (a scalar, a string or an empty
+/// array: its release frees nothing) is consumed and falls through, as
+/// the generic op's read consumes it. `None`, nothing changed, for a value
+/// whose truth needs a conversion or a warning and for a `dst` holding a
+/// value to release.
+#[inline(never)]
+fn jmp_set_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
+    let Operand::Tmp(t) = a else {
+        return None;
+    };
+    let truth = plain_truth(f.tmps.get(t as usize)?)?;
+    if !truth {
+        f.tmps[t as usize] = Value::Null;
+        return Some(false);
+    }
+    if !matches!(
+        f.tmps.get(dst as usize)?,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        return None;
+    }
+    let v = std::mem::take(&mut f.tmps[t as usize]);
     put_tmp(&mut f.tmps[dst as usize], v);
     Some(true)
 }

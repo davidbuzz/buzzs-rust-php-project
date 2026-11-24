@@ -111,6 +111,41 @@ pub(crate) fn find_leaders(op_array: &OpArray) -> Vec<bool> {
 /// Runs Pass 5 on `op_array`. Returns `true` if any instruction was modified.
 /// `merge_echoes`: also merge consecutive literal `ECHO`s (only on the
 /// pass that stands for php-src's single block pass).
+/// For each instruction, the first one from it on that is not a `Nop`
+/// (`ops.len()` when none is), as the ops are now.
+fn nop_skips(ops: &[Op]) -> Vec<usize> {
+    let mut skip = vec![ops.len(); ops.len() + 1];
+    for i in (0..ops.len()).rev() {
+        skip[i] = if matches!(ops[i], Op::Nop) {
+            skip[i + 1]
+        } else {
+            i
+        };
+    }
+    skip
+}
+
+/// The first instruction from `at` on and before `end` that is not a
+/// `Nop`, or `end`. `skip` was made by [`nop_skips`] earlier in the pass,
+/// which since turned instructions into `Nop`s but never a `Nop` into
+/// another instruction: where it points is a `Nop` at most, and the walk
+/// goes on after it.
+fn next_op(ops: &[Op], skip: &[usize], mut at: usize, end: usize) -> usize {
+    loop {
+        if at >= end {
+            return end;
+        }
+        at = skip.get(at).copied().unwrap_or(end);
+        if at >= end {
+            return end;
+        }
+        if !matches!(ops[at], Op::Nop) {
+            return at;
+        }
+        at += 1;
+    }
+}
+
 /// `JMP_NULL` of a null literal: SCCP's constant result and single
 /// feasible edge (`sccp.c`) make the chain it skips dead, and the one use
 /// of its result reads what the chain gives (`null`, or `false` / `true`
@@ -334,12 +369,14 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
         }
     }
 
+    // Where each run of `Nop`s ends ([`next_op`]): walking over a run
+    // from every instruction in it was quadratic in its length (an array
+    // literal folded into a constant leaves thousands).
+    let skip = nop_skips(&op_array.ops);
+
     // Eliminate jumps to next instruction
     for i in 0..len {
-        let mut next_i = i + 1;
-        while next_i < len && matches!(op_array.ops[next_i], Op::Nop) {
-            next_i += 1;
-        }
+        let next_i = next_op(&op_array.ops, &skip, i + 1, len);
         match &op_array.ops[i] {
             Op::Jmp(t) if *t as usize == next_i => {
                 op_array.ops[i] = Op::Nop;
@@ -365,10 +402,7 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
         for i in b_start..b_end {
             if let Some(t) = def_tmp(&op_array.ops[i]) {
                 // Find next non-Nop instruction in this basic block
-                let mut next_i = i + 1;
-                while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
-                    next_i += 1;
-                }
+                let next_i = next_op(&op_array.ops, &skip, i + 1, b_end);
                 if next_i < b_end {
                     if let Op::Free(Operand::Tmp(ft)) = op_array.ops[next_i] {
                         if ft == t && use_counts.get(t as usize).copied().unwrap_or(0) <= 1 {
@@ -443,10 +477,7 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                 Op::JmpNz(c, _) => (*c, false),
                 _ => continue,
             };
-            let mut next_i = i + 1;
-            while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
-                next_i += 1;
-            }
+            let next_i = next_op(&op_array.ops, &skip, i + 1, b_end);
             if next_i >= b_end {
                 continue;
             }
@@ -473,10 +504,7 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
 
         // 4. Boolean negation and inverted branch simplification
         for i in b_start..b_end {
-            let mut next_i = i + 1;
-            while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
-                next_i += 1;
-            }
+            let next_i = next_op(&op_array.ops, &skip, i + 1, b_end);
             if next_i >= b_end {
                 continue;
             }
@@ -637,10 +665,7 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
         // merge leaves the next echo of the run after `i`.
         for i in (b_start..b_end).filter(|_| merge_echoes) {
             while let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
-                let mut next_i = i + 1;
-                while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
-                    next_i += 1;
-                }
+                let next_i = next_op(&op_array.ops, &skip, i + 1, b_end);
                 if next_i < b_end {
                     if let Op::Echo(Operand::Lit(l2)) = op_array.ops[next_i] {
                         let s1_opt = match op_array.literals.get(l1 as usize) {

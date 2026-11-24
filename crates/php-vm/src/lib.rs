@@ -327,7 +327,7 @@ impl Vm {
             builtin_deprecation_reported: false,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
-            prop_guards: HashSet::new(),
+            prop_guards: HashSet::default(),
             observer: crate::observer::ObserverState::default(),
             user_opcode_handlers: Vec::new(),
         }

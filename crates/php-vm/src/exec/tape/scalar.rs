@@ -12,7 +12,7 @@ use super::{
 };
 use super::{Num, KL};
 use crate::exec::spec::plain_truth;
-use crate::opcode::{BinKind, Op, OpArray, Operand};
+use crate::opcode::{BinKind, Op, OpArray, Operand, UnKind};
 use php_runtime::{BinaryOp, Value};
 
 /// The operators of [`num_bin_tmp`], by their code in an instruction's `e`:
@@ -51,6 +51,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::JmpNzC)
         },
+        Op::Unary { .. } | Op::JmpZEx { .. } | Op::JmpNzEx { .. } => return lower_bool(code, i),
         // A jump on a literal (`while (1)`, `while (true)` whose test stands
         // at the loop's end): taken always, a plain jump, or never, nothing.
         Op::JmpZ(Operand::Lit(l), target) | Op::JmpNz(Operand::Lit(l), target) => {
@@ -216,6 +217,81 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::CoalesceT)
         },
+        _ => return None,
+    })
+}
+
+/// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.
+fn lower_bool(code: &OpArray, i: usize) -> Option<Inst> {
+    let plain = Inst::plain;
+    Some(match *code.ops.get(i)? {
+        // `&&` / `||` as a value (`ZEND_JMPZ_EX`, `ZEND_JMPNZ_EX`): the
+        // result temporary's offset in `d`.
+        Op::JmpZEx { a, dst, target } | Op::JmpNzEx { a, dst, target } => {
+            let z = matches!(code.ops[i], Op::JmpZEx { .. });
+            let (a, op) = match a {
+                Operand::Cv(cv) => (
+                    cv_off(code, cv)?,
+                    if z { TOp::JmpZExC } else { TOp::JmpNzExC },
+                ),
+                Operand::Tmp(t) => (
+                    tmp_off(code, t)?,
+                    if z { TOp::JmpZExT } else { TOp::JmpNzExT },
+                ),
+                _ => return None,
+            };
+            Inst {
+                a,
+                c: rel(code, i, target)?,
+                d: tmp_off(code, dst)?,
+                ..plain(op)
+            }
+        }
+        // `if (!$cv)`: the negation of a variable and the jump on it
+        // after it (`ZEND_BOOL_NOT` + `ZEND_JMPZ`/`ZEND_JMPNZ` of its
+        // result, which nothing else reads), as one jump on the variable;
+        // a jump to the second op still runs that op alone.
+        Op::Unary {
+            op: UnKind::Not,
+            a: Operand::Cv(cv),
+            dst,
+        } => match *code.ops.get(i + 1)? {
+            Op::JmpZ(Operand::Tmp(t), target) if t == dst => Inst {
+                a: cv_off(code, cv)?,
+                c: rel(code, i, target)?,
+                ..plain(TOp::NotJmpZC)
+            },
+            Op::JmpNz(Operand::Tmp(t), target) if t == dst => Inst {
+                a: cv_off(code, cv)?,
+                c: rel(code, i, target)?,
+                ..plain(TOp::NotJmpNzC)
+            },
+            _ => Inst {
+                a: cv_off(code, cv)?,
+                d: tmp_off(code, dst)?,
+                e: 1,
+                ..plain(TOp::UnaryC)
+            },
+        },
+        // `!a` and `(bool) a` (`ZEND_BOOL_NOT`, `ZEND_BOOL`) into a
+        // temporary: `e` is 1 for the negation.
+        Op::Unary {
+            op: op @ (UnKind::Not | UnKind::Bool),
+            a,
+            dst,
+        } => {
+            let (a, top) = match a {
+                Operand::Tmp(t) => (tmp_off(code, t)?, TOp::UnaryT),
+                Operand::Cv(cv) => (cv_off(code, cv)?, TOp::UnaryC),
+                _ => return None,
+            };
+            Inst {
+                a,
+                d: tmp_off(code, dst)?,
+                e: u8::from(op == UnKind::Not),
+                ..plain(top)
+            }
+        }
         _ => return None,
     })
 }
@@ -809,6 +885,212 @@ pub(super) unsafe fn jmpnz_cv(st: St, inst: &Inst) -> Br {
         Some(false) => Br::Fall,
         None => Br::Decline,
     }
+}
+
+/// `Op::Unary { op: Not, a: Cv }` and the `Op::JmpZ` of its result
+/// (`if (!$cv)`): jumps when the variable is true (its negation false);
+/// otherwise as [`jmpz_cv`].
+///
+/// # Safety
+/// As [`jmpz_cv`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn not_jmpz_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: as in `jmpz_cv`.
+    unsafe { jmpnz_cv(st, inst) }
+}
+
+/// `Op::Unary { op: Not, a: Cv }` and the `Op::JmpNz` of its result:
+/// jumps when the variable is false; otherwise as [`jmpz_cv`].
+///
+/// # Safety
+/// As [`jmpz_cv`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn not_jmpnz_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: as in `jmpz_cv`.
+    unsafe { jmpz_cv(st, inst) }
+}
+
+/// `Op::Unary { op: Not | Bool, a: Tmp }` (`ZEND_BOOL_NOT`, `ZEND_BOOL`
+/// of a temporary): a temporary holding null, a bool, an int or a non-NaN
+/// float (a comparison's or a call's result) is consumed and its truth,
+/// negated when `e` is 1, goes into the temporary at `d`, which may be the
+/// operand. Declines any other value and a destination holding a value to
+/// release, before changing anything (the generic step converts, warns or
+/// releases).
+///
+/// # Safety
+/// As [`jmpz_cv`]; `a` and `d` are validated temporary offsets.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn unary_bool_tmp(st: St, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let src = unsafe { tmp_slot(st, inst.a) };
+    let b = match *src {
+        Value::Null => false,
+        Value::Bool(b) => b,
+        Value::Int(i) => i != 0,
+        Value::Float(x) if !x.is_nan() => x != 0.0,
+        _ => return false,
+    };
+    // Tested before the operand is consumed: a decline changes nothing.
+    // SAFETY: the caller's contract.
+    if !is_scalar(unsafe { tmp_slot(st, inst.d) }) {
+        return false;
+    }
+    // A scalar has nothing to drop: consumed, as the generic read does
+    // (the destination may be this slot: written below).
+    std::mem::forget(std::mem::take(src));
+    // SAFETY: the caller's contract.
+    unsafe { store_bool(st, inst, b) }
+}
+
+/// `Op::Unary { op: Not | Bool, a: Cv }` of a variable whose truth
+/// [`plain_truth`] decides (as [`unary_bool_tmp`], the variable read in
+/// place).
+///
+/// # Safety
+/// As [`jmpz_cv`]; `d` is a validated temporary offset.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn unary_bool_cv(st: St, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    match unsafe { cv_slot(st, inst.a) }
+        .as_ref()
+        .and_then(plain_truth)
+    {
+        // SAFETY: the caller's contract.
+        Some(b) => unsafe { store_bool(st, inst, b) },
+        None => false,
+    }
+}
+
+/// The result of [`unary_bool_tmp`] and [`unary_bool_cv`]: `b`, negated
+/// when `e` is 1, into the temporary at `d` when it holds a scalar.
+///
+/// # Safety
+/// `d` is a validated temporary offset of the current frame.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn store_bool(st: St, inst: &Inst, b: bool) -> bool {
+    // SAFETY: the caller's contract.
+    let dst = unsafe { tmp_slot(st, inst.d) };
+    if !is_scalar(dst) {
+        return false;
+    }
+    // A scalar has nothing to drop.
+    std::mem::forget(std::mem::replace(dst, Value::Bool(b != (inst.e == 1))));
+    true
+}
+
+/// `Op::JmpZEx` / `Op::JmpNzEx` (`ZEND_JMPZ_EX`, `ZEND_JMPNZ_EX`: `&&`
+/// and `||` as a value) once the operand's truth `b` is known: when it is
+/// `jump_on`, `b` goes into the result temporary at `inst.d` and the
+/// branch is taken; otherwise it falls through. A result temporary holding
+/// a value to release declines (before anything changed).
+///
+/// # Safety
+/// As [`jmpz_cv`]; `d` is a validated temporary offset.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn jmp_ex(st: St, inst: &Inst, b: bool, jump_on: bool) -> Br {
+    if b != jump_on {
+        return Br::Fall;
+    }
+    // SAFETY: the caller's contract.
+    let dst = unsafe { tmp_slot(st, inst.d) };
+    if !is_scalar(dst) {
+        return Br::Decline;
+    }
+    // A scalar has nothing to drop.
+    std::mem::forget(std::mem::replace(dst, Value::Bool(b)));
+    Br::Jump
+}
+
+/// `Op::JmpZEx` of a compiled variable whose truth [`plain_truth`]
+/// decides; declines anything else (the generic op converts or warns).
+///
+/// # Safety
+/// As [`jmp_ex`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn jmpz_ex_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    match unsafe { cv_slot(st, inst.a) }
+        .as_ref()
+        .and_then(plain_truth)
+    {
+        // SAFETY: the caller's contract.
+        Some(b) => unsafe { jmp_ex(st, inst, b, false) },
+        None => Br::Decline,
+    }
+}
+
+/// `Op::JmpNzEx` of a compiled variable (as [`jmpz_ex_cv`]).
+///
+/// # Safety
+/// As [`jmp_ex`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn jmpnz_ex_cv(st: St, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    match unsafe { cv_slot(st, inst.a) }
+        .as_ref()
+        .and_then(plain_truth)
+    {
+        // SAFETY: the caller's contract.
+        Some(b) => unsafe { jmp_ex(st, inst, b, true) },
+        None => Br::Decline,
+    }
+}
+
+/// `Op::JmpZEx` of a temporary holding a bool (a comparison's result),
+/// which it consumes; declines any other value. The result temporary may
+/// be the operand itself: the operand is emptied first.
+///
+/// # Safety
+/// As [`jmp_ex`]; `a` is a validated temporary offset.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn jmpz_ex_tmp(st: St, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    unsafe { jmp_ex_tmp(st, inst, false) }
+}
+
+/// `Op::JmpNzEx` of a temporary (as [`jmpz_ex_tmp`]).
+///
+/// # Safety
+/// As [`jmpz_ex_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn jmpnz_ex_tmp(st: St, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    unsafe { jmp_ex_tmp(st, inst, true) }
+}
+
+/// [`jmpz_ex_tmp`] and [`jmpnz_ex_tmp`].
+///
+/// # Safety
+/// As [`jmpz_ex_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn jmp_ex_tmp(st: St, inst: &Inst, jump_on: bool) -> Br {
+    // SAFETY: the caller's contract.
+    let src = unsafe { tmp_slot(st, inst.a) };
+    let Value::Bool(b) = *src else {
+        return Br::Decline;
+    };
+    if b == jump_on {
+        // SAFETY: the caller's contract.
+        if !is_scalar(unsafe { tmp_slot(st, inst.d) }) {
+            return Br::Decline;
+        }
+    }
+    // Consumed, as the generic read does; a bool has nothing to drop.
+    std::mem::forget(std::mem::take(src));
+    // SAFETY: the caller's contract.
+    unsafe { jmp_ex(st, inst, b, jump_on) }
 }
 
 #[cfg(test)]

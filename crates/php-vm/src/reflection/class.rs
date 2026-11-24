@@ -422,13 +422,15 @@ fn closure_invoke(vm: &Vm, c: &Rc<Class>, o: &Obj) -> Option<FnRef> {
 fn rc_get_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, obj) = this_class_obj(vm, a)?;
     let filter = filter_arg(a, 0x7f);
-    let mut out = Vec::new();
-    for m in order::methods(&c) {
+    let refl = crate::reflection::refl_class(vm, "ReflectionMethod")?;
+    let methods = order::methods(&c);
+    let mut out = Vec::with_capacity(methods.len());
+    for m in methods.iter() {
         if m.visibility() == flags::PRIVATE && !Rc::ptr_eq(&m.scope(), &c) {
             continue;
         }
-        if method_php_flags(&m) & filter != 0 {
-            out.push(method_value(vm, &m, &c)?);
+        if method_php_flags(m) & filter != 0 {
+            out.push(crate::reflection::method_value_of(vm, &refl, m, &c)?);
         }
     }
     if c.lc_name.as_bytes() == b"closure" && c.find_method(b"__invoke").is_none() && filter & 1 != 0
