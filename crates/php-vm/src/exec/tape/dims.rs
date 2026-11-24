@@ -24,10 +24,10 @@
 use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
-    concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in,
-    incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
+    concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_cv_is_miss,
+    fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
 };
-use crate::opcode::{BinKind, CastKind, IncDecKind, Op, OpArray, Operand, Seg};
+use crate::opcode::{BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Seg};
 use crate::vm::{CvSlot, ForeachIter, Frame};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
@@ -306,7 +306,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         Op::FetchDimCv {
-            cv, dim, dst, to, ..
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
         } => {
             let (dk, di) = dim_operand(code, dim)?;
             dst_off(code, dst)?;
@@ -317,6 +322,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 c,
                 d: to,
                 k: dk,
+                e: u8::from(mode == FetchMode::Is),
                 p: dst as usize,
                 ..plain(fetch_op(code, dk, di, to, made_str(code, i, dim)))
             }
@@ -598,7 +604,14 @@ pub(super) unsafe fn fetch_dim(frame: *mut Frame, inst: &Inst) -> Br {
     let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let to = (inst.d != NO_TO).then_some(inst.d);
-    fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
+    if let Some(r) = fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to) {
+        return fetched(Some(r));
+    }
+    // An `Is` read (`??`): a missing element is `null` (`inst.e`).
+    if inst.e != 0 {
+        return fetched(fetch_dim_cv_is_miss(f, inst.a, dim, inst.p as u32, to));
+    }
+    Br::Decline
 }
 
 /// `TOp::FetchDimIC`: the offset, then [`fetch_packed_into_cv`], else

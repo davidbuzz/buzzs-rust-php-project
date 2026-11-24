@@ -387,3 +387,60 @@ var_dump($a);
          Err: Automatic conversion of false to array is deprecated\nstring(0) \"\"\n"
     );
 }
+
+/// `$cv[$k] ?? $d` of an offset the array lacks is `null` on the tape
+/// (`ZEND_FETCH_DIM_IS`): string, int and integer-string offsets,
+/// through a reference, a present `null` element, string offsets and an
+/// undefined variable (the generic fetch). Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_element_is_null() {
+    let src = r#"<?php
+function t() {
+    $a = ['k' => 1, 5 => 'five', '7' => 'seven', 'n' => null];
+    $r = &$a;
+    $s = 'str';
+    $keys = ['k', 'z', 5, 6, '5', '7', 7, 'n', '', '08'];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($keys as $key) {
+            echo var_export($a[$key] ?? 'D', true), ' ', var_export($r[$key] ?? 'D', true), ' ';
+            $v = $a[$key] ?? 'D';
+            echo var_export($v, true), "\n";
+        }
+        echo var_export($a['z'] ?? null, true), var_export($a[99] ?? 0, true), var_export($s[1] ?? 'D', true), var_export($s[9] ?? 'D', true), var_export($s['x'] ?? 'D', true), "\n";
+        echo var_export($undef['x'] ?? 'U', true), var_export($a[true] ?? 'B', true), "\n";
+        $k = 'dyn' . $i;
+        echo var_export($a[$k] ?? 'T', true), var_export($a['k' . ''] ?? 'T', true), "\n";
+    }
+}
+t();
+"#;
+    let expected = r#"1 1 1
+'D' 'D' 'D'
+'five' 'five' 'five'
+'D' 'D' 'D'
+'five' 'five' 'five'
+'seven' 'seven' 'seven'
+'seven' 'seven' 'seven'
+'D' 'D' 'D'
+'D' 'D' 'D'
+'D' 'D' 'D'
+NULL0't''D''D'
+'U''B'
+'T'1
+1 1 1
+'D' 'D' 'D'
+'five' 'five' 'five'
+'D' 'D' 'D'
+'five' 'five' 'five'
+'seven' 'seven' 'seven'
+'seven' 'seven' 'seven'
+'D' 'D' 'D'
+'D' 'D' 'D'
+'D' 'D' 'D'
+NULL0't''D''D'
+'U''B'
+'T'1
+"#;
+    assert_eq!(run(src), expected);
+}

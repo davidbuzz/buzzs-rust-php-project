@@ -48,8 +48,8 @@ mod strings;
 
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
-    fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in,
-    isset_dim_cv_in,
+    fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_cv_is_miss, fetch_dims_cv_in,
+    incdec_dim_cv_in, isset_dim_cv_in,
 };
 pub(super) use props::{prop_op_in, read_hit};
 pub(super) use statics::{

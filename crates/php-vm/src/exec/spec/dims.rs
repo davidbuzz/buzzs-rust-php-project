@@ -99,6 +99,36 @@ fn fetch_dim_cv_other(
     Some(store_fetched_in(f, dst, to, v))
 }
 
+/// `ZEND_FETCH_DIM_IS` of an offset the array lacks (`$cv['k'] ?? $d`):
+/// `null`, and no notice, when `$cv` holds an array (directly or through a
+/// reference) and the offset is an int or a string that it has no element
+/// for (`zend_fetch_dimension_address_inner` with `BP_VAR_IS`). Stored and
+/// released as in [`fetch_dim_cv_in`]; `None`, nothing changed, for
+/// anything else: the generic fetch.
+#[inline(never)]
+pub(in crate::exec) fn fetch_dim_cv_is_miss(
+    f: &mut Frame,
+    cv: u32,
+    dim: Operand,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let d = dim_ref_in(f, dim)?;
+    let missing = match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+        Value::Array(a) => table_dim(a, d).is_none(),
+        Value::Reference(r) => match &*r.try_borrow()? {
+            Value::Array(a) => table_dim(a, d).is_none(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if !missing {
+        return None;
+    }
+    release_str_tmp_in(f, dim);
+    Some(store_fetched_in(f, dst, to, Value::Null))
+}
+
 /// [`Op::FetchDimsCv`](crate::opcode::Op::FetchDimsCv): `$cv[d1][d2]...`
 /// read when every container on the way is an array (the variable itself
 /// possibly through a reference) holding the offset, and every offset
