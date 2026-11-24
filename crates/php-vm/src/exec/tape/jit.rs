@@ -9095,11 +9095,13 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
     }
     let (code, pins) = if cfg!(target_arch = "aarch64") {
         let mut em = a64::A64::new(p, tape.to_vec(), scratch);
+        em.gtable = gtable;
+        em.tbase = ctx.tbase as usize;
         em.emit();
         if !em.resolve() {
             return usize::MAX;
         }
-        (em.bytes(), Vec::new())
+        (em.bytes(), std::mem::take(&mut em.pins))
     } else {
         let mut em = Emitter::new(p, tape.to_vec(), scratch);
         em.gtable = gtable;

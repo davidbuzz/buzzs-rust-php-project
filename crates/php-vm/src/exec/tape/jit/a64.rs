@@ -119,25 +119,26 @@ enum Width {
 /// ints, bools, nulls and floats (`Jmp`, `++`/`--`, the assignments, the
 /// fused compare-and-branch and `++`-compare, the arithmetic into a
 /// variable or a temporary and its float forms, the moves, the truth jumps,
-/// `?:`, `??`, `abs()`) and no inlined call, helper call, frame read or
-/// global read. Anything else is refused, so the interpreter runs it.
+/// `?:`, `??`, `abs()`), the array element rows (in place for a list,
+/// else through their helpers), the tape handlers a trace calls and the
+/// reads through the global scope; no inlined call, no property, static
+/// property or constant row. Anything else is refused, so the interpreter
+/// runs it.
 pub(super) fn supports(p: &Plan) -> bool {
-    if p.has_calls || p.frame {
+    if p.has_calls {
         return false;
     }
     p.class.iter().zip(&p.meta).all(|(&c, m)| match c {
         0 | C_JMP | C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | C_NOP | J_CMP | J_INCCMP
         | C_ASSIGN_R | C_INCDEC_T | C_ABS | C_MOVE | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE
-        | C_JMPZT | C_JMPNZT | J_CMPS => true,
+        | C_JMPZT | C_JMPNZT | J_CMPS | J_ASSIGN_T | C_DIMR | C_DIMW | C_DIMOP | C_DIMSR
+        | C_DIMKEY | C_GREAD | C_VMREAD | C_ROW | C_ROWBR => true,
         J_ARITH_CV | J_ARITH_TMP | J_ASSIGN_OP | J_NUMBIN_T | J_NUMBIN_C | J_NUMBIN_D => {
             matches!(
                 m.arith,
                 0 | 1 | 2 | 5 | OPA_BITAND | OPA_BITOR | OPA_BITXOR | ARITH_SHL | ARITH_SAR
             )
         }
-        // An owned value over a string, an object or a resource is the
-        // tape's own assignment (a helper call: a later row).
-        J_ASSIGN_T => m.mask != ANY_SRC,
         J_ASSIGN_OPS => m.arith <= 2,
         _ => false,
     })
@@ -159,6 +160,12 @@ pub(super) struct A64 {
     tape: Vec<Inst>,
     /// The scratch buffer's address (`has_calls`).
     scratch: i64,
+    /// The address of the tape the trace is of (the rows a handler reads).
+    pub(super) tbase: usize,
+    /// The trace's table of global slots (`C_GREAD`), 0 when none.
+    pub(super) gtable: i64,
+    /// The closure objects the guards name, kept alive once placed.
+    pub(super) pins: Vec<(u64, php_runtime::Obj)>,
     labels: HashMap<usize, usize>,
     stubs: HashMap<usize, usize>,
     sides: HashMap<usize, usize>,
@@ -177,6 +184,9 @@ impl A64 {
             plan,
             tape,
             scratch,
+            tbase: 0,
+            gtable: 0,
+            pins: Vec::new(),
             labels: HashMap::new(),
             stubs: HashMap::new(),
             sides: HashMap::new(),
@@ -433,6 +443,85 @@ impl A64 {
                 self.bcond(cc, self.jump_tgt(j));
             }
             C_MOVE => self.emit_move(m, &inst, Target::Side(i)),
+            C_DIMR => self.emit_dimr(m, i),
+            C_DIMW => self.emit_dimw(m, i, jit_dim_set as *const () as usize, 0),
+            C_DIMOP => self.emit_dimw(m, i, jit_dim_op as *const () as usize, u32::from(m.arith)),
+            C_DIMSR => {
+                let row = self.row_arg(i);
+                self.emit_helper(
+                    jit_row_fetch_dims as *const () as usize,
+                    [HArg::Frame, row, HArg::Null],
+                    0,
+                    Target::Side(i),
+                );
+                self.poll(Target::Poll(i + 1, i));
+            }
+            C_DIMKEY => {
+                let row = self.row_arg(i);
+                let helper = keyed_row_helper(self.tape[i].op);
+                self.emit_helper(
+                    helper,
+                    [HArg::Frame, row, HArg::Null],
+                    u32::try_from(i).unwrap_or(u32::MAX),
+                    Target::Side(i),
+                );
+                let next = i + self.plan.span[j] as usize;
+                self.poll(Target::Poll(next, i));
+            }
+            C_GREAD => self.emit_gread(m, i),
+            C_VMREAD => {
+                self.emit_helper(
+                    jit_row_vm_read as *const () as usize,
+                    [
+                        HArg::Frame,
+                        HArg::Abs(i64::try_from(i).unwrap_or(i64::MAX)),
+                        HArg::Null,
+                    ],
+                    0,
+                    Target::Side(i),
+                );
+                let next = i + self.plan.span[j] as usize;
+                self.poll(Target::Poll(next, i));
+            }
+            C_ROW if m.mask == ROW_NEW_RET => self.emit_new_row(m, i, j),
+            C_ROW => {
+                let row = self.row_arg(i);
+                self.emit_row(
+                    usize::try_from(m.lit_a).unwrap_or(0),
+                    m.mask == ROW_BR_RET,
+                    [HArg::Frame, row, HArg::Null],
+                    Target::Side(i),
+                );
+                if m.inc {
+                    let next = i + self.plan.span[j] as usize;
+                    self.poll(Target::Poll(next, i));
+                }
+            }
+            // A handler that may jump: 1 declined, 2 jumped, 0 goes on.
+            C_ROWBR => {
+                let row = self.row_arg(i);
+                self.emit_helper_call(
+                    usize::try_from(m.lit_a).unwrap_or(0),
+                    [HArg::Frame, row, HArg::Null],
+                    0,
+                );
+                self.uxtb_w0();
+                self.cmp_w_imm(0, 1);
+                self.bcond(EQ, Target::Side(i));
+                self.bcond(HI, self.jump_tgt(j));
+            }
+            // `$cv = TMP` of any value over any value: the tape's own
+            // assignment, then its poll.
+            J_ASSIGN_T if m.mask == ANY_SRC => {
+                let row = self.row_arg(i);
+                self.emit_row(
+                    super::super::scalar::assign_cv_any as *const () as usize,
+                    false,
+                    [HArg::Frame, row, HArg::Abs(1)],
+                    Target::Side(i),
+                );
+                self.poll(Target::Poll(i + 1, i));
+            }
             C_JMPZT | C_JMPNZT => {
                 if m.ca {
                     let (is_bool, tested) = (self.synth_label(), self.synth_label());
@@ -961,6 +1050,403 @@ impl A64 {
         self.set_label(done);
     }
 
+    // ------------------------------------------------- helper calls
+
+    /// `xd = xn + imm` (`add`, no flags), through `T0` past 12 bits.
+    fn add_imm(&mut self, rd: u32, rn: u32, imm: u32) {
+        if imm < 4096 {
+            self.put(0x9100_0000 | (imm << 10) | (rn << 5) | rd);
+        } else {
+            self.mov_imm(T0, i64::from(imm));
+            self.put(0x8B00_0000 | (T0 << 16) | (rn << 5) | rd);
+        }
+    }
+
+    /// One helper argument into `x<reg>`.
+    fn helper_arg(&mut self, reg: u32, arg: HArg) {
+        match arg {
+            HArg::Slot(base, off) => self.add_imm(reg, base_reg(base), off),
+            HArg::Abs(v) => self.mov_imm(reg, v),
+            HArg::Null => self.mov_reg(reg, ZR),
+            HArg::Frame => self.mov_reg(reg, FRAME),
+        }
+    }
+
+    /// The call of `helper` as `extern "C" fn(args[0], args[1], args[2],
+    /// word)`: its answer is in `w0`. Everything the trace keeps is in
+    /// callee-saved registers, so nothing is saved around the call; `sp`
+    /// is 16-byte aligned (the prologue's 64-byte frame).
+    fn emit_helper_call(&mut self, helper: usize, args: [HArg; 3], word: u32) {
+        for (k, arg) in (0u32..).zip(args) {
+            self.helper_arg(k, arg);
+        }
+        self.mov_imm(3, i64::from(word));
+        self.mov_imm(T0, i64::try_from(helper).unwrap_or(0));
+        self.put(0xD63F_0000 | (T0 << 5)); // blr x16
+    }
+
+    /// A helper that answers 0 (done) or anything else (declined, nothing
+    /// changed: leave through `fail`).
+    fn emit_helper(&mut self, helper: usize, args: [HArg; 3], word: u32, fail: Target) {
+        self.emit_helper_call(helper, args, word);
+        self.cbnz_w(0, fail);
+    }
+
+    /// `w0` = its low byte (a `bool`/`u8` answer: AAPCS64 leaves the bits
+    /// above it unspecified).
+    fn uxtb_w0(&mut self) {
+        self.put(0x1200_1C00); // and w0, w0, #0xff
+    }
+
+    /// A tape handler's call for a row it does or declines (`br`: a
+    /// `Br` answer, 1 declined; else a `bool`, false
+    /// declined).
+    fn emit_row(&mut self, handler: usize, br: bool, args: [HArg; 3], fail: Target) {
+        self.emit_helper_call(handler, args, 0);
+        self.uxtb_w0();
+        if br {
+            self.cmp_w_imm(0, 1);
+            self.bcond(EQ, fail);
+        } else {
+            self.fixups.push((self.code.len(), Fix::I19, fail));
+            self.put(0x3400_0000); // cbz w0
+        }
+    }
+
+    /// The address of row `i` of the tape the trace is of.
+    fn row_arg(&self, i: usize) -> HArg {
+        let row = self.tbase.wrapping_add(i * std::mem::size_of::<Inst>());
+        HArg::Abs(i64::try_from(row).unwrap_or(0))
+    }
+
+    /// The `new` row whose result the next row assigns (see the x86
+    /// `emit_new_row`): 0 declined, 1 on to the assignment, 2 on past it.
+    fn emit_new_row(&mut self, m: JitMeta, i: usize, j: usize) {
+        let row = self.row_arg(i);
+        self.emit_helper_call(
+            usize::try_from(m.lit_a).unwrap_or(0),
+            [HArg::Frame, row, HArg::Null],
+            0,
+        );
+        self.uxtb_w0();
+        let next = i + self.plan.span[j] as usize;
+        let past = if next < self.plan.close {
+            Target::Label(next + 1)
+        } else {
+            Target::Stub(next + 1)
+        };
+        let (over, made) = (self.synth_label(), self.synth_label());
+        self.cmp_w_imm(0, 1);
+        self.bcond(LO, Target::Side(i));
+        self.bcond(HI, Target::Label(over));
+        self.poll(Target::Poll(next, i));
+        self.b(Target::Label(made));
+        self.set_label(over);
+        self.poll(Target::Poll(next + 1, i));
+        self.b(past);
+        self.set_label(made);
+    }
+
+    // ---------------------------------------------------------- arrays
+
+    /// `x9 = x9 + (x10 << 4)`: the element at index `x10` of the
+    /// 16-byte elements at `x9`.
+    fn elem_addr(&mut self) {
+        self.mem(true, Width::X, RA, RA, LIST_ELEMS);
+        self.put(0x8B00_0000 | (RB << 16) | (SLOT_SHIFT << 10) | (RA << 5) | RA);
+    }
+
+    /// The offset of an array row into `x10` (`false`: none to read).
+    fn dim_index(&mut self, m: JitMeta, slow: Target) -> bool {
+        match m.kb {
+            KC | KT => {
+                self.cmp_tag(m.kb, m.slot, TAG_INT);
+                self.bcond(NE, slow);
+                self.load_payload(RB, m.kb, m.slot);
+                true
+            }
+            KL => {
+                // SAFETY: a `KL` offset of an array row is the address of a
+                // literal of the op array the plan was made for
+                // (`plan_dim`), alive as long as the trace.
+                let lit = unsafe { &*(m.lit_b as *const php_runtime::Value) };
+                let php_runtime::Value::Int(at) = lit else {
+                    return false;
+                };
+                self.mov_imm(RB, *at);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `x9` = the table of the array the variable `m.sb` holds, directly
+    /// or through a reference (`write`: no borrow at all; else none being
+    /// written); else to `slow`.
+    fn dim_table(&mut self, m: JitMeta, write: bool, slow: Target) {
+        let direct = self.synth_label();
+        self.load_payload(RA, KC, m.sb);
+        self.cmp_tag(KC, m.sb, TAG_ARRAY);
+        self.bcond(EQ, Target::Label(direct));
+        self.cmp_w_imm(T0, u32::from(TAG_REF));
+        self.bcond(NE, slow);
+        self.mem(true, Width::X, T0, RA, REF_BORROW);
+        if write {
+            self.cbnz_x(T0, slow);
+        } else {
+            self.cmp_x_imm(T0, 0);
+            self.bcond(LT, slow); // being written
+        }
+        self.mem(true, Width::B, T0, RA, REF_VALUE);
+        self.cmp_w_imm(T0, u32::from(TAG_ARRAY));
+        self.bcond(NE, slow);
+        self.mem(true, Width::X, RA, RA, REF_VALUE + PAYLOAD);
+        self.set_label(direct);
+        // A list.
+        self.mov_imm(RC, LIST_PACKED);
+        self.mem(true, Width::X, T0, RA, LIST_KIND);
+        self.cmp_x(T0, RC);
+        self.bcond(NE, slow);
+    }
+
+    /// The x86 `emit_list_read`, the same cases and order.
+    fn emit_list_read(&mut self, m: JitMeta, slow: usize, int_only: bool) -> bool {
+        let slow = Target::Label(slow);
+        if !self.dim_index(m, slow) {
+            return false;
+        }
+        self.dim_table(m, false, slow);
+        self.mem(true, Width::X, T0, RA, LIST_LEN);
+        self.cmp_x(RB, T0);
+        self.bcond(HS, slow); // unsigned: a negative offset is outside
+        self.elem_addr();
+        self.mem(true, Width::B, T0, RA, 0);
+        if int_only {
+            self.cmp_w_imm(T0, u32::from(TAG_INT));
+            self.bcond(NE, slow);
+        } else {
+            self.cmp_w_imm(T0, u32::from(TAG_FLOAT));
+            self.bcond(HI, slow);
+        }
+        self.cmp_tag(m.kc, m.db, TAG_FLOAT);
+        self.bcond(HI, slow);
+        self.mem(true, Width::X, RC, RA, 0);
+        self.mem(true, Width::X, RB, RA, PAYLOAD);
+        self.st(RC, m.kc, m.db);
+        self.store_payload(RB, m.kc, m.db);
+        true
+    }
+
+    /// The x86 `emit_list_write`, the same cases and order.
+    fn emit_list_write(&mut self, m: JitMeta, slow: usize, done: usize, int_only: bool) {
+        use php_runtime::Value;
+        let slow = Target::Label(slow);
+        let lit_words = if m.sc == KL {
+            // SAFETY: a `KL` value of an array row is the address of a
+            // literal of the op array the plan was made for (`plan_dim`).
+            match unsafe { &*(m.lit_c as *const Value) } {
+                Value::Int(v) => Some((i64::from(TAG_INT), *v)),
+                Value::Float(x) if !int_only => {
+                    Some((i64::from(TAG_FLOAT), i64::from_ne_bytes(x.to_ne_bytes())))
+                }
+                Value::Null if !int_only => Some((i64::from(TAG_NULL), 0)),
+                Value::Bool(b) if !int_only => {
+                    Some((i64::from(TAG_BOOL) | (i64::from(*b) << (8 * BOOL_BYTE)), 0))
+                }
+                _ => return,
+            }
+        } else if m.sc == KC || m.sc == KT {
+            None
+        } else {
+            return;
+        };
+        if !matches!(m.kb, KC | KT | KL) || !self.dim_index(m, slow) {
+            return;
+        }
+        if lit_words.is_none() {
+            if int_only {
+                self.cmp_tag(m.sc, m.sw, TAG_INT);
+                self.bcond(NE, slow);
+            } else {
+                self.cmp_tag(m.sc, m.sw, TAG_FLOAT);
+                self.bcond(HI, slow);
+            }
+        }
+        let (store, append) = (self.synth_label(), self.synth_label());
+        self.dim_table(m, true, slow);
+        // The table is this handle's alone.
+        self.mem(true, Width::X, T0, RA, 0);
+        self.cmp_x_imm(T0, 1);
+        self.bcond(NE, slow);
+        self.mem(true, Width::X, T0, RA, 8);
+        self.cmp_x_imm(T0, 1);
+        self.bcond(NE, slow);
+        self.mem(true, Width::X, T0, RA, LIST_LEN);
+        self.cmp_x(RB, T0);
+        self.bcond(HS, Target::Label(append));
+        self.elem_addr();
+        self.mem(true, Width::B, T0, RA, 0);
+        self.cmp_w_imm(T0, u32::from(TAG_FLOAT));
+        self.bcond(HI, slow);
+        self.set_label(store);
+        if let Some((first, second)) = lit_words {
+            self.mov_imm(RC, first);
+            self.mov_imm(RB, second);
+        } else {
+            self.ld(RC, m.sc, m.sw);
+            self.load_payload(RB, m.sc, m.sw);
+        }
+        self.mem(false, Width::X, RC, RA, 0);
+        self.mem(false, Width::X, RB, RA, PAYLOAD);
+        self.b(Target::Label(done));
+        // The next element: the flags are the length test's.
+        self.set_label(append);
+        self.bcond(NE, slow);
+        self.mem(true, Width::X, T0, RA, LIST_CAP);
+        self.cmp_x(RB, T0);
+        self.bcond(HS, slow);
+        self.mem(true, Width::W, T0, RA, TABLE_SIZE);
+        self.cmp_x(RB, T0);
+        self.bcond(HS, slow);
+        self.put(0x9100_0000 | (1 << 10) | (RB << 5) | RC); // add x11, x10, #1
+        self.mem(false, Width::X, RC, RA, LIST_LEN);
+        self.mem(false, Width::X, RC, RA, TABLE_NEXT);
+        self.mem(true, Width::W, T0, RA, ARRAY_COUNT);
+        self.put(0x1100_0000 | (1 << 10) | (T0 << 5) | T0); // add w16, w16, #1
+        self.mem(false, Width::W, T0, RA, ARRAY_COUNT);
+        self.elem_addr();
+        self.b(Target::Label(store));
+    }
+
+    fn dim_arg(m: JitMeta) -> HArg {
+        match m.kb {
+            KSKIP => HArg::Null,
+            KL => HArg::Abs(m.lit_b),
+            k => HArg::Slot(k, m.slot),
+        }
+    }
+
+    /// One array element read (`C_DIMR`), as the x86 `emit_dimr`.
+    fn emit_dimr(&mut self, m: JitMeta, i: usize) {
+        if m.arr {
+            let (slow, done) = (self.synth_label(), self.synth_label());
+            if self.emit_list_read(m, slow, false) {
+                self.b(Target::Label(done));
+            }
+            self.set_label(slow);
+            self.emit_helper(
+                jit_dim_get_wide as *const () as usize,
+                [HArg::Frame, Self::dim_arg(m), HArg::Slot(m.kc, m.db)],
+                (m.sb >> SLOT_SHIFT) | (u32::from(m.kc == KC) * DIM_WIDE_TO_CV),
+                Target::Side(i),
+            );
+            self.set_label(done);
+            return;
+        }
+        if m.inc && m.kb == KL && m.kc == KC {
+            self.emit_helper(
+                jit_dim_get_key as *const () as usize,
+                [
+                    HArg::Slot(KC, m.sb),
+                    HArg::Abs(m.lit_b),
+                    HArg::Slot(KC, m.db),
+                ],
+                0,
+                Target::Side(i),
+            );
+            return;
+        }
+        let (slow, done) = (self.synth_label(), self.synth_label());
+        if !m.inc && self.emit_list_read(m, slow, true) {
+            self.b(Target::Label(done));
+        }
+        self.set_label(slow);
+        self.emit_helper(
+            jit_dim_get as *const () as usize,
+            [
+                HArg::Slot(KC, m.sb),
+                Self::dim_arg(m),
+                HArg::Slot(m.kc, m.db),
+            ],
+            u32::from(m.kc == KC) * DIM_GET_TO_CV + u32::from(m.inc) * DIM_GET_EXACT_KEY,
+            Target::Side(i),
+        );
+        self.set_label(done);
+    }
+
+    /// One array element write or compound write (`C_DIMW`/`C_DIMOP`),
+    /// as the x86 `emit_dimw`, ending with the row's poll.
+    fn emit_dimw(&mut self, m: JitMeta, i: usize, helper: usize, word: u32) {
+        let val = if m.sc == KL {
+            HArg::Abs(m.lit_c)
+        } else {
+            HArg::Slot(m.sc, m.sw)
+        };
+        let (slow, done) = (self.synth_label(), self.synth_label());
+        if helper == jit_dim_set as *const () as usize {
+            self.emit_list_write(m, slow, done, !m.arr);
+        }
+        self.set_label(slow);
+        if m.arr {
+            self.emit_helper(
+                jit_dim_set_wide as *const () as usize,
+                [HArg::Frame, Self::dim_arg(m), val],
+                m.sb >> SLOT_SHIFT,
+                Target::Side(i),
+            );
+        } else {
+            self.emit_helper(
+                helper,
+                [HArg::Slot(KC, m.sb), Self::dim_arg(m), val],
+                word,
+                Target::Side(i),
+            );
+        }
+        self.set_label(done);
+        if m.consume {
+            self.store_imm(KT, m.sw, 0);
+            self.store_tag(KT, m.sw, TAG_NULL);
+        }
+        self.poll(Target::Poll(i + 1, i));
+    }
+
+    /// One [`C_GREAD`] row, as the x86 `emit_gread`.
+    fn emit_gread(&mut self, m: JitMeta, i: usize) {
+        let side = Target::Side(i);
+        self.mov_imm(RA, self.gtable + 8 * i64::from(m.slot));
+        self.mem(true, Width::X, RB, RA, 0);
+        self.cbz_x(RB, side); // not resolved
+        self.mem(true, Width::B, RC, RB, 0); // the tag
+        let known = self.synth_label();
+        self.cmp_w_imm(RC, u32::from(TAG_ARRAY));
+        self.bcond(EQ, Target::Label(known));
+        self.cmp_w_imm(RC, u32::from(TAG_FLOAT));
+        self.bcond(HI, side);
+        self.set_label(known);
+        if m.kc == KC {
+            let store = self.synth_label();
+            self.cmp_tag(KC, m.db, TAG_FLOAT);
+            self.bcond(LS, Target::Label(store));
+            self.cmp_w_imm(T0, u32::from(TAG_NONE));
+            self.bcond(EQ, Target::Label(store));
+            self.cmp_w_imm(T0, u32::from(TAG_ARRAY));
+            self.bcond(NE, side);
+            self.load_payload(RA, KC, m.db);
+            self.count_dec_not_last(side);
+            self.set_label(store);
+        }
+        let copy = self.synth_label();
+        self.cmp_w_imm(RC, u32::from(TAG_ARRAY));
+        self.bcond(NE, Target::Label(copy));
+        self.mem(true, Width::X, RA, RB, PAYLOAD);
+        self.count_inc();
+        self.set_label(copy);
+        self.mem(true, Width::X, RA, RB, 0);
+        self.mem(true, Width::X, RC, RB, PAYLOAD);
+        self.st(RA, m.kc, m.db);
+        self.store_payload(RC, m.kc, m.db);
+    }
+
     // ---------------------------------------------------------- driver
 
     /// Emit the whole region (branches still need `resolve`).
@@ -1010,6 +1496,22 @@ impl A64 {
             self.mov_imm(T1, self.plan.version as i64);
             self.cmp_x(T0, T1);
             self.bcond(NE, Target::Replan(self.plan.head));
+        }
+        // The slots of the globals the trace reads itself, found once per
+        // entry (the helper always returns 0).
+        let greads = self.plan.class.iter().filter(|c| **c == C_GREAD).count();
+        if greads != 0 {
+            let n = u32::try_from(greads).unwrap_or(0);
+            self.emit_helper(
+                jit_resolve_globals as *const () as usize,
+                [
+                    HArg::Frame,
+                    HArg::Abs(self.gtable),
+                    HArg::Abs(self.gtable + 8 * i64::from(n)),
+                ],
+                n,
+                Target::Stub(self.plan.head),
+            );
         }
         // The head: the poll and the iteration cap.
         self.head_pos = self.code.len();
@@ -1483,5 +1985,42 @@ function f10() {
 f10();
 ");
         assert_eq!(out, "float(12496250.5)\nint(9992)\nint(30000)\nint(12500007)\nint(22500)\nint(6260000)\nint(5000)\nfloat(9.223372036854776E+18)\nint(4000)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nint(3999)\nint(3999)\nint(5334)\nfloat(1.76207894137449E+104)\n");
+    }
+
+    /// Array element reads and writes (in place and through the helpers),
+    /// handler rows and global reads, compiled, give the interpreter's
+    /// answers (`BUZZS_JIT=0`).
+    #[test]
+    fn array_and_helper_rows_run_compiled() {
+        let (out, _) = run(r"<?php
+function a0() { $a = []; for ($i = 0; $i < 5000; $i++) { $a[] = $i * 2; } $s = 0; for ($i = 0; $i < 5000; $i++) { $s += $a[$i]; } var_dump($s, count($a)); }
+a0();
+function a1() { $a = []; for ($i = 0; $i < 1000; $i++) { $a[] = 1; } for ($i = 0; $i < 5000; $i++) { $a[$i % 1000] += $i; } $s = 0; foreach ($a as $v) { $s += $v; } var_dump($s); }
+a1();
+function a2() { $a = [1.5, 2, null, true]; $t = 0; for ($i = 0; $i < 4000; $i++) { $v = $a[$i & 3]; if ($v) $t++; } var_dump($t); }
+a2();
+function a3() { $a = ['x' => 1, 'y' => 2]; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $a['x'] + $a['y']; $a['x'] = $i; } var_dump($t, $a); }
+a3();
+function a4() { $m = [[1,2],[3,4]]; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $m[$i & 1][1]; } var_dump($t); }
+a4();
+function a5() { $s = ''; for ($i = 0; $i < 3000; $i++) { $s .= 'ab'; } var_dump(strlen($s)); }
+a5();
+function a6() { $a = [5]; $r = &$a; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $a[0]; $a[0] = $i; } var_dump($t, $r); }
+a6();
+function a7() { $a = []; for ($i = 0; $i < 3000; $i++) { $a[$i] = $i; $b = $a; } var_dump(count($b), $b[2999]); }
+a7();
+$g = 5; $GLOBALS['h'] = 1;
+function a8() { $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $GLOBALS['g']; } var_dump($t); }
+a8();
+function a9() { $t = 0; for ($i = 0; $i < 4000; $i++) { $o = new stdClass; $o->x = $i; $t += $o->x; } var_dump($t); }
+a9();
+function a10() { $a = [1,2,3]; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $a[$i] ?? 7; if (isset($a[$i % 5])) $t++; } var_dump($t); }
+a10();
+function a11() { $a = []; for ($i = 0; $i < 4000; $i++) { $a[$i] = $i * 0.5; } var_dump($a[3999]); $k = 'k'; $b = []; for ($i = 0; $i < 4000; $i++) { $b[$k . ($i % 10)] = $i; } var_dump(count($b)); }
+a11();
+function a12() { $a = [0]; for ($i = 0; $i < 4000; $i++) { $a[0] = PHP_INT_MAX; $a[0] += 1; } var_dump($a); }
+a12();
+");
+        assert_eq!(out, "int(24995000)\nint(5000)\nint(12498500)\nint(3000)\nint(8002002)\narray(2) {\n  [\"x\"]=>\n  int(3999)\n  [\"y\"]=>\n  int(2)\n}\nint(12000)\nint(6000)\nint(7994006)\narray(1) {\n  [0]=>\n  int(3999)\n}\nint(3000)\nint(2999)\nint(20000)\nint(7998000)\nint(30385)\nfloat(1999.5)\nint(10)\narray(1) {\n  [0]=>\n  float(9.223372036854776E+18)\n}\n");
     }
 }
