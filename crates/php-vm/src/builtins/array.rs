@@ -430,8 +430,7 @@ fn count(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
             }
         }
     }
-    let f = a.func_name();
-    sa::basic::count(vm, &f, &v, mode)
+    sa::basic::count(vm, a.func_name_str(), &v, mode)
         .map(Value::Int)
         .map_err(|e| vm.rt_throw(e))
 }

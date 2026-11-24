@@ -763,4 +763,17 @@ impl Args {
             .as_ref()
             .map_or_else(String::new, |f| f.name.to_string_lossy())
     }
+
+    /// [`Args::func_name`] borrowed instead of copied into a new `String`
+    /// (a builtin's name is ASCII; one that is not UTF-8 gives `""`): for
+    /// the builtins that pass their name along on every call (`count()`,
+    /// `array_key_exists()`, ...), where the copy was an allocation and a
+    /// UTF-8 scan per call.
+    #[must_use]
+    pub fn func_name_str(&self) -> &str {
+        self.func
+            .as_ref()
+            .and_then(|f| std::str::from_utf8(f.name.as_bytes()).ok())
+            .unwrap_or("")
+    }
 }

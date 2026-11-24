@@ -46,8 +46,7 @@ pub fn count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             stack::nesting_depth(&v, cap + 1).saturating_sub(1)
         })?;
     }
-    let f = a.func_name();
-    let r = sa::basic::count(vm, &f, &v, a.int(1));
+    let r = sa::basic::count(vm, a.func_name_str(), &v, a.int(1));
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -123,7 +122,7 @@ pub fn array_is_list(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let key = a.at(0);
     let h = a.array(1);
-    let f = a.func_name();
+    let f = a.func_name_str();
     // A direct call to `array_key_exists()` is compiled to the
     // ZEND_ARRAY_KEY_EXISTS opcode, whose error for illegal keys differs.
     if f == "array_key_exists"
@@ -133,7 +132,7 @@ pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let msg = format!("Cannot access offset of type {} on array", key.value_name());
         return Err(vm.throw("TypeError", &msg));
     }
-    let r = sa::basic::array_key_exists(vm, &f, &key, &h);
+    let r = sa::basic::array_key_exists(vm, f, &key, &h);
     Ok(Value::Bool(rt(vm, r)?))
 }
 
@@ -679,11 +678,11 @@ ptr_fn!(reset, sa::pointer::reset, Reset);
 
 pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
-    let f = a.func_name();
+    let f = a.func_name_str();
     if let Value::Object(o) = &v {
-        return objptr::run(vm, &f, o, objptr::Op::Current);
+        return objptr::run(vm, f, o, objptr::Op::Current);
     }
-    let r = sa::pointer::current(vm, &f, &v);
+    let r = sa::pointer::current(vm, f, &v);
     rt(vm, r)
 }
 
