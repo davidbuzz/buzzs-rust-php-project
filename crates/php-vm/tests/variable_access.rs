@@ -558,6 +558,7 @@ t();
 /// assignment's result; appends, `isset`/`empty`/`unset` and nested writes
 /// keep the general path. Expected output: php-src's (PHP 8.4 CLI).
 #[test]
+#[allow(clippy::too_many_lines)] // a script and its expected output
 fn array_access_dimensions_call_the_methods_directly() {
     let src = r#"<?php
 class A implements ArrayAccess {
