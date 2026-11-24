@@ -339,40 +339,93 @@ fn search_key<'a, C: RuntimeContext + ?Sized>(
     strict: bool,
 ) -> RtResult<Option<&'a ArrayKey>> {
     for (k, v) in haystack {
-        let found = match (needle, v) {
-            (Value::Int(a), Value::Int(b)) => a == b,
-            // `ops::is_identical`/`ops::is_equal` look through references.
-            (_, Value::Reference(_)) => {
-                if strict {
-                    ops::is_identical(needle, v)?
-                } else {
-                    ops::is_equal(needle, v, ctx)?
-                }
-            }
-            (Value::Str(a), Value::Str(b)) if strict => a == b,
-            // `ops::is_equal` of two strings, without its generic setup.
-            (Value::Str(a), Value::Str(b)) => {
-                ZStr::ptr_eq(a, b) || ops::smart_streq(a.as_bytes(), b.as_bytes())
-            }
-            (Value::Int(_) | Value::Str(_), _) if strict => false,
-            _ if strict => ops::is_identical(needle, v)?,
-            _ => ops::is_equal(needle, v, ctx)?,
-        };
-        if found {
+        if matches_needle(ctx, needle, v, strict)? {
             return Ok(Some(k));
         }
     }
     Ok(None)
 }
 
+/// Whether element `v` is `needle` for `in_array()` / `array_search()`
+/// (`php_search_array`): `===` when `strict`, else `==`.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of both searches' loops
+fn matches_needle<C: RuntimeContext + ?Sized>(
+    ctx: &mut C,
+    needle: &Value,
+    v: &Value,
+    strict: bool,
+) -> RtResult<bool> {
+    Ok(match (needle, v) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        // `ops::is_identical`/`ops::is_equal` look through references.
+        (_, Value::Reference(_)) => {
+            if strict {
+                ops::is_identical(needle, v)?
+            } else {
+                ops::is_equal(needle, v, ctx)?
+            }
+        }
+        (Value::Str(a), Value::Str(b)) if strict => a == b,
+        // `ops::is_equal` of two strings (`zend_fast_equal_strings`), its
+        // common case here: a string whose first byte is above `'9'` is not
+        // numeric, so the bytes decide (`ops::smart_streq` is out of line).
+        (Value::Str(a), Value::Str(b)) => {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if ZStr::ptr_eq(a, b) {
+                true
+            } else if x.first().is_some_and(|&c| c > b'9') || y.first().is_some_and(|&c| c > b'9') {
+                x == y
+            } else {
+                ops::smart_streq(x, y)
+            }
+        }
+        (Value::Int(_) | Value::Str(_), _) if strict => false,
+        _ if strict => ops::is_identical(needle, v)?,
+        _ => ops::is_equal(needle, v, ctx)?,
+    })
+}
+
 /// `in_array(mixed $needle, array $haystack, bool $strict = false): bool`.
+/// The values only: the keys of a packed array are not made.
 pub fn in_array<C: RuntimeContext + ?Sized>(
     ctx: &mut C,
     needle: &Value,
     haystack: &HashTable,
     strict: bool,
 ) -> RtResult<bool> {
-    Ok(search_key(ctx, needle, haystack, strict)?.is_some())
+    // A string needle against string elements, without the general
+    // comparison per element: equal bytes when strict, and when not strict
+    // as well whenever either first byte is above `'9'` (neither string is
+    // then numeric: `zend_fast_equal_strings`). Other elements, and two
+    // possibly numeric strings, take [`matches_needle`].
+    if let Value::Str(n) = needle {
+        let nb = n.as_bytes();
+        let alpha = nb.first().is_some_and(|&c| c > b'9');
+        for v in haystack.values() {
+            let found = match v {
+                Value::Str(b) => {
+                    let bb = b.as_bytes();
+                    if strict || alpha || bb.first().is_some_and(|&c| c > b'9') {
+                        bb.len() == nb.len() && (ZStr::ptr_eq(n, b) || bb == nb)
+                    } else {
+                        ops::smart_streq(nb, bb)
+                    }
+                }
+                other => matches_needle(ctx, needle, other, strict)?,
+            };
+            if found {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    for v in haystack.values() {
+        if matches_needle(ctx, needle, v, strict)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `array_search(mixed $needle, array $haystack, bool $strict = false): int|string|false`.

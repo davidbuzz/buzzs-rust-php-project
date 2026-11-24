@@ -1978,30 +1978,34 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     // else sent there (a value, a dimension) is the generic send's to
     // report or resolve.
     if let Callee::Native(b, _) = &prep.callee {
-        let sig = b.signature();
-        let by_ref = sig
-            .params
-            .get(n)
-            .or_else(|| sig.params.last().filter(|p| p.variadic))
-            .is_some_and(|p| p.by_ref);
-        if by_ref {
-            let ArgSrc::Place(pid) = src else {
-                return false;
-            };
-            if caller.symtab_attached
-                || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
-            {
-                return false;
+        if !b.has_by_ref() {
+            // (Most builtins: nothing to look up per argument.)
+        } else {
+            let sig = b.signature();
+            let by_ref = sig
+                .params
+                .get(n)
+                .or_else(|| sig.params.last().filter(|p| p.variadic))
+                .is_some_and(|p| p.by_ref);
+            if by_ref {
+                let ArgSrc::Place(pid) = src else {
+                    return false;
+                };
+                if caller.symtab_attached
+                    || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
+                {
+                    return false;
+                }
+                let Some(slot) =
+                    place_cv(&caller.code, *pid).and_then(|cv| caller.cvs.get_mut(cv as usize))
+                else {
+                    return false;
+                };
+                let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
+                frame.args.push(Some(Value::Reference(r)));
+                prep.n = n + 1;
+                return true;
             }
-            let Some(slot) =
-                place_cv(&caller.code, *pid).and_then(|cv| caller.cvs.get_mut(cv as usize))
-            else {
-                return false;
-            };
-            let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
-            frame.args.push(Some(Value::Reference(r)));
-            prep.n = n + 1;
-            return true;
         }
     }
     let v = match src {

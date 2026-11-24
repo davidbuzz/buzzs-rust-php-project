@@ -474,6 +474,8 @@ pub struct Builtin {
     /// [`Builtin::fast_eval_id`] plus one, once worked out
     /// ([`FAST_UNKNOWN`] before).
     fast: Cell<u8>,
+    /// [`Builtin::has_by_ref`] plus one, once worked out (0 before).
+    refs: Cell<u8>,
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -512,6 +514,7 @@ impl Builtin {
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            refs: Cell::new(0),
         }
     }
 
@@ -531,6 +534,7 @@ impl Builtin {
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            refs: Cell::new(0),
         }
     }
 
@@ -544,6 +548,7 @@ impl Builtin {
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            refs: Cell::new(0),
         }
     }
 
@@ -554,6 +559,7 @@ impl Builtin {
             // Depend on the name.
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            refs: Cell::new(0),
             ..self.clone()
         }
     }
@@ -579,6 +585,20 @@ impl Builtin {
             PLAIN_UNNAMED => PlainCall::Unnamed,
             PLAIN_NO => PlainCall::No,
             _ => self.plain_call_slow(),
+        }
+    }
+
+    /// Whether a parameter is by reference (or prefers one). Worked out
+    /// once, from the signature: the tape's `send` asks per argument.
+    #[inline]
+    pub(crate) fn has_by_ref(&self) -> bool {
+        match self.refs.get() {
+            0 => {
+                let r = self.signature().params.iter().any(|p| p.by_ref);
+                self.refs.set(u8::from(r) + 1);
+                r
+            }
+            r => r == 2,
         }
     }
 

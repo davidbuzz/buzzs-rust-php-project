@@ -621,3 +621,56 @@ array(2) {
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `in_array()` of a string needle (its own loop: equal bytes, unless both
+/// strings may be numeric) and the general comparison: numeric strings,
+/// leading whitespace, mixed element types, a reference, arrays, strict and
+/// loose, with `array_search()` alongside. Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn in_array_string_needles() {
+    let src = r#"$x = "ref";
+$hay = ["abc", "10", "1e1", " 10", "0", "", null, 0, 1.5, true, false, [1], "ABC", &$x, "007", "7", "-0", ".5", "0.5"];
+$needles = ["abc", "ABC", "10", "1e1", "010", " 10", "10 ", "0", "", "ref", "7", "0x1A", "-0", "0.0", ".5", "0.50", "true", "1.5", "nope", 10, 0, null, true, false, 1.5, [1]];
+foreach ($needles as $n) {
+    echo var_export($n, true), ': ', var_export(in_array($n, $hay), true), ' ', var_export(in_array($n, $hay, true), true), ' ', var_export(array_search($n, $hay), true), "\n";
+}
+$strs = ["b", "a", "c"];
+var_dump(in_array("a", $strs), in_array("a", ["x" => "a"]), in_array("9", ["9.0"]), in_array("9.0", ["9"]), in_array("abc", ["abc\0"]));
+"#;
+    let expected = r#"'abc': true true 0
+'ABC': true true 9
+'10': true true 1
+'1e1': true true 1
+'010': true false 1
+' 10': true true 1
+'10 ': true false 1
+'0': true true 4
+'': true true 5
+'ref': true true 9
+'7': true true 9
+'0x1A': true false 9
+'-0': true true 4
+'0.0': true false 4
+'.5': true true 9
+'0.50': true false 9
+'true': true false 9
+'1.5': true false 8
+'nope': true false 9
+10: true false 1
+0: true true 4
+NULL: true true 5
+true: true true 0
+false: true true 4
+1.5: true true 8
+array (
+  0 => 1,
+): true true 9
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+"#;
+    assert_eq!(run(src), expected);
+}
