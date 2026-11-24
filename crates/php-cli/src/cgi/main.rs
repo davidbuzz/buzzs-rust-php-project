@@ -763,6 +763,12 @@ fn fastcgi_main(
         }
     }
     let mgmt = fastcgi::MgmtVars::new(children_str.as_deref());
+    if children > 0 {
+        // The parent makes the children's VM before it forks them: module
+        // startup runs once, and the children share its pages
+        // copy-on-write (each takes it for its first request).
+        request::adopt_worker_vm(request::prepare_worker_vm(cfg, &[], None));
+    }
     if children > 0
         && sys::prefork(u32::try_from(children).unwrap_or(u32::MAX)) == sys::Role::Parent
     {
