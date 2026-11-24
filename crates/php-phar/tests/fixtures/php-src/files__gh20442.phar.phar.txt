@@ -1,1 +1,9 @@
-EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/files/gh20442.phar" (__HALT_COMPILER(); not found)
+version: 1.1.1
+alias: '%DIR%/files/gh20442.phar'
+count: 1
+signature: SHA-256 D83C976909C28A016A286D1827AF7D7195367288FEBBBEA88E0BFD50EBF26B56
+compressed: false
+format: phar
+metadata: NONE
+stub: 0764df4e20fd8108416d879fa16e7991 50
+entry src dir=1 size=0 perms=40555 mtime=1762797940 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-

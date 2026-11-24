@@ -218,6 +218,25 @@ fn std_props(o: &Obj) -> HashTable {
         .unwrap_or_default()
 }
 
+/// `zend_array_dup()` of a property table: the keys as they are. A
+/// property name is a string even when numeric (`$g->{1}` keeps `"1"`);
+/// an integer key comes only from the legacy `C:` payload, whose array is
+/// copied into the table unchanged (`zend_hash_copy()`).
+fn property_table_copy(props: &HashTable) -> HashTable {
+    let mut t = HashTable::new();
+    for (k, v) in props {
+        match k {
+            ArrayKey::Str(s) => {
+                t.insert_str_raw(s.clone(), v.clone());
+            }
+            k @ ArrayKey::Int(_) => {
+                t.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    t
+}
+
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
     php_memlimit::uncounted(|| properties_for_impl(o, purpose))
 }
@@ -226,16 +245,9 @@ fn properties_for_impl(o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZAr
     if purpose != PropertyPurpose::Debug {
         return Ok(None);
     }
-    // `zend_std_get_properties` + `zend_array_dup`: numeric names show as
-    // integer keys.
-    let mut t = HashTable::new();
-    for (k, v) in &std_props(o) {
-        let k = match k {
-            ArrayKey::Str(s) => ArrayKey::from_zstr(s),
-            k @ ArrayKey::Int(_) => k.clone(),
-        };
-        t.insert(k, v.clone());
-    }
+    // `zend_std_get_properties` + `zend_array_dup`: the keys stay as they
+    // are, and property names are strings (`$g->{1}` dumps as `["1"]`).
+    let mut t = property_table_copy(&std_props(o));
     let num = mpz_of(o).map(|m| gmp::debug_num(&m)).unwrap_or_default();
     t.insert("num", Value::from(num));
     Ok(Some(ZArray::from_table(t)))
@@ -263,14 +275,7 @@ fn serialize(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut arr = ZArray::from_values([Value::from(gmp::serialize_number(&m))]);
     let props = std_props(&o);
     if !props.is_empty() {
-        let mut t = HashTable::new();
-        for (k, v) in &props {
-            let k = match k {
-                ArrayKey::Str(s) => ArrayKey::from_zstr(s),
-                k @ ArrayKey::Int(_) => k.clone(),
-            };
-            t.insert(k, v.clone());
-        }
+        let t = property_table_copy(&props);
         let _ = arr.make_mut().push(Value::Array(ZArray::from_table(t)));
     }
     Ok(Value::Array(arr))

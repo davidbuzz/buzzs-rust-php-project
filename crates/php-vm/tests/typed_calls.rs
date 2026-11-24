@@ -3,7 +3,7 @@
 //! Parameter and return type verification of user calls
 //! (`zend_verify_recv_arg_type`, `zend_verify_return_type`): the slow paths
 //! that coerce, resolve class types or raise the `TypeError`. Expected
-//! outputs are php-src's (`/usr/bin/php -n`).
+//! outputs are php-src's (`/usr/bin/php8.5 -n`).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

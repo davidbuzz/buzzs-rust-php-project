@@ -10,6 +10,21 @@ use php_runtime::{Obj, PhpRef, Value, ZStr};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Bumped on every change to the VM's function table (a declaration, an
+/// include's hoisted declaration, a reset, a discard, a disable, a
+/// re-registration). A JIT trace that inlines a user-function call
+/// resolves the callee at plan time without a per-entry name lookup, so
+/// its entry code compares this counter with the planned value and
+/// disarms itself when they differ (see `jit.rs`).
+pub(crate) static FUNC_TABLE_VERSION: AtomicU64 = AtomicU64::new(1);
+
+/// Records a change to the function table.
+#[inline]
+pub(crate) fn bump_func_table_version() {
+    FUNC_TABLE_VERSION.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Function flags (`ZEND_ACC_*` subset).
 pub mod flags {
@@ -70,6 +85,11 @@ pub mod flags {
     /// backtrace (ext/sodium's `sodium_remove_param_values_from_backtrace`
     /// after a failed `zend_parse_parameters`).
     pub const SCRUB_ARG_ERROR_TRACE: u32 = 1 << 25;
+    /// A property whose slot starts undefined but not `IS_PROP_UNINIT`
+    /// (`__get()` & co. apply as after `unset()`): a virtual hooked
+    /// redeclaration of a backed hooked parent property that had a default
+    /// (`do_inherit_property`: "Default value was removed in child").
+    pub const DEFAULT_UNSET: u32 = 1 << 26;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
     /// The lowest of the five bits (27..=31) of a builtin *function*'s
@@ -152,7 +172,45 @@ pub struct CallShape {
     first_ops: [Cell<u32>; FIRST_OPS],
     /// [`UserFunction::plain_params`]; filled with `kind`.
     plain_params: Cell<u32>,
+    /// The machine code of a function compiled whole (`exec/tape/jit.rs`,
+    /// "whole functions": a pure int function, its recursion included): 0
+    /// while its plain calls are being counted, 1 once it was refused,
+    /// else the address of its entry.
+    pub(crate) native: Cell<usize>,
+    /// With `native`: the address of the body, which the native code of
+    /// other functions calls.
+    pub(crate) native_body: Cell<usize>,
+    /// The plain calls counted toward compiling it; afterwards, how many
+    /// times in a row its native code declined a call.
+    pub(crate) native_count: Cell<u32>,
+    /// The body as a list of `$this->property = $parameter` steps when it
+    /// is nothing else ([`UserFunction::ctor_fold`]), worked out on first
+    /// use.
+    fold: std::cell::OnceCell<Option<Box<[FoldStep]>>>,
 }
+
+impl Drop for CallShape {
+    fn drop(&mut self) {
+        // Freed as it was allocated: outside the accounting.
+        if let Some(Some(steps)) = self.fold.take() {
+            php_memlimit::persistent(|| drop(steps));
+        }
+    }
+}
+
+/// One step of a constructor that only stores its parameters
+/// ([`UserFunction::ctor_fold`]): `$this-><property> = $<parameter>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoldStep {
+    /// The property's place in the function's op array: its entry of the
+    /// property cache says which slot of which class it is.
+    pub(crate) place: u32,
+    /// The parameter stored (its index, which is its compiled variable).
+    pub(crate) param: u32,
+}
+
+/// The most steps [`UserFunction::ctor_fold`] gives.
+pub(crate) const FOLD_STEPS: usize = 8;
 
 /// Passed-argument counts with a precomputed first op ([`CallShape`]):
 /// `0..=6`, as many as the pending call's inline argument buffer holds
@@ -163,9 +221,8 @@ impl CallShape {
     /// Not worked out yet.
     const UNKNOWN: u8 = 0;
     /// Deprecated, `#[\NoDiscard]`, body-less or a generator, with static
-    /// variables, foreach or finally slots, a by-reference parameter, or
-    /// more parameters than compiled variables. (A trailing variadic
-    /// parameter is plain: [`UserFunction::plain_params`].)
+    /// variables, foreach or finally slots, a by-reference or variadic
+    /// parameter, or more parameters than compiled variables.
     pub const NOT_PLAIN: u8 = 1;
     /// Plain, and no parameter has a type other than `mixed`.
     pub const UNTYPED: u8 = 2;
@@ -197,13 +254,10 @@ impl UserFunction {
     }
 
     /// How many arguments a plain call (`Vm::push_simple_ucall`) passes
-    /// at most: one per parameter, but none to a trailing variadic one
-    /// (`...$args`), whose `RECV_VARIADIC` then runs in the callee and
-    /// collects nothing (the frame's arguments are the passed ones, each
-    /// in its parameter's compiled variable). A call with more arguments
-    /// takes the generic path, which keeps the extra ones.
-    /// Read from the call shape: valid once [`UserFunction::call_shape`]
-    /// found a plain declaration (each plain path asks that first).
+    /// at most: one per parameter (a function with a variadic parameter
+    /// is not plain, see [`CallShape::NOT_PLAIN`]). Read from the call
+    /// shape: valid once [`UserFunction::call_shape`] found a plain
+    /// declaration (each plain path asks that first).
     #[inline]
     pub(crate) fn plain_params(&self) -> usize {
         debug_assert!(self.call_shape.kind.get() > CallShape::NOT_PLAIN);
@@ -222,6 +276,65 @@ impl UserFunction {
         }
     }
 
+    /// The steps of this function's body when the whole of it, called
+    /// with every declared parameter passed, stores parameters in
+    /// properties of `$this` and returns: `$this->a = $a; ...` and nothing
+    /// else (a promoted constructor parameter compiles to the same op).
+    /// Such a call needs no frame (`exec/tape/calls.rs`, `new_plain`): the
+    /// values go from the caller's operands into the object's slots.
+    /// `None` for any other body, for a declaration that makes no plain
+    /// call, and for more than [`FOLD_STEPS`] steps.
+    #[inline]
+    pub(crate) fn ctor_fold(&self) -> Option<&[FoldStep]> {
+        self.call_shape
+            .fold
+            // A run-time cache, outside the request's memory accounting
+            // (`memory_get_usage()` must not move on a first `new`).
+            .get_or_init(|| php_memlimit::persistent(|| self.compute_fold()))
+            .as_deref()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compute_fold(&self) -> Option<Box<[FoldStep]>> {
+        use crate::opcode::{Op, Operand, PlaceBase, Seg};
+        if self.call_shape() == CallShape::NOT_PLAIN
+            || !self.uses.is_empty()
+            || self.return_type.is_some()
+        {
+            return None;
+        }
+        let n = self.params.len();
+        let mut steps = Vec::new();
+        for op in self.code.ops.get(self.plain_first_op(n)..)? {
+            match op {
+                Op::Nop => {}
+                Op::AssignObjProp {
+                    place,
+                    val: Operand::Cv(cv),
+                    dst: None,
+                } if (*cv as usize) < n && steps.len() < FOLD_STEPS => {
+                    let p = self.code.places.get(*place as usize)?;
+                    if !matches!(
+                        (&p.base, p.segs.as_slice()),
+                        (PlaceBase::This, [Seg::Prop(Operand::Lit(_))])
+                    ) {
+                        return None;
+                    }
+                    steps.push(FoldStep {
+                        place: *place,
+                        param: *cv,
+                    });
+                }
+                Op::Return {
+                    val: Operand::Unused,
+                } => return Some(steps.into_boxed_slice()),
+                _ => return None,
+            }
+        }
+        None
+    }
+
     #[cold]
     #[inline(never)]
     fn compute_call_shape(&self) -> u8 {
@@ -233,15 +346,14 @@ impl UserFunction {
             // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
-            || self.params.iter().any(|p| p.by_ref)
-            // A variadic parameter only last (as the parser has it): a plain
-            // call passes it nothing ([`UserFunction::plain_params`]).
-            || self.params.iter().rev().skip(1).any(|p| p.variadic)
+            // A variadic parameter too: the plain paths of the JIT and the
+            // tape's whole-function calls bind every parameter from an
+            // argument (`plain_params` is then the parameter count).
+            || self.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return CallShape::NOT_PLAIN;
         }
-        let plain = self.params.len() - usize::from(self.params.last().is_some_and(|p| p.variadic));
-        let Ok(plain) = u32::try_from(plain) else {
+        let Ok(plain) = u32::try_from(self.params.len()) else {
             return CallShape::NOT_PLAIN;
         };
         self.call_shape.plain_params.set(plain);
@@ -438,10 +550,11 @@ impl Builtin {
     /// Whether a call by name of this function, all of whose arguments are
     /// passed by value and have the declared types, can run as the tape's
     /// direct internal call (`exec/tape/calls.rs`): no parameter is passed
-    /// by reference, the function is neither deprecated nor
-    /// `#[\NoDiscard]` (diagnostics before the call), and it has no
-    /// frameless class (`special::frameless_call` decides those calls).
-    /// Worked out once.
+    /// by reference and the function is neither deprecated nor
+    /// `#[\NoDiscard]` (diagnostics before the call). A function with a
+    /// frameless class is called without its frame there when its
+    /// arguments allow it (`Vm::frameless_icall_prepared`). Worked out
+    /// once.
     #[inline]
     pub(crate) fn plain_call(&self) -> PlainCall {
         match self.plain.get() {
@@ -455,7 +568,7 @@ impl Builtin {
     #[cold]
     #[inline(never)]
     fn plain_call_slow(&self) -> PlainCall {
-        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::FRAMELESS) == 0
+        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
             && !self.signature().params.iter().any(|p| p.by_ref);
         let kind = if !plain {
             PlainCall::No

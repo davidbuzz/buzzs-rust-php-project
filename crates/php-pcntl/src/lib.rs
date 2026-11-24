@@ -613,6 +613,12 @@ impl<C> Pcntl<C> {
         restart_syscalls: Option<bool>,
     ) -> PcntlResult<()> {
         Self::check_signo_range(signo)?;
+        // "sigaction() always fails for these, and zend_sigaction() turns
+        // that into a fatal error" (php-src master): a warning instead.
+        if signo == i64::from(libc::SIGKILL) || signo == i64::from(libc::SIGSTOP) {
+            self.fail(libc::EINVAL);
+            return Err(PcntlError::Warning("Error assigning signal".into()));
+        }
         let restart = restart_syscalls.unwrap_or(signo != i64::from(libc::SIGALRM));
         let disposition = match handler {
             SignalHandler::Default => sys::Disposition::Default,

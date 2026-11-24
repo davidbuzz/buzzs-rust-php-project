@@ -176,11 +176,15 @@ fn fpow(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Float(math::fpow(a.float(0), a.float(1))))
 }
 
-fn base_to_number(vm: &mut Vm, a: &Args, f: fn(&[u8], &mut Notices) -> Number) -> VmResult<Value> {
+fn base_to_number(
+    vm: &mut Vm,
+    a: &Args,
+    f: fn(&[u8], &mut Notices) -> php_stdstr::error::StdResult<Number>,
+) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = f(a.str(0).as_bytes(), &mut n);
     emit(vm, n)?;
-    Ok(number_value(r))
+    Ok(number_value(check(vm, r)?))
 }
 
 fn bindec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

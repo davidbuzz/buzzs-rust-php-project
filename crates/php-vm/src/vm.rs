@@ -113,6 +113,57 @@ impl std::fmt::Debug for VarNames {
     }
 }
 
+/// Records slot `slot` of compiled variable `cv` (of `ncv`) in a frame's
+/// [`Frame::symtab_slots`]. The list stays empty (nothing allocated) while
+/// every variable is at its own index, as in a function's own table; the
+/// first one elsewhere fills in the ones before it.
+#[inline]
+fn record_slot(slots: &mut Vec<u32>, cv: usize, slot: u32, ncv: usize) {
+    if slots.is_empty() {
+        if slot as usize == cv {
+            return;
+        }
+        slots.reserve(ncv);
+        slots.extend((0..cv).map(|i| u32::try_from(i).unwrap_or(u32::MAX)));
+    }
+    slots.push(slot);
+}
+
+/// The attached table's slot of compiled variable `cv` named `name`: from
+/// `slots` (the frame's [`Frame::symtab_slots`]) when they are this
+/// table's, else by name.
+#[inline]
+fn mapped_slot(
+    slots: &[u32],
+    valid: bool,
+    st: &mut VarStore,
+    cv: usize,
+    name: &ZStr,
+) -> Option<u32> {
+    match slots.get(cv) {
+        Some(&s) if valid && (s as usize) < st.slots.len() => Some(s),
+        _ => st.find_cv_z(cv, name),
+    }
+}
+
+/// Whether `a` and `b` are the same handle (or equal scalars): a frame's
+/// compiled variable that already holds its symbol-table slot's value.
+#[inline]
+fn same_handle(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Str(x), Value::Str(y)) => ZStr::ptr_eq(x, y),
+        (Value::Array(x), Value::Array(y)) => php_runtime::ZArray::ptr_eq(x, y),
+        (Value::Object(x), Value::Object(y)) => Obj::ptr_eq(x, y),
+        (Value::Resource(x), Value::Resource(y)) => php_runtime::Resource::ptr_eq(x, y),
+        (Value::Reference(x), Value::Reference(y)) => PhpRef::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
 /// A variable table (symbol table): compiled variables plus dynamically
 /// created ones.
 #[derive(Debug, Default)]
@@ -137,33 +188,6 @@ impl VarStore {
         }
     }
 
-    /// Makes this the table of the one variable `name` holding `value`:
-    /// the stand-in table of a place walk on a function's compiled
-    /// variable (`Vm::with_cv_symtab`). Keeps the buffers.
-    pub(crate) fn hold_single(&mut self, name: ZStr, value: Option<Value>) {
-        self.slots.clear();
-        self.slots.push(value);
-        self.names.shared = None;
-        self.names.owned.clear();
-        self.names.owned.push(name);
-        self.index = None;
-    }
-
-    /// Whether [`VarStore::hold_single`] filled this table.
-    pub(crate) fn holds_single(&self) -> bool {
-        self.names.shared.is_none() && self.names.owned.len() == 1 && self.slots.len() == 1
-    }
-
-    /// Empties a table [`VarStore::hold_single`] filled, returning the
-    /// variable's value.
-    pub(crate) fn take_single(&mut self) -> Option<Value> {
-        let v = self.slots.pop().flatten();
-        self.slots.clear();
-        self.names.owned.clear();
-        self.index = None;
-        v
-    }
-
     /// A store for the compiled variables of `code`, sharing their names
     /// with the op array (a php-src frame reads `op_array->vars`).
     #[must_use]
@@ -173,6 +197,16 @@ impl VarStore {
             names: VarNames::shared(code),
             index: None,
         }
+    }
+
+    /// Empties the table and gives it the compiled-variable names of
+    /// `code` (a private table reused for the next walk, see
+    /// `Vm::with_cv_symtab`).
+    pub(crate) fn reset_for(&mut self, code: &Rc<OpArray>) {
+        self.names.share(code);
+        self.index = None;
+        self.slots.clear();
+        self.slots.resize(code.cv_names.len(), None);
     }
 
     fn build_index(&mut self) {
@@ -220,6 +254,26 @@ impl VarStore {
             }
         }
         self.find(name)
+    }
+
+    /// [`VarStore::find_cv`] for a name that is usually the very string
+    /// the table holds (the op array's own `cv_names`): compared by
+    /// pointer before by bytes.
+    #[inline]
+    pub fn find_cv_z(&mut self, cv: usize, name: &ZStr) -> Option<u32> {
+        if self
+            .names
+            .get(cv)
+            .is_some_and(|n| ZStr::ptr_eq(n, name) || n.as_bytes() == name.as_bytes())
+        {
+            if self.slots.len() <= cv {
+                self.slots.resize(self.names.len().max(cv + 1), None);
+            }
+            if let Ok(i) = u32::try_from(cv) {
+                return Some(i);
+            }
+        }
+        self.find(name.as_bytes())
     }
 
     /// [`VarStore::find_cv`], creating the slot when the name is missing.
@@ -555,8 +609,14 @@ use std::cell::UnsafeCell;
 /// An inline compiled variable slot in a frame.
 ///
 /// Guaranteed zero-overhead `Option<Value>` representation (16 bytes,
-/// identical to `Option<Value>`), providing borrow-free read access
-/// and direct scalar stores.
+/// identical to `Option<Value>`), so the tape interpreter and the JIT can
+/// address slots by offset. Safe code reads through `&self` and writes
+/// only through `&mut self`, so a reference from [`CvSlot::get`] can never
+/// outlive the value it points to: a store while one is held (a
+/// destructor or `__set` run by user code replacing the variable) does
+/// not compile. The only shared-reference write is the `unsafe`
+/// [`CvSlot::get_mut_unchecked`], whose callers must hold no such
+/// reference.
 #[repr(transparent)]
 pub struct CvSlot(UnsafeCell<Option<Value>>);
 
@@ -568,21 +628,35 @@ impl CvSlot {
 
     #[inline(always)]
     pub fn get(&self) -> Option<&Value> {
+        // SAFETY: writes need `&mut self` (or the `unsafe`
+        // `get_mut_unchecked`, whose contract excludes live shared
+        // references), so no write can happen while this borrow lives.
         unsafe { (*self.0.get()).as_ref() }
     }
 
     #[inline(always)]
     pub fn get_clone(&self) -> Option<Value> {
-        unsafe { (*self.0.get()).clone() }
+        self.get().cloned()
     }
 
+    /// Stores `val`, returning the previous value (whose drop may run a
+    /// destructor: callers drop it once they no longer borrow the frame).
     #[inline(always)]
-    pub fn set(&self, val: Option<Value>) -> Option<Value> {
-        unsafe { std::mem::replace(&mut *self.0.get(), val) }
+    pub fn set(&mut self, val: Option<Value>) -> Option<Value> {
+        std::mem::replace(self.0.get_mut(), val)
     }
 
+    /// A mutable view through a shared reference, for the paths that hold
+    /// the frame only by `&` (the tape interpreter's raw slot pointers).
+    ///
+    /// # Safety
+    ///
+    /// No reference from [`CvSlot::get`] (or another
+    /// `get_mut_unchecked`) to this slot may be alive while the returned
+    /// one is used.
     #[inline(always)]
     pub unsafe fn get_mut_unchecked(&self) -> &mut Option<Value> {
+        // SAFETY: the caller guarantees exclusive access (see above).
         unsafe { &mut *self.0.get() }
     }
 
@@ -679,6 +753,52 @@ impl FrameStack {
         Some(self.vec.remove(self.live))
     }
 
+    /// Pushes a boxed frame (a generator's) by swapping it with the
+    /// released frame kept in the slot for the next call at this depth:
+    /// nothing is dropped or freed, and the box comes back holding that
+    /// frame, for [`FrameStack::pop_boxed`] to swap back. With no frame
+    /// kept there, the frame moves in as [`FrameStack::push`] moves it, the
+    /// box is freed and `None` is returned.
+    #[inline]
+    pub(crate) fn push_boxed(&mut self, mut frame: Box<Frame>) -> Option<Box<Frame>> {
+        if let Some(slot) = self.vec.get_mut(self.live) {
+            std::mem::swap(slot, &mut *frame);
+            self.live += 1;
+            return Some(frame);
+        }
+        self.vec.push(*frame);
+        self.live += 1;
+        None
+    }
+
+    /// Pops the top frame into a box: into `spare` (the box
+    /// [`FrameStack::push_boxed`] gave back) by a swap that puts the
+    /// released frame it holds back in the slot, else into a new box,
+    /// leaving an empty frame in the slot for the next push to swap with.
+    /// The frames kept above stay where they are. `None` when the stack is
+    /// empty.
+    #[inline]
+    pub(crate) fn pop_boxed(
+        &mut self,
+        spare: Option<Box<Frame>>,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) -> Option<Box<Frame>> {
+        let top = self.live.checked_sub(1)?;
+        let slot = self.vec.get_mut(top)?;
+        self.live = top;
+        Some(match spare {
+            Some(mut b) => {
+                std::mem::swap(slot, &mut *b);
+                b
+            }
+            None => Box::new(std::mem::replace(
+                slot,
+                Frame::empty_builtin(empty_code, empty_vars),
+            )),
+        })
+    }
+
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.live {
@@ -767,6 +887,31 @@ impl FrameStack {
         }
         self.live = idx + 1;
         &mut self.vec[idx]
+    }
+
+    /// Makes sure a released frame sits right above the live ones: the
+    /// frame a call made at this depth is readied in (`exec/tape/calls.rs`
+    /// prepares its calls in place). The first call at a depth normally
+    /// leaves one there; when none did (only calls that push no frame ran
+    /// so far: frameless builtins), an empty one is appended, as
+    /// [`FrameStack::push_builtin`] appends it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one length test per prepared call
+    pub(crate) fn ensure_pooled(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) {
+        if self.vec.len() <= self.live {
+            self.grow_pool(empty_code, empty_vars);
+        }
+    }
+
+    /// [`FrameStack::ensure_pooled`]'s append, out of line.
+    #[cold]
+    #[inline(never)]
+    fn grow_pool(&mut self, empty_code: &Rc<OpArray>, empty_vars: &Rc<RefCell<VarStore>>) {
+        self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
     }
 
     /// Releases the builtin frame on top of the stack in place
@@ -976,6 +1121,13 @@ pub struct Frame {
     pub cvs: Vec<CvSlot>,
     /// Whether a symbol table has been attached.
     pub symtab_attached: bool,
+    /// The attached table's slot of each compiled variable, as
+    /// [`Frame::attach_symbol_table`] found them, for the table at
+    /// `symtab_slots_of` (a table's slots never move while it lives): an
+    /// included file's variables are not where the global table has its
+    /// names, and each synchronisation would look them up by name.
+    pub(crate) symtab_slots: Vec<u32>,
+    pub(crate) symtab_slots_of: *const RefCell<VarStore>,
     /// Variables / attached symbol table.
     pub vars: Rc<RefCell<VarStore>>,
     /// Extra named args.
@@ -1179,6 +1331,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs: Vec::with_capacity(8),
             symtab_attached: false,
+            symtab_slots: Vec::new(),
+            symtab_slots_of: std::ptr::null(),
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
@@ -1368,6 +1522,8 @@ impl Frame {
             calls: Vec::new(),
             cvs: Vec::new(),
             symtab_attached: false,
+            symtab_slots: Vec::new(),
+            symtab_slots_of: std::ptr::null(),
             vars: empty_vars.clone(),
             named: Vec::new(),
             args: Vec::new(),
@@ -1808,11 +1964,25 @@ impl Frame {
         // which would order them after variables created before that.
         let add_names = symtab_attached || matches!(kind, FrameKind::Main);
         let mut cvs = Vec::with_capacity(ncv);
+        // An attached frame's slots, as `attach_symbol_table` records them.
+        let mut symtab_slots = Vec::new();
+        let symtab_slots_of = if symtab_attached {
+            Rc::as_ptr(&vars)
+        } else {
+            std::ptr::null()
+        };
         {
             let mut st = vars.borrow_mut();
             for name in &code.cv_names {
                 let val = if add_names {
-                    let slot = st.find_or_add(name.as_bytes()) as usize;
+                    let slot = st.find_or_add(name.as_bytes());
+                    // The main script's slots too, though its table is
+                    // attached later (`attach_symbol_table` reuses the
+                    // list's room): recording them on the first generic
+                    // access (an `unset()` at the top level) would
+                    // allocate mid-script (bug79881).
+                    record_slot(&mut symtab_slots, cvs.len(), slot, ncv);
+                    let slot = slot as usize;
                     st.slots.get(slot).cloned().flatten()
                 } else {
                     st.find(name.as_bytes())
@@ -1843,6 +2013,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs,
             symtab_attached,
+            symtab_slots,
+            symtab_slots_of,
             vars,
             named: Vec::new(),
             args: Vec::with_capacity(8),
@@ -1886,8 +2058,12 @@ impl Frame {
                 st.slots.resize(self.code.cv_names.len(), None);
             }
         }
+        self.symtab_slots.clear();
+        self.symtab_slots_of = Rc::as_ptr(&self.vars);
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let slot = st.find_or_add_cv(i, name.as_bytes()) as usize;
+            let slot = st.find_or_add_cv(i, name.as_bytes());
+            record_slot(&mut self.symtab_slots, i, slot, self.code.cv_names.len());
+            let slot = slot as usize;
             if slot < st.slots.len() {
                 if let Some(val) = self.cvs.get(i).and_then(CvSlot::get) {
                     st.slots[slot] = Some(val.clone());
@@ -1910,16 +2086,17 @@ impl Frame {
             return;
         }
         self.symtab_attached = false;
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let Some(idx) = st.find_cv(i, name.as_bytes()) else {
+            let Some(idx) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) else {
                 continue;
             };
             let Some(sv) = st.slots.get_mut(idx as usize) else {
                 continue;
             };
             let val = sv.take();
-            if let Some(cv) = self.cvs.get(i) {
+            if let Some(cv) = self.cvs.get_mut(i) {
                 if let Some(old) = cv.set(val) {
                     crate::gc::release_duplicate(old);
                 }
@@ -1928,18 +2105,27 @@ impl Frame {
     }
 
     /// Synchronizes CV slots from the attached symbol table (`zend_detach_symbol_table`).
+    /// A CV already holding the slot's value (the same handle) is left as
+    /// it is: most are, when the table is synchronised after each write.
     pub fn sync_from_symbol_table(&mut self) {
         if !self.symtab_attached {
             return;
         }
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
-                let val = st.slots.get(slot as usize).cloned().flatten();
-                if let Some(cv) = self.cvs.get_mut(i) {
-                    if let Some(old) = cv.set(val) {
-                        crate::gc::release_duplicate(old);
-                    }
+            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
+                let Some(cv) = self.cvs.get_mut(i) else {
+                    continue;
+                };
+                let table = st.slots.get(slot as usize).and_then(Option::as_ref);
+                match (cv.get(), table) {
+                    (None, None) => continue,
+                    (Some(a), Some(b)) if same_handle(a, b) => continue,
+                    _ => {}
+                }
+                if let Some(old) = cv.set(table.cloned()) {
+                    crate::gc::release_duplicate(old);
                 }
             }
         }
@@ -1950,19 +2136,24 @@ impl Frame {
         if !self.symtab_attached {
             return;
         }
+        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
+            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     // A CV that is `None` was never assigned in this frame
                     // (e.g. cleared by `clear_cv_for_symtab_slot` ahead of an
                     // in-place mutation of the shared slot); it must not wipe
                     // a live global slot that another frame still owns.
-                    if let Some(val) = self.cvs.get(i).and_then(CvSlot::get_clone) {
-                        if let Some(old) = std::mem::replace(&mut st.slots[slot], Some(val)) {
-                            crate::gc::release_duplicate(old);
-                        }
+                    let Some(cv) = self.cvs.get(i).and_then(CvSlot::get) else {
+                        continue;
+                    };
+                    if st.slots[slot].as_ref().is_some_and(|t| same_handle(t, cv)) {
+                        continue;
+                    }
+                    if let Some(old) = std::mem::replace(&mut st.slots[slot], Some(cv.clone())) {
+                        crate::gc::release_duplicate(old);
                     }
                 }
             }
@@ -1984,16 +2175,9 @@ impl Frame {
     #[inline(never)]
     fn unsync_cv_from_symtab_slow(&self, cv: u32) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = if st
-                .names
-                .get(cv as usize)
-                .is_some_and(|n| n.as_bytes() == name.as_bytes())
-            {
-                Some(cv)
-            } else {
-                st.find(name.as_bytes())
-            };
+            let idx = mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name);
             if let Some(idx) = idx {
                 let idx = idx as usize;
                 if idx < st.slots.len() {
@@ -2009,7 +2193,7 @@ impl Frame {
     /// mutation of `store.slots[sym_idx]` that will be followed by
     /// [`Frame::sync_from_symbol_table`].
     #[inline]
-    pub fn clear_cv_for_symtab_slot(&self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
+    pub fn clear_cv_for_symtab_slot(&mut self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
         if self.symtab_attached && Rc::ptr_eq(store, &self.vars) {
             let st = self.vars.borrow();
             if let Some(name) = st.names.get(sym_idx) {
@@ -2019,7 +2203,7 @@ impl Frame {
                     .get(sym_idx)
                     .is_some_and(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.cvs.get(sym_idx) {
+                    if let Some(slot) = self.cvs.get_mut(sym_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -2030,7 +2214,7 @@ impl Frame {
                     .iter()
                     .position(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.cvs.get(cv_idx) {
+                    if let Some(slot) = self.cvs.get_mut(cv_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -2052,15 +2236,11 @@ impl Frame {
     #[inline(never)]
     fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = if st
-                .names
-                .get(cv as usize)
-                .is_some_and(|n| n.as_bytes() == name.as_bytes())
-            {
-                cv
-            } else {
-                st.find_or_add(name.as_bytes())
+            let idx = match mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name) {
+                Some(i) => i,
+                None => st.find_or_add(name.as_bytes()),
             };
             let idx = idx as usize;
             if idx < st.slots.len() {
@@ -2203,6 +2383,22 @@ pub struct Vm {
     /// `EG(last_fatal_error_backtrace)`: the stack recorded for the last
     /// fatal error under `fatal_error_backtraces` (cleared by every error).
     pub last_fatal_error_backtrace: Option<php_runtime::ZArray>,
+    /// `EG(active)`: false once the executor has shut down
+    /// (`shutdown_executor()`, see [`Vm::ini_deactivate`]) and in a VM
+    /// that only judges INI values between requests. A fatal error then
+    /// records and prints no backtrace (GHSA-2fjv-p558-g82m), and a
+    /// `php_error_docref()` origin is `PHP Request Shutdown` (or `Unknown`
+    /// before the first request).
+    pub executor_active: bool,
+    /// `zend_memory_usage(true)` when the request's accounting ended: what
+    /// the request still holds while [`Vm::ini_deactivate`] restores the
+    /// memory limits (C frees the last error message only after that).
+    pub(crate) end_usage: usize,
+    /// `EG_FLAGS_IN_SHUTDOWN`: `php_request_shutdown()` has begun (the
+    /// shutdown functions, destructors, extension shutdowns and resource
+    /// closing that follow). A docref error raised then with no function
+    /// running comes from "PHP Request Shutdown".
+    pub request_ending: bool,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
     /// The last user output handler call threw (`retval` UNDEF), even if
@@ -2210,6 +2406,8 @@ pub struct Vm {
     pub(crate) output_handler_threw: bool,
     /// The main script path.
     pub script_path: ZStr,
+    /// `SG(request_info)`: the request as the SAPI describes it.
+    pub request_info: php_sapi::RequestInfo,
     /// Command line arguments.
     pub argv: Vec<ZStr>,
     /// Class declarations already bound (by address).
@@ -2306,6 +2504,9 @@ pub struct Vm {
     pub loaded_extensions: Vec<String>,
     /// Request shutdown hooks of extensions.
     pub shutdown_hooks: Vec<fn(&mut Vm)>,
+    /// Bailouts so far (fatal errors that end the script): a module's
+    /// `RSHUTDOWN` that bails out ends the process (`zend_deactivate_modules`).
+    pub bailouts: u32,
     /// Request startup hooks of extensions (`RINIT`).
     pub startup_hooks: Vec<fn(&mut Vm)>,
     /// Module startup hooks of extensions, run after registration.
@@ -2325,6 +2526,10 @@ pub struct Vm {
     /// INI warnings raised while building the registry at startup (the
     /// SAPI reports them as "PHP Startup: ...").
     pub startup_diagnostics: Vec<php_support::Diagnostic>,
+    /// INI warnings raised while the extensions registered their
+    /// directives (`zend_register_ini_entries` in `MINIT`, e.g. an invalid
+    /// quantity given with `-d`); the SAPI reports them once at startup.
+    pub module_diagnostics: Vec<php_support::Diagnostic>,
     /// SAPI log sink for `log_errors` (`sapi_module.log_message`);
     /// `None` writes to stderr / the `error_log` file.
     pub log_hook: Option<Box<dyn FnMut(&[u8])>>,
@@ -2348,8 +2553,29 @@ pub struct Vm {
     pub output_handler_hooks: HashMap<ZStr, crate::ext::OutputHandlerHookFn>,
     /// `include` opener hook.
     pub include_opener: Option<crate::ext::IncludeOpenerFn>,
+    /// The include the opener hook is running (frame depth, kind, name):
+    /// `php_verror` names `kind()` while the opline is on
+    /// `ZEND_INCLUDE_OR_EVAL` and no function runs above it.
+    pub(crate) including: Option<(usize, &'static str, ZStr)>,
+    /// The `__call`/`__callStatic` frame entered with a `memory_limit`
+    /// violation pending: backtraces show it as the trampoline it still is.
+    pub(crate) trampoline_entry: Option<usize>,
+    /// The compiled variable of the running function whose generic write
+    /// walk works on a private one-slot table instead of the function's
+    /// symbol table (see `Vm::with_cv_symtab`).
+    pub(crate) cv_root: Option<crate::place::CvRoot>,
+    /// The private table kept for the next [`Vm::cv_root`].
+    pub(crate) cv_scratch: Option<Rc<RefCell<VarStore>>>,
+    /// The resolution of the running builtin's callable argument, made by
+    /// its parameter check, for `call_user_func[_array]()` to take.
+    pub(crate) checked_callable: Option<(Value, PendingCall)>,
+    /// `global $name` slots by the address of the name literal (see
+    /// `Vm::global_ref_lit`): (address, slot of the global table).
+    pub(crate) global_slot_cache: [(usize, u32); crate::place::GLOBAL_SLOT_CACHE],
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
+    /// Which scripts the source filter may rewrite.
+    pub source_filter_probe: Option<crate::ext::SourceFilterProbeFn>,
     /// Current mbstring encoding/substitution settings.
     pub(crate) script_encoding_provider: Option<crate::ext::ScriptEncodingFn>,
     /// Source ASTs retained with their original compile-time encoding semantics.
@@ -2400,12 +2626,6 @@ pub struct Vm {
     /// guards of the accesses in progress.
     pub prop_guards:
         HashSet<(u32, ZStr, u8), std::hash::BuildHasherDefault<crate::class::FxHasher>>,
-    /// The compiled variable of a function frame that the place walk now
-    /// starting is to reach through a one-variable stand-in table instead
-    /// of the frame's whole symbol table ([`crate::place::CvWalk`]).
-    pub(crate) cv_walk: Option<crate::place::CvWalk>,
-    /// Stand-in tables of finished walks, for reuse.
-    pub(crate) cv_walk_pool: Vec<Rc<RefCell<VarStore>>>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
@@ -2519,7 +2739,7 @@ mod tests {
 
     #[test]
     fn peek_cv_reads_slots_in_place_without_holding_a_borrow() {
-        let f = frame_with(&["a", "b"]);
+        let mut f = frame_with(&["a", "b"]);
         f.cvs[0].set(Some(Value::Int(7)));
         assert_eq!(f.peek_cv(0, as_int), Some(7));
         // Undefined.
@@ -2570,7 +2790,7 @@ mod tests {
 
     #[test]
     fn peek_cv_clones_share_the_string() {
-        let f = frame_with(&["s"]);
+        let mut f = frame_with(&["s"]);
         f.cvs[0].set(Some(Value::Str(ZStr::from("abc"))));
         let v = f.peek_cv(0, |slot: Option<&Value>| slot.cloned());
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));

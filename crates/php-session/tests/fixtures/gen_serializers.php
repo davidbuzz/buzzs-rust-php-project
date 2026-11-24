@@ -1,6 +1,6 @@
 <?php
 // Oracle generator for the session serializers.
-// Run: php -d memory_limit=1G -d session.save_path=/tmp -d session.use_strict_mode=0 \
+// Run: /usr/bin/php8.5 -d memory_limit=1G -d session.save_path=/tmp -d session.use_strict_mode=0 \
 //      gen_serializers.php > serializers.tsv
 // Each line: name \t hex(serialize($shape)) \t hex(php)|FALSE \t hex(php_binary) \t warnings(;-joined)
 // The php_serialize encoding equals serialize($shape).

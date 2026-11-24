@@ -4,14 +4,14 @@
 //! signal dispositions/masks or process attributes runs in an isolated
 //! subprocess (the test binary re-executed with a single `iso_*` test), so
 //! the multi-threaded cargo harness is never disturbed.  Deterministic
-//! behaviour is compared with `/usr/bin/php` where available.
+//! behaviour is compared with `/usr/bin/php8.5` where available.
 
 #![allow(clippy::format_collect)]
 
 use super::*;
 use std::process::Command;
 
-const ORACLE: &str = "/usr/bin/php";
+const ORACLE: &str = "/usr/bin/php8.5";
 const ISOLATED: &str = "PHP_PCNTL_ISOLATED";
 
 fn php(code: &str) -> Option<String> {
@@ -644,13 +644,13 @@ isolated_test!(signal_queue_dispatch, iso_signal_queue_dispatch, {
     p.request_shutdown();
     assert_eq!(p.signal_get_handler(12).unwrap().as_int(), Some(SIG_DFL));
     assert!(!async_interrupt_pending());
-    // Uncatchable signals are fatal at installation (zend_signal).
+    // Uncatchable signals: a warning and EINVAL (php-src master; the
+    // failing sigaction() used to be a fatal error in zend_signal).
     assert_eq!(
         p.signal(libc::SIGKILL.into(), SignalHandler::Ignore, None),
-        Err(PcntlError::Fatal(
-            "Error installing signal handler for 9".into()
-        ))
+        Err(PcntlError::Warning("Error assigning signal".into()))
     );
+    assert_eq!(p.last_error(), i64::from(libc::EINVAL));
 });
 
 isolated_test!(queue_overflow, iso_queue_overflow, {

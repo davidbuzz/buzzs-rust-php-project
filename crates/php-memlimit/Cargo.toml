@@ -6,7 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mimalloc = "0.1.52"
+# `local_dynamic_tls`: mimalloc's C code uses the local-dynamic TLS model
+# instead of initial-exec. With initial-exec, a shared object that links it
+# (libphprust_apache2.so, mod_php) is marked STATIC_TLS and its whole TLS
+# block must fit glibc's static TLS surplus, which it does not: apache2
+# fails to load it ("cannot allocate memory in static TLS block"). In an
+# executable (`php`, `php-cgi`) the linker relaxes the accesses to
+# local-exec, so the binaries are unchanged.
+mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
 
 [lints]
 workspace = true

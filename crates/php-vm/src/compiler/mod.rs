@@ -80,6 +80,25 @@ pub struct CompiledUnit {
     /// The anonymous class counter after this unit (see
     /// [`CompileOptions::anon_base`]).
     pub anon_end: u32,
+    /// What compiling the unit did besides producing it, recorded so a
+    /// cached unit can repeat it (`zend_persistent_script`'s
+    /// `ping_auto_globals_mask` and friends). Filled by
+    /// `Vm::compile_source_default`; empty for `eval` and fresh units.
+    pub meta: UnitMeta,
+}
+
+/// The side effects of compiling a file that a cache hit has to repeat.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnitMeta {
+    /// The anonymous class counter the unit was compiled from
+    /// ([`CompileOptions::anon_base`]); anonymous class names embed it.
+    pub anon_base: u32,
+    /// `__COMPILER_HALT_OFFSET__` of the file, if it calls
+    /// `__halt_compiler()`.
+    pub halt_offset: Option<i64>,
+    /// The auto-globals (`$_SERVER`, `$_ENV`, ... by registration index)
+    /// the code names, whose just-in-time callbacks compiling armed.
+    pub auto_globals: Vec<u8>,
 }
 
 /// The global constants `zend_try_ct_eval_const` (`Zend/zend_compile.c`)
@@ -108,6 +127,49 @@ impl CtConstants {
     /// Whether no constant may be substituted.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// A hash of every substitutable constant's name and value: code
+    /// compiled against one table may only be reused (from the bytecode
+    /// cache) where the table is the same. Memoized per table.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        type Memo = Option<(std::rc::Weak<crate::class::NameMap<Value>>, u64)>;
+        thread_local! {
+            /// The table last fingerprinted and its fingerprint. The table
+            /// is held weakly: that keeps its allocation, so a table built
+            /// later cannot have its address and take its fingerprint.
+            static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
+        }
+        let memo = MEMO.with(|m| {
+            m.borrow()
+                .as_ref()
+                .filter(|(table, _)| std::ptr::eq(table.as_ptr(), Rc::as_ptr(&self.0)))
+                .map(|(_, fp)| *fp)
+        });
+        if let Some(fp) = memo {
+            return fp;
+        }
+        let mut entries: Vec<(&[u8], &Value)> =
+            self.0.iter().map(|(k, v)| (k.as_bytes(), v)).collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (name, value) in entries {
+            name.hash(&mut h);
+            match value {
+                Value::Null => 0_u8.hash(&mut h),
+                Value::Bool(b) => (1_u8, *b).hash(&mut h),
+                Value::Int(i) => (2_u8, *i).hash(&mut h),
+                Value::Float(f) => (3_u8, f.to_bits()).hash(&mut h),
+                Value::Str(s) => (4_u8, s.as_bytes()).hash(&mut h),
+                // Only scalars are substitutable (`can_ct_eval_const`).
+                _ => 5_u8.hash(&mut h),
+            }
+        }
+        let fp = h.finish();
+        MEMO.with(|m| *m.borrow_mut() = Some((Rc::downgrade(&self.0), fp)));
+        fp
     }
 }
 
@@ -146,6 +208,7 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "array_key_exists",
     "chr",
     "ord",
+    "array_slice",
 ];
 
 /// The internal functions with `@frameless-function` handlers in php-src
@@ -516,7 +579,7 @@ pub(crate) struct Compiler<'f> {
 /// What `zend_compile_args` reads of a function it finds in
 /// `CG(function_table)` at compile time (its `fbc`): how each argument is
 /// sent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FunctionInfo {
     /// `fbc->type == ZEND_INTERNAL_FUNCTION`.
     pub internal: bool,
@@ -529,6 +592,8 @@ pub struct FunctionInfo {
     /// Bit `i`: parameter `i` is sent by reference (`ZEND_SEND_BY_REF` or
     /// `ZEND_SEND_PREFER_REF`); parameters past the 64th count as by value.
     pub by_ref: u64,
+    /// The parameters' names (`zend_get_arg_num`); empty when unknown.
+    pub param_names: std::rc::Rc<[ZStr]>,
 }
 
 impl FunctionInfo {
@@ -540,6 +605,26 @@ impl FunctionInfo {
             func.required(),
             func.params().iter().map(|p| (p.by_ref, p.variadic)),
         )
+        .with_names(func.params().iter().map(|p| p.name.clone()))
+    }
+
+    /// The same, with the parameters' names.
+    #[must_use]
+    pub(crate) fn with_names(mut self, names: impl Iterator<Item = ZStr>) -> Self {
+        self.param_names = names.collect();
+        self
+    }
+
+    /// `zend_get_arg_num`: the 1-based position of the parameter called
+    /// `name` (a variadic parameter is not matched by name).
+    #[must_use]
+    pub fn arg_num(&self, name: &[u8]) -> Option<usize> {
+        let declared = self.num_params as usize - usize::from(self.variadic);
+        self.param_names
+            .iter()
+            .take(declared)
+            .position(|n| n.as_bytes() == name)
+            .map(|i| i + 1)
     }
 
     /// From each declared parameter's (by reference, variadic) flags.
@@ -585,6 +670,51 @@ impl FunctionInfo {
 pub trait FunctionTable {
     /// The function `lcname`, if one is declared.
     fn find(&self, lcname: &[u8]) -> Option<FunctionInfo>;
+
+    /// The preloaded user function `lcname` (`ZEND_ACC_PRELOADED`), whose
+    /// code the optimizer may look into: opcache's optimizer takes
+    /// functions of other files only when they are preloaded
+    /// (`zend_optimizer_get_called_func`).
+    fn preloaded(&self, _lcname: &[u8]) -> Option<Rc<UserFunction>> {
+        None
+    }
+
+    /// The parameter names of the function `lcname`, which named
+    /// arguments resolve against (`zend_get_arg_num`).
+    fn param_names(&self, _lcname: &[u8]) -> Option<Vec<ZStr>> {
+        None
+    }
+
+    /// The constructor `zend_compile_new` knows for the internal class
+    /// `class_lc` (`ce->constructor` with the standard `get_constructor`):
+    /// its send modes and parameter names.
+    fn internal_ctor(&self, _class_lc: &[u8]) -> Option<(FunctionInfo, Vec<ZStr>)> {
+        None
+    }
+}
+
+/// A [`FunctionTable`] of two lookups: the declared functions, and the
+/// preloaded user functions among them.
+pub struct TableWithPreloaded<F, P>(pub F, pub P);
+
+impl<F, P> std::fmt::Debug for TableWithPreloaded<F, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TableWithPreloaded")
+    }
+}
+
+impl<F, P> FunctionTable for TableWithPreloaded<F, P>
+where
+    F: Fn(&[u8]) -> Option<FunctionInfo>,
+    P: Fn(&[u8]) -> Option<Rc<UserFunction>>,
+{
+    fn find(&self, lcname: &[u8]) -> Option<FunctionInfo> {
+        (self.0)(lcname)
+    }
+
+    fn preloaded(&self, lcname: &[u8]) -> Option<Rc<UserFunction>> {
+        (self.1)(lcname)
+    }
 }
 
 impl<F: Fn(&[u8]) -> Option<FunctionInfo>> FunctionTable for F {
@@ -758,6 +888,7 @@ impl<'f> Compiler<'f> {
             decls: c.decls.clone(),
             warnings: std::mem::take(&mut c.warnings),
             anon_end: c.anon_counter,
+            meta: UnitMeta::default(),
         })
     }
 }
@@ -1042,6 +1173,7 @@ impl Compiler<'_> {
             static_vars: f.static_vars,
             try_table: try_table.into_iter().map(|(e, _)| e).collect(),
             live_tmps: f.live_tmps,
+            dropped_tmps: Vec::new(),
             filename: self.filename.clone(),
             strict_types: self.strict_types,
             decls: f.decls.unwrap_or_else(|| self.empty_decls.clone()),
@@ -1055,7 +1187,9 @@ impl Compiler<'_> {
         // Optimizer passes run when opcache.optimization_level is nonzero
         // and no user opcode handlers are hooked.
         let mut reduced_to_literal = false;
-        if self.opts.optimization_level != 0 && self.opts.user_opcodes.is_empty() {
+        // (php-src's optimizer runs whatever user opcode handlers are set;
+        // only the handler specialisation below stays off with them.)
+        if self.opts.optimization_level != 0 {
             let raw_literal = optimizer::dump::returns_literal(&op_array);
             // Top-level code's CVs are the global symbol table: other
             // functions reach them through `global`/`$GLOBALS` and included
@@ -1065,6 +1199,48 @@ impl Compiler<'_> {
                 self.opts.optimization_level & !optimizer::PASS_13
             } else {
                 self.opts.optimization_level
+            };
+            // The callees a compiled name is certain to reach: a finalized
+            // top-level function of this file, or an internal function (a
+            // user function of another file may be another one when the
+            // compiled code runs again).
+            let (file_functions, declared) = (&self.known_functions, self.functions);
+            let known = |lc: &[u8]| {
+                file_functions.get(lc).cloned().or_else(|| {
+                    declared
+                        .and_then(|table| table.find(lc))
+                        .filter(|info| info.internal)
+                })
+            };
+            // The functions of this file compiled so far that only return
+            // a literal: their calls are that literal (`zend_try_inline_call`;
+            // a top-level function is declared before the file runs).
+            let (unit_functions, hoisted) = (&self.decls.functions, &self.hoisted_functions);
+            let inline = |lc: &[u8], sent: u32, used: bool| {
+                let own = {
+                    let table = unit_functions.try_borrow().ok()?;
+                    hoisted
+                        .iter()
+                        .filter_map(|&k| table.get(k as usize))
+                        .find(|f| f.name.as_bytes().eq_ignore_ascii_case(lc))
+                        .cloned()
+                };
+                // Else a preloaded function (one of another file).
+                let f = own.or_else(|| declared.and_then(|t| t.preloaded(lc)))?;
+                optimizer::dump::literal_return_value(&f, sent, false, used)
+            };
+            // The top-level classes of this file compiled so far whose
+            // objects do nothing visible when made, written or freed.
+            let (unit_classes, hoisted_classes) = (&self.decls.classes, &self.hoisted_classes);
+            let plain_class = |lc: &[u8]| {
+                let Ok(table) = unit_classes.try_borrow() else {
+                    return false;
+                };
+                hoisted_classes
+                    .iter()
+                    .filter_map(|&k| table.get(k as usize))
+                    .find(|c| c.name.as_bytes().eq_ignore_ascii_case(lc))
+                    .is_some_and(|c| plain_object_class(c))
             };
             let ctx = optimizer::OptContext {
                 is_main,
@@ -1076,6 +1252,9 @@ impl Compiler<'_> {
                     .as_ref()
                     .and_then(|c| c.get(b"PHP_SAPI")),
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
+                known: Some(&known),
+                inline: Some(optimizer::Inliner(&inline)),
+                plain_class: Some(optimizer::ClassCheck(&plain_class)),
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);
@@ -1085,6 +1264,11 @@ impl Compiler<'_> {
         // `zend_set_user_opcode_handler()` hook runs before its generic
         // opcode, so hooked code keeps the generic ops.
         if self.opts.user_opcodes.is_empty() {
+            // Without the optimizer, whose own passes send jumps on as
+            // opcache's do and whose dump shows php-src's ops.
+            if self.opts.optimization_level == 0 {
+                let _ = specialise::thread_short_circuits(&mut op_array.ops);
+            }
             specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
             specialise::fuse_frameless_calls(&mut op_array);
         }
@@ -1425,13 +1609,15 @@ impl Compiler<'_> {
 }
 
 /// Whether a folded array holds an empty or one-byte string that is not
-/// the shared interned instance.
+/// the shared interned instance, or a string key that is not interned.
 fn has_uninterned_strings(a: &php_runtime::ZArray) -> bool {
-    a.values().any(|v| match v {
-        Value::Str(s) => s.len() <= 1 && !s.is_interned(),
-        Value::Array(inner) => has_uninterned_strings(inner),
-        _ => false,
-    })
+    a.keys()
+        .any(|k| matches!(k, php_runtime::ArrayKey::Str(s) if !s.is_interned()))
+        || a.values().any(|v| match v {
+            Value::Str(s) => s.len() <= 1 && !s.is_interned(),
+            Value::Array(inner) => has_uninterned_strings(inner),
+            _ => false,
+        })
 }
 
 /// The scanner makes empty and one-byte string literals the shared
@@ -1442,13 +1628,53 @@ fn intern_array_strings(a: &mut php_runtime::ZArray) {
     if !has_uninterned_strings(a) {
         return;
     }
-    for (_, v) in a.make_mut().iter_mut() {
+    // The keys of a compile-time array are interned strings, as every
+    // string the compiler keeps is (php-src builds the array from the
+    // AST's interned strings): `$a['key']`, whose literal is interned as
+    // well, then finds its bucket by pointer. Without it every such
+    // lookup compared the bytes.
+    let table = a.make_mut();
+    table.intern_str_keys();
+    for (_, v) in table.iter_mut() {
         match v {
             Value::Str(s) if s.len() <= 1 && !s.is_interned() => *s = s.interned(),
             Value::Array(inner) => intern_array_strings(inner),
             _ => {}
         }
     }
+}
+
+/// Whether objects of the class `c` do nothing visible when made,
+/// written through dynamic properties or freed: a plain `class` with no
+/// parent, interface or trait, no constructor, destructor or property
+/// magic, no declared property, and dynamic properties allowed
+/// (`#[AllowDynamicProperties]`).
+fn plain_object_class(c: &ClassDecl) -> bool {
+    use crate::class::cflags;
+    const MAGIC: &[&[u8]] = &[
+        b"__construct",
+        b"__destruct",
+        b"__get",
+        b"__set",
+        b"__isset",
+        b"__unset",
+    ];
+    c.kind == crate::class::ClassKind::Class
+        && c.flags & (cflags::ABSTRACT | cflags::READONLY | cflags::ANON) == 0
+        && c.parent.is_none()
+        && c.interfaces.is_empty()
+        && c.traits.is_empty()
+        && c.props.is_empty()
+        && !c.methods.iter().any(|m| {
+            MAGIC
+                .iter()
+                .any(|n| m.name.as_bytes().eq_ignore_ascii_case(n))
+        })
+        && c.attributes.iter().any(|a| {
+            a.name
+                .as_bytes()
+                .eq_ignore_ascii_case(b"AllowDynamicProperties")
+        })
 }
 
 /// Records in [`OpArray::static_vars`] the constant initializers that the

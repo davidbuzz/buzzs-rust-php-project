@@ -40,7 +40,7 @@ fn object_data_stays_small() {
 
 #[test]
 fn unset_flags_beyond_63_slots() {
-    // Expected output from PHP 8.3 (`php -n`).
+    // Expected output from `/usr/bin/php8.5 -n`.
     let out = run(r#"<?php
 $decl = '';
 for ($i = 0; $i < 70; $i++) { $decl .= "public int \$p$i; "; }

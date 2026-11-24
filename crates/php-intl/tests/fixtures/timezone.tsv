@@ -84,7 +84,7 @@ s:equiv	s:Europe/Lisbon	i:5	s:
 s:equiv	s:Europe/Lisbon	i:-1	s:
 s:equiv	s:Europe/Lisbon	i:100	s:
 s:windows	s:Europe/Lisbon	s:GMT Standard Time
-s:iana	s:Europe/Lisbon	s:!Error
+s:iana	s:Europe/Lisbon	s:Europe/Lisbon
 s:to_dtz	s:Europe/Lisbon	s:Europe/Lisbon
 s:same_rules	s:Europe/Lisbon	s:Europe/Lisbon	~T
 s:same_rules	s:Europe/Lisbon	s:Europe/London	~F
@@ -181,7 +181,7 @@ s:equiv	s:America/New_York	i:5	s:
 s:equiv	s:America/New_York	i:-1	s:
 s:equiv	s:America/New_York	i:100	s:
 s:windows	s:America/New_York	s:Eastern Standard Time
-s:iana	s:America/New_York	s:!Error
+s:iana	s:America/New_York	s:America/New_York
 s:to_dtz	s:America/New_York	s:America/New_York
 s:same_rules	s:America/New_York	s:Europe/Lisbon	~F
 s:same_rules	s:America/New_York	s:Europe/London	~F
@@ -278,7 +278,7 @@ s:equiv	s:Asia/Kolkata	i:5	s:
 s:equiv	s:Asia/Kolkata	i:-1	s:
 s:equiv	s:Asia/Kolkata	i:100	s:
 s:windows	s:Asia/Kolkata	s:India Standard Time
-s:iana	s:Asia/Kolkata	s:!Error
+s:iana	s:Asia/Kolkata	s:Asia/Kolkata
 s:to_dtz	s:Asia/Kolkata	s:Asia/Kolkata
 s:same_rules	s:Asia/Kolkata	s:Europe/Lisbon	~F
 s:same_rules	s:Asia/Kolkata	s:Europe/London	~F
@@ -375,7 +375,7 @@ s:equiv	s:Australia/Lord_Howe	i:5	s:
 s:equiv	s:Australia/Lord_Howe	i:-1	s:
 s:equiv	s:Australia/Lord_Howe	i:100	s:
 s:windows	s:Australia/Lord_Howe	s:Lord Howe Standard Time
-s:iana	s:Australia/Lord_Howe	s:!Error
+s:iana	s:Australia/Lord_Howe	s:Australia/Lord_Howe
 s:to_dtz	s:Australia/Lord_Howe	s:Australia/Lord_Howe
 s:same_rules	s:Australia/Lord_Howe	s:Europe/Lisbon	~F
 s:same_rules	s:Australia/Lord_Howe	s:Europe/London	~F
@@ -472,7 +472,7 @@ s:equiv	s:Asia/Tokyo	i:5	s:
 s:equiv	s:Asia/Tokyo	i:-1	s:
 s:equiv	s:Asia/Tokyo	i:100	s:
 s:windows	s:Asia/Tokyo	s:Tokyo Standard Time
-s:iana	s:Asia/Tokyo	s:!Error
+s:iana	s:Asia/Tokyo	s:Asia/Tokyo
 s:to_dtz	s:Asia/Tokyo	s:Asia/Tokyo
 s:same_rules	s:Asia/Tokyo	s:Europe/Lisbon	~F
 s:same_rules	s:Asia/Tokyo	s:Europe/London	~F
@@ -569,7 +569,7 @@ s:equiv	s:UTC	i:5	s:UTC
 s:equiv	s:UTC	i:-1	s:
 s:equiv	s:UTC	i:100	s:
 s:windows	s:UTC	s:UTC
-s:iana	s:UTC	s:!Error
+s:iana	s:UTC	s:Etc/UTC
 s:to_dtz	s:UTC	s:UTC
 s:same_rules	s:UTC	s:Europe/Lisbon	~F
 s:same_rules	s:UTC	s:Europe/London	~F
@@ -666,7 +666,7 @@ s:equiv	s:GMT	i:5	s:GMT
 s:equiv	s:GMT	i:-1	s:
 s:equiv	s:GMT	i:100	s:
 s:windows	s:GMT	s:UTC
-s:iana	s:GMT	s:!Error
+s:iana	s:GMT	s:Etc/GMT
 s:to_dtz	s:GMT	s:+00:00
 s:same_rules	s:GMT	s:Europe/Lisbon	~F
 s:same_rules	s:GMT	s:Europe/London	~F
@@ -763,7 +763,7 @@ s:equiv	s:Etc/GMT+5	i:5	s:
 s:equiv	s:Etc/GMT+5	i:-1	s:
 s:equiv	s:Etc/GMT+5	i:100	s:
 s:windows	s:Etc/GMT+5	s:SA Pacific Standard Time
-s:iana	s:Etc/GMT+5	s:!Error
+s:iana	s:Etc/GMT+5	s:Etc/GMT+5
 s:to_dtz	s:Etc/GMT+5	s:Etc/GMT+5
 s:same_rules	s:Etc/GMT+5	s:Europe/Lisbon	~F
 s:same_rules	s:Etc/GMT+5	s:Europe/London	~F
@@ -860,7 +860,7 @@ s:equiv	s:GMT+05:30	i:5	s:
 s:equiv	s:GMT+05:30	i:-1	s:
 s:equiv	s:GMT+05:30	i:100	s:
 s:windows	s:GMT+05:30	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:GMT+05:30	s:!Error
+s:iana	s:GMT+05:30	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:to_dtz	s:GMT+05:30	s:+05:30
 s:same_rules	s:GMT+05:30	s:Europe/Lisbon	~F
 s:same_rules	s:GMT+05:30	s:Europe/London	~F
@@ -957,7 +957,7 @@ s:equiv	s:GMT-3	i:5	s:
 s:equiv	s:GMT-3	i:-1	s:
 s:equiv	s:GMT-3	i:100	s:
 s:windows	s:GMT-3	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:GMT-3	s:!Error
+s:iana	s:GMT-3	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:to_dtz	s:GMT-3	s:-03:00
 s:same_rules	s:GMT-3	s:Europe/Lisbon	~F
 s:same_rules	s:GMT-3	s:Europe/London	~F
@@ -1054,7 +1054,7 @@ s:equiv	s:gmt+1	i:5	s:
 s:equiv	s:gmt+1	i:-1	s:
 s:equiv	s:gmt+1	i:100	s:
 s:windows	s:gmt+1	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:gmt+1	s:!Error
+s:iana	s:gmt+1	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:to_dtz	s:gmt+1	s:+01:00
 s:same_rules	s:gmt+1	s:Europe/Lisbon	~F
 s:same_rules	s:gmt+1	s:Europe/London	~F
@@ -1151,8 +1151,8 @@ s:equiv	s:Europe/Kiev	i:5	s:
 s:equiv	s:Europe/Kiev	i:-1	s:
 s:equiv	s:Europe/Kiev	i:100	s:
 s:windows	s:Europe/Kiev	s:FLE Standard Time
-s:iana	s:Europe/Kiev	s:!Error
-s:to_dtz	s:Europe/Kiev	s:!DateInvalidTimeZoneException
+s:iana	s:Europe/Kiev	s:Europe/Kyiv
+s:to_dtz	s:Europe/Kiev	s:!IntlException
 s:same_rules	s:Europe/Kiev	s:Europe/Lisbon	~F
 s:same_rules	s:Europe/Kiev	s:Europe/London	~F
 s:same_rules	s:Europe/Kiev	s:WET	~F
@@ -1248,7 +1248,7 @@ s:equiv	s:Europe/Kyiv	i:5	s:
 s:equiv	s:Europe/Kyiv	i:-1	s:
 s:equiv	s:Europe/Kyiv	i:100	s:
 s:windows	s:Europe/Kyiv	s:FLE Standard Time
-s:iana	s:Europe/Kyiv	s:!Error
+s:iana	s:Europe/Kyiv	s:Europe/Kyiv
 s:to_dtz	s:Europe/Kyiv	s:Europe/Kyiv
 s:same_rules	s:Europe/Kyiv	s:Europe/Lisbon	~F
 s:same_rules	s:Europe/Kyiv	s:Europe/London	~F
@@ -1345,8 +1345,8 @@ s:equiv	s:US/Pacific	i:5	s:
 s:equiv	s:US/Pacific	i:-1	s:
 s:equiv	s:US/Pacific	i:100	s:
 s:windows	s:US/Pacific	s:Pacific Standard Time
-s:iana	s:US/Pacific	s:!Error
-s:to_dtz	s:US/Pacific	s:!DateInvalidTimeZoneException
+s:iana	s:US/Pacific	s:America/Los_Angeles
+s:to_dtz	s:US/Pacific	s:!IntlException
 s:same_rules	s:US/Pacific	s:Europe/Lisbon	~F
 s:same_rules	s:US/Pacific	s:Europe/London	~F
 s:same_rules	s:US/Pacific	s:WET	~F
@@ -1442,7 +1442,7 @@ s:equiv	s:EST	i:5	s:
 s:equiv	s:EST	i:-1	s:
 s:equiv	s:EST	i:100	s:
 s:windows	s:EST	s:SA Pacific Standard Time
-s:iana	s:EST	s:!Error
+s:iana	s:EST	s:Etc/GMT+5
 s:to_dtz	s:EST	s:EST
 s:same_rules	s:EST	s:Europe/Lisbon	~F
 s:same_rules	s:EST	s:Europe/London	~F
@@ -1539,7 +1539,7 @@ s:equiv	s:CET	i:5	s:
 s:equiv	s:CET	i:-1	s:
 s:equiv	s:CET	i:100	s:
 s:windows	s:CET	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:CET	s:!Error
+s:iana	s:CET	s:CET
 s:to_dtz	s:CET	s:CET
 s:same_rules	s:CET	s:Europe/Lisbon	~F
 s:same_rules	s:CET	s:Europe/London	~F
@@ -1636,8 +1636,8 @@ s:equiv	s:nonsense	i:5	s:
 s:equiv	s:nonsense	i:-1	s:
 s:equiv	s:nonsense	i:100	s:
 s:windows	s:nonsense	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:nonsense	s:!Error
-s:to_dtz	s:nonsense	s:!DateInvalidTimeZoneException
+s:iana	s:nonsense	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:to_dtz	s:nonsense	s:!IntlException
 s:same_rules	s:nonsense	s:Europe/Lisbon	~F
 s:same_rules	s:nonsense	s:Europe/London	~F
 s:same_rules	s:nonsense	s:WET	~F
@@ -1733,8 +1733,8 @@ s:equiv	s:	i:5	s:
 s:equiv	s:	i:-1	s:
 s:equiv	s:	i:100	s:
 s:windows	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:	s:!Error
-s:to_dtz	s:	s:!DateInvalidTimeZoneException
+s:iana	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:to_dtz	s:	s:!IntlException
 s:same_rules	s:	s:Europe/Lisbon	~F
 s:same_rules	s:	s:Europe/London	~F
 s:same_rules	s:	s:WET	~F
@@ -1830,7 +1830,7 @@ s:equiv	s:Africa/Casablanca	i:5	s:
 s:equiv	s:Africa/Casablanca	i:-1	s:
 s:equiv	s:Africa/Casablanca	i:100	s:
 s:windows	s:Africa/Casablanca	s:Morocco Standard Time
-s:iana	s:Africa/Casablanca	s:!Error
+s:iana	s:Africa/Casablanca	s:Africa/Casablanca
 s:to_dtz	s:Africa/Casablanca	s:Africa/Casablanca
 s:same_rules	s:Africa/Casablanca	s:Europe/Lisbon	~F
 s:same_rules	s:Africa/Casablanca	s:Europe/London	~F
@@ -1927,7 +1927,7 @@ s:equiv	s:America/Sao_Paulo	i:5	s:
 s:equiv	s:America/Sao_Paulo	i:-1	s:
 s:equiv	s:America/Sao_Paulo	i:100	s:
 s:windows	s:America/Sao_Paulo	s:E. South America Standard Time
-s:iana	s:America/Sao_Paulo	s:!Error
+s:iana	s:America/Sao_Paulo	s:America/Sao_Paulo
 s:to_dtz	s:America/Sao_Paulo	s:America/Sao_Paulo
 s:same_rules	s:America/Sao_Paulo	s:Europe/Lisbon	~F
 s:same_rules	s:America/Sao_Paulo	s:Europe/London	~F
@@ -2024,7 +2024,7 @@ s:equiv	s:Pacific/Chatham	i:5	s:
 s:equiv	s:Pacific/Chatham	i:-1	s:
 s:equiv	s:Pacific/Chatham	i:100	s:
 s:windows	s:Pacific/Chatham	s:Chatham Islands Standard Time
-s:iana	s:Pacific/Chatham	s:!Error
+s:iana	s:Pacific/Chatham	s:Pacific/Chatham
 s:to_dtz	s:Pacific/Chatham	s:Pacific/Chatham
 s:same_rules	s:Pacific/Chatham	s:Europe/Lisbon	~F
 s:same_rules	s:Pacific/Chatham	s:Europe/London	~F
@@ -2121,7 +2121,7 @@ s:equiv	s:Antarctica/Troll	i:5	s:
 s:equiv	s:Antarctica/Troll	i:-1	s:
 s:equiv	s:Antarctica/Troll	i:100	s:
 s:windows	s:Antarctica/Troll	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:Antarctica/Troll	s:!Error
+s:iana	s:Antarctica/Troll	s:Antarctica/Troll
 s:to_dtz	s:Antarctica/Troll	s:Antarctica/Troll
 s:same_rules	s:Antarctica/Troll	s:Europe/Lisbon	~F
 s:same_rules	s:Antarctica/Troll	s:Europe/London	~F
@@ -2218,8 +2218,8 @@ s:equiv	s:Etc/Unknown	i:5	s:
 s:equiv	s:Etc/Unknown	i:-1	s:
 s:equiv	s:Etc/Unknown	i:100	s:
 s:windows	s:Etc/Unknown	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:iana	s:Etc/Unknown	s:!Error
-s:to_dtz	s:Etc/Unknown	s:!DateInvalidTimeZoneException
+s:iana	s:Etc/Unknown	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:to_dtz	s:Etc/Unknown	s:!IntlException
 s:same_rules	s:Etc/Unknown	s:Europe/Lisbon	~F
 s:same_rules	s:Etc/Unknown	s:Europe/London	~F
 s:same_rules	s:Etc/Unknown	s:WET	~F
@@ -2315,8 +2315,8 @@ s:equiv	s:Asia/Calcutta	i:5	s:
 s:equiv	s:Asia/Calcutta	i:-1	s:
 s:equiv	s:Asia/Calcutta	i:100	s:
 s:windows	s:Asia/Calcutta	s:India Standard Time
-s:iana	s:Asia/Calcutta	s:!Error
-s:to_dtz	s:Asia/Calcutta	s:!DateInvalidTimeZoneException
+s:iana	s:Asia/Calcutta	s:Asia/Kolkata
+s:to_dtz	s:Asia/Calcutta	s:!IntlException
 s:same_rules	s:Asia/Calcutta	s:Europe/Lisbon	~F
 s:same_rules	s:Asia/Calcutta	s:Europe/London	~F
 s:same_rules	s:Asia/Calcutta	s:WET	~F
@@ -2412,7 +2412,7 @@ s:equiv	s:America/Argentina/Buenos_Aires	i:5	s:
 s:equiv	s:America/Argentina/Buenos_Aires	i:-1	s:
 s:equiv	s:America/Argentina/Buenos_Aires	i:100	s:
 s:windows	s:America/Argentina/Buenos_Aires	s:Argentina Standard Time
-s:iana	s:America/Argentina/Buenos_Aires	s:!Error
+s:iana	s:America/Argentina/Buenos_Aires	s:America/Argentina/Buenos_Aires
 s:to_dtz	s:America/Argentina/Buenos_Aires	s:America/Argentina/Buenos_Aires
 s:same_rules	s:America/Argentina/Buenos_Aires	s:Europe/Lisbon	~F
 s:same_rules	s:America/Argentina/Buenos_Aires	s:Europe/London	~F
@@ -2452,7 +2452,7 @@ s:enum	~N	a:["ACT","AET","AGT","ART","AST","Africa/Abidjan","Africa/Accra","Afri
 s:enum	s:PT	a:["Atlantic/Azores","Atlantic/Madeira","Europe/Lisbon","Portugal"]
 s:enum	s:US	a:["AST","America/Adak","America/Anchorage","America/Atka","America/Boise","America/Chicago","America/Denver","America/Detroit","America/Fort_Wayne","America/Indiana/Indianapolis","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Juneau","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Knox_IN","America/Los_Angeles","America/Louisville","America/Menominee","America/Metlakatla","America/New_York","America/Nome","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Phoenix","America/Shiprock","America/Sitka","America/Yakutat","CST","IET","Navajo","PNT","PST","Pacific/Honolulu","US/Alaska","US/Aleutian","US/Arizona","US/Central","US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke","US/Michigan","US/Mountain","US/Pacific","US/Pacific-New"]
 s:enum	s:XX	a:[]
-s:enum	s:001	a:[]
+s:enum	s:001	a:["CET","CST6CDT","EET","EST","EST5EDT","Etc/GMT","Etc/GMT+0","Etc/GMT+1","Etc/GMT+10","Etc/GMT+11","Etc/GMT+12","Etc/GMT+2","Etc/GMT+3","Etc/GMT+4","Etc/GMT+5","Etc/GMT+6","Etc/GMT+7","Etc/GMT+8","Etc/GMT+9","Etc/GMT-0","Etc/GMT-1","Etc/GMT-10","Etc/GMT-11","Etc/GMT-12","Etc/GMT-13","Etc/GMT-14","Etc/GMT-2","Etc/GMT-3","Etc/GMT-4","Etc/GMT-5","Etc/GMT-6","Etc/GMT-7","Etc/GMT-8","Etc/GMT-9","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Factory","GMT","GMT+0","GMT-0","GMT0","Greenwich","HST","MET","MST","MST7MDT","PST8PDT","SystemV/AST4","SystemV/AST4ADT","SystemV/CST6","SystemV/CST6CDT","SystemV/EST5","SystemV/EST5EDT","SystemV/HST10","SystemV/MST7","SystemV/MST7MDT","SystemV/PST8","SystemV/PST8PDT","SystemV/YST9","SystemV/YST9YDT","UCT","UTC","Universal","WET","Zulu"]
 s:enum_off	i:0	a:["Africa/Abidjan","Africa/Accra","Africa/Bamako","Africa/Banjul","Africa/Bissau","Africa/Casablanca","Africa/Conakry","Africa/Dakar","Africa/El_Aaiun","Africa/Freetown","Africa/Lome","Africa/Monrovia","Africa/Nouakchott","Africa/Ouagadougou","Africa/Sao_Tome","Africa/Timbuktu","America/Danmarkshavn","Antarctica/Troll","Atlantic/Canary","Atlantic/Faeroe","Atlantic/Faroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/St_Helena","Eire","Etc/GMT","Etc/GMT+0","Etc/GMT-0","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Europe/Belfast","Europe/Dublin","Europe/Guernsey","Europe/Isle_of_Man","Europe/Jersey","Europe/Lisbon","Europe/London","Factory","GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich","Iceland","Portugal","UCT","UTC","Universal","WET","Zulu"]
 s:enum_off	i:3600000	a:["Africa/Algiers","Africa/Bangui","Africa/Brazzaville","Africa/Ceuta","Africa/Douala","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Luanda","Africa/Malabo","Africa/Ndjamena","Africa/Niamey","Africa/Porto-Novo","Africa/Tunis","Arctic/Longyearbyen","Atlantic/Jan_Mayen","CET","ECT","Etc/GMT-1","Europe/Amsterdam","Europe/Andorra","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Budapest","Europe/Busingen","Europe/Copenhagen","Europe/Gibraltar","Europe/Ljubljana","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Monaco","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Rome","Europe/San_Marino","Europe/Sarajevo","Europe/Skopje","Europe/Stockholm","Europe/Tirane","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Warsaw","Europe/Zagreb","Europe/Zurich","MET","Poland"]
 s:enum_off	i:19800000	a:["Asia/Calcutta","Asia/Colombo","Asia/Kolkata","IST"]

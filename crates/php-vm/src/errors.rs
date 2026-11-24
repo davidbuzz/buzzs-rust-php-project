@@ -60,6 +60,24 @@ pub fn label(l: i64) -> &'static str {
     }
 }
 
+/// `php_escape_nul_for_log()`: log sinks take C strings, so a NUL byte
+/// (an anonymous class name's) is written as `\0` instead of cutting the
+/// message there.
+fn escape_nul_for_log(msg: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if !msg.contains(&0) {
+        return std::borrow::Cow::Borrowed(msg);
+    }
+    let mut out = Vec::with_capacity(msg.len() + 8);
+    for &b in msg {
+        if b == 0 {
+            out.extend_from_slice(b"\\0");
+        } else {
+            out.push(b);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 fn is_fatal(l: i64) -> bool {
     matches!(l, 1 | 4 | 16 | 64 | 256 | 4096)
 }
@@ -163,6 +181,18 @@ impl Vm {
         if php_memlimit::is_pending() {
             return Ok(());
         }
+        if let Some((depth, kind, name)) = &self.including {
+            if *depth == self.frames.len() {
+                let (kind, name) = (*kind, name.clone());
+                let origin = self.include_error_origin(kind, name.as_bytes());
+                if self.ini.get_bool("html_errors") {
+                    return self.docref_html(level, &origin, kind, msg);
+                }
+                let mut m = format!("{origin}: ").into_bytes();
+                m.extend_from_slice(msg);
+                return self.error_bytes(level, &m);
+            }
+        }
         match self.docref_function_name() {
             Some(n) => {
                 let args = self.docref_args();
@@ -170,6 +200,18 @@ impl Vm {
                     return self.docref_html(level, &format!("{n}({args})"), &n, msg);
                 }
                 let mut m = format!("{n}({args}): ").into_bytes();
+                m.extend_from_slice(msg);
+                self.error_bytes(level, &m)
+            }
+            // `php_verror` with no function running and the executor shut
+            // down: `EG_FLAGS_IN_SHUTDOWN` names the origin.
+            None if !self.executor_active || (self.request_ending && !self.is_executing()) => {
+                let origin = if self.in_shutdown || self.request_ending {
+                    "PHP Request Shutdown"
+                } else {
+                    "Unknown"
+                };
+                let mut m = format!("{origin}: ").into_bytes();
                 m.extend_from_slice(msg);
                 self.error_bytes(level, &m)
             }
@@ -341,10 +383,41 @@ impl Vm {
         }
         if is_fatal(level) {
             self.exit_status = 255;
+            self.bailouts += 1;
             object::set_destructors_enabled(false);
             return Err(Throw::Fatal);
         }
         Ok(())
+    }
+
+    /// The extensions' `RSHUTDOWN`s (`zend_deactivate_modules()`), in the
+    /// reverse of their registration order as `zend_collect_module_handlers()`
+    /// lists them (the session's data goes before the standard module's
+    /// resources are closed). One that bails out leaves its module's
+    /// shutdown incomplete, so the process ends with status 1 rather than
+    /// serve another request on that state (GHSA-g3vh-838c-65v7).
+    pub(crate) fn run_shutdown_hooks(&mut self) {
+        for h in self.shutdown_hooks.clone().into_iter().rev() {
+            let before = self.bailouts;
+            h(self);
+            if self.bailouts != before {
+                self.flush_stdout();
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Runs `f` as `shutdown_executor()` runs `zend_close_rsrc_list()`,
+    /// inside its own `zend_try`: a fatal error a resource's destructor
+    /// raises (a user stream's `stream_close()`) ends that destructor, not
+    /// the process. For an extension whose request-shutdown hook also
+    /// closes the request's resources; a bailout in the rest of the hook
+    /// (its `RSHUTDOWN` proper) still ends the process.
+    pub fn closing_resources<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
+        let before = self.bailouts;
+        let r = f(self);
+        self.bailouts = before;
+        r
     }
 
     /// `zend_error_impl`: every reported error clears
@@ -367,7 +440,10 @@ impl Vm {
             Some(e) => {
                 self.exception_error(&e, level::WARNING);
             }
-            None => self.record_fatal_backtrace(),
+            // "EG(last_fatal_error_backtrace) is useless when the executor
+            // is inactive" (a late error of the INI restore at request end).
+            None if self.executor_active => self.record_fatal_backtrace(),
+            None => {}
         }
     }
 
@@ -404,11 +480,11 @@ impl Vm {
     /// (`zend_trace_to_string(..., include_main = true)`), else empty.
     fn fatal_backtrace_suffix(&mut self) -> String {
         match self.last_fatal_error_backtrace.clone() {
-            Some(trace) => {
+            Some(trace) if self.executor_active => {
                 let s = self.trace_to_string(&trace, true);
                 format!("\nStack trace:\n{s}")
             }
-            None => String::new(),
+            _ => String::new(),
         }
     }
 
@@ -434,7 +510,7 @@ impl Vm {
         if self.ini.get_bool("log_errors") {
             let log = format!(
                 "PHP {lbl}:  {} in {file_s} on line {line}{trace}",
-                String::from_utf8_lossy(msg)
+                String::from_utf8_lossy(&escape_nul_for_log(msg))
             );
             self.log_error(&log);
         }
@@ -463,6 +539,21 @@ impl Vm {
         let Some(to_stderr) = display else {
             return;
         };
+        if self.ini.get_bool("xmlrpc_errors") {
+            // The message is printed by length (`%pS`): an anonymous class
+            // name keeps its NUL byte and what follows it.
+            let mut out = format!(
+                "<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member><name>faultCode</name><value><int>{}</int></value></member><member><name>faultString</name><value><string>{lbl}:",
+                self.ini.get_long("xmlrpc_error_number")
+            )
+            .into_bytes();
+            out.extend_from_slice(msg);
+            out.extend_from_slice(
+                format!(" in {file_s} on line {line}{trace}</string></value></member></struct></value></fault></methodResponse>").as_bytes(),
+            );
+            self.echo(&out);
+            return;
+        }
         let prepend = self
             .ini
             .get("error_prepend_string")
@@ -579,6 +670,7 @@ impl Vm {
         }
         if level == level::ERROR {
             self.exit_status = 255;
+            self.bailouts += 1;
         }
     }
 
@@ -610,6 +702,7 @@ impl Vm {
             self.display_error(lv, msg.as_bytes(), file, line);
         }
         self.exit_status = 255;
+        self.bailouts += 1;
         object::set_destructors_enabled(false);
     }
 

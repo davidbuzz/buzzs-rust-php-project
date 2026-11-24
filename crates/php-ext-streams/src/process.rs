@@ -78,12 +78,29 @@ fn exit_code(c: Option<Child>) -> i64 {
 
 fn pclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (r, cell) = res::stream_arg_res(vm, a, 0)?;
+    // `PHP_STREAM_FLAG_NO_FCLOSE`, as `fclose()` checks it: a stream in use
+    // by one of its own callbacks (a user filter, a user wrapper method).
+    let busy = cell.get().is_none();
+    let no_fclose = (busy && php_streams::user::in_guarded_call(cell.id()))
+        || cell
+            .get()
+            .is_some_and(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
+    if no_fclose {
+        vm.php_warning("cannot close the provided stream, as it must not be manually closed")?;
+        return Ok(Value::Int(-1));
+    }
+    let mut closed = 0;
     if let Some(mut s) = cell.take() {
-        bridge::run(vm, || s.close())?;
+        closed = bridge::run(vm, || s.close())?;
     }
     r.close();
+    // `FG(pclose_ret)`: the child's exit status for a `popen()` stream,
+    // else what closing the stream returned (0 when it closed cleanly).
     let child = CHILDREN.with(|m| m.borrow_mut().remove(&cell.id()));
-    Ok(Value::Int(exit_code(child)))
+    Ok(Value::Int(match child {
+        Some(c) => exit_code(Some(c)),
+        None => i64::from(closed),
+    }))
 }
 
 /// Reaps the child of a closed `popen()` stream (called by `fclose()`).

@@ -383,6 +383,19 @@ pub(crate) fn class_const_hit_dyn_in(f: &Frame, op: Operand, name: u32) -> Optio
         },
         Operand::Lit(_) | Operand::Unused => return None,
     };
+    class_const_hit_obj_in(f, obj, name)
+}
+
+/// [`class_const_hit_dyn_in`] for the object `obj` itself (`$this::NAME`,
+/// where the object is the frame's own): the cached value of constant
+/// `name` for its class. No lookup, no diagnostic, nothing consumed.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(crate) fn class_const_hit_obj_in(
+    f: &Frame,
+    obj: &php_runtime::Obj,
+    name: u32,
+) -> Option<Value> {
     let cls = object::class_of(obj);
     let cache = f.code.rt_cache.class_consts.try_borrow().ok()?;
     let entries = cache.get(name as usize)?;

@@ -38,6 +38,17 @@ const G_UNSET: u8 = 3;
 /// cloned that was already re-initialized (`IS_PROP_REINITABLE` cleared).
 const G_REINIT: u8 = 4;
 
+/// Whether `ZEND_NEW` of `cls` needs nothing from the VM once its default
+/// properties are evaluated ([`new_plain`]'s test of the class).
+#[inline]
+pub(crate) fn plain_new_class(cls: &Class) -> bool {
+    !(cls.flags & NOT_INSTANTIABLE != 0
+        || cls.magic.construct.is_some()
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator"))
+}
+
 /// `ZEND_NEW` of `cls` when it needs nothing from the VM: an
 /// instantiable class (not `Generator`) with no constructor, no internal
 /// hooks (`create_object`, `get_constructor`), not a `Throwable` (whose
@@ -48,12 +59,7 @@ const G_REINIT: u8 = 4;
 /// constructor call then run).
 #[inline]
 pub(crate) fn new_plain(cls: &Rc<Class>) -> Option<Obj> {
-    if cls.flags & NOT_INSTANTIABLE != 0
-        || cls.magic.construct.is_some()
-        || cls.hooks.is_some()
-        || cls.internal == InternalKind::Throwable
-        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
-    {
+    if !plain_new_class(cls) {
         return None;
     }
     let defaults = cls.defaults.try_borrow().ok()?;
@@ -112,6 +118,26 @@ pub(crate) fn ctor_call(cls: &Rc<Class>) -> Option<(crate::func::Func, Rc<Class>
         ctor.scope.upgrade()?
     };
     Some((ctor.func.clone(), scope))
+}
+
+/// [`ctor_call`] without the handles, for a caller that makes no call (a
+/// constructor run as stores, `exec/tape/calls.rs`): the constructor's
+/// function and the address of its declaring class (the scope its frame
+/// would have), under the same conditions.
+#[inline]
+pub(crate) fn ctor_ref(cls: &Rc<Class>) -> Option<(&crate::func::Func, usize)> {
+    if cls.flags & NOT_INSTANTIABLE != 0
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
+    {
+        return None;
+    }
+    let ctor = cls.magic.construct.as_ref()?;
+    if ctor.visibility() != flags::PUBLIC || ctor.is_static() || ctor.scope.strong_count() == 0 {
+        return None;
+    }
+    Some((&ctor.func, std::rc::Weak::as_ptr(&ctor.scope) as usize))
 }
 
 /// The object [`new_with_ctor`] creates for a class [`ctor_call`]
@@ -298,7 +324,7 @@ impl Vm {
         )
     }
 
-    fn undefined_property_warning(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
+    pub(crate) fn undefined_property_warning(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
         self.warning(&format!(
             "Undefined property: {}::${}",
             object::display_name(&object::class_of(o).name),
@@ -843,7 +869,7 @@ impl Vm {
             } else {
                 format!(
                     "Cannot modify readonly property {}::${}",
-                    object::display_name(&pi.class),
+                    pi.class.to_string_lossy(),
                     pi.name
                 )
             };
@@ -1026,7 +1052,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Cannot unserialize value for virtual property {}::${}",
-                    object::display_name(&cls.name),
+                    cls.name.to_string_lossy(),
                     pi.name
                 ),
             ));
@@ -1223,7 +1249,7 @@ impl Vm {
                         "Error",
                         &format!(
                             "Cannot modify readonly property {}::${}",
-                            object::display_name(&cls.name),
+                            cls.name.to_string_lossy(),
                             pi.name
                         ),
                     ));
@@ -2494,7 +2520,7 @@ impl Vm {
                     "Error",
                     &format!(
                         "Call to {vis} method {}::{}() from {}",
-                        object::display_name(&m.scope().name),
+                        m.scope().name.to_string_lossy(),
                         m.name,
                         scope_display(scope.as_ref())
                     ),
@@ -2596,6 +2622,15 @@ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
         let v = object::data(&o).slots.borrow()[pi.slot as usize].clone();
         return match v {
             Some(v) => Ok(v.deref()),
+            // `read_property` from the trampoline: an unset backing slot
+            // falls back to `__get()`, whose result must fit the type.
+            None if (pi.ty.is_none() || object::data(&o).slot_unset(pi.slot as usize))
+                && vm.has_read_magic(&o, &name, FetchMode::Read) =>
+            {
+                let mut v = vm.magic_read(&o, &name, FetchMode::Read)?;
+                vm.verify_magic_get_result(&pi, &mut v)?;
+                Ok(v)
+            }
             None => Err(vm.make_throw(
                 "Error",
                 &format!(

@@ -19,7 +19,17 @@ pub(crate) struct TypeCtx<'a> {
     pub called: Option<&'a Rc<Class>>,
     pub strict: bool,
     /// Internal function argument: null coerces with a deprecation.
-    pub internal_arg: Option<(&'a str, usize, &'a str)>,
+    pub internal_arg: Option<InternalArg<'a>>,
+}
+
+/// The internal function argument a type check is for: the function, the
+/// argument's 1-based position and the parameter's name. Their display
+/// names are put together only when a message needs them.
+#[derive(Clone, Copy)]
+pub(crate) struct InternalArg<'a> {
+    pub func: &'a Rc<crate::func::Builtin>,
+    pub argn: usize,
+    pub param: &'a ZStr,
 }
 
 /// `instanceof_function` against the class a type member names, resolved
@@ -222,9 +232,13 @@ impl Vm {
         }
         let m = ty.mask;
         // Internal functions: null to scalar coerces with a deprecation.
-        if let (Value::Null, Some((fname, argn, pname))) = (&*v, ctx.internal_arg) {
+        if let (Value::Null, Some(arg)) = (&*v, ctx.internal_arg) {
             if !ctx.strict && m & (mask::LONG | mask::DOUBLE | mask::STRING | mask::BOOL) != 0 {
                 let tyname = ty.to_php_string();
+                let fname =
+                    self.func_display(&crate::func::Func::Builtin(arg.func.clone()), ctx.scope);
+                let pname = arg.param.to_string_lossy();
+                let argn = arg.argn;
                 self.deprecated(&format!(
                     "{fname}(): Passing null to parameter #{argn} (${pname}) of type {tyname} is deprecated"
                 ))?;

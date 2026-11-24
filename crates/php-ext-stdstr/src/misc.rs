@@ -32,7 +32,7 @@ struct PackRecorder<'a> {
 }
 
 impl PackValue for PackRecorder<'_> {
-    fn to_long(&self) -> i64 {
+    fn to_long(&self, _notices: &mut Notices) -> i64 {
         self.log.borrow_mut().push((self.idx, Conv::Long));
         0
     }
@@ -55,7 +55,8 @@ struct PackConverted {
 }
 
 impl PackValue for PackConverted {
-    fn to_long(&self) -> i64 {
+    // The VM converted the value, with its diagnostics, in the first pass.
+    fn to_long(&self, _notices: &mut Notices) -> i64 {
         self.long
     }
     fn to_double(&self) -> f64 {
@@ -173,6 +174,12 @@ fn quoted_printable_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (v1, v2) = (a.str(0), a.str(1));
+    // `Z_PARAM_PATH` (php-src master).
+    for (i, v) in [&v1, &v2].into_iter().enumerate() {
+        if v.as_bytes().contains(&0) {
+            return Err(a.value_error(vm, i + 1, "must not contain any null bytes"));
+        }
+    }
     match a.opt(2) {
         None => Ok(Value::Int(i64::from(versioning::version_compare(
             v1.as_bytes(),

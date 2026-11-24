@@ -587,7 +587,9 @@ fn target(req: &mut Request<'_>, resource: &mut Uri) -> Option<Target> {
         return None;
     }
     let request_fulluri = req.opt("request_fulluri").is_some_and(|v| v.is_true());
-    let use_ssl = scheme.len() > 4 && scheme[4] == b's';
+    // The whole scheme, in any case (GHSA-f6gg-rchx-xw8j, CVE-2026-128064:
+    // `HTTPS://` went out in plain text).
+    let use_ssl = scheme.eq_ignore_ascii_case(b"https");
     if resource.port == 0 {
         resource.port = if use_ssl { 443 } else { 80 };
     }

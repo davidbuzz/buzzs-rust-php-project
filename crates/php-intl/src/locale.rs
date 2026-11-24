@@ -683,7 +683,8 @@ pub fn lookup(
     common::check_locale_len(&range)
         .map_err(|e| crate::timezone::rescope(e, crate::Scope::Global))?;
     if tags_list.is_empty() {
-        return Ok(Some(String::new()));
+        // php-src master (#25462): the default locale, when one is given.
+        return Ok(Some(fallback.unwrap_or_default().to_owned()));
     }
     let mut cur: Vec<(String, String)> = Vec::with_capacity(tags_list.len());
     for t in tags_list {

@@ -1,6 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Tape instructions for object properties and `new`.
+//! Tape instructions for object properties, `$this::NAME` and `++`/`--`
+//! of a static property.
 //!
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
@@ -23,8 +24,8 @@
 //! constructor's frame.
 
 use super::{Br, Inst, TOp};
-use crate::exec::spec::{prop_op_in, read_hit, store_fetched_in};
-use crate::opcode::{FetchMode, Op, OpArray, Operand};
+use crate::exec::spec::{incdec_static_prop_in, prop_op_in, read_hit, store_fetched_in};
+use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
 use std::rc::Rc;
 
@@ -128,8 +129,144 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::IssetObjProp)
             }
         }
+        // `Class::$name++` and its kin (`ZEND_PRE_INC_STATIC_PROP` & co.):
+        // the generic `IncDec` of a place that is a static property and
+        // nothing more.
+        Op::IncDec { place, dst, .. } => {
+            let p = code.places.get(place as usize)?;
+            if !matches!(p.base, PlaceBase::StaticProp { .. }) || !p.segs.is_empty() {
+                return None;
+            }
+            if dst.is_some_and(|d| d >= code.num_tmps) {
+                return None;
+            }
+            Inst {
+                a: place,
+                d: i as u32,
+                ..plain(TOp::IncDecStatic)
+            }
+        }
+        // `$this::NAME`: the `FetchThis` and the class-constant read of
+        // its temporary (`p`) right after it, as one instruction that
+        // reads the frame's `$this` where it is. The constant's name
+        // literal is in `a`, the result temporary in `b`.
+        Op::FetchThis { dst: this_tmp } => {
+            let (name, dst, to) = match *code.ops.get(i + 1)? {
+                Op::FetchClassConst {
+                    class: ClassSpec::Dyn(Operand::Tmp(t)),
+                    name: Operand::Lit(name),
+                    dst,
+                } if t == this_tmp => (name, dst, None),
+                Op::FetchClassConstTo {
+                    class: ClassSpec::Dyn(Operand::Tmp(t)),
+                    name,
+                    dst,
+                    to,
+                } if t == this_tmp => (name, dst, Some(to)),
+                _ => return None,
+            };
+            if dst >= code.num_tmps || this_tmp >= code.num_tmps {
+                return None;
+            }
+            match to {
+                None => Inst {
+                    a: name,
+                    b: dst,
+                    p: this_tmp as usize,
+                    ..plain(TOp::ThisConst)
+                },
+                // With the folded `AssignCv` after the two ops (`c` jumps
+                // past it when the value went into the variable `d`).
+                Some(cv) => {
+                    if (cv as usize) >= code.cv_names.len() {
+                        return None;
+                    }
+                    Inst {
+                        a: name,
+                        b: dst,
+                        c: super::rel(code, i, u32::try_from(i + 3).ok()?)?,
+                        d: cv,
+                        p: this_tmp as usize,
+                        ..plain(TOp::ThisConstTo)
+                    }
+                }
+            }
+        }
         _ => return None,
     })
+}
+
+/// `++`/`--` of a static property ([`TOp::IncDecStatic`], the op at
+/// `inst.d`) on a cache hit (`spec::incdec_static_prop_in`): an untyped
+/// property holding an int or a float. Declines anything else, having
+/// changed nothing: the generic `IncDec` walks the place.
+///
+/// # Safety
+/// As [`prop_in`].
+#[inline(never)]
+pub(super) unsafe fn incdec_static(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // A handle of its own on the op array, as in `prop_in`.
+    let code = Rc::clone(&f.code);
+    let Some(&Op::IncDec { place, kind, dst }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    incdec_static_prop_in(f, place, kind, dst)
+}
+
+/// The value of `$this::NAME` for a [`TOp::ThisConst`] instruction on a
+/// hit of the constant's cache for the class of the frame's `$this`
+/// (`rtcache::class_const_hit_obj_in`). `None` (the two ops then run one
+/// after the other) without a `$this`, on a miss, and when the temporary
+/// the ops pass the object through holds a value the `FetchThis` would
+/// release.
+fn this_const_value(f: &Frame, inst: &Inst) -> Option<php_runtime::Value> {
+    if !matches!(
+        f.tmps.get(inst.p)?,
+        php_runtime::Value::Null
+            | php_runtime::Value::Bool(_)
+            | php_runtime::Value::Int(_)
+            | php_runtime::Value::Float(_)
+    ) {
+        return None;
+    }
+    crate::rtcache::class_const_hit_obj_in(f, f.this.as_ref()?, inst.a)
+}
+
+/// `$this::NAME` into its temporary `b` ([`this_const_value`]).
+///
+/// # Safety
+/// As [`prop_in`]; `b` is a temporary of the frame.
+#[inline(never)]
+pub(super) unsafe fn this_const(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(v) = this_const_value(f, inst) else {
+        return false;
+    };
+    store_fetched_in(f, inst.b, None, v);
+    true
+}
+
+/// `$cv = $this::NAME`, as [`this_const`]: into the variable `d` of the
+/// folded `AssignCv` when that holds nothing to release (the jump past
+/// it), else into the temporary `b` (falling through to the `AssignCv`).
+///
+/// # Safety
+/// As [`this_const`]; `d` is a variable of the frame.
+#[inline(never)]
+pub(super) unsafe fn this_const_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(v) = this_const_value(f, inst) else {
+        return Br::Decline;
+    };
+    if store_fetched_in(f, inst.b, Some(inst.d), v) {
+        Br::Jump
+    } else {
+        Br::Fall
+    }
 }
 
 /// Runs `prop_op_in` on the op at `inst.d`. The op is cloned from the

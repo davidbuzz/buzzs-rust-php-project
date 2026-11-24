@@ -542,15 +542,24 @@ fn ours(snippet: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs /usr/bin/php; regenerates tests/fixtures/error_messages.tsv"]
+#[ignore = "needs /usr/bin/php8.5; regenerates tests/fixtures/error_messages.tsv"]
 fn regenerate() {
     use std::process::Command;
     let tmp = std::env::temp_dir().join(format!("php-parser-errors-{}.php", std::process::id()));
     let mut out = String::new();
     for s in SNIPPETS {
         std::fs::write(&tmp, format!("<?php {s}")).unwrap();
-        let o = Command::new("php")
-            .args(["-n", "-l", "-d", "display_errors=1", "-d", "log_errors=0"])
+        let o = Command::new("/usr/bin/php8.5")
+            .args([
+                "-n",
+                "-d",
+                "memory_limit=1G",
+                "-l",
+                "-d",
+                "display_errors=1",
+                "-d",
+                "log_errors=0",
+            ])
             .arg(&tmp)
             .output()
             .unwrap();

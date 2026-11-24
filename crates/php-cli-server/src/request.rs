@@ -302,11 +302,19 @@ impl RequestReader {
 }
 
 impl Handler for RequestReader {
+    /// `php_cli_server_client_read_request_on_message_begin`: a second
+    /// (pipelined) request in the buffer stops the parser.
+    fn on_message_begin(&mut self) -> i32 {
+        i32::from(self.request_read)
+    }
+
     fn on_path(&mut self, data: &[u8]) -> i32 {
-        if self.request.vpath.is_some() {
-            return 1;
-        }
-        self.request.vpath = Some(normalize_vpath(data));
+        // A path that spans several reads arrives in pieces: it is
+        // collected whole and normalized once the request is complete.
+        self.request
+            .vpath
+            .get_or_insert_with(Vec::new)
+            .extend_from_slice(data);
         0
     }
 
@@ -420,6 +428,9 @@ impl Handler for RequestReader {
     fn on_message_complete(&mut self, info: &Info) -> i32 {
         self.request.protocol_version =
             i32::from(info.http_major) * 100 + i32::from(info.http_minor);
+        if let Some(v) = self.request.vpath.take() {
+            self.request.vpath = Some(normalize_vpath(&v));
+        }
         let root = self.document_root.clone();
         self.request.translate_vpath(&root);
         self.request.compute_ext();

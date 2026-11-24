@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Script-level tests of the cycle collector (expected output from php
-//! 8.3 / master).
+//! Script-level tests of the cycle collector (expected output from
+//! `/usr/bin/php8.5 -n`, or php-src master where the two differ).
 
 use crate::{Vm, VmOptions};
 use std::cell::RefCell;
@@ -351,22 +351,36 @@ fn collection_while_unwinding_chains_the_exception_in_flight() {
     assert_eq!(out, "C\nc f\n");
 }
 
-/// `destructors_015`: a fiber releases its callable (`zend_fiber_release_callable`)
-/// inside the fiber once its function returned; values released with a
-/// closure's bound variables can fill the root buffer, and the exception
-/// of the collection's destructor is thrown by the fiber.
+/// `destructors_015`: the arguments of a native call (`Fiber::start()`) are
+/// released after it returns (`zend_vm_stack_free_args`): an argument array
+/// released with its last handle buffers the objects it held as roots, the
+/// collection that fills the buffer runs at once, and its destructor's
+/// exception is thrown by the call.
 #[test]
-fn fiber_releases_its_callable_when_its_function_returns() {
+fn released_call_arguments_root_their_objects() {
     let out = run(
         "<?php class C { public $s; function __construct() { $this->s = $this; }\n\
          function __destruct() { echo \"C\\n\"; throw new Exception('c'); } }\n\
-         $all = []; for ($i = 0; $i < 10001; $i++) $all[] = new stdClass;\n\
-         function make() { global $all; $copy = [...$all];\n\
-         return new Fiber(function () use ($copy) { new C; echo \"return\\n\"; }); }\n\
-         $fiber = make();\n\
-         try { $fiber->start(); echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; }",
+         $all = []; for ($i = 0; $i < 20000; $i++) $all[] = new stdClass;\n\
+         $fiber = new Fiber(function () { new C; echo \"return\\n\"; });\n\
+         try { $fiber->start([...$all]); echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; }",
     );
     assert_eq!(out, "return\nC\ncaught c\n");
+}
+
+/// `fiber-callable-object-outlives-caller`: a fiber keeps the object its
+/// callable resolved to (`fci_cache`) until the fiber itself is freed
+/// (`zend_fiber_object_free`), not only until its function returns.
+#[test]
+fn fiber_keeps_its_callable_object_until_freed() {
+    let out = run(
+        "<?php class A { function __construct(public string $n) {}\n\
+         function m() { echo \"m {$this->n}\\n\"; }\n\
+         function make() { return new Fiber([A::class, 'm']); }\n\
+         function __destruct() { echo \"released {$this->n}\\n\"; } }\n\
+         $f = (new A('a'))->make(); $f->start(); echo \"started\\n\"; unset($f); echo \"end\\n\";",
+    );
+    assert_eq!(out, "m a\nstarted\nreleased a\nend\n");
 }
 
 /// Binding a reference (`$a[$i][0] = &$a[$i]`, `$y = &$x`) releases no
@@ -439,7 +453,7 @@ fn live_root_hole_takes_the_last_root() {
 /// `new` of a class with a native constructor buffers the object
 /// (`ZEND_CALL_RELEASE_THIS`), as a user constructor does. (`Exception`
 /// is the bare VM's class with a native constructor; `ArrayObject` gives
-/// the same output under `/usr/bin/php -n`.)
+/// the same output under `/usr/bin/php8.5 -n`.)
 #[test]
 fn native_constructor_buffers_the_new_object() {
     let out = run(&format!(
@@ -549,6 +563,59 @@ fn live_registered_array_is_kept() {
     assert_eq!(a.len(), 1);
 }
 
+/// [`super::RootBuffer::rehome`] leaves what `insert_new` under the new
+/// handle followed by `remove` of the old entry leaves: the slots, the
+/// unused list and the index of two buffers with the same history agree.
+#[test]
+fn rehome_is_insert_then_remove() {
+    let sink = Sink::default();
+    let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let std_class = vm.find_class(b"stdClass").expect("stdClass");
+    let objs: Vec<php_runtime::Obj> = (0..6)
+        .map(|_| crate::object::new_object(std_class.clone(), Vec::new()))
+        .collect();
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
+    let state = |b: &super::RootBuffer| {
+        (
+            b.slots
+                .iter()
+                .map(|s| s.as_ref().map(|r| (r.handle, super::weak_addr(&r.weak))))
+                .collect::<Vec<_>>(),
+            b.unused.clone(),
+            b.num_roots,
+            b.by_handle.clone(),
+        )
+    };
+    let (mut one, mut two) = (super::RootBuffer::default(), super::RootBuffer::default());
+    for b in [&mut one, &mut two] {
+        for o in &objs {
+            b.push(o);
+        }
+        // Two freed slots: the last freed is the next one taken.
+        assert!(b.remove(objs[1].addr(), handle(&objs[1])));
+        assert!(b.remove(objs[4].addr(), handle(&objs[4])));
+    }
+    // The object in slot 2 goes on under another handle, twice (the
+    // second time into the slot it left).
+    let o = &objs[2];
+    let mut old = handle(o);
+    for new in [901u32, 902] {
+        one.insert_new(o, new);
+        assert!(one.remove(o.addr(), old));
+        assert!(two.rehome(o.addr(), old, new));
+        assert_eq!(state(&one), state(&two));
+        old = new;
+    }
+    // No freed slot: nothing changes.
+    let mut full = super::RootBuffer::default();
+    full.push(o);
+    let before = state(&full);
+    assert!(!full.rehome(o.addr(), handle(o), 903));
+    assert_eq!(state(&full), before);
+    // Not buffered under that handle.
+    assert!(!two.rehome(o.addr(), 5000, 904));
+}
+
 /// The root index (by object handle, php-src's `GC_INFO`) finds and
 /// forgets every buffered object, and an entry left behind by a freed
 /// object never matches the new object that reuses its handle.
@@ -560,7 +627,7 @@ fn root_index_finds_and_forgets_every_handle() {
     let objs: Vec<php_runtime::Obj> = (0..64)
         .map(|_| crate::object::new_object(std_class.clone(), Vec::new()))
         .collect();
-    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
     let mut b = super::RootBuffer::default();
     for (i, o) in objs.iter().enumerate() {
         assert_eq!(b.push(o), Some(i));
@@ -606,7 +673,7 @@ fn root_index_finds_and_forgets_every_handle() {
 /// `$this` and closures of calls returning in a loop are buffered once
 /// (`LAST_ROOT` answers the later returns), and a collection that empties
 /// the buffer makes the next return buffer the object again (php-src
-/// 8.3: 2, 0, 0, 1, 1, 2).
+/// 8.5: 2, 0, 0, 1, 1, 2).
 #[test]
 fn returning_this_is_buffered_once_and_again_after_a_collection() {
     let out = run("<?php class A { public $s; function m() { return 1; } }\n\
@@ -623,7 +690,7 @@ fn returning_this_is_buffered_once_and_again_after_a_collection() {
 
 /// The last root is recognised by its address alone: once it is freed (its
 /// buffer entry removed), an object allocated in its place is buffered
-/// when a shared handle of it is released (php-src 8.3 and 8.5: 1, 0, 1,
+/// when a shared handle of it is released (php-src 8.5: 1, 0, 1,
 /// 1, 2, 2, 0, 0, 2).
 #[test]
 fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
@@ -646,7 +713,7 @@ fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
 /// object: `$o = new C; $o->m();` in a loop frees the previous object
 /// between buffering the new one (its constructor's return) and the
 /// method's return, which then finds the new one recorded. The counts are
-/// php-src 8.3's.
+/// php-src 8.5's.
 #[test]
 fn freeing_another_root_keeps_the_last_root() {
     let out = run(
@@ -665,7 +732,7 @@ fn freeing_another_root_keeps_the_last_root() {
     let std_class = vm.find_class(b"stdClass").expect("stdClass");
     let a = crate::object::new_object(std_class.clone(), Vec::new());
     let b = crate::object::new_object(std_class, Vec::new());
-    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle.get();
     let mut buf = super::RootBuffer::default();
     assert_eq!(buf.push(&a), Some(0));
     assert_eq!(buf.push(&b), Some(1));

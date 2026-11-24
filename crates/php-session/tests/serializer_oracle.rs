@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Byte-exact comparison of the three serializers against fixtures produced
-//! by `/usr/bin/php` (see `fixtures/gen_serializers.php`).
+//! by `/usr/bin/php8.5` (see `fixtures/gen_serializers.php`).
 
 use php_runtime::serialize::{unserialize, UnserializeOptions};
 use php_runtime::{CollectingContext, Value, ZArray};

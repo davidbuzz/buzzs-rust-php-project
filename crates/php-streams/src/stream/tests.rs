@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Stream-level tests; expected values were taken from `/usr/bin/php`.
+//! Stream-level tests; expected values were taken from `/usr/bin/php8.5`.
 
 use super::*;
 use crate::memory::{memory_create, temp_create};
@@ -228,4 +228,61 @@ fn chunk_size_option() {
     let mut m = memory_create(TempMode::Default);
     assert_eq!(m.set_chunk_size(100), 8192);
     assert_eq!(m.set_chunk_size(5), 100);
+}
+
+#[test]
+fn streams_take_a_resource_number_when_allocated() {
+    thread_local! {
+        static NEXT: std::cell::Cell<i64> = const { std::cell::Cell::new(7) };
+    }
+    fn next() -> i64 {
+        NEXT.with(|n| n.replace(n.get() + 1))
+    }
+    assert_eq!(memory_create(TempMode::Default).resource_number(), None);
+    set_resource_number_hook(Some(next));
+    let a = memory_create(TempMode::Default);
+    let b = memory_create(TempMode::Default);
+    set_resource_number_hook(None);
+    assert_eq!(
+        (a.resource_number(), b.resource_number()),
+        (Some(7), Some(8))
+    );
+}
+
+/// A stream that wraps the socket of one allocated before it keeps that
+/// stream's number, and the next stream takes the one after (`tcp://` &
+/// `ssl://` clients through the openssl transport: one number each).
+#[test]
+fn a_stream_in_place_of_another_keeps_its_number() {
+    #[derive(Debug)]
+    struct Nothing;
+    impl StreamOps for Nothing {
+        fn label(&self) -> &'static str {
+            "nothing"
+        }
+        fn read(&mut self, _st: &mut StreamState, _buf: &mut [u8]) -> Result<usize, OpFailed> {
+            Ok(0)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+    thread_local! {
+        static NEXT: std::cell::Cell<i64> = const { std::cell::Cell::new(3) };
+    }
+    fn next() -> i64 {
+        NEXT.with(|n| n.replace(n.get() + 1))
+    }
+    set_resource_number_hook(Some(next));
+    let plain = Stream::new(Box::new(Nothing), "r+");
+    let wrapped = Stream::new_numbered(Box::new(Nothing), "r+", plain.resource_number());
+    let fresh = Stream::new_numbered(Box::new(Nothing), "r+", None);
+    set_resource_number_hook(None);
+    assert_eq!(
+        (wrapped.resource_number(), fresh.resource_number()),
+        (Some(3), Some(4))
+    );
 }

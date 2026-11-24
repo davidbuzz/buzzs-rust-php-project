@@ -141,7 +141,7 @@ MAPPING: dict[str, list[str]] = {
     "Superglobals and request variables": ["tests/basic/"],
     # SAPIs.
     "CLI (`php` binary)": ["sapi/cli/tests/"],
-    "CGI": ["sapi/cgi/tests/"],
+    "CGI (`php-cgi`)": ["sapi/cgi/tests/"],
     "FPM": ["sapi/fpm/tests/"],
     "phpdbg": ["sapi/phpdbg/tests/"],
     # Extensions.
@@ -186,10 +186,14 @@ MAPPING: dict[str, list[str]] = {
     "ext/soap": ["ext/soap/tests/"],
     # "ext/pdo (core)" is set by hand: its generic tests run redirected under ext/pdo_sqlite/tests.
     "ext/pdo_sqlite / ext/sqlite3": ["ext/pdo_sqlite/tests/", "ext/sqlite3/tests/"],
+    "ext/pdo_mysql": ["ext/pdo_mysql/tests/"],
+    "ext/mysqli + ext/mysqlnd": ["ext/mysqli/tests/", "ext/mysqlnd/tests/"],
+    "ext/zend_test, dl_test, skeleton": ["ext/zend_test/tests/", "ext/dl_test/tests/", "ext/skeleton/tests/"],
     "ext/posix": ["ext/posix/tests/"],
     "ext/pcntl": ["ext/pcntl/tests/"],
     "ext/readline": ["ext/readline/tests/"],
-    "ext/opcache": ["ext/opcache/tests/"],
+    "ext/opcache (opcode cache, JIT)": ["ext/opcache/tests/"],
+    "Optimizer passes": ["ext/opcache/tests/opt/"],
     "ext/ffi": ["ext/ffi/tests/"],
 }
 

@@ -7,7 +7,7 @@
 
 use php_opcache::blacklist::Blacklist;
 use php_opcache::file_cache;
-use php_opcache::{CacheLookup, PreloadStats, ScriptCache};
+use php_opcache::{CacheLookup, InsertRefused, PreloadStats, ScriptCache};
 pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
@@ -64,6 +64,26 @@ impl Extension for Opcache {
         "Zend OPcache"
     }
 
+    /// `accel_startup` in the parent of a pre-forking server: the restart
+    /// counters are shared with the workers forked next (GH-8739). Only
+    /// `php -S` calls this, a web SAPI, so `opcache.enable_cli` does not apply.
+    fn process_startup(&self, ini: &[(String, String)]) {
+        let setting = |name: &str, default: bool| {
+            ini.iter()
+                .rev()
+                .find(|(k, _)| k == name)
+                .map_or(default, |(_, v)| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "on" | "yes" | "true"
+                    )
+                })
+        };
+        if setting("opcache.enable", true) {
+            php_opcache::shared_index::init_restarts();
+        }
+    }
+
     fn register(&self, module: &mut ModuleBuilder<'_>) {
         // Also register "opcache" in loaded extensions so tests with `--EXTENSIONS-- opcache` pass
         module.vm().loaded_extensions.push("opcache".to_string());
@@ -110,6 +130,7 @@ impl Extension for Opcache {
 
         // Install additive compile hook
         Vm::set_compile_hook(opcache_compile_hook);
+        Vm::set_precompiled_hook(opcache_precompiled_hook);
     }
 }
 
@@ -223,6 +244,11 @@ fn check_startup_ini(vm: &mut Vm) {
     /// `MIN_ACCEL_FILES` / `MAX_ACCEL_FILES`.
     const MIN_ACCEL_FILES: i64 = 200;
     const MAX_ACCEL_FILES: i64 = 1_000_000;
+    /// The sizes `OnUpdateMaxAcceleratedFiles` accepts without a warning
+    /// (the primes of `zend_accel_hash`).
+    const ACCEL_FILES_PRIMES: [i64; 13] = [
+        223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793,
+    ];
     if vm.ini_long("opcache.memory_consumption") < 8 {
         accel_log_warning(
             vm,
@@ -258,6 +284,12 @@ fn check_startup_ini(vm: &mut Vm) {
             vm,
             &format!("opcache.max_accelerated_files is set above the limit ({MAX_ACCEL_FILES}).\n"),
         );
+    } else if !ACCEL_FILES_PRIMES.contains(&files) {
+        // The size is kept; master only advises one of its hash primes.
+        accel_log_warning(
+            vm,
+            "opcache.max_accelerated_files should be a value in {223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793}.\n",
+        );
     }
     if !(MIN_ACCEL_FILES..=MAX_ACCEL_FILES).contains(&files) {
         vm.ini.reset_to_default("opcache.max_accelerated_files");
@@ -271,7 +303,52 @@ fn check_startup_ini(vm: &mut Vm) {
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
     }
     check_startup_shm(vm);
+    configure_cache(vm);
     JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+}
+
+/// Sizes the in-memory cache as `zend_accel_init_shm` does: as many
+/// scripts as the hash table for `opcache.max_accelerated_files` holds,
+/// in `opcache.memory_consumption` (less the 1 MiB that
+/// `opcache_get_status()` counts as used without any script).
+fn configure_cache(vm: &Vm) {
+    const MIB: usize = 1024 * 1024;
+    let files = usize::try_from(vm.ini_long("opcache.max_accelerated_files")).unwrap_or(0);
+    let memory = usize::try_from(vm.ini_long("opcache.memory_consumption")).unwrap_or(0);
+    let limit = memory.saturating_mul(MIB).saturating_sub(MIB);
+    GLOBAL_CACHE.with(|c| c.borrow_mut().configure(files, limit));
+}
+
+/// `cache_script_in_shared_memory`: stores a compiled script in the
+/// in-memory cache, logging as php-src does when it does not fit. A
+/// script that is not stored is still run, only compiled again next time.
+fn cache_in_memory(
+    vm: &mut Vm,
+    path: &str,
+    mtime: i64,
+    memory: usize,
+    now: i64,
+    unit: &Rc<php_vm::compiler::CompiledUnit>,
+) {
+    let stored = GLOBAL_CACHE.with(|c| {
+        c.borrow_mut()
+            .insert(path.to_owned(), mtime, memory, now, unit.clone())
+    });
+    match stored {
+        Ok(()) => {
+            vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{path}'"));
+            // Listed for the processes forked from the same startup.
+            php_opcache::shared_index::record_cached(path);
+        }
+        Err(InsertRefused::Full) => {}
+        Err(InsertRefused::HashFull) => {
+            vm_accel_log(vm, AccelLog::Debug, "No more entries in hash table!");
+        }
+        Err(InsertRefused::OutOfMemory { size, free }) => accel_log_warning(
+            vm,
+            &format!("Not enough free shared space to allocate {size} bytes ({free} bytes free)"),
+        ),
+    }
 }
 
 /// `JIT_G(enabled)` after start-up: `zend_jit_config` on the configured
@@ -317,6 +394,14 @@ fn check_startup_shm(vm: &Vm) {
     if !is_opcache_enabled(vm) {
         return;
     }
+    if vm.ini_bool("opcache.file_cache_read_only")
+        && get_ini_string(vm, "opcache.file_cache").is_empty()
+    {
+        accel_fatal(
+            vm,
+            "opcache.file_cache_read_only is set without a proper setting of opcache.file_cache",
+        );
+    }
     if vm.ini_bool("opcache.file_cache_only") {
         if get_ini_string(vm, "opcache.file_cache").is_empty() {
             accel_fatal(
@@ -354,6 +439,26 @@ fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
         || vm.ini_bool("opcache.enable")
     {
         return Ok(true);
+    }
+    if vm.ini_modify_stage() == php_vm::ext::IniStage::Activate {
+        // `ZEND_INI_STAGE_ACTIVATE` (a pool's `php_admin_value`, a
+        // per-directory value): logged, not raised.
+        // `strcmp(sapi_module.name, "fpm-fcgi") == 0`.
+        let fpm = vm
+            .constants
+            .get(&php_runtime::ZStr::from("PHP_SAPI"))
+            .is_some_and(
+                |v| matches!(v, php_runtime::Value::Str(s) if s.as_bytes() == b"fpm-fcgi"),
+            );
+        accel_log_warning(
+            vm,
+            if fpm {
+                "Zend OPcache can't be temporarily enabled. Are you using php_admin_value[opcache.enable]=1 in an individual pool's configuration?"
+            } else {
+                "Zend OPcache can't be temporarily enabled (it may be only disabled until the end of request)"
+            },
+        );
+        return Ok(false);
     }
     // `zend_error(E_WARNING, ...)`: no function-name prefix.
     vm.raise(
@@ -439,7 +544,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ))
     .ini(d(
         "opcache.max_accelerated_files",
-        Some("10000"),
+        Some("16229"),
         Access::SYSTEM,
         ModifyHandler::Long,
     ))
@@ -528,6 +633,12 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         ModifyHandler::None,
     ))
     .ini(d(
+        "opcache.file_cache_read_only",
+        Some("0"),
+        Access::SYSTEM,
+        ModifyHandler::Bool,
+    ))
+    .ini(d(
         "opcache.file_cache_only",
         Some("0"),
         Access::SYSTEM,
@@ -576,8 +687,10 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         ModifyHandler::None,
     ))
     .ini(d(
+        // php-src master's default (`zend_accelerator_module.c`): the JIT
+        // is off until a script's INI asks for it.
         "opcache.jit",
-        Some("tracing"),
+        Some("disable"),
         Access::ALL,
         ModifyHandler::None,
     ))
@@ -692,23 +805,31 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
 }
 
 /// `zend_finalize_system_id` for the file cache, from the internal
-/// function table as it stands after `disable_functions` (GH-17733).
+/// function table as it stands after `disable_functions` (GH-17733), and
+/// the bytecode format (php-src hashes its build id in): entries written
+/// by another build or format land in another directory and are never read.
 fn ensure_system_id(vm: &Vm) {
     if file_cache::system_id_is_final() {
         return;
     }
+    let format = php_vm::bytecode_cache::format_id();
     let names = vm
         .functions
         .iter()
         .filter(|(_, f)| matches!(f, php_vm::func::Func::Builtin(_)))
-        .map(|(name, _)| name.as_bytes());
+        .map(|(name, _)| name.as_bytes())
+        .chain(std::iter::once(format.as_bytes()));
     file_cache::set_system_id(file_cache::compute_system_id(names));
 }
 
+/// `opcache.enable_cli` for the CLI and phpdbg, always on for the web
+/// SAPIs: the `accel_startup` check "Opcode Caching is disabled for CLI".
+fn enabled_for_sapi(vm: &Vm) -> bool {
+    vm.ini_bool("opcache.enable_cli") || !vm.sapi_is_cli()
+}
+
 fn is_opcache_enabled(vm: &Vm) -> bool {
-    let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
-    enable && enable_cli
+    vm.ini_bool("opcache.enable") && enabled_for_sapi(vm)
 }
 
 fn get_ini_string(vm: &Vm, name: &str) -> String {
@@ -857,6 +978,237 @@ fn sync_preload_stats() {
     });
 }
 
+/// What opcache found out about a script before compiling it.
+struct Probe {
+    /// The script's key: its resolved path.
+    realpath: std::path::PathBuf,
+    real_str: String,
+    /// Modification time (`zend_get_file_handle_timestamp`), determined
+    /// on first use (see [`Probe::mtime`]).
+    mtime: std::cell::OnceCell<Option<i64>>,
+    now_sec: i64,
+    /// `opcache.file_cache`, empty when unset.
+    file_cache_dir: String,
+    file_cache_only: bool,
+    /// `opcache.file_cache_read_only`: entries are only read, never
+    /// written or removed.
+    file_cache_read_only: bool,
+}
+
+impl Probe {
+    /// The script's modification time, `None` when it cannot be
+    /// determined. It is only looked up when needed: a hit in the
+    /// in-memory cache between revalidations (`opcache.revalidate_freq`)
+    /// costs no `stat`, as in `validate_timestamp_and_record`.
+    fn mtime(&self) -> Option<i64> {
+        *self.mtime.get_or_init(|| script_timestamp(&self.realpath))
+    }
+
+    /// The modification time to cache a freshly compiled script under,
+    /// as `opcache_compile_file` checks before compiling: `None` (compile
+    /// without caching) when the time cannot be determined or the file is
+    /// newer than `opcache.file_update_protection` seconds, as it may not
+    /// be written completely yet.
+    fn cacheable_mtime(&self, vm: &Vm) -> Option<i64> {
+        let mtime = self.mtime()?;
+        let update_prot = vm.ini_long("opcache.file_update_protection");
+        if update_prot > 0 && self.now_sec - update_prot < mtime {
+            return None;
+        }
+        Some(mtime)
+    }
+}
+
+thread_local! {
+    /// The script whose lookup [`opcache_precompiled_hook`] just missed,
+    /// with its modification time then: the VM then reads and compiles
+    /// it, and the compile hook need not look it up again.
+    static LOOKUP_MISSED: std::cell::RefCell<Option<(ZStr, Option<i64>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The key path of `filename`. The VM passes the opened path of a plain
+/// include, already resolved (`tsrm_realpath`); resolving it again costs a
+/// `readlink` per path component. Only a path that is not absolute and
+/// normalized is resolved here.
+fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+    let bytes = filename.as_bytes();
+    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(bytes));
+    let normalized = path.is_absolute()
+        && !bytes.windows(2).any(|w| w == b"//")
+        && !bytes.ends_with(b"/")
+        && path
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    if normalized {
+        return path.to_path_buf();
+    }
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `persistent_compile_file`'s checks: whether opcache handles `filename`
+/// at all, and under which key. `None` when it is compiled without the
+/// cache (opcache off or blacklisted). The script is not stat'ed here;
+/// see [`Probe::mtime`].
+fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
+    use std::os::unix::ffi::OsStrExt;
+    let enable = vm.ini_bool("opcache.enable");
+    let for_sapi = enabled_for_sapi(vm);
+    let file_cache_only = vm.ini_bool("opcache.file_cache_only");
+    ensure_system_id(vm);
+    if !enable || (!for_sapi && !file_cache_only) {
+        return None;
+    }
+    // The index the processes forked from this one share (opened before
+    // the script that may fork runs: its own compile comes first).
+    php_opcache::shared_index::init();
+    let realpath = script_key_path(filename);
+    // A blacklisted script is compiled, never cached (`persistent_compile_file`).
+    if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
+        return None;
+    }
+    let now_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(0);
+    Some(Probe {
+        real_str: realpath.to_string_lossy().into_owned(),
+        realpath,
+        mtime: std::cell::OnceCell::new(),
+        now_sec,
+        file_cache_dir: get_ini_string(vm, "opcache.file_cache"),
+        file_cache_only,
+        file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
+    })
+}
+
+/// The cached unit of a probed script: from the in-memory cache, else
+/// from the file cache (`zend_file_cache_script_load`). Replays the
+/// recorded warnings under `opcache.record_warnings`.
+fn lookup(
+    vm: &mut Vm,
+    p: &Probe,
+    filename: &ZStr,
+) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
+    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
+    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+
+    // 1. In-memory cache check (unless file_cache_only)
+    if !p.file_cache_only {
+        let hit = GLOBAL_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            match cache.get(
+                &p.real_str,
+                || p.mtime(),
+                validate_timestamps,
+                revalidate_freq,
+                p.now_sec,
+            ) {
+                CacheLookup::Hit(unit) => Some(unit.clone()),
+                _ => None,
+            }
+        });
+        if let Some(unit) = hit {
+            unit.clear_runtime_caches();
+            // As a file cache hit: what compiling the script set up in this
+            // request (`__COMPILER_HALT_OFFSET__`, the auto-globals it
+            // uses, the anonymous class counter) is set up again; a long-
+            // running worker reset it since the script was cached. A unit
+            // whose anonymous classes were named for another counter is
+            // compiled again.
+            if !vm.install_cached_unit(&unit, filename) {
+                return Ok(None);
+            }
+            if vm.ini_bool("opcache.record_warnings") {
+                vm.emit_compile_warnings(&unit, filename)?;
+            }
+            return Ok(Some(unit));
+        }
+    }
+
+    // 2. File cache check: the entry holds compiled bytecode, valid only
+    // for the compiler inputs it was compiled under (`fingerprint`).
+    let Some(fingerprint) = vm.compile_fingerprint() else {
+        return Ok(None);
+    };
+    if p.file_cache_dir.is_empty() {
+        return Ok(None);
+    }
+    // An entry is validated by the script's modification time, so with
+    // `validate_timestamps` a script whose time cannot be determined is
+    // not loaded (`zend_file_cache_script_load_ex`).
+    let expected_mtime = if validate_timestamps {
+        match p.mtime() {
+            Some(mtime) => mtime,
+            None => return Ok(None),
+        }
+    } else {
+        0
+    };
+    let cache_dir = std::path::Path::new(&p.file_cache_dir);
+    let consistency_checks = vm.ini_bool("opcache.file_cache_consistency_checks");
+    match file_cache::read_file_cache(
+        cache_dir,
+        &p.realpath,
+        expected_mtime,
+        validate_timestamps,
+        consistency_checks,
+        p.file_cache_read_only,
+    ) {
+        Ok(Some(payload)) => {
+            if let Some(unit) = load_cached_unit(vm, &payload, fingerprint, filename) {
+                if vm.ini_bool("opcache.record_warnings") {
+                    vm.emit_compile_warnings(&unit, filename)?;
+                }
+                if !p.file_cache_only {
+                    cache_in_memory(
+                        vm,
+                        &p.real_str,
+                        payload.mtime(),
+                        payload.len(),
+                        p.now_sec,
+                        &unit,
+                    );
+                }
+                return Ok(Some(unit));
+            }
+        }
+        Err(corrupted_msg) => {
+            // zend_accel_error(ACCEL_LOG_WARNING, "...\n").
+            accel_log_warning(vm, &format!("{corrupted_msg}\n"));
+        }
+        Ok(None) => {}
+    }
+    Ok(None)
+}
+
+/// The hook the VM asks before it reads an included file: a cached unit
+/// serves the include without the file being read, as
+/// `persistent_compile_file` loads a script from the cache before
+/// `zend_stream_fixup` would read it.
+fn opcache_precompiled_hook(
+    vm: &mut Vm,
+    filename: &ZStr,
+) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
+    sync_preload_stats();
+    let Some(p) = probe(vm, filename) else {
+        return Ok(None);
+    };
+    let unit = lookup(vm, &p, filename)?;
+    if unit.is_none() {
+        // The time to cache the script under is taken now, before the VM
+        // reads the file, as `zend_get_file_handle_timestamp` precedes the
+        // read in `persistent_compile_file`: a write in between then makes
+        // the cached copy look older than the file, and it is compiled
+        // again, instead of the old source being cached under the new time.
+        let mtime = p.mtime();
+        LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some((filename.clone(), mtime)));
+    }
+    Ok(unit)
+}
+
 /// The compile hook overriding `compile_source` for files.
 fn opcache_compile_hook(
     vm: &mut Vm,
@@ -865,131 +1217,130 @@ fn opcache_compile_hook(
     skip_shebang: bool,
 ) -> VmResult<CompileOutcome> {
     sync_preload_stats();
-
-    let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
-    let file_cache_only = vm.ini_bool("opcache.file_cache_only");
-    let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
-    ensure_system_id(vm);
-
-    if !enable || (!enable_cli && !file_cache_only) {
+    let Some(p) = probe(vm, filename) else {
         return vm.compile_source_default(src, filename, false, skip_shebang);
+    };
+    let missed = LOOKUP_MISSED.with(|m| {
+        m.borrow_mut()
+            .take()
+            .filter(|(missed, _)| missed.as_bytes() == filename.as_bytes())
+    });
+    let just_missed = missed.is_some();
+    if let Some((_, before_read)) = missed {
+        // The time taken before the file was read.
+        let _ = p.mtime.set(before_read);
     }
-
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename.as_bytes()));
-    let realpath = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let real_str = realpath.to_string_lossy().into_owned();
-
-    // A blacklisted script is compiled, never cached (`persistent_compile_file`).
-    if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
-        return vm.compile_source_default(src, filename, false, skip_shebang);
-    }
-
-    let mtime_sec = std::fs::metadata(&realpath)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let now_sec = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let update_prot = vm.ini_long("opcache.file_update_protection");
-    if update_prot > 0 && (now_sec - mtime_sec) < update_prot {
-        return vm.compile_source_default(src, filename, false, skip_shebang);
-    }
-
-    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
-    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
-
-    // 1. In-memory cache check (unless file_cache_only)
-    if !file_cache_only {
-        let hit = GLOBAL_CACHE.with(|c| {
-            let mut cache = c.borrow_mut();
-            match cache.get(
-                &real_str,
-                mtime_sec,
-                validate_timestamps,
-                revalidate_freq,
-                now_sec,
-            ) {
-                CacheLookup::Hit(unit) => Some(unit.clone()),
-                _ => None,
-            }
-        });
-        if let Some(unit) = hit {
-            unit.clear_runtime_caches();
-            if vm.ini_bool("opcache.record_warnings") {
-                vm.emit_compile_warnings(&unit, filename)?;
-            }
+    if !just_missed {
+        if let Some(unit) = lookup(vm, &p, filename)? {
             return Ok(CompileOutcome::Ok(unit));
         }
     }
 
-    // 2. File cache check
-    if !file_cache_dir.is_empty() {
-        let cache_dir = std::path::Path::new(&file_cache_dir);
-        let consistency_checks = vm.ini_bool("opcache.file_cache_consistency_checks");
-        match file_cache::read_file_cache(
-            cache_dir,
-            &realpath,
-            mtime_sec,
-            validate_timestamps,
-            consistency_checks,
-        ) {
-            Ok(Some(cached_src)) => {
-                let res =
-                    vm.compile_source_default(Rc::from(cached_src), filename, false, skip_shebang)?;
-                if let CompileOutcome::Ok(ref unit) = res {
-                    unit.clear_runtime_caches();
-                    if !file_cache_only {
-                        GLOBAL_CACHE.with(|c| {
-                            c.borrow_mut().insert(
-                                real_str,
-                                mtime_sec,
-                                src.len() + 1024,
-                                now_sec,
-                                unit.clone(),
-                            );
-                        });
-                    }
-                }
-                return Ok(res);
-            }
-            Err(corrupted_msg) => {
-                // zend_accel_error(ACCEL_LOG_WARNING, "...\n").
-                accel_log_warning(vm, &format!("{corrupted_msg}\n"));
-            }
-            Ok(None) => {}
-        }
-    }
-
-    // 3. Cache Miss: compile source
-    let res = vm.compile_source_default(src.clone(), filename, false, skip_shebang)?;
+    // Cache miss. The time to cache the script under is taken before
+    // compiling (`opcache_compile_file`: otherwise a change during the
+    // compile would go unnoticed); a script that is not to be cached is
+    // compiled plainly.
+    let Some(mtime) = p.cacheable_mtime(vm) else {
+        return vm.compile_source_default(src, filename, false, skip_shebang);
+    };
+    // Like `persistent_compile_file`, compile with
+    // `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
+    // depend on the functions other files happened to declare first.
+    let res = vm.with_ignore_other_files(|vm| {
+        vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+    })?;
     if let CompileOutcome::Ok(ref unit) = res {
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
         vm.call_registered_optimizer_passes();
-        if !file_cache_only {
+        if !p.file_cache_only {
             // `cache_script_in_shared_memory()`.
-            vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{real_str}'"));
-            GLOBAL_CACHE.with(|c| {
-                c.borrow_mut()
-                    .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit.clone());
-            });
+            cache_in_memory(vm, &p.real_str, mtime, src.len() + 1024, p.now_sec, unit);
         }
-        if !file_cache_dir.is_empty() {
-            let cache_dir = std::path::Path::new(&file_cache_dir);
-            if let Err((msg, _)) =
-                file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src)
+        let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
+        if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
+            let cache_dir = std::path::Path::new(&p.file_cache_dir);
+            if let Err(msg) = store_in_file_cache(cache_dir, &p.realpath, mtime, fingerprint, unit)
             {
                 accel_log_warning(vm, &format!("{msg}\n"));
             }
         }
     }
     Ok(res)
+}
+
+/// `zend_file_cache_script_store`: writes `unit` as a file cache entry
+/// (the compiler fingerprint, then the bytecode image). A unit that
+/// cannot be encoded (it holds a value without a compile-time form) is
+/// silently not stored.
+fn store_in_file_cache(
+    cache_dir: &std::path::Path,
+    realpath: &std::path::Path,
+    mtime_sec: i64,
+    fingerprint: u64,
+    unit: &php_vm::compiler::CompiledUnit,
+) -> Result<(), String> {
+    let Ok(image) = php_vm::bytecode_cache::encode(unit) else {
+        return Ok(());
+    };
+    let mut payload = Vec::with_capacity(8 + image.len());
+    payload.extend_from_slice(&fingerprint.to_le_bytes());
+    payload.extend_from_slice(&image);
+    file_cache::write_file_cache(cache_dir, realpath, mtime_sec, &payload)
+        .map(|_| ())
+        .map_err(|(msg, _)| msg)
+}
+
+/// `zend_get_file_handle_timestamp`: the script's modification time in
+/// seconds. A plain file is stat'ed; a stream path (`phar://...`) is
+/// stat'ed through its wrapper's `url_stat` (`zend_get_stream_timestamp`),
+/// and a wrapper without `url_stat` gives the constant 1, as in php-src
+/// ("anything other than 0 is considered to be a valid timestamp").
+/// `None` when the script cannot be stat'ed.
+fn script_timestamp(path: &std::path::Path) -> Option<i64> {
+    use php_streams::wrapper::{locate, STREAM_LOCATE_WRAPPERS_ONLY, URL_STAT_QUIET};
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    let scheme = php_streams::wrapper::scheme_len(bytes);
+    let is_url = scheme > 1 && bytes[scheme..].starts_with(b"://");
+    if is_url && !bytes.starts_with(b"file://") {
+        let located = locate(bytes, STREAM_LOCATE_WRAPPERS_ONLY)?;
+        return match located
+            .wrapper
+            .url_stat(&located.path, URL_STAT_QUIET, None)
+        {
+            None => Some(1),
+            Some(Ok(stat)) => Some(stat.mtime),
+            Some(Err(())) => None,
+        };
+    }
+    let plain = bytes.strip_prefix(b"file://").unwrap_or(bytes);
+    let modified = std::fs::metadata(std::ffi::OsStr::from_bytes(plain))
+        .ok()?
+        .modified()
+        .ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    i64::try_from(secs).ok()
+}
+
+/// Decodes a file cache entry (compiler fingerprint, then the bytecode
+/// image) and installs it. `None` when the entry was compiled under other
+/// compiler inputs, is unreadable, or cannot be installed in this request;
+/// the caller then compiles the file and overwrites the entry.
+fn load_cached_unit(
+    vm: &mut Vm,
+    payload: &[u8],
+    fingerprint: u64,
+    filename: &ZStr,
+) -> Option<Rc<php_vm::compiler::CompiledUnit>> {
+    let (stored, image) = payload.split_first_chunk::<8>()?;
+    if u64::from_le_bytes(*stored) != fingerprint {
+        return None;
+    }
+    let unit = Rc::new(php_vm::bytecode_cache::decode(image).ok()?);
+    vm.install_cached_unit(&unit, filename).then_some(unit)
 }
 
 /// An include of a file that cannot be opened: `persistent_compile_file`
@@ -1029,7 +1380,7 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
         if !cache.is_cached(&key) {
             return None;
         }
-        match cache.get(&key, 0, false, 0, now_sec) {
+        match cache.get(&key, || None, false, 0, now_sec) {
             CacheLookup::Hit(unit) => Some(unit.clone()),
             _ => None,
         }
@@ -1039,6 +1390,10 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
     };
     unit.clear_runtime_caches();
     let filename = ZStr::from(key.as_bytes());
+    // See `lookup`: the request state compiling the script set up.
+    if !vm.install_cached_unit(&unit, &filename) {
+        return Ok(None);
+    }
     if vm.ini_bool("opcache.record_warnings") {
         vm.emit_compile_warnings(&unit, &filename)?;
     }
@@ -1056,6 +1411,8 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         vm_accel_log(vm, AccelLog::Debug, "Restart Scheduled! Reason: user");
     }
     GLOBAL_CACHE.with(|c| c.borrow_mut().reset());
+    php_opcache::shared_index::record_reset();
+    php_opcache::shared_index::record_manual_restart();
     Ok(Value::Bool(true))
 }
 
@@ -1090,7 +1447,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .insert(ZStr::from("opcache_enabled"), Value::Bool(true));
         status
             .make_mut()
-            .insert(ZStr::from("cache_full"), Value::Bool(false));
+            .insert(ZStr::from("cache_full"), Value::Bool(cache.full));
         status
             .make_mut()
             .insert(ZStr::from("restart_pending"), Value::Bool(false));
@@ -1150,9 +1507,10 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ZStr::from("num_cached_keys"),
             Value::Int(num_scripts as i64),
         );
-        stats
-            .make_mut()
-            .insert(ZStr::from("max_cached_keys"), Value::Int(16229));
+        stats.make_mut().insert(
+            ZStr::from("max_cached_keys"),
+            Value::Int(i64::try_from(cache.max_cached_keys).unwrap_or(i64::MAX)),
+        );
         stats
             .make_mut()
             .insert(ZStr::from("hits"), Value::Int(cache.hits as i64));
@@ -1169,9 +1527,11 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         stats
             .make_mut()
             .insert(ZStr::from("hash_restarts"), Value::Int(0));
+        // Counted by every process forked after startup when shared.
+        let manual = php_opcache::shared_index::manual_restarts().unwrap_or(cache.manual_restarts);
         stats.make_mut().insert(
             ZStr::from("manual_restarts"),
-            Value::Int(cache.manual_restarts as i64),
+            Value::Int(i64::try_from(manual).unwrap_or(i64::MAX)),
         );
         stats
             .make_mut()
@@ -1276,6 +1636,38 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 let reval = entry.last_revalidate + vm.ini_long("opcache.revalidate_freq");
                 s.make_mut()
                     .insert(ZStr::from("revalidate"), Value::Int(reval));
+                scripts_arr
+                    .make_mut()
+                    .insert(ZStr::from(path.as_str()), Value::Array(s));
+            }
+            // The scripts the processes sharing this one's cache (forked
+            // from the same startup) cached.
+            for path in php_opcache::shared_index::cached_elsewhere() {
+                if cache.scripts.contains_key(&path) {
+                    continue;
+                }
+                let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+                let mut s = ZArray::new();
+                s.make_mut().insert(
+                    ZStr::from("full_path"),
+                    Value::Str(ZStr::from(path.as_str())),
+                );
+                s.make_mut().insert(ZStr::from("hits"), Value::Int(0));
+                s.make_mut().insert(
+                    ZStr::from("memory_consumption"),
+                    Value::Int(i64::try_from(size).unwrap_or(0) + 1024),
+                );
+                s.make_mut().insert(
+                    ZStr::from("last_used"),
+                    Value::Str(ZStr::from(format_ctime(0))),
+                );
+                s.make_mut()
+                    .insert(ZStr::from("last_used_timestamp"), Value::Int(0));
+                s.make_mut().insert(ZStr::from("timestamp"), Value::Int(0));
+                s.make_mut().insert(
+                    ZStr::from("revalidate"),
+                    Value::Int(vm.ini_long("opcache.revalidate_freq")),
+                );
                 scripts_arr
                     .make_mut()
                     .insert(ZStr::from(path.as_str()), Value::Array(s));
@@ -1416,7 +1808,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let filename_z = a.str(0);
 
     let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+        && (enabled_for_sapi(vm) || vm.ini_bool("opcache.file_cache_only"));
     if !enabled {
         let (file, line) = vm.current_location();
         let file_s = file.to_string_lossy();
@@ -1457,22 +1849,29 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 
     let real_z = ZStr::from(realpath.as_os_str().as_bytes());
-    let res = vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)?;
+    let res = vm.with_ignore_other_files(|vm| {
+        vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)
+    })?;
     match res {
         CompileOutcome::Ok(unit) => {
+            let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+            ensure_system_id(vm);
+            if !file_cache_dir.is_empty() && !vm.ini_bool("opcache.file_cache_read_only") {
+                if let Some(fingerprint) = vm.compile_fingerprint() {
+                    // The write error is not reported here, as before.
+                    let _ = store_in_file_cache(
+                        std::path::Path::new(&file_cache_dir),
+                        &realpath,
+                        mtime_sec,
+                        fingerprint,
+                        &unit,
+                    );
+                }
+            }
             let file_cache_only = vm.ini_bool("opcache.file_cache_only");
             if !file_cache_only {
                 let real_str = realpath.to_string_lossy().into_owned();
-                GLOBAL_CACHE.with(|c| {
-                    c.borrow_mut()
-                        .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit);
-                });
-            }
-            let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
-            ensure_system_id(vm);
-            if !file_cache_dir.is_empty() {
-                let cache_dir = std::path::Path::new(&file_cache_dir);
-                let _ = file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src);
+                cache_in_memory(vm, &real_str, mtime_sec, src.len() + 1024, now_sec, &unit);
             }
             Ok(Value::Bool(true))
         }
@@ -1500,7 +1899,8 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
 
     ensure_system_id(vm);
-    if !file_cache_dir.is_empty() {
+    // `zend_file_cache_invalidate` leaves a read-only cache alone.
+    if !file_cache_dir.is_empty() && !vm.ini_bool("opcache.file_cache_read_only") {
         let cache_dir = std::path::Path::new(&file_cache_dir);
         file_cache::invalidate_file_cache(cache_dir, &realpath);
     }
@@ -1516,6 +1916,9 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         c.borrow_mut()
             .invalidate(&real_str, force, mtime_sec, validate_timestamps)
     });
+    if was_cached {
+        php_opcache::shared_index::record_invalidated(&real_str);
+    }
 
     Ok(Value::Bool(file_found || was_cached))
 }
@@ -1635,6 +2038,10 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     dirs.make_mut().insert(
         ZStr::from("opcache.file_cache"),
         Value::Str(ZStr::from(get_ini_string(vm, "opcache.file_cache"))),
+    );
+    dirs.make_mut().insert(
+        ZStr::from("opcache.file_cache_read_only"),
+        Value::Bool(vm.ini_bool("opcache.file_cache_read_only")),
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.file_cache_only"),
@@ -1798,14 +2205,15 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Err(_) => return Ok(Value::Bool(false)),
     };
     let real_str = realpath.to_string_lossy().into_owned();
-    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&real_str));
+    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&real_str))
+        || php_opcache::shared_index::cached_elsewhere().contains(&real_str);
     Ok(Value::Bool(cached))
 }
 
 fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let filename_z = a.str(0);
     let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+        && (enabled_for_sapi(vm) || vm.ini_bool("opcache.file_cache_only"));
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
     ensure_system_id(vm);
     if !enabled || file_cache_dir.is_empty() {

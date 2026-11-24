@@ -218,7 +218,7 @@ fn echo_of_ints_matches_php() {
 /// with method calls as in php-src; an opcode consuming a multi-line call's
 /// result reports the last argument's line (`CG(zend_lineno)` after the
 /// call); a one-part interpolation is a plain string cast. Expected output
-/// from `php -n` 8.3.
+/// from `/usr/bin/php8.5 -n`.
 #[test]
 fn interpolation_converts_parts_in_php_order() {
     assert_eq!(

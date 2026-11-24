@@ -36,8 +36,18 @@ impl Extension for Spl {
         funcs::register(m);
         m.info(info);
         // Ahead of the stream layer's shutdown hook (which closes all
-        // resources): see `files::shutdown`.
-        m.vm().shutdown_hooks.insert(0, files::shutdown);
+        // resources; it was registered earlier, and the hooks run in
+        // reverse): see `files::shutdown`.
+        m.on_request_shutdown(files::shutdown);
+        // `PHP_RINIT(spl)`: the autoloader registry is the request's (a
+        // server process runs many requests on one thread).
+        // The class cache of the `create_object` hook too (class addresses
+        // are reused from one request to the next).
+        m.on_request_startup(|_| {
+            php_spl::functions::reset_request();
+            hooks::reset_bases();
+            files::request_startup();
+        });
     }
 }
 

@@ -246,7 +246,8 @@ impl Compiler<'_> {
                 false,
                 required,
                 fd.params.iter().map(|p| (p.by_ref, p.variadic)),
-            );
+            )
+            .with_names(fd.params.iter().map(|p| ZStr::from(p.name.name.as_slice())));
             self.known_functions.insert(known_key, info);
         } else {
             self.f().line = fd.span.line;
@@ -659,7 +660,11 @@ impl Compiler<'_> {
                 }
                 modifiers_to_flags(p.modifiers)
             };
-            let mut attrs = self.attributes_at(&p.attributes, Some(spec.line_start))?;
+            // `zend_compile_params` sets `CG(zend_lineno)` to the parameter's
+            // line first: its AST node's, that of its first child (the type,
+            // else the variable).
+            let param_line = p.ty.as_ref().map_or(p.name.span.line, |t| t.span.line);
+            let mut attrs = self.attributes_at(&p.attributes, Some(param_line))?;
             let promoted_tgt = if promote == 0 {
                 0
             } else {

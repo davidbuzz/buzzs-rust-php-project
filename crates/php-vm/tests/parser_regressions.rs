@@ -95,8 +95,10 @@ for ($i = 0; $i < 2; $i++) {
     );
 }
 
+/// GH-25352 (php-src master): the error names the anonymous class in
+/// full, its NUL byte and the file and line after it included.
 #[test]
-fn anonymous_readonly_write_error_hides_internal_name_suffix() {
+fn anonymous_readonly_write_error_names_the_full_class() {
     assert_eq!(
         run(r#"<?php
 $readonly = new readonly class {
@@ -112,7 +114,7 @@ $mutable->field = 123;
 var_dump($mutable->field);
 "#),
         "int(2)\n\
-         Error: Cannot modify readonly property class@anonymous::$field\n\
+         Error: Cannot modify readonly property class@anonymous\0t.php:2$0::$field\n\
          int(2)\n\
          int(123)\n"
     );

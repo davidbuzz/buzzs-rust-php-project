@@ -42,8 +42,7 @@ impl Counts {
                 self.pass += 1;
                 self.warn += 1;
             }
-            Status::Fail => self.fail += 1,
-            Status::Timeout => self.fail += 1,
+            Status::Fail | Status::Timeout => self.fail += 1,
             Status::Xfail => self.xfail += 1,
             Status::Skip => self.skip += 1,
             Status::Bork => self.bork += 1,

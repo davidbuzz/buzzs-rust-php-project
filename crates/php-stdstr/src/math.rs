@@ -66,16 +66,17 @@ fn zend_error(level: Level, message: &str) -> Notice {
 
 /// `_php_math_basetozval()` — parses a base-`base` (2..=36) number.
 ///
-/// Leading/trailing C whitespace is skipped, a `0x`/`0o`/`0b` prefix is
-/// accepted for bases 16/8/2, any other non-digit byte is ignored with the
-/// `E_DEPRECATED` "Invalid characters passed for attempted conversion, these
-/// have been ignored", and values above `PHP_INT_MAX` continue as a float
-/// after the `E_NOTICE` "Input number is larger than `PHP_INT_MAX`, precision
-/// has been lost in conversion" (php-src master; PHP 8.3 is silent). Both
-/// are raised with `zend_error`, i.e. without a function-name prefix.
+/// Leading/trailing C whitespace is skipped and a `0x`/`0o`/`0b` prefix is
+/// accepted for bases 16/8/2. Any other byte that is not a digit of the
+/// base throws `Exception` "Invalid characters passed for attempted
+/// conversion" (php-src master, by RFC; it was a deprecation). A value
+/// above `PHP_INT_MAX`
+/// continues as a float, with the `E_NOTICE` "Input number is larger than
+/// `PHP_INT_MAX`, precision has been lost in conversion" once the whole
+/// input is read (`zend_error`, without a function-name prefix).
 ///
 /// A `base` outside 2..=36 is a caller bug; it is clamped.
-pub fn base_to_number(s: &[u8], base: u32, notices: &mut Notices) -> Number {
+pub fn base_to_number(s: &[u8], base: u32, notices: &mut Notices) -> StdResult<Number> {
     let base = base.clamp(2, 36);
     let mut start = 0;
     let mut end = s.len();
@@ -99,12 +100,13 @@ pub fn base_to_number(s: &[u8], base: u32, notices: &mut Notices) -> Number {
     let mut num: i64 = 0;
     let mut fnum: f64 = 0.0;
     let mut is_float = false;
-    let mut invalid = false;
 
     for &c in s {
         let Some(d) = digit_value(c).filter(|&d| d < base) else {
-            invalid = true;
-            continue;
+            return Err(StdError::new(
+                ErrorKind::Exception,
+                "Invalid characters passed for attempted conversion",
+            ));
         };
         if !is_float {
             let d = i64::from(d);
@@ -112,10 +114,6 @@ pub fn base_to_number(s: &[u8], base: u32, notices: &mut Notices) -> Number {
                 num = num * base_l + d;
                 continue;
             }
-            notices.push(zend_error(
-                Level::Notice,
-                "Input number is larger than PHP_INT_MAX, precision has been lost in conversion",
-            ));
             #[allow(clippy::cast_precision_loss)]
             {
                 fnum = num as f64;
@@ -125,33 +123,31 @@ pub fn base_to_number(s: &[u8], base: u32, notices: &mut Notices) -> Number {
         fnum = fnum * f64::from(base) + f64::from(d);
     }
 
-    if invalid {
+    Ok(if is_float {
         notices.push(zend_error(
-            Level::Deprecated,
-            "Invalid characters passed for attempted conversion, these have been ignored",
+            Level::Notice,
+            "Input number is larger than PHP_INT_MAX, precision has been lost in conversion",
         ));
-    }
-    if is_float {
         Number::Float(fnum)
     } else {
         Number::Int(num)
-    }
+    })
 }
 
 /// `bindec(string $binary_string): int|float`.
 ///
 /// VM coercion: `Z_PARAM_STR` (the argument is converted to a string).
-pub fn bindec(s: &[u8], notices: &mut Notices) -> Number {
+pub fn bindec(s: &[u8], notices: &mut Notices) -> StdResult<Number> {
     base_to_number(s, 2, notices)
 }
 
 /// `hexdec(string $hex_string): int|float`. VM coercion: `Z_PARAM_STR`.
-pub fn hexdec(s: &[u8], notices: &mut Notices) -> Number {
+pub fn hexdec(s: &[u8], notices: &mut Notices) -> StdResult<Number> {
     base_to_number(s, 16, notices)
 }
 
 /// `octdec(string $octal_string): int|float`. VM coercion: `Z_PARAM_STR`.
-pub fn octdec(s: &[u8], notices: &mut Notices) -> Number {
+pub fn octdec(s: &[u8], notices: &mut Notices) -> StdResult<Number> {
     base_to_number(s, 8, notices)
 }
 
@@ -288,7 +284,7 @@ pub fn base_convert(
         .ok()
         .filter(|b| (2..=36).contains(b))
         .ok_or_else(|| StdError::arg_value("base_convert", 3, "to_base", MSG))?;
-    let n = base_to_number(num, from, notices);
+    let n = base_to_number(num, from, notices)?;
     number_to_base(n, to)
 }
 
@@ -563,7 +559,7 @@ mod tests {
     use super::*;
 
     /// libm's results, which Rust's `f64::asinh`/`acosh`/`atanh` miss by
-    /// one bit for these arguments (`/usr/bin/php -n`).
+    /// one bit for these arguments (`/usr/bin/php8.5 -n`).
     #[test]
     fn inverse_hyperbolics_are_libms() {
         assert_eq!(asinh(0.044_318_560_479_840_056), 0.044_304_065_350_020_95);
@@ -590,7 +586,7 @@ mod tests {
 
     fn conv(s: &[u8], base: u32) -> (Number, Vec<Notice>) {
         let mut n = Vec::new();
-        let r = base_to_number(s, base, &mut n);
+        let r = base_to_number(s, base, &mut n).expect("valid digits");
         (r, n)
     }
 
@@ -600,11 +596,13 @@ mod tests {
         assert_eq!(conv(b" 0xFf\t\n", 16), (Number::Int(255), vec![]));
         assert_eq!(conv(b"0b1010", 2).0, Number::Int(10));
         assert_eq!(conv(b"0o17", 8).0, Number::Int(15));
-        let (r, n) = conv(b"fg", 16);
-        assert_eq!(r, Number::Int(15));
-        assert_eq!(n.len(), 1);
-        assert_eq!(n[0].level, Level::Deprecated);
-        assert_eq!(n[0].func, None);
+        // php-src master: an invalid digit throws (it was a deprecation).
+        let e = base_to_number(b"fg", 16, &mut Vec::new()).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Exception);
+        assert_eq!(
+            e.to_string(),
+            "Invalid characters passed for attempted conversion"
+        );
         let (r, n) = conv(b"17fffffffffffffff", 16);
         assert_eq!(r, Number::Float(2.767_011_611_056_432_7E19));
         assert_eq!(n[0].level, Level::Notice);

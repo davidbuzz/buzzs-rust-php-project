@@ -24,6 +24,8 @@ use common::{output_matches, phpt_sections, soap_tests_dir, with_big_stack, Test
 /// the VM.
 const ENGINE_DEPENDENT: &[&str] = &[
     "GHSA-m33r-qmcv-p97q.phpt",
+    "GHSA-q23r-hr55-xmpg-wsdl.phpt",
+    "GHSA-q23r-hr55-xmpg.phpt",
     "SoapServer/persistent-session-no-free-SoapFault.phpt",
     "bugs/bug28751.phpt",
     "bugs/bug29830.phpt",
@@ -54,6 +56,7 @@ const ENGINE_DEPENDENT: &[&str] = &[
     "bugs/segfault_assertion_props.phpt",
     "classmap004.phpt",
     "classmap_private_property_packed_array.phpt",
+    "gh25303.phpt",
     "gh15711.phpt",
     "gh16318.phpt",
     "gh22585.phpt",

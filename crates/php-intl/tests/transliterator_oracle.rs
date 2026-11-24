@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! `Transliterator` checked against fixtures from `/usr/bin/php`.
+//! `Transliterator` checked against fixtures from `/usr/bin/php8.5`.
 #![allow(clippy::too_many_lines, clippy::many_single_char_names)]
 
 mod common;
@@ -54,9 +54,10 @@ fn transliterator_matches_php() {
                 }
                 Err(e) => {
                     c.check(ctx, &err_name(&e), &row[3].show());
+                    // The binding adds the function prefix.
                     let want = row[4]
                         .s()
-                        .trim_start_matches("transliterator_create_from_rules: ");
+                        .trim_start_matches("Transliterator::createFromRules(): ");
                     let want = want.rsplit_once(": ").map_or(want, |x| x.0);
                     c.check(ctx, e.intl_message().unwrap_or(""), want);
                 }

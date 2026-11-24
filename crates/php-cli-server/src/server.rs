@@ -71,8 +71,8 @@ pub struct Server {
     clients: BTreeMap<RawFd, Client>,
     config: Arc<ServerConfig>,
     post_max_size: i64,
-    /// The VM after module startup; each request runs on a forked copy.
-    template: Option<crate::sapi::PreparedVm>,
+    /// Runs the PHP requests.
+    php: Option<PhpThread>,
 }
 
 /// `php_cli_server_parse_addr()`: `host:port` or `[host]:port`.
@@ -163,15 +163,13 @@ impl Server {
     /// A server on `listener`.
     pub fn new(listener: TcpListener, config: ServerConfig, post_max_size: i64) -> Self {
         let config = Arc::new(config);
-        // Module startup happens once, before the banner (as in PHP);
-        // requests run in forked children of this process.
-        let template = Some(crate::sapi::prepare_vm(&config));
+        let php = PhpThread::spawn(&config);
         Server {
             listener,
             clients: BTreeMap::new(),
             config,
             post_max_size,
-            template,
+            php,
         }
     }
 
@@ -452,10 +450,12 @@ impl Server {
             self.begin_send_static(fd);
             return;
         }
-        let outcome = if self.template.is_some() {
-            run_php_forked(c, &mut self.template, &self.config, is_static)
+        let outcome = if let Some(o) = self.php.as_ref().and_then(|t| run_php(c, t, is_static)) {
+            o
         } else {
-            run_php(c, Prepared::spawn(&self.config), is_static)
+            // The request thread ended (a panic): the next request gets a new one.
+            self.php = PhpThread::spawn(&self.config);
+            Outcome::Done
         };
         match outcome {
             Outcome::Done => self.close(fd),
@@ -489,7 +489,7 @@ fn send_blocking(stream: &TcpStream, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// A request handed to a [`Prepared`] thread.
+/// A request handed to the [`PhpThread`].
 struct Job {
     request: crate::request::Request,
     stream: TcpStream,
@@ -497,48 +497,71 @@ struct Job {
     is_static: bool,
 }
 
-/// A thread holding a ready VM, waiting for its request (fresh
-/// thread-locals and a large stack per request).
+/// The thread that runs this process's PHP requests one after another, as
+/// php-src's server runs them in its own process (`php_request_startup()`
+/// to `php_request_shutdown()` in `php_cli_server_dispatch()`): what a
+/// request leaves in the process, opcache's scripts among it, is there for
+/// the next one. Module startup runs once, for the thread's VM; after each
+/// request the VM is reset to its start-of-request state
+/// ([`php_vm::Vm::request_reset`], as `mod_php` does), not built again. The
+/// thread has the large stack requests need.
 #[derive(Debug)]
-struct Prepared {
+struct PhpThread {
     jobs: mpsc::Sender<Job>,
     done: mpsc::Receiver<Outcome>,
 }
 
-impl Prepared {
-    fn spawn(config: &Arc<ServerConfig>) -> Option<Prepared> {
+impl PhpThread {
+    /// Starts the thread and waits for its first VM: module startup comes
+    /// before the banner, as in php-src.
+    fn spawn(config: &Arc<ServerConfig>) -> Option<PhpThread> {
         let (jtx, jrx) = mpsc::channel::<Job>();
         let (dtx, drx) = mpsc::channel::<Outcome>();
+        let (ready_tx, ready_rx) = mpsc::channel::<()>();
         let config = config.clone();
         std::thread::Builder::new()
             .name("php-request".to_string())
             .stack_size(256 << 20)
             .spawn(move || {
-                let vm = crate::sapi::prepare_vm(&config);
-                let Ok(job) = jrx.recv() else {
-                    return;
-                };
-                let ctx = Rc::new(RequestCtx::new(job.request, job.stream, job.addr));
-                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, &config, job.is_static);
-                let _ = dtx.send(outcome);
-                drop(vm);
-                drop(ctx);
+                let mut vm = crate::sapi::prepare_vm(&config);
+                let slot = vm.slot.clone();
+                let _ = ready_tx.send(());
+                while let Ok(job) = jrx.recv() {
+                    let ctx = Rc::new(RequestCtx::new(job.request, job.stream, job.addr));
+                    let (outcome, mut used) =
+                        crate::sapi::run_request(vm, &ctx, &config, job.is_static);
+                    if outcome == Outcome::Done {
+                        // The response is complete: the client sees EOF now,
+                        // not once this thread lets go of its copy of the socket.
+                        if let Some(stream) = &ctx.stream {
+                            let _ = stream.shutdown(std::net::Shutdown::Write);
+                        }
+                    }
+                    if dtx.send(outcome).is_err() {
+                        break;
+                    }
+                    drop(ctx);
+                    used.request_reset();
+                    vm = crate::sapi::PreparedVm {
+                        vm: used,
+                        slot: slot.clone(),
+                    };
+                }
             })
             .ok()?;
-        Some(Prepared {
+        ready_rx.recv().ok()?;
+        Some(PhpThread {
             jobs: jtx,
             done: drx,
         })
     }
 }
 
-/// Runs the PHP part of a request on the prepared thread and waits for it.
-fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outcome {
+/// Runs the PHP part of a request on the [`PhpThread`] and waits for it;
+/// `None` when the thread is gone.
+fn run_php(c: &mut Client, php: &PhpThread, is_static: bool) -> Option<Outcome> {
     let Ok(stream) = c.stream.try_clone() else {
-        return Outcome::Done;
-    };
-    let Some(p) = prepared else {
-        return Outcome::Done;
+        return Some(Outcome::Done);
     };
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -553,87 +576,9 @@ fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outco
         addr: c.addr.clone(),
         is_static,
     };
-    let outcome = if p.jobs.send(job).is_ok() {
-        p.done.recv().unwrap_or(Outcome::Done)
-    } else {
-        Outcome::Done
-    };
+    let outcome = php.jobs.send(job).ok().and_then(|()| php.done.recv().ok());
     let _ = c.stream.set_nonblocking(true);
     outcome
-}
-
-/// Exit status of a request child that asks for the static file.
-const EXIT_SERVE_STATIC: i32 = 10;
-
-/// Runs the PHP part of a request in a forked child of the server, which
-/// inherits the started-up `template` VM (PHP's per-request startup
-/// without paying for module startup again) and leaves the server's state
-/// untouched.  Waits for the child, as PHP's server is single-threaded.
-fn run_php_forked(
-    c: &mut Client,
-    template: &mut Option<crate::sapi::PreparedVm>,
-    config: &Arc<ServerConfig>,
-    is_static: bool,
-) -> Outcome {
-    let _ = std::io::stderr().flush();
-    let server_pid = crate::sapi::server_pid();
-    // SAFETY: the server thread is the only one doing work; the child only
-    // continues on this thread with its copy of the address space and ends
-    // with `_exit`.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return run_php(c, Prepared::spawn(config), is_static);
-    }
-    if pid == 0 {
-        crate::sapi::set_server_pid(server_pid);
-        // SAFETY: prctl has no memory-safety preconditions.
-        unsafe {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-        }
-        let code = match (c.stream.try_clone(), template.take()) {
-            (Ok(stream), Some(vm)) => {
-                let _ = stream.set_nonblocking(false);
-                let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                let request = std::mem::take(&mut c.reader.request);
-                let ctx = Rc::new(RequestCtx::new(request, stream, c.addr.clone()));
-                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, config, is_static);
-                // The process ends right away: skip the VM's destruction.
-                std::mem::forget(vm);
-                if outcome == Outcome::Done {
-                    // The response is complete: let the client see EOF now.
-                    if let Some(stream) = &ctx.stream {
-                        let _ = stream.shutdown(std::net::Shutdown::Write);
-                    }
-                }
-                std::mem::forget(ctx);
-                match outcome {
-                    Outcome::Done => 0,
-                    Outcome::ServeStatic => EXIT_SERVE_STATIC,
-                }
-            }
-            _ => 0,
-        };
-        let _ = std::io::stderr().flush();
-        // SAFETY: ends the child without running the parent's destructors.
-        unsafe { libc::_exit(code) }
-    }
-    let mut status = 0;
-    loop {
-        // SAFETY: waitpid writes the status into our local.
-        let r = unsafe { libc::waitpid(pid, &raw mut status, 0) };
-        if r == pid {
-            break;
-        }
-        if r < 0 && std::io::Error::last_os_error().kind() != ErrorKind::Interrupted {
-            return Outcome::Done;
-        }
-    }
-    let _ = c.stream.set_nonblocking(true);
-    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == EXIT_SERVE_STATIC {
-        Outcome::ServeStatic
-    } else {
-        Outcome::Done
-    }
 }
 
 /// `php_cli_server_startup_workers()`: forks `PHP_CLI_SERVER_WORKERS`
@@ -668,6 +613,8 @@ pub fn startup_workers() -> Vec<libc::pid_t> {
                 }
             }
             log::set_pid(std::process::id());
+            // `php_child_init()` in the worker.
+            php_vm::ext::php_child_init();
             return Vec::new();
         }
         pids.push(pid);

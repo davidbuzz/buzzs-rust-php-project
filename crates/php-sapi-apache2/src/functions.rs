@@ -562,10 +562,24 @@ fn virtual_(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // php_output_end_all(); php_header();
     php_support::output::end_all(vm);
     php_header(vm);
+    let _ = crate::request::take_subrequest();
     if rr.run() != 0 {
         drop(rr);
         lookup_warning(vm, "request execution failed", &uri)?;
         return Ok(Value::Bool(false));
+    }
+    // A PHP script's sub-request runs here, in this request, as an
+    // include (`zend_execute_script(ZEND_INCLUDE)` in `php_handler()`).
+    if let Some((file, highlight)) = crate::request::take_subrequest() {
+        let path = String::from_utf8_lossy(&file).into_owned();
+        if highlight {
+            vm.call_function(
+                "highlight_file",
+                vec![Value::Str(ZStr::from(file.as_slice()))],
+            )?;
+        } else {
+            vm.include_file(&path)?;
+        }
     }
     Ok(Value::Bool(true))
 }
@@ -638,6 +652,9 @@ impl Extension for Apache2Handler {
             for c in ["STDIN", "STDOUT", "STDERR"] {
                 vm.constants.remove(c.as_bytes());
             }
+            // Only the CLI registers them (`cli_register_file_handles`): the
+            // request's resources are numbered from #1, as C's are.
+            php_runtime::Resource::set_next_handle(1);
             // Defined unattributed (not through `m.constant`), so that
             // `get_defined_constants(true)` files them under `Core`, like
             // the other engine constants.

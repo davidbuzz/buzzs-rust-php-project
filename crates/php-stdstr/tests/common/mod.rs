@@ -13,7 +13,7 @@
 //!
 //! or `!! ValueError: message` for a thrown exception.  The expected PHP
 //! outcomes are cached in `tests/fixtures/<name>.txt`; the `#[ignore]`d
-//! `regenerate` test of each file re-runs `/usr/bin/php` to rebuild it.
+//! `regenerate` test of each file re-runs `/usr/bin/php8.5` to rebuild it.
 //!
 //! When the installed PHP (8.3) differs from php-src master, a case can be
 //! given an explicit expectation with [`Case::expect`]; such cases are not
@@ -469,7 +469,7 @@ pub fn check_mapped(name: &str, cases: &[Case], map: impl Fn(&str, &str) -> Stri
     );
 }
 
-/// Re-runs `/usr/bin/php` over all cases and rewrites the fixture.
+/// Re-runs `/usr/bin/php8.5` over all cases and rewrites the fixture.
 pub fn regenerate(name: &str, cases: &[Case]) {
     let dir = std::env::temp_dir().join(format!("php-stdstr-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("tmp dir");
@@ -485,8 +485,16 @@ pub fn regenerate(name: &str, cases: &[Case]) {
         }
     }
     std::fs::write(&exprs, list).expect("write exprs");
-    let out = Command::new("/usr/bin/php")
-        .args(["-n", "-d", "error_reporting=-1", "-d", "display_errors=1"])
+    let out = Command::new("/usr/bin/php8.5")
+        .args([
+            "-n",
+            "-d",
+            "memory_limit=1G",
+            "-d",
+            "error_reporting=-1",
+            "-d",
+            "display_errors=1",
+        ])
         .arg(&driver)
         .arg(&exprs)
         .output()

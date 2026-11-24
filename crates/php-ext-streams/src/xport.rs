@@ -49,13 +49,27 @@ pub struct XportRequest {
 
 /// A failed transport creation: `errno` and message for the
 /// `$error_code`/`$error_message` out parameters and the
-/// "Unable to connect to %s (%s)" warning.
+/// "Unable to connect to %s (%s)" warning. An empty message is none (C's
+/// `errstr == NULL`, a failed TLS handshake): the warning says "Unknown
+/// error" and `$error_message` stays empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XportError {
     /// `$error_code`.
     pub errno: i32,
     /// `$error_message`.
     pub message: String,
+}
+
+impl XportError {
+    /// The message as the warnings show it.
+    #[must_use]
+    pub fn shown(&self) -> &str {
+        if self.message.is_empty() {
+            "Unknown error"
+        } else {
+            &self.message
+        }
+    }
 }
 
 /// Creates a stream for a registered scheme.
@@ -67,6 +81,24 @@ pub type XportFactory = fn(&mut Vm, &XportRequest) -> VmResult<Result<Stream, Xp
 pub type AcceptHook =
     fn(&mut Vm, &mut Stream, Stream, Option<Duration>) -> VmResult<Result<Stream, XportError>>;
 
+/// Finishes setting up a client or accepted connection once its stream is
+/// a resource: the TLS handshake of a transport with crypto enabled on
+/// connect (`STREAM_XPORT_OP_CONNECT` / `_ACCEPT`). php-src allocates the
+/// stream, and so registers its resource, before it connects, so the
+/// handshake's PHP callbacks get the stream. A stream with nothing left to
+/// do returns `Ok(Ok(()))`; on failure the caller closes the stream again.
+pub type ConnectHook = fn(&mut Vm, &mut Stream) -> VmResult<Result<(), ConnectError>>;
+
+/// A failed [`ConnectHook`].
+#[derive(Debug)]
+pub struct ConnectError {
+    /// What the caller reports ("Unable to connect to %s (%s)").
+    pub error: XportError,
+    /// An exception a PHP callback threw meanwhile, thrown once the caller
+    /// has reported the failure.
+    pub thrown: Option<php_vm::ext::Throw>,
+}
+
 /// A registered transport.
 #[derive(Debug, Clone, Copy)]
 pub struct Transport {
@@ -74,6 +106,9 @@ pub struct Transport {
     pub create: XportFactory,
     /// Accepted-connection wrapper.
     pub accept: Option<AcceptHook>,
+    /// What [`Transport::create`] and [`Transport::accept`] leave to do
+    /// once the stream is a resource.
+    pub connect: Option<ConnectHook>,
 }
 
 /// `stream_socket_enable_crypto($stream, $enable, $method, $session)`:
@@ -210,6 +245,7 @@ mod tests {
             Transport {
                 create: f,
                 accept: None,
+                connect: None,
             },
         );
         assert!(find("ssl").is_some());

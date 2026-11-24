@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
-use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
+use phpt_runner::discover::{collect, find_srcdir, ConflictResolver, ExtraConflicts};
 use phpt_runner::environment::{normalize_env, Environment};
 use phpt_runner::ini::{
     default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
@@ -44,6 +44,12 @@ struct Cli {
     /// Do not look for a CGI binary: skip CGI tests with "CGI not available".
     #[arg(long, conflicts_with = "php_cgi")]
     no_cgi: bool,
+    /// FPM binary for the sapi/fpm tests [default: `$TEST_PHP_FPM_EXECUTABLE`, else `php-fpm`
+    /// beside the PHP binary; without one those tests skip]. tester.inc finds it as
+    /// `fpm/php-fpm` two directories above `$TEST_PHP_FPM_EXECUTABLE`, so the runner exports a
+    /// path of that shape (`<snapshot>/fpm/php-fpm`).
+    #[arg(long, value_name = "PATH")]
+    php_fpm: Option<PathBuf>,
     /// Number of parallel workers [default: number of CPUs].
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
@@ -106,6 +112,14 @@ struct Cli {
     /// Ignore the environment file: report host-environment failures as FAIL.
     #[arg(long, conflicts_with = "environment")]
     no_environment: bool,
+    /// File giving tests conflict keys that php-src does not declare (tests sharing a key
+    /// never run at the same time) [default: `phpt-conflicts.txt` in the php-src root or one
+    /// of its ancestors].
+    #[arg(long, value_name = "FILE")]
+    extra_conflicts: Option<PathBuf>,
+    /// Ignore the extra conflicts file: schedule by php-src's own conflict keys only.
+    #[arg(long, conflicts_with = "extra_conflicts")]
+    no_extra_conflicts: bool,
     /// Append each result to this JSON-lines file as soon as it completes; tests already
     /// recorded there are not run again (their recorded results are reused). Makes long runs
     /// resumable after the runner is killed.
@@ -122,7 +136,7 @@ struct Cli {
     env: Vec<String>,
     /// Run each test script N times in the same process (`php --repeat N`) and check the
     /// output of the last execution, like run-tests.php --repeat. Exports `SKIP_REPEAT=1`;
-    /// tests with FILE_EXTERNAL, CLEAN, STDIN or CAPTURE_STDIO sections are skipped.
+    /// tests with `FILE_EXTERNAL`, `CLEAN`, `STDIN` or `CAPTURE_STDIO` sections are skipped.
     #[arg(long, value_name = "N", default_value_t = 1)]
     repeat: u32,
     /// Write a `JUnit` XML report in run-tests.php's format to this file [default:
@@ -178,6 +192,33 @@ fn find_php_cgi(cli_value: Option<&Path>, php: &Path) -> Result<Option<PathBuf>,
             .map_err(|e| format!("invalid CGI executable {}: {e}", p.display())),
         None => Ok(get_binary(php, "php-cgi", "sapi/cgi/php-cgi")),
     }
+}
+
+/// The FPM binary: `--php-fpm`, else `$TEST_PHP_FPM_EXECUTABLE`, else `php-fpm` beside `php`
+/// (as a php-src build tree's `sapi/fpm/php-fpm` or an installation's sibling).
+fn find_php_fpm(cli_value: Option<&Path>, php: &Path) -> Result<Option<PathBuf>, String> {
+    let given = cli_value.map(Path::to_path_buf).or_else(|| {
+        std::env::var_os("TEST_PHP_FPM_EXECUTABLE")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+    });
+    match given {
+        Some(p) => p
+            .canonicalize()
+            .map(Some)
+            .map_err(|e| format!("invalid FPM executable {}: {e}", p.display())),
+        None => Ok(get_binary(php, "php-fpm", "sapi/fpm/php-fpm")),
+    }
+}
+
+/// Whether tester.inc `findExecutable()` finds `fpm` through `$TEST_PHP_FPM_EXECUTABLE=fpm`:
+/// it strips two path components and looks for `fpm/php-fpm` there.
+fn fpm_layout_ok(fpm: &Path) -> bool {
+    fpm.file_name().is_some_and(|n| n == "php-fpm")
+        && fpm
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "fpm")
 }
 
 /// The shared probe-cache directory run-tests.php exports as `TEST_PHP_SHARED_CACHE_DIR`
@@ -274,6 +315,25 @@ impl BinarySnapshot {
         }
         Ok(snapshot)
     }
+
+    /// Put `bin` at `rel` inside the snapshot (a hard link or copy, or with `in_place` a
+    /// symbolic link to the binary itself).
+    fn add_as(&self, bin: &Path, rel: &str, in_place: bool) -> Result<PathBuf, String> {
+        let path = self.dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let linked = if in_place {
+            std::os::unix::fs::symlink(bin, &path).is_ok()
+        } else {
+            std::fs::hard_link(bin, &path).is_ok()
+        };
+        if !linked {
+            std::fs::copy(bin, &path)
+                .map_err(|e| format!("cannot snapshot {}: {e}", bin.display()))?;
+        }
+        Ok(path)
+    }
 }
 
 impl Drop for BinarySnapshot {
@@ -286,9 +346,10 @@ impl Drop for BinarySnapshot {
 struct RunGuards {
     _probe_cache: Option<SharedProbeCache>,
     _snapshot: Option<BinarySnapshot>,
+    _fpm_layout: Option<BinarySnapshot>,
 }
 
-fn base_env(php: &Path, php_cgi: Option<&Path>, skip_slow: bool) -> Env {
+fn base_env(php: &Path, php_cgi: Option<&Path>, php_fpm: Option<&Path>, skip_slow: bool) -> Env {
     let mut env: Env = std::env::vars_os().collect();
     normalize_env(&mut env);
     let mut set = |k: &str, v: OsString| {
@@ -314,6 +375,10 @@ fn base_env(php: &Path, php_cgi: Option<&Path>, skip_slow: bool) -> Env {
         "TEST_PHP_CGI_EXECUTABLE_ESCAPED",
         escapeshellarg(&php_cgi.map_or_else(String::new, |p| p.to_string_lossy().into_owned()))
             .into(),
+    );
+    set(
+        "TEST_PHP_FPM_EXECUTABLE",
+        php_fpm.map_or_else(OsString::new, |p| p.as_os_str().to_owned()),
     );
     set("TEST_PHPDBG_EXECUTABLE", OsString::new());
     set("TEST_PHPDBG_EXECUTABLE_ESCAPED", "''".into());
@@ -436,6 +501,23 @@ fn load_scope(cli: &Cli, srcdir: &Path) -> Result<Option<(Scope, PathBuf)>, Stri
     Ok(Some((scope, path)))
 }
 
+/// Load the extra conflicts file (explicit `--extra-conflicts`, else the default one if
+/// present).
+fn load_extra_conflicts(cli: &Cli, srcdir: &Path) -> Result<ExtraConflicts, String> {
+    if cli.no_extra_conflicts {
+        return Ok(ExtraConflicts::default());
+    }
+    let Some(path) = cli
+        .extra_conflicts
+        .clone()
+        .or_else(|| ExtraConflicts::find_default(srcdir))
+    else {
+        return Ok(ExtraConflicts::default());
+    };
+    ExtraConflicts::load(&path)
+        .map_err(|e| format!("cannot read extra conflicts file {}: {e}", path.display()))
+}
+
 /// Load the environment file (explicit `--environment`, else the default one if present).
 fn load_environment(cli: &Cli, srcdir: &Path) -> Result<Option<(Environment, String)>, String> {
     if cli.no_environment {
@@ -533,8 +615,22 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         Some(s) => (s.paths[0].clone(), s.paths.get(1).cloned()),
         None => (php, php_cgi),
     };
+    let mut fpm_layout = None;
+    let php_fpm = match find_php_fpm(cli.php_fpm.as_deref(), &given_php)? {
+        Some(fpm) => match &snapshot {
+            Some(s) => Some(s.add_as(&fpm, "fpm/php-fpm", false)?),
+            None if fpm_layout_ok(&fpm) => Some(fpm),
+            None => {
+                let layout = BinarySnapshot::create(&[])?;
+                let path = layout.add_as(&fpm, "fpm/php-fpm", true)?;
+                fpm_layout = Some(layout);
+                Some(path)
+            }
+        },
+        None => None,
+    };
 
-    let mut env = base_env(&php, php_cgi.as_deref(), cli.skip_slow);
+    let mut env = base_env(&php, php_cgi.as_deref(), php_fpm.as_deref(), cli.skip_slow);
     if cli.repeat > 1 {
         env.insert("SKIP_REPEAT".into(), "1".into());
     }
@@ -585,6 +681,7 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         RunGuards {
             _probe_cache: probe_cache,
             _snapshot: snapshot,
+            _fpm_layout: fpm_layout,
         },
     ))
 }
@@ -607,15 +704,20 @@ fn execute(
     runner: &Runner,
     tests: &[PathBuf],
     environment: Option<&(Environment, String)>,
+    extra_conflicts: &ExtraConflicts,
     mut log: Option<&mut std::fs::File>,
     keep_diffs: bool,
 ) -> Vec<TestResult> {
     let mut resolver = ConflictResolver::default();
     let jobs: Vec<Job> = tests
         .iter()
-        .map(|t| Job {
-            path: t.clone(),
-            conflicts: resolver.conflicts_for(t),
+        .map(|t| {
+            let mut conflicts = resolver.conflicts_for(t);
+            conflicts.extend_from_slice(extra_conflicts.keys_for(&runner.shortname(t)));
+            Job {
+                path: t.clone(),
+                conflicts,
+            }
         })
         .collect();
     let workers = cli.jobs.unwrap_or_else(|| {
@@ -716,6 +818,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let (mut tests, srcdir) = select_tests(cli)?;
     let scope = load_scope(cli, &srcdir)?;
     let environment = load_environment(cli, &srcdir)?;
+    let extra_conflicts = load_extra_conflicts(cli, &srcdir)?;
     let out_of_scope = apply_scope(&mut tests, &srcdir, scope.as_ref());
     if cli.list {
         for t in &tests {
@@ -784,6 +887,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         &runner,
         &tests,
         environment.as_ref(),
+        &extra_conflicts,
         log.as_mut(),
         junit_path.is_some(),
     );
@@ -863,7 +967,12 @@ mod tests {
 
     #[test]
     fn cgi_executable_exported() {
-        let env = base_env(Path::new("/x/php"), Some(Path::new("/x/php-cgi")), false);
+        let env = base_env(
+            Path::new("/x/php"),
+            Some(Path::new("/x/php-cgi")),
+            None,
+            false,
+        );
         assert_eq!(
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")],
             "/x/php-cgi"
@@ -872,11 +981,43 @@ mod tests {
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
             "'/x/php-cgi'"
         );
-        let env = base_env(Path::new("/x/php"), None, false);
+        let env = base_env(Path::new("/x/php"), None, None, false);
         assert_eq!(env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")], "");
         assert_eq!(
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
             "''"
         );
+        assert_eq!(env[&OsString::from("TEST_PHP_FPM_EXECUTABLE")], "");
+    }
+
+    #[test]
+    fn fpm_layout_is_what_tester_inc_finds() {
+        assert!(fpm_layout_ok(Path::new("/tmp/snap/fpm/php-fpm")));
+        assert!(!fpm_layout_ok(Path::new("/x/target/debug/php-fpm")));
+        assert!(!fpm_layout_ok(Path::new("/x/fpm/php-fpm8.5")));
+        let env = base_env(
+            Path::new("/x/php"),
+            None,
+            Some(Path::new("/s/fpm/php-fpm")),
+            false,
+        );
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_FPM_EXECUTABLE")],
+            "/s/fpm/php-fpm"
+        );
+    }
+
+    #[test]
+    fn snapshot_places_fpm_under_fpm_dir() {
+        let src = std::env::temp_dir().join(format!("phpt-fpm-src-{}", std::process::id()));
+        std::fs::write(&src, "x").unwrap();
+        let snap = BinarySnapshot::create(&[]).unwrap();
+        let p = snap.add_as(&src, "fpm/php-fpm", false).unwrap();
+        assert!(fpm_layout_ok(&p));
+        assert_eq!(std::fs::read(&p).unwrap(), b"x");
+        let dir = snap.dir.clone();
+        drop(snap);
+        assert!(!dir.exists());
+        let _ = std::fs::remove_file(&src);
     }
 }

@@ -50,6 +50,13 @@ fn serialization_state(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(vm.serialization_state()))
 }
 
+/// `zend_return_non_interned_string()`: a fresh copy of the string
+/// (`RETURN_STRINGL`), never an interned one, so a callback's return value
+/// is a refcounted string in the leak tests that use it.
+fn return_non_interned_string(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(ZStr::from(a.str(0).as_bytes().to_vec())))
+}
+
 /// `zend_test_array_return()`: returns nothing although declared `array`
 /// (a release build hands back `null`).
 fn array_return(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -245,6 +252,33 @@ fn call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     vm.call_value(&callable, args)
+}
+
+/// `zend_object_init_with_constructor_array(string $class, array $args)`:
+/// `object_init_with_constructor()` with the array as its named-parameter
+/// table, where an integer key is a positional argument
+/// (`zend_call_function()`).
+fn object_init_with_constructor_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let table = a.array(1);
+    let mut positional = vec![a.at(0)];
+    let mut named = Vec::new();
+    for (k, v) in table.iter() {
+        match k {
+            php_runtime::ArrayKey::Int(_) => {
+                if !named.is_empty() {
+                    return Err(vm.throw(
+                        "Error",
+                        "Cannot use positional argument after named argument",
+                    ));
+                }
+                positional.push(v.clone());
+            }
+            php_runtime::ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
+        }
+    }
+    a.values = positional;
+    a.named = named;
+    object_init_with_constructor(vm, a)
 }
 
 /// `zend_object_init_with_constructor(string $class, mixed ...$args)`.
@@ -730,7 +764,14 @@ fn register_stub_metadata(vm: &mut Vm) {
     );
 }
 
+/// `zend_test_child_init_count()`.
+#[allow(clippy::unnecessary_wraps)]
+fn child_init_count(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(crate::child_init_count()))
+}
+
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
+    m.function_static("zend_test_child_init_count(): int", child_init_count);
     m.function_static("zend_trigger_bailout(): never", trigger_bailout);
     m.function_static(
         "zend_test_serialization_bailout(bool $unserialize, bool $locked): never",
@@ -741,6 +782,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         serialization_state,
     );
     m.function_static("zend_test_array_return(): array", array_return);
+    m.function_static(
+        "zend_return_non_interned_string(string $str): string",
+        return_non_interned_string,
+    );
     m.function_static("zend_test_nullable_array_return(): ?array", none);
     m.function_static("zend_test_void_return(): void", none);
     m.function_static(
@@ -802,6 +847,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function_static(
         "zend_object_init_with_constructor($class, mixed ...$args): mixed",
         object_init_with_constructor,
+    );
+    m.function_static(
+        "zend_object_init_with_constructor_array(string $class, array $args): mixed",
+        object_init_with_constructor_array,
     );
     m.function_static(
         "zend_call_method_if_exists(object $obj, string $method, mixed ...$args): mixed",

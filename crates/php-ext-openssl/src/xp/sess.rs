@@ -36,6 +36,19 @@ thread_local! {
     /// An exception raised while configuring (`zend_type_error` & co.):
     /// thrown once the transport has reported its failure.
     static PENDING: RefCell<Option<Throw>> = const { RefCell::new(None) };
+    /// A PHP callback was installed in the context being built.
+    static CALLBACKS_SET: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Notes that a PHP callback (session, PSK or early data) was installed
+/// in the context being built.
+pub(crate) fn note_callbacks() {
+    CALLBACKS_SET.with(|c| c.set(true));
+}
+
+/// Whether a callback was installed since the last call (which resets it).
+pub(crate) fn callbacks_set() -> bool {
+    CALLBACKS_SET.with(|c| c.replace(false))
 }
 
 /// Records the stream id for callbacks fired during I/O on it.
@@ -56,6 +69,12 @@ pub(crate) fn set_pending(t: Throw) {
 /// Takes the configuration exception, if any.
 pub(crate) fn take_pending() -> Option<Throw> {
     PENDING.with(|p| p.borrow_mut().take())
+}
+
+/// Forgets this request's callables ([`super::reset_request`]).
+pub(super) fn reset_request() {
+    REGISTRY.with(|r| r.borrow_mut().clear());
+    CURRENT.with(|c| c.set(0));
 }
 
 fn register(cbs: Callbacks) -> usize {
@@ -80,6 +99,26 @@ pub(crate) fn current_stream() -> Value {
 /// the bridge.
 fn call(cb: &Value, args: Vec<Value>) -> Option<Value> {
     php_ext_streams::bridge::with_vm(|vm| match vm.call_value(cb, args) {
+        Ok(v) => Some(v),
+        Err(t) => {
+            php_ext_streams::bridge::set_pending(t);
+            None
+        }
+    })
+    .flatten()
+}
+
+/// Calls a PHP callback of the running operation with
+/// `PHP_STREAM_FLAG_NO_FCLOSE` set on its stream: `fclose()` refuses the
+/// stream the callback gets (it is in use).
+pub(crate) fn call_guarded(vm: &mut Vm, cb: &Value, args: Vec<Value>) -> VmResult<Value> {
+    let id = CURRENT.with(Cell::get);
+    php_streams::user::without_fclose(id, || vm.call_value(cb, args))
+}
+
+/// [`call`] with [`call_guarded`]'s flag.
+fn call_no_fclose(cb: &Value, args: Vec<Value>) -> Option<Value> {
+    php_ext_streams::bridge::with_vm(|vm| match call_guarded(vm, cb, args) {
         Ok(v) => Some(v),
         Err(t) => {
             php_ext_streams::bridge::set_pending(t);
@@ -127,7 +166,7 @@ fn new_session_cb(b: &mut SslContextBuilder, id: usize) {
             php_ext_streams::bridge::with_vm(|vm| crate::session::session_value(vm, session).ok())
                 .flatten();
         if let Some(obj) = obj {
-            let _ = call(&cb, vec![stream, obj]);
+            let _ = call_no_fclose(&cb, vec![stream, obj]);
         }
     });
 }
@@ -159,6 +198,7 @@ pub(crate) fn setup_client(
             new_cb: Some(cb),
             ..Callbacks::default()
         });
+        note_callbacks();
         new_session_cb(b, id);
         enable_cache = true;
     }
@@ -249,6 +289,9 @@ pub(crate) fn setup_server(
     let has_new = cbs.new_cb.is_some();
     let has_remove = cbs.remove_cb.is_some();
     let id = register(cbs);
+    if has_get || has_new || has_remove {
+        note_callbacks();
+    }
     if has_get {
         b.set_session_cache_mode(SslSessionCacheMode::SERVER | SslSessionCacheMode::NO_INTERNAL);
         new_session_cb(b, id);
@@ -259,7 +302,7 @@ pub(crate) fn setup_server(
                 let cb = callback(id, |c| c.get_cb.clone())?;
                 let stream = current_stream();
                 let sid = Value::Str(php_runtime::ZStr::from(sid));
-                let ret = call(&cb, vec![stream, sid])?;
+                let ret = call_no_fclose(&cb, vec![stream, sid])?;
                 if let Some(s) = crate::session::session_of(&ret) {
                     s
                 } else {

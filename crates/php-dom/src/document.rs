@@ -1184,6 +1184,7 @@ impl Node {
                 if host.is_abstract(ext) {
                     return Err(DomError::arg_value(2, "must not be an abstract class"));
                 }
+                host.update_class_constants(ext)?;
                 let ext_canon = host.canonical_name(ext).unwrap_or_else(|| ext.to_string());
                 self.node()?;
                 if let Some(d) = self.doc_ref() {

@@ -33,6 +33,8 @@ pub enum ErrorKind {
     DivisionByZeroError,
     /// `\Error`.
     Error,
+    /// `\Exception` (`zend_throw_exception(NULL, ...)`).
+    Exception,
 }
 
 impl ErrorKind {
@@ -45,6 +47,7 @@ impl ErrorKind {
             Self::ArithmeticError => "ArithmeticError",
             Self::DivisionByZeroError => "DivisionByZeroError",
             Self::Error => "Error",
+            Self::Exception => "Exception",
         }
     }
 }

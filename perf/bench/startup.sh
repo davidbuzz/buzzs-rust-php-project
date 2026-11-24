@@ -7,7 +7,7 @@
 # to /usr/bin/time when perf is unavailable).
 for b in "$@"; do
     extra=
-    case "$b" in */usr/bin/php|php) extra="-d memory_limit=1G -d opcache.enable_cli=0" ;; esac
+    case "$b" in */usr/bin/php8.5|php) extra="-d memory_limit=1G -d opcache.enable_cli=0" ;; esac
     best=
     for _ in 1 2 3 4 5; do
         s=$(date +%s%N); "$b" $extra -r 'echo 1;' >/dev/null 2>&1; e=$(date +%s%N)

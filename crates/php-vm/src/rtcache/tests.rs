@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the run-time lookup caches: every script reads
 //! the same names repeatedly, so the second and later executions run
-//! from the cache. Expected output from `/usr/bin/php -n` (paths
+//! from the cache. Expected output from `/usr/bin/php8.5 -n` (paths
 //! normalised to `t.php`) unless noted; it is also the output of the
 //! uncached implementation.
 
@@ -498,7 +498,7 @@ late-ns
 /// uninitialized, `isset`/`empty`, closures bound to other scopes (the
 /// same op array, other access), a reference to a static property and
 /// `func_num_args()` with an unused result. Expected output from
-/// `/usr/bin/php -n` (8.3).
+/// `/usr/bin/php8.5 -n`.
 #[test]
 fn hot_loop_cache_hits_keep_scope_and_type_semantics() {
     let out = run(r#"<?php

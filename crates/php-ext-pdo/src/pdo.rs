@@ -512,12 +512,12 @@ pub fn register(vm: &mut Vm) {
     }
     let pub_ = acc::PUBLIC;
     pdo.method(
-        "__construct(string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null)",
+        "__construct(#[\\SensitiveParameter] string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null)",
         pub_,
         construct,
     )
     .method(
-        "connect(string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null): static",
+        "connect(#[\\SensitiveParameter] string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null): static",
         pub_ | acc::STATIC,
         connect,
     )

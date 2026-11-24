@@ -86,12 +86,18 @@ pub(crate) struct TlsOps {
     pub(crate) timed_out: bool,
     /// `persistent_id != NULL`.
     pub(crate) persistent: bool,
+    /// The context has PHP callbacks (`session_callbacks`, `psk_callbacks`
+    /// or `early_data_callbacks` set).
+    pub(crate) callbacks: bool,
     /// `early_data_state`.
     pub(crate) early_state: super::early::State,
     /// `early_data_send`.
     pub(crate) early_send: Option<Vec<u8>>,
     /// `early_data_offset`.
     pub(crate) early_offset: usize,
+    /// The handshake of a connection with crypto enabled on connect, left
+    /// for when its stream is a resource ([`super::handshake`]).
+    pub(crate) handshake: Option<super::Handshake>,
 }
 
 impl std::fmt::Debug for TlsOps {
@@ -210,9 +216,11 @@ impl TlsOps {
             connect_timeout: timeout,
             timed_out: false,
             persistent: false,
+            callbacks: false,
             early_state: super::early::State::None,
             early_send: None,
             early_offset: 0,
+            handshake: None,
         }
     }
 

@@ -122,6 +122,7 @@ impl Vm {
             );
             let fiber = self.new_object_with_args(&cls, vec![Value::string(FN_NAME)]);
             self.functions.remove(&lc);
+            crate::func::bump_func_table_version();
             let fiber = fiber?;
             STARTING.with(|s| s.set(generation));
             // `zend_fiber_start`, not `Fiber->start()`: the destructors'

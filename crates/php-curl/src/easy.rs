@@ -817,13 +817,15 @@ fn add_part(mime: *mut ffi::curl_mime, part: MimePart, shared: &Rc<RefCell<Retai
         }
         0
     };
-    // SAFETY (all closures below): `p` is a live part of `mime`; strings are
+    // SAFETY: (all closures below) `p` is a live part of `mime`; strings are
     // valid C strings and data slices are copied by libcurl.
     match part {
         MimePart::Data { name, data } => {
             let n = c_trunc(&name);
             chain(&[
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_name(p, n.as_ptr()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_data(p, data.as_ptr().cast::<c_char>(), data.len()) },
             ])
         }
@@ -835,9 +837,13 @@ fn add_part(mime: *mut ffi::curl_mime, part: MimePart, shared: &Rc<RefCell<Retai
         } => {
             let (n, f, t) = (c_trunc(&name), c_trunc(&filename), c_trunc(&mime_type));
             chain(&[
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_name(p, n.as_ptr()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_data(p, data.as_ptr().cast::<c_char>(), data.len()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_filename(p, f.as_ptr()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_type(p, t.as_ptr()) },
             ])
         }
@@ -855,7 +861,9 @@ fn add_part(mime: *mut ffi::curl_mime, part: MimePart, shared: &Rc<RefCell<Retai
             let seek: Option<ffi::curl_seek_callback> =
                 if seekable { Some(mime_seek_cb) } else { None };
             chain(&[
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_name(p, n.as_ptr()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe {
                     ffi::curl_mime_data_cb(
                         p,
@@ -866,7 +874,9 @@ fn add_part(mime: *mut ffi::curl_mime, part: MimePart, shared: &Rc<RefCell<Retai
                         arg.cast::<c_void>(),
                     )
                 },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_filename(p, f.as_ptr()) },
+                // SAFETY: see the note above the `match`.
                 &|| unsafe { ffi::curl_mime_type(p, t.as_ptr()) },
             ])
         }

@@ -6,7 +6,7 @@
 //! a `zend_object_iterator`, which holds an object handle of its own
 //! (`zend_iterator_init`) from `get_iterator` to `zend_iterator_dtor`, so
 //! objects created while it lives take the next handles. Expected outputs
-//! from `/usr/bin/php -n`.
+//! from `/usr/bin/php8.5 -n`.
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

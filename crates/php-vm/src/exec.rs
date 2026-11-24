@@ -503,17 +503,16 @@ impl Vm {
     fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let slot = f.cvs.get(idx)?;
-        let is_ref = matches!(slot.get(), Some(Value::Reference(_)));
+        let is_ref = matches!(f.cvs.get(idx)?.get(), Some(Value::Reference(_)));
         if !is_ref && f.symtab_attached {
             f.unsync_cv_from_symtab(cv);
         }
-        let old = match slot.get() {
+        let old = match f.cvs.get(idx)?.get() {
             Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
                 return Some((r.clone(), v));
             }
             Some(Value::Reference(r)) => Some(r.set(v.clone())),
-            _ => slot.set(Some(v.clone())),
+            _ => f.cvs[idx].set(Some(v.clone())),
         };
         if !is_ref {
             f.sync_cv_to_symtab(cv, &v);
@@ -1444,12 +1443,13 @@ impl Vm {
                         },
                         // `ZEND_FRAMELESS_ICALL_n` in place
                         // (`Vm::frameless_icall_op`), past the `Nop`s of the
-                        // call ops it replaced. Declined, the generic arm
-                        // below runs those ops.
+                        // call ops it replaced (those after it: none when it
+                        // stands at the call's `DoCall`). Declined, the
+                        // generic arm below runs those ops.
                         Op::FramelessICall(fc) => match self.frameless_icall_op(fc, ip) {
                             Some(r) => {
                                 r?;
-                                ip = at + usize::from(fc.argc) + 2;
+                                ip = at + 1 + fc.tail();
                             }
                             None => break 'slow,
                         },
@@ -1675,10 +1675,18 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::JmpNull { a, dst, target } => {
+                    Op::JmpNull {
+                        a,
+                        dst,
+                        target,
+                        chain,
+                    } => {
                         let v = match a {
                             Operand::Cv(cv) => match self.read_cv_defined(*cv) {
                                 Some(v) => v,
+                                // `ZEND_JMP_NULL_BP_VAR_IS`, `isset()`
+                                // and `empty()` read quietly.
+                                None if !chain.warns() => Value::Null,
                                 None => self.read(*a)?,
                             },
                             o => self.read(*o)?,
@@ -1687,7 +1695,7 @@ impl Vm {
                             if let Operand::TmpKeep(t) = a {
                                 self.set_tmp(*t, Value::Null);
                             }
-                            self.set_tmp(*dst, Value::Null);
+                            self.set_tmp(*dst, chain.value());
                             ip = *target as usize;
                         }
                         Flow::Next
@@ -1843,7 +1851,7 @@ impl Vm {
                     }
                     Op::Global { cv, name } => {
                         let n = self.lit_str(*name);
-                        let r = self.global_ref(n.as_bytes());
+                        let r = self.global_ref_lit(&n);
                         self.cv_bind(*cv, Value::Reference(r));
                         Flow::Next
                     }
@@ -2182,9 +2190,12 @@ impl Vm {
                         self.set_dst(*dst, Value::Int(i64::try_from(n).unwrap_or(i64::MAX)));
                         Flow::Next
                     }
-                    Op::FuncGetArgs { dst } => {
+                    Op::FuncGetArgs { dst, skip } => {
                         let idx = self.frames.len() - 1;
-                        let args = self.frame_args(idx);
+                        let mut args = self.frame_args(idx);
+                        if let Some(n) = *skip {
+                            args = Vm::frame_args_after(&args, n as usize);
+                        }
                         self.set_dst(*dst, Value::Array(args));
                         Flow::Next
                     }
@@ -3386,6 +3397,15 @@ fn release_slot_value(old: Option<Value>) {
     }
 }
 
+/// [`release_rooted`] of an object a caller took out of its slot: a
+/// possible GC root while other handles remain, then the release (the
+/// free, or a queued destructor, when it was the last).
+#[inline(never)]
+fn release_object(old: php_runtime::Obj) {
+    crate::gc::possible_root_obj(&old);
+    drop(old);
+}
+
 /// [`release_slot_value`] of an array, object or reference.
 #[inline(never)]
 fn release_rooted(old: Option<Value>) {
@@ -3445,7 +3465,7 @@ pub(crate) const fn silence_restore(current: i64, old: i64) -> i64 {
 /// "scope X" / "global scope" for messages.
 pub(crate) fn scope_display(scope: Option<&Rc<crate::class::Class>>) -> String {
     match scope {
-        Some(c) => format!("scope {}", object::display_name(&c.name)),
+        Some(c) => format!("scope {}", c.name.to_string_lossy()),
         None => "global scope".to_string(),
     }
 }
@@ -3477,7 +3497,9 @@ thread_local! {
 /// on `EG(vm_interrupt)` at interrupt points (`ZEND_VM_ENTER`, taken jumps,
 /// after internal calls: `ZEND_VM_FCALL_INTERRUPT_CHECK`), so the plain
 /// data instructions after the allocation that crossed the limit still run
-/// (`oom_after_main_script.phpt` prints "Done" before the fatal).
+/// (`oom_after_main_script.phpt` prints "Done" before the fatal), and so
+/// does the setup of a call: the fatal of an argument's allocation names
+/// the called function in its backtrace (GHSA-8mjj-2r7p-4hg2).
 fn defers_oom(op: &Op) -> bool {
     matches!(
         op,
@@ -3508,6 +3530,12 @@ fn defers_oom(op: &Op) -> bool {
             | Op::Abs { .. }
             | Op::Echo(_)
             | Op::Free(_)
+            | Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::Send { .. }
+            | Op::SendNamed { .. }
     )
 }
 
@@ -3544,6 +3572,7 @@ impl Vm {
             }
             let r = self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line);
             self.reporting_oom = false;
+            self.trampoline_entry = None;
             r?;
         }
         Ok(())

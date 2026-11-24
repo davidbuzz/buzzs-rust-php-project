@@ -115,7 +115,7 @@ pub fn json_decode(
     }
     if depth > INT_MAX {
         return Err(RuntimeError::ValueError(format!(
-            "json_decode(): Argument #3 ($depth) must be less than {INT_MAX}"
+            "json_decode(): Argument #3 ($depth) must be less than or equal to {INT_MAX}"
         )));
     }
     match decode(json, assoc, depth, flags, host) {
@@ -155,7 +155,7 @@ pub fn json_validate(state: &mut JsonState, json: &[u8], depth: i64, flags: i64)
     }
     if depth > INT_MAX {
         return Err(RuntimeError::ValueError(format!(
-            "json_validate(): Argument #2 ($depth) must be less than {INT_MAX}"
+            "json_validate(): Argument #2 ($depth) must be less than or equal to {INT_MAX}"
         )));
     }
     match validate(json, depth, flags) {

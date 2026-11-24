@@ -19,6 +19,7 @@ pub use php_parser::ast;
 mod attrs;
 mod auto_globals;
 mod builtins;
+pub mod bytecode_cache;
 mod call;
 pub mod class;
 mod classlink;
@@ -239,9 +240,13 @@ impl Vm {
             shutdown_functions: Vec::new(),
             last_error: None,
             last_fatal_error_backtrace: None,
+            executor_active: true,
+            end_usage: 0,
+            request_ending: false,
             pending_throw: None,
             output_handler_threw: false,
             script_path: ZStr::empty(),
+            request_info: php_sapi::RequestInfo::default(),
             argv: Vec::new(),
             bound_decls: HashMap::new(),
             units: Vec::new(),
@@ -275,6 +280,7 @@ impl Vm {
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
+            bailouts: 0,
             startup_hooks: Vec::new(),
             module_startup_hooks: Vec::new(),
             ini_modify_hooks: std::collections::HashMap::new(),
@@ -284,6 +290,7 @@ impl Vm {
             ini_stage: crate::ext::IniStage::Runtime,
             magic_call_name: None,
             startup_diagnostics: Vec::new(),
+            module_diagnostics: Vec::new(),
             log_hook: None,
             main_return: Value::Null,
             native_stack_base: 0,
@@ -294,7 +301,14 @@ impl Vm {
             output_handler_conflicts: std::collections::HashMap::new(),
             output_handler_hooks: std::collections::HashMap::new(),
             include_opener: None,
+            including: None,
+            trampoline_entry: None,
+            cv_root: None,
+            cv_scratch: None,
+            global_slot_cache: [(0, 0); crate::place::GLOBAL_SLOT_CACHE],
+            checked_callable: None,
             source_filter: None,
+            source_filter_probe: None,
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),
             builtin_deprecations: std::collections::HashMap::new(),
@@ -314,22 +328,14 @@ impl Vm {
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::default(),
-            cv_walk: None,
-            // One stand-in table with its buffers, made up front so the
-            // first walk does not move `memory_get_usage()` (php-src's
-            // walks need no allocation).
-            cv_walk_pool: vec![{
-                let mut st = crate::vm::VarStore::with_names(&[php_runtime::ZStr::empty()]);
-                let _ = st.take_single();
-                std::rc::Rc::new(std::cell::RefCell::new(st))
-            }],
             observer: crate::observer::ObserverState::default(),
             user_opcode_handlers: Vec::new(),
         }
     }
 
-    /// Re-reads cached ini values after a change.
-    pub(crate) fn sync_ini(&mut self, name: &str) {
+    /// Re-reads cached ini values after a change (a SAPI that alters
+    /// entries through [`Vm::ini`] directly calls it too).
+    pub fn sync_ini(&mut self, name: &str) {
         match name {
             "error_reporting" => {
                 self.error_reporting = match self.ini.get("error_reporting") {
@@ -383,6 +389,7 @@ impl Vm {
             self.ini.get_long("output_buffering"),
             self.ini.get_bool("implicit_flush"),
         );
+        self.activate();
         for hook in self.startup_hooks.clone() {
             hook(self);
         }
@@ -391,8 +398,15 @@ impl Vm {
         if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
             php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
         }
-        let t = self.ini.get_long("max_execution_time");
-        self.set_time_limit(t);
+    }
+
+    /// The engine's part of `php_request_startup()`, for a SAPI that runs
+    /// the other steps itself: `zend_activate()` (the collector's
+    /// `gc_reset()`) and the request's execution timer
+    /// ([`Vm::request_timer`]).
+    pub fn activate(&mut self) {
+        gc::mark_activated();
+        self.request_timer();
     }
 
     /// Request shutdown: runs shutdown functions, destructors, extension
@@ -405,6 +419,7 @@ impl Vm {
     /// Runs a script and performs request shutdown; returns the exit status.
     pub fn run_script(&mut self, src: &[u8], path: &str) -> i32 {
         self.request_startup();
+        self.script_timer();
         let p = ZStr::from(path);
         let mut r = Ok(());
         let prepend = self
@@ -433,6 +448,7 @@ impl Vm {
 
     /// Request shutdown: shutdown functions, destructors, output flush.
     pub fn shutdown(&mut self, r: Result<(), Throw>) -> i32 {
+        self.request_ending = true;
         let fatal = matches!(r, Err(Throw::Fatal));
         // `oom_after_main_script`: a violation recorded by the last
         // statement is still reported.
@@ -484,16 +500,18 @@ impl Vm {
         // module started (`output_handler=ob_gzhandler`) still has its
         // module's request state when it is flushed.
         php_support::output::end_all(self);
-        for h in self.shutdown_hooks.clone() {
-            h(self);
-        }
+        self.run_shutdown_hooks();
         php_support::output::deactivate(self);
         object::set_destructors_enabled(false);
         // `sapi_deactivate`: headers go out (and header_register_callback
         // runs) even when the script produced no output.
         crate::builtins::headers::send_headers(self);
         self.flush_stdout();
+        self.end_usage = php_memlimit::real_usage();
         php_memlimit::request_end();
+        // php_request_shutdown(): zend_unset_timeout(), so a long-running
+        // worker's timer does not run between requests.
+        interrupt::arm_timer(0, 0);
         self.exit_status
     }
 

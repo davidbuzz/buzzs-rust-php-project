@@ -9192,12 +9192,12 @@ s:parse	s:en_US	i:1	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:1	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:1	s:€12	d:12.0	i:3
-s:parse	s:en_US	i:1	s:١٢٣	i:1	i:123	i:3
-s:parse	s:en_US	i:1	s:١٢٣	i:2	i:123	i:3
-s:parse	s:en_US	i:1	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:en_US	i:1	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:en_US	i:1	s:١٢٣	i:1	i:123	i:6
+s:parse	s:en_US	i:1	s:١٢٣	i:2	i:123	i:6
+s:parse	s:en_US	i:1	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:en_US	i:1	s:١٢٣	d:123.0
-s:parse_pos1	s:en_US	i:1	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:en_US	i:1	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:1	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9217,7 +9217,7 @@ s:parse	s:en_US	i:1	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:1	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:1	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:1	s: 42	d:42.0	i:3
+s:parse_pos1	s:en_US	i:1	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:1	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:en_US	i:1	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:en_US	i:1	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -9228,11 +9228,11 @@ s:parse	s:en_US	i:1	s:0.0000001	i:2	i:0	i:9
 s:parse	s:en_US	i:1	s:0.0000001	i:3	d:1.0E-7	i:9
 s:parse_nopos	s:en_US	i:1	s:0.0000001	d:1.0E-7
 s:parse_pos1	s:en_US	i:1	s:0.0000001	d:1.0E-7	i:9
-s:parse	s:en_US	i:1	s:१२३	i:1	i:123	i:3
-s:parse	s:en_US	i:1	s:१२३	i:2	i:123	i:3
-s:parse	s:en_US	i:1	s:१२३	i:3	d:123.0	i:3
+s:parse	s:en_US	i:1	s:१२३	i:1	i:123	i:9
+s:parse	s:en_US	i:1	s:१२३	i:2	i:123	i:9
+s:parse	s:en_US	i:1	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:en_US	i:1	s:१२३	d:123.0
-s:parse_pos1	s:en_US	i:1	s:१२३	d:23.0	i:3
+s:parse_pos1	s:en_US	i:1	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:2	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:en_US	i:2	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:en_US	i:2	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -9307,12 +9307,12 @@ s:parse	s:en_US	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:2	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:2	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:en_US	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:en_US	i:2	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:en_US	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:en_US	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:en_US	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:en_US	i:2	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:2	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:2	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:2	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9332,7 +9332,7 @@ s:parse	s:en_US	i:2	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:2	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:2	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:2	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:2	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:2	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -9343,11 +9343,11 @@ s:parse	s:en_US	i:2	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:9
 s:parse	s:en_US	i:2	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:en_US	i:2	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:en_US	i:2	s:0.0000001	s:!U_PARSE_ERROR	i:10
-s:parse	s:en_US	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:en_US	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:en_US	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:en_US	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:en_US	i:2	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:2	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:2	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:3	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:en_US	i:3	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:en_US	i:3	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -9422,12 +9422,12 @@ s:parse	s:en_US	i:3	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:3	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:3	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:en_US	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:en_US	i:3	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:en_US	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:en_US	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:en_US	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:en_US	i:3	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:3	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:3	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:3	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9447,7 +9447,7 @@ s:parse	s:en_US	i:3	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:3	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:3	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:3	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:3	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:3	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:en_US	i:3	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:en_US	i:3	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -9458,11 +9458,11 @@ s:parse	s:en_US	i:3	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:9
 s:parse	s:en_US	i:3	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:en_US	i:3	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:en_US	i:3	s:0.0000001	s:!U_PARSE_ERROR	i:10
-s:parse	s:en_US	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:en_US	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:en_US	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:en_US	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:en_US	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:en_US	i:3	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:3	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:en_US	i:3	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:5	s:123	i:1	i:123	i:3
 s:parse	s:en_US	i:5	s:123	i:2	i:123	i:3
 s:parse	s:en_US	i:5	s:123	i:3	d:123.0	i:3
@@ -9537,12 +9537,12 @@ s:parse	s:en_US	i:5	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:5	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:5	s:€12	d:12.0	i:3
-s:parse	s:en_US	i:5	s:١٢٣	i:1	i:123	i:3
-s:parse	s:en_US	i:5	s:١٢٣	i:2	i:123	i:3
-s:parse	s:en_US	i:5	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:en_US	i:5	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:en_US	i:5	s:١٢٣	i:1	i:123	i:6
+s:parse	s:en_US	i:5	s:١٢٣	i:2	i:123	i:6
+s:parse	s:en_US	i:5	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:en_US	i:5	s:١٢٣	d:123.0
-s:parse_pos1	s:en_US	i:5	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:en_US	i:5	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:5	s:one hundred	i:1	i:100	i:11
 s:parse	s:en_US	i:5	s:one hundred	i:2	i:100	i:11
 s:parse	s:en_US	i:5	s:one hundred	i:3	d:100.0	i:11
@@ -9562,7 +9562,7 @@ s:parse	s:en_US	i:5	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:en_US	i:5	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:en_US	i:5	s: 42	d:42.0	i:3
+s:parse_pos1	s:en_US	i:5	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:en_US	i:5	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:en_US	i:5	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -9573,18 +9573,18 @@ s:parse	s:en_US	i:5	s:0.0000001	i:2	i:0	i:9
 s:parse	s:en_US	i:5	s:0.0000001	i:3	d:1.0E-7	i:9
 s:parse_nopos	s:en_US	i:5	s:0.0000001	d:1.0E-7
 s:parse_pos1	s:en_US	i:5	s:0.0000001	d:1.0E-7	i:9
-s:parse	s:en_US	i:5	s:१२३	i:1	i:123	i:3
-s:parse	s:en_US	i:5	s:१२३	i:2	i:123	i:3
-s:parse	s:en_US	i:5	s:१२३	i:3	d:123.0	i:3
+s:parse	s:en_US	i:5	s:१२३	i:1	i:123	i:9
+s:parse	s:en_US	i:5	s:१२३	i:2	i:123	i:9
+s:parse	s:en_US	i:5	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:en_US	i:5	s:१२३	d:123.0
-s:parse_pos1	s:en_US	i:5	s:१२३	d:23.0	i:3
+s:parse_pos1	s:en_US	i:5	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parsecur	s:en_US	s:$1,234.56	d:1234.56	s:USD	i:9
 s:parsecur	s:en_US	s:1.234,56 €	s:!U_PARSE_ERROR	s:	i:5
-s:parsecur	s:en_US	s:€1,234.56	d:1234.56	s:EUR	i:9
+s:parsecur	s:en_US	s:€1,234.56	d:1234.56	s:EUR	i:11
 s:parsecur	s:en_US	s:USD 12	s:!U_PARSE_ERROR	s:	i:3
 s:parsecur	s:en_US	s:12 USD	s:!U_PARSE_ERROR	s:	i:2
 s:parsecur	s:en_US	s:CHF 1	s:!U_PARSE_ERROR	s:	i:3
-s:parsecur	s:en_US	s:¥123	d:123.0	s:JPY	i:4
+s:parsecur	s:en_US	s:¥123	d:123.0	s:JPY	i:5
 s:parsecur	s:en_US	s:abc	s:!U_PARSE_ERROR	s:	i:0
 s:parsecur	s:en_US	s:1234,56 €	s:!U_PARSE_ERROR	s:	i:0
 s:parsecur	s:en_US	s:US$12.00	s:!U_PARSE_ERROR	s:	i:0
@@ -9662,12 +9662,12 @@ s:parse	s:de_DE	i:1	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:1	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:1	s:€12	d:12.0	i:3
-s:parse	s:de_DE	i:1	s:١٢٣	i:1	i:123	i:3
-s:parse	s:de_DE	i:1	s:١٢٣	i:2	i:123	i:3
-s:parse	s:de_DE	i:1	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:de_DE	i:1	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:de_DE	i:1	s:١٢٣	i:1	i:123	i:6
+s:parse	s:de_DE	i:1	s:١٢٣	i:2	i:123	i:6
+s:parse	s:de_DE	i:1	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:de_DE	i:1	s:١٢٣	d:123.0
-s:parse_pos1	s:de_DE	i:1	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:de_DE	i:1	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:1	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9687,7 +9687,7 @@ s:parse	s:de_DE	i:1	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:1	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:1	s: 42	d:42.0	i:3
+s:parse_pos1	s:de_DE	i:1	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:1	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:1	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:1	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -9698,11 +9698,11 @@ s:parse	s:de_DE	i:1	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:1	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:1	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:de_DE	i:1	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:de_DE	i:1	s:१२३	i:1	i:123	i:3
-s:parse	s:de_DE	i:1	s:१२३	i:2	i:123	i:3
-s:parse	s:de_DE	i:1	s:१२३	i:3	d:123.0	i:3
+s:parse	s:de_DE	i:1	s:१२३	i:1	i:123	i:9
+s:parse	s:de_DE	i:1	s:१२३	i:2	i:123	i:9
+s:parse	s:de_DE	i:1	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:de_DE	i:1	s:१२३	d:123.0
-s:parse_pos1	s:de_DE	i:1	s:१२३	d:23.0	i:3
+s:parse_pos1	s:de_DE	i:1	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:2	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:de_DE	i:2	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:de_DE	i:2	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -9773,16 +9773,16 @@ s:parse	s:de_DE	i:2	s:$1,234.56	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s:$1,234.56	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:2	s:$1,234.56	s:!U_PARSE_ERROR
 s:parse_pos1	s:de_DE	i:2	s:$1,234.56	s:!U_PARSE_ERROR	i:7
-s:parse	s:de_DE	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:de_DE	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:5
+s:parse	s:de_DE	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:5
+s:parse	s:de_DE	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:5
 s:parse_nopos	s:de_DE	i:2	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:2	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:de_DE	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:de_DE	i:2	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:de_DE	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:de_DE	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:de_DE	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:de_DE	i:2	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:2	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:2	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:2	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9802,7 +9802,7 @@ s:parse	s:de_DE	i:2	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:2	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:2	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:2	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:2	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:2	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:2	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -9813,11 +9813,11 @@ s:parse	s:de_DE	i:2	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:2	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:2	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:de_DE	i:2	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:de_DE	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:de_DE	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:de_DE	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:de_DE	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:de_DE	i:2	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:2	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:2	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:3	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:de_DE	i:3	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:de_DE	i:3	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -9892,12 +9892,12 @@ s:parse	s:de_DE	i:3	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:3	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:3	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:de_DE	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:de_DE	i:3	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:de_DE	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:de_DE	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:de_DE	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:de_DE	i:3	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:3	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:3	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:3	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -9917,7 +9917,7 @@ s:parse	s:de_DE	i:3	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:3	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:3	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:3	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:3	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:3	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:de_DE	i:3	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -9928,11 +9928,11 @@ s:parse	s:de_DE	i:3	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:3	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:3	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:de_DE	i:3	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:de_DE	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:de_DE	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:de_DE	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:de_DE	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:de_DE	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:de_DE	i:3	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:3	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:de_DE	i:3	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:5	s:123	i:1	i:123	i:3
 s:parse	s:de_DE	i:5	s:123	i:2	i:123	i:3
 s:parse	s:de_DE	i:5	s:123	i:3	d:123.0	i:3
@@ -10007,12 +10007,12 @@ s:parse	s:de_DE	i:5	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:5	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:5	s:€12	d:12.0	i:3
-s:parse	s:de_DE	i:5	s:١٢٣	i:1	i:123	i:3
-s:parse	s:de_DE	i:5	s:١٢٣	i:2	i:123	i:3
-s:parse	s:de_DE	i:5	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:de_DE	i:5	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:de_DE	i:5	s:١٢٣	i:1	i:123	i:6
+s:parse	s:de_DE	i:5	s:١٢٣	i:2	i:123	i:6
+s:parse	s:de_DE	i:5	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:de_DE	i:5	s:١٢٣	d:123.0
-s:parse_pos1	s:de_DE	i:5	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:de_DE	i:5	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:5	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10032,7 +10032,7 @@ s:parse	s:de_DE	i:5	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:de_DE	i:5	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:de_DE	i:5	s: 42	d:42.0	i:3
+s:parse_pos1	s:de_DE	i:5	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:de_DE	i:5	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:de_DE	i:5	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -10043,18 +10043,18 @@ s:parse	s:de_DE	i:5	s:0.0000001	i:2	i:0	i:1
 s:parse	s:de_DE	i:5	s:0.0000001	i:3	d:0.0	i:1
 s:parse_nopos	s:de_DE	i:5	s:0.0000001	d:0.0
 s:parse_pos1	s:de_DE	i:5	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:de_DE	i:5	s:१२३	i:1	i:123	i:3
-s:parse	s:de_DE	i:5	s:१२३	i:2	i:123	i:3
-s:parse	s:de_DE	i:5	s:१२३	i:3	d:123.0	i:3
+s:parse	s:de_DE	i:5	s:१२३	i:1	i:123	i:9
+s:parse	s:de_DE	i:5	s:१२३	i:2	i:123	i:9
+s:parse	s:de_DE	i:5	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:de_DE	i:5	s:१२३	d:123.0
-s:parse_pos1	s:de_DE	i:5	s:१२३	d:23.0	i:3
+s:parse_pos1	s:de_DE	i:5	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parsecur	s:de_DE	s:$1,234.56	s:!U_PARSE_ERROR	s:	i:6
 s:parsecur	s:de_DE	s:1.234,56 €	s:!U_PARSE_ERROR	s:	i:8
-s:parsecur	s:de_DE	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:6
+s:parsecur	s:de_DE	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:8
 s:parsecur	s:de_DE	s:USD 12	s:!U_PARSE_ERROR	s:	i:3
 s:parsecur	s:de_DE	s:12 USD	s:!U_PARSE_ERROR	s:	i:2
 s:parsecur	s:de_DE	s:CHF 1	s:!U_PARSE_ERROR	s:	i:3
-s:parsecur	s:de_DE	s:¥123	s:!U_PARSE_ERROR	s:	i:4
+s:parsecur	s:de_DE	s:¥123	s:!U_PARSE_ERROR	s:	i:5
 s:parsecur	s:de_DE	s:abc	s:!U_PARSE_ERROR	s:	i:0
 s:parsecur	s:de_DE	s:1234,56 €	s:!U_PARSE_ERROR	s:	i:7
 s:parsecur	s:de_DE	s:US$12.00	s:!U_PARSE_ERROR	s:	i:0
@@ -10132,12 +10132,12 @@ s:parse	s:fr_FR	i:1	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:1	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:1	s:€12	d:12.0	i:3
-s:parse	s:fr_FR	i:1	s:١٢٣	i:1	i:123	i:3
-s:parse	s:fr_FR	i:1	s:١٢٣	i:2	i:123	i:3
-s:parse	s:fr_FR	i:1	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:fr_FR	i:1	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:fr_FR	i:1	s:١٢٣	i:1	i:123	i:6
+s:parse	s:fr_FR	i:1	s:١٢٣	i:2	i:123	i:6
+s:parse	s:fr_FR	i:1	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:fr_FR	i:1	s:١٢٣	d:123.0
-s:parse_pos1	s:fr_FR	i:1	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:fr_FR	i:1	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:1	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10157,7 +10157,7 @@ s:parse	s:fr_FR	i:1	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:1	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:1	s: 42	d:42.0	i:3
+s:parse_pos1	s:fr_FR	i:1	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:1	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:1	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:1	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -10168,11 +10168,11 @@ s:parse	s:fr_FR	i:1	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:1	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:1	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:fr_FR	i:1	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:fr_FR	i:1	s:१२३	i:1	i:123	i:3
-s:parse	s:fr_FR	i:1	s:१२३	i:2	i:123	i:3
-s:parse	s:fr_FR	i:1	s:१२३	i:3	d:123.0	i:3
+s:parse	s:fr_FR	i:1	s:१२३	i:1	i:123	i:9
+s:parse	s:fr_FR	i:1	s:१२३	i:2	i:123	i:9
+s:parse	s:fr_FR	i:1	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:fr_FR	i:1	s:१२३	d:123.0
-s:parse_pos1	s:fr_FR	i:1	s:१२३	d:23.0	i:3
+s:parse_pos1	s:fr_FR	i:1	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:2	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:fr_FR	i:2	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:fr_FR	i:2	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -10243,16 +10243,16 @@ s:parse	s:fr_FR	i:2	s:$1,234.56	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s:$1,234.56	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:2	s:$1,234.56	s:!U_PARSE_ERROR
 s:parse_pos1	s:fr_FR	i:2	s:$1,234.56	s:!U_PARSE_ERROR	i:7
-s:parse	s:fr_FR	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:fr_FR	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:5
+s:parse	s:fr_FR	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:5
+s:parse	s:fr_FR	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:5
 s:parse_nopos	s:fr_FR	i:2	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:2	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:fr_FR	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:fr_FR	i:2	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:fr_FR	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:fr_FR	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:fr_FR	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:fr_FR	i:2	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:2	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:2	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:2	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10272,7 +10272,7 @@ s:parse	s:fr_FR	i:2	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:2	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:2	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:2	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:2	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:2	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:2	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -10283,11 +10283,11 @@ s:parse	s:fr_FR	i:2	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:2	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:2	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:fr_FR	i:2	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:fr_FR	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:fr_FR	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:fr_FR	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:fr_FR	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:fr_FR	i:2	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:2	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:2	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:3	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:fr_FR	i:3	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:fr_FR	i:3	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -10362,12 +10362,12 @@ s:parse	s:fr_FR	i:3	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:3	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:3	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:fr_FR	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:fr_FR	i:3	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:fr_FR	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:fr_FR	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:fr_FR	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:fr_FR	i:3	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:3	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:3	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:3	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10387,7 +10387,7 @@ s:parse	s:fr_FR	i:3	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:3	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:3	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:3	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:3	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:3	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:fr_FR	i:3	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -10398,11 +10398,11 @@ s:parse	s:fr_FR	i:3	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:3	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:3	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:fr_FR	i:3	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:fr_FR	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:fr_FR	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:fr_FR	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:fr_FR	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:fr_FR	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:fr_FR	i:3	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:3	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:fr_FR	i:3	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:5	s:123	i:1	i:123	i:3
 s:parse	s:fr_FR	i:5	s:123	i:2	i:123	i:3
 s:parse	s:fr_FR	i:5	s:123	i:3	d:123.0	i:3
@@ -10477,12 +10477,12 @@ s:parse	s:fr_FR	i:5	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:5	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:5	s:€12	d:12.0	i:3
-s:parse	s:fr_FR	i:5	s:١٢٣	i:1	i:123	i:3
-s:parse	s:fr_FR	i:5	s:١٢٣	i:2	i:123	i:3
-s:parse	s:fr_FR	i:5	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:fr_FR	i:5	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:fr_FR	i:5	s:١٢٣	i:1	i:123	i:6
+s:parse	s:fr_FR	i:5	s:١٢٣	i:2	i:123	i:6
+s:parse	s:fr_FR	i:5	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:fr_FR	i:5	s:١٢٣	d:123.0
-s:parse_pos1	s:fr_FR	i:5	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:fr_FR	i:5	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:5	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10502,7 +10502,7 @@ s:parse	s:fr_FR	i:5	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:fr_FR	i:5	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:fr_FR	i:5	s: 42	d:42.0	i:3
+s:parse_pos1	s:fr_FR	i:5	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:fr_FR	i:5	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:fr_FR	i:5	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -10513,14 +10513,14 @@ s:parse	s:fr_FR	i:5	s:0.0000001	i:2	i:0	i:1
 s:parse	s:fr_FR	i:5	s:0.0000001	i:3	d:0.0	i:1
 s:parse_nopos	s:fr_FR	i:5	s:0.0000001	d:0.0
 s:parse_pos1	s:fr_FR	i:5	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:fr_FR	i:5	s:१२३	i:1	i:123	i:3
-s:parse	s:fr_FR	i:5	s:१२३	i:2	i:123	i:3
-s:parse	s:fr_FR	i:5	s:१२३	i:3	d:123.0	i:3
+s:parse	s:fr_FR	i:5	s:१२३	i:1	i:123	i:9
+s:parse	s:fr_FR	i:5	s:१२३	i:2	i:123	i:9
+s:parse	s:fr_FR	i:5	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:fr_FR	i:5	s:१२३	d:123.0
-s:parse_pos1	s:fr_FR	i:5	s:१२३	d:23.0	i:3
+s:parse_pos1	s:fr_FR	i:5	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parsecur	s:fr_FR	s:$1,234.56	s:!U_PARSE_ERROR	s:	i:0
 s:parsecur	s:fr_FR	s:1.234,56 €	s:!U_PARSE_ERROR	s:	i:8
-s:parsecur	s:fr_FR	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:6
+s:parsecur	s:fr_FR	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:8
 s:parsecur	s:fr_FR	s:USD 12	s:!U_PARSE_ERROR	s:	i:3
 s:parsecur	s:fr_FR	s:12 USD	s:!U_PARSE_ERROR	s:	i:2
 s:parsecur	s:fr_FR	s:CHF 1	s:!U_PARSE_ERROR	s:	i:3
@@ -10602,12 +10602,12 @@ s:parse	s:ar_EG	i:1	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:1	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:1	s:€12	d:12.0	i:3
-s:parse	s:ar_EG	i:1	s:١٢٣	i:1	i:123	i:3
-s:parse	s:ar_EG	i:1	s:١٢٣	i:2	i:123	i:3
-s:parse	s:ar_EG	i:1	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:ar_EG	i:1	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:ar_EG	i:1	s:١٢٣	i:1	i:123	i:6
+s:parse	s:ar_EG	i:1	s:١٢٣	i:2	i:123	i:6
+s:parse	s:ar_EG	i:1	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:ar_EG	i:1	s:١٢٣	d:123.0
-s:parse_pos1	s:ar_EG	i:1	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:ar_EG	i:1	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:1	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10627,7 +10627,7 @@ s:parse	s:ar_EG	i:1	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:1	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:1	s: 42	d:42.0	i:3
+s:parse_pos1	s:ar_EG	i:1	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:1	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:ar_EG	i:1	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:ar_EG	i:1	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -10638,11 +10638,11 @@ s:parse	s:ar_EG	i:1	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:1	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:1	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:ar_EG	i:1	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:ar_EG	i:1	s:१२३	i:1	i:123	i:3
-s:parse	s:ar_EG	i:1	s:१२३	i:2	i:123	i:3
-s:parse	s:ar_EG	i:1	s:१२३	i:3	d:123.0	i:3
+s:parse	s:ar_EG	i:1	s:१२३	i:1	i:123	i:9
+s:parse	s:ar_EG	i:1	s:१२३	i:2	i:123	i:9
+s:parse	s:ar_EG	i:1	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:ar_EG	i:1	s:१२३	d:123.0
-s:parse_pos1	s:ar_EG	i:1	s:१२३	d:23.0	i:3
+s:parse_pos1	s:ar_EG	i:1	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:2	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:ar_EG	i:2	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:ar_EG	i:2	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -10717,12 +10717,12 @@ s:parse	s:ar_EG	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:2	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:2	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:ar_EG	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:ar_EG	i:2	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:ar_EG	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:ar_EG	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:ar_EG	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:ar_EG	i:2	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:2	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:2	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:2	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10742,7 +10742,7 @@ s:parse	s:ar_EG	i:2	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:2	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:2	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:2	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:2	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -10753,11 +10753,11 @@ s:parse	s:ar_EG	i:2	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:2	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:2	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:ar_EG	i:2	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:ar_EG	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:ar_EG	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:ar_EG	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:ar_EG	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:ar_EG	i:2	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:2	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:2	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:3	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:ar_EG	i:3	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:ar_EG	i:3	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -10832,12 +10832,12 @@ s:parse	s:ar_EG	i:3	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:3	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:3	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:ar_EG	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:ar_EG	i:3	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:ar_EG	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:ar_EG	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:ar_EG	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:ar_EG	i:3	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:3	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:3	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:3	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10857,7 +10857,7 @@ s:parse	s:ar_EG	i:3	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:3	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:3	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:3	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:3	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:ar_EG	i:3	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:ar_EG	i:3	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -10868,11 +10868,11 @@ s:parse	s:ar_EG	i:3	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:3	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:3	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:ar_EG	i:3	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:ar_EG	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:ar_EG	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:ar_EG	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:ar_EG	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:ar_EG	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:ar_EG	i:3	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:3	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:ar_EG	i:3	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:5	s:123	i:1	i:123	i:3
 s:parse	s:ar_EG	i:5	s:123	i:2	i:123	i:3
 s:parse	s:ar_EG	i:5	s:123	i:3	d:123.0	i:3
@@ -10947,12 +10947,12 @@ s:parse	s:ar_EG	i:5	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:5	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:5	s:€12	d:12.0	i:3
-s:parse	s:ar_EG	i:5	s:١٢٣	i:1	i:123	i:3
-s:parse	s:ar_EG	i:5	s:١٢٣	i:2	i:123	i:3
-s:parse	s:ar_EG	i:5	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:ar_EG	i:5	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:ar_EG	i:5	s:١٢٣	i:1	i:123	i:6
+s:parse	s:ar_EG	i:5	s:١٢٣	i:2	i:123	i:6
+s:parse	s:ar_EG	i:5	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:ar_EG	i:5	s:١٢٣	d:123.0
-s:parse_pos1	s:ar_EG	i:5	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:ar_EG	i:5	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:5	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -10972,7 +10972,7 @@ s:parse	s:ar_EG	i:5	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:ar_EG	i:5	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:ar_EG	i:5	s: 42	d:42.0	i:3
+s:parse_pos1	s:ar_EG	i:5	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:ar_EG	i:5	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:ar_EG	i:5	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -10983,14 +10983,14 @@ s:parse	s:ar_EG	i:5	s:0.0000001	i:2	i:0	i:1
 s:parse	s:ar_EG	i:5	s:0.0000001	i:3	d:0.0	i:1
 s:parse_nopos	s:ar_EG	i:5	s:0.0000001	d:0.0
 s:parse_pos1	s:ar_EG	i:5	s:0.0000001	s:!U_PARSE_ERROR	i:1
-s:parse	s:ar_EG	i:5	s:१२३	i:1	i:123	i:3
-s:parse	s:ar_EG	i:5	s:१२३	i:2	i:123	i:3
-s:parse	s:ar_EG	i:5	s:१२३	i:3	d:123.0	i:3
+s:parse	s:ar_EG	i:5	s:१२३	i:1	i:123	i:9
+s:parse	s:ar_EG	i:5	s:१२३	i:2	i:123	i:9
+s:parse	s:ar_EG	i:5	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:ar_EG	i:5	s:१२३	d:123.0
-s:parse_pos1	s:ar_EG	i:5	s:१२३	d:23.0	i:3
+s:parse_pos1	s:ar_EG	i:5	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parsecur	s:ar_EG	s:$1,234.56	s:!U_PARSE_ERROR	s:	i:0
 s:parsecur	s:ar_EG	s:1.234,56 €	s:!U_PARSE_ERROR	s:	i:8
-s:parsecur	s:ar_EG	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:6
+s:parsecur	s:ar_EG	s:€1,234.56	s:!U_PARSE_ERROR	s:	i:8
 s:parsecur	s:ar_EG	s:USD 12	s:!U_PARSE_ERROR	s:	i:3
 s:parsecur	s:ar_EG	s:12 USD	s:!U_PARSE_ERROR	s:	i:2
 s:parsecur	s:ar_EG	s:CHF 1	s:!U_PARSE_ERROR	s:	i:3
@@ -11072,12 +11072,12 @@ s:parse	s:hi_IN	i:1	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:1	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:1	s:€12	d:12.0	i:3
-s:parse	s:hi_IN	i:1	s:١٢٣	i:1	i:123	i:3
-s:parse	s:hi_IN	i:1	s:١٢٣	i:2	i:123	i:3
-s:parse	s:hi_IN	i:1	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:hi_IN	i:1	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:hi_IN	i:1	s:١٢٣	i:1	i:123	i:6
+s:parse	s:hi_IN	i:1	s:١٢٣	i:2	i:123	i:6
+s:parse	s:hi_IN	i:1	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:hi_IN	i:1	s:١٢٣	d:123.0
-s:parse_pos1	s:hi_IN	i:1	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:hi_IN	i:1	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:1	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -11097,7 +11097,7 @@ s:parse	s:hi_IN	i:1	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:1	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:1	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:1	s: 42	d:42.0	i:3
+s:parse_pos1	s:hi_IN	i:1	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:1	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:hi_IN	i:1	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:hi_IN	i:1	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -11108,11 +11108,11 @@ s:parse	s:hi_IN	i:1	s:0.0000001	i:2	i:0	i:9
 s:parse	s:hi_IN	i:1	s:0.0000001	i:3	d:1.0E-7	i:9
 s:parse_nopos	s:hi_IN	i:1	s:0.0000001	d:1.0E-7
 s:parse_pos1	s:hi_IN	i:1	s:0.0000001	d:1.0E-7	i:9
-s:parse	s:hi_IN	i:1	s:१२३	i:1	i:123	i:3
-s:parse	s:hi_IN	i:1	s:१२३	i:2	i:123	i:3
-s:parse	s:hi_IN	i:1	s:१२३	i:3	d:123.0	i:3
+s:parse	s:hi_IN	i:1	s:१२३	i:1	i:123	i:9
+s:parse	s:hi_IN	i:1	s:१२३	i:2	i:123	i:9
+s:parse	s:hi_IN	i:1	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:hi_IN	i:1	s:१२३	d:123.0
-s:parse_pos1	s:hi_IN	i:1	s:१२३	d:23.0	i:3
+s:parse_pos1	s:hi_IN	i:1	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:2	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:hi_IN	i:2	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:hi_IN	i:2	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -11187,12 +11187,12 @@ s:parse	s:hi_IN	i:2	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:2	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:2	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:hi_IN	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:hi_IN	i:2	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:hi_IN	i:2	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:hi_IN	i:2	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:hi_IN	i:2	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:hi_IN	i:2	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:2	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:2	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:2	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -11212,7 +11212,7 @@ s:parse	s:hi_IN	i:2	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:2	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:2	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:2	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:2	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:2	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -11223,11 +11223,11 @@ s:parse	s:hi_IN	i:2	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:9
 s:parse	s:hi_IN	i:2	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:hi_IN	i:2	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:hi_IN	i:2	s:0.0000001	s:!U_PARSE_ERROR	i:10
-s:parse	s:hi_IN	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:hi_IN	i:2	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:hi_IN	i:2	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:hi_IN	i:2	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:hi_IN	i:2	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:2	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:2	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:3	s:123	i:1	s:!U_PARSE_ERROR	i:3
 s:parse	s:hi_IN	i:3	s:123	i:2	s:!U_PARSE_ERROR	i:3
 s:parse	s:hi_IN	i:3	s:123	i:3	s:!U_PARSE_ERROR	i:3
@@ -11302,12 +11302,12 @@ s:parse	s:hi_IN	i:3	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:3	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:3	s:€12	s:!U_PARSE_ERROR	i:4
-s:parse	s:hi_IN	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:3
+s:parse_pos1	s:hi_IN	i:3	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:hi_IN	i:3	s:١٢٣	i:1	s:!U_PARSE_ERROR	i:6
+s:parse	s:hi_IN	i:3	s:١٢٣	i:2	s:!U_PARSE_ERROR	i:6
+s:parse	s:hi_IN	i:3	s:١٢٣	i:3	s:!U_PARSE_ERROR	i:6
 s:parse_nopos	s:hi_IN	i:3	s:١٢٣	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:3	s:١٢٣	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:3	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:3	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -11327,7 +11327,7 @@ s:parse	s:hi_IN	i:3	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:3	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:3	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:3	s: 42	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:3	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:3	s:-	i:1	s:!U_PARSE_ERROR	i:1
 s:parse	s:hi_IN	i:3	s:-	i:2	s:!U_PARSE_ERROR	i:1
 s:parse	s:hi_IN	i:3	s:-	i:3	s:!U_PARSE_ERROR	i:1
@@ -11338,11 +11338,11 @@ s:parse	s:hi_IN	i:3	s:0.0000001	i:2	s:!U_PARSE_ERROR	i:9
 s:parse	s:hi_IN	i:3	s:0.0000001	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:hi_IN	i:3	s:0.0000001	s:!U_PARSE_ERROR
 s:parse_pos1	s:hi_IN	i:3	s:0.0000001	s:!U_PARSE_ERROR	i:10
-s:parse	s:hi_IN	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:3
-s:parse	s:hi_IN	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:3
+s:parse	s:hi_IN	i:3	s:१२३	i:1	s:!U_PARSE_ERROR	i:9
+s:parse	s:hi_IN	i:3	s:१२३	i:2	s:!U_PARSE_ERROR	i:9
+s:parse	s:hi_IN	i:3	s:१२३	i:3	s:!U_PARSE_ERROR	i:9
 s:parse_nopos	s:hi_IN	i:3	s:१२३	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:3	s:१२३	s:!U_PARSE_ERROR	i:4
+s:parse_pos1	s:hi_IN	i:3	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:5	s:123	i:1	i:123	i:3
 s:parse	s:hi_IN	i:5	s:123	i:2	i:123	i:3
 s:parse	s:hi_IN	i:5	s:123	i:3	d:123.0	i:3
@@ -11417,12 +11417,12 @@ s:parse	s:hi_IN	i:5	s:€12	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:€12	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:€12	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:5	s:€12	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:5	s:€12	d:12.0	i:3
-s:parse	s:hi_IN	i:5	s:١٢٣	i:1	i:123	i:3
-s:parse	s:hi_IN	i:5	s:١٢٣	i:2	i:123	i:3
-s:parse	s:hi_IN	i:5	s:١٢٣	i:3	d:123.0	i:3
+s:parse_pos1	s:hi_IN	i:5	s:€12	s:!U_INVALID_CHAR_FOUND	i:1
+s:parse	s:hi_IN	i:5	s:١٢٣	i:1	i:123	i:6
+s:parse	s:hi_IN	i:5	s:١٢٣	i:2	i:123	i:6
+s:parse	s:hi_IN	i:5	s:١٢٣	i:3	d:123.0	i:6
 s:parse_nopos	s:hi_IN	i:5	s:١٢٣	d:123.0
-s:parse_pos1	s:hi_IN	i:5	s:١٢٣	d:23.0	i:3
+s:parse_pos1	s:hi_IN	i:5	s:١٢٣	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:5	s:one hundred	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:one hundred	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:one hundred	i:3	s:!U_PARSE_ERROR	i:0
@@ -11442,7 +11442,7 @@ s:parse	s:hi_IN	i:5	s: 42	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s: 42	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s: 42	i:3	s:!U_PARSE_ERROR	i:0
 s:parse_nopos	s:hi_IN	i:5	s: 42	s:!U_PARSE_ERROR
-s:parse_pos1	s:hi_IN	i:5	s: 42	d:42.0	i:3
+s:parse_pos1	s:hi_IN	i:5	s: 42	s:!U_INVALID_CHAR_FOUND	i:1
 s:parse	s:hi_IN	i:5	s:-	i:1	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:-	i:2	s:!U_PARSE_ERROR	i:0
 s:parse	s:hi_IN	i:5	s:-	i:3	s:!U_PARSE_ERROR	i:0
@@ -11453,14 +11453,14 @@ s:parse	s:hi_IN	i:5	s:0.0000001	i:2	i:0	i:9
 s:parse	s:hi_IN	i:5	s:0.0000001	i:3	d:1.0E-7	i:9
 s:parse_nopos	s:hi_IN	i:5	s:0.0000001	d:1.0E-7
 s:parse_pos1	s:hi_IN	i:5	s:0.0000001	d:1.0E-7	i:9
-s:parse	s:hi_IN	i:5	s:१२३	i:1	i:123	i:3
-s:parse	s:hi_IN	i:5	s:१२३	i:2	i:123	i:3
-s:parse	s:hi_IN	i:5	s:१२३	i:3	d:123.0	i:3
+s:parse	s:hi_IN	i:5	s:१२३	i:1	i:123	i:9
+s:parse	s:hi_IN	i:5	s:१२३	i:2	i:123	i:9
+s:parse	s:hi_IN	i:5	s:१२३	i:3	d:123.0	i:9
 s:parse_nopos	s:hi_IN	i:5	s:१२३	d:123.0
-s:parse_pos1	s:hi_IN	i:5	s:१२३	d:23.0	i:3
+s:parse_pos1	s:hi_IN	i:5	s:१२३	s:!U_INVALID_CHAR_FOUND	i:1
 s:parsecur	s:hi_IN	s:$1,234.56	d:1234.56	s:USD	i:9
 s:parsecur	s:hi_IN	s:1.234,56 €	s:!U_PARSE_ERROR	s:	i:5
-s:parsecur	s:hi_IN	s:€1,234.56	d:1234.56	s:EUR	i:9
+s:parsecur	s:hi_IN	s:€1,234.56	d:1234.56	s:EUR	i:11
 s:parsecur	s:hi_IN	s:USD 12	s:!U_PARSE_ERROR	s:	i:3
 s:parsecur	s:hi_IN	s:12 USD	s:!U_PARSE_ERROR	s:	i:2
 s:parsecur	s:hi_IN	s:CHF 1	s:!U_PARSE_ERROR	s:	i:3
@@ -11560,10 +11560,10 @@ s:setpattern	s:#,##0.0#‰	~T	s:#,##0.0#‰	s:-12,345,678.0‰	s:500.0‰	s:7,00
 s:setpattern	s:[	~T	s:[0	s:-[12346	s:[0	s:[7
 s:setpattern	s:#.#.#	s:!U_ZERO_ERROR	s:#,##0.###	s:-12,345.678	s:0.5	s:7
 s:setpattern	s:	~T	s:#	s:-12345.678	s:0.5	s:7
-s:locfmt	s:@numbers=arab	i:1	s:١٬٢٣٤٫٥	s:root
-s:locfmt	s:@numbers=arab	i:2	s:١٬٢٣٤٫٥٠ ¤	s:root
-s:locfmt	s:@numbers=arab	i:8	s:١٬٢٣٤٫٥	s:root
-s:locfmt	s:@numbers=arab	i:5	s:١٬٢٣٤٫٥	s:root
+s:locfmt	s:@numbers=arab	i:1	s:!ValueError	s:!ValueError
+s:locfmt	s:@numbers=arab	i:2	s:!ValueError	s:!ValueError
+s:locfmt	s:@numbers=arab	i:8	s:!ValueError	s:!ValueError
+s:locfmt	s:@numbers=arab	i:5	s:!ValueError	s:!ValueError
 s:locfmt	s:en@numbers=hanidec	i:1	s:一,二三四.五	s:en
 s:locfmt	s:en@numbers=hanidec	i:2	s:¤一,二三四.五〇	s:en
 s:locfmt	s:en@numbers=hanidec	i:8	s:一,二三四.五	s:en
@@ -11580,14 +11580,14 @@ s:locfmt	s:en_US_POSIX	i:1	s:1234.5	s:en_US_POSIX
 s:locfmt	s:en_US_POSIX	i:2	s:$ 1234.50	s:en_US_POSIX
 s:locfmt	s:en_US_POSIX	i:8	s:1,234	s:en
 s:locfmt	s:en_US_POSIX	i:5	s:one thousand two hundred thirty-four point five	s:en
-s:locfmt	s:root	i:1	s:1,234.5	s:root
-s:locfmt	s:root	i:2	s:¤ 1,234.50	s:root
-s:locfmt	s:root	i:8	s:1,234	s:root
-s:locfmt	s:root	i:5	s:1,234.5	s:root
-s:locfmt	s:und	i:1	s:1,234.5	s:root
-s:locfmt	s:und	i:2	s:¤ 1,234.50	s:root
-s:locfmt	s:und	i:8	s:1,234	s:root
-s:locfmt	s:und	i:5	s:1,234.5	s:root
+s:locfmt	s:root	i:1	s:!ValueError	s:!ValueError
+s:locfmt	s:root	i:2	s:!ValueError	s:!ValueError
+s:locfmt	s:root	i:8	s:!ValueError	s:!ValueError
+s:locfmt	s:root	i:5	s:!ValueError	s:!ValueError
+s:locfmt	s:und	i:1	s:!ValueError	s:!ValueError
+s:locfmt	s:und	i:2	s:!ValueError	s:!ValueError
+s:locfmt	s:und	i:8	s:!ValueError	s:!ValueError
+s:locfmt	s:und	i:5	s:!ValueError	s:!ValueError
 s:locfmt	s:uk	i:1	s:1 234,5	s:uk
 s:locfmt	s:uk	i:2	s:1 234,50 ¤	s:uk
 s:locfmt	s:uk	i:8	s:1 234	s:uk
@@ -11604,10 +11604,10 @@ s:locfmt	s:sr_Latn	i:1	s:1.234,5	s:sr_Latn
 s:locfmt	s:sr_Latn	i:2	s:1.234,50 ¤	s:sr_Latn
 s:locfmt	s:sr_Latn	i:8	s:1.234	s:sr_Latn
 s:locfmt	s:sr_Latn	i:5	s:jedna hiljadu dvesta trideset i četiri koma pet	s:sr_Latn
-s:locfmt	s:xx	i:1	s:1,234.5	s:en_US
-s:locfmt	s:xx	i:2	s:¤1,234.50	s:en_US
-s:locfmt	s:xx	i:8	s:1,234	s:en
-s:locfmt	s:xx	i:5	s:one thousand two hundred thirty-four point five	s:en
+s:locfmt	s:xx	i:1	s:!ValueError	s:!ValueError
+s:locfmt	s:xx	i:2	s:!ValueError	s:!ValueError
+s:locfmt	s:xx	i:8	s:!ValueError	s:!ValueError
+s:locfmt	s:xx	i:5	s:!ValueError	s:!ValueError
 s:locfmt	s:EN_us	i:1	s:1,234.5	s:en_US
 s:locfmt	s:EN_us	i:2	s:$1,234.50	s:en_US
 s:locfmt	s:EN_us	i:8	s:1,234	s:en

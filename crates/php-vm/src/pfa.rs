@@ -25,6 +25,18 @@ use crate::object;
 use crate::opcode::ParamInfo;
 use crate::vm::{Frame, FrameKind, PendingCall, Vm, VmResult};
 
+thread_local! {
+    /// The partial applications whose script was dumped (file, line and
+    /// called function): `zend_accel_pfa_cache_get` finds them cached
+    /// afterwards.
+    static PFA_DUMPED: std::cell::RefCell<std::collections::HashSet<DumpedPfa>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// A partial application's call site: file, line and lower-case name of
+/// the called function.
+type DumpedPfa = (Vec<u8>, u32, Vec<u8>);
+
 /// Placeholder bookkeeping of a pending partial call.
 #[derive(Clone, Debug, Default)]
 pub struct PfaArgs {
@@ -529,9 +541,11 @@ impl Vm {
         } else {
             func.return_type().cloned()
         };
+        // Void and never functions cannot `return $expr`: the call is a
+        // statement of its own.
         let is_void = ret_ty
             .as_ref()
-            .is_some_and(|t| t.mask & crate::types::mask::VOID != 0);
+            .is_some_and(|t| t.mask & (crate::types::mask::VOID | crate::types::mask::NEVER) != 0);
         let this_obj = call.this.clone();
         let static_closure = this_obj.is_none()
             && !(func.flags() & flags::CLOSURE != 0 && func.flags() & flags::STATIC == 0);
@@ -666,12 +680,44 @@ impl Vm {
         } else {
             call.scope.clone()
         };
-        let unit =
-            match self.compile_pfa(code.as_bytes(), &file, fscope.as_ref(), &pfa_name, strict)? {
-                CompileOutcome::Ok(u) => u,
-                CompileOutcome::ParseError(e) => return Err(crate::vm::Throw::Exception(e)),
-                CompileOutcome::Fatal => return Err(crate::vm::Throw::Fatal),
-            };
+        let unit = match self.compile_pfa(
+            code.as_bytes(),
+            &file,
+            fscope.as_ref(),
+            &pfa_name,
+            strict,
+            None,
+        )? {
+            CompileOutcome::Ok(u) => u,
+            CompileOutcome::ParseError(e) => return Err(crate::vm::Throw::Exception(e)),
+            CompileOutcome::Fatal => return Err(crate::vm::Throw::Fatal),
+        };
+        // `zend_accel_compile_pfa`: opcache caches the script of the
+        // closure (an expression statement) and optimizes it, once per call
+        // site and function, dumping it as any script it optimizes.
+        if self.opcache_dumps() && !self.ini.get_bool("opcache.file_cache_only") {
+            let key = (
+                file.as_bytes().to_vec(),
+                line,
+                func.name().as_bytes().to_ascii_lowercase(),
+            );
+            if PFA_DUMPED.with(|d| d.borrow_mut().insert(key)) {
+                let level =
+                    u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                        .unwrap_or(0);
+                let stmt = code.replacen("return ", "", 1);
+                if let Ok(CompileOutcome::Ok(u)) = self.compile_pfa(
+                    stmt.as_bytes(),
+                    &file,
+                    fscope.as_ref(),
+                    &pfa_name,
+                    strict,
+                    Some(level),
+                ) {
+                    self.opcache_dump(&u, stmt.as_bytes(), None, &file);
+                }
+            }
+        }
 
         // Run it with the bound values as variables.
         let mut f = Frame::new(unit.main.code.clone(), FrameKind::Eval);
@@ -830,6 +876,8 @@ impl Vm {
         Ok(p.default_text.clone().unwrap_or_else(|| "null".into()))
     }
 
+    /// Compiles the closure's script `src`; for the optimizer's dump with
+    /// `dump_level` (`opcache.optimization_level`), quietly.
     fn compile_pfa(
         &mut self,
         src: &[u8],
@@ -837,6 +885,7 @@ impl Vm {
         scope: Option<&Rc<crate::class::Class>>,
         name: &ZStr,
         strict: bool,
+        dump_level: Option<u32>,
     ) -> VmResult<CompileOutcome> {
         let program = match php_parser::parse(src, &php_parser::ParseOptions::default()) {
             Ok(p) => p,
@@ -871,9 +920,15 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: None,
             user_opcodes: Vec::new(),
-            optimization_level: 0,
+            optimization_level: dump_level.unwrap_or(0),
         };
         let compiled = crate::compiler::compile(&program, Rc::from(src), opts);
+        if dump_level.is_some() {
+            return Ok(match compiled {
+                Ok(u) => CompileOutcome::Ok(Rc::new(u)),
+                Err(_) => CompileOutcome::Fatal,
+            });
+        }
         self.activate_compiled_auto_globals();
         match compiled {
             Ok(u) => {

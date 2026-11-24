@@ -85,7 +85,7 @@ fn imagecolormatch(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match r {
         -1 => Err(a.value_error(vm, 1, "must be TrueColor")),
         -2 => Err(a.value_error(vm, 2, "must be Palette")),
-        -3 => Err(a.value_error(vm, 2, "must be the same size as argument #1 ($im1)")),
+        -3 => Err(a.value_error(vm, 2, "must be the same size as argument #1 ($image1)")),
         -4 => Err(a.value_error(vm, 2, "must have at least one color")),
         _ => Ok(Value::Bool(true)),
     }
@@ -436,7 +436,9 @@ fn imageinterlace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn polygon(vm: &mut Vm, a: &Args, kind: i32) -> VmResult<Value> {
     let im = image_arg(vm, a, 0)?;
     let points = a.array(1);
-    let (npoints, col) = if a.opt(3).is_none() {
+    // `COL_IS_NULL`: the count comes from the array, argument #3 is the color.
+    let count_from_array = a.opt(3).is_none();
+    let (npoints, col) = if count_from_array {
         let n = i64::try_from(points.len()).unwrap_or(i64::MAX);
         if n % 2 != 0 {
             return Err(a.value_error(vm, 2, "must have an even number of elements"));
@@ -453,7 +455,11 @@ fn polygon(vm: &mut Vm, a: &Args, kind: i32) -> VmResult<Value> {
     let col = ci(col);
     let nelem = i32::try_from(points.len()).unwrap_or(i32::MAX);
     if npoints < 3 {
-        return Err(a.value_error(vm, 3, "must be greater than or equal to 3"));
+        return Err(if count_from_array {
+            a.value_error(vm, 2, "must have at least 3 points")
+        } else {
+            a.value_error(vm, 3, "must be greater than or equal to 3")
+        });
     }
     if i64::from(nelem) < i64::from(npoints) * 2 {
         return Err(vm.throw(

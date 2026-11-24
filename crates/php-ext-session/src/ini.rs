@@ -43,15 +43,31 @@ pub(crate) fn restoring() -> bool {
     RESTORING.with(Cell::get)
 }
 
-/// The modify hook of `DIRECTIVES[I]`.
+/// The modify hook of `DIRECTIVES[I]`. Per-directory configuration (`mod_php`'s
+/// `php_value`, `.htaccess`) reaches it at the activation stages with
+/// `PHP_INI_PERDIR` access, which `PHP_INI_PERDIR` directives such as
+/// `session.upload_progress.*` accept and `ini_set()` does not.
 fn on_modify<const I: usize>(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    use php_session::ini::{alter, IniStage as SessionStage, INI_PERDIR};
+    use php_vm::ext::IniStage;
     let name = DIRECTIVES[I].name;
+    let stage = vm.ini_modify_stage();
     with_host_unsynced(vm, |h| {
         let ok = if restoring() {
             php_session::ini::ini_restore(h, name);
             true
         } else {
-            php_session::ini::ini_set(h, name, value) == Some(true)
+            match stage {
+                IniStage::Activate => {
+                    alter(h, name, value, INI_PERDIR, SessionStage::Activate) == Some(true)
+                }
+                IniStage::Htaccess => {
+                    alter(h, name, value, INI_PERDIR, SessionStage::Htaccess) == Some(true)
+                }
+                IniStage::Runtime | IniStage::Restore => {
+                    php_session::ini::ini_set(h, name, value) == Some(true)
+                }
+            }
         };
         match h.state().take_exception() {
             Some(e) => Err(to_throw(h.vm, e)),

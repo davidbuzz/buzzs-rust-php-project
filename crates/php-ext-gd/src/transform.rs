@@ -397,7 +397,7 @@ fn imageaffine(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 *slot = d;
             }
             _ => {
-                return Err(a.type_error(vm, 3, &format!("contains invalid type for element {i}")));
+                return Err(a.type_error(vm, 2, &format!("contains invalid type for element {i}")));
             }
         }
     }

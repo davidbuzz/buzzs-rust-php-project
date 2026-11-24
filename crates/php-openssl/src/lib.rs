@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/openssl` for phprust, built on the system OpenSSL 3.x
-//! (the same libcrypto `/usr/bin/php` links against, so ciphertexts,
+//! (the same libcrypto `/usr/bin/php8.5` links against, so ciphertexts,
 //! signatures and error strings match byte for byte).
 //!
 //! # Architecture

@@ -126,7 +126,9 @@ impl Replacement {
                 ReplacementPiece::Literal(l) => out.extend_from_slice(l),
                 ReplacementPiece::Group(n) => {
                     if *n < count && ov[2 * n] != ffi::PCRE2_UNSET {
-                        out.extend_from_slice(&subject[ov[2 * n]..ov[2 * n + 1]]);
+                        if let Some(group) = subject.get(ov[2 * n]..ov[2 * n + 1]) {
+                            out.extend_from_slice(group);
+                        }
                     }
                 }
             }
@@ -241,7 +243,7 @@ fn replace_loop(
                 }
                 replaced += 1;
                 let buf = out.get_or_insert_with(Vec::new);
-                buf.extend_from_slice(&subject[last_end..s]);
+                buf.extend_from_slice(subject.get(last_end..s).unwrap_or_default());
                 if !sub.substitute(&ex, n, buf) {
                     // Exception in the callback: `goto error` with count >= 0.
                     return ReplaceOutcome {
@@ -289,7 +291,7 @@ fn finish(out: Option<Vec<u8>>, subject: &[u8], last_end: usize, count: usize) -
     let result = match out {
         None => subject.to_vec(),
         Some(mut buf) => {
-            buf.extend_from_slice(&subject[last_end..]);
+            buf.extend_from_slice(subject.get(last_end..).unwrap_or_default());
             buf
         }
     };

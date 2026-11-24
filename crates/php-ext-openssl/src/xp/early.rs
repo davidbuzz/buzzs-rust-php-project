@@ -42,6 +42,11 @@ thread_local! {
     static CALLBACKS: RefCell<HashMap<usize, Value>> = RefCell::new(HashMap::new());
 }
 
+/// Forgets this request's callables ([`super::reset_request`]).
+pub(super) fn reset_request() {
+    CALLBACKS.with(|c| c.borrow_mut().clear());
+}
+
 /// `php_openssl_setup_client_early_data`: the payload, or `Err(())` after
 /// queueing the `TypeError`.
 pub(crate) fn client_payload(vm: &mut Vm, opts: &SslOpts) -> Result<Option<Vec<u8>>, ()> {
@@ -91,6 +96,7 @@ pub(crate) fn setup_server(
         }
         let key = b.as_ptr() as usize;
         CALLBACKS.with(|c| c.borrow_mut().insert(key, cb));
+        super::sess::note_callbacks();
         if max == 0 {
             max = i64::try_from(CHUNK).unwrap_or(0);
         }
@@ -167,7 +173,7 @@ pub(crate) fn handshake(
                     let data = Value::Str(ZStr::from(&buf[..n]));
                     let stream = super::sess::current_stream();
                     php_ext_streams::bridge::with_vm(|vm| {
-                        if let Err(t) = vm.call_value(&cb, vec![stream, data]) {
+                        if let Err(t) = super::sess::call_guarded(vm, &cb, vec![stream, data]) {
                             php_ext_streams::bridge::set_pending(t);
                         }
                     });

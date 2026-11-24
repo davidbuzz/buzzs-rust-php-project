@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! `NumberFormatter` behaviour checked against fixtures from `/usr/bin/php`.
+//! `NumberFormatter` behaviour checked against fixtures from `/usr/bin/php8.5`.
 #![allow(clippy::too_many_lines, clippy::many_single_char_names)]
 
 mod common;

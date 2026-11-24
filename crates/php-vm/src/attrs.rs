@@ -287,9 +287,8 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         return None;
     }
     let parent = cls.parent.as_ref();
-    // Methods print `ZEND_FN_SCOPE_NAME` (`%s`, cut at the NUL of an
-    // anonymous class name); constants and properties print `%pS` (whole).
-    let display = crate::object::display_name(&cls.name);
+    // Every form prints the whole class name (`%pS`), the NUL of an
+    // anonymous class name and what follows it included (GH-25352).
     let full = cls.name.to_string_lossy();
     for lc in &cls.method_order {
         let Some(m) = cls.methods.get(lc) else {
@@ -323,7 +322,7 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         });
         if !in_parent && !in_iface && !in_trait {
             return Some((
-                format!("{display}::{}() has #[\\Override] attribute, but no matching parent method exists", m.name),
+                format!("{full}::{}() has #[\\Override] attribute, but no matching parent method exists", m.name),
                 uf.line_start,
             ));
         }
@@ -390,7 +389,7 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
             if !has_op {
                 return Some((
                     format!(
-                        "{display}::${}::{kind}() has #[\\Override] attribute, but no matching parent method exists",
+                        "{full}::${}::{kind}() has #[\\Override] attribute, but no matching parent method exists",
                         p.name.to_string_lossy()
                     ),
                     f.line_start,

@@ -171,21 +171,20 @@ fn compile(
 }
 
 /// An INI limit as `OnigMatchParam` takes it: `_php_mb_onig_search` sets
-/// any value in `0..=UINT_MAX` (`!ZEND_LONG_UINT_OVFL`), `mb_ereg_match`
-/// (`strict`) only values in `1..UINT_MAX`; others keep the library
-/// default.
-fn limit(v: i64, strict: bool) -> Option<u32> {
-    u32::try_from(v)
-        .ok()
-        .filter(|&n| !strict || (n > 0 && n < u32::MAX))
+/// any value in the range of the parameter's type (`ZEND_IN_RANGE_OF`:
+/// `unsigned int` for the stack limit, `unsigned long` for the retry
+/// limit), `mb_ereg_match` (`strict`) only the positive ones; others keep
+/// the library default.
+fn limit<T: TryFrom<i64> + Default + PartialOrd>(v: i64, strict: bool) -> Option<T> {
+    T::try_from(v).ok().filter(|n| !strict || *n > T::default())
 }
 
 /// The match limits from `mbstring.regex_stack_limit` /
 /// `mbstring.regex_retry_limit`.
 fn limits(vm: &Vm, strict: bool) -> MatchLimits {
     MatchLimits {
-        stack: limit(vm.ini_long("mbstring.regex_stack_limit"), strict),
-        retry: limit(vm.ini_long("mbstring.regex_retry_limit"), strict),
+        stack: limit::<u32>(vm.ini_long("mbstring.regex_stack_limit"), strict),
+        retry: limit::<std::ffi::c_ulong>(vm.ini_long("mbstring.regex_retry_limit"), strict),
     }
 }
 
@@ -885,16 +884,23 @@ mod tests {
 
     #[test]
     fn ini_limits_follow_php_mbregex() {
-        // _php_mb_onig_search: any value in 0..=UINT_MAX.
-        assert_eq!(limit(0, false), Some(0));
-        assert_eq!(limit(10_000, false), Some(10_000));
-        assert_eq!(limit(i64::from(u32::MAX), false), Some(u32::MAX));
-        assert_eq!(limit(-1, false), None);
-        assert_eq!(limit(i64::from(u32::MAX) + 1, false), None);
-        // mb_ereg_match: 0 < n < UINT_MAX.
-        assert_eq!(limit(0, true), None);
-        assert_eq!(limit(i64::from(u32::MAX), true), None);
-        assert_eq!(limit(5, true), Some(5));
+        // _php_mb_onig_search: any value in the range of the parameter.
+        assert_eq!(limit::<u32>(0, false), Some(0));
+        assert_eq!(limit::<u32>(10_000, false), Some(10_000));
+        assert_eq!(limit::<u32>(i64::from(u32::MAX), false), Some(u32::MAX));
+        assert_eq!(limit::<u32>(-1, false), None);
+        assert_eq!(limit::<u32>(i64::from(u32::MAX) + 1, false), None);
+        // The retry limit is an unsigned long: UINT_MAX + 1 is kept.
+        let wide = i64::from(u32::MAX) + 1;
+        assert_eq!(
+            limit::<std::ffi::c_ulong>(wide, false),
+            std::ffi::c_ulong::try_from(wide).ok()
+        );
+        assert_eq!(limit::<std::ffi::c_ulong>(-1, false), None);
+        // mb_ereg_match: only positive values.
+        assert_eq!(limit::<u32>(0, true), None);
+        assert_eq!(limit::<u32>(i64::from(u32::MAX), true), Some(u32::MAX));
+        assert_eq!(limit::<u32>(5, true), Some(5));
     }
 
     #[test]

@@ -138,7 +138,7 @@ fn rel(p: &Path) -> String {
 }
 
 #[test]
-#[ignore = "needs /usr/bin/php; regenerates tests/fixtures/php_lint.tsv"]
+#[ignore = "needs /usr/bin/php8.5; regenerates tests/fixtures/php_lint.tsv"]
 fn regenerate() {
     use std::process::Command;
     let tmp = std::env::temp_dir().join(format!("php-parser-lint-{}", std::process::id()));
@@ -155,9 +155,11 @@ fn regenerate() {
         let short = short_open_tag(&secs);
         let f = tmp.join(format!("t{i}.php"));
         std::fs::write(&f, file).unwrap();
-        let o = Command::new("php")
+        let o = Command::new("/usr/bin/php8.5")
             .args([
                 "-n",
+                "-d",
+                "memory_limit=1G",
                 "-l",
                 "-d",
                 if short {

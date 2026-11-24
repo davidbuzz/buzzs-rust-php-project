@@ -409,6 +409,16 @@ const fn payload_offset<T>() -> usize {
     std::mem::size_of::<ObjHeader>().next_multiple_of(std::mem::align_of::<T>())
 }
 
+/// Offset of the payload of an [`Obj`] handle's allocation, seen from the
+/// handle's pointer (the base of the `ObjCell<T>`). An `Obj`'s payload is
+/// one fixed distance behind the header, so a consumer that knows the
+/// payload type (like `php-vm`'s trace JIT, reading an `ObjectData`) can
+/// reach it with one displacement.
+#[must_use]
+pub const fn obj_payload_offset<T>() -> usize {
+    payload_offset::<T>()
+}
+
 impl<T: PhpObject> PhpObject for ObjCell<T> {
     #[inline]
     fn handle(&self) -> u32 {
@@ -867,12 +877,20 @@ impl Resource {
     /// Creates a resource with the next free handle number of this thread.
     #[must_use]
     pub fn new(type_name: impl Into<ZStr>, data: Option<Box<dyn Any>>) -> Self {
-        let handle = NEXT_RESOURCE_ID.with(|c| {
+        Self::with_handle(Self::take_number(), type_name, data)
+    }
+
+    /// Takes the next free handle number of this thread
+    /// (`zend_hash_next_free_element(&EG(regular_list))`), for a resource
+    /// created later with [`Resource::with_handle`] or one C registers and
+    /// frees inside a call (the stream `file_get_contents()` opens).
+    #[must_use]
+    pub fn take_number() -> i64 {
+        NEXT_RESOURCE_ID.with(|c| {
             let h = c.get();
             c.set(h + 1);
             h
-        });
-        Self::with_handle(handle, type_name, data)
+        })
     }
 
     /// Sets the next handle number allocated by [`Resource::new`].
@@ -1402,7 +1420,9 @@ mod tests {
                 .add(std::mem::offset_of!(Tailed<3>, tail))
                 .cast::<u64>()
         };
+        // SAFETY: element 1 of the three-element tail (see above).
         unsafe { tail.add(1).write(20) };
+        // SAFETY: as for the write.
         assert_eq!(unsafe { tail.add(1).read() }, 20);
         assert_eq!(head.id, 5);
         assert_eq!(o.addr() + payload_offset::<Head>(), base.as_ptr() as usize);

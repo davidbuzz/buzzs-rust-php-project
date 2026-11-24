@@ -4,9 +4,8 @@
 //! (`zend_object_handlers.c`: `zend_std_compare_objects`,
 //! `zend_vm_def.h`: `ZEND_FE_RESET_R` / `ZEND_FE_FETCH_R` on plain objects),
 //! including lazy objects (`zend_lazy_objects.c`) and a ghost's table of
-//! frozen declared-property copies. The lazy-object expectations are derived
-//! from php-src master (PHP 8.3 has no lazy objects); the others from
-//! `/usr/bin/php -n`.
+//! frozen declared-property copies. Expected output from
+//! `/usr/bin/php8.5 -n`.
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

@@ -33,6 +33,10 @@ pub fn sort_table<C: ArrayContext + ?Sized>(
 ) -> RtResult<()> {
     let mut slot = ErrSlot::default();
     let regular_values = !by_key && kind == SortKind::Regular;
+    // `sort()` / `rsort()` of ints: the numbers themselves are sorted.
+    if regular_values && renumber && ht.sort_ints(reverse) {
+        return Ok(());
+    }
     ht.sort_by(
         |ka, va, kb, vb| {
             // `zend_compare`'s `TYPE_PAIR(IS_LONG, IS_LONG)` case inline:

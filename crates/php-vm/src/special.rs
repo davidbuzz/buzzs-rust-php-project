@@ -640,9 +640,256 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
         (fl::CHR, Value::Int(c)) => u8::try_from(*c)
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
+        (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
         _ => None,
     }
+}
+
+/// `dechex()` of `num` as its handler builds it
+/// (`_php_math_longtobase(num, 16)`: the number read as unsigned, in
+/// lower-case digits), without the handler's argument and result vectors.
+#[inline(never)] // inside `quick_eval`, every `sqrt()` and `abs()` saved its registers
+fn dechex_str(num: i64) -> ZStr {
+    let mut value = u64::from_ne_bytes(num.to_ne_bytes());
+    // A digit for every four bits up to the highest one set, one for 0
+    // (`_php_math_longtobase_pwr2`'s length from `zend_ulong_nlz`).
+    let digits = (67 - (value | 1).leading_zeros()) / 4;
+    // The digits are asked for from the last (the lowest) to the first.
+    ZStr::from_fn(digits as usize, |_| {
+        let digit = b"0123456789abcdef"[usize::from((value & 15) as u8)];
+        value >>= 4;
+        digit
+    })
+}
+
+/// [`quick_id`] of `abs()`: the ids of the math functions
+/// ([`crate::call::ff`]) are below these.
+pub(crate) const QUICK_ABS: u8 = 0x40;
+/// [`quick_id`] of `ord()`.
+pub(crate) const QUICK_ORD: u8 = 0x41;
+/// [`quick_id`] of `chr()`.
+pub(crate) const QUICK_CHR: u8 = 0x42;
+/// [`quick_id`] of `dechex()`.
+pub(crate) const QUICK_DECHEX: u8 = 0x43;
+const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
+
+/// The id of the builtin named `lc` (lower case) when its one-argument
+/// call needs no handler ([`frameless_inline`]), with its frameless class:
+/// what a tape instruction carries in place of the name (`exec/tape/strs.rs`).
+/// `None` for every other function.
+pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
+    let class = frameless_flags(lc) >> flags::FRAMELESS_SHIFT;
+    let id = match class {
+        fl::ABS => QUICK_ABS,
+        fl::ORD => QUICK_ORD,
+        fl::CHR => QUICK_CHR,
+        fl::DECHEX => QUICK_DECHEX,
+        fl::FLOAT | fl::LOG | fl::ROUND => crate::call::float_fn_id(lc)?,
+        _ => return None,
+    };
+    Some((id, class))
+}
+
+/// Whether the flags of a builtin name frameless class `class` and nothing
+/// a call must report first: the test [`Vm::frameless_icall_op`] makes of
+/// its call site's cached function.
+#[inline]
+pub(crate) fn frameless_class_is(func_flags: u32, class: u32) -> bool {
+    func_flags & (flags::FRAMELESS | flags::DEPRECATED | flags::NODISCARD)
+        == class << flags::FRAMELESS_SHIFT
+}
+
+/// [`frameless_inline`] of the function with id `id` ([`quick_id`]) for
+/// the argument `v`, shape test included ([`frameless_args`] of one
+/// argument for the id's class): the result, or `None` when the call
+/// needs its handler (another type, `abs(PHP_INT_MIN)`, an `ord()` of a
+/// string that is not one byte, a `chr()` outside 0..=255).
+#[inline]
+pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
+    match (id, v) {
+        (QUICK_ABS, Value::Int(i)) if *i != i64::MIN => Some(Value::Int(i.abs())),
+        (QUICK_ABS, Value::Float(x)) => Some(Value::Float(x.abs())),
+        (QUICK_ORD, Value::Str(s)) if s.len() == 1 => {
+            s.as_bytes().first().map(|&c| Value::Int(i64::from(c)))
+        }
+        (QUICK_CHR, Value::Int(c)) => u8::try_from(*c)
+            .ok()
+            .map(|c| Value::Str(ZStr::from_byte(c))),
+        (QUICK_DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
+        (QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX, _) => None,
+        (id, v) => crate::call::float_fn_eval(id, v),
+    }
+}
+
+/// [`quick_id_n`] of `strpos()` with two or three arguments.
+pub(crate) const QUICK_STRPOS: u8 = 0x50;
+/// [`quick_id_n`] of `substr()` with two or three arguments.
+pub(crate) const QUICK_SUBSTR: u8 = 0x51;
+/// [`quick_id_n`] of `max()` with two arguments.
+pub(crate) const QUICK_MAX: u8 = 0x52;
+/// [`quick_id_n`] of `min()` with two arguments.
+pub(crate) const QUICK_MIN: u8 = 0x53;
+/// [`quick_id_n`] of `in_array()` with three arguments.
+pub(crate) const QUICK_IN_ARRAY: u8 = 0x54;
+/// [`quick_id_n`] of `str_contains()`.
+pub(crate) const QUICK_STR_CONTAINS: u8 = 0x55;
+/// [`quick_id_n`] of `str_starts_with()`.
+pub(crate) const QUICK_STR_STARTS: u8 = 0x56;
+/// [`quick_id_n`] of `str_ends_with()`.
+pub(crate) const QUICK_STR_ENDS: u8 = 0x57;
+
+/// The id of the builtin named `lc` (lower case) when its call with `argc`
+/// arguments can be answered without its handler ([`quick_eval_n`]), with
+/// its frameless class: what a tape instruction carries in place of the
+/// name (`exec/tape/strs.rs`). `None` for every other call.
+pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
+    if argc == 1 {
+        return quick_id(lc);
+    }
+    let id = match (lc, argc) {
+        (b"strpos", 2 | 3) => QUICK_STRPOS,
+        (b"substr", 2 | 3) => QUICK_SUBSTR,
+        (b"max", 2) => QUICK_MAX,
+        (b"min", 2) => QUICK_MIN,
+        (b"in_array", 3) => QUICK_IN_ARRAY,
+        (b"str_contains", 2) => QUICK_STR_CONTAINS,
+        (b"str_starts_with", 2) => QUICK_STR_STARTS,
+        (b"str_ends_with", 2) => QUICK_STR_ENDS,
+        _ => return None,
+    };
+    Some((id, frameless_flags(lc) >> flags::FRAMELESS_SHIFT))
+}
+
+/// Whether php-src itself compiles the call of the builtin named `lc` with
+/// `argc` arguments to a `ZEND_FRAMELESS_ICALL_n` (its
+/// `ZEND_FRAMELESS_FUNCTION`s of that arity): the arguments are then
+/// compiled as expressions before the one op, which reads a variable among
+/// them when it runs. The other functions with a frameless class here are
+/// regular calls in php-src, whose `SEND`s copy each argument where it
+/// stands (`compiler::specialise::spread_frameless_call_at`).
+pub(crate) fn defers_like_php_src(lc: &[u8], argc: usize) -> bool {
+    match frameless_flags(lc) >> flags::FRAMELESS_SHIFT {
+        fl::DECHEX | fl::CASE | fl::IS_NUMERIC => argc == 1,
+        fl::TRIM | fl::DIRNAME => argc == 1 || argc == 2,
+        fl::STR_TEST | fl::MIN_MAX => argc == 2,
+        fl::STRPOS | fl::SUBSTR | fl::STRSTR | fl::IN_ARRAY | fl::STRTR => argc == 2 || argc == 3,
+        fl::STR_REPLACE => argc == 3,
+        _ => false,
+    }
+}
+
+/// What `strpos()` returns for a search result.
+#[inline]
+fn quick_pos(found: Option<i64>) -> Value {
+    found.map_or(Value::Bool(false), Value::Int)
+}
+
+/// What `substr()` returns: `RETURN_STR_COPY(str)` for the whole string,
+/// else `RETURN_STRINGL_FAST` (the shared empty and one-byte strings).
+#[inline]
+fn quick_substr(s: &ZStr, offset: i64, length: Option<i64>) -> Value {
+    let part = php_stdstr::search::substr(s.as_bytes(), offset, length);
+    Value::Str(if part.len() == s.len() {
+        s.clone()
+    } else {
+        ZStr::init_fast(part)
+    })
+}
+
+/// The result of the call of the function with id `id` ([`quick_id_n`])
+/// with the two arguments `a` and `b`, as its handler computes it for
+/// arguments of the types it is declared with, shape test included
+/// ([`frameless_args`] for the id's class, of which this takes the common
+/// part): `None` when the call needs its handler (another type, numbers of
+/// mixed types for `max()` and `min()`).
+pub(crate) fn quick_eval_2(id: u8, a: &Value, b: &Value) -> Option<Value> {
+    use php_stdstr::search;
+    use Value::{Bool, Float, Int, Str};
+    Some(match (id, a, b) {
+        (QUICK_STRPOS, Str(h), Str(n)) => {
+            quick_pos(search::strpos(h.as_bytes(), n.as_bytes(), 0).ok()?)
+        }
+        (QUICK_SUBSTR, Str(s), Int(offset)) => quick_substr(s, *offset, None),
+        // `ZEND_FRAMELESS_FUNCTION(max, 2)` / `(min, 2)` of two ints or two
+        // floats: `max` keeps the first of two equal values, `min` the
+        // second, and a NaN on either side gives the second.
+        (QUICK_MAX, Int(l), Int(r)) => Int(if l >= r { *l } else { *r }),
+        (QUICK_MIN, Int(l), Int(r)) => Int(if l < r { *l } else { *r }),
+        (QUICK_MAX, Float(l), Float(r)) => Float(if l >= r { *l } else { *r }),
+        (QUICK_MIN, Float(l), Float(r)) => Float(if l < r { *l } else { *r }),
+        (QUICK_STR_CONTAINS, Str(h), Str(n)) => {
+            Bool(search::str_contains(h.as_bytes(), n.as_bytes()))
+        }
+        (QUICK_STR_STARTS, Str(h), Str(n)) => {
+            Bool(search::str_starts_with(h.as_bytes(), n.as_bytes()))
+        }
+        (QUICK_STR_ENDS, Str(h), Str(n)) => Bool(search::str_ends_with(h.as_bytes(), n.as_bytes())),
+        _ => return None,
+    })
+}
+
+/// [`quick_eval_2`] for three arguments: `None` as there, and for an offset
+/// outside the haystack (the handler's `ValueError`) and a loose
+/// `in_array()`.
+pub(crate) fn quick_eval_3(id: u8, first: &Value, second: &Value, third: &Value) -> Option<Value> {
+    use php_stdstr::search;
+    use Value::{Array, Bool, Int, Null, Str};
+    Some(match (id, first, second, third) {
+        (QUICK_STRPOS, Str(h), Str(n), Int(offset)) => {
+            quick_pos(search::strpos(h.as_bytes(), n.as_bytes(), *offset).ok()?)
+        }
+        (QUICK_SUBSTR, Str(s), Int(offset), Null) => quick_substr(s, *offset, None),
+        (QUICK_SUBSTR, Str(s), Int(offset), Int(length)) => quick_substr(s, *offset, Some(*length)),
+        (QUICK_IN_ARRAY, needle, Array(haystack), Bool(true)) => {
+            Bool(in_array_identical(needle, haystack)?)
+        }
+        _ => return None,
+    })
+}
+
+/// [`quick_eval_2`] or [`quick_eval_3`] by the number of arguments (one
+/// argument: [`quick_eval`]): what the tests compare with the handlers.
+#[cfg(test)]
+pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
+    match args {
+        [a, b] => quick_eval_2(id, a, b),
+        [a, b, c] => quick_eval_3(id, a, b, c),
+        _ => None,
+    }
+}
+
+/// A strict `in_array()` of a null, bool, int, float or string needle: the
+/// identity test of each element (behind a reference: the referenced
+/// value), which for these types is a comparison of the same type's values
+/// (`fast_is_identical_function`). `None` for any other needle and for a
+/// reference being written.
+fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
+    let same = |v: &Value| match (needle, v) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        #[allow(clippy::float_cmp)] // `Z_DVAL_P(op1) == Z_DVAL_P(op2)`
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a.as_bytes() == b.as_bytes(),
+        _ => false,
+    };
+    if !matches!(
+        needle,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    ) {
+        return None;
+    }
+    for v in haystack.values() {
+        let hit = match v {
+            Value::Reference(r) => same(&*r.try_borrow()?),
+            v => same(v),
+        };
+        if hit {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 impl Vm {
@@ -824,11 +1071,147 @@ impl Vm {
 }
 
 impl Vm {
+    /// `ZEND_FRAMELESS_ICALL_n` of a call the tape prepared
+    /// (`exec/tape/calls.rs`): builtin `b` has a frameless class and its
+    /// `n` arguments were sent into the argument buffer of the pooled frame
+    /// above the current one. When they have shapes [`frameless_args`]
+    /// accepts, the handler runs on the caller's frame with the arguments
+    /// moved out of that buffer (which is left empty, as a pooled frame's
+    /// is): no frame is pushed. Each step is the one
+    /// [`Vm::frameless_icall_op`] takes for the same call, in the same
+    /// order: `caller_ip` saved as the resume point (`SAVE_OPLINE()`), the
+    /// inline result or the handler with the declared defaults of omitted
+    /// parameters, the interrupt check, the buffers back to their pools,
+    /// the result stored in `dst`.
+    ///
+    /// Returns `None`, having changed nothing, for any other call (the
+    /// tape then makes it with the builtin's frame). `calls_len` is the
+    /// number of pending calls the caller had when the call was prepared:
+    /// the call is its newest.
+    pub(crate) fn frameless_icall_prepared(
+        &mut self,
+        b: &Rc<Builtin>,
+        n: usize,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let live = self.frames.live;
+        let (callers, pool) = self.frames.vec.split_at_mut(live);
+        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+            return None;
+        };
+        if caller.calls.len() != calls_len
+            || frame.args.len() != n
+            || !frameless_args(class, &frame.args)
+        {
+            return None;
+        }
+        caller.ip = caller_ip;
+        let quick = if n == 1 {
+            frameless_inline(b.name.as_bytes(), class, frame.args[0].as_ref())
+        } else {
+            None
+        };
+        if let Some(v) = quick {
+            // The argument: a number or a string (no side effect).
+            frame.args.clear();
+            if let Err(e) = self.check_interrupt() {
+                return Some(Err(e));
+            }
+            self.put_call_result(dst, v);
+            return Some(Ok(()));
+        }
+        // The declared defaults of omitted trailing parameters, read as
+        // in [`Vm::frameless_icall_in_place`].
+        let sig = b.signature();
+        let (nparams, required) = (sig.params.len(), sig.required as usize);
+        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        values.reserve(nparams.max(n));
+        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        passed.reserve(nparams.max(n));
+        for arg in self.frames.vec[live].args.drain(..) {
+            values.push(arg.unwrap_or_default());
+            passed.push(true);
+        }
+        self.pending_call_dst = dst;
+        if self.magic_call_name.is_some() {
+            self.magic_call_name = None;
+        }
+        while values.len() < nparams {
+            let i = values.len();
+            if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
+                values.push(crate::call::clone_value(d));
+                passed.push(false);
+                continue;
+            }
+            match self.builtin_default(b, i) {
+                Some(d) if i >= required => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        let handler = b.handler;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(b)),
+        };
+        let mut r = handler(self, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args {
+            values,
+            passed,
+            named,
+            ..
+        } = args;
+        forget_unallocated(named);
+        self.put_val_vec(values);
+        self.put_bool_vec(passed);
+        Some(r.map(|v| self.put_call_result(dst, v)))
+    }
+
+    /// Stores a call's result in its temporary, or releases it when the
+    /// result is unused (a scalar without the out-of-line drop call).
+    #[inline]
+    fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
+        match dst {
+            Some(d) => self.set_tmp(d, v),
+            None => {
+                if matches!(
+                    v,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    std::mem::forget(v);
+                } else {
+                    drop(v);
+                }
+            }
+        }
+    }
+}
+
+impl Vm {
     /// [`Op::FramelessICall`](crate::opcode::Op::FramelessICall) in
     /// place (`ZEND_FRAMELESS_ICALL_n`): when the call site resolved to a
     /// builtin with a frameless class (its run-time cache entry, filled by
-    /// the first, generic run of the op) and the arguments (literals, and
-    /// defined variables of a frame without an attached symbol table) have
+    /// the first, generic run of the op) and the arguments (literals,
+    /// defined variables of a frame without an attached symbol table, and
+    /// the temporaries of arguments computed before the op) have
     /// shapes [`frameless_args`] accepts, the handler runs on the caller's
     /// frame with the arguments read straight from their operands: no
     /// pending call, no `SEND`s, no `DO_ICALL`. Each step is the one
@@ -882,11 +1265,25 @@ impl Vm {
                     Value::Reference(r) => r.get(),
                     v => crate::call::clone_value(v),
                 },
+                // An argument computed before the op: a copy for now; the
+                // temporary is released below, once the call is known to
+                // run here (its `Send` would have moved it).
+                Operand::Tmp(t) => match frame.tmps.get(t as usize)? {
+                    Value::Reference(r) => r.get(),
+                    v => crate::call::clone_value(v),
+                },
                 _ => return None,
             });
         }
         if !frameless_args(class, &sent[..n]) {
             return None;
+        }
+        for operand in &fc.vals[..n] {
+            if let Operand::Tmp(t) = *operand {
+                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                    drop(std::mem::take(slot));
+                }
+            }
         }
         frame.ip = ip;
         let quick = if n == 1 {
@@ -1073,7 +1470,7 @@ mod tests {
     }
 
     /// The one-argument math functions run without their handlers, with
-    /// the handlers' results (`/usr/bin/php -n`: `var_dump()` of each).
+    /// the handlers' results (`/usr/bin/php8.5 -n`: `var_dump()` of each).
     #[test]
     #[allow(clippy::float_cmp)]
     fn inline_math_results_are_the_handlers() {
@@ -1106,6 +1503,288 @@ mod tests {
         ));
         // Not one of the evaluated names: the handler runs.
         assert!(frameless_inline(b"sqrtx", fl::FLOAT, Some(&Value::Int(4))).is_none());
+    }
+
+    /// The tape's form of the inline results: `quick_eval` by id gives
+    /// what `frameless_inline` gives by name for every argument
+    /// `frameless_args` accepts, and nothing for any other.
+    #[test]
+    fn quick_results_are_the_inline_results() {
+        use super::{frameless_class_is, quick_eval, quick_id};
+        let names = [
+            "abs",
+            "ord",
+            "chr",
+            "dechex",
+            "sqrt",
+            "sin",
+            "cos",
+            "floor",
+            "ceil",
+            "round",
+            "exp",
+            "tan",
+            "atan",
+            "log",
+            "log10",
+            "asin",
+            "acos",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "expm1",
+            "log1p",
+            "deg2rad",
+            "rad2deg",
+            "is_nan",
+            "is_finite",
+            "is_infinite",
+        ];
+        let args = [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(0),
+            Value::Int(-7),
+            Value::Int(65),
+            Value::Int(255),
+            Value::Int(256),
+            Value::Int(i64::MIN),
+            Value::Int(i64::MAX),
+            Value::Float(0.5),
+            Value::Float(-2.5),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::Str(ZStr::from("")),
+            Value::Str(ZStr::from("a")),
+            Value::Str(ZStr::from("ab")),
+            Value::Str(ZStr::from("16")),
+        ];
+        let mut ids = Vec::new();
+        for name in names {
+            let (id, class) = quick_id(name.as_bytes()).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(
+                class << crate::func::flags::FRAMELESS_SHIFT,
+                frameless_flags(name.as_bytes()),
+                "{name}"
+            );
+            assert!(!ids.contains(&id), "{name}: id {id} twice");
+            ids.push(id);
+            for v in &args {
+                let sent = [Some(v.clone())];
+                let inline = if frameless_args(class, &sent) {
+                    frameless_inline(name.as_bytes(), class, Some(v))
+                } else {
+                    None
+                };
+                assert_eq!(
+                    format!("{:?}", quick_eval(id, v)),
+                    format!("{inline:?}"),
+                    "{name}({v:?})"
+                );
+            }
+        }
+        // Functions whose one-argument call needs its handler have no id.
+        for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
+            assert!(quick_id(name.as_bytes()).is_none(), "{name}");
+        }
+        // `dechex()` is the handler's string.
+        for n in [0, 1, 15, 16, 255, 4096, -1, i64::MIN, i64::MAX] {
+            let ours = super::dechex_str(n);
+            assert_eq!(
+                ours.as_bytes(),
+                php_stdstr::math::long_to_base(n, 16).as_slice(),
+                "{n}"
+            );
+        }
+        assert!(quick_eval(0x7f, &Value::Int(1)).is_none());
+        // The class test of the call site's cached function.
+        let abs = frameless_flags(b"abs");
+        assert!(frameless_class_is(abs, fl::ABS));
+        assert!(!frameless_class_is(abs, fl::ORD));
+        assert!(!frameless_class_is(
+            abs | crate::func::flags::DEPRECATED,
+            fl::ABS
+        ));
+        assert!(!frameless_class_is(0, fl::ABS));
+    }
+
+    /// `quick_eval_n` of several arguments gives what the function's
+    /// handler gives, for every argument list it answers, and answers none
+    /// the handler reports about or converts.
+    #[test]
+    #[allow(clippy::too_many_lines)] // a table of calls
+    fn quick_results_of_several_arguments_are_the_handlers() {
+        use super::{defers_like_php_src, quick_eval_n, quick_id_n};
+        use crate::func::Args;
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        let ints = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Int(3),
+                Value::Int(1),
+                Value::Int(2),
+            ]))
+        };
+        let mixed = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Null,
+                Value::Bool(false),
+                Value::Int(1),
+                Value::Float(1.5),
+                Value::Str(ZStr::from("2")),
+            ]))
+        };
+        let t = Value::Bool(true);
+        // A string by its bytes (two handles of one content may differ in
+        // what else they record).
+        let show = |v: &Value| match v {
+            Value::Str(s) => format!("string {:?}", s.as_bytes()),
+            v => format!("{v:?}"),
+        };
+        let cases: Vec<(&str, Vec<Value>)> = vec![
+            ("strpos", vec![s("hello world"), s("o")]),
+            ("strpos", vec![s("hello world"), s("o"), Value::Int(5)]),
+            ("strpos", vec![s("hello world"), s("o"), Value::Int(-3)]),
+            ("strpos", vec![s("hello world"), s("wor"), Value::Int(0)]),
+            ("strpos", vec![s("hello"), s("")]),
+            ("strpos", vec![s("hello"), s(""), Value::Int(5)]),
+            ("strpos", vec![s("hello"), s("z")]),
+            ("strpos", vec![s(""), s("")]),
+            ("substr", vec![s("hello"), Value::Int(1)]),
+            ("substr", vec![s("hello"), Value::Int(-2)]),
+            ("substr", vec![s("hello"), Value::Int(9)]),
+            ("substr", vec![s("hello"), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(4)]),
+            ("substr", vec![s("hello"), Value::Int(5)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(1)]),
+            ("substr", vec![s("hello"), Value::Int(0), Value::Int(5)]),
+            ("substr", vec![s("hello"), Value::Int(0), Value::Int(50)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(-1)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(-9), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(2), Value::Int(0)]),
+            ("substr", vec![s("hello"), Value::Int(2), Value::Null]),
+            ("substr", vec![s(""), Value::Int(0), Value::Int(1)]),
+            ("max", vec![Value::Int(1), Value::Int(2)]),
+            ("max", vec![Value::Int(2), Value::Int(2)]),
+            ("max", vec![Value::Int(-3), Value::Int(-7)]),
+            ("min", vec![Value::Int(1), Value::Int(2)]),
+            ("min", vec![Value::Int(2), Value::Int(2)]),
+            ("min", vec![Value::Int(i64::MAX), Value::Int(i64::MIN)]),
+            ("max", vec![Value::Float(1.5), Value::Float(-1.5)]),
+            ("max", vec![Value::Float(0.0), Value::Float(-0.0)]),
+            ("max", vec![Value::Float(-0.0), Value::Float(0.0)]),
+            ("max", vec![Value::Float(f64::NAN), Value::Float(1.0)]),
+            ("max", vec![Value::Float(1.0), Value::Float(f64::NAN)]),
+            ("min", vec![Value::Float(1.5), Value::Float(-1.5)]),
+            ("min", vec![Value::Float(0.0), Value::Float(-0.0)]),
+            ("min", vec![Value::Float(-0.0), Value::Float(0.0)]),
+            ("min", vec![Value::Float(f64::NAN), Value::Float(1.0)]),
+            ("min", vec![Value::Float(1.0), Value::Float(f64::NAN)]),
+            ("in_array", vec![Value::Int(2), ints(), t.clone()]),
+            ("in_array", vec![Value::Int(7), ints(), t.clone()]),
+            ("in_array", vec![s("2"), ints(), t.clone()]),
+            ("in_array", vec![s("2"), mixed(), t.clone()]),
+            ("in_array", vec![Value::Null, mixed(), t.clone()]),
+            ("in_array", vec![Value::Null, ints(), t.clone()]),
+            ("in_array", vec![Value::Bool(false), mixed(), t.clone()]),
+            ("in_array", vec![Value::Bool(true), mixed(), t.clone()]),
+            ("in_array", vec![Value::Float(1.5), mixed(), t.clone()]),
+            ("in_array", vec![Value::Float(1.0), mixed(), t.clone()]),
+            ("in_array", vec![Value::Int(1), mixed(), t.clone()]),
+            ("str_contains", vec![s("hello"), s("ell")]),
+            ("str_contains", vec![s("hello"), s("")]),
+            ("str_contains", vec![s("hello"), s("elx")]),
+            ("str_starts_with", vec![s("hello"), s("he")]),
+            ("str_starts_with", vec![s("hello"), s("lo")]),
+            ("str_starts_with", vec![s("hello"), s("")]),
+            ("str_ends_with", vec![s("hello"), s("lo")]),
+            ("str_ends_with", vec![s("hello"), s("he")]),
+            ("str_ends_with", vec![s(""), s("")]),
+        ];
+        for (name, args) in cases {
+            let (id, class) =
+                quick_id_n(name.as_bytes(), args.len()).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(
+                class,
+                frameless_flags(name.as_bytes()) >> crate::func::flags::FRAMELESS_SHIFT,
+                "{name}"
+            );
+            let refs: Vec<&Value> = args.iter().collect();
+            let quick = quick_eval_n(id, &refs).unwrap_or_else(|| panic!("{name} {args:?}"));
+            // The handler's arguments, as a call passes them: the declared
+            // defaults of the omitted ones behind the sent ones.
+            let Some(Func::Builtin(b)) = vm.functions.get(&ZStr::from(name)).cloned() else {
+                panic!("{name} is a core builtin");
+            };
+            let mut values = args.clone();
+            let mut passed = vec![true; values.len()];
+            while let Some(d) = vm.builtin_default(&b, values.len()) {
+                values.push(d);
+                passed.push(false);
+            }
+            let mut a = Args {
+                values,
+                passed,
+                named: Vec::new(),
+                this: None,
+                called: None,
+                func: Some(b.clone()),
+            };
+            let Ok(theirs) = (b.handler)(&mut vm, &mut a) else {
+                panic!("{name} {args:?} threw");
+            };
+            assert_eq!(show(&quick), show(&theirs), "{name} {args:?}");
+        }
+        // What the handler reports about, converts or compares loosely.
+        let declined: Vec<(&str, Vec<Value>)> = vec![
+            ("strpos", vec![s("abc"), s("b"), Value::Int(4)]),
+            ("strpos", vec![s("abc"), s("b"), Value::Int(-4)]),
+            ("strpos", vec![s("abc"), Value::Int(1)]),
+            ("substr", vec![s("abc"), s("1")]),
+            ("substr", vec![Value::Int(123), Value::Int(1)]),
+            ("max", vec![Value::Int(1), Value::Float(2.0)]),
+            ("max", vec![s("a"), s("b")]),
+            ("min", vec![Value::Float(1.0), Value::Int(2)]),
+            ("in_array", vec![Value::Int(1), ints(), Value::Bool(false)]),
+            ("in_array", vec![ints(), ints(), t.clone()]),
+            ("str_contains", vec![s("abc"), Value::Int(1)]),
+        ];
+        for (name, args) in declined {
+            let (id, _) =
+                quick_id_n(name.as_bytes(), args.len()).unwrap_or_else(|| panic!("{name}"));
+            let refs: Vec<&Value> = args.iter().collect();
+            assert!(quick_eval_n(id, &refs).is_none(), "{name} {args:?}");
+        }
+        // Other arities and functions have no id.
+        for (name, argc) in [("max", 3), ("in_array", 2), ("strpos", 4), ("trim", 2)] {
+            assert!(quick_id_n(name.as_bytes(), argc).is_none(), "{name}/{argc}");
+        }
+        assert_eq!(quick_id_n(b"ord", 1), super::quick_id(b"ord"));
+        // php-src's own frameless functions, by arity.
+        for (name, argc, yes) in [
+            ("substr", 2, true),
+            ("substr", 3, true),
+            ("max", 2, true),
+            ("max", 3, false),
+            ("in_array", 3, true),
+            ("str_replace", 3, true),
+            ("trim", 1, true),
+            ("abs", 1, false),
+            ("ord", 1, false),
+            ("sqrt", 1, false),
+            ("intdiv", 2, false),
+            ("strlen", 1, false),
+        ] {
+            assert_eq!(
+                defers_like_php_src(name.as_bytes(), argc),
+                yes,
+                "{name}/{argc}"
+            );
+        }
     }
 
     #[test]
@@ -1296,7 +1975,7 @@ for ($i = 0; $i < 3; $i++) {
     /// results of `abs()`, `ord()` and `chr()`, and arguments taken from
     /// variables, literals and temporaries, which the calls release (the
     /// variables are reused afterwards). Expected output from
-    /// `/usr/bin/php -n`.
+    /// `/usr/bin/php8.5 -n`.
     #[test]
     fn frameless_calls_in_place_match_the_handlers() {
         use std::cell::RefCell;
@@ -1341,7 +2020,7 @@ echo f("a"), " ", $s, "\n";
     /// place, and declined ones (a reference, a coerced or invalid
     /// argument, an undefined variable, a `ValueError`) run as the call
     /// ops they replaced, with the builtin's frame in the trace. Expected
-    /// output from `/usr/bin/php -n`.
+    /// output from `/usr/bin/php8.5 -n`.
     #[test]
     fn fused_frameless_calls_match_the_call_ops() {
         use std::cell::RefCell;

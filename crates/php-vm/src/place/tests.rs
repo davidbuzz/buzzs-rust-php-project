@@ -4,10 +4,9 @@
 //! reference to a container of the place (`ZEND_ASSIGN_DIM` reads `OP_DATA`
 //! after the container fetch), operands read inside the walk, and walks an
 //! error handler observes (live walks). Expected output from
-//! `/usr/bin/php -n` (8.3); where php-src master raises the null-offset
+//! `/usr/bin/php8.5 -n`, which, like php-src master, raises the null-offset
 //! deprecation ("Using null as an array offset is deprecated") after an
-//! undefined-variable offset (`slow_index_convert_w`), it is added to 8.3's
-//! output.
+//! undefined-variable offset (`slow_index_convert_w`).
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -340,7 +339,7 @@ handler: Undefined property: stdClass::$n
 handler: Undefined property: stdClass::$m
 object(stdClass)#1 (3) {
   ["undef"]=>
-  NULL
+  string(1) "x"
   ["n"]=>
   int(1)
   ["m"]=>

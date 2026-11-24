@@ -13,18 +13,26 @@ path = "src/main.rs"
 name = "php-cgi"
 path = "src/cgi/main.rs"
 
+[[bin]]
+name = "php-fpm"
+path = "src/fpm/main.rs"
+
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-parser = { path = "../php-parser" }
 php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
+php-sapi = { path = "../php-sapi" }
+php-streams = { path = "../php-streams" }
 php-ext-stdmisc = { path = "../php-ext-stdmisc" }
 php-ext-stdstr = { path = "../php-ext-stdstr" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-ext-stdarr = { path = "../php-ext-stdarr" }
 php-ext-pcre = { path = "../php-ext-pcre" }
 php-ext-json = { path = "../php-ext-json" }
+php-json = { path = "../php-json" }
+php-stdstr = { path = "../php-stdstr" }
 php-ext-spl = { path = "../php-ext-spl" }
 php-ext-hash = { path = "../php-ext-hash" }
 php-ext-random = { path = "../php-ext-random" }

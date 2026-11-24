@@ -4,7 +4,7 @@
 //! `ZEND_STRLEN`, `ZEND_TYPE_CHECK`, `ZEND_CAST`, `ZEND_GET_TYPE`,
 //! `ZEND_DEFINED`, `ZEND_IN_ARRAY`, `ZEND_ARRAY_KEY_EXISTS`) or constants
 //! (`chr()`, `ord()`): same results as the calls, and no builtin frame
-//! (expected outputs from `/usr/bin/php -n`; the null-key deprecation of
+//! (expected outputs from `/usr/bin/php8.5 -n`; the null-key deprecation of
 //! `array_key_exists()`, the float-key owner check and the `chr()`/`ord()`
 //! range and length deprecations follow php-src master).
 use php_runtime::{Value, ZStr};
@@ -699,8 +699,8 @@ bool(false)
 #[test]
 fn chr_and_ord_literals_fold_to_constants() {
     // Only `chr(0..=255)` and one-byte `ord()` literals fold; the rest are
-    // calls, with php-src master's range and length deprecations (8.3 has
-    // none) and their strict-mode TypeErrors. A folded argument is sent by
+    // calls, with the range and length deprecations (8.5 and master) and
+    // their strict-mode TypeErrors. A folded argument is sent by
     // value even after a call argument (`h(g(), chr(65))`), and in write
     // context the constant behaves like the call's temporary.
     assert_eq!(

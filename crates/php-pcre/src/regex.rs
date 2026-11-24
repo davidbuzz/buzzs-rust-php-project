@@ -196,6 +196,15 @@ impl Regex {
             }
         })?;
 
+        // "In-pattern verbs such as (*UTF) can enable PCRE2_UTF, in which \C
+        // is unsafe": refused like `/u` refuses it.
+        if parsed.compile_options & ffi::PCRE2_NEVER_BACKSLASH_C == 0
+            && code.has_backslash_c() == Ok(true)
+            && code.all_options().is_ok_and(|o| o & ffi::PCRE2_UTF != 0)
+        {
+            return Err(CompileError::BackslashCInUtf);
+        }
+
         let mut has_jit = false;
         let jit_outcome = if jit {
             let rc = code.jit_compile();
@@ -382,6 +391,26 @@ mod tests {
             e.to_string(),
             "Compilation failed: using \\C is incompatible with the 'u' modifier at offset 6"
         );
+    }
+
+    /// GH-21134: `(*UTF)` in the pattern refuses `\C` too (it could match
+    /// half a character and give an end offset before the start); outside
+    /// UTF mode `\C` stays allowed.
+    #[test]
+    fn backslash_c_is_refused_under_an_in_pattern_utf_verb() {
+        for p in [
+            &b"/(*UTF)\\C/"[..],
+            b"/(*UTF8)a\\C/",
+            b"/(*LIMIT_MATCH=100)(*UTF)a\\C/",
+        ] {
+            let e = Regex::compile(p).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                "Compilation failed: using \\C is incompatible with UTF-8 mode"
+            );
+        }
+        assert!(Regex::compile(b"/a\\C/").is_ok());
+        assert!(Regex::compile(b"/(*UTF)\\\\C/").is_ok());
     }
 
     #[test]

@@ -44,6 +44,16 @@ pub fn install() {
     php_spl::object::set_file_access_hook(Some(on_access));
 }
 
+/// Request startup: streams are parked in resources again (the previous
+/// request of a long-running worker ended with [`shutdown`], which keeps
+/// them in their objects), and nothing of that request is tracked.
+pub fn request_startup() {
+    UNPARKED.with(|u| u.set(false));
+    DEPTH.with(|d| d.set(0));
+    DIRTY.with(|d| d.set(false));
+    STATES.with(|s| s.borrow_mut().clear());
+}
+
 /// Request shutdown, run before the stream layer closes the remaining
 /// resources: PHP flushes the output buffers (whose handlers may still
 /// write to an `SplFileObject`) before it frees resources, so the streams

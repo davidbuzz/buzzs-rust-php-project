@@ -1797,10 +1797,10 @@ impl Pkey {
         match name {
             Some(n) => {
                 let nid = txt2nid(n.as_bytes());
-                // SAFETY: plain lookup.
                 if nid == 0 {
                     0
                 } else {
+                    // SAFETY: plain lookup.
                     unsafe { EVP_PKEY_type(nid) }
                 }
             }

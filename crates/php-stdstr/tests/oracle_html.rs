@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Oracle tests for `php_stdstr::html` against `/usr/bin/php`.
+//! Oracle tests for `php_stdstr::html` against `/usr/bin/php8.5`.
 mod common;
 
 use common::{assoc, case, check, lit, regenerate, Case, K, V};
@@ -476,7 +476,7 @@ fn oracle() {
 }
 
 #[test]
-#[ignore = "runs /usr/bin/php to rebuild the fixture"]
+#[ignore = "runs /usr/bin/php8.5 to rebuild the fixture"]
 fn regenerate_fixture() {
     regenerate("html", &cases());
 }

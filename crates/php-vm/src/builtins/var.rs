@@ -78,14 +78,15 @@ fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // `php_var_export_ex` builds the whole export in a buffer: warnings
     // (circular references) and output of user code run meanwhile come
-    // first, and a partial export is still written on an exception.
+    // first. On a failure (an exception from a property hook or a lazy
+    // initializer) nothing is written (GH-24743).
     let mut out = Out::collect();
     let r = dump::var_export(vm, &mut out, &v, 1);
     let bytes = out.finish(vm);
+    r?;
     if !bytes.is_empty() {
         vm.echo(&bytes);
     }
-    r?;
     Ok(Value::Null)
 }
 
@@ -396,6 +397,7 @@ fn deprecate(vm: &mut Vm, name: &str, since: &str, message: &str) {
         nb.flags |= crate::func::flags::DEPRECATED;
         vm.functions
             .insert(lc.clone(), crate::func::Func::Builtin(std::rc::Rc::new(nb)));
+        crate::func::bump_func_table_version();
         let suffix =
             crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
         vm.builtin_deprecations.insert(lc, suffix);

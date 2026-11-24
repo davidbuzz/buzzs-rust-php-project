@@ -728,6 +728,7 @@ fn new_vm(cfg: &Config) -> Vm {
     let stdout: Box<dyn Write> =
         Box::new(std::io::BufWriter::with_capacity(1 << 16, sapi::RawStdout));
     let mut vm = extensions::with_all_extensions(|refs| Vm::with_extensions(&opts, stdout, refs));
+    startup::report_module_diagnostics(cfg, &std::mem::take(&mut vm.module_diagnostics));
     vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     sapi::register(&mut vm, cfg);
@@ -775,18 +776,11 @@ fn release(vm: Vm, how: Release) {
     }
 }
 
-/// `php_request_startup()` (what `Vm::run_script` does before running).
+/// `php_request_startup()`: output buffering, `zend_activate()`, the
+/// execution timer (`max_execution_time` from `-d` or php.ini), RINIT and
+/// memory_limit accounting.
 fn request_startup(vm: &mut Vm) {
-    let ob = vm.ini_long("output_buffering");
-    let flush = vm.ini_bool("implicit_flush");
-    php_support::output::request_startup(vm, None, ob, flush);
-    for hook in vm.startup_hooks.clone() {
-        hook(vm);
-    }
-    let limit = u64::try_from(vm.ini_long("memory_limit")).unwrap_or(u64::MAX);
-    if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
-        php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
-    }
+    vm.request_startup();
 }
 
 /// Runs PHP code for an informational mode (`-i`, `-m`, `--r*`); `args`
@@ -806,6 +800,12 @@ fn run_snippet(
     let mut request_argv = vec![b"Standard input code".to_vec()];
     request_argv.extend_from_slice(args);
     vm.set_cli_args("Standard input code", args);
+    // php_cli.c: without a script file, `path_translated` is `php_self`.
+    vm.request_info = php_sapi::RequestInfo {
+        path_translated: Some(b"Standard input code".to_vec()),
+        argv: request_argv.clone(),
+        ..php_sapi::RequestInfo::default()
+    };
     sapi::register_variables(
         &mut vm,
         &sapi::Request {
@@ -841,10 +841,10 @@ fn could_not_open(file: &[u8]) {
 }
 
 /// The absolute, symlink-resolved path of the primary script
-/// (`php_execute_script` expands it for `__FILE__` and messages).
+/// (`VCWD_REALPATH` in `php_cli.c`, through the realpath cache); the path
+/// as given when it does not resolve.
 fn real_path(file: &[u8]) -> Vec<u8> {
-    std::fs::canonicalize(std::ffi::OsStr::from_bytes(file))
-        .map_or_else(|_| file.to_vec(), |c| c.into_os_string().into_vec())
+    php_streams::paths::realpath(file).unwrap_or_else(|| file.to_vec())
 }
 
 fn lossy(b: &[u8]) -> String {
@@ -914,6 +914,12 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
                 Err(status) => return status,
             };
             vm.set_cli_args(&lossy(&php_self), &request_argv[1..]);
+            // php_cli.c: the script's realpath, else `php_self`.
+            vm.request_info = php_sapi::RequestInfo {
+                path_translated: Some(real_path(&php_self)),
+                argv: request_argv.clone(),
+                ..php_sapi::RequestInfo::default()
+            };
             sapi::register_variables(
                 &mut vm,
                 &sapi::Request {
@@ -1190,6 +1196,7 @@ fn resolve_path(vm: &Vm, name: &[u8]) -> Option<Vec<u8>> {
 /// `auto_append_file`, and request shutdown.
 fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
     request_startup(vm);
+    vm.script_timer();
     let extra = |vm: &mut Vm, directive: &str| -> Result<(), Throw> {
         let name = vm.ini_string(directive).unwrap_or_default();
         if name.is_empty() {

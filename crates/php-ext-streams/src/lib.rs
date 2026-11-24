@@ -78,8 +78,16 @@ fn shutdown(vm: &mut Vm) {
     // `PHP_RSHUTDOWN(basic)` (user_filter_map) runs before
     // `zend_close_rsrc_list()` closes the remaining streams.
     userfilter::shutdown();
-    res::shutdown(vm);
+    // Streams whose last reference went in an `RSHUTDOWN` that ran before
+    // this one (the session's data at its shutdown): C closes each right
+    // then, inside that `RSHUTDOWN`, where a fatal error ends the process
+    // (GHSA-g3vh-838c-65v7).
+    res::close_deferred(vm);
+    // `zend_close_rsrc_list()`: a fatal error in a destructor ends only it.
+    vm.closing_resources(res::shutdown);
     http::shutdown();
+    dirs::shutdown();
+    files::restore_umask();
 }
 
 impl Extension for Streams {

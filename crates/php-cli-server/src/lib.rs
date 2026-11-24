@@ -203,13 +203,17 @@ pub fn run(opts: &Options, extensions: ExtensionFactory) -> i32 {
         return 1;
     }
     let port = listener.local_addr().map_or(port, |a| a.port());
-    let workers = server::startup_workers();
-
     let mut ini: Vec<(String, String)> = SAPI_INI
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
     ini.extend(opts.ini.iter().cloned());
+    // `php_module_startup()` runs in the parent, before the workers fork.
+    for e in extensions() {
+        e.process_startup(&ini);
+    }
+    let workers = server::startup_workers();
+
     let post_max_size = ini
         .iter()
         .rev()

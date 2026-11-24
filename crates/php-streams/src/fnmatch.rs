@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(php_fnmatch(b"a*", b"abc", 0), Ok(true));
     }
 
-    /// Oracle table generated with `/usr/bin/php` (glibc fnmatch).
+    /// Oracle table generated with `/usr/bin/php8.5` (glibc fnmatch).
     #[test]
     fn oracle_table() {
         let data = include_str!("../tests/data/fnmatch_oracle.txt");

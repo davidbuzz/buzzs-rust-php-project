@@ -28,6 +28,13 @@ pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileO
 /// runs). Returns the cached unit and its path.
 pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
 
+/// A hook asked for a cached unit of an included file before the file is
+/// read (by its opened path): a script cache serves the include without
+/// reading the source, as opcache loads a script before
+/// `zend_stream_fixup` reads it. `None` falls back to reading and
+/// compiling.
+pub type PrecompiledHookFn = fn(&mut Vm, &ZStr) -> VmResult<Option<Rc<CompiledUnit>>>;
+
 /// `tsrm_realpath()` as the stream layer implements it, with
 /// `CWDG(realpath_cache)`: the real path of an existing file, `None` when
 /// it cannot be resolved.
@@ -41,12 +48,23 @@ thread_local! {
     static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
     static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+    static PRECOMPILED_HOOK: std::cell::Cell<Option<PrecompiledHookFn>> = const { std::cell::Cell::new(None) };
     static REALPATH_HOOK: std::cell::Cell<Option<IncludeRealpathFn>> = const { std::cell::Cell::new(None) };
     /// Set while compiling a file opened through a stream wrapper other
     /// than `file://` and `phar://`: such source bypasses the compile hook
     /// (opcache's `persistent_compile_file` falls back to the original
     /// `compile_file` for it, bug #64482).
     static UNCACHEABLE_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The file about to be compiled was read directly, where C opens it as
+    /// a stream (`php_stream_open_for_zend_ex`), which takes a resource
+    /// number: taken when the file is compiled, not when a script cache
+    /// serves it (opcache does not open a file it has cached).
+    static NUMBER_ON_COMPILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `ZEND_COMPILE_IGNORE_OTHER_FILES`: while set, the compiler does not
+    /// see user functions declared by other files, so the code it produces
+    /// does not depend on what happened to be declared before (opcache sets
+    /// it for every script it caches; ZendAccelerator.c).
+    static IGNORE_OTHER_FILES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
@@ -62,10 +80,59 @@ fn is_uncacheable_stream_path(name: &[u8]) -> bool {
         && !name.starts_with(b"phar://")
 }
 
+/// `CG(function_table)` and `CG(class_table)` as the optimizer's dump
+/// sees them while compiling a script.
+struct DumpTable<'a> {
+    functions: &'a crate::class::NameMap<crate::func::Func>,
+    classes: &'a crate::class::NameMap<Rc<crate::class::Class>>,
+    /// The file being compiled: user functions of other files are not
+    /// looked at (`ZEND_COMPILE_IGNORE_OTHER_FILES`).
+    filename: &'a ZStr,
+}
+
+impl compiler::FunctionTable for DumpTable<'_> {
+    fn find(&self, lcname: &[u8]) -> Option<compiler::FunctionInfo> {
+        match self.functions.get(lcname)? {
+            crate::func::Func::User(u) if u.code.filename != *self.filename => None,
+            f => Some(compiler::FunctionInfo::of(f)),
+        }
+    }
+
+    fn param_names(&self, lcname: &[u8]) -> Option<Vec<ZStr>> {
+        let f = self.functions.get(lcname)?;
+        Some(f.params().iter().map(|p| p.name.clone()).collect())
+    }
+
+    fn internal_ctor(&self, class_lc: &[u8]) -> Option<(compiler::FunctionInfo, Vec<ZStr>)> {
+        use crate::func::flags;
+        let c = self.classes.get(class_lc)?;
+        // A user class, or one whose `get_constructor` is its own.
+        if c.decl.is_some()
+            || c.hooks
+                .as_ref()
+                .is_some_and(|h| h.get_constructor.is_some())
+        {
+            return None;
+        }
+        let m = c.methods.get(&b"__construct"[..])?;
+        if m.flags & (flags::PRIVATE | flags::PROTECTED) != 0 {
+            return None;
+        }
+        let names = m.func.params().iter().map(|p| p.name.clone()).collect();
+        Some((compiler::FunctionInfo::of(&m.func), names))
+    }
+}
+
 impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
         COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// Installs the hook asked for a cached unit before an included file
+    /// is read ([`PrecompiledHookFn`]).
+    pub fn set_precompiled_hook(f: PrecompiledHookFn) {
+        PRECOMPILED_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// `zend_optimizer_register_pass`: `pass` runs after opcache's
@@ -95,6 +162,84 @@ impl Vm {
     /// script cache.
     pub fn set_cached_include_hook(f: CachedIncludeHookFn) {
         CACHED_INCLUDE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// Runs `f` with `ZEND_COMPILE_IGNORE_OTHER_FILES` set: compiling then
+    /// ignores user functions declared by other files, so the result can
+    /// be cached and reused whatever else is declared.
+    pub fn with_ignore_other_files<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = IGNORE_OTHER_FILES.with(|c| c.replace(true));
+        let out = f(self);
+        IGNORE_OTHER_FILES.with(|c| c.set(prev));
+        out
+    }
+
+    /// A hash of every compiler input besides the source that changes the
+    /// code a file compiles to: options from INI (`zend.assertions`, the
+    /// optimization level), which builtins compile to dedicated opcodes,
+    /// and the constants substituted at compile time. A cached unit is
+    /// reused only under the same fingerprint. `None` when the current
+    /// setup must not use cached code at all (user opcode handlers are
+    /// installed, or `zend.multibyte` keeps the AST for diagnostics).
+    pub fn compile_fingerprint(&mut self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        if !self.user_opcodes().is_empty() || self.ini.get_bool("zend.multibyte") {
+            return None;
+        }
+        let builtin = |vm: &Self, name: &[u8]| {
+            matches!(vm.functions.get(name), Some(crate::func::Func::Builtin(_)))
+        };
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.ini.get_long("zend.assertions").hash(&mut h);
+        self.optimization_level().hash(&mut h);
+        self.ini.get_bool("short_open_tag").hash(&mut h);
+        builtin(self, b"sprintf").hash(&mut h);
+        builtin(self, b"array_map").hash(&mut h);
+        builtin(self, b"strlen").hash(&mut h);
+        self.special_builtins().hash(&mut h);
+        self.ct_constants().fingerprint().hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// The optimizer passes a file is compiled with: opcache's
+    /// `opcache.optimization_level` when opcache optimizes (it is on for
+    /// this SAPI, or only the file cache is), else none.
+    fn optimization_level(&self) -> u32 {
+        if self.opcache_optimizes() {
+            // A zend_long whose low 32 bits are the passes: `-1` is all.
+            u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Makes a unit from the script cache current, repeating what
+    /// compiling it did ([`compiler::UnitMeta`]): the anonymous class
+    /// counter, `__COMPILER_HALT_OFFSET__`, the auto-globals it names and
+    /// the registration of its declarations. Returns `false` (the caller
+    /// then compiles the file) when the unit declares anonymous classes
+    /// named for a different counter than the current one.
+    pub fn install_cached_unit(&mut self, unit: &Rc<CompiledUnit>, filename: &ZStr) -> bool {
+        let meta = &unit.meta;
+        let declares_anon = unit.anon_end != meta.anon_base;
+        if declares_anon && meta.anon_base != self.anon_counter {
+            return false;
+        }
+        if declares_anon {
+            self.anon_counter = unit.anon_end;
+        }
+        for &i in &meta.auto_globals {
+            crate::auto_globals::note_compiled_index(i);
+        }
+        self.activate_compiled_auto_globals();
+        if let Some(off) = meta.halt_offset {
+            self.ext.halt_offsets.insert(filename.clone(), off);
+        }
+        if declares_anything(unit) {
+            self.units.push(unit.clone());
+        }
+        true
     }
 
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
@@ -182,6 +327,14 @@ impl Vm {
         php_parser::parse_with_encoding(src, &opts, &encoding)
     }
 
+    /// Compiles a file read directly from disk ([`NUMBER_ON_COMPILE`]).
+    fn compile_read_file(&mut self, src: Rc<[u8]>, path: &ZStr) -> VmResult<CompileOutcome> {
+        NUMBER_ON_COMPILE.with(|c| c.set(true));
+        let r = self.compile_source(src, path, false, true);
+        NUMBER_ON_COMPILE.with(|c| c.set(false));
+        r
+    }
+
     /// Parses and compiles source code, calling the compile hook for files.
     pub(crate) fn compile_source(
         &mut self,
@@ -210,6 +363,9 @@ impl Vm {
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
+        if NUMBER_ON_COMPILE.with(|c| c.replace(false)) && !is_eval {
+            let _ = php_runtime::Resource::take_number();
+        }
         let parsed = self.parse_source(&src, is_eval, skip_shebang);
         let program = match parsed {
             Ok(p) => p,
@@ -269,37 +425,40 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
-            optimization_level: if self.ini.get_bool("opcache.enable")
-                && (self.ini.get_bool("opcache.enable_cli")
-                    || self.ini.get_bool("opcache.file_cache_only"))
-            {
-                // A zend_long whose low 32 bits are the passes: `-1` is all.
-                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
-                    .unwrap_or(0)
-            } else {
-                0
-            },
+            optimization_level: self.optimization_level(),
         };
+        let anon_base = self.anon_counter;
         let halt_compiler_offset = program.halt_compiler_offset;
         // `opcache.opt_debug_level` & `ZEND_DUMP_AFTER_OPTIMIZER`: opcache
         // dumps each script it compiles (`zend_optimize_script`); eval'd
         // code is not cached.
-        let dump_src = (!is_eval
-            && self.ini.get_bool("opcache.enable")
-            && (self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
-            && self.ini.get_long("opcache.opt_debug_level")
-                & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
-                    | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
-                    | compiler::optimizer::dump::DUMP_AFTER_DFA_PASS)
-                != 0)
-            .then(|| src.clone());
+        let dump_src = (!is_eval && self.opcache_dumps()).then(|| src.clone());
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
         // it compiles. The compiler sees the function table as it stands
         // (`CG(function_table)`), for the `fbc` of calls by name.
         let functions = &self.functions;
-        let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+        let ignore_other_files = !is_eval && IGNORE_OTHER_FILES.with(std::cell::Cell::get);
+        let table = compiler::TableWithPreloaded(
+            |lc: &[u8]| {
+                functions
+                    .get(lc)
+                    .filter(|f| match f {
+                        // `ZEND_COMPILE_IGNORE_OTHER_FILES`: a user function
+                        // is seen only if this file declared it
+                        // (`zend_compile_ignore_function`).
+                        crate::func::Func::User(u) if ignore_other_files => {
+                            u.code.filename.as_bytes() == filename.as_bytes()
+                        }
+                        _ => true,
+                    })
+                    .map(compiler::FunctionInfo::of)
+            },
+            |lc: &[u8]| match functions.get(lc) {
+                Some(crate::func::Func::User(u)) if Vm::is_preloaded_name(lc) => Some(u.clone()),
+                _ => None,
+            },
+        );
         let (compiled, kept) = if program.multibyte {
             let unit = compiler::compile_with_functions(&program, src, opts, &table);
             (unit, Some(program))
@@ -307,10 +466,15 @@ impl Vm {
             let unit = compiler::compile_program_with_functions(program, src, opts, &table);
             (unit, None)
         };
-        self.activate_compiled_auto_globals();
+        let auto_globals = self.activate_compiled_auto_globals();
         let unit = match compiled {
-            Ok(u) => {
+            Ok(mut u) => {
                 self.anon_counter = u.anon_end;
+                u.meta = compiler::UnitMeta {
+                    anon_base,
+                    halt_offset: halt_compiler_offset.map(|off| i64::try_from(off).unwrap_or(0)),
+                    auto_globals,
+                };
                 u
             }
             Err(e) => {
@@ -354,25 +518,83 @@ impl Vm {
         // compile warnings (php-src dumps from the optimizer, which runs
         // when the script is cached).
         if let Some(src) = dump_src {
-            let level =
-                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
-                    .unwrap_or(0);
-            let functions = &self.functions;
-            let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
-            let internal = |lc: &[u8]| match functions.get(lc) {
-                Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
-                _ => (0, None),
-            };
-            let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
-            let debug = self.ini.get_long("opcache.opt_debug_level");
-            // The DFA pass dumps each op array while it optimizes them,
-            // before `zend_optimize_script` dumps the result.
-            let mut out = compiler::optimizer::dump::dump_unit_dfa(
-                &unit, &table, &internal, level, end, debug,
-            );
-            if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
+            self.opcache_dump(&unit, &src, halt_compiler_offset, filename);
+        }
+        Ok(CompileOutcome::Ok(unit))
+    }
+
+    /// `accel_sapi_is_cli()`: the CLI and phpdbg, the SAPIs whose opcache
+    /// `opcache.enable_cli` switches. The web SAPIs (`cli-server`,
+    /// `cgi-fcgi`, `fpm-fcgi`, `apache2handler`) need `opcache.enable` alone.
+    pub fn sapi_is_cli(&self) -> bool {
+        self.constants.get(b"PHP_SAPI".as_slice()).is_none_or(
+            |v| matches!(v, Value::Str(s) if matches!(s.as_bytes(), b"cli" | b"phpdbg")),
+        )
+    }
+
+    /// opcache compiles (and optimizes) this request's scripts: it is on
+    /// for this SAPI, or caches to files only.
+    fn opcache_optimizes(&self) -> bool {
+        self.ini.get_bool("opcache.enable")
+            && (!self.sapi_is_cli()
+                || self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+    }
+
+    /// `opcache.opt_debug_level` asks for the op arrays of the scripts
+    /// opcache optimizes (`ZEND_DUMP_AFTER_OPTIMIZER` and the DFA bits).
+    pub(crate) fn opcache_dumps(&self) -> bool {
+        self.opcache_optimizes()
+            && self.ini.get_long("opcache.opt_debug_level")
+                & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                    | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
+                    | compiler::optimizer::dump::DUMP_AFTER_DFA_PASS)
+                != 0
+    }
+
+    /// Writes the optimizer's dump of `unit`, compiled from `src` of file
+    /// `filename`, to stderr (`zend_optimize_script` when opcache caches
+    /// the script).
+    pub(crate) fn opcache_dump(
+        &mut self,
+        unit: &CompiledUnit,
+        src: &[u8],
+        halt_compiler_offset: Option<usize>,
+        filename: &ZStr,
+    ) {
+        let level = u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+            .unwrap_or(0);
+        let functions = &self.functions;
+        let table = DumpTable {
+            functions,
+            classes: &self.classes,
+            filename,
+        };
+        let internal = |lc: &[u8]| match functions.get(lc) {
+            Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
+            _ => (0, None),
+        };
+        let end = compiler::optimizer::dump::main_line_end(src, halt_compiler_offset);
+        let debug = self.ini.get_long("opcache.opt_debug_level");
+        // The DFA pass dumps each op array while it optimizes them,
+        // before `zend_optimize_script` dumps the result.
+        let mut out =
+            compiler::optimizer::dump::dump_unit_dfa(unit, &table, &internal, level, end, debug);
+        if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
+            if Vm::is_preloading() {
+                // Written with the `$PRELOAD$` script when the preload
+                // ends (`Vm::finish_preload`).
+                compiler::optimizer::dump::keep_preload_dump(
+                    unit,
+                    &table,
+                    &internal,
+                    level,
+                    end,
+                    "after optimizer",
+                );
+            } else {
                 out.extend(compiler::optimizer::dump::dump_unit(
-                    &unit,
+                    unit,
                     &table,
                     &internal,
                     level,
@@ -380,10 +602,9 @@ impl Vm {
                     "after optimizer",
                 ));
             }
-            self.flush_stdout();
-            let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
         }
-        Ok(CompileOutcome::Ok(unit))
+        self.flush_stdout();
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
     }
 
     /// Emits the diagnostics recorded while compiling a file
@@ -474,6 +695,7 @@ impl Vm {
             self.observer_declared(&lc, false);
             crate::builtins::info::note_user_function(&lc);
             self.functions.insert(lc, crate::func::Func::User(f));
+            crate::func::bump_func_table_version();
         }
         let mut progress = true;
         while progress {
@@ -599,7 +821,15 @@ impl Vm {
                 Err(t) => return self.handle_top_throw(t),
             }
         };
-        let unit = match self.compile_source(Rc::from(src), path, is_eval, !is_eval) {
+        // The CLI opens its script as a `FILE *` (`cli_seek_file_begin`);
+        // the other SAPIs pass a file name, which compiling opens as a
+        // stream.
+        let compiled = if is_eval || self.sapi_is_cli() {
+            self.compile_source(Rc::from(src), path, is_eval, !is_eval)
+        } else {
+            self.compile_read_file(Rc::from(src), path)
+        };
+        let unit = match compiled {
             Ok(CompileOutcome::Ok(u)) => u,
             Ok(CompileOutcome::ParseError(e)) => {
                 self.report_uncaught(&e);
@@ -665,6 +895,12 @@ impl Vm {
             Throw::Exception(e) => self.uncaught_exception(e),
             other => Err(other),
         }
+    }
+
+    /// Whether the source filter may rewrite what is read from `path`; a
+    /// script cache must then not serve it.
+    fn source_filter_may_rewrite(&self, path: &ZStr) -> bool {
+        self.source_filter.is_some() && self.source_filter_probe.is_none_or(|probe| probe(path))
     }
 
     fn resolve_include_path(&self, name: &[u8]) -> Option<std::path::PathBuf> {
@@ -742,7 +978,13 @@ impl Vm {
         // Extension opener (stream wrappers, include_path entries such as
         // `phar://`): `php_stream_open_for_zend_ex`.
         if let Some(opener) = self.include_opener {
-            match opener(self, name, kind_name)? {
+            // A docref error raised while the opener reads (a user filter's
+            // leftover buckets) is the include's: `include(): ...`.
+            let depth = self.frames.len();
+            let prev = self.including.replace((depth, kind_name, s.clone()));
+            let opened = opener(self, name, kind_name);
+            self.including = prev;
+            match opened? {
                 crate::ext::IncludeOpen::Opened {
                     source,
                     opened_path,
@@ -761,6 +1003,32 @@ impl Vm {
                     return self.include_failed(kind, kind_name, &s, dst);
                 }
                 crate::ext::IncludeOpen::NotHandled => {}
+            }
+        }
+        // A script cache is asked for an absolute name before the file is
+        // looked up, as `persistent_compile_file` finds a script by
+        // `accel_make_persistent_key` (the name itself) before opening it:
+        // a hit costs no `stat`. The script counts as included under the
+        // path it was compiled under. A name already included once is
+        // answered first, so `include_once` does not load it again.
+        // Only a normalized name is its own key; one with `.`/`..`
+        // segments is resolved below through the realpath cache.
+        let mut asked: Option<&[u8]> = None;
+        if is_normalized_absolute(name) {
+            if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+                && self.included_set.contains(&s)
+            {
+                self.set_tmp(dst, Value::Bool(true));
+                return Ok(false);
+            }
+            if !self.source_filter_may_rewrite(&s) {
+                if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
+                    if let Some(unit) = hook(self, &s)? {
+                        let path = unit.main.code.filename.clone();
+                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    }
+                    asked = Some(name);
+                }
             }
         }
         let resolved = self.resolve_include_path(name);
@@ -791,6 +1059,21 @@ impl Vm {
             self.set_tmp(dst, Value::Bool(true));
             return Ok(false);
         }
+        // A script cache serves the include without the file being read,
+        // unless the source filter may rewrite what would be read. It is
+        // not asked twice for the same path.
+        if asked != Some(real_z.as_bytes()) && !self.source_filter_may_rewrite(&real_z) {
+            if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
+                if let Some(unit) = hook(self, &real_z)? {
+                    if self.included_set.insert(real_z.clone()) {
+                        self.included.push(real_z);
+                    }
+                    self.declare_hoisted(&unit)?;
+                    self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
+                    return Ok(true);
+                }
+            }
+        }
         let src = match std::fs::read(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -809,7 +1092,7 @@ impl Vm {
             self.included.push(real_z.clone());
         }
         let src = self.filter_source(&real_z, src)?;
-        let unit = match self.compile_source(Rc::from(src), &real_z, false, true)? {
+        let unit = match self.compile_read_file(Rc::from(src), &real_z)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -950,7 +1233,7 @@ impl Vm {
                 .as_os_str()
                 .as_bytes(),
         );
-        let unit = match self.compile_source(Rc::from(src), &p, false, true)? {
+        let unit = match self.compile_read_file(Rc::from(src), &p)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return self.handle_top_throw(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -971,6 +1254,19 @@ impl Vm {
             Err(t) => self.handle_top_throw(t),
         }
     }
+}
+
+/// Whether `name` is an absolute path without empty, `.` or `..`
+/// segments and without a trailing slash: such a name needs no resolving
+/// to serve as a script cache key (symbolic links aside, which a key may
+/// keep, as `accel_make_persistent_key` does).
+fn is_normalized_absolute(name: &[u8]) -> bool {
+    name.len() > 1
+        && name.first() == Some(&b'/')
+        && name.last() != Some(&b'/')
+        && name[1..]
+            .split(|&c| c == b'/')
+            .all(|seg| !seg.is_empty() && seg != b"." && seg != b"..")
 }
 
 /// The `opened_path` of a plain file found at `path` for inclusion: its
@@ -1034,9 +1330,20 @@ impl CompiledUnit {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_uncacheable_stream_path, opened_path};
+    use super::{is_normalized_absolute, is_uncacheable_stream_path, opened_path};
     use crate::vm::Vm;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn only_normalized_absolute_names_are_their_own_cache_key() {
+        assert!(is_normalized_absolute(b"/app/vendor/autoload.php"));
+        assert!(!is_normalized_absolute(b"/"));
+        assert!(!is_normalized_absolute(b"app/a.php"));
+        assert!(!is_normalized_absolute(b"/app/vendor/composer/../a.php"));
+        assert!(!is_normalized_absolute(b"/app/./a.php"));
+        assert!(!is_normalized_absolute(b"/app//a.php"));
+        assert!(!is_normalized_absolute(b"/app/dir/"));
+    }
 
     #[test]
     fn stream_paths_other_than_file_and_phar_are_not_cacheable() {

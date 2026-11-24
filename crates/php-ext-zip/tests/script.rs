@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `zip` extension
 //! (plus the stream and string functions they use). Expected outputs follow
-//! `/usr/bin/php` with php-src master messages.
+//! `/usr/bin/php8.5` with php-src master messages.
 
 use std::cell::RefCell;
 use std::io::Write;

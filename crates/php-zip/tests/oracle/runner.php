@@ -1,7 +1,7 @@
 <?php
 // Oracle side of the php-zip scenario tests.
 //
-// usage: php -d memory_limit=1G runner.php <scenario.jsonl> <workdir> <fixtures-dir>
+// usage: /usr/bin/php8.5 -d memory_limit=1G runner.php <scenario.jsonl> <workdir> <fixtures-dir>
 //
 // Each scenario line is a JSON array `[op, ...args]`; the Rust harness in
 // tests/oracle.rs interprets the same lines against the php-zip API and

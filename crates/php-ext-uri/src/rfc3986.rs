@@ -147,10 +147,37 @@ getters! {
     get_raw_query(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_query());
     get_fragment(true) => |u: &Rfc3986Uri| opt_bytes(u.fragment());
     get_raw_fragment(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_fragment());
-    to_string(true) => |u: &Rfc3986Uri| bytes(u.to_string_normalized());
-    to_raw_string(false) => |u: &Rfc3986Uri| bytes(u.to_raw_string());
     debug_info(false) => |u: &Rfc3986Uri| common::debug_info(u.debug_info());
     serialize(false) => |u: &Rfc3986Uri| common::serialized(u.serialize());
+}
+
+/// The recomposed URI, which `php_uri_parser_rfc3986_to_string()` refuses
+/// at `INT_MAX` characters or more (uriparser counts in `int`;
+/// GHSA-mg3p-mxj9-g2mm, CVE-2026-129438).
+fn recomposed(vm: &mut Vm, s: Vec<u8>) -> VmResult<Value> {
+    if s.len() >= usize::try_from(i32::MAX).unwrap_or(usize::MAX) {
+        return Err(vm.throw(
+            "Uri\\UriError",
+            "Cannot recompose Uri\\Rfc3986\\Uri to a string",
+        ));
+    }
+    Ok(bytes(s))
+}
+
+/// `Uri\Rfc3986\Uri::toString()`.
+fn to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let u = this(vm, a)?;
+    // Normalization works on a full copy of the URI.
+    memory::check(vm, 2 * held(&u))?;
+    let s = u.to_string_normalized();
+    recomposed(vm, s)
+}
+
+/// `Uri\Rfc3986\Uri::toRawString()`.
+fn to_raw_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let u = this(vm, a)?;
+    let s = u.to_raw_string();
+    recomposed(vm, s)
 }
 
 fn get_uri_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

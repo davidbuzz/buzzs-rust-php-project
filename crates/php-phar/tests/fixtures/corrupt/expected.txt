@@ -8842,17 +8842,46 @@ EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tardata-c
 ### tardata-cut511.tar
 EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tardata-cut511.tar" (__HALT_COMPILER(); not found)
 ### tardata-cut512.tar
-EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tardata-cut512.tar" (__HALT_COMPILER(); not found)
+EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut512.tar" is a corrupted tar file (truncated)
 ### tardata-cut700.tar
 EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut700.tar" is a corrupted tar file (truncated)
 ### tardata-cut1024.tar
-EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut1024.tar" is a corrupted tar file (truncated)
+version: 
+alias: '%DIR%/tardata-cut1024.tar'
+count: 1
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=5d41402abc4b2a76b9719d911017c592
 ### tardata-cut1536.tar
 EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut1536.tar" is a corrupted tar file (truncated)
 ### tardata-cut2048.tar
-EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut2048.tar" is a corrupted tar file (truncated)
+version: 
+alias: '%DIR%/tardata-cut2048.tar'
+count: 2
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=5d41402abc4b2a76b9719d911017c592
+entry d dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry d/b.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=7d793037a0760186574b0282f2f435e7
 ### tardata-cut2560.tar
-EXCEPTION UnexpectedValueException: phar error: "%DIR%/tardata-cut2560.tar" is a corrupted tar file (truncated)
+version: 
+alias: '%DIR%/tardata-cut2560.tar'
+count: 3
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=5d41402abc4b2a76b9719d911017c592
+entry d dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry d/b.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=7d793037a0760186574b0282f2f435e7
+entry empty dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
 ### tardata-cut3072.tar
 version: 
 alias: '%DIR%/tardata-cut3072.tar'
@@ -8923,15 +8952,24 @@ EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tarexec-c
 ### tarexec-cut511.phar.tar
 EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tarexec-cut511.phar.tar" (__HALT_COMPILER(); not found)
 ### tarexec-cut512.phar.tar
-EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/tarexec-cut512.phar.tar" (__HALT_COMPILER(); not found)
+EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut512.phar.tar" is a corrupted tar file (truncated)
 ### tarexec-cut700.phar.tar
 EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut700.phar.tar" is a corrupted tar file (truncated)
 ### tarexec-cut1024.phar.tar
-EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut1024.phar.tar" is a corrupted tar file (truncated)
+EXCEPTION UnexpectedValueException: RecursiveDirectoryIterator::__construct(phar://%DIR%/tarexec-cut1024.phar.tar/): Failed to open directory: '%DIR%/tarexec-cut1024.phar.tar' is not a phar archive. Use PharData::__construct() for a standard zip or tar archive
+phar url "phar://%DIR%/tarexec-cut1024.phar.tar/" is unknown
 ### tarexec-cut1536.phar.tar
 EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut1536.phar.tar" is a corrupted tar file (truncated)
 ### tarexec-cut2048.phar.tar
-EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut2048.phar.tar" is a corrupted tar file (truncated)
+version: 
+alias: '%DIR%/tarexec-cut2048.phar.tar'
+count: 2
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: f6a3e44876aa82b6ea1e2305fbfb330a 60
+entry index.php dir=0 size=5 perms=100444 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=feabe5cc691b088d6ade3e04d6b120fc
 ### tarexec-cut4096.phar.tar
 EXCEPTION UnexpectedValueException: phar error: "%DIR%/tarexec-cut4096.phar.tar" is a corrupted tar file (truncated)
 ### tarexec-cut4608.phar.tar

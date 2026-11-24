@@ -506,6 +506,8 @@ fn curl_reset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     st.debug = None;
     st.prereq = None;
     st.sshhostkey = None;
+    // `zval_ptr_dtor(&ch->private_data)`: CURLOPT_PRIVATE is reset too.
+    st.private = None;
     Ok(Value::Null)
 }
 

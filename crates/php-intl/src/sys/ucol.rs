@@ -82,6 +82,20 @@ impl Collator {
         unsafe { ffi::ucol_setStrength(self.0, s) }
     }
 
+    /// `ucol_getRules()`: the tailoring rules (empty for the root collator).
+    pub fn rules(&self) -> Vec<u16> {
+        let mut len: i32 = 0;
+        // SAFETY: self.0 is live; ICU returns a pointer into the collator's
+        // own data (valid while it lives) and its length, copied at once.
+        let p = unsafe { ffi::ucol_getRules(self.0, &mut len) };
+        let n = usize::try_from(len).unwrap_or(0);
+        if p.is_null() || n == 0 {
+            return Vec::new();
+        }
+        // SAFETY: `p` points to `len` UTF-16 units owned by the collator.
+        unsafe { std::slice::from_raw_parts(p, n) }.to_vec()
+    }
+
     /// `ucol_getLocaleByType()`.
     pub fn locale_by_type(&self, ty: i32) -> Result<String, UErrorCode> {
         let mut st = UErrorCode::ZERO;

@@ -1,6 +1,6 @@
 <?php
 // Oracle generator for cookie/cache dates and session ID alphabets.
-// Run: php -d memory_limit=1G gen_misc.php > misc.tsv
+// Run: /usr/bin/php8.5 -d memory_limit=1G gen_misc.php > misc.tsv
 // Lines: "date\t<timestamp>\t<gmdate>" and "sidchars\t<bits>\t<sorted chars>".
 // ID alphabets first: any output marks the headers as sent.
 $sid = [];

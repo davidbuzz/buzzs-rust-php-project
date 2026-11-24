@@ -8,6 +8,7 @@ members = [
     "crates/php-cli",
     "crates/phpt-runner",
     "crates/php-support",
+    "crates/php-sapi",
     "crates/php-hash",
     "crates/php-random",
     "crates/php-date",
@@ -126,6 +127,12 @@ missing_panics_doc = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Line-level profiling (callgrind `--auto=yes`): `cargo build --profile
+# profiling` keeps the release optimisation and adds line info only.
+[profile.profiling]
+inherits = "release"
+debug = 1
 
 # Pure-Rust crypto/bignum crates are far too slow unoptimised (argon2 ~13 s per hash in debug);
 # optimise them even in dev builds so the test suite's 60 s per-test timeout is not hit.

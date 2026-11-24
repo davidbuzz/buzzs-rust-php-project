@@ -171,13 +171,19 @@ pub(crate) fn run_pass3(op_array: &mut OpArray) -> bool {
                 }
             }
 
-            Op::JmpNull { a, dst, target } => {
+            Op::JmpNull {
+                a,
+                dst,
+                target,
+                chain,
+            } => {
                 let resolved = follow_jumps(&op_array.ops, *target as usize);
                 if resolved != *target as usize {
                     replacement = Some(Op::JmpNull {
                         a: *a,
                         dst: *dst,
                         target: resolved as Label,
+                        chain: *chain,
                     });
                 }
             }

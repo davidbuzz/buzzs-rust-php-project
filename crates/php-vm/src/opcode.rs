@@ -122,6 +122,39 @@ pub enum BinKind {
     Spaceship,
 }
 
+/// What a nullsafe chain short-circuited by [`Op::JmpNull`] evaluates
+/// to (`ZEND_SHORT_CIRCUITING_CHAIN_*` in the op's `extended_value`, with
+/// `ZEND_JMP_NULL_BP_VAR_IS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NullChain {
+    /// `null`; an undefined variable warns.
+    Expr,
+    /// `null`, read quietly (the operand of `??`).
+    Quiet,
+    /// `false` (`isset()`).
+    Isset,
+    /// `true` (`empty()`).
+    Empty,
+}
+
+impl NullChain {
+    /// The chain's value when it short-circuits.
+    #[must_use]
+    pub fn value(self) -> Value {
+        match self {
+            NullChain::Expr | NullChain::Quiet => Value::Null,
+            NullChain::Isset => Value::Bool(false),
+            NullChain::Empty => Value::Bool(true),
+        }
+    }
+
+    /// Whether an undefined variable operand warns.
+    #[must_use]
+    pub fn warns(self) -> bool {
+        self == NullChain::Expr
+    }
+}
+
 /// Unary operations of [`Op::Unary`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnKind {
@@ -224,6 +257,13 @@ pub enum ArgSrc {
 /// The operands of [`Op::FramelessICall`]: the call's `InitFCall`
 /// (`name`, `display`; no namespace fallback), its arguments and its
 /// `DoCall` result.
+///
+/// The op stands in one of two places. When the `Send`s and the `DoCall`
+/// follow the `InitFCall` directly, it replaces the `InitFCall` and the ops
+/// after it are `Nop`s (`init_back == 0`). When arguments are computed
+/// between them, it replaces the `DoCall`, and the `InitFCall` and the
+/// `Send`s before it are `Nop`s where they stood (`init_back` and
+/// `send_back`: how many ops back).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FramelessCall {
     /// The lower-case function name literal (the run-time cache key).
@@ -232,12 +272,32 @@ pub struct FramelessCall {
     pub display: u32,
     /// The arguments' `Send` sources (`args[..argc]`).
     pub args: [ArgSrc; 3],
-    /// The arguments as read by the in-place call: `Lit` or `Cv`.
+    /// The arguments as read by the in-place call: `Lit`, `Cv`, or (only
+    /// where arguments are computed first) `Tmp`.
     pub vals: [Operand; 3],
     /// The number of arguments (1..=3).
     pub argc: u8,
     /// The call's result temporary.
     pub dst: Option<u32>,
+    /// 0: the op stands at the call's `InitFCall`. Else it stands at the
+    /// `DoCall`, this many ops after the `InitFCall`.
+    pub init_back: u32,
+    /// With `init_back != 0`: how many ops before the op each `Send` stood.
+    pub send_back: [u32; 3],
+}
+
+impl FramelessCall {
+    /// The ops right after this one that belong to the call (the `Nop`s of
+    /// its `Send`s and `DoCall`): none when the op stands at the `DoCall`.
+    #[inline]
+    #[must_use]
+    pub fn tail(&self) -> usize {
+        if self.init_back == 0 {
+            usize::from(self.argc) + 1
+        } else {
+            0
+        }
+    }
 }
 
 /// The kind of a `foreach` loop.
@@ -403,8 +463,14 @@ pub enum Op {
     JmpSet { a: Operand, dst: u32, target: Label },
     /// `??`: if not null, `dst = a` and jump.
     Coalesce { a: Operand, dst: u32, target: Label },
-    /// Nullsafe: if null, `dst = null` and jump.
-    JmpNull { a: Operand, dst: u32, target: Label },
+    /// Nullsafe: if null, `dst` = what the short-circuited chain gives
+    /// and jump.
+    JmpNull {
+        a: Operand,
+        dst: u32,
+        target: Label,
+        chain: NullChain,
+    },
 
     /// `$cv = val`.
     AssignCv {
@@ -616,8 +682,10 @@ pub enum Op {
     /// `func_num_args()` called by name, without arguments, in a function
     /// body (`ZEND_FUNC_NUM_ARGS`): no call frame, no observer frame.
     FuncNumArgs { dst: Option<u32> },
-    /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`).
-    FuncGetArgs { dst: Option<u32> },
+    /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`); with `skip`,
+    /// `array_slice(func_get_args(), skip)` (`zend_compile_func_array_slice`:
+    /// the arguments after the first `skip`).
+    FuncGetArgs { dst: Option<u32>, skip: Option<u32> },
     /// `strlen($x)` (`ZEND_STRLEN`, `zend_compile_func_strlen`): no call
     /// frame; weak-mode coercion and the `TypeError` happen in place.
     Strlen { a: Operand, dst: Option<u32> },
@@ -1427,6 +1495,11 @@ pub struct OpArray {
     /// the op array first runs there (`exec/tape.rs`). `ops` must not
     /// change once it exists.
     pub(crate) tape: crate::exec::tape::Tape,
+    /// The instructions an optimizer pass dropped while their result
+    /// temporary keeps its number in php-src (a `BOOL_NOT` the block pass
+    /// folds into a jump): without pass 9 the dump counts them where they
+    /// stood.
+    pub dropped_tmps: Vec<u32>,
 }
 
 /// [`PropCacheEntry::base`] of a `$this->name` place.
@@ -1602,6 +1675,10 @@ impl OpArray {
 
     /// Clears run-time caches so this op array carries no request state.
     pub fn clear_runtime_caches(&self) {
+        // A JIT trace that inlined a call resolved it through
+        // `fcall_cache`: clearing it means a later call at the same site
+        // can resolve to a different function (see `jit.rs`).
+        crate::func::bump_func_table_version();
         self.fcall_cache.borrow_mut().clear();
         self.class_cache.borrow_mut().clear();
         self.rt_cache.clear();

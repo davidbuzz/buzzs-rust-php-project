@@ -15,25 +15,72 @@ use crate::funcs::OwnedList;
 use crate::mem;
 use crate::state::{self, bytes, call, opt_str};
 
-/// Nesting limit standing in for `mb_check_stack_limit()`.
+/// Nesting limit of the walks that have no VM to read the stack settings
+/// from (`mb_convert_variables()`'s string search).
 const MAX_DEPTH: usize = 4096;
 
-/// Recursion protection (`GC_PROTECT_RECURSION`) by array identity.
-#[derive(Default)]
-struct Guard(Vec<usize>);
+/// Recursion protection (`GC_PROTECT_RECURSION`) by array identity, with
+/// a depth limit standing in for `mb_check_stack_limit()`.
+struct Guard {
+    stack: Vec<usize>,
+    max_depth: usize,
+}
+
+impl Default for Guard {
+    fn default() -> Guard {
+        Guard {
+            stack: Vec::new(),
+            max_depth: MAX_DEPTH,
+        }
+    }
+}
 
 impl Guard {
+    /// A guard whose depth limit models `mb_check_stack_limit()` for the
+    /// VM's stack settings (see [`stack_depth_limit`]).
+    fn for_vm(vm: &Vm) -> Guard {
+        Guard {
+            stack: Vec::new(),
+            max_depth: stack_depth_limit(vm),
+        }
+    }
+
+    /// `mb_check_stack_limit()`: one more level would exhaust the stack.
+    fn overflowed(&self) -> bool {
+        self.stack.len() >= self.max_depth
+    }
+
+    /// `false` for an array already being walked (or the depth limit).
     fn enter(&mut self, addr: usize) -> bool {
-        if self.0.contains(&addr) || self.0.len() >= MAX_DEPTH {
+        if self.stack.contains(&addr) || self.overflowed() {
             return false;
         }
-        self.0.push(addr);
+        self.stack.push(addr);
         true
     }
 
     fn leave(&mut self) {
-        self.0.pop();
+        self.stack.pop();
     }
+}
+
+/// The nesting depth `mb_check_stack_limit()` allows: the C stack
+/// `zend.max_allowed_stack_size` leaves after `zend.reserved_stack_size`
+/// (48 KiB by default), at about 128 bytes a level of
+/// `php_mb_check_encoding_recursive()`. 0 (detect) is taken as an 8 MiB
+/// stack, a negative size as no limit.
+fn stack_depth_limit(vm: &Vm) -> usize {
+    const FRAME_BYTES: i64 = 128;
+    let max = vm.ini_long("zend.max_allowed_stack_size");
+    if max < 0 {
+        return usize::MAX;
+    }
+    let max = if max == 0 { 8 << 20 } else { max };
+    let reserved = match vm.ini_long("zend.reserved_stack_size") {
+        r if r <= 0 => 48 << 10,
+        r => r,
+    };
+    usize::try_from((max - reserved).max(FRAME_BYTES) / FRAME_BYTES).unwrap_or(usize::MAX)
 }
 
 // ---- mb_convert_encoding -------------------------------------------------
@@ -57,6 +104,9 @@ impl Converter<'_> {
     /// `php_mb_convert_encoding_recursive`; `None` is PHP's `NULL` result
     /// (recursion detected).
     fn array(&mut self, vm: &mut Vm, input: &ZArray) -> VmResult<Option<HashTable>> {
+        if self.guard.overflowed() {
+            return Err(stack_limit_error(vm));
+        }
         if !self.guard.enter(input.addr()) {
             vm.php_warning("Cannot convert recursively referenced values")?;
             return Ok(None);
@@ -122,7 +172,7 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let mut c = Converter {
                 to: to_enc,
                 from: &from_list,
-                guard: Guard::default(),
+                guard: Guard::for_vm(vm),
             };
             let t = c.array(vm, &arr)?;
             let v = t.map_or(Value::Null, |t| Value::Array(ZArray::from_table(t)));
@@ -161,6 +211,9 @@ fn check_recursive(
     enc: &'static Encoding,
     guard: &mut Guard,
 ) -> VmResult<bool> {
+    if guard.overflowed() {
+        return Err(stack_limit_error(vm));
+    }
     if !guard.enter(arr.addr()) {
         vm.php_warning("Cannot not handle circular references")?;
         return Ok(false);
@@ -199,7 +252,8 @@ fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         None => call(vm, a, |st| st.mb_check_encoding_noarg(enc_arg)).map(Value::Bool),
         Some(Value::Array(arr)) => {
             let enc = call(vm, a, |st| st.get_encoding(enc_arg, 2, "encoding"))?;
-            check_recursive(vm, &arr, enc, &mut Guard::default()).map(Value::Bool)
+            let mut guard = Guard::for_vm(vm);
+            check_recursive(vm, &arr, enc, &mut guard).map(Value::Bool)
         }
         Some(v) => {
             let s = vm.value_to_string(&v)?;

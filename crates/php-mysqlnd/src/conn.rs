@@ -1535,7 +1535,18 @@ impl ConnData {
 
     /// `mysqlnd_res_meta::read_metadata`
     pub(crate) fn read_metadata(&mut self, n: u32) -> std::result::Result<Metadata, ()> {
-        let mut fields = Vec::with_capacity(n as usize);
+        // The column count comes from the server: `mnd_pecalloc(field_count
+        // + 1, sizeof(MYSQLND_FIELD))` over the memory limit is the
+        // "Allowed memory size exhausted" fatal, not a reservation of up to
+        // 2^32 fields; and no more than a page of them is reserved before
+        // their packets arrive.
+        let count = n as usize;
+        if php_memlimit::try_reserve_n(count + 1, std::mem::size_of::<protocol::Field>(), 0)
+            .is_err()
+        {
+            return Err(());
+        }
+        let mut fields = Vec::with_capacity(count.min(4096));
         for _ in 0..n {
             let Some(buf) = self.read_packet(PacketKind::Field) else {
                 return Err(());

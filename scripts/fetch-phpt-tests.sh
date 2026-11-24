@@ -20,22 +20,28 @@
 set -euo pipefail
 
 PHP_SRC_URL='https://github.com/php/php-src'
-# Deliberately not upstream's tip (master is at `f5e5e349` as of 16 Nov 2026): this is the
-# revision the conformance numbers and `phpt-baseline.txt` were measured against.
-PHP_SRC_SHA='0c7255dc521f3776d5627c0b8ac6cffd8f7c8951'  # "Merge branch 'PHP-8.6'", 2 Nov 2026
-PHP_SRC_DESC='php-src master, PHP-8.6 merged'
+# The revision the conformance numbers and `phpt-baseline.txt` are measured against: php-src
+# master of 22 Nov 2026 (moved up from 0c7255dc521, 2 Nov, on 22 Nov 2026 at the owner's
+# request: 716 commits, 207 more `.phpt` files; the last 3, after 6e4c78a1723 of 21 Nov,
+# change no test).
+PHP_SRC_SHA='cb90f9a237757209ecd2e67a7e0c950f36ba6ea1'  # "streams: voidify parse_unix_address", 22 Nov 2026
+PHP_SRC_DESC='php-src master of 22 Nov 2026'
 
 # Every .phpt in the tree we run lives under a directory named `tests`, and the
 # support files they include (`skipif_root.inc`, `helper.inc`, locale data) live in
 # those directories too, so these four prefixes are the complete payload. Checked
-# against a full clone at this revision: the 23,792 `.phpt` files match one for one,
+# against a full clone at this revision: the 23,999 `.phpt` files match one for one,
 # none missing and none extra. `**` is needed for `ext/intl/uchar/tests/`, which sits
 # two levels below `ext/`.
+# Plus php-src's two benchmark scripts, inputs of `perf/bench/timing.py` and
+# `scripts/acceptance.sh`.
 SPARSE_PATHS=(
     '/tests/'
     '/Zend/tests/'
     '/ext/**/tests/'
     '/sapi/**/tests/'
+    '/Zend/bench.php'
+    '/Zend/micro_bench.php'
 )
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

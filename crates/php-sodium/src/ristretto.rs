@@ -53,7 +53,7 @@ fn unary(
 
 /// `sodium_crypto_core_ristretto255_add($p, $q)`.
 pub fn add(p: &[u8], q: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte buffers, lengths checked by `binary`.
+    // SAFETY: (closure) 32-byte buffers, lengths checked by `binary`.
     binary("add", ("p", "q"), p, q, (BYTES, POINT), |r, a, b| unsafe {
         ffi::crypto_core_ristretto255_add(r, a, b)
     })
@@ -61,7 +61,7 @@ pub fn add(p: &[u8], q: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_sub($p, $q)`.
 pub fn sub(p: &[u8], q: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): as for `add`.
+    // SAFETY: (closure) as for `add`.
     binary("sub", ("p", "q"), p, q, (BYTES, POINT), |r, a, b| unsafe {
         ffi::crypto_core_ristretto255_sub(r, a, b)
     })
@@ -69,11 +69,12 @@ pub fn sub(p: &[u8], q: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_from_hash($s)`.
 pub fn from_hash(s: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 64-byte input, 32-byte output.
+    // SAFETY: (closure) 64-byte input, 32-byte output.
     unary(
         "from_hash",
         s,
         (HASHBYTES, "SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES"),
+        // SAFETY: as for the closure (see the note above the call).
         |r, a| unsafe { ffi::crypto_core_ristretto255_from_hash(r, a) },
     )
 }
@@ -106,7 +107,7 @@ pub fn scalar_random() -> Vec<u8> {
 
 /// `sodium_crypto_core_ristretto255_scalar_add($x, $y)`.
 pub fn scalar_add(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     binary(
         "scalar_add",
         ("x", "y"),
@@ -114,6 +115,7 @@ pub fn scalar_add(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
         y,
         (SCALARBYTES, SCALAR),
         |r, a, b| {
+            // SAFETY: as for the closure (see the note above the call).
             unsafe { ffi::crypto_core_ristretto255_scalar_add(r, a, b) };
             0
         },
@@ -122,7 +124,7 @@ pub fn scalar_add(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_sub($x, $y)`.
 pub fn scalar_sub(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     binary(
         "scalar_sub",
         ("x", "y"),
@@ -130,6 +132,7 @@ pub fn scalar_sub(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
         y,
         (SCALARBYTES, SCALAR),
         |r, a, b| {
+            // SAFETY: as for the closure (see the note above the call).
             unsafe { ffi::crypto_core_ristretto255_scalar_sub(r, a, b) };
             0
         },
@@ -138,7 +141,7 @@ pub fn scalar_sub(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_mul($x, $y)`.
 pub fn scalar_mul(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     binary(
         "scalar_mul",
         ("x", "y"),
@@ -146,6 +149,7 @@ pub fn scalar_mul(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
         y,
         (SCALARBYTES, SCALAR),
         |r, a, b| {
+            // SAFETY: as for the closure (see the note above the call).
             unsafe { ffi::crypto_core_ristretto255_scalar_mul(r, a, b) };
             0
         },
@@ -154,7 +158,7 @@ pub fn scalar_mul(x: &[u8], y: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_invert($s)`.
 pub fn scalar_invert(s: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     unary("scalar_invert", s, (SCALARBYTES, SCALAR), |r, a| unsafe {
         ffi::crypto_core_ristretto255_scalar_invert(r, a)
     })
@@ -162,8 +166,9 @@ pub fn scalar_invert(s: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_negate($s)`.
 pub fn scalar_negate(s: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     unary("scalar_negate", s, (SCALARBYTES, SCALAR), |r, a| {
+        // SAFETY: as for the closure (see the note above the call).
         unsafe { ffi::crypto_core_ristretto255_scalar_negate(r, a) };
         0
     })
@@ -171,8 +176,9 @@ pub fn scalar_negate(s: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_complement($s)`.
 pub fn scalar_complement(s: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 32-byte scalars.
+    // SAFETY: (closure) 32-byte scalars.
     unary("scalar_complement", s, (SCALARBYTES, SCALAR), |r, a| {
+        // SAFETY: as for the closure (see the note above the call).
         unsafe { ffi::crypto_core_ristretto255_scalar_complement(r, a) };
         0
     })
@@ -180,7 +186,7 @@ pub fn scalar_complement(s: &[u8]) -> Result<Vec<u8>> {
 
 /// `sodium_crypto_core_ristretto255_scalar_reduce($s)`.
 pub fn scalar_reduce(s: &[u8]) -> Result<Vec<u8>> {
-    // SAFETY (closure): 64-byte input, 32-byte output.
+    // SAFETY: (closure) 64-byte input, 32-byte output.
     unary(
         "scalar_reduce",
         s,
@@ -189,6 +195,7 @@ pub fn scalar_reduce(s: &[u8]) -> Result<Vec<u8>> {
             "SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES",
         ),
         |r, a| {
+            // SAFETY: as for the closure (see the note above the call).
             unsafe { ffi::crypto_core_ristretto255_scalar_reduce(r, a) };
             0
         },

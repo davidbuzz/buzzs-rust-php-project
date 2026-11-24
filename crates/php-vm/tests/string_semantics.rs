@@ -185,7 +185,7 @@ fn unserialize_arrays_are_mixed_and_short_strings_interned() {
 /// yields the other operand itself (an interned string stays interned),
 /// while an empty literal does not short-cut, so `$row['label'] . ''`
 /// makes a new string (ext/mysqli/tests/mysqli_result_references.phpt).
-/// Expected output from php 8.3.
+/// Expected output from `/usr/bin/php8.5 -n`.
 #[test]
 fn concat_with_empty_operand_shares_only_for_non_literals() {
     assert_eq!(

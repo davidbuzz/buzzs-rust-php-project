@@ -4,7 +4,7 @@
 //! and the oracle table tests (`tests/oracle.rs`).
 //!
 //! Each command mirrors a snippet of `tools/probe.php`; outputs use a
-//! canonical text form so they can be compared with `/usr/bin/php`.
+//! canonical text form so they can be compared with `/usr/bin/php8.5`.
 
 #![allow(dead_code, clippy::too_many_lines)]
 

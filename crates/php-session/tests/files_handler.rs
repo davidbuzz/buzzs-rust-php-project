@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `files` save handler: on-disk layout, locking, GC and messages
 //! (`mod_files.c`, `ext/session/tests/mod_files/*.phpt`), plus interop
-//! with `/usr/bin/php` when it is installed.
+//! with `/usr/bin/php8.5` when it is installed.
 #![allow(clippy::too_many_lines)]
 
 mod common;
@@ -275,10 +275,10 @@ fn open_basedir_denial() {
 }
 
 fn php() -> Option<Command> {
-    if !Path::new("/usr/bin/php").exists() {
+    if !Path::new("/usr/bin/php8.5").exists() {
         return None;
     }
-    let mut c = Command::new("/usr/bin/php");
+    let mut c = Command::new("/usr/bin/php8.5");
     c.args([
         "-d",
         "memory_limit=1G",
@@ -359,6 +359,7 @@ fn upload_progress() {
         ("session.save_path", path.as_str()),
         ("session.use_strict_mode", "0"),
         ("session.use_only_cookies", "0"),
+        ("session.upload_progress.enabled", "1"),
         ("session.upload_progress.cleanup", "0"),
         ("session.upload_progress.min_freq", "0.000000001"),
     ];
@@ -491,4 +492,26 @@ fn upload_progress() {
         b"file1.txt",
         300
     ));
+}
+
+/// A symlink planted at a session's path is not followed (`O_NOFOLLOW`
+/// in `ps_files_open()`): the session cannot be read from or written to
+/// the file it points at, even if it is swapped in after a check.
+#[cfg(unix)]
+#[test]
+fn planted_symlink_is_not_followed() {
+    let dir = tempdir("nofollow");
+    let target = dir.join("victim");
+    std::fs::write(&target, b"untouched").unwrap();
+    std::os::unix::fs::symlink(&target, dir.join("sess_planted")).unwrap();
+    let mut h = host(&dir.to_string_lossy());
+    start_with_id(&mut h, "planted");
+    h.set_var("k", Value::Int(7));
+    let _ = h.call("session_write_close", |h| session_write_close(h));
+    assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    let log = h.take_log().join("\n");
+    assert!(
+        log.contains("failed: Too many levels of symbolic links (40)"),
+        "{log}"
+    );
 }

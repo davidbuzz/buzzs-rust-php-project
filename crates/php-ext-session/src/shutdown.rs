@@ -4,6 +4,7 @@
 //! function registered by `session_set_save_handler($handler)`.
 
 use php_runtime::{Obj, RuntimeError, Value, ZStr};
+use php_session::SessionHost;
 use php_vm::{Throw, Vm};
 
 use crate::host::{set_phase, with_host, Phase};
@@ -53,6 +54,10 @@ pub(crate) fn request_shutdown(vm: &mut Vm) {
     let err = with_host(vm, |h| {
         let r = php_session::request_shutdown(h);
         php_session::ini::deactivate(h);
+        // The next request's body is parsed before its `RINIT`, with
+        // `PG(modules_activated)` off (a VM that serves several requests:
+        // mod_php).
+        h.session().set_modules_activated(false);
         let late = h.state().take_exception();
         r.err().or(late)
     });

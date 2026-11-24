@@ -263,6 +263,24 @@ impl UserFilterObject for FilterObject {
                     v => vm.value_to_int(&v).unwrap_or(0),
                 });
             }
+            // Leftover input: kept by the stream layer after PSFS_FEED_ME
+            // (not on the closing call); otherwise warned about here, while
+            // `$in` is still a valid brigade resource (an error handler may
+            // add to it), and released with whatever it holds then.
+            let feed_me = matches!(
+                &r,
+                UserCall::Returned(SValue::Int(i))
+                    if php_streams::filter::FilterStatus::from_long(*i)
+                        == php_streams::filter::FilterStatus::FeedMe
+            );
+            if (!feed_me || closing) && !in_b.borrow().is_empty() {
+                // Through the stream layer's diagnostics, flushed at once:
+                // the message names the operation (`include(): ...`).
+                php_streams::diag::warning("Unprocessed filter buckets remaining on input brigade");
+                bridge::flush_diags(vm);
+                let released = std::mem::take(&mut *in_b.borrow_mut());
+                drop(released);
+            }
             if has_stream && !bridge::has_pending() {
                 let _ = set_stream_property(vm, &obj, Value::Null, &scope);
             }
@@ -534,6 +552,25 @@ fn stream_filter_prepend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     apply(vm, a, false)
 }
 
+thread_local! {
+    /// Streams whose filters cannot be removed now: a `stream_filter_remove()`
+    /// is flushing one (`PHP_STREAM_FLAG_NO_*_FILTER_REMOVE` set around the
+    /// flush), or a filter's diagnostic is being reported.
+    static REMOVING: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Runs `f` (the report of a diagnostic a filter of stream `stream_id`
+/// raised) with that stream's filters held: C raises it while the chain
+/// is applied, so its error handler cannot remove them.
+pub(crate) fn while_applying<R>(stream_id: u64, f: impl FnOnce() -> R) -> R {
+    REMOVING.with(|r| r.borrow_mut().push(stream_id));
+    let out = f();
+    REMOVING.with(|r| {
+        r.borrow_mut().pop();
+    });
+    out
+}
+
 fn stream_filter_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = res::resource_arg(vm, a, 0)?;
     let found = if r.is_closed() {
@@ -559,10 +596,25 @@ fn stream_filter_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if cell.is_closed() {
         return Err(invalid(vm));
     }
+    // GH-22063: a filter of a chain that is being applied (its own
+    // callback, another filter's of the same stream, or the flush of a
+    // removal in progress) is not removed.
+    let stream_id = cell.id();
+    if php_streams::filter::user::filtering_eof(stream_id).is_some()
+        || REMOVING.with(|r| r.borrow().contains(&stream_id))
+    {
+        vm.php_warning("Cannot remove filter while it is being applied")?;
+        return Ok(Value::Bool(false));
+    }
+    REMOVING.with(|r| r.borrow_mut().push(stream_id));
     let ok = bridge::run(vm, || {
         cell.get()
             .is_some_and(|mut s| lib::stream_filter_remove(&mut s, id))
-    })?;
+    });
+    REMOVING.with(|r| {
+        r.borrow_mut().pop();
+    });
+    let ok = ok?;
     if ok {
         r.close();
     }

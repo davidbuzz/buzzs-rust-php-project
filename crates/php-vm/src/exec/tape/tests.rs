@@ -1,8 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests of the tape: what [`lower`] decodes, and scripts whose loops run on
-//! it. Expected output from `/usr/bin/php8.5 -n` (identical under 8.3),
-//! paths normalised to `t.php`.
+//! it. Expected output from `/usr/bin/php8.5 -n`, paths normalised to
+//! `t.php`.
 #![allow(clippy::needless_raw_string_hashes)]
 
 use super::{lower, Inst, TOp};
@@ -71,8 +71,20 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         // The call instructions also take ops `Vm::run` runs itself
-        // (`InitMethodCall`).
-        if inst.op != TOp::CallInit {
+        // (`InitMethodCall`), and so do the instructions of the ops the
+        // tape runs with the VM at hand (a frameless call, a read through
+        // the global scope).
+        // An array literal's ops are `Vm::run`'s too, and its table and
+        // elements instructions.
+        if !matches!(
+            inst.op,
+            TOp::CallInit
+                | TOp::VmOp
+                | TOp::FramelessQ
+                | TOp::IncDecStatic
+                | TOp::InitArrayT
+                | TOp::ArrayAddT
+        ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
         // An unspecialised hot op is handed to the old fast path that
@@ -84,6 +96,13 @@ fn check(code: &OpArray) -> Box<[Inst]> {
             continue;
         }
         let label = match *op {
+            // A jump on a literal that is never taken is a `Nop`.
+            Op::JmpZ(crate::opcode::Operand::Lit(_), _)
+            | Op::JmpNz(crate::opcode::Operand::Lit(_), _)
+                if inst.op == TOp::Nop =>
+            {
+                None
+            }
             Op::Jmp(t) | Op::JmpZ(_, t) | Op::JmpNz(_, t) => Some(t),
             Op::CmpJmp { target, .. } => Some(target),
             Op::IncDecCvCmpJmp { .. } => match code.ops.get(i + 1) {
@@ -217,9 +236,265 @@ fn fused_steps_with_the_variable_on_the_right() {
     assert_eq!((fused, lowered), (3, 2));
 }
 
+/// A jump on a literal is decided when the tape is built: a plain jump
+/// (`while (1)`, whose test stands at the loop's end) or nothing
+/// (`do { } while (0)`); `$a = $b` with a used result and a read into a
+/// temporary are instructions of their own.
+#[test]
+fn literal_jumps_and_used_assignments_are_instructions() {
+    const SRC: &str = r#"<?php
+function f($n, $a) {
+    $i = 0; $j = 1; $t = 0;
+    while (1) { if (++$i > $n) { break; } $j += ($k = $j); $t += $a[$i & 3] + $k; }
+    do { $t++; } while (0);
+    do { $t += 2; } while (false);
+    while (true) { $t += 3; break; }
+    return [$i, $j, $t];
+}
+var_dump(f(5, [1, 2, 3, 4]));
+"#;
+    let arrays = op_arrays(SRC);
+    let code = &arrays[1];
+    let tape = check(code);
+    let mut taken = 0;
+    let mut never = 0;
+    for (i, op) in code.ops.iter().enumerate() {
+        match op {
+            Op::JmpZ(crate::opcode::Operand::Lit(_), _)
+            | Op::JmpNz(crate::opcode::Operand::Lit(_), _) => match tape[i].op {
+                TOp::Jmp => taken += 1,
+                TOp::Nop => never += 1,
+                other => panic!("op {i}: {op:?} is {other:?}"),
+            },
+            Op::AssignCv { dst: Some(_), .. } => assert_eq!(tape[i].op, TOp::AssignR, "op {i}"),
+            Op::FetchDimCv { to: None, .. } => assert_eq!(tape[i].op, TOp::FetchDimIT, "op {i}"),
+            _ => {}
+        }
+    }
+    assert_eq!((taken, never), (2, 2), "{:?}", code.ops);
+    assert_eq!(
+        run(SRC),
+        "array(3) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(32)
+  [2]=>
+  int(49)
+}
+"
+    );
+}
+
+const ARRAY_LITERALS: &str = r#"<?php
+function f($a, $b) {
+    $list = [$a, $b, $a . $b, 7];
+    $map = ['x' => $a, 'y' => $b, 5 => $a, '6' => $b, 'x' => $b];
+    $k = 'dyn';
+    $mixed = [$a, $k => $b, false => $b, true => $a];
+    return [$list, $map, $mixed, [[$a], ['n' => [$b]]]];
+}
+function g($a) {
+    $r = &$a;
+    $u = [$a, $r, $undef];
+    try { $o = [PHP_INT_MAX => 1, $a]; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    return $u;
+}
+for ($i = 0; $i < 3; $i++) { $r = f($i, "s$i"); }
+var_dump($r, g(4));
+"#;
+
+const ARRAY_LITERALS_OUT: &str = r#"
+Warning: Undefined variable $undef in t.php on line 11
+Cannot add element to the array as the next element is already occupied
+array(4) {
+  [0]=>
+  array(4) {
+    [0]=>
+    int(2)
+    [1]=>
+    string(2) "s2"
+    [2]=>
+    string(3) "2s2"
+    [3]=>
+    int(7)
+  }
+  [1]=>
+  array(4) {
+    ["x"]=>
+    string(2) "s2"
+    ["y"]=>
+    string(2) "s2"
+    [5]=>
+    int(2)
+    [6]=>
+    string(2) "s2"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(2) "s2"
+    ["dyn"]=>
+    string(2) "s2"
+    [1]=>
+    int(2)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+    [1]=>
+    array(1) {
+      ["n"]=>
+      array(1) {
+        [0]=>
+        string(2) "s2"
+      }
+    }
+  }
+}
+array(3) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(4)
+  [2]=>
+  NULL
+}
+"#;
+
+/// An array literal with an element that is no constant: its table and
+/// each element with no key or a string/int literal key are instructions;
+/// an element with any other key stays the generic op. The results are the
+/// generic ops' (keys given twice, an integer in digits, references, an
+/// undefined variable, the next index after `PHP_INT_MAX`).
+#[test]
+fn array_literals_are_instructions() {
+    let src = ARRAY_LITERALS;
+    let arrays = op_arrays(src);
+    let code = &arrays[1];
+    let tape = check(code);
+    let (mut inits, mut adds, mut generic) = (0, 0, 0);
+    for (i, op) in code.ops.iter().enumerate() {
+        match op {
+            Op::InitArray { .. } => {
+                assert_eq!(tape[i].op, TOp::InitArrayT, "op {i}: {op:?}");
+                inits += 1;
+            }
+            Op::ArrayAdd {
+                key: None | Some(crate::opcode::Operand::Lit(_)),
+                ..
+            } if tape[i].op == TOp::ArrayAddT => adds += 1,
+            Op::ArrayAdd { key, .. } => {
+                assert!(key.is_some(), "op {i}: {op:?}");
+                assert_ne!(tape[i].op, TOp::ArrayAddT, "op {i}: {op:?}");
+                generic += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(inits >= 7, "{inits} literals");
+    assert!(adds >= 14, "{adds} elements as instructions");
+    // `$k => $b` at least: the generic op converts the key.
+    assert!(generic >= 1, "{generic} generic elements");
+    assert_eq!(run(src), ARRAY_LITERALS_OUT);
+}
+
+const LEAN_FOREACH: &str = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "d{$this->n} "; } }
+function kv($n) {
+    $list = []; $hash = [];
+    for ($i = 0; $i < $n; $i++) { $list[] = $i * 2; $hash["k$i"] = $i; $hash[$i + 100] = "s$i"; }
+    $s = 0; $ks = '';
+    foreach ($list as $i => $v) { $s += $i * $v; }
+    foreach ($hash as $k => $v) { $ks = $k; if (is_int($v)) { $s += $v; } else { $s += strlen($v); } }
+    foreach ($list as $v) { $s += $v; }
+    unset($hash['k1'], $list[1]);
+    foreach ($hash as $k => $v) { $s += is_int($v) ? 1 : 2; }
+    foreach ($list as $k => $v) { $s += $k; }
+    foreach ([1.5, true, null, 'x', [1], new D(7)] as $k => $v) { $s += $k; }
+    echo $s, ' ', $ks, ' ', $i, ' ', $k, "\n";
+}
+function vars($n) {
+    $a = ['x' => 1, 'y' => 2, 'z' => 3];
+    for ($r = 0; $r < $n; $r++) {
+        $v = [1, 2]; $k = new D(100 + $r % 2);
+        foreach ($a as $k => $v) { }
+        $x = 5; $v = &$x; $kk = 'q'; $k = &$kk;
+        foreach ($a as $k => $v) { }
+        unset($v, $k);
+        foreach ($a as $same => $same) { }
+        $v = 'long string value ' . $r; $k = 'key ' . $r;
+        foreach ($a as $k => $v) { }
+    }
+    echo "| $x $kk $same $k $v\n";
+}
+function sums($n) {
+    $h = []; $w = [];
+    for ($i = 0; $i < 40; $i++) { $h["foo_$i"] = 0; $h["a-key-that-is-longer-than-sixteen-bytes-$i"] = 0; $h[$i] = 0; $h["-$i"] = 0; $w["foo_$i"] = $i; }
+    for ($r = 0; $r < $n; $r++) {
+        foreach ($w as $k => $v) { $h[$k] += $v; $h[$k] -= 1; $h[$k] *= 1; $h[$k] |= 1; $h[$k] &= 0xffff; $h[$k] ^= 2; $h[$k] += 3; }
+        $k = "a-key-that-is-longer-than-sixteen-bytes-" . ($r % 40); $one = 1;
+        $h[$k] += $one;
+        $d = (string)($r % 40); $h[$d] += $one;
+        $m = '-' . ($r % 40); $h[$m] += $one;
+        $i = $r % 40; $h[$i] += $one;
+    }
+    $t = 0; foreach ($h as $v) { $t += $v; }
+    $b = $h; $k = 'foo_7'; $h[$k] += 1000; $big = PHP_INT_MAX; $h[$k] += $big;
+    $f = ['f' => 1.5, 's' => '5']; $k2 = 'f'; $f[$k2] += $one; $k2 = 's'; $f[$k2] += $one;
+    echo $t, ' ', $b['foo_7'], ' ', $h[3], ' ', count($h), ' ';
+    var_dump($h['foo_7'], $f);
+}
+foreach ([3, 50] as $n) { kv($n); vars($n); sums($n); }
+"#;
+
+const LEAN_FOREACH_OUT: &str = r#"50 102 2 5
+d7 d100 d101 d100 | 3 z z z 3
+68108 24 0 160 float(9.223372036854776E+18)
+array(2) {
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  int(6)
+}
+86053 149 49 5
+d7 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 d100 d101 | 3 z z z 3
+107736 400 4 160 float(9.223372036854778E+18)
+array(2) {
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  int(6)
+}
+"#;
+
+/// The lean paths of the `foreach` step and of `$a[$key] op= $int`: what
+/// they take and what they leave to the general code gives the generic
+/// ops' results (lists and hashes, holes, string and other values, loop
+/// variables that hold arrays, objects and references, keys that are
+/// integers in digits, shared tables, overflow, missing keys).
+#[test]
+fn lean_foreach_steps_and_keyed_compound_writes() {
+    let src = LEAN_FOREACH;
+    let out = run(src);
+    assert_eq!(out, LEAN_FOREACH_OUT);
+    let arrays = op_arrays(src);
+    let steps = arrays
+        .iter()
+        .flat_map(|code| check(code).into_vec())
+        .filter(|inst| matches!(inst.op, TOp::FeFetchV | TOp::FeFetchKV))
+        .count();
+    assert!(steps >= 8, "{steps} fused foreach steps");
+}
+
 /// Ops with no specialised form keep their place: hot ones are `Step`,
 /// the others `Exit`, and a string or array literal operand is not a
-/// number (`/` and `%` of a number literal are specialised).
+/// number (`/` and `%` of a number literal are specialised, and `.` of a
+/// string literal is the concat instruction).
 #[test]
 fn unspecialised_ops_keep_their_place() {
     let src = "<?php function f($a) { $s = $a . 'x'; $t = $a + 'y'; $u = [1] + $a; $v = $a / 2; \
@@ -244,11 +519,14 @@ fn unspecialised_ops_keep_their_place() {
             crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Div | php_runtime::BinaryOp::Mod)
         ) && matches!(b, crate::opcode::Operand::Lit(l)
             if matches!(code.literals[l as usize], php_runtime::Value::Int(_)));
+        let concat = binop == crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Concat);
         if by_number {
             assert!(
                 matches!(tape[i].op, TOp::NumBinT | TOp::NumBinC),
                 "op {i}: {op:?}"
             );
+        } else if concat {
+            assert_eq!(tape[i].op, TOp::ConcatT, "op {i}: {op:?}");
         } else {
             assert_eq!(tape[i].op, TOp::Step, "op {i}: {op:?}");
         }
@@ -708,7 +986,7 @@ $o = new P(); var_dump(props($o));
 /// compound assignments, `++`/`--`, `isset`/`empty`, chained assignment,
 /// and `new` on both the ctor path (fall-through) and the no-ctor path
 /// (jump over the ctor call). Every props family instruction appears, the
-/// tape shape is checked, and the output matches `/usr/bin/php`.
+/// tape shape is checked, and the output matches `/usr/bin/php8.5`.
 #[test]
 fn props_in_every_specialised_form() {
     let arrays = op_arrays(PROPS_IN_EVERY_SPECIALISED_FORM);
@@ -780,7 +1058,7 @@ var_dump(dims(5));
 /// compound assignments, `isset`/`empty`, `++`/`--`, chained dimensions,
 /// string offsets, string keys, and `.=` on a variable. Every dims family
 /// instruction appears, the tape shape is checked, and the output matches
-/// `/usr/bin/php`.
+/// `/usr/bin/php8.5`.
 #[test]
 fn dims_in_every_specialised_form() {
     let arrays = op_arrays(DIMS_IN_EVERY_SPECIALISED_FORM);
@@ -890,13 +1168,13 @@ f([10, 20, 30], 1, ["beta" => 2, 7 => "seven"]);
 
 /// The fast path an array read or write tries first is chosen from what
 /// its operands can hold when the tape is built: an int offset (a variable,
-/// a temporary, an int literal), a literal string key that is no integer
-/// key, an append; none for a read without a folded `AssignCv`, a float
-/// or integer-string literal offset, a string literal key of a write or an
-/// array literal value.
+/// a temporary, an int literal) of a read folded with its `AssignCv` or
+/// into its temporary, a literal string key that is no integer key, an
+/// append; none for a float or integer-string literal offset, a string
+/// literal key of a write or an array literal value.
 #[test]
 fn dim_fast_paths_follow_the_operands() {
-    use TOp::{AssignDimC, AssignDimIC, FetchDimC, FetchDimIC, FetchDimSC};
+    use TOp::{AssignDimC, AssignDimIC, FetchDimC, FetchDimIC, FetchDimIT, FetchDimSC};
     let arrays = op_arrays(DIM_FAST_PATHS);
     let tape = check(&arrays[1]);
     let ops = |pick: fn(TOp) -> bool| {
@@ -906,8 +1184,8 @@ fn dim_fast_paths_follow_the_operands() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        ops(|op| matches!(op, FetchDimC | FetchDimIC | FetchDimSC)),
-        [FetchDimIC, FetchDimIC, FetchDimIC, FetchDimSC, FetchDimC, FetchDimC, FetchDimC]
+        ops(|op| matches!(op, FetchDimC | FetchDimIC | FetchDimIT | FetchDimSC)),
+        [FetchDimIC, FetchDimIC, FetchDimIC, FetchDimSC, FetchDimC, FetchDimC, FetchDimIT]
     );
     assert_eq!(
         ops(|op| matches!(op, AssignDimC | AssignDimIC)),
@@ -977,10 +1255,15 @@ fn strs_in_every_specialised_form() {
     let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
     assert_eq!(count(TOp::StrlenC), 2, "a result and an unused one");
     assert_eq!(count(TOp::CountC), 2, "a result and an unused one");
-    // `!is_array()` is `BOOL_NOT` and `JMPZ` after the test, as in
-    // php-src before the optimizer folds them.
-    assert_eq!(count(TOp::TypeCheckC), 2, "$b = is_int($n), !is_array()");
-    assert_eq!(count(TOp::TypeCheckJmpC), 1, "if (is_string())");
+    // `!is_array()`: the `BOOL_NOT` and the `JMPZ` after the test are the
+    // opposite jump (`specialise::thread_short_circuits`), which the test
+    // is fused with.
+    assert_eq!(count(TOp::TypeCheckC), 1, "$b = is_int($n)");
+    assert_eq!(
+        count(TOp::TypeCheckJmpC),
+        2,
+        "if (is_string()), if (!is_array())"
+    );
     assert_eq!(count(TOp::IssetC), 2, "$c = isset(), $d = empty()");
     assert_eq!(count(TOp::IssetJmpC), 2, "if (isset()) / if (empty())");
     assert_eq!(
@@ -1090,4 +1373,218 @@ fn binary_operators_into_variables() {
     assert!(all.contains(&TOp::NumBinC), "{all:?}");
     assert!(all.contains(&TOp::NumAssignOpC), "{all:?}");
     assert_eq!(run(BINARY_OPERATORS_INTO_VARIABLES), "7 0 false\n1,7\n");
+}
+
+const FRAMELESS_CALLS: &str = r#"<?php
+function f($x, $s) {
+    $r = [];
+    for ($i = 1; $i <= 3; $i++) {
+        $r[] = sqrt($x); $r[] = abs($i - 2); $r[] = floor(2.5); $r[] = ord($s); $r[] = chr(64 + $i);
+        $r[] = strpos($s . 'xyz', 'y'); $r[] = substr('hello', $i); $r[] = max($i, 2);
+        $r[] = abs(PHP_INT_MIN); $r[] = sqrt("16"); sin($x);
+        try { $r[] = intdiv($x, $i - 2); } catch (DivisionByZeroError $e) { $r[] = $e->getLine(); }
+        $x++;
+    }
+    return implode("|", $r);
+}
+echo f(4, "a"), "\n";
+"#;
+
+/// Frameless calls stay on the tape: a call whose result needs no handler
+/// is one instruction ([`TOp::FramelessQ`], which leaves an argument it
+/// does not cover to the handler: `sqrt("16")`), also with two or three
+/// arguments and with arguments computed first; any other one runs with
+/// the VM at hand (a call instruction). The instruction jumps to the op
+/// after the call. An error a handler raises comes out with the call's
+/// line.
+#[test]
+fn frameless_calls() {
+    let arrays = op_arrays(FRAMELESS_CALLS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = &arrays[1];
+    let tape = check(code);
+    let quick = |name: &str| {
+        code.ops.iter().zip(tape.iter()).any(|(op, inst)| {
+            matches!(op, Op::FramelessICall(fc)
+                if matches!(&code.literals[fc.name as usize],
+                    php_runtime::Value::Str(lc) if lc.as_bytes() == name.as_bytes()))
+                && inst.op == TOp::FramelessQ
+        })
+    };
+    assert!(quick("sqrt"), "sqrt($x)");
+    assert!(quick("floor"), "floor(2.5)");
+    assert!(quick("ord"), "ord($s)");
+    assert!(quick("sin"), "sin($x), unused");
+    // The instruction of the call of `name`, with the op its jump lands on.
+    let row = |name: &str| {
+        code.ops
+            .iter()
+            .zip(tape.iter())
+            .enumerate()
+            .find(|(_, (op, _))| {
+                matches!(op, Op::FramelessICall(fc)
+                    if matches!(&code.literals[fc.name as usize],
+                        php_runtime::Value::Str(lc) if lc.as_bytes() == name.as_bytes()))
+            })
+            .map(|(i, (op, inst))| {
+                let Op::FramelessICall(fc) = op else {
+                    unreachable!()
+                };
+                (inst.op, target(&tape, i) - i, fc.tail() + 1)
+            })
+    };
+    // `substr('hello', $i)` and `max($i, 2)`: two arguments, sent right
+    // after the call's start: past the three `Nop`s behind the op.
+    assert_eq!(row("substr"), Some((TOp::FramelessQ, 4, 4)));
+    assert_eq!(row("max"), Some((TOp::FramelessQ, 4, 4)));
+    assert_eq!(row("ord"), Some((TOp::FramelessQ, 3, 3)));
+    // `strpos($s . 'xyz', 'y')` and `chr(64 + $i)`: an argument computed
+    // first, the op at the call's `DoCall`.
+    assert_eq!(row("strpos"), Some((TOp::FramelessQ, 1, 1)));
+    assert_eq!(row("chr"), Some((TOp::FramelessQ, 1, 1)));
+    // `intdiv($x, $i - 2)`: php-src sends `$x` before `$i - 2` is computed,
+    // so the call keeps its ops.
+    assert_eq!(row("intdiv"), None);
+    assert_eq!(
+        run(FRAMELESS_CALLS),
+        "2|1|2|97|A|2|ello|2|9.2233720368548E+18|4|-4|2.2360679774998|0|2|97|B|2|llo|2|9.2233720368548E+18|4|8|2.4494897427832|1|2|97|C|2|lo|3|9.2233720368548E+18|4|6\n"
+    );
+}
+
+const MOVES_AND_ASSIGNMENTS: &str = r#"<?php
+function f($a, $s, $n) {
+    $r = []; $f = false; $z = null;
+    for ($i = 0; $i < 3; $i++) {
+        $x = $f ?: $i + 1; $r[] = $x;
+        $x = $s ?: 'none'; $r[] = $x;
+        $x = $z ?? $a; $r[] = count($x);
+        $x = $s ?? 'd'; $r[] = $x;
+        $x = $i ? $a : $s; $r[] = is_array($x) ? 'arr' : $x;
+        $x = $i > 1 ? 'big' : $n; $r[] = $x;
+        $y = $a; $y[] = $i; $r[] = count($y);
+        $t = "v$i"; $u = $t; $r[] = $u;
+    }
+    return implode(",", $r) . ' ' . count($a);
+}
+echo f([1, 2], "str", 7), "\n";
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "d", $this->n, " "; } }
+function g() { for ($i = 0; $i < 3; $i++) { $o = new D($i); echo "i$i "; } echo "end "; }
+g(); echo "\n";
+"#;
+
+/// A ternary's arms, `?:` and `??` are instructions of their own
+/// ([`TOp::MoveT`], [`TOp::JmpSetC`], [`TOp::CoalesceC`]) for values of
+/// every type, and an assignment of a string, an array or an object stays
+/// on the tape: the old value is released when it is overwritten (an
+/// object's destructor runs before the next statement).
+#[test]
+fn moves_and_assignments() {
+    let arrays = op_arrays(MOVES_AND_ASSIGNMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert!(count(TOp::MoveT) >= 6, "{}", count(TOp::MoveT));
+    assert_eq!(count(TOp::JmpSetC), 2, "$f ?: ..., $s ?: ...");
+    assert_eq!(count(TOp::CoalesceC), 2, "$z ?? ..., $s ?? ...");
+    assert_eq!(
+        run(MOVES_AND_ASSIGNMENTS),
+        "1,str,2,str,str,7,3,v0,2,str,2,str,arr,7,3,v1,3,str,2,str,arr,big,3,v2 2\ni0 d0 i1 d1 i2 end d2 \n"
+    );
+}
+
+const VM_OPS_AND_STATICS: &str = r#"<?php
+$g = 5;
+class K {
+    const A = 3;
+    public static $n = 0;
+    function r($k) { $a = 0; for ($i = 0; $i < $k; $i++) { $x = $this::A; $a += $x + $this::A; self::$n++; $a += ++self::$n; } return $a; }
+}
+function f($s, $k) { $a = 0; $t = ''; for ($i = 0; $i < $k; $i++) { $x = $GLOBALS['g']; $a += $x; $y = $_GET; $a += count($y); $c = $s[$i % 3]; $t .= $c; K::$n++; } return "$a $t " . K::$n; }
+echo (new K)->r(3), ' ', K::$n, "\n";
+echo f("abc", 4), "\n";
+for ($i = 0; $i < 3; $i++) { $v = abs(-$i) + max($i, 1); echo $v; }
+echo "\n";
+"#;
+
+/// `$this::NAME` is one instruction for its two ops, `++` of a static
+/// property has an instruction, reads of a global by name and of a
+/// superglobal run with the VM at hand without leaving the tape, a string
+/// offset is read by the element read's fast path, and builtin calls at
+/// the script's top level (where no call left a pooled frame) are made.
+#[test]
+fn vm_ops_and_statics() {
+    let arrays = op_arrays(VM_OPS_AND_STATICS);
+    for code in &arrays {
+        check(code);
+    }
+    let all: Vec<TOp> = arrays
+        .iter()
+        .flat_map(|c| lower(c).to_vec())
+        .map(|i| i.op)
+        .collect();
+    let count = |op: TOp| all.iter().filter(|&&o| o == op).count();
+    // (The method's rows are not among these op arrays: its `$this::A`
+    // and `self::$n++` show in the output below.)
+    assert_eq!(count(TOp::IncDecStatic), 1, "K::$n++ in f(): {all:?}");
+    assert!(count(TOp::VmOp) >= 2, "$GLOBALS['g'], $_GET: {all:?}");
+    assert_eq!(run(VM_OPS_AND_STATICS), "30 6\n20 abca 10\n124\n");
+}
+
+const NEW_WITH_ARGUMENTS: &str = r#"<?php
+class P { public $x; public $y; function __construct($x, $y) { $this->x = $x; $this->y = $y; } }
+function same($v) { return $v; }
+function run($n) {
+    for ($i = 0; $i < $n; $i++) { $p = new P($i, $i + 1); $q = new P(same($i), $i); }
+    return $p->x + $p->y + $q->x;
+}
+var_dump(run(20));
+"#;
+
+/// `new C(arguments)` whose arguments are variables, literals and sums of
+/// them is the tape's `new` instruction, jumping past the constructor's
+/// `DoCall` (`calls::new_plain` then runs a constructor that only stores
+/// its parameters without the call); a call among the arguments keeps the
+/// call instructions.
+#[test]
+fn new_with_arguments_at_hand_is_one_instruction() {
+    let arrays = op_arrays(NEW_WITH_ARGUMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = arrays
+        .iter()
+        .find(|c| {
+            c.ops
+                .iter()
+                .filter(|op| matches!(op, Op::New { .. }))
+                .count()
+                == 2
+        })
+        .expect("the function with the two `new`s");
+    let tape = check(code);
+    let news: Vec<usize> = (0..code.ops.len())
+        .filter(|&i| matches!(code.ops[i], Op::New { .. }))
+        .collect();
+    let first = &tape[news[0]];
+    assert_eq!(
+        (first.op, first.k, first.e),
+        (TOp::CallInit, super::calls::CALL_NEW, 1)
+    );
+    let end = target(&tape, news[0]);
+    assert!(matches!(code.ops[end - 1], Op::DoCall { dst: None }));
+    assert!(
+        code.ops[news[0] + 1..end - 1]
+            .iter()
+            .all(|op| matches!(op, Op::Send { .. } | Op::Bin { .. })),
+        "{:?}",
+        &code.ops[news[0]..end]
+    );
+    let second = &tape[news[1]];
+    assert_eq!(second.op, TOp::CallInit);
+    assert_ne!(second.k, super::calls::CALL_NEW);
+    assert_eq!(run(NEW_WITH_ARGUMENTS), "int(58)\n");
 }

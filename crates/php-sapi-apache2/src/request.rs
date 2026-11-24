@@ -217,11 +217,6 @@ pub struct RequestCtx {
     body_ready: Cell<Option<bool>>,
     /// Bytes of the body read so far (`SG(read_post_bytes)`).
     pub read_post_bytes: Cell<i64>,
-    /// Temporary files of uploads a later multipart parse
-    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
-    /// no longer uploaded files, deleted at request end (php-src leaks
-    /// them).
-    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `max_execution_time` timer.
     pub timer: Arc<Timer>,
     /// `header_register_callback()` callable (`SG(send_header_fcc)`).
@@ -241,6 +236,30 @@ thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
     static PERSISTENT_VM: RefCell<Option<Vm>> = const { RefCell::new(None) };
     static ACTIVE_VM: Cell<*mut Vm> = const { Cell::new(std::ptr::null_mut()) };
+    /// The script of a sub-request (`virtual()`) made while a PHP script
+    /// runs, and whether to highlight it: [`run`] records it for
+    /// `virtual()` to run.
+    static SUBREQUEST: RefCell<Option<(Vec<u8>, bool)>> = const { RefCell::new(None) };
+}
+
+/// `php_handler()` with a parent request: while this thread runs a PHP
+/// script, a sub-request (`virtual()`) for a PHP script does not start a
+/// request of its own. php-src runs the script in the current request as
+/// an include (`zend_execute_script(ZEND_INCLUDE)`, the current
+/// superglobals, output in order); the script is recorded here and
+/// `virtual()`, which holds the VM, runs it when the sub-request returns.
+fn defer_subrequest(backend: &dyn Backend, params: &RunParams) -> bool {
+    if ACTIVE_VM.with(|c| c.get().is_null()) {
+        return false;
+    }
+    let filename = backend.str_field(StrField::Filename).unwrap_or_default();
+    SUBREQUEST.with(|s| *s.borrow_mut() = Some((filename, params.highlight)));
+    true
+}
+
+/// The sub-request script [`defer_subrequest`] recorded, if any.
+pub(crate) fn take_subrequest() -> Option<(Vec<u8>, bool)> {
+    SUBREQUEST.with(|s| s.borrow_mut().take())
 }
 
 pub(crate) fn with_active_vm<R>(f: impl FnOnce(&mut Vm) -> R) -> Option<R> {
@@ -288,7 +307,6 @@ impl RequestCtx {
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             timer,
             header_callback: RefCell::new(None),
         }
@@ -680,8 +698,22 @@ pub fn apply_dir_config(vm: &mut Vm, entries: &[crate::backend::DirEntry]) {
         } else {
             Stage::Activate
         };
-        vm.ini
+        let accepted = vm
+            .ini
             .alter(&e.name, &e.value, access, stage, false, &mut sink);
+        // `zend_alter_ini_entry_ex()` runs the entry's on-modify handler
+        // too: an extension that keeps its own copy of its directives
+        // (ext/session: `session.save_path`, `session.upload_progress.*`)
+        // must see the per-directory value. It restores its copy at
+        // request shutdown, as the registry does.
+        if accepted {
+            let hook_stage = if e.htaccess {
+                php_vm::ext::IniStage::Htaccess
+            } else {
+                php_vm::ext::IniStage::Activate
+            };
+            let _ = vm.run_ini_modify_hook(&e.name, &e.value, hook_stage);
+        }
     }
     sync_cached_ini(vm);
 }
@@ -711,56 +743,34 @@ pub struct RunParams {
     pub highlight: bool,
 }
 
-/// `(user, password, digest)` of HTTP authentication.
-pub type AuthData = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+pub use php_sapi::{handle_auth_data as auth_data, AuthData};
 
-/// `php_handle_auth_data()`: `(user, password, digest)` from an
-/// `Authorization` header.
-pub fn auth_data(auth: Option<&[u8]>) -> AuthData {
-    let Some(auth) = auth.filter(|a| !a.is_empty()) else {
-        return (None, None, None);
-    };
-    if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
-        let decoded = base64_decode(&auth[6..]);
-        let decoded = decoded.split(|&c| c == 0).next().unwrap_or_default();
-        if let Some(colon) = decoded.iter().position(|&c| c == b':') {
-            return (
-                Some(decoded[..colon].to_vec()),
-                Some(decoded[colon + 1..].to_vec()),
-                None,
-            );
-        }
+/// `SG(request_info)` as `php_apache_request_ctor()` and `sapi_activate()`
+/// fill it from the `request_rec`, with the authentication already worked
+/// out (`php_handle_auth_data()`, else `r->user`).
+fn request_info(
+    r: &dyn Backend,
+    user: Option<&[u8]>,
+    password: Option<&[u8]>,
+    digest: Option<&[u8]>,
+) -> php_sapi::RequestInfo {
+    let header = |name: &[u8]| r.table_get(Table::HeadersIn, name);
+    let method = r.str_field(StrField::Method);
+    php_sapi::RequestInfo {
+        headers_only: php_sapi::RequestInfo::is_head(method.as_deref()),
+        request_method: method,
+        query_string: r.str_field(StrField::Args),
+        cookie_data: header(b"Cookie"),
+        content_length: header(b"Content-Length").map_or(0, |v| php_support::atol(&v)),
+        path_translated: r.str_field(StrField::Filename),
+        request_uri: r.str_field(StrField::Uri),
+        content_type: header(b"Content-Type"),
+        auth_user: user.map(<[u8]>::to_vec),
+        auth_password: password.map(<[u8]>::to_vec),
+        auth_digest: digest.map(<[u8]>::to_vec),
+        proto_num: i32::try_from(r.int_field(IntField::ProtoNum)).unwrap_or(0),
+        ..php_sapi::RequestInfo::default()
     }
-    if auth.len() >= 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-        return (None, None, Some(auth[7..].to_vec()));
-    }
-    (None, None, None)
-}
-
-/// Non-strict `php_base64_decode()`: skips invalid characters, stops at
-/// padding.
-pub fn base64_decode(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for &c in s {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(u8::try_from((acc >> bits) & 0xff).unwrap_or(0));
-        }
-    }
-    out
 }
 
 /// Escapes `s` for a single-quoted PHP string literal.
@@ -779,7 +789,11 @@ fn php_single_quoted(s: &[u8]) -> Vec<u8> {
 /// Runs one request on the current thread (`php_handler()` from
 /// `php_apache_request_ctor()` to `php_apache_request_dtor()`), maintaining
 /// a persistent VM per worker thread and resetting state between requests.
+#[allow(clippy::too_many_lines)]
 pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
+    if defer_subrequest(&*backend, params) {
+        return;
+    }
     let _ = php_memlimit::bind_to_current_thread();
     let ctx = Rc::new(RequestCtx::new(backend, params.timer.clone()));
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
@@ -827,6 +841,12 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
             user = ctx.backend.str_field(StrField::User);
         }
         ctx.backend.set_user(user.as_deref());
+        vm.request_info = request_info(
+            &*ctx.backend,
+            user.as_deref(),
+            password.as_deref(),
+            digest.as_deref(),
+        );
         for h in ["Content-Length", "Last-Modified", "Expires", "ETag"] {
             ctx.backend
                 .table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
@@ -921,7 +941,6 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     apply_fatal_status(vm);
     php_header(vm);
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// Makes `php://input` read the request body through the SAPI (the
@@ -929,6 +948,11 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
 /// `php-ext-streams` sets them up).
 fn install_input_hook() {
     use php_ext_streams::bridge::with_vm;
+    // The streams layer's per-request state (the `php://input` body it
+    // caches, per-request wrapper and filter registrations, the stat
+    // cache) starts empty: a prefork child serves many requests on this
+    // thread.
+    php_streams::state::reset_request();
     php_streams::state::set_hooks(php_streams::state::Hooks {
         output: Some(Box::new(|data: &[u8]| {
             let data = data.to_vec();
@@ -948,30 +972,6 @@ mod tests {
     use crate::backend::MockBackend;
 
     const SEC: i64 = 1_000_000_000;
-
-    #[test]
-    fn auth_parsing() {
-        assert_eq!(
-            auth_data(Some(b"Basic dXNlcjpwYXNzOndvcmQ=")),
-            (Some(b"user".to_vec()), Some(b"pass:word".to_vec()), None)
-        );
-        assert_eq!(
-            auth_data(Some(b"basic dXNlcg==")),
-            (None, None, None),
-            "no colon: not basic auth"
-        );
-        assert_eq!(
-            auth_data(Some(b"Digest username=\"x\"")),
-            (None, None, Some(b"username=\"x\"".to_vec()))
-        );
-        assert_eq!(auth_data(None), (None, None, None));
-    }
-
-    #[test]
-    fn base64_is_lenient() {
-        assert_eq!(base64_decode(b"aGVs bG8="), b"hello");
-        assert_eq!(base64_decode(b"aGVsbG8"), b"hello");
-    }
 
     #[test]
     fn timer_unlimited_never_expires() {

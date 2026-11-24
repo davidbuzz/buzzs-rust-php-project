@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests against real kernel IPC objects (unique keys per process, every
 //! object removed afterwards), with hand-ported `.phpt` expectations and
-//! `/usr/bin/php` interoperability checks where the oracle is installed.
+//! `/usr/bin/php8.5` interoperability checks where the oracle is installed.
 
 use crate::msg::{MessageQueue, Payload, QueueUpdate, MSG_IPC_NOWAIT, MSG_NOERROR};
 use crate::sem::Semaphore;
@@ -12,7 +12,7 @@ use crate::{key_from_arg, SysvError};
 use std::process::Command;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-const ORACLE: &str = "/usr/bin/php";
+const ORACLE: &str = "/usr/bin/php8.5";
 
 /// A key unique to this process and call.
 fn key() -> i64 {

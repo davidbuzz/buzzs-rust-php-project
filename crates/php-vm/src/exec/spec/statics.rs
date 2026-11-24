@@ -241,6 +241,65 @@ pub(in crate::exec) fn assign_static_prop_in(
     true
 }
 
+/// `++`/`--` of the static property place `pid` on a cache hit, on the
+/// running frame `f` alone: `Vm::inc_dec_static_prop_fast` (an untyped
+/// property holding an int, without overflow, or a float is updated in its
+/// cell), with the result (the new value, or the old one for a post
+/// operator) stored in `dst`. `false`, nothing changed, otherwise: a typed
+/// property, a reference, an overflow, another type, a miss.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn incdec_static_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    kind: IncDecKind,
+    dst: Option<u32>,
+) -> bool {
+    if dst.is_some_and(|d| d as usize >= f.tmps.len()) {
+        return false;
+    }
+    let cell = match static_prop_entry_in(f, pid, |e| Some(e.fast_plain.then(|| e.cell.clone()))) {
+        Some(Some(cell)) => cell,
+        // A typed property: the result needs the type check.
+        Some(None) => return false,
+        None => match static_place_cell_in(f, pid) {
+            Some((cell, false)) => cell,
+            _ => return false,
+        },
+    };
+    let result = {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return false;
+        };
+        match &mut *slot {
+            Value::Int(cur) => {
+                let old = *cur;
+                let new = if kind.is_inc() {
+                    old.checked_add(1)
+                } else {
+                    old.checked_sub(1)
+                };
+                let Some(new) = new else {
+                    return false;
+                };
+                *cur = new;
+                Value::Int(if kind.is_post() { old } else { new })
+            }
+            Value::Float(cur) => {
+                let old = *cur;
+                let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+                *cur = new;
+                Value::Float(if kind.is_post() { old } else { new })
+            }
+            _ => return false,
+        }
+    };
+    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+        put_tmp(slot, result);
+    }
+    true
+}
+
 #[allow(dead_code)]
 impl Vm {
     /// The cached storage cell of the static-property place `pid`
@@ -635,7 +694,7 @@ mod tests {
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    // Expected outputs are from `/usr/bin/php -n -d memory_limit=1G` (8.3).
+    // Expected outputs are from `/usr/bin/php8.5 -n -d memory_limit=1G`.
 
     #[test]
     fn static_property_reads_writes_and_tests_in_loops() {

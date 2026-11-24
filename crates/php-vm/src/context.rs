@@ -103,22 +103,11 @@ impl Vm {
         let cls = object::class_of(o).clone();
         if purpose == PropertyPurpose::Debug {
             if let Some(m) = cls.magic.debug_info.clone() {
+                if crate::builtins::dump::has_deferred_throw() || self.pending_throw.is_some() {
+                    return Ok(Some(ZArray::new()));
+                }
                 let r = self.call_method(o, &m, Vec::new())?;
-                return match r {
-                    Value::Array(a) => Ok(Some(a)),
-                    Value::Null => {
-                        let msg = format!(
-                            "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
-                            object::display_name(&cls.name)
-                        );
-                        self.deprecated(&msg)?;
-                        Ok(Some(ZArray::new()))
-                    }
-                    _ => {
-                        let msg = "__debugInfo() must return an array".to_string();
-                        Err(self.fatal(&msg))
-                    }
-                };
+                return crate::builtins::dump::debug_info_table(self, &cls.name, &r).map(Some);
             }
         }
         // Serialization, export and JSON initialize lazy objects (and read
@@ -578,7 +567,12 @@ impl Vm {
             object::data(obj).slots.borrow_mut()[pi.slot as usize] = Some(value);
             return;
         }
-        self.write_dynamic_prop(obj, n, value);
+        // No declared property: the member keeps the name it was stored
+        // under, mangling included (`object_properties_load`'s
+        // `zend_hash_update(object->properties, key, prop)`, and
+        // `is_property_visibility_changed` returning 0 in
+        // `var_unserializer.re`): `"\0A\0b"` is not `"b"`.
+        self.write_dynamic_prop(obj, name.clone(), value);
     }
 
     /// Serialization decision for an object.
@@ -956,5 +950,43 @@ impl OutputHost for Vm {
                 self.pending_throw = Some(t);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{object, Vm, VmOptions};
+    use php_runtime::{ArrayKey, Value, ZStr};
+
+    /// A member with no declared property keeps the name it was stored
+    /// under, mangling included (`object_properties_load`): the upload
+    /// progress update writes a session's objects back from such tables
+    /// (`ext/session/tests/rfc1867_incomplete_class_reserved_props.phpt`).
+    #[test]
+    fn a_mangled_name_without_a_declared_property_stays_mangled() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let Ok(Value::Object(o)) = vm.create_std_object_vm() else {
+            panic!("stdClass");
+        };
+        vm.write_mangled_prop(&o, &ZStr::from(&b"\0A\0b"[..]), Value::Int(1));
+        vm.write_mangled_prop(&o, &ZStr::from(&b"\0*\0c"[..]), Value::Int(2));
+        vm.write_mangled_prop(&o, &ZStr::from("d"), Value::Int(3));
+        let keys: Vec<Vec<u8>> = object::data(&o)
+            .dynamic
+            .borrow()
+            .as_ref()
+            .map(|t| {
+                t.iter()
+                    .map(|(k, _)| match k {
+                        ArrayKey::Str(s) => s.as_bytes().to_vec(),
+                        ArrayKey::Int(i) => i.to_string().into_bytes(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            keys,
+            [b"\0A\0b".to_vec(), b"\0*\0c".to_vec(), b"d".to_vec()]
+        );
     }
 }

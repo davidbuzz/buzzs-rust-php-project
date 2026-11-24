@@ -48,7 +48,7 @@ mod tests {
         p.fields.iter().map(|(_, v)| *v).collect()
     }
 
-    // Expectations from /usr/bin/php (glibc strptime, C locale).
+    // Expectations from /usr/bin/php8.5 (glibc strptime, C locale).
     #[test]
     fn parses_with_unparsed_rest() {
         let p = strptime(b"10:00:00 AM July 02 1963 GMT", b"%H:%M:%S %p %B %d %Y").unwrap();

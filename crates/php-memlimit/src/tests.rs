@@ -270,10 +270,11 @@ fn soft_limit_is_flagged_not_failed() {
 fn small_blocks_fail_only_when_a_new_chunk_passes_the_limit() {
     let a = CountingAlloc::new(System);
     a.request_start(Some(4 * M)).expect("limit");
-    // Fill up to 64 bytes short of 4M with blocks below the huge size.
+    // Fill up to 64 bytes short of 4M with blocks of half a megabyte (two
+    // 1M blocks never share a chunk: see `big_large_blocks_take_a_chunk_each`).
     let mut fill = Vec::new();
-    while 4 * M - a.usage() > M + 64 {
-        fill.push(alloc(&a, M));
+    while 4 * M - a.usage() > M / 2 + 64 {
+        fill.push(alloc(&a, M / 2));
     }
     fill.push(alloc(&a, 4 * M - a.usage() - 64));
     assert_eq!(a.check(), None);
@@ -289,6 +290,36 @@ fn small_blocks_fail_only_when_a_new_chunk_passes_the_limit() {
         "a third chunk would pass 4M"
     );
     drop(fill);
+}
+
+/// `zend_mm_alloc_pages`: a large block of more than half the pages a
+/// chunk hands out shares its chunk with no other such block, so under 8M
+/// (four chunks) a fifth one fails although the bytes would fit in three.
+#[test]
+fn big_large_blocks_take_a_chunk_each() {
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(8 * M)).expect("limit");
+    let size = 1100 * 1024;
+    let held: Vec<_> = (0..4).map(|_| alloc(&a, size)).collect();
+    assert_eq!(a.check(), None, "four chunks");
+    let fifth = alloc(&a, size);
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: 8 * M,
+            tried: size
+        }),
+        "a fifth chunk would pass 8M"
+    );
+    a.clear();
+    drop(held);
+    drop(fifth);
+    let _again = alloc(&a, size);
+    assert_eq!(a.check(), None, "the freed blocks give their chunks back");
+    // Blocks of half a chunk or less are counted by their bytes.
+    let halves: Vec<_> = (0..6).map(|_| alloc(&a, 1000 * 1024)).collect();
+    assert_eq!(a.check(), None);
+    drop(halves);
 }
 
 #[test]

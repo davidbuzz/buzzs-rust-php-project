@@ -3,7 +3,7 @@
 
 Names and order come from the php-src master stubs; values come from
 tools/consts83.tsv (dumped from /usr/bin/php 8.3 + ICU 74.2 with
-`php -d memory_limit=1G tools/dump_consts.php`) or, for constants that 8.3
+`/usr/bin/php8.5 -d memory_limit=1G tools/dump_consts.php`) or, for constants that 8.3
 lacks, from the MASTER_ONLY table below (ICU 74 header values).
 Run manually: python3 tools/gen_consts.py > src/constants.rs
 """

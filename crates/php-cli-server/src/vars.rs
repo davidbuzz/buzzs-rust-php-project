@@ -174,6 +174,12 @@ fn register(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray, cookie: 
     let _ = query::register_variable_ex(name, value, track, &opts, vm);
 }
 
+/// `php_register_variable_safe()` into `$_SERVER`-like `track` (the
+/// `FastCGI` environment as `cgi_php_load_env_var()` registers it).
+pub(crate) fn register_server_var(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray) {
+    register(vm, name, value, track, false);
+}
+
 /// The lower-cased content type without parameters, as SAPI.c looks it up.
 pub fn content_type_key(ct: &[u8]) -> Vec<u8> {
     let end = ct
@@ -327,58 +333,10 @@ fn merge(dest: &mut HashTable, src: &ZArray) {
     }
 }
 
-/// `(user, password, digest)` of HTTP authentication.
-pub type AuthData = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
-
-/// `php_handle_auth_data()`.
-pub fn auth_data(auth: Option<&[u8]>) -> AuthData {
-    let Some(auth) = auth.filter(|a| !a.is_empty()) else {
-        return (None, None, None);
-    };
-    if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
-        let decoded = base64_decode(&auth[6..]);
-        let decoded = decoded.split(|&c| c == 0).next().unwrap_or_default();
-        if let Some(colon) = decoded.iter().position(|&c| c == b':') {
-            return (
-                Some(decoded[..colon].to_vec()),
-                Some(decoded[colon + 1..].to_vec()),
-                None,
-            );
-        }
-    }
-    if auth.len() >= 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-        return (None, None, Some(auth[7..].to_vec()));
-    }
-    (None, None, None)
-}
-
-/// Non-strict `php_base64_decode()`.
-fn base64_decode(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for &c in s {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(u8::try_from((acc >> bits) & 0xff).unwrap_or(0));
-        }
-    }
-    out
-}
+pub use php_sapi::{handle_auth_data as auth_data, AuthData};
 
 /// `SG(request_info).content_length`: the length of the received body.
-fn content_length(ctx: &RequestCtx) -> i64 {
+pub(crate) fn content_length(ctx: &RequestCtx) -> i64 {
     i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX)
 }
 
@@ -537,28 +495,17 @@ fn handle_multipart(
     let callback = vm.rfc1867_callback;
     // mbstring's multibyte callbacks (`mbstring.encoding_translation`).
     let mut translation = php_vm::ext::rfc1867_translation_hook().and_then(|hook| hook(vm));
-    // The parse got past its early checks: MULTIPART_EVENT_START follows
-    // the new SG(rfc1867_uploaded_files).
-    let mut started = false;
     let mut read = |buf: &mut [u8]| ctx.read_post(buf);
     let outcome = multipart::parse_with_events(
         content_type,
         content_length(ctx),
         &upload,
         &mut read,
-        &mut |event: Rfc1867Event<'_>, bytes| {
-            if matches!(event, Rfc1867Event::Start { .. }) {
-                started = true;
-            }
-            callback.is_none_or(|cb| cb(vm, event, bytes))
-        },
+        &mut |event: Rfc1867Event<'_>, bytes| callback.is_none_or(|cb| cb(vm, event, bytes)),
         translation.as_deref_mut(),
     );
-    if started {
-        // The files of an earlier parse are no longer uploaded files.
-        let earlier = std::mem::take(&mut vm.rfc1867_uploaded_files);
-        ctx.orphaned_uploads.borrow_mut().extend(earlier);
-    }
+    // A later parse (`request_parse_body()`) keeps the files of an earlier
+    // one uploaded (`SG(rfc1867_uploaded_files)` is created once).
     vm.rfc1867_uploaded_files.extend(outcome.uploaded);
     // The parse stopped at a `memory_limit` violation: the request fails
     // with it (`sapi_handle_post()`), registering nothing more.
@@ -725,6 +672,17 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             let v = Value::Str(ZStr::from(v.as_bytes()));
             register(vm, k.as_bytes(), v, &mut server, false);
         }
+        // cgi_php_import_environment_variables(): then a FastCGI
+        // request's environment, newest name first (`fcgi_loadenv()`).
+        for (k, v) in cgi.fcgi_env.iter().flatten().rev() {
+            register(
+                vm,
+                k,
+                Value::Str(ZStr::from(v.as_slice())),
+                &mut server,
+                false,
+            );
+        }
         let self_ = Value::Str(ZStr::from(cgi.php_self.as_slice()));
         register(vm, b"PHP_SELF", self_, &mut server, false);
     }
@@ -777,6 +735,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             );
             t.insert("argc", Value::Int(count));
         }
+        check_http_proxy(&mut server);
     }
 
     // $_ENV
@@ -789,6 +748,12 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                 ArrayKey::from_bytes(k.as_bytes()),
                 Value::Str(ZStr::from(v.as_bytes())),
             );
+        }
+        // Under FastCGI `$_ENV` is built by the same import as
+        // `$_SERVER`: the request's environment follows.
+        let fcgi_env = ctx.cgi.as_ref().and_then(|c| c.fcgi_env.as_ref());
+        for (k, v) in fcgi_env.into_iter().flatten().rev() {
+            register(vm, k, Value::Str(ZStr::from(v.as_slice())), &mut env, false);
         }
     }
 
@@ -872,6 +837,27 @@ pub fn parse_body(vm: &mut Vm, options: &ParseBodyOptions) -> VmResult<(ZArray, 
     match pending {
         Some(t) => Err(t),
         None => Ok((post, files)),
+    }
+}
+
+/// `check_http_proxy()` (bug #72573, "httpoxy", CVE-2016-5385): a
+/// client's `Proxy:` header must not pass for the `HTTP_PROXY`
+/// environment variable, so `$_SERVER['HTTP_PROXY']` is the process
+/// environment's value, or absent.
+fn check_http_proxy(server: &mut ZArray) {
+    let key = ArrayKey::from_bytes(b"HTTP_PROXY");
+    if server.get(&key).is_none() {
+        return;
+    }
+    let t = server.make_mut();
+    match std::env::var_os("HTTP_PROXY") {
+        Some(v) => {
+            use std::os::unix::ffi::OsStrExt;
+            t.insert(key, Value::Str(ZStr::from(v.as_bytes())));
+        }
+        None => {
+            t.remove(&key);
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Live tests against the local MariaDB: connection info, errors, simple
-//! queries, compared with `/usr/bin/php`'s mysqli on the same server.
+//! queries, compared with `/usr/bin/php8.5`'s mysqli on the same server.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

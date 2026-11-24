@@ -27,8 +27,8 @@ for ($a; $b) {}	Parse error: syntax error, unexpected token ")", expecting ";" o
 for (;;): endwhile;	Parse error: syntax error, unexpected token "endwhile" on line 1
 foreach ($a $b) {}	Parse error: syntax error, unexpected variable "$b" on line 1
 foreach ($a as) {}	Parse error: syntax error, unexpected token ")" on line 1
-foreach ($a as $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
-foreach ($a as $k => $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+foreach ($a as $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
+foreach ($a as $k => $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
 foreach ($a as $k => ) {}	Parse error: syntax error, unexpected token ")" on line 1
 foreach ($a as list($x) 1) {}	Parse error: syntax error, unexpected integer "1", expecting "=>" or ")" on line 1
 switch (1) { foo }	Parse error: syntax error, unexpected identifier "foo", expecting "case" or "default" or "}" on line 1
@@ -48,11 +48,11 @@ global $$;	Parse error: syntax error, unexpected token ";", expecting variable o
 static $a 1;	Parse error: syntax error, unexpected integer "1", expecting "," or ";" on line 1
 static 1;	Parse error: syntax error, unexpected integer "1", expecting "::" on line 1
 static $a = 1 2;	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
-unset($a 1);	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+unset($a 1);	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
 unset(1);	Parse error: syntax error, unexpected integer "1" on line 1
 unset($a, 1);	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
 unset FOO;	Parse error: syntax error, unexpected identifier "FOO", expecting "(" on line 1
-unset(FOO);	Parse error: syntax error, unexpected token ")", expecting "->" or "?->" or "{" or "[" on line 1
+unset(FOO);	Parse error: syntax error, unexpected token ")", expecting "->" or "?->" or "[" on line 1
 declare(ticks=1 2);	Parse error: syntax error, unexpected integer "2", expecting "," or ")" on line 1
 declare(1);	Parse error: syntax error, unexpected integer "1", expecting identifier on line 1
 declare(ticks=1) 1	Parse error: syntax error, unexpected end of file on line 1
@@ -107,7 +107,7 @@ function f(...1) {}	Parse error: syntax error, unexpected integer "1", expecting
 function f(): {}	Parse error: syntax error, unexpected token "{" on line 1
 function f(): ?1 {}	Parse error: syntax error, unexpected integer "1" on line 1
 function f(): A| {}	Parse error: syntax error, unexpected token "{" on line 1
-function f(): (A) {}	Parse error: syntax error, unexpected token ")", expecting amp on line 1
+function f(): (A) {}	Parse error: syntax error, unexpected token ")", expecting token "&" on line 1
 function f(): (A&B) {}	Parse error: syntax error, unexpected token "{", expecting "|" on line 1
 function f() {	Parse error: Unclosed '{' on line 1
 function f() { return; 	Parse error: Unclosed '{' on line 1
@@ -115,8 +115,8 @@ function &() {}	Parse error: syntax error, unexpected end of file on line 1
 function f() use ($a) {}	Parse error: syntax error, unexpected token "use", expecting "{" on line 1
 $f = function() ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
 $f = function() use ($b 1) {};	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
-$f = function() use (1) {};	Parse error: syntax error, unexpected integer "1", expecting variable or "&" or amp on line 1
-$f = function() use () {};	Parse error: syntax error, unexpected token ")", expecting variable or "&" or amp on line 1
+$f = function() use (1) {};	Parse error: syntax error, unexpected integer "1", expecting variable or "&" or token "&" on line 1
+$f = function() use () {};	Parse error: syntax error, unexpected token ")", expecting variable or "&" or token "&" on line 1
 $f = function() use ($a) ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
 $f = fn() ;	Parse error: syntax error, unexpected token ";", expecting "=>" on line 1
 $f = fn() => ;	Parse error: syntax error, unexpected token ";" on line 1
@@ -203,7 +203,7 @@ class A { public public $a; }	Fatal error: Multiple access type modifiers are no
 class A { public private $a; }	Fatal error: Multiple access type modifiers are not allowed on line 1
 class A { static static $a; }	Fatal error: Multiple static modifiers are not allowed on line 1
 class A { final abstract function f(); }	Fatal error: Cannot use the final modifier on an abstract method on line 1
-class A { abstract $a; }	Fatal error: Cannot use the abstract modifier on a property on line 1
+class A { abstract $a; }	Fatal error: Only hooked properties may be declared abstract on line 1
 class A { abstract const X = 1; }	Fatal error: Cannot use the abstract modifier on a class constant on line 1
 class A { static const X = 1; }	Fatal error: Cannot use the static modifier on a class constant on line 1
 class A { readonly function f() {} }	Fatal error: Cannot use the readonly modifier on a method on line 1
@@ -227,7 +227,7 @@ ${;	Parse error: syntax error, unexpected token ";" on line 1
 ${1 2};	Parse error: syntax error, unexpected integer "2" on line 1
 $a[1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
 $a[;	Parse error: syntax error, unexpected token ";", expecting "]" on line 1
-$a{1};	Fatal error: Array and string offset access syntax with curly braces is no longer supported on line 1
+$a{1};	Parse error: syntax error, unexpected token "{" on line 1
 $a = [1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
 $a = [;];	Parse error: syntax error, unexpected token ";", expecting "]" on line 1
 $a = array(;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
@@ -239,7 +239,7 @@ list($a) 1;	Parse error: syntax error, unexpected integer "1", expecting "=" on 
 list($a, ) 1;	Parse error: syntax error, unexpected integer "1", expecting "=" on line 1
 list(1 2) = $a;	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
 [$a] 1;	Parse error: syntax error, unexpected integer "1" on line 1
-$a = &new A;	Parse error: syntax error, unexpected token "new" on line 1
+$a = &new A;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
 $a = & 1;	Parse error: syntax error, unexpected integer "1" on line 1
 $a =& $b 1;	Parse error: syntax error, unexpected integer "1" on line 1
 foo(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
@@ -283,7 +283,7 @@ empty();	Parse error: syntax error, unexpected token ")" on line 1
 eval(1 2);	Parse error: syntax error, unexpected integer "2" on line 1
 exit 1;	Parse error: syntax error, unexpected integer "1" on line 1
 exit(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
-die(;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
+die(;);	Parse error: syntax error, unexpected token ";" on line 1
 print;	Parse error: syntax error, unexpected token ";" on line 1
 clone;	Parse error: syntax error, unexpected token ";" on line 1
 yield 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
@@ -319,7 +319,7 @@ foo() = 1;	Fatal error: Can't use function return value in write context on line
 $a++++;	Parse error: syntax error, unexpected token "++" on line 1
 ++1;	Parse error: syntax error, unexpected integer "1" on line 1
 ++$a++;	Parse error: syntax error, unexpected token "++" on line 1
---FOO;	Parse error: syntax error, unexpected token ";", expecting "->" or "?->" or "{" or "[" on line 1
+--FOO;	Parse error: syntax error, unexpected token ";", expecting "->" or "?->" or "[" on line 1
 (int);	Parse error: syntax error, unexpected token ";" on line 1
 (int) 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
 @;	Parse error: syntax error, unexpected token ";" on line 1
@@ -349,17 +349,17 @@ static;	Parse error: syntax error, unexpected token ";", expecting "::" on line 
 "$a[]";	Parse error: syntax error, unexpected token "]", expecting "-" or identifier or variable or number on line 1
 "$a[-a]";	Parse error: syntax error, unexpected identifier "a", expecting number on line 1
 "${a 1}";	Parse error: syntax error, unexpected integer "1" on line 1
-"{$a 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
-"{$a->b 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
-"{$f = 'f'}";	Parse error: syntax error, unexpected token "=", expecting "->" or "?->" or "{" or "[" on line 1
-"{$g{'h'}}";	Fatal error: Array and string offset access syntax with curly braces is no longer supported on line 1
+"{$a 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
+"{$a->b 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
+"{$f = 'f'}";	Parse error: syntax error, unexpected token "=", expecting "->" or "?->" or "[" on line 1
+"{$g{'h'}}";	Parse error: syntax error, unexpected token "{", expecting "->" or "?->" or "[" on line 1
 "$a->1";	OK
 "${a[1 2]}";	Parse error: syntax error, unexpected integer "2" on line 1
 "$a" 1;	Parse error: syntax error, unexpected integer "1" on line 1
 <<<A\n$a\nA 1;	Parse error: syntax error, unexpected integer "1" on line 3
 <<<A\nfoo\nA 1;	Parse error: syntax error, unexpected integer "1" on line 3
 `$a` 1;	Parse error: syntax error, unexpected integer "1" on line 1
-$a = <<<A\n{$a 1}\nA;\n	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 2
+$a = <<<A\n{$a 1}\nA;\n	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 2
 $a = 0x;	Parse error: syntax error, unexpected identifier "x" on line 1
 $a = 1_;	Parse error: syntax error, unexpected identifier "_" on line 1
 $a = 08;	Parse error: Invalid numeric literal on line 1
@@ -370,7 +370,7 @@ $a = "$a	Parse error: syntax error, unexpected end of file on line 1
 /* unterminated	Parse error: Unterminated comment starting line 1 on line 1
 $a = (unset) 1;	Fatal error: The (unset) cast is no longer supported on line 1
 $a = (real) 1;	Parse error: The (real) cast has been removed, use (float) instead on line 1
-$a = (void) 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = (void) 1;	Parse error: syntax error, unexpected token "(void)" on line 1
 echo <<<A\n  a\n b\n  A;\n	Parse error: Invalid body indentation level (expecting an indentation level of at least 2) on line 3
 echo "\\u{zz}";	Parse error: Invalid UTF-8 codepoint escape sequence on line 1
 $a ;	Parse error: syntax error, unexpected character 0x01 on line 1
@@ -403,8 +403,8 @@ $a = [...];	Parse error: syntax error, unexpected token "]" on line 1
 $a = [... 1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
 $a = [1 => &];	Parse error: syntax error, unexpected token "]" on line 1
 $a = [&1];	Parse error: syntax error, unexpected integer "1" on line 1
-$a = [&$b 1];	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
-$a = [&$b => 1];	Parse error: syntax error, unexpected token "=>", expecting "->" or "?->" or "{" or "[" on line 1
+$a = [&$b 1];	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "[" on line 1
+$a = [&$b => 1];	Parse error: syntax error, unexpected token "=>", expecting "->" or "?->" or "[" on line 1
 $a = [1 => list($b) 1];	Parse error: syntax error, unexpected integer "1", expecting "]" on line 1
 $x = 1 ? 2 : 3 ? 4 : 5;	Fatal error: Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)` on line 1
 echo <?php	Parse error: syntax error, unexpected token "<" on line 1

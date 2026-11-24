@@ -142,19 +142,36 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mut result = 0;
     sync_stdio(vm, &cell);
-    if let Some(mut s) = cell.take() {
-        r.close();
-        if is_cli_std_handle(r.handle()) {
-            // GH-8827: an explicit fclose(STDIN/STDOUT/STDERR) closes the
-            // descriptor; only dropping the constant's resource keeps it.
-            s.clear_flags(php_streams::stream::flags::NO_CLOSE);
+    // The stream is closed in place: during the closing flush it is busy
+    // but still open, so a user filter's last call can use `$this->stream`
+    // (`_php_stream_free()` flushes before `zend_list_close()`).
+    let closed = match cell.get() {
+        Some(mut s) => {
+            if is_cli_std_handle(r.handle()) {
+                // GH-8827: an explicit fclose(STDIN/STDOUT/STDERR) closes the
+                // descriptor; only dropping the constant's resource keeps it.
+                s.clear_flags(php_streams::stream::flags::NO_CLOSE);
+            }
+            let id = s.id();
+            let rr = r.clone();
+            result = res::fclosing(id, || {
+                bridge::run(vm, || {
+                    s.close_ex_then(false, &mut || {
+                        drop(rr.close());
+                    })
+                })
+            })?;
+            Some(id)
         }
-        let id = s.id();
-        result = res::fclosing(id, || bridge::run(vm, || s.close()))?;
-        res::release_enclosed(id);
-        crate::process::reap(cell.id());
-    } else {
-        r.close();
+        None => None,
+    };
+    match closed {
+        Some(id) => {
+            drop(cell.take());
+            res::release_enclosed(id);
+            crate::process::reap(cell.id());
+        }
+        None => drop(r.close()),
     }
     Ok(Value::Bool(result == 0))
 }
@@ -458,8 +475,29 @@ fn sys_get_temp_dir(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(bytes(r))
 }
 
+thread_local! {
+    /// `BG(umask)`: the umask before the first `umask()` call, which every
+    /// request end restores.
+    static SAVED_UMASK: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
 fn umask(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(lib::umask(opt_int(a, 0))))
+    let old = lib::umask(opt_int(a, 0));
+    SAVED_UMASK.with(|s| {
+        if s.get().is_none() {
+            s.set(Some(old));
+        }
+    });
+    Ok(Value::Int(old))
+}
+
+/// `PHP_RSHUTDOWN_FUNCTION(basic)` restores `BG(umask)`, so a request's
+/// `umask()` does not stay in force for the next request a `FastCGI`
+/// worker serves.
+pub(crate) fn restore_umask() {
+    if let Some(m) = SAVED_UMASK.with(std::cell::Cell::get) {
+        lib::umask(Some(m));
+    }
 }
 
 fn unlink(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

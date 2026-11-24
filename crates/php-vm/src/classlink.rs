@@ -837,6 +837,7 @@ impl Vm {
         self.observer_declared(&lc, false);
         crate::builtins::info::note_user_function(&lc);
         self.functions.insert(lc, Func::User(f.clone()));
+        crate::func::bump_func_table_version();
         Ok(())
     }
 
@@ -1773,11 +1774,7 @@ impl Vm {
             for lcname in &cls.method_order {
                 if let Some(m) = cls.methods.get(lcname) {
                     if m.is_abstract() && (!explicit_abstract || m.visibility() == flags::PRIVATE) {
-                        missing.push(format!(
-                            "{}::{}",
-                            object::display_name(&m.scope().name),
-                            m.name
-                        ));
+                        missing.push(format!("{}::{}", m.scope().name.to_string_lossy(), m.name));
                     }
                 }
             }
@@ -1800,9 +1797,9 @@ impl Vm {
                             .find_class(name.as_bytes())
                             .is_some_and(|c| c.is_trait())
                         {
-                            object::display_name(&pi.class)
+                            pi.class.to_string_lossy()
                         } else {
-                            object::display_name(name)
+                            name.to_string_lossy()
                         }
                     };
                     if h.abstract_get {
@@ -2683,10 +2680,10 @@ fn static_prop_override_error(
     }
     Some(format!(
         "Access level to {}::${} must be {} (as in class {}){}",
-        object::display_name(name),
+        name.to_string_lossy(),
         pd.name,
         visibility_name(sp.flags),
-        object::display_name(&sp.class),
+        sp.class.to_string_lossy(),
         if parent_vis == flags::PUBLIC {
             ""
         } else {
@@ -2852,10 +2849,10 @@ fn check_parent_methods(cls: &Rc<Class>, parent: &Rc<Class>) -> Option<(String, 
             return Some((
                 format!(
                     "Access level to {}::{}() must be {} (as in class {}){}",
-                    object::display_name(&cls.name),
+                    cls.name.to_string_lossy(),
                     m.name,
                     visibility_name(pv),
-                    object::display_name(&as_in.name),
+                    as_in.name.to_string_lossy(),
                     if pv == flags::PROTECTED {
                         " or weaker"
                     } else {
@@ -3323,10 +3320,21 @@ fn build_class(
             }
         }
         let mut pflags = pd.flags;
-        if existing
+        if let Some(e) = existing
             .as_ref()
-            .is_some_and(|e| e.visibility() != flags::PRIVATE && !e.is_virtual())
+            .filter(|e| e.visibility() != flags::PRIVATE && !e.is_virtual())
         {
+            // The parent's slot keeps its "not uninitialized" flag when a
+            // virtual child removes its default; a child that adds the
+            // first hooks gets a fresh, uninitialized slot instead.
+            if pflags & flags::VIRTUAL != 0
+                && pd.default.is_none()
+                && pd.ty.is_some()
+                && e.hooks.is_some()
+                && (e.default.is_some() || e.flags & flags::DEFAULT_UNSET != 0)
+            {
+                pflags |= flags::DEFAULT_UNSET;
+            }
             pflags &= !flags::VIRTUAL;
         }
         let pi = Rc::new(PropInfo {

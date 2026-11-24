@@ -17,7 +17,7 @@
 //! ```
 //!
 //! Arguments may be `hex:`-encoded. `regenerate_fixtures` (ignored; needs
-//! `/usr/bin/php`) stores PHP's archive, the build time and PHP's listing
+//! `/usr/bin/php8.5`) stores PHP's archive, the build time and PHP's listing
 //! under `tests/fixtures/<case>/`. The regular tests then check that
 //! (a) our reader lists PHP's archive exactly like PHP does, and
 //! (b) our writer, replaying the recipe at the same clock time, produces
@@ -88,7 +88,7 @@ fn final_is_data(lines: &[String]) -> bool {
 }
 
 fn php(args: &[&str]) -> std::process::Output {
-    Command::new("/usr/bin/php")
+    Command::new("/usr/bin/php8.5")
         .args(["-d", "memory_limit=1G"])
         .args(args)
         .output()
@@ -430,7 +430,7 @@ fn scratch(case: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "regenerates fixtures with /usr/bin/php"]
+#[ignore = "regenerates fixtures with /usr/bin/php8.5"]
 fn regenerate_fixtures() {
     for (case, lines) in recipes() {
         let dir = case_dir(&case);
@@ -484,7 +484,7 @@ fn regenerate_fixtures() {
 
 #[test]
 fn reads_php_archives_like_php() {
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
     let mut failures = Vec::new();
     for (case, lines) in recipes() {
         let Some((archive, _, expected)) = fixture_archive(&case) else {
@@ -502,7 +502,7 @@ fn reads_php_archives_like_php() {
 
 #[test]
 fn writes_archives_byte_identical_to_php() {
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
     registry::set_ini("phar.readonly", false, true);
     let mut failures = Vec::new();
     for (case, lines) in recipes() {
@@ -513,7 +513,7 @@ fn writes_archives_byte_identical_to_php() {
             continue;
         }
         let work = scratch(&case);
-        // Ubuntu's PHP 8.3 build writes 0 for entry timestamps (a
+        // Ubuntu's PHP builds (8.5 too) write 0 for entry timestamps (a
         // reproducible-build patch) but the real time for magic tar/zip
         // entries.
         php_phar::sys::set_time_override(Some(time));
@@ -542,9 +542,9 @@ fn writes_archives_byte_identical_to_php() {
 }
 
 #[test]
-#[ignore = "runs /usr/bin/php on archives written by this crate"]
+#[ignore = "runs /usr/bin/php8.5 on archives written by this crate"]
 fn php_reads_our_archives() {
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
     php_phar::sys::set_entry_time_override(Some(0));
     registry::set_ini("phar.readonly", false, true);
     let mut failures = Vec::new();
@@ -592,7 +592,7 @@ fn php_src_archives() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "regenerates php-src archive listings with /usr/bin/php"]
+#[ignore = "regenerates php-src archive listings with /usr/bin/php8.5"]
 fn regenerate_php_src_listings() {
     let o = Command::new("git")
         .args(["-C", php_src_tests().to_str().unwrap(), "ls-files", "."])
@@ -635,29 +635,17 @@ fn regenerate_php_src_listings() {
     }
 }
 
-/// Archives where php-src master intentionally differs from PHP 8.3:
-/// GH-20442 (case-insensitive `__halt_compiler()` search) and the zip
-/// `UT` extended-timestamp extra field (8.3 uses the DOS local time).
-const MASTER_DIFFERS: &[&str] = &[
-    "files/gh20442.phar",
-    "bug77565.zip",
-    "gh12532.zip",
-    "zip/files/gh13037.zip",
-    "zip/files/zip.zip",
-];
-
 #[test]
 fn reads_php_src_archives_like_php() {
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
-    // The oracle PHP build has no ext/bz2.
-    registry::set_compression_support(true, false);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
+    registry::set_compression_support(true, true);
     let Ok(base) = std::fs::canonicalize(php_src_tests()) else {
         return;
     };
     let mut failures = Vec::new();
     let mut checked = 0;
     for f in php_src_archives() {
-        if f.contains("openssl") || MASTER_DIFFERS.contains(&f.as_str()) {
+        if f.contains("openssl") {
             continue;
         }
         let path = base.join(&f);
@@ -834,7 +822,7 @@ fn corrupt_kind(name: &str) -> &'static str {
 }
 
 #[test]
-#[ignore = "regenerates corruption listings with /usr/bin/php"]
+#[ignore = "regenerates corruption listings with /usr/bin/php8.5"]
 fn regenerate_corruptions() {
     let dir = corrupt_dir();
     let _ = std::fs::remove_dir_all(&dir);
@@ -861,7 +849,7 @@ fn regenerate_corruptions() {
     std::fs::write(dir.join("expected.txt"), expected).unwrap();
 }
 
-/// Maps PHP 8.3's `(cannot create unknown filter while decompressing file
+/// Maps PHP 8.5's `(cannot create unknown filter while decompressing file
 /// "x")` to master's `(file "x" is compressed with an unknown compression
 /// algorithm)`.
 fn reword_unknown_filter(text: &str) -> String {
@@ -883,7 +871,8 @@ fn reword_unknown_filter(text: &str) -> String {
 }
 
 /// Tar archives truncated exactly at a block boundary: master stops at the
-/// end of the file (and detects 512-byte tars), PHP 8.3 reports truncation.
+/// end of the file (and detects 512-byte tars), PHP 8.5 reports truncation
+/// (of these, only for `tarexec-cut1024`).
 fn master_differs_corrupt(name: &str) -> bool {
     let Some(rest) = name
         .strip_prefix("tardata-cut")
@@ -897,8 +886,8 @@ fn master_differs_corrupt(name: &str) -> bool {
 
 #[test]
 fn corrupted_archives_fail_like_php() {
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
-    registry::set_compression_support(true, false);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
+    registry::set_compression_support(true, true);
     let Ok(expected) = std::fs::read_to_string(corrupt_dir().join("expected.txt")) else {
         return;
     };

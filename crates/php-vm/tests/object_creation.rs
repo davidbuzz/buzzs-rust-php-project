@@ -4,7 +4,7 @@
 //! `zend_std_get_constructor`): the instantiability errors, constructor
 //! visibility, constructor-less classes with arguments, default property
 //! copies and handle reuse with destructor order. Expected output from
-//! PHP 8.3 (`php -n`).
+//! `/usr/bin/php8.5 -n`.
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -181,7 +181,7 @@ M::$map = new WeakMap; $m = new M; M::$map[$m] = 1; unset($m); var_dump(M::$map-
 /// Objects of every slot size class (inline up to 64 declared slots, then
 /// a buffer of their own): defaults, writes, `clone`, `unset`, the
 /// `serialize` round trip, comparison, the property count and destructor
-/// order. Expected output from `/usr/bin/php -n` (8.3), also the debug
+/// order. Expected output from `/usr/bin/php8.5 -n`, also the debug
 /// build's of master 4e1c2df8.
 #[test]
 fn slot_storage_of_every_size_class() {

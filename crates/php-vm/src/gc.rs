@@ -81,6 +81,11 @@ const THRESHOLD_STEP: usize = 10_000;
 const THRESHOLD_MAX: usize = 1_000_000_000;
 /// `GC_THRESHOLD_TRIGGER`: a run collecting fewer nodes raises the threshold.
 const THRESHOLD_TRIGGER: i64 = 100;
+/// `GC_THRESHOLD_COST_RATIO`: a run may traverse this many live nodes per
+/// root added since the last run.
+const THRESHOLD_COST_RATIO: usize = 8;
+/// `GC_FIRST_ROOT`.
+const FIRST_ROOT: usize = 1;
 
 /// An external source of possible roots (the reference counts it watches
 /// live outside this crate, e.g. `PhpRef` handles in `php-runtime`).
@@ -285,7 +290,7 @@ impl RootBuffer {
     /// is buffered.
     #[cfg(test)]
     fn push(&mut self, o: &Obj) -> Option<usize> {
-        let handle = crate::object::data(o).handle;
+        let handle = crate::object::data(o).handle.get();
         if self.contains(handle, o.addr()) {
             return None;
         }
@@ -494,6 +499,11 @@ struct GcState {
     collected: u64,
     /// `gc_threshold`.
     threshold: usize,
+    /// `gc_base_threshold`: the threshold from the collected counts, before
+    /// the cost of the live graph is added (kept across requests).
+    base_threshold: usize,
+    /// `visited`: the nodes the last pass traversed.
+    visited: usize,
     /// `buf_size`.
     buf_size: usize,
     /// Object roots.
@@ -534,6 +544,8 @@ impl Default for GcState {
             runs: 0,
             collected: 0,
             threshold: THRESHOLD_DEFAULT,
+            base_threshold: THRESHOLD_DEFAULT,
+            visited: 0,
             buf_size: DEFAULT_BUF_SIZE,
             roots: RootBuffer::default(),
             ref_pending: 0,
@@ -664,6 +676,12 @@ pub fn possible_root(v: &Value) {
     }
 }
 
+/// [`possible_root`] of an object.
+#[inline]
+pub(crate) fn possible_root_obj(o: &Obj) {
+    root_obj(o);
+}
+
 /// [`possible_root`] of the last handle of a reference: its value.
 #[inline(never)]
 fn released_ref(r: &php_runtime::PhpRef) {
@@ -677,79 +695,29 @@ fn released_ref(r: &php_runtime::PhpRef) {
 /// `zend_array_destroy` → `i_zval_ptr_dtor` on every element of an array
 /// whose last handle is being released: objects that stay referenced become
 /// possible roots; unshared nested arrays are released in turn.
-#[cold]
 #[inline(never)]
 fn released_array(a: &php_runtime::ZArray) {
     if !with_state(|s| !s.protected).unwrap_or(false) {
         return;
     }
-    // The array itself is walked first without a work list: `vec![a]`
-    // allocated one for every array released (most hold no nested array).
+    // The unshared arrays found inside that are still to walk: none in a
+    // table of scalars and strings, for which nothing is allocated.
     let mut pending: Vec<&php_runtime::ZArray> = Vec::new();
-    let mut next = Some(a);
-    while let Some(arr) = next.take().or_else(|| pending.pop()) {
-        for v in arr.values() {
-            match v {
-                Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
-                    pending.push(inner);
-                }
-                Value::Object(_) | Value::Reference(_) => possible_root(v),
-                _ => {}
+    let mut arr = a;
+    loop {
+        // Only the elements that can be or hold a root: a table of scalars
+        // and strings costs a tag test an element.
+        arr.for_each_counted(|v| match v {
+            Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
+                pending.push(inner);
             }
-        }
-    }
-}
-
-/// Nesting limit of [`release_value`]'s walk through unshared objects.
-const RELEASE_DEPTH: u32 = 64;
-
-/// `zval_ptr_dtor` of `v`, a handle about to be dropped: like
-/// [`possible_root`], and when it is the last handle of an object, the
-/// object is freed (`zend_object_std_dtor`), releasing its properties and
-/// a closure's bound variables and `$this` the same way. Call it before
-/// dropping `v`.
-pub(crate) fn release_value(v: &Value) {
-    release_value_at(v, 0);
-}
-
-fn release_value_at(v: &Value, depth: u32) {
-    match v {
-        Value::Object(o) if o.refcount() == 1 && depth < RELEASE_DEPTH => {
-            released_object(o, depth + 1);
-        }
-        _ => possible_root(v),
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn released_object(o: &Obj, depth: u32) {
-    if o.downcast_ref::<ObjectData>().is_none() {
-        return;
-    }
-    let d = crate::object::data(o);
-    if let Ok(slots) = d.slots.try_borrow() {
-        for v in slots.iter().flatten() {
-            release_value_at(v, depth);
-        }
-    }
-    if let Ok(dynamic) = d.dynamic.try_borrow() {
-        for v in dynamic.iter().flat_map(|t| t.values()) {
-            release_value_at(v, depth);
-        }
-    }
-    if let Ok(state) = d.internal.try_borrow() {
-        if let Some(c) = state
-            .as_ref()
-            .and_then(|s| s.downcast_ref::<crate::closure::ClosureData>())
-        {
-            for (_, v) in &c.vars {
-                release_value_at(v, depth);
-            }
-            if let Some(this) = &c.this {
-                root_obj(this);
-            }
-        }
+            Value::Object(_) | Value::Reference(_) => possible_root(v),
+            _ => {}
+        });
+        let Some(next) = pending.pop() else {
+            break;
+        };
+        arr = next;
     }
 }
 
@@ -858,7 +826,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     // was never buffered (`oflags::GC_BUFFERED` clear, the case of every
     // fresh object) cannot be in the buffer, so the lookup is skipped.
     if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
-        && s.roots.contains(d.handle, o.addr())
+        && s.roots.contains(d.handle.get(), o.addr())
     {
         remember_root(o);
         return None;
@@ -868,7 +836,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
         // empty buffer).
         note_new_slot(s);
     }
-    let i = s.roots.insert_new(o, d.handle);
+    let i = s.roots.insert_new(o, d.handle.get());
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
     remember_root(o);
@@ -916,6 +884,95 @@ fn take_self_arrays(s: &mut GcState) -> Vec<php_runtime::ZArray> {
 /// call's handle.
 pub(crate) fn released_ctor_this(o: &Obj) {
     root_obj(o);
+}
+
+/// [`released_ctor_this`] for a constructor that ran without a call
+/// (`exec/tape/calls.rs`, a constructor run as stores): the new object,
+/// which the result of `new` holds, becomes a possible root as the call's
+/// return makes it one. The call would hold a second handle while it is
+/// recorded; here there is none, so the count is not asked.
+pub(crate) fn root_ctor_result(o: &Obj) {
+    if !is_last_root(o) {
+        root_shared_obj(o);
+    }
+}
+
+impl RootBuffer {
+    /// [`RootBuffer::insert_new`] of the object at `addr` under the handle
+    /// `new`, then [`RootBuffer::remove`] of its entry under `old`, when
+    /// both are of one block (`new` made an object in the block of the
+    /// one it replaces): the entry moves to the slot the next root takes,
+    /// and the slot it leaves is the next one reused. `false`, nothing
+    /// changed, when the entry is not in this buffer or no freed slot
+    /// waits (the two steps are then made one by one).
+    fn rehome(&mut self, addr: usize, old: u32, new: u32) -> bool {
+        let Some(from) = self.slot_of(old, addr) else {
+            return false;
+        };
+        // The slot the next root takes: the last one freed, when it is
+        // still empty (`fetch` would pass over one that is not).
+        let Some(top) = self.unused.last_mut() else {
+            return false;
+        };
+        let to = *top;
+        if !matches!(self.slots.get(to), Some(None)) {
+            return false;
+        }
+        let moved = self.slots.get_mut(from).and_then(Option::take);
+        if let Some(slot) = self.slots.get_mut(to) {
+            *slot = moved.map(|root| Root {
+                handle: new,
+                ..root
+            });
+        }
+        // The slot it leaves is the next one reused.
+        *top = from;
+        self.clear_index(old, from);
+        self.set_index(new, to);
+        true
+    }
+}
+
+/// `new` made an object in the block of the one that had the handle `old`
+/// (`object::reuse_for_new`; `o`, whose data is `d`, has its new handle):
+/// what php-src's order
+/// of events leaves in the root buffer. The new object becomes a possible
+/// root when a constructor ran for it (`ctor`: `ZEND_CALL_RELEASE_THIS` at
+/// the constructor's return), in the slot the next root takes; then the
+/// old object's entry goes (`GC_REMOVE_FROM_BUFFER` of its free), its slot
+/// the next one reused. The two entries are of one block: the handle
+/// tells them apart.
+pub(crate) fn reused(o: &Obj, d: &ObjectData, old: u32, was_buffered: bool, ctor: bool) {
+    let mark = crate::object::oflags::GC_BUFFERED;
+    with_state(|s| {
+        let addr = o.addr();
+        let rooted = ctor && !s.protected;
+        if rooted && was_buffered && s.roots.rehome(addr, old, d.handle.get()) {
+            // Both steps in one: the entry moved (the mark stays).
+            remember_root(o);
+            return;
+        }
+        if rooted {
+            if !s.roots.has_unused() {
+                // May set the buffered roots aside (the new root then
+                // starts an empty buffer).
+                note_new_slot(s);
+            }
+            s.roots.insert_new(o, d.handle.get());
+        }
+        if was_buffered {
+            s.roots.remove(addr, old);
+            if let Some(f) = &mut s.frozen {
+                f.objs.remove(addr, old);
+            }
+        }
+        if rooted {
+            d.flags.set(d.flags.get() | mark);
+            remember_root(o);
+        } else {
+            d.flags.set(d.flags.get() & !mark);
+        }
+    });
 }
 
 /// The buffered object (`oflags::GC_BUFFERED`) with `handle` at `addr` is
@@ -1043,25 +1100,42 @@ fn grow_buffer(s: &mut GcState) {
     s.buf_size = new.min(MAX_BUF_SIZE);
 }
 
-/// `gc_adjust_threshold`: raise the threshold after unproductive automatic
-/// runs, lower it back after productive ones.
+/// `gc_adjust_threshold`: the base threshold rises after unproductive
+/// automatic runs and falls back after productive ones; the next run then
+/// waits for enough new roots to pay for the live nodes this one
+/// traversed (GH-9993).
 fn adjust_threshold(s: &mut GcState, count: i64) {
+    let mut base = s.base_threshold;
     if count < THRESHOLD_TRIGGER || s.roots.num_roots + s.ref_pending >= s.threshold {
-        if s.threshold < THRESHOLD_MAX {
-            let new = (s.threshold + THRESHOLD_STEP).min(THRESHOLD_MAX);
-            if new > s.buf_size {
-                grow_buffer(s);
-            }
-            if new <= s.buf_size {
-                s.threshold = new;
-            }
-        }
-    } else if s.threshold > THRESHOLD_DEFAULT {
-        s.threshold = s
-            .threshold
-            .saturating_sub(THRESHOLD_STEP)
-            .max(THRESHOLD_DEFAULT);
+        base = (base + THRESHOLD_STEP).min(THRESHOLD_MAX);
+    } else if base > THRESHOLD_DEFAULT {
+        base = base.saturating_sub(THRESHOLD_STEP).max(THRESHOLD_DEFAULT);
     }
+    s.base_threshold = base;
+    let live = s
+        .visited
+        .saturating_sub(usize::try_from(count).unwrap_or(0));
+    let threshold = (live / THRESHOLD_COST_RATIO + FIRST_ROOT)
+        .max(base)
+        .min(THRESHOLD_MAX);
+    grow_buffer_to(s, threshold);
+    s.threshold = threshold;
+}
+
+/// `gc_grow_root_buffer_to`: doubles the buffer up to `GC_BUF_GROW_STEP`,
+/// then grows it by whole steps, until it holds `min` roots.
+fn grow_buffer_to(s: &mut GcState, min: usize) {
+    let mut new = s.buf_size;
+    if new >= min {
+        return;
+    }
+    while new < min && new < BUF_GROW_STEP {
+        new *= 2;
+    }
+    if new < min {
+        new += (min - new).div_ceil(BUF_GROW_STEP) * BUF_GROW_STEP;
+    }
+    s.buf_size = new.min(MAX_BUF_SIZE);
 }
 
 /// Number of buffered possible roots (`num_roots`).
@@ -1091,13 +1165,26 @@ pub(crate) fn request_startup(enable: bool) {
     with_state(|s| {
         let providers = std::mem::take(&mut s.providers);
         forget_last_root();
+        // The buffer and the base threshold outlive the request; the run
+        // cost depends on the live graph of the request.
+        let (base, buf_size) = (s.base_threshold, s.buf_size);
         *s = GcState {
             providers,
+            threshold: base,
+            base_threshold: base,
+            buf_size,
             ..GcState::default()
         };
     });
     WANT_RUN.with(|w| w.set(false));
     set_enabled(enable);
+}
+
+/// Starts `gc_status()['application_time']` at request startup, as
+/// `gc_reset()` sets `GC_G(activated_at)` from `zend_activate()`; a worker
+/// serving many requests would otherwise count from its first one.
+pub(crate) fn mark_activated() {
+    with_state(|s| s.activated_at = Instant::now());
 }
 
 /// Statistics reported by `gc_status()` (`zend_gc_status`).

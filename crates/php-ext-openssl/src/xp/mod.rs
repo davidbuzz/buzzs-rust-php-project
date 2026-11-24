@@ -21,12 +21,27 @@ mod reneg;
 mod sess;
 mod sock;
 
+/// `RSHUTDOWN`: forgets the PHP callables (session, PSK and early-data
+/// callbacks) and PSK identities registered for this request's contexts.
+/// php-src keeps them with the stream and frees them when it closes;
+/// every stream that has them is closed by the end of the request
+/// (persistent streams cannot have them), and a long-running worker's
+/// next request must neither keep them alive nor find them under a
+/// reused `SSL_CTX` address.
+pub(crate) fn reset_request() {
+    psk::reset_request();
+    sess::reset_request();
+    early::reset_request();
+}
+
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{BorrowedFd, FromRawFd};
 use std::time::{Duration, Instant};
 
 use openssl::ssl::{ErrorCode, Ssl, SslStream};
-use php_ext_streams::xport::{self, CryptoHooks, Transport, XportError, XportRequest};
+use php_ext_streams::xport::{
+    self, ConnectError, CryptoHooks, Transport, XportError, XportRequest,
+};
 use php_runtime::{Value, ZArray, ZStr};
 use php_streams::diag::StreamErrorCode as Code;
 use php_streams::sockopts::{SockOpts, XportKind};
@@ -57,6 +72,7 @@ pub(crate) fn register() {
             Transport {
                 create,
                 accept: Some(accept),
+                connect: Some(handshake),
             },
         );
     }
@@ -97,8 +113,9 @@ fn crypto_method(vm: &mut Vm, opts: &SslOpts, default: i64) -> VmResult<i64> {
 }
 
 /// Connects a TCP client socket through the streams library (same error
-/// texts as plain `tcp://`) and takes over its descriptor.
-fn connect(req: &XportRequest) -> Result<TcpStream, XportError> {
+/// texts as plain `tcp://`) and takes over its descriptor; with the
+/// resource number that stream took.
+fn connect(req: &XportRequest) -> Result<(TcpStream, Option<i64>), XportError> {
     let (_, rest) = xport::split_scheme(&req.address);
     let target = format!("tcp://{rest}");
     let mut plain = php_streams::transports::socket_client(target.as_bytes(), req.timeout)
@@ -108,10 +125,11 @@ fn connect(req: &XportRequest) -> Result<TcpStream, XportError> {
         })?;
     let tcp = dup_socket(&mut plain).ok_or_else(|| XportError {
         errno: 0,
-        message: "Unknown error".into(),
+        message: String::new(),
     })?;
+    let number = plain.resource_number();
     drop(plain);
-    Ok(tcp)
+    Ok((tcp, number))
 }
 
 /// `socket(AF_INET, SOCK_STREAM)` without connecting.
@@ -128,7 +146,13 @@ fn unconnected_socket() -> Option<TcpStream> {
 
 /// Builds the stream around socket ops.
 fn new_stream(ops: TlsOps) -> Stream {
-    let mut s = Stream::new(Box::new(ops), "r+");
+    new_stream_numbered(ops, None)
+}
+
+/// [`new_stream`] in place of the plain socket stream that took `number`
+/// ([`Stream::new_numbered`]).
+fn new_stream_numbered(ops: TlsOps, number: Option<i64>) -> Stream {
+    let mut s = Stream::new_numbered(Box::new(ops), "r+", number);
     s.add_flags(flags::NO_SEEK);
     s
 }
@@ -204,7 +228,7 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
             if ops.ctx.is_none() {
                 return Ok(Err(XportError {
                     errno: 0,
-                    message: "Unknown error".into(),
+                    message: String::new(),
                 }));
             }
         }
@@ -225,7 +249,7 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
         s.context.clone_from(&req.context);
         return Ok(Ok(s));
     }
-    let tcp = match connect(req) {
+    let (tcp, number) = match connect(req) {
         Ok(t) => t,
         Err(e) => return Ok(Err(e)),
     };
@@ -237,36 +261,16 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
     ops.url_name = url_name;
     ops.persistent = req.persistent_id.is_some();
     if plain_tcp {
-        let mut s = new_stream(ops);
+        let mut s = new_stream_numbered(ops, number);
         s.orig_path = Some(req.address.as_bytes().to_vec());
         s.context.clone_from(&req.context);
         return Ok(Ok(s));
     }
-    sess::set_current(0);
-    let session = session_stream(&opts);
-    let ok = setup(vm, &mut ops, &opts, method, session.as_ref())?
-        && enable(vm, &mut ops, &opts, true)? >= 0;
-    if !ok {
-        warn(Code::ProtocolError, "Failed to enable crypto");
-        flush(vm);
-        if let Some(t) = take_exception() {
-            // C reports the connect failure before the exception surfaces.
-            vm.php_warning(&format!(
-                "Unable to connect to {} (Unknown error)",
-                req.address
-            ))?;
-            return Err(t);
-        }
-        return Ok(Err(XportError {
-            errno: 0,
-            message: "Unknown error".into(),
-        }));
-    }
-    flush(vm);
-    if let Some(t) = take_exception() {
-        return Err(t);
-    }
-    let mut s = new_stream(ops);
+    ops.handshake = Some(Handshake {
+        parent: session_stream(&opts),
+        failure: "",
+    });
+    let mut s = new_stream_numbered(ops, number);
     s.orig_path = Some(req.address.as_bytes().to_vec());
     s.context.clone_from(&req.context);
     Ok(Ok(s))
@@ -294,6 +298,7 @@ pub(crate) struct SessionParent {
     ctx: Option<openssl::ssl::SslContext>,
     session: Option<openssl::ssl::SslSession>,
     has_handle: bool,
+    callbacks: bool,
 }
 
 impl SessionParent {
@@ -306,12 +311,14 @@ impl SessionParent {
                     .tls()
                     .and_then(|t| t.ssl().session().map(ToOwned::to_owned)),
                 has_handle: o.tls().is_some(),
+                callbacks: o.callbacks,
             },
             None => SessionParent {
                 is_tls: false,
                 ctx: None,
                 session: None,
                 has_handle: false,
+                callbacks: false,
             },
         }
     }
@@ -389,6 +396,13 @@ fn setup(
                 Code::SslNotSupported,
                 "Supplied SSL session stream is not initialized",
             );
+        } else if ops.persistent && parent.callbacks {
+            // GH-25172: the callbacks are request data a persistent stream
+            // would outlive.
+            warn(
+                Code::PersistentNotSupported,
+                "Supplied SSL session stream with callbacks is not supported for persistent streams",
+            );
         } else if let Some(ctx) = &parent.ctx {
             let Ok(mut ssl) = Ssl::new(ctx) else {
                 warn(Code::CreateFailed, "SSL handle creation failure");
@@ -412,9 +426,11 @@ fn setup(
             return Ok(attach(ops, ssl));
         }
     }
+    sess::callbacks_set();
     let Some(ctx) = ctx::create_ctx(vm, opts, ops.is_client, method_flags, ops.persistent)? else {
         return Ok(false);
     };
+    ops.callbacks = sess::callbacks_set();
     if ops.is_client {
         match early::client_payload(vm, opts) {
             Ok(p) => ops.early_send = p,
@@ -544,13 +560,16 @@ fn accept(
         return Ok(Ok(conn));
     };
     let (enable_on_connect, method, timeout) = (lops.enable_on_connect, lops.method, lops.timeout);
+    let callbacks = lops.callbacks;
     let parent = lops.ctx.clone().map(|ctx| SessionParent {
         is_tls: true,
         ctx: Some(ctx),
         session: None,
         has_handle: true,
+        callbacks,
     });
     let mut conn = conn;
+    let number = conn.resource_number();
     let Some(tcp) = dup_socket(&mut conn) else {
         return Ok(Err(XportError {
             errno: 0,
@@ -560,32 +579,64 @@ fn accept(
     drop(conn);
     let mut ops = TlsOps::new(Conn::Plain(tcp), timeout);
     ops.connect_timeout = None;
-    let opts = SslOpts::of_stream(listener);
     if enable_on_connect {
-        let method = method & !IS_CLIENT;
-        ops.method = method;
-        sess::set_current(0);
-        let ok = setup(vm, &mut ops, &opts, method, parent.as_ref())?
-            && enable(vm, &mut ops, &opts, true)? >= 0;
-        if !ok {
-            warn(Code::ProtocolError, "Failed to enable crypto");
-            flush(vm);
-            if let Some(t) = take_exception() {
-                return Err(t);
-            }
-            return Ok(Err(XportError {
-                errno: 0,
-                message: "Cannot enable crypto".into(),
-            }));
-        }
+        ops.method = method & !IS_CLIENT;
+        ops.handshake = Some(Handshake {
+            parent,
+            failure: "Cannot enable crypto",
+        });
     }
     flush(vm);
     if let Some(t) = take_exception() {
         return Err(t);
     }
-    let mut s = new_stream(ops);
+    let mut s = new_stream_numbered(ops, number);
     s.context.clone_from(&listener.context);
     Ok(Ok(s))
+}
+
+/// A handshake left for when the connection's stream is a resource.
+pub(crate) struct Handshake {
+    /// The `SSL_CTX` and session to start from: the `session_stream`
+    /// option's of a client, the server's of an accepted connection.
+    parent: Option<SessionParent>,
+    /// The error the caller reports when the handshake fails.
+    failure: &'static str,
+}
+
+/// The transports' [`php_ext_streams::xport::ConnectHook`]: the TLS
+/// handshake `create` or `accept` left for when the connection's stream is
+/// a resource. php-src enables crypto on connect on the stream it has
+/// allocated (`STREAM_XPORT_OP_CONNECT`, `php_openssl_tcp_sockop_accept`),
+/// so the PSK and session callbacks get that stream.
+fn handshake(vm: &mut Vm, s: &mut Stream) -> VmResult<Result<(), ConnectError>> {
+    let opts = SslOpts::of_stream(s);
+    let id = s.id();
+    let Some(ops) = s.ops_as_mut::<TlsOps>() else {
+        return Ok(Ok(()));
+    };
+    let Some(h) = ops.handshake.take() else {
+        return Ok(Ok(()));
+    };
+    let method = ops.method;
+    sess::set_current(id);
+    let ok =
+        setup(vm, ops, &opts, method, h.parent.as_ref())? && enable(vm, ops, &opts, true)? >= 0;
+    if !ok {
+        warn(Code::ProtocolError, "Failed to enable crypto");
+    }
+    flush(vm);
+    let thrown = take_exception();
+    if ok {
+        return thrown.map_or(Ok(Ok(())), Err);
+    }
+    Ok(Err(ConnectError {
+        error: XportError {
+            errno: 0,
+            message: h.failure.into(),
+        },
+        thrown,
+    }))
 }
 
 /// Duplicates the descriptor of a plain socket stream into a
@@ -688,7 +739,7 @@ fn enable_hook(
     if n < 0 {
         return Ok((Value::Bool(false), None));
     }
-    let mut s = new_stream(ops);
+    let mut s = new_stream_numbered(ops, stream.resource_number());
     s.context.clone_from(&stream.context);
     s.orig_path.clone_from(&stream.orig_path);
     Ok((ret(n), Some(s)))

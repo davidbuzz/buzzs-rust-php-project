@@ -141,6 +141,17 @@ impl DomHost for VmHost {
         .flatten()
     }
 
+    fn update_class_constants(&self, class: &str) -> Result<(), DomError> {
+        let r = bridge::with_vm(|vm| match vm.find_class(class.as_bytes()) {
+            Some(c) => vm.update_class_constants(&c),
+            None => Ok(()),
+        });
+        match r {
+            Some(Err(t)) => Err(host_error(t)),
+            _ => Ok(()),
+        }
+    }
+
     fn resolve_callable(&self, name: &[u8]) -> Result<HostCallable, String> {
         let v = bytes(name.to_vec());
         bridge::with_vm(|vm| {

@@ -138,7 +138,7 @@ fn argument_errors() {
     );
     assert_eq!(
         out,
-        "ValueError: imagecreatetruecolor(): Argument #1 ($width) must be greater than 0\n\
+        "ValueError: imagecreatetruecolor(): Argument #1 ($width) must be greater than 0 and less than 2147483647\n\
          ValueError: imagecolorallocate(): Argument #2 ($red) must be between 0 and 255 (inclusive)\n\
          ValueError: imagefilter(): Argument #2 ($filter) must be one of the IMG_FILTER_* filter constants\n\
          ArgumentCountError: imagefilter() expects exactly 3 arguments, 2 given\n\

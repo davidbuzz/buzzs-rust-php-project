@@ -761,12 +761,12 @@ fn workdir(name: &str) -> PathBuf {
 fn run(name: &str) -> String {
     let w = workdir(name);
     let ws = w.to_string_lossy().into_owned();
-    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
-    registry::set_compression_support(true, false);
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Release);
+    registry::set_compression_support(true, true);
     registry::set_ini("phar.readonly", false, true);
     registry::set_ini("phar.require_hash", true, true);
     php_phar::signature::set_openssl_hook(Some(Rc::new(NoOpenSsl)));
-    // Ubuntu's PHP 8.3 writes 0 for entry timestamps.
+    // Ubuntu's PHP builds (8.5 too) write 0 for entry timestamps.
     php_phar::sys::set_entry_time_override(Some(0));
     let _ = php_streams::wrapper::register_global(b"phar", Rc::new(php_phar::wrapper::PharWrapper));
     let _ = php_streams::diag::take();
@@ -793,11 +793,11 @@ fn run(name: &str) -> String {
 }
 
 #[test]
-#[ignore = "regenerates scenario outputs with /usr/bin/php"]
+#[ignore = "regenerates scenario outputs with /usr/bin/php8.5"]
 fn regenerate_scenarios() {
     for name in scenarios() {
         let w = workdir(&name);
-        let o = Command::new("/usr/bin/php")
+        let o = Command::new("/usr/bin/php8.5")
             .args([
                 "-d",
                 "memory_limit=1G",
@@ -823,7 +823,7 @@ fn regenerate_scenarios() {
 }
 
 /// Removes VM-level noise (errno texts of ext/standard warnings) and maps
-/// PHP 8.3 messages that php-src master reworded.
+/// PHP 8.5 messages that php-src master reworded.
 fn normalize(out: &str) -> String {
     out.lines()
         .filter(|l| !l.starts_with("W: (errno "))
@@ -844,7 +844,6 @@ fn normalize(out: &str) -> String {
                 "exists and is a not a directory",
                 "exists and is not a directory",
             )
-            .replace("\" cannot be empty", "\" must not be empty")
         })
         .collect::<Vec<_>>()
         .join("\n")

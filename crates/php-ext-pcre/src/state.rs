@@ -62,9 +62,10 @@ pub(crate) fn last_error() -> PregError {
     with(|p| p.last_error())
 }
 
-/// `RINIT`/`RSHUTDOWN`: drops the cache and resets the error state.
+/// `RSHUTDOWN`: resets the request's state; the compiled patterns stay
+/// for the next request, as php-src's `PCRE_G(pcre_cache)` does.
 pub(crate) fn reset() {
-    with(|p| *p = Pcre::new());
+    with(Pcre::end_request);
     invalidate_config();
 }
 
@@ -124,8 +125,10 @@ fn is_c_locale(name: &[u8]) -> bool {
 pub(crate) fn compile(vm: &mut Vm, pattern: &[u8]) -> VmResult<Option<Regex>> {
     sync_config(vm);
     let locale = ctype_locale();
+    // The cache outlives the request (`pemalloc` in php-src): what a
+    // compilation keeps is not part of `memory_get_usage()`.
     let (result, warnings) = with(|p| {
-        let r = p.compile_with_locale(pattern, locale.as_deref());
+        let r = php_memlimit::persistent(|| p.compile_with_locale(pattern, locale.as_deref()));
         (r, p.take_warnings())
     });
     for w in warnings {

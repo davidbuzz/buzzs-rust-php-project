@@ -164,7 +164,7 @@ pub(crate) fn stale_slots(d: &ObjectData) -> Option<Rc<Vec<Option<Value>>>> {
     if d.flags.get() & oflags::STALE_PROPS == 0 {
         return None;
     }
-    stale_slots_cold(d.handle)
+    stale_slots_cold(d.handle.get())
 }
 
 #[cold]
@@ -182,7 +182,7 @@ pub(crate) fn set_stale_slots(
     d: &ObjectData,
     frozen: Option<Vec<Option<Value>>>,
 ) -> Option<Rc<Vec<Option<Value>>>> {
-    let handle = d.handle;
+    let handle = d.handle.get();
     if let Some(values) = frozen {
         d.flags.set(d.flags.get() | oflags::STALE_PROPS);
         STALE

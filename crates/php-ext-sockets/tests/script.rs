@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `sockets`
 //! extension (plus `streams` for the stream glue), over socket pairs and
-//! loopback UDP.  Expected outputs come from `/usr/bin/php`.
+//! loopback UDP.  Expected outputs come from `/usr/bin/php8.5`.
 
 use std::cell::RefCell;
 use std::io::Write;

@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle probe: reads tab-separated commands on stdin and prints results
 //! in the same canonical format as `tools/probe.php`, so the two can be
-//! diffed against `/usr/bin/php`.
+//! diffed against `/usr/bin/php8.5`.
 //!
 //! Commands (fields backslash-escaped: `\t`, `\n`, `\\`):
 //! * `parse <str>` — `date_parse()`

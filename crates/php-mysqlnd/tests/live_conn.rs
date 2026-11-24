@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Connection-level features: multi statements, charsets and escaping,
 //! `change_user`, transactions, LOAD DATA LOCAL INFILE, init commands,
-//! compression, async queries and statistics — compared with `/usr/bin/php`.
+//! compression, async queries and statistics — compared with `/usr/bin/php8.5`.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

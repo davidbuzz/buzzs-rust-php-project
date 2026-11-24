@@ -260,6 +260,10 @@ struct DocInner {
     /// Bumped by every structural mutation made through this layer (the
     /// cache tag other models compare against).
     generation: std::cell::Cell<u64>,
+    /// `php_libxml_ref_obj.class_type` for a document imported into DOM:
+    /// `None` until then, then whether it was imported as `Dom\` nodes
+    /// (`true`) or legacy `DOMNode`s. It lives and dies with the document.
+    family: std::cell::Cell<Option<bool>>,
 }
 
 impl DocInner {
@@ -486,6 +490,7 @@ impl Document {
                 live: RefCell::new(HashMap::new()),
                 shared: std::cell::Cell::new(false),
                 generation: std::cell::Cell::new(0),
+                family: std::cell::Cell::new(None),
             }),
         }
     }
@@ -941,6 +946,18 @@ impl SharedDocument {
     pub fn mark_modified(&self) {
         self.inner.touch();
     }
+
+    /// The node family the document was imported into DOM as
+    /// (`php_libxml_ref_obj.class_type`): `Some(true)` for `Dom\`,
+    /// `Some(false)` for the legacy classes, `None` before an import.
+    pub fn family(&self) -> Option<bool> {
+        self.inner.family.get()
+    }
+
+    /// Locks the document to a node family (see [`SharedDocument::family`]).
+    pub fn set_family(&self, modern: bool) {
+        self.inner.family.set(Some(modern));
+    }
 }
 
 /// A handle to a node of a [`Document`]. See the module docs.
@@ -1059,6 +1076,7 @@ impl Node {
         self.ns().map(|ns| Namespace {
             // SAFETY: prefix/href are NULL or C strings owned by the xmlNs.
             prefix: unsafe { opt_slice(ns.prefix) }.map(<[u8]>::to_vec),
+            // SAFETY: as for `prefix`.
             href: unsafe { opt_slice(ns.href) }.unwrap_or_default().to_vec(),
         })
     }

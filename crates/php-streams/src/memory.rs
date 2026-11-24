@@ -232,15 +232,25 @@ impl TempOps {
 
 /// `php_stream_temp_create_ex()`.
 pub fn temp_create(mode: TempMode, max_memory: usize, tmpdir: Option<&[u8]>) -> Stream {
-    let ops = TempOps {
-        inner: Some(Box::new(memory_create(mode))),
-        smax: max_memory,
-        mode,
-        meta: None,
-        tmpdir: tmpdir.map(<[u8]>::to_vec),
-        rfc2397: false,
-    };
-    let mut s = Stream::new(Box::new(ops), mode.as_mode());
+    let inner = memory_create(mode);
+    let mut s = Stream::new(
+        Box::new(TempOps {
+            inner: None,
+            smax: max_memory,
+            mode,
+            meta: None,
+            tmpdir: tmpdir.map(<[u8]>::to_vec),
+            rfc2397: false,
+        }),
+        mode.as_mode(),
+    );
+    // C allocates the temp stream first and its memory stream next: the
+    // temp stream takes the first of the two numbers, and the enclosed
+    // stream's resource the second (`Resource id #N+1`).
+    s.take_number_of(&inner);
+    if let Some(t) = s.ops_as_mut::<TempOps>() {
+        t.inner = Some(Box::new(inner));
+    }
     s.add_flags(flags::NO_BUFFER);
     s
 }

@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `base64.rs`, `uuencode.rs` and `quoted_printable.rs`.
 mod common;
-use common::{case, check, lit, pure, regenerate, Case};
+use common::{case, check_mapped, lit, pure, regenerate, Case, V};
 use php_stdstr::base64::{base64_decode, base64_encode};
 use php_stdstr::quoted_printable::{quoted_printable_decode, quoted_printable_encode};
 use php_stdstr::uuencode::{convert_uudecode, convert_uuencode};
@@ -225,13 +225,80 @@ fn cases() -> Vec<Case> {
     v
 }
 
-#[test]
-fn oracle() {
-    check("encoding", &cases());
+/// php-src master's `php_quot_print_encode()` (GH-25284), transliterated
+/// from `ext/standard/quot_print.c` as an independent reference: PHP 8.5
+/// (the oracle) still ends a soft line before a UTF-8 continuation byte.
+fn master_qp_encode(s: &[u8]) -> Vec<u8> {
+    const MAXL: u64 = 75;
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = Vec::new();
+    let mut lp: u64 = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        i += 1;
+        let next = s.get(i).copied().unwrap_or(0);
+        if c == b'\r' && next == b'\n' && i < s.len() {
+            out.extend_from_slice(b"\r\n");
+            i += 1;
+            lp = 0;
+        } else if c.is_ascii_control() || c & 0x80 != 0 || c == b'=' || (c == b' ' && next == b'\r')
+        {
+            lp += 3;
+            if (lp > MAXL && (c <= 0xbf || c > 0xf4))
+                || (c > 0xbf && c <= 0xdf && lp + 3 > MAXL)
+                || (c > 0xdf && c <= 0xef && lp + 6 > MAXL)
+                || (c > 0xef && c <= 0xf4 && lp + 9 > MAXL)
+            {
+                out.extend_from_slice(b"=\r\n");
+                lp = 3;
+            }
+            out.push(b'=');
+            out.push(HEX[usize::from(c >> 4)]);
+            out.push(HEX[usize::from(c & 0xf)]);
+        } else {
+            lp += 1;
+            if lp > MAXL {
+                out.extend_from_slice(b"=\r\n");
+                lp = 1;
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[test]
-#[ignore = "runs /usr/bin/php to rebuild the fixture"]
+fn oracle() {
+    // quoted_printable_encode() follows master's line breaking (checked
+    // against the reference above, not the 8.5 oracle).
+    let mut master: std::collections::HashMap<String, String> = samples()
+        .iter()
+        .map(|s| {
+            (
+                format!("quoted_printable_encode({})", lit(s)),
+                format!("=> {}", V::from(master_qp_encode(s)).export()),
+            )
+        })
+        .collect();
+    // quoted_printable_decode() works by length in master (ba8c7aa4772):
+    // PHP 8.5 stops at the first NUL byte, master decodes past it.
+    for (input, hex) in [(&b"a\x00=41"[..], "610041"), (b"=\x00=41", "3d0041")] {
+        master.insert(
+            format!("bin2hex(quoted_printable_decode({}))", lit(input)),
+            format!("=> '{hex}'"),
+        );
+    }
+    check_mapped("encoding", &cases(), |php, expected| {
+        master
+            .get(php)
+            .cloned()
+            .unwrap_or_else(|| expected.to_owned())
+    });
+}
+
+#[test]
+#[ignore = "runs /usr/bin/php8.5 to rebuild the fixture"]
 fn regenerate_fixture() {
     regenerate("encoding", &cases());
 }

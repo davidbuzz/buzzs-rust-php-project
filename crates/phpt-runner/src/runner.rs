@@ -189,7 +189,8 @@ pub struct Runner {
 }
 
 enum Once {
-    Done(TestResult),
+    /// Boxed: a `TestResult` is large and `Once` is the error type of the run steps.
+    Done(Box<TestResult>),
     Many(Vec<TestResult>),
     Retry,
 }
@@ -238,17 +239,17 @@ impl Attempt<'_> {
     }
 
     fn skip(&self, reason: &str) -> Once {
-        Once::Done(self.result(
+        Once::Done(Box::new(self.result(
             Status::Skip,
             self.tested.clone(),
             format!("reason: {reason}"),
-        ))
+        )))
     }
 
     fn bork(&self, message: String, info: &str) -> Once {
         let mut result = self.result(Status::Bork, message, info.to_string());
         result.title = Some(self.tested.clone());
-        Once::Done(result)
+        Once::Done(Box::new(result))
     }
 
     /// Directory of the original test file (`{PWD}`).
@@ -477,7 +478,7 @@ impl Runner {
                 Once::Done(mut result) => {
                     result.duration_ms =
                         u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    return vec![result];
+                    return vec![*result];
                 }
             }
         }
@@ -677,7 +678,7 @@ impl Runner {
                     uses_cgi: false,
                 })
             }
-            Err(e) => Err(Once::Done(TestResult {
+            Err(e) => Err(Once::Done(Box::new(TestResult {
                 // run-tests.php names the `JUnit` test case after the unparsable file.
                 title: Some(shortname.clone()),
                 path: shortname,
@@ -687,7 +688,7 @@ impl Runner {
                 duration_ms: 0,
                 diff: None,
                 junit_message: None,
-            })),
+            }))),
         }
     }
 
@@ -847,7 +848,11 @@ impl Runner {
             let reason = prefix_reason(&output[4..], false)
                 .map(|r| format!("reason: {r}"))
                 .unwrap_or_default();
-            return Err(Once::Done(a.result(Status::Skip, a.tested.clone(), reason)));
+            return Err(Once::Done(Box::new(a.result(
+                Status::Skip,
+                a.tested.clone(),
+                reason,
+            ))));
         }
         if let Some(r) = starts_with_ignore_case(&output, b"info")
             .then(|| prefix_reason(&output[4..], false))
@@ -1004,7 +1009,7 @@ impl Runner {
             } else {
                 (Status::Pass, String::new())
             };
-            return Once::Done(a.result(status, a.tested.clone(), info));
+            return Once::Done(Box::new(a.result(status, a.tested.clone(), info)));
         }
 
         if let Some(check) = header_check.filter(|c| c.failed) {
@@ -1043,7 +1048,7 @@ impl Runner {
         }
         let mut res = a.result(status, a.tested.clone(), info);
         res.diff = Some(diff);
-        Once::Done(res)
+        Once::Done(Box::new(res))
     }
 
     /// Run a SKIPIF section, caching by directory and code (`SkipCache::checkSkip`).

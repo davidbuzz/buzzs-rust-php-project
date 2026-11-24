@@ -646,16 +646,7 @@ fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
             }
         }
     }
-    if let Some(parent) = &c.parent {
-        let mut inherited = Vec::new();
-        properties_info(parent, &mut inherited);
-        for e in inherited {
-            if user.is_none() && own_info(c, e.0.as_bytes()).is_some() {
-                continue;
-            }
-            push(out, e);
-        }
-    }
+    // `zend_do_link_class` binds trait properties before it inherits.
     if user.is_some() {
         for t in &c.traits {
             let mut bound = Vec::new();
@@ -665,6 +656,16 @@ fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
                     push(out, e);
                 }
             }
+        }
+    }
+    if let Some(parent) = &c.parent {
+        let mut inherited = Vec::new();
+        properties_info(parent, &mut inherited);
+        for e in inherited {
+            if user.is_none() && own_info(c, e.0.as_bytes()).is_some() {
+                continue;
+            }
+            push(out, e);
         }
     }
     // The rest of what `c` declares (all of an internal class's own).
@@ -1017,7 +1018,9 @@ fn is_subclass_of(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn spl_autoload_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(cb) = opt(a, 0) {
-        if !vm.is_callable_value(&cb) {
+        // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its
+        // deprecations.
+        if vm.zend_is_callable(&cb, false)?.is_err() {
             return Err(super::util::type_error(
                 vm,
                 a,
@@ -1075,7 +1078,8 @@ fn spl_object_hash(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set_error_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    if !cb.is_null() && !vm.is_callable_value(&cb) {
+    // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its deprecations.
+    if !cb.is_null() && vm.zend_is_callable(&cb, false)?.is_err() {
         let desc = vm.callable_error(&cb);
         return Err(super::util::type_error(
             vm,
@@ -1112,7 +1116,8 @@ fn get_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn set_exception_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    if !cb.is_null() && !vm.is_callable_value(&cb) {
+    // `Z_PARAM_FUNC_OR_NULL`: resolving the callable emits its deprecations.
+    if !cb.is_null() && vm.zend_is_callable(&cb, false)?.is_err() {
         let desc = vm.callable_error(&cb);
         return Err(super::util::type_error(
             vm,
@@ -1819,7 +1824,14 @@ fn cuf_call(
     // (frameless here), whose unused result triggers `#[\NoDiscard]`.
     let discarded =
         vm.pending_call_dst.is_none() && vm.frames.last().is_some_and(|f| f.builtin_name.is_none());
-    let call = match vm.zend_is_callable(cb, false) {
+    // The resolution the callable argument's check made (see
+    // `coerce_builtin_arg`), when it was this callable's.
+    let checked = vm
+        .checked_callable
+        .take()
+        .filter(|(v, _)| crate::call::same_callable(v, cb))
+        .map(|(_, call)| call);
+    let call = match checked.map_or_else(|| vm.zend_is_callable(cb, false), |c| Ok(Ok(c))) {
         Ok(Ok(call)) => call,
         Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
         Err(Throw::Exception(prev))
@@ -2371,34 +2383,6 @@ fn hrtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ])))
 }
 
-thread_local! {
-    /// Request start, for `gc_status()['application_time']`.
-    static REQUEST_START: std::time::Instant = std::time::Instant::now();
-}
-
-fn gc_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let elapsed = REQUEST_START
-        .with(std::time::Instant::elapsed)
-        .as_secs_f64();
-    let mut t = HashTable::new();
-    let mut put = |k: &str, v: Value| {
-        t.insert(ArrayKey::Str(ZStr::from(k)), v);
-    };
-    put("running", Value::Bool(false));
-    put("protected", Value::Bool(false));
-    put("full", Value::Bool(false));
-    put("runs", Value::Int(0));
-    put("collected", Value::Int(0));
-    put("threshold", Value::Int(10001));
-    put("buffer_size", Value::Int(16384));
-    put("roots", Value::Int(0));
-    put("application_time", Value::Float(elapsed));
-    put("collector_time", Value::Float(0.0));
-    put("destructor_time", Value::Float(0.0));
-    put("free_time", Value::Float(0.0));
-    Ok(Value::Array(ZArray::from_table(t)))
-}
-
 fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v1 = s(a, 0);
     let v2 = s(a, 1);
@@ -2486,17 +2470,7 @@ pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
                 let xd = x[0].is_ascii_digit();
                 let yd = y[0].is_ascii_digit();
                 match (xd, yd) {
-                    (true, true) => {
-                        let xi: i64 = std::str::from_utf8(x)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        let yi: i64 = std::str::from_utf8(y)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        (xi > yi) as i32 - (xi < yi) as i32
-                    }
+                    (true, true) => php_stdstr::versioning::compare_numeric_version_forms(x, y),
                     (false, false) => {
                         let (o1, o2) = (special_order(x), special_order(y));
                         (o1 > o2) as i32 - (o1 < o2) as i32
@@ -2771,7 +2745,6 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "gc_enable(): void", ret_null);
     reg(vm, "gc_disable(): void", ret_null);
     reg(vm, "gc_mem_caches(): int", gc_mem_caches);
-    reg(vm, "gc_status(): array", gc_status);
     reg(
         vm,
         "memory_get_usage(bool $real_usage = false): int",

@@ -11,7 +11,12 @@ use crate::value::{MatchArray, Value};
 use crate::{PREG_SPLIT_DELIM_CAPTURE, PREG_SPLIT_NO_EMPTY, PREG_SPLIT_OFFSET_CAPTURE};
 
 fn piece(subject: &[u8], start: usize, end: usize, offset_capture: bool) -> Value {
-    let s = Value::Str(subject[start..end].to_vec());
+    // An inverted span (PCRE2 offsets around `\K`) is empty, never a panic.
+    let s = Value::Str(
+        subject
+            .get(start..end)
+            .map_or_else(Vec::new, <[u8]>::to_vec),
+    );
     if offset_capture {
         Value::pair(s, off(start))
     } else {

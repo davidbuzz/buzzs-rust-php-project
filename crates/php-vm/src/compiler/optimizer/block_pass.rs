@@ -12,7 +12,7 @@
 
 use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
 use crate::compiler::expr::const_truthiness;
-use crate::opcode::{BinKind, CastKind, Label, Op, OpArray, Operand, UnKind};
+use crate::opcode::{ArgSrc, BinKind, CastKind, Label, Op, OpArray, Operand, UnKind};
 use php_runtime::{Value, ZStr};
 
 /// Finds all basic block leaders in `op_array`.
@@ -146,8 +146,146 @@ fn next_op(ops: &[Op], skip: &[usize], mut at: usize, end: usize) -> usize {
     }
 }
 
-pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool {
+/// `JMP_NULL` of a null literal: SCCP's constant result and single
+/// feasible edge (`sccp.c`) make the chain it skips dead, and the one use
+/// of its result reads what the chain gives (`null`, or `false` / `true`
+/// under `isset()` / `empty()`).
+fn fold_null_jumps(op_array: &mut OpArray) -> bool {
     let mut changed = false;
+    for i in 0..op_array.ops.len() {
+        let Op::JmpNull {
+            a: Operand::Lit(l),
+            dst,
+            target,
+            chain,
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        if !matches!(op_array.literals.get(l as usize), Some(Value::Null)) {
+            continue;
+        }
+        let end = target as usize;
+        if end <= i || end > op_array.ops.len() || !skipped_chain(op_array, i, end, dst) {
+            continue;
+        }
+        let Some(at) = only_use(op_array, dst) else {
+            continue;
+        };
+        if at < end {
+            continue;
+        }
+        let lit = add_or_find_literal(&mut op_array.literals, chain.value());
+        if !read_literal(&mut op_array.ops[at], dst, lit) {
+            continue;
+        }
+        op_array.ops[i] = Op::Jmp(target);
+        changed = true;
+    }
+    changed
+}
+
+/// Whether the instructions strictly between `from` and `end` are entered
+/// only through `from`, and `dst` is written nowhere else.
+fn skipped_chain(op_array: &OpArray, from: usize, end: usize, dst: u32) -> bool {
+    let inside = |at: usize| at > from && at < end;
+    for (j, op) in op_array.ops.iter().enumerate() {
+        if j == from {
+            continue;
+        }
+        if !inside(j) && def_tmp(op) == Some(dst) {
+            return false;
+        }
+        if !inside(j) {
+            let mut enters = false;
+            for_each_label_mut(&mut op.clone(), |t| {
+                enters |= (*t as usize) > from && (*t as usize) <= end;
+            });
+            if enters {
+                return false;
+            }
+        }
+    }
+    op_array.try_table.iter().all(|e| {
+        let entered = |at: u32| (at as usize) > from && (at as usize) <= end;
+        !e.catch_start.is_some_and(entered)
+            && !e.finally.is_some_and(|(_, start, _)| entered(start))
+            && !entered(e.try_start)
+            && !entered(e.try_end)
+    })
+}
+
+/// The one instruction that reads temporary `t`, when nothing else (a
+/// place, a live range) does.
+fn only_use(op_array: &OpArray, t: u32) -> Option<usize> {
+    let mut counts = vec![0u32; op_array.num_tmps as usize + 1];
+    super::count_tmp_uses(op_array, &mut counts);
+    if counts.get(t as usize) != Some(&1) {
+        return None;
+    }
+    op_array.ops.iter().position(|op| {
+        let mut reads = false;
+        super::for_each_operand_mut(&mut op.clone(), |o| {
+            reads |= matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
+        });
+        reads
+    })
+}
+
+/// Makes `op` read literal `lit` in place of temporary `t`, for the
+/// instructions a short-circuited chain's value feeds.
+fn read_literal(op: &mut Op, t: u32, lit: u32) -> bool {
+    let is_t = |o: &Operand| matches!(o, Operand::Tmp(x) if *x == t);
+    match op {
+        Op::Send {
+            src: ArgSrc::Val(o) | ArgSrc::CallResult(o),
+        }
+        | Op::SendNamed {
+            src: ArgSrc::Val(o) | ArgSrc::CallResult(o),
+            ..
+        } if is_t(o) => {
+            let src = ArgSrc::Val(Operand::Lit(lit));
+            match op {
+                Op::Send { src: s } | Op::SendNamed { src: s, .. } => *s = src,
+                _ => {}
+            }
+            true
+        }
+        Op::Free(o) if is_t(o) => {
+            *op = Op::Nop;
+            true
+        }
+        Op::Move { src: o, .. }
+        | Op::Echo(o)
+        | Op::Return { val: o }
+        | Op::AssignCv { val: o, .. }
+        | Op::JmpZ(o, _)
+        | Op::JmpNz(o, _)
+        | Op::Coalesce { a: o, .. }
+        | Op::JmpSet { a: o, .. }
+        | Op::Unary { a: o, .. }
+            if is_t(o) =>
+        {
+            *o = Operand::Lit(lit);
+            true
+        }
+        Op::Bin { a, b, .. } if is_t(a) || is_t(b) => {
+            if is_t(a) {
+                *a = Operand::Lit(lit);
+            } else {
+                *b = Operand::Lit(lit);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool {
+    let mut changed = fold_null_jumps(op_array);
+    // `zend_optimize_cfg` assembles the live blocks only.
+    changed |= super::dce::drop_unreachable(op_array);
     let leaders = find_leaders(op_array);
     let len = op_array.ops.len();
     if len == 0 {
@@ -383,6 +521,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpNz(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -397,6 +538,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpZ(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -411,6 +555,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpZ(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
@@ -425,14 +572,16 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     let new_jmp = Op::JmpNz(*a, *target);
                     op_array.ops[next_i] = new_jmp;
                     op_array.ops[i] = Op::Nop;
+                    op_array
+                        .dropped_tmps
+                        .push(u32::try_from(i).unwrap_or(u32::MAX));
                     changed = true;
                 }
 
-                // No `T = BOOL_NOT(X)` + `T = JMPZ_EX(T)` (or `JMPNZ_EX`) arm:
-                // the jump also stores the tested value, so reversing its
-                // sense on `X` would leave `X`'s truth in the result where
-                // the negated one is expected (`!a && !b` took the wrong
-                // branch). `zend_optimize_block` folds only a `BOOL` there.
+                // (`!` in front of `JMPZ_EX`/`JMPNZ_EX` stays: the jump keeps
+                // its condition as its result, which would be `(bool) X`
+                // where every reader expects `!X`. php-src folds `BOOL_NOT`
+                // only into the jumps without a result.)
                 (
                     Op::Move {
                         src: Operand::Lit(l),
@@ -546,6 +695,11 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
         }
     }
 
+    // `zend_jmp_optimization`, after the blocks' own rules: an `&&` / `||`
+    // whose result only feeds a test jumps where that test goes (`T =
+    // JMPZ_EX(X, L1), L1: JMPZ(T, L2)`), and a `BOOL` / `BOOL_NOT` into a
+    // jump is that jump.
+    changed |= crate::compiler::specialise::thread_short_circuits(&mut op_array.ops);
     changed
 }
 

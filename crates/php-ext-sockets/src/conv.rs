@@ -4,7 +4,6 @@
 
 use php_runtime::{ArrayKey, PropertyPurpose, RuntimeContext, Value, ZArray, ZStr};
 use php_sockets::{Key, OutValue, Value as SValue};
-use php_streams::stream::CastAs;
 use php_vm::ext::VmResult;
 use php_vm::{object, Vm};
 
@@ -46,10 +45,7 @@ pub(crate) fn to_svalue(vm: &mut Vm, v: &Value) -> VmResult<SValue> {
         Value::Reference(r) => to_svalue(vm, &r.get())?,
         Value::Resource(r) => match php_ext_streams::res::cell_of(r) {
             Some(cell) => {
-                let fd = cell.get().and_then(|mut s| {
-                    s.cast(CastAs::FdForSelect, false)
-                        .or_else(|| s.cast(CastAs::Fd, false))
-                });
+                let fd = cell.get().and_then(|mut s| s.any_fd());
                 SValue::Stream { fd }
             }
             None => SValue::Resource,

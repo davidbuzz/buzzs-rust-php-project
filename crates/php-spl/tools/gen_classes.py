@@ -2,7 +2,7 @@
 """Generates src/classes_gen.rs from ext/spl/*.stub.php (php-src master).
 
 Constant values come from the C sources' @cvalue names, resolved by a small
-table (the values are ABI-stable and identical in /usr/bin/php).
+table (the values are ABI-stable and identical in /usr/bin/php8.5).
 
 Usage: python3 -I tools/gen_classes.py ../../modules/php-src/ext/spl > src/classes_gen.rs
 """

@@ -413,9 +413,13 @@ dependencies = [
  "php-ext-zendtest",
  "php-ext-zip",
  "php-ext-zlib",
+ "php-json",
  "php-memlimit",
  "php-parser",
  "php-runtime",
+ "php-sapi",
+ "php-stdstr",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -429,6 +433,7 @@ dependencies = [
  "php-lexer",
  "php-memlimit",
  "php-runtime",
+ "php-sapi",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -701,6 +706,7 @@ version = "0.1.0"
 dependencies = [
  "php-opcache",
  "php-runtime",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -1132,6 +1138,7 @@ version = "0.1.0"
 dependencies = [
  "openssl",
  "php-hash",
+ "php-memlimit",
  "php-runtime",
 ]
 
@@ -1140,6 +1147,7 @@ name = "php-opcache"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "twox-hash",
 ]
 
 [[package]]
@@ -1214,6 +1222,13 @@ name = "php-runtime"
 version = "0.1.0"
 
 [[package]]
+name = "php-sapi"
+version = "0.1.0"
+dependencies = [
+ "php-stdstr",
+]
+
+[[package]]
 name = "php-sapi-apache2"
 version = "0.1.0"
 dependencies = [
@@ -1234,6 +1249,7 @@ dependencies = [
  "php-ext-streams",
  "php-memlimit",
  "php-runtime",
+ "php-sapi",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -1244,6 +1260,7 @@ dependencies = [
 name = "php-session"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-random",
  "php-runtime",
  "php-support",
@@ -1265,6 +1282,7 @@ version = "0.1.0"
 dependencies = [
  "php-hash",
  "php-libxml",
+ "php-memlimit",
  "php-runtime",
  "php-zlib",
 ]
@@ -1354,6 +1372,7 @@ version = "0.1.0"
 name = "php-vm"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-hash",
  "php-lexer",
  "php-mbstring",
@@ -1361,9 +1380,11 @@ dependencies = [
  "php-parser",
  "php-random",
  "php-runtime",
+ "php-sapi",
  "php-stdarr",
  "php-stdstr",
  "php-support",
+ "twox-hash",
 ]
 
 [[package]]

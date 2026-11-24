@@ -299,6 +299,22 @@ impl Exporter {
         }
     }
 
+    /// `zend_ast_export_class_const_name`: a constant string that is a
+    /// valid name is written bare (`C::{'foo'}` as `C::foo`), except
+    /// `class`, which would turn the fetch into `C::class`; anything else
+    /// in braces.
+    fn class_const_name(&mut self, e: &Expr, indent: usize) {
+        if let ExprKind::String(s) = &e.kind {
+            if valid_var_name(s) && !s.eq_ignore_ascii_case(b"class") {
+                self.b(s);
+                return;
+            }
+        }
+        self.c(b'{');
+        self.expr(e, 0, indent);
+        self.c(b'}');
+    }
+
     /// `zend_ast_export_var` for an identifier.
     fn var_ident(&mut self, name: &[u8]) {
         if valid_var_name(name) {
@@ -472,7 +488,7 @@ impl Exporter {
                 self.s("::");
                 match name {
                     MemberName::Ident(id) => self.b(&id.name),
-                    MemberName::Expr(x) => self.name_expr(x, indent),
+                    MemberName::Expr(x) => self.class_const_name(x, indent),
                 }
             }
             ExprKind::ClassName(class) => {
@@ -816,6 +832,9 @@ impl Exporter {
             if p.modifiers.contains(Modifiers::FINAL) {
                 self.s("final ");
             }
+            if p.modifiers.contains(Modifiers::READONLY) {
+                self.s("readonly ");
+            }
             if let Some(t) = &p.ty {
                 self.ty(t);
                 self.c(b' ');
@@ -843,11 +862,21 @@ impl Exporter {
         let indent = indent + 1;
         self.indent(indent);
         for (i, h) in hooks.iter().enumerate() {
-            self.visibility(h.modifiers, true);
+            // `zend_ast_export_hook_list`: attributes, `final`, `&`, the
+            // name and the explicit parameter list.
+            self.attributes(&h.attributes, indent, true);
             if h.modifiers.contains(Modifiers::FINAL) {
                 self.s("final ");
             }
+            if h.by_ref {
+                self.c(b'&');
+            }
             self.b(&h.name.name);
+            if let Some(params) = &h.params {
+                self.c(b'(');
+                self.params(params, indent);
+                self.c(b')');
+            }
             match &h.body {
                 HookBody::None => self.c(b';'),
                 HookBody::Expr(e) => {
@@ -985,7 +1014,12 @@ impl Exporter {
             self.ns_name(p);
         }
         if !decl.implements.is_empty() {
-            self.s(" implements ");
+            // An interface's parents are its `extends` list.
+            if decl.kind == ClassKind::Interface {
+                self.s(" extends ");
+            } else {
+                self.s(" implements ");
+            }
             self.name_list(&decl.implements, ", ");
         }
         self.s(" {\n");
@@ -996,13 +1030,14 @@ impl Exporter {
         self.c(b'}');
     }
 
+    /// `zend_ast_export_name_list_ex`: each name as written, with its
+    /// `\` or `namespace\` prefix (`zend_ast_export_ns_name`).
     fn name_list(&mut self, names: &[Name], sep: &str) {
         for (i, n) in names.iter().enumerate() {
             if i > 0 {
                 self.s(sep);
             }
-            // `zend_ast_export_name` prints the stored string (no prefix).
-            self.b(&n.name);
+            self.ns_name(n);
         }
     }
 
@@ -1166,7 +1201,7 @@ impl Exporter {
 
     fn method_ref(&mut self, r: &TraitMethodRef) {
         if let Some(t) = &r.trait_name {
-            self.b(&t.name);
+            self.ns_name(t);
             self.s("::");
         }
         self.b(&r.method.name);

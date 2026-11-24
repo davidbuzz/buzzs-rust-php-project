@@ -5,6 +5,7 @@
 //! `local_infile_directory` containment check.
 
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
 use crate::consts::{CR_UNKNOWN_ERROR, MYSQLND_EE_FILENOTFOUND};
@@ -30,7 +31,8 @@ pub fn not_found_message(filename: &[u8]) -> String {
 
 impl LocalInfileHandler for FsInfile {
     fn open(&mut self, filename: &[u8]) -> Result<Box<dyn Read>, (u32, String)> {
-        let path = PathBuf::from(String::from_utf8_lossy(filename).into_owned());
+        // Byte-exact (a lossy UTF-8 conversion could name another file).
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(filename));
         match std::fs::File::open(&path) {
             Ok(f) if f.metadata().is_ok_and(|m| !m.is_dir()) => Ok(Box::new(f)),
             _ => Err((MYSQLND_EE_FILENOTFOUND, not_found_message(filename))),
@@ -71,7 +73,7 @@ fn absolutize(p: &Path) -> PathBuf {
 #[must_use]
 pub fn path_within(dir: &str, filename: &[u8]) -> bool {
     let d = absolutize(Path::new(dir));
-    let f = absolutize(Path::new(&*String::from_utf8_lossy(filename)));
+    let f = absolutize(Path::new(std::ffi::OsStr::from_bytes(filename)));
     f.starts_with(&d)
 }
 

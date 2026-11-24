@@ -11,11 +11,16 @@ php-parser = { path = "../php-parser" }
 php-mbstring = { path = "../php-mbstring" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
+php-sapi = { path = "../php-sapi" }
 php-random = { path = "../php-random" }
 php-stdarr = { path = "../php-stdarr" }
 php-stdstr = { path = "../php-stdstr" }
 php-hash = { path = "../php-hash" }
 php-memlimit = { path = "../php-memlimit" }
+libc = "0.2"
+
+[build-dependencies]
+twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64"] }
 
 [lints]
 workspace = true

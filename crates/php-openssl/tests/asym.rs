@@ -1,6 +1,6 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! RSA primitives, signatures and envelopes (oracle: `/usr/bin/php`).
+//! RSA primitives, signatures and envelopes (oracle: `/usr/bin/php8.5`).
 
 mod common;
 use common::*;

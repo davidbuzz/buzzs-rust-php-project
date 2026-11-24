@@ -105,6 +105,12 @@ pub struct PhpRef {
 }
 
 impl PhpRef {
+    /// The byte offset of the value's cell (its borrow word, then the
+    /// value) from the address a handle holds: what machine code that
+    /// reads through a reference without a call starts from (php-vm's
+    /// trace JIT, whose layout test pins the cell's two parts).
+    pub const CELL_OFFSET: usize = std::mem::offset_of!(RefBox, value);
+
     /// Creates a new reference holding `value`. A reference never directly
     /// contains another reference: nested references are unwrapped.
     #[must_use]

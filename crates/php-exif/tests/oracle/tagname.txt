@@ -163,13 +163,16 @@
 34665 Exif_IFD_Pointer
 34675 ICC_Profile
 34850 ExposureProgram
-34852 SpectralSensity
+34852 SpectralSensitivity
 34853 GPS_IFD_Pointer
 34855 ISOSpeedRatings
 34856 OECF
 36864 ExifVersion
 36867 DateTimeOriginal
 36868 DateTimeDigitized
+36880 OffsetTime
+36881 OffsetTimeOriginal
+36882 OffsetTimeDigitized
 37121 ComponentsConfiguration
 37122 CompressedBitsPerPixel
 37377 ShutterSpeedValue

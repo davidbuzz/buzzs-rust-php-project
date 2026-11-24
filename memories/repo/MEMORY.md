@@ -10,7 +10,7 @@
 - [One full build rule](phprust-one-build-rule.md) — merge everything, then ONE consolidated build/test/PHPT; no per-branch or verifier builds (user stopped 12 queued builds on 6 Nov 2026)
 - [ws20 batch 6 Nov 2026](phprust-ws20-batch.md) — 17 edit-only agents on high-priority rows; status files + helper-split plan for stragglers
 - [PHPT workers](phprust-phpt-workers.md) — full PHPT runs use -j 12 (user, 6 Nov 2026); cargo stays at 6 jobs
-- [Oracle INI](phprust-oracle-ini.md) — run /usr/bin/php with -n: Ubuntu php.ini hides deprecations (error_reporting=22527, display_errors=Off)
+- [Oracle INI](phprust-oracle-ini.md) — run /usr/bin/php8.5 with -n: Ubuntu php.ini hides deprecations (error_reporting=22527, display_errors=Off)
 - [Straggler helpers](phprust-straggler-helpers.md) — below the user's per-batch threshold (5, then 10 for ws24 perf), split stragglers' open items to helpers
 - [Project name](brp-project-name.md) — public name is buzzs-rust-php-project (owner, 16 Nov 2026): use it in all docs and file headers; never write "phprust" as the project name; legacy code identifiers rename at publishing
 - [No invented labels](feedback-no-invented-labels.md) — describe findings and stages in plain words, never "D1"- or "Tier 4"-style labels

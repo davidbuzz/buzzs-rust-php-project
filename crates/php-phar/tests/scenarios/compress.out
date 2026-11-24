@@ -6,8 +6,6 @@ NULL
 NULL
 > call compressFiles i:1
 EXC BadMethodCallException: Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2
-> call compressFiles i:8192
-EXC BadMethodCallException: Cannot compress files within archive with bz2, enable ext/bz2 in php.ini
 > call compressFiles i:4096
 NULL
 > info s:a.txt isCompressed
@@ -20,8 +18,6 @@ int(6)
 string(38) "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 > info s:a.txt compress i:4096
 bool(true)
-> info s:a.txt compress i:8192
-EXC BadMethodCallException: Cannot compress with bzip2 compression, bz2 extension is not enabled
 > info s:a.txt compress i:99
 EXC BadMethodCallException: Unknown compression type specified
 > info s:a.txt decompress

@@ -1754,8 +1754,16 @@ fn extract_file(ar: &ArchiveRef, key: &[u8], dest: &[u8], overwrite: bool) -> Re
             "Cannot extract \"{name}\", could not open for writing \"{full}\""
         ));
     };
-    let _ = out.write(&content[..(e.uncompressed_filesize as usize).min(content.len())]);
+    let data = &content[..(e.uncompressed_filesize as usize).min(content.len())];
+    // `php_stream_copy_to_stream_ex() != SUCCESS`: a short or failed write
+    // is reported, not left as a truncated file without an error.
+    let written = out.write(data);
     out.close();
+    if !written.is_ok_and(|n| n >= data.len()) {
+        return Err(format!(
+            "Cannot extract \"{name}\" to \"{full}\", copying contents failed"
+        ));
+    }
     if std::fs::set_permissions(
         crate::sys::path(&fullpath),
         std::fs::Permissions::from_mode(e.flags & ENT_PERM_MASK),

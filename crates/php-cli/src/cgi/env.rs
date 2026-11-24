@@ -4,7 +4,7 @@
 //! `cgi.fix_pathinfo` translation of `SCRIPT_FILENAME`, `PATH_INFO`,
 //! `PATH_TRANSLATED` and `SCRIPT_NAME`), `is_valid_path()`, the `PHP_SELF`
 //! rule of `sapi_cgi_register_variables()`, the CGI detection and the
-//! query-string guard of `main()` (ref: sapi/cgi/cgi_main.c).
+//! query-string guard of `main()` (ref: `sapi/cgi/cgi_main.c`).
 //!
 //! The environment is modelled as an ordered list so that the translation
 //! is a pure function; [`Env::changes`] records the `CGI_PUTENV()` calls
@@ -31,6 +31,11 @@ impl Env {
     pub fn from_process() -> Self {
         use std::os::unix::ffi::OsStringExt;
         Env::new(std::env::vars_os().map(|(k, v)| (k.into_vec(), v.into_vec())))
+    }
+
+    /// Every variable, in the order the names were first set.
+    pub fn vars(&self) -> &[(Vec<u8>, Vec<u8>)] {
+        &self.vars
     }
 
     /// `getenv(name)`.
@@ -81,6 +86,8 @@ pub struct Settings {
     pub discard_path: bool,
     /// `doc_root`.
     pub doc_root: Option<Vec<u8>>,
+    /// `fastcgi.script_path_encoded` (FPM).
+    pub script_path_encoded: bool,
 }
 
 impl Default for Settings {
@@ -89,6 +96,7 @@ impl Default for Settings {
             fix_pathinfo: true,
             discard_path: false,
             doc_root: None,
+            script_path_encoded: true,
         }
     }
 }
@@ -154,7 +162,7 @@ impl Default for RequestInfo {
 }
 
 /// C `atol()`.
-fn atol(s: &[u8]) -> i64 {
+pub fn atol(s: &[u8]) -> i64 {
     let s = s.trim_ascii_start();
     let (neg, digits) = match s.first() {
         Some(b'-') => (true, &s[1..]),
@@ -192,13 +200,15 @@ pub fn is_valid_path(path: &[u8]) -> bool {
 }
 
 /// `strrchr(pt, '/')`, else `strrchr(pt, '\\')`.
-fn last_slash(pt: &[u8]) -> Option<usize> {
+pub fn last_slash(pt: &[u8]) -> Option<usize> {
     pt.iter()
         .rposition(|&c| c == b'/')
         .or_else(|| pt.iter().rposition(|&c| c == b'\\'))
 }
 
-/// `init_request_info()` for a non-FastCGI request.
+/// `init_request_info()`: `env` is the process environment of a CGI
+/// request, or the environment of a `FastCGI` request (`CGI_GETENV` and
+/// `CGI_PUTENV` then use `request->env`).
 #[allow(clippy::too_many_lines)]
 pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> RequestInfo {
     let mut info = RequestInfo::default();
@@ -254,8 +264,12 @@ pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> Req
                 }
                 found = true;
                 let slen = len - pt.len();
-                if let Some(pi) = env_path_info.clone() {
-                    let off = pi.len().saturating_sub(slen);
+                // Only a PATH_INFO longer than what was stripped ends in it
+                // (GHSA-5j3f-64r7-f564, CVE-2026-129538: C read and wrote
+                // before the value otherwise; it now leaves PATH_INFO and
+                // SCRIPT_NAME alone then).
+                if let Some(pi) = env_path_info.clone().filter(|pi| pi.len() > slen) {
+                    let off = pi.len() - slen;
                     env.put("ORIG_PATH_INFO", Some(&pi));
                     let prefix = &pi[..off];
                     if orig_script_name.as_deref() == Some(prefix) {
@@ -494,8 +508,8 @@ mod tests {
         )
     }
 
-    /// What run-tests.php passes: SCRIPT_FILENAME = PATH_TRANSLATED = the
-    /// test file, no SCRIPT_NAME (so `PHP_SELF` is empty, as the oracle
+    /// What run-tests.php passes: `SCRIPT_FILENAME` = `PATH_TRANSLATED` = the
+    /// test file, no `SCRIPT_NAME` (so `PHP_SELF` is empty, as the oracle
     /// prints).
     #[test]
     fn run_tests_environment() {
@@ -520,7 +534,7 @@ mod tests {
         assert_eq!(php_self(None, None, true), b"");
     }
 
-    /// `/info.php/test`: PATH_INFO is split off the script path.
+    /// `/info.php/test`: `PATH_INFO` is split off the script path.
     #[test]
     fn path_info_split() {
         let mut e = env(&[
@@ -562,6 +576,31 @@ mod tests {
         );
     }
 
+    /// GHSA-5j3f-64r7-f564 (CVE-2026-129538): a stripped suffix longer
+    /// than `PATH_INFO` leaves `PATH_INFO` (and `SCRIPT_NAME`) as they are.
+    #[test]
+    fn path_info_shorter_than_stripped_suffix() {
+        let fs = FakeFs(&["/t/s.php"]);
+        let mut e = env(&[
+            ("SCRIPT_FILENAME", "/t/s.php/b"),
+            ("PATH_INFO", "/a/b"),
+            ("SCRIPT_NAME", "/s.php"),
+        ]);
+        init_request_info(&mut e, &Settings::default(), &fs);
+        assert_eq!(e.get("PATH_INFO").as_deref(), Some(&b"/b"[..]));
+        assert_eq!(e.get("ORIG_PATH_INFO").as_deref(), Some(&b"/a/b"[..]));
+        let mut e = env(&[
+            ("SCRIPT_FILENAME", "/t/s.php/xxxxxxxxxxxxxxxx"),
+            ("PATH_INFO", "/x"),
+            ("SCRIPT_NAME", "/s.php"),
+        ]);
+        let info = init_request_info(&mut e, &Settings::default(), &fs);
+        assert_eq!(info.path_translated.as_deref(), Some(&b"/t/s.php"[..]));
+        assert_eq!(e.get("PATH_INFO").as_deref(), Some(&b"/x"[..]));
+        assert_eq!(e.get("ORIG_PATH_INFO"), None);
+        assert_eq!(e.get("SCRIPT_NAME").as_deref(), Some(&b"/s.php"[..]));
+    }
+
     /// No file anywhere along the path: 404 and no script.
     #[test]
     fn missing_script_is_404() {
@@ -593,7 +632,7 @@ mod tests {
         let s = Settings {
             fix_pathinfo: false,
             discard_path: true,
-            doc_root: None,
+            ..Settings::default()
         };
         let info = init_request_info(&mut e, &s, &FakeFs(&[]));
         assert_eq!(info.path_translated.as_deref(), Some(&b"/a/php-cgi"[..]));

@@ -241,13 +241,12 @@ impl FilesHandler {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-            opts.mode(self.filemode);
+            // `O_CREAT | O_RDWR | O_NOFOLLOW`: a symlink planted at the
+            // session's path is refused by the same `open()` (ELOOP), with
+            // no window between a check and the open.
+            opts.mode(self.filemode).custom_flags(libc::O_NOFOLLOW);
         }
-        // O_NOFOLLOW: refuse to follow a planted symlink.
-        let opened = match std::fs::symlink_metadata(&p) {
-            Ok(m) if m.file_type().is_symlink() => Err(std::io::Error::from_raw_os_error(40)),
-            _ => opts.open(&p),
-        };
+        let opened = opts.open(&p);
         match opened {
             Ok(file) => {
                 #[cfg(unix)]
@@ -291,6 +290,22 @@ impl FilesHandler {
         let Some(file) = self.file.as_mut() else {
             return false;
         };
+        // Truncate before writing (GHSA-fm2m-fjf5-v3cp, CVE-2026-126714):
+        // a write cut short then leaves a short file, never the new data
+        // followed by the end of the old session, which `unserialize()`
+        // would read as one.
+        if let Err(e) = file.set_len(0) {
+            warn(
+                host,
+                ErrorLevel::Warning,
+                &format!(
+                    "ftruncate() failed: {} ({})",
+                    strerror(&e),
+                    e.raw_os_error().unwrap_or(0)
+                ),
+            );
+            return false;
+        }
         let res = file
             .seek(SeekFrom::Start(0))
             .and_then(|_| file.write_all(val));
@@ -306,11 +321,7 @@ impl FilesHandler {
             );
             return false;
         }
-        let len = val.len() as u64;
-        if len < self.st_size {
-            let _ = file.set_len(len);
-        }
-        self.st_size = len;
+        self.st_size = val.len() as u64;
         true
     }
 

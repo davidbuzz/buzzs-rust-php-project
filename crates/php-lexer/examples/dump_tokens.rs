@@ -2,7 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Dumps `token_get_all()`-style output for each file given on the command
 //! line, one token per line as `NAME<TAB>LINE<TAB>HEX(TEXT)`, preceded by a
-//! `== path` header. Used to diff against `/usr/bin/php`.
+//! `== path` header. Used to diff against `/usr/bin/php8.5`.
 
 use std::fmt::Write as _;
 use std::io::Write as _;

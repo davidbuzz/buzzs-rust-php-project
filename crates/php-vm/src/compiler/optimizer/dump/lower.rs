@@ -18,7 +18,7 @@ use crate::compiler::{FunctionInfo, FunctionTable};
 use crate::func::UserFunction;
 use crate::opcode::{
     ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, IncludeKind,
-    MatchKey, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
+    MatchKey, NullChain, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use crate::types::TypeDecl;
 use php_runtime::{BinaryOp, Value, ZStr};
@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 /// A function a call resolves to at compile time
 /// (`zend_optimizer_get_called_func`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Known {
     /// Send modes.
     pub info: FunctionInfo,
@@ -139,6 +139,7 @@ impl Resolver<'_> {
             f.required,
             f.params.iter().map(|p| (p.by_ref, p.variadic)),
         )
+        .with_names(f.params.iter().map(|p| p.name.clone()))
     }
 
     /// The result type of a call of user function `f`.
@@ -166,7 +167,9 @@ impl Resolver<'_> {
             }
             return None;
         }
-        self.table.find(lc).filter(|i| i.internal).map(|info| {
+        // A user function of the same file declared when the code runs
+        // (a partial application's script) counts as well.
+        self.table.find(lc).map(|info| {
             let (flags, ret) = (self.internal)(lc);
             Known {
                 info,
@@ -179,7 +182,7 @@ impl Resolver<'_> {
 
     /// The script class declared under lower-case name `lc`, when only one
     /// class of the script has that name.
-    fn class_decl(&self, lc: &[u8]) -> Option<&Rc<ClassDecl>> {
+    pub(crate) fn class_decl(&self, lc: &[u8]) -> Option<&Rc<ClassDecl>> {
         if self.ambiguous.iter().any(|a| a == lc) {
             return None;
         }
@@ -291,7 +294,7 @@ impl Resolver<'_> {
     /// `zend_try_inline_call`: the constant a call of the dumped user
     /// function `user` with `sent` arguments is replaced by, when its
     /// code is nothing but `return <literal>;` after receiving its
-    /// arguments.
+    /// arguments ([`literal_return_value`]).
     pub(crate) fn inline_value(
         &self,
         user: usize,
@@ -299,76 +302,10 @@ impl Resolver<'_> {
         static_call: bool,
         result_used: bool,
     ) -> Option<Value> {
-        use crate::func::flags;
-        use crate::types::mask as m;
-        let f = self.funcs.get(user)?;
-        let no_discard = if result_used { 0 } else { flags::NODISCARD };
-        if self.level & crate::compiler::optimizer::PASS_16 == 0
-            || f.flags
-                & (flags::ABSTRACT
-                    | flags::DEPRECATED
-                    | flags::VARIADIC
-                    | flags::RETURN_REF
-                    | flags::NO_BODY
-                    | no_discard)
-                != 0
-            || f.is_generator()
-            || f.is_closure()
-            || sent < f.required
-            || (static_call && f.flags & flags::STATIC == 0)
-            || f.params
-                .iter()
-                .any(|p| p.by_ref || p.variadic || p.ty.is_some())
-            || !f.code.static_vars.is_empty()
-            || f.code.num_statics != 0
-            || super::reduced_to_literal(&f.code)
-        {
+        if self.level & crate::compiler::optimizer::PASS_16 == 0 {
             return None;
         }
-        // Missing optional arguments take their defaults, which must not
-        // be constant expressions.
-        if f.params
-            .iter()
-            .skip(sent as usize)
-            .any(|p| !matches!(p.default_expr, Some(crate::class::ConstExpr::Value(_))))
-        {
-            return None;
-        }
-        let mut body = f.code.ops.iter().map(generic).filter(|op| {
-            !matches!(
-                op,
-                Op::Nop | Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
-            )
-        });
-        let v = match body.next()? {
-            Op::Return {
-                val: Operand::Lit(l),
-            } => f.code.literals.get(l as usize)?.clone(),
-            Op::Return {
-                val: Operand::Unused,
-            } => Value::Null,
-            _ => return None,
-        };
-        // A literal of another type than the declared return type is
-        // checked first (`zend_emit_return_type_check`).
-        if let Some(rt) = &f.return_type {
-            let mixed =
-                rt.classes.is_empty() && rt.intersections.is_empty() && rt.mask & m::ANY == m::ANY;
-            let bit = match &v {
-                Value::Null => m::NULL | m::VOID,
-                Value::Bool(false) => m::FALSE,
-                Value::Bool(true) => m::TRUE,
-                Value::Int(_) => m::LONG,
-                Value::Float(_) => m::DOUBLE,
-                Value::Str(_) => m::STRING,
-                Value::Array(_) => m::ARRAY,
-                _ => 0,
-            };
-            if !mixed && rt.mask & bit == 0 {
-                return None;
-            }
-        }
-        Some(v)
+        literal_return_value(self.funcs.get(user)?, sent, static_call, result_used)
     }
 
     /// A method of a script class.
@@ -389,6 +326,91 @@ impl Resolver<'_> {
             decl.flags,
         ))
     }
+}
+
+/// `zend_try_inline_call`: the constant a call of the user function `f`
+/// with `sent` arguments is replaced by, when its code is nothing but
+/// `return <literal>;` after receiving its arguments (the code it was
+/// compiled to, not what its own optimizer made of it): not abstract,
+/// deprecated, `#[\NoDiscard]` with the result unused, variadic, by
+/// reference, a generator or a closure; every required argument passed, no
+/// by-reference or typed parameter, no static variable, a missing optional
+/// argument's default a literal; a literal its return type takes.
+/// `static_call`: the call is `C::f()`; `result_used`: its result is read.
+pub(crate) fn literal_return_value(
+    f: &UserFunction,
+    sent: u32,
+    static_call: bool,
+    result_used: bool,
+) -> Option<Value> {
+    use crate::func::flags;
+    use crate::types::mask as m;
+    let no_discard = if result_used { 0 } else { flags::NODISCARD };
+    if f.flags
+        & (flags::ABSTRACT
+            | flags::DEPRECATED
+            | flags::VARIADIC
+            | flags::RETURN_REF
+            | flags::NO_BODY
+            | no_discard)
+        != 0
+        || f.is_generator()
+        || f.is_closure()
+        || sent < f.required
+        || (static_call && f.flags & flags::STATIC == 0)
+        || f.params
+            .iter()
+            .any(|p| p.by_ref || p.variadic || p.ty.is_some())
+        || !f.code.static_vars.is_empty()
+        || f.code.num_statics != 0
+        || super::reduced_to_literal(&f.code)
+    {
+        return None;
+    }
+    // Missing optional arguments take their defaults, which must not
+    // be constant expressions.
+    if f.params
+        .iter()
+        .skip(sent as usize)
+        .any(|p| !matches!(p.default_expr, Some(crate::class::ConstExpr::Value(_))))
+    {
+        return None;
+    }
+    let mut body = f.code.ops.iter().map(generic).filter(|op| {
+        !matches!(
+            op,
+            Op::Nop | Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
+        )
+    });
+    let v = match body.next()? {
+        Op::Return {
+            val: Operand::Lit(l),
+        } => f.code.literals.get(l as usize)?.clone(),
+        Op::Return {
+            val: Operand::Unused,
+        } => Value::Null,
+        _ => return None,
+    };
+    // A literal of another type than the declared return type is
+    // checked first (`zend_emit_return_type_check`).
+    if let Some(rt) = &f.return_type {
+        let mixed =
+            rt.classes.is_empty() && rt.intersections.is_empty() && rt.mask & m::ANY == m::ANY;
+        let bit = match &v {
+            Value::Null => m::NULL | m::VOID,
+            Value::Bool(false) => m::FALSE,
+            Value::Bool(true) => m::TRUE,
+            Value::Int(_) => m::LONG,
+            Value::Float(_) => m::DOUBLE,
+            Value::Str(_) => m::STRING,
+            Value::Array(_) => m::ARRAY,
+            _ => 0,
+        };
+        if !mixed && rt.mask & bit == 0 {
+            return None;
+        }
+    }
+    Some(v)
 }
 
 /// The lowered form of one op array.
@@ -429,6 +451,37 @@ struct Call {
     /// The `INIT_*` opline of a call to a known function that is not a
     /// prototype, which `zend_try_inline_call` may replace.
     inline: Option<usize>,
+    /// The parameter names of the known function (its variadic one
+    /// excluded), which named arguments resolve against
+    /// (`zend_get_arg_num`).
+    names: Option<Vec<ZStr>>,
+    /// The positional arguments sent so far (`arg_count`).
+    count: u32,
+    /// A named argument out of order, or an unpacking: some parameter
+    /// may be missing (`may_have_undef`, `ZEND_CHECK_UNDEF_ARGS`).
+    undef: bool,
+}
+
+/// `zend_compile_args_ex` for one argument of `call`: a named argument
+/// passed in order is positional, one out of order stays named (and a
+/// parameter may go missing). The argument's number when the called
+/// function is known (or the argument is positional), and its name.
+fn resolve_arg(call: &mut Call, name: Option<Value>) -> (Option<u32>, Option<Value>) {
+    let Some(Value::Str(nm)) = &name else {
+        call.count += 1;
+        return (Some(call.count), name);
+    };
+    let at = call
+        .names
+        .as_ref()
+        .and_then(|ps| ps.iter().position(|p| p == nm))
+        .and_then(|p| u32::try_from(p + 1).ok());
+    if !call.undef && at == Some(call.count + 1) {
+        call.count += 1;
+        return (at, None);
+    }
+    call.undef = true;
+    (at, name)
 }
 
 /// A fetch mode of a container chain.
@@ -548,6 +601,8 @@ pub(crate) struct Lower<'a> {
     next_tmp: u32,
     /// Temporaries replaced by another operand.
     alias: HashMap<u32, Z>,
+    /// Temporaries for the next line's [`ZLine::pre`].
+    pre: Vec<u32>,
     calls: Vec<Call>,
     /// The temporary of each foreach iterator slot.
     iters: HashMap<u32, u32>,
@@ -591,6 +646,7 @@ impl<'a> Lower<'a> {
             lines: Vec::new(),
             next_tmp: oa.num_tmps,
             alias: HashMap::new(),
+            pre: Vec::new(),
             calls: Vec::new(),
             iters: HashMap::new(),
             skip: vec![false; oa.ops.len()],
@@ -609,8 +665,34 @@ impl<'a> Lower<'a> {
         t
     }
 
-    fn push(&mut self, l: ZLine) {
+    fn push(&mut self, mut l: ZLine) {
+        if !self.pre.is_empty() {
+            l.pre = std::mem::take(&mut self.pre);
+        }
         self.lines.push(l);
+    }
+
+    /// The temporaries php-src allocated at op `i` that no line of ours
+    /// names there: the result of an instruction a pass dropped, and the
+    /// `finally` call variable of a `try` starting at `i`
+    /// (`zend_compile_try` allocates it before the body).
+    fn note_allocations(&mut self, i: usize) {
+        let at = u32::try_from(i).unwrap_or(u32::MAX);
+        if self.oa.dropped_tmps.contains(&at) {
+            let t = self.tmp();
+            self.pre.push(t);
+        }
+        let fins: Vec<u32> = self
+            .oa
+            .try_table
+            .iter()
+            .filter(|e| e.try_start == at)
+            .filter_map(|e| e.finally.map(|(fin, _, _)| fin))
+            .collect();
+        for fin in fins {
+            let t = self.fin_tmp(fin);
+            self.pre.push(t);
+        }
     }
 
     fn lit(&self, l: u32) -> Value {
@@ -619,6 +701,28 @@ impl<'a> Lower<'a> {
             .get(l as usize)
             .cloned()
             .unwrap_or(Value::Null)
+    }
+
+    /// The parameter names of a known function (its variadic one
+    /// excluded): a user function's, or those of the internal function
+    /// `internal_lc`.
+    fn param_names(&self, known: Option<&Known>, internal_lc: Option<&[u8]>) -> Option<Vec<ZStr>> {
+        let k = known?;
+        let mut names: Vec<ZStr> = match k.user {
+            Some(u) => self
+                .res
+                .funcs
+                .get(u)?
+                .params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect(),
+            None => self.res.table.param_names(internal_lc?)?,
+        };
+        if k.info.variadic {
+            names.pop();
+        }
+        Some(names)
     }
 
     fn lit_bytes(&self, l: u32) -> Vec<u8> {
@@ -687,6 +791,7 @@ impl<'a> Lower<'a> {
         let mut bound = self.func.uses.is_empty();
         for i in 0..n {
             first_z.push(u32::try_from(self.lines.len()).unwrap_or(u32::MAX));
+            self.note_allocations(i);
             if self.skip[i] {
                 continue;
             }
@@ -758,12 +863,29 @@ impl<'a> Lower<'a> {
     }
 
     /// Scans the arguments of the call started at op `i`: the number of
-    /// arguments, and whether every one is a plain positional value or
-    /// variable (what a frameless call can take).
-    fn scan_call(&self, i: usize) -> (u32, bool) {
+    /// positional arguments (named ones in order count when the called
+    /// function's parameter `names` are known), and whether every one is
+    /// a plain positional value or variable (what a frameless call can
+    /// take).
+    fn scan_call(&self, i: usize, names: Option<&[ZStr]>) -> (u32, bool) {
         let mut depth = 0u32;
         let mut n = 0u32;
         let mut simple = true;
+        let mut names = names;
+        let mut undef = false;
+        // `zend_compile_args_ex`: a named argument passed in order is a
+        // positional one.
+        let resolve_named = |nm: &[u8], n: &mut u32, undef: &mut bool, names: Option<&[ZStr]>| {
+            let in_order = !*undef
+                && names
+                    .and_then(|ps| ps.get(*n as usize))
+                    .is_some_and(|p| p.as_bytes() == nm);
+            if in_order {
+                *n += 1;
+            } else {
+                *undef = true;
+            }
+        };
         for op in self.ops.iter().skip(i + 1) {
             match generic(op) {
                 Op::InitFCall { .. }
@@ -791,11 +913,23 @@ impl<'a> Lower<'a> {
                         }
                     }
                 }
-                Op::SendNamed { .. } | Op::SendPlaceholder { .. } if depth == 0 => {
+                Op::SendNamed { name, .. }
+                | Op::SendPlaceholder {
+                    name: Some(name), ..
+                } if depth == 0 => {
+                    simple = false;
+                    let nm = self.lit_bytes(name);
+                    resolve_named(&nm, &mut n, &mut undef, names);
+                }
+                Op::SendPlaceholder { name: None } if depth == 0 => {
                     n += 1;
                     simple = false;
                 }
-                Op::SendUnpack { .. } if depth == 0 => simple = false,
+                Op::SendUnpack { .. } if depth == 0 => {
+                    simple = false;
+                    names = None;
+                    undef = true;
+                }
                 _ => {}
             }
         }
@@ -891,9 +1025,21 @@ impl<'a> Lower<'a> {
                 let a = self.z(a);
                 self.push(ZLine::new("COALESCE").t(*dst).a(a).b(Z::Label(*target)));
             }
-            Op::JmpNull { a, dst, target } => {
+            Op::JmpNull {
+                a,
+                dst,
+                target,
+                chain,
+            } => {
                 let a = self.z(a);
-                self.push(ZLine::new("JMP_NULL").t(*dst).a(a).b(Z::Label(*target)));
+                let mut l = ZLine::new("JMP_NULL").t(*dst).a(a).b(Z::Label(*target));
+                // `ZEND_SHORT_CIRCUITING_CHAIN_*`.
+                l.xv = match chain {
+                    NullChain::Expr | NullChain::Quiet => 0,
+                    NullChain::Isset => 1,
+                    NullChain::Empty => 2,
+                };
+                self.push(l);
             }
             Op::AssignCv { cv, val, dst } => {
                 let v = self.z(val);
@@ -988,7 +1134,7 @@ impl<'a> Lower<'a> {
             } => self.lower_init_fcall(i, *name, *fallback, *display),
             Op::InitDynCall { callee } => {
                 let c = self.copy_kept(callee);
-                let (n, _) = self.scan_call(i);
+                let (n, _) = self.scan_call(i, None);
                 self.push(ZLine::new("INIT_DYNAMIC_CALL").x(format!(" {n}")).b(c));
                 self.calls.push(Call {
                     kind: CallKind::Dynamic,
@@ -997,6 +1143,9 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitMethodCall { obj, name } => {
@@ -1005,7 +1154,6 @@ impl<'a> Lower<'a> {
                     _ => self.z(obj),
                 };
                 let nm = self.z(name);
-                let (n, _) = self.scan_call(i);
                 // `zend_optimizer_get_called_func`: a closure's op array has
                 // no scope there.
                 let closure = self.func.flags & crate::func::flags::CLOSURE != 0;
@@ -1016,7 +1164,9 @@ impl<'a> Lower<'a> {
                     }
                     _ => None,
                 };
-                let known = found.map(|(k, _, _)| k);
+                let known = found.as_ref().map(|(k, _, _)| k.clone());
+                let names = self.param_names(known.as_ref(), None);
+                let (n, _) = self.scan_call(i, names.as_deref());
                 // `zend_optimizer_get_called_func`: a method that no child
                 // class can override (private, final, or of a final class)
                 // is not a prototype, so its calls may be inlined.
@@ -1036,11 +1186,13 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: fixed.then_some(init_at),
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitStaticCall { class, name } => {
                 let nm = self.z(name);
-                let (n, _) = self.scan_call(i);
                 let class_lc = match class {
                     ClassSpec::Named(l) => Some(self.lit_bytes(*l).to_ascii_lowercase()),
                     ClassSpec::SelfClass => self.scope.clone(),
@@ -1069,7 +1221,9 @@ impl<'a> Lower<'a> {
                             .class_decl(c)
                             .is_some_and(|d| d.flags & crate::class::cflags::TRAIT == 0)
                 });
-                let fixed = resolved && known.is_some_and(|k| k.user.is_some());
+                let fixed = resolved && known.as_ref().is_some_and(|k| k.user.is_some());
+                let names = self.param_names(known.as_ref(), None);
+                let (n, _) = self.scan_call(i, names.as_deref());
                 let c = self.class_z(class, " (exception)");
                 let init_at = self.lines.len();
                 self.push(
@@ -1085,10 +1239,13 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: fixed.then_some(init_at),
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::InitParentHook { prop, set } => {
-                let (n, _) = self.scan_call(i);
+                let (n, _) = self.scan_call(i, None);
                 let p = Z::Const(self.lit(*prop));
                 self.push(
                     ZLine::new("INIT_PARENT_PROPERTY_HOOK_CALL")
@@ -1103,14 +1260,34 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::New { class, dst, .. } => {
-                let (n, _) = self.scan_call(i);
+                // `zend_compile_new`: the constructor of a class the
+                // compiler knows, the script's or an internal one.
+                let mut internal = None;
                 let known = match class {
                     ClassSpec::Named(l) => {
                         let lc = self.lit_bytes(*l).to_ascii_lowercase();
-                        self.res.method(&lc, b"__construct").map(|(k, _, _)| k)
+                        let lc = lc.strip_prefix(b"\\").unwrap_or(&lc).to_vec();
+                        match self.res.method(&lc, b"__construct") {
+                            Some((k, _, _)) => Some(k),
+                            None if self.res.class_decl(&lc).is_none() => {
+                                self.res.table.internal_ctor(&lc).map(|(info, names)| {
+                                    internal = Some(names);
+                                    Known {
+                                        info,
+                                        user: None,
+                                        flags: 0,
+                                        ret: 0,
+                                    }
+                                })
+                            }
+                            None => None,
+                        }
                     }
                     ClassSpec::SelfClass => self
                         .scope
@@ -1119,6 +1296,14 @@ impl<'a> Lower<'a> {
                         .map(|(k, _, _)| k),
                     _ => None,
                 };
+                let names = internal.or_else(|| self.param_names(known.as_ref(), None));
+                let names = names.map(|mut v| {
+                    if known.as_ref().is_some_and(|k| k.info.variadic) {
+                        v.pop();
+                    }
+                    v
+                });
+                let (n, _) = self.scan_call(i, names.as_deref());
                 let c = self.class_z(class, " (exception)");
                 self.push(ZLine::new("NEW").t(*dst).x(format!(" {n}")).a(c));
                 self.calls.push(Call {
@@ -1128,6 +1313,9 @@ impl<'a> Lower<'a> {
                     args: Vec::new(),
                     sent: 0,
                     inline: None,
+                    names,
+                    count: 0,
+                    undef: false,
                 });
             }
             Op::Send { src } => self.lower_send(src, None),
@@ -1139,17 +1327,23 @@ impl<'a> Lower<'a> {
                 let s = self.z(src);
                 if let Some(c) = self.calls.last_mut() {
                     c.frameless = None;
+                    c.names = None;
+                    c.undef = true;
                 }
                 self.push(ZLine::new("SEND_UNPACK").a(s));
             }
             Op::SendPlaceholder { name } => {
-                let sent = self.calls.last_mut().map_or(1, |c| {
-                    c.sent += 1;
-                    c.sent
-                });
+                let name = (*name).map(|n| self.lit(n));
+                let (num, name) = match self.calls.last_mut() {
+                    Some(c) => {
+                        c.sent += 1;
+                        resolve_arg(c, name)
+                    }
+                    None => (Some(1), name),
+                };
                 let b = match name {
-                    Some(n) => Z::Const(self.lit(*n)),
-                    None => Z::Num(sent),
+                    Some(n) => Z::Const(n),
+                    None => Z::Num(num.unwrap_or(0)),
                 };
                 self.push(ZLine::new("SEND_PLACEHOLDER").b(b));
             }
@@ -1388,7 +1582,13 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("CLONE").t(*dst).a(a));
             }
             Op::FuncNumArgs { dst } => self.push(ZLine::new("FUNC_NUM_ARGS").ot(*dst)),
-            Op::FuncGetArgs { dst } => self.push(ZLine::new("FUNC_GET_ARGS").ot(*dst)),
+            Op::FuncGetArgs { dst, skip } => {
+                let mut l = ZLine::new("FUNC_GET_ARGS").ot(*dst);
+                if let Some(n) = skip {
+                    l = l.a(Z::Const(Value::Int(i64::from(*n))));
+                }
+                self.push(l);
+            }
             Op::Strlen { a, dst } => {
                 let a = self.z(a);
                 self.push(ZLine::new("STRLEN").ot(*dst).a(a));
@@ -2250,10 +2450,11 @@ impl Lower<'_> {
 
     fn lower_init_fcall(&mut self, i: usize, name: u32, fallback: Option<u32>, display: u32) {
         let lc = self.lit_bytes(name);
-        let (n, simple) = self.scan_call(i);
         let line = self.oa.line(i);
         let known = self.res.function(&lc, line);
-        let frameless = match known {
+        let names = self.param_names(known.as_ref(), Some(&lc));
+        let (n, simple) = self.scan_call(i, names.as_deref());
+        let frameless = match &known {
             Some(k) if fallback.is_none() && k.user.is_none() && simple && n <= 3 => {
                 let ok = crate::compiler::frameless_arities(&lc)
                     .unwrap_or(&[])
@@ -2271,11 +2472,14 @@ impl Lower<'_> {
                 args: Vec::new(),
                 sent: 0,
                 inline: None,
+                names,
+                count: 0,
+                undef: false,
             });
             return;
         }
         let init_at = self.lines.len();
-        let kind = match (known, fallback) {
+        let kind = match (&known, fallback) {
             (Some(k), _) => {
                 let mut l = ZLine::new("INIT_FCALL")
                     .x(format!(" {n}"))
@@ -2299,7 +2503,7 @@ impl Lower<'_> {
                 CallKind::ByName
             }
         };
-        let user = known.is_some_and(|k| k.user.is_some());
+        let user = known.as_ref().is_some_and(|k| k.user.is_some());
         self.calls.push(Call {
             kind,
             known,
@@ -2307,16 +2511,20 @@ impl Lower<'_> {
             args: Vec::new(),
             sent: 0,
             inline: (kind == CallKind::FCall && user).then_some(init_at),
+            names,
+            count: 0,
+            undef: false,
         });
     }
 
     fn lower_send(&mut self, src: &ArgSrc, name: Option<Value>) {
-        let (known, frameless, argn) = match self.calls.last_mut() {
+        let (known, frameless, argn, name) = match self.calls.last_mut() {
             Some(c) => {
                 c.sent += 1;
-                (c.known, c.frameless.is_some(), c.sent)
+                let (num, name) = resolve_arg(c, name);
+                (c.known.clone(), c.frameless.is_some(), num, name)
             }
-            None => (None, false, 1),
+            None => (None, false, Some(1), name),
         };
         if frameless {
             let z = match src {
@@ -2333,12 +2541,12 @@ impl Lower<'_> {
         }
         let pos = match &name {
             Some(n) => Z::Const(n.clone()),
-            None => Z::Num(argn),
+            None => Z::Num(argn.unwrap_or(0)),
         };
-        let by_ref = if name.is_some() {
-            None
-        } else {
-            known.map(|k| k.info.sends_by_ref(argn as usize - 1))
+        // The send mode of a known function's parameter `arg_num`.
+        let by_ref = match (known, argn) {
+            (Some(k), Some(a)) => Some(k.info.sends_by_ref(a as usize - 1)),
+            _ => None,
         };
         match src {
             ArgSrc::Val(o) => {
@@ -2429,6 +2637,9 @@ impl Lower<'_> {
             self.push(ZLine::new("DO_FCALL").ot(dst));
             return;
         };
+        if call.undef {
+            self.push(ZLine::new("CHECK_UNDEF_ARGS"));
+        }
         if let Some((name, n)) = call.frameless {
             let op = match n {
                 0 => "FRAMELESS_ICALL_0",
@@ -2441,7 +2652,7 @@ impl Lower<'_> {
             let b = args.next().unwrap_or(Z::Unused);
             let mut l = ZLine::new(op).ot(dst).a(a).b(b);
             l.suffix = format!("({})", String::from_utf8_lossy(&name));
-            l.ret = call.known.map(|k| k.ret);
+            l.ret = call.known.as_ref().map(|k| k.ret);
             self.push(l);
             if n == 3 {
                 let c = args.next().unwrap_or(Z::Unused);
@@ -2449,21 +2660,21 @@ impl Lower<'_> {
             }
             return;
         }
-        if self.try_inline(&call, dst) {
+        if !call.undef && self.try_inline(&call, dst) {
             return;
         }
         // `zend_get_call_op`: deprecated functions, and `#[\NoDiscard]` ones
         // whose result is unused, keep `DO_FCALL_BY_NAME`.
-        let by_name = call.known.is_some_and(|k| {
+        let by_name = call.known.as_ref().is_some_and(|k| {
             use crate::func::flags;
             k.flags & flags::DEPRECATED != 0 || (k.flags & flags::NODISCARD != 0 && dst.is_none())
         });
-        let op = match (call.kind, call.known) {
+        let op = match (call.kind, &call.known) {
             (CallKind::FCall | CallKind::Method | CallKind::Static, Some(_)) if by_name => {
                 "DO_FCALL_BY_NAME"
             }
             (CallKind::FCall, Some(k)) => {
-                if k.user.is_some() {
+                if k.user.is_some() || !k.info.internal {
                     "DO_UCALL"
                 } else {
                     "DO_ICALL"
@@ -2475,7 +2686,7 @@ impl Lower<'_> {
         };
         let mut l = ZLine::new(op).ot(dst);
         if call.kind != CallKind::New {
-            l.ret = call.known.map(|k| k.ret);
+            l.ret = call.known.as_ref().map(|k| k.ret);
         }
         self.push(l);
     }
@@ -2486,13 +2697,13 @@ impl Lower<'_> {
     /// opline goes and the arguments it sent are freed
     /// (`zend_delete_call_instructions`).
     fn try_inline(&mut self, call: &Call, dst: Option<u32>) -> bool {
-        let (Some(init), Some(Known { user: Some(u), .. })) = (call.inline, call.known) else {
+        let (Some(init), Some(Known { user: Some(u), .. })) = (call.inline, &call.known) else {
             return false;
         };
         let static_call = call.kind == CallKind::Static;
         let Some(v) = self
             .res
-            .inline_value(u, call.sent, static_call, dst.is_some())
+            .inline_value(*u, call.sent, static_call, dst.is_some())
         else {
             return false;
         };

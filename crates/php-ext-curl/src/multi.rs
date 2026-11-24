@@ -249,7 +249,7 @@ fn curl_multi_setopt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 let why = vm.callable_error_message(&value);
                 return Err(a.type_error(
                     vm,
-                    2,
+                    3,
                     &format!("must be a valid callback for option CURLMOPT_PUSHFUNCTION, {why}"),
                 ));
             }

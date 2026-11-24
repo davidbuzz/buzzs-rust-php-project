@@ -211,6 +211,9 @@ impl Vm {
             }
         }
         g.build();
+        // `GC_G(visited)`: the nodes `gc_mark_grey` reached in this pass.
+        let visited = g.nodes.len();
+        with_state(|s| s.visited = visited);
         let garbage = g.analyze();
         // `gc_collect_roots`: the live (black) roots leave the buffer, which
         // is compacted (its last roots move into the holes); the garbage
@@ -468,7 +471,7 @@ fn clear_object(d: &ObjectData, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn
             states.extend(state.take());
         }
     }
-    crate::weakref::object_freed(d.handle);
+    crate::weakref::object_freed(d.handle.get());
 }
 
 /// `gc_remove_nested_data_from_buffer`: removes the garbage reachable from

@@ -43,9 +43,9 @@ bool(true)
 > static canCompress i:4096
 bool(true)
 > static canCompress i:8192
-bool(false)
+bool(true)
 > static getSupportedCompression
-array(int(0)=>string(2) "GZ")
+array(int(0)=>string(2) "GZ", int(1)=>string(5) "BZIP2")
 > static getSupportedSignatures
 array(int(0)=>string(3) "MD5", int(1)=>string(5) "SHA-1", int(2)=>string(7) "SHA-256", int(3)=>string(7) "SHA-512", int(4)=>string(7) "OpenSSL", int(5)=>string(14) "OpenSSL_SHA256", int(6)=>string(14) "OpenSSL_SHA512")
 > static createDefaultStub

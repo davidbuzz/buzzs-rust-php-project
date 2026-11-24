@@ -2,11 +2,11 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `get_class_vars()` (`Zend/zend_builtin_functions.c`: `add_class_vars`
 //! over `ce->properties_info`): the order of the entries (a class's own
-//! declarations in declaration order, then the parent's table, then the
-//! trait properties), the caller's scope deciding which private and
-//! protected entries show, and the declared defaults of static properties
-//! rather than their current values. Expected output from `/usr/bin/php -n`
-//! (8.3 and master share `add_class_vars`).
+//! declarations in declaration order, then the trait properties, which
+//! `zend_do_link_class` binds before it inherits, then the parent's table),
+//! the caller's scope deciding which private and protected entries show,
+//! and the declared defaults of static properties rather than their
+//! current values. Expected output from `/usr/bin/php8.5 -n`.
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -69,9 +69,9 @@ trait TT { public $t = 'pp'; public $u = 'u'; }
 class CC extends PP { use TT; public $c = 1; }
 echo serialize(get_class_vars('UT')), serialize(get_class_vars('CC')), "\n";
 "#),
-        r#"a:10:{s:1:"z";i:3;s:1:"y";i:22;s:4:"prom";N;s:5:"after";s:2:"af";s:5:"typed";N;s:1:"x";i:1;s:2:"t1";s:1:"t";s:2:"sb";s:2:"sb";s:2:"sa";s:2:"sa";s:2:"ts";s:2:"ts";}
-a:14:{s:2:"c1";N;s:1:"z";i:3;s:1:"y";i:22;s:4:"prom";N;s:2:"pi";N;s:5:"after";s:2:"af";s:5:"typed";N;s:1:"x";i:1;s:2:"pr";s:2:"pr";s:2:"t1";s:1:"t";s:2:"sb";s:2:"sb";s:2:"sa";s:2:"sa";s:3:"psa";s:3:"psa";s:2:"ts";s:2:"ts";}
-a:14:{s:2:"c1";N;s:1:"z";i:3;s:1:"y";i:22;s:2:"px";s:2:"pb";s:4:"prom";N;s:2:"pi";N;s:5:"after";s:2:"af";s:5:"typed";N;s:1:"x";i:1;s:2:"pr";s:2:"pr";s:2:"t1";s:1:"t";s:2:"sb";s:2:"sb";s:2:"sa";s:2:"sa";s:2:"ts";s:2:"ts";}
+        r#"a:10:{s:1:"z";i:3;s:1:"y";i:22;s:4:"prom";N;s:5:"after";s:2:"af";s:5:"typed";N;s:2:"t1";s:1:"t";s:1:"x";i:1;s:2:"sb";s:2:"sb";s:2:"ts";s:2:"ts";s:2:"sa";s:2:"sa";}
+a:14:{s:2:"c1";N;s:1:"z";i:3;s:1:"y";i:22;s:4:"prom";N;s:2:"pi";N;s:5:"after";s:2:"af";s:5:"typed";N;s:2:"t1";s:1:"t";s:1:"x";i:1;s:2:"pr";s:2:"pr";s:2:"sb";s:2:"sb";s:2:"ts";s:2:"ts";s:2:"sa";s:2:"sa";s:3:"psa";s:3:"psa";}
+a:14:{s:2:"c1";N;s:1:"z";i:3;s:1:"y";i:22;s:2:"px";s:2:"pb";s:4:"prom";N;s:2:"pi";N;s:5:"after";s:2:"af";s:5:"typed";N;s:2:"t1";s:1:"t";s:1:"x";i:1;s:2:"pr";s:2:"pr";s:2:"sb";s:2:"sb";s:2:"ts";s:2:"ts";s:2:"sa";s:2:"sa";}
 a:5:{s:2:"i2";s:1:"e";s:2:"i3";i:3;s:2:"i1";i:1;s:2:"s1";s:1:"e";s:2:"s2";i:2;}
 a:3:{s:1:"a";i:1;s:1:"k";i:3;s:3:"arr";a:1:{i:0;i:3;}}a:3:{s:1:"a";i:1;s:1:"k";i:3;s:3:"arr";a:1:{i:0;i:3;}}64
 a:5:{s:4:"mine";i:1;s:4:"code";i:5;s:7:"message";s:0:"";s:4:"file";s:0:"";s:4:"line";i:0;}

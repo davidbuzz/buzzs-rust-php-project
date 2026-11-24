@@ -383,6 +383,11 @@ fn transform_to_doc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 );
                 return Err(throw_xsl(vm, &e));
             }
+            // `object_init_ex(return_value, ret_class)`.
+            if let Err(t) = vm.check_instantiable(&cls) {
+                drop(doc);
+                return Err(t);
+            }
             provider.wrap_document(vm, doc, Some(&cls))
         }
         None => match access::provider("dom") {

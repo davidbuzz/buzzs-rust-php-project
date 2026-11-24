@@ -32,10 +32,6 @@ pub(crate) struct DomXslAccess;
 pub(crate) static ACCESS: DomXslAccess = DomXslAccess;
 
 thread_local! {
-    /// Documents imported from SimpleXML, with the family they were
-    /// imported as (`nodeobj->document->class_type`): `true` for `Dom\`.
-    static IMPORTED: RefCell<std::collections::HashMap<usize, bool>> =
-        RefCell::new(std::collections::HashMap::new());
     /// Objects returned from callbacks, kept alive until the
     /// transformation is over.
     static RETURNED: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
@@ -169,10 +165,11 @@ impl DomAccess for DomXslAccess {
     }
 }
 
-/// The family a shared document was imported with, if known.
+/// The family a shared document was imported with, if known
+/// (`nodeobj->document->class_type`: kept on the document itself, so a
+/// later document at the same address starts unlocked).
 pub(crate) fn family_of(shared: &SharedDocument) -> Option<bool> {
-    let key = shared.as_ptr() as usize;
-    IMPORTED.with(|m| m.borrow().get(&key).copied())
+    shared.family()
 }
 
 /// `dom_import_simplexml()` / `Dom\import_simplexml()`: the element or
@@ -203,9 +200,8 @@ pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let document = sx.document();
     let came_from_dom = document.is_shared();
     let shared = document.to_shared();
-    let key = shared.as_ptr() as usize;
     // Lock the document to one node family (`document->class_type`).
-    let known = IMPORTED.with(|m| m.borrow().get(&key).copied());
+    let known = shared.family();
     let previous = match known {
         Some(f) => Some(f),
         // A tree DOM handed to SimpleXML: its family is the DOM document's.
@@ -226,7 +222,7 @@ pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 1, msg));
         }
     }
-    IMPORTED.with(|m| m.borrow_mut().insert(key, modern));
+    shared.set_family(modern);
     // SAFETY: `p` is a live node of the shared document.
     unsafe { crate::interop::shared_node_object(vm, &shared, p, modern) }
 }

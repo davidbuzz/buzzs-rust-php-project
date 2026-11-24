@@ -1,7 +1,7 @@
 <?php
 /*
  * Generates tests/data/oracle.tsv from the system PHP (the oracle):
- *   php -d memory_limit=1G -d error_reporting=-1 tools/gen_oracle.php > tests/data/oracle.tsv
+ *   /usr/bin/php8.5 -d memory_limit=1G -d error_reporting=-1 tools/gen_oracle.php > tests/data/oracle.tsv
  *
  * Line format (tab separated):
  *   func  arg1  arg2 ...  =>  result  diag

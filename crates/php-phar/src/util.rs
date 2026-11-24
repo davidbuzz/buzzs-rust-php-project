@@ -54,8 +54,9 @@ pub fn zend_hash_func(data: &[u8]) -> u64 {
 }
 
 /// `phar_set_inode()`: the fake inode of an entry, derived from the archive
-/// path and the entry name (PHP 8.3 semantics; master hashes the
-/// `zend_string` header by mistake).
+/// path and the entry name. (Master's `memcpy(tmp + len1, entry->filename,
+/// len2)` copies the `zend_string` header rather than the name, a bug this
+/// does not copy.)
 pub fn entry_inode(fname: &[u8], filename: &[u8]) -> u16 {
     const MAXPATHLEN: usize = 4096;
     let mut tmp = Vec::with_capacity(fname.len() + filename.len());

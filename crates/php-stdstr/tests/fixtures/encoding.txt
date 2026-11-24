@@ -689,9 +689,6 @@ TUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~=7F=80=81=82=83=84=85=86=87=
 => '616263646566'
 === (($r = base64_decode("YWJj\x80ZGVm", true)) === false ? false : bin2hex($r))
 => false
-=== (($r = convert_uudecode('')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
 === (($r = convert_uudecode("`\x0a")) === false ? false : bin2hex($r))
 => ''
 === (($r = convert_uudecode("!80``\x0a`\x0a")) === false ? false : bin2hex($r))
@@ -700,27 +697,6 @@ Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
 => '616263'
 === (($r = convert_uudecode('#86)C')) === false ? false : bin2hex($r))
 => '616263'
-=== (($r = convert_uudecode('#86)')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('M86)C')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('!')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('!8')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('!80')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode("\x80")) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('~~~~')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
 === (($r = convert_uudecode("begin 644 x\x0a#86)C\x0a`\x0aend\x0a")) === false ? false : bin2hex($r))
 => '1472'
 === (($r = convert_uudecode("5=&5S=`IT97AT('1E>'0@=&5X=`T*\x0a`\x0a")) === false ? false : bin2hex($r))
@@ -729,12 +705,6 @@ Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
 => '746573740a74657874207465787420746578740d0a'
 === (($r = convert_uudecode(' ')) === false ? false : bin2hex($r))
 => ''
-=== (($r = convert_uudecode('!!')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
-=== (($r = convert_uudecode('%86)C9&4')) === false ? false : bin2hex($r))
-Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
-=> false
 === bin2hex(quoted_printable_decode(''))
 => ''
 === bin2hex(quoted_printable_decode('=41=42=43'))

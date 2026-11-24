@@ -122,6 +122,338 @@ pub struct OptContext<'a> {
     /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
     /// does the check itself).
     pub verifies_return: bool,
+    /// The functions a name resolved when the code is compiled (an
+    /// `InitFCall` without a namespace fallback) is certain to reach when
+    /// the code runs, with their argument send modes: the internal ones
+    /// and the finalized top-level functions of the same file
+    /// (`zend_optimizer_get_called_func`). `None`: no callee is known.
+    pub known: Option<&'a dyn super::FunctionTable>,
+    /// The constant a call of the function a compiled name names (lower
+    /// case) with this many arguments, its result read or not, is replaced
+    /// by (`zend_try_inline_call`): the functions of the file compiled so
+    /// far that only return a literal. `None`: no call is inlined.
+    pub inline: Option<Inliner<'a>>,
+    /// Whether the class of this lower-case name (a top-level class of the
+    /// file compiled so far) makes objects that do nothing visible when
+    /// made, written or freed ([`fold_local_objects`]). `None`: only
+    /// `stdClass` is known to.
+    pub plain_class: Option<ClassCheck<'a>>,
+}
+
+/// [`OptContext::plain_class`].
+#[derive(Clone, Copy)]
+pub struct ClassCheck<'a>(pub &'a ClassFn<'a>);
+
+/// The test of a [`ClassCheck`].
+pub type ClassFn<'a> = dyn Fn(&[u8]) -> bool + 'a;
+
+impl std::fmt::Debug for ClassCheck<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClassCheck")
+    }
+}
+
+/// A local object [`fold_local_objects`] may fold: the variable, and the
+/// ops of `new C` (the `New`, its constructor call, the assignment).
+struct LocalObject {
+    cv: u32,
+    new_at: usize,
+    call_at: usize,
+    assign_at: usize,
+}
+
+/// The local objects of `op_array` that never escape: `New` of a plain
+/// class without arguments, its `DoCall`, `AssignCv` into a variable no
+/// other op defines, and every other op naming that variable a read,
+/// write, `op=` or `++`/`--` of one constant-named property of it.
+fn local_objects(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<LocalObject> {
+    let plain = |lc: &[u8]| lc == b"stdclass" || ctx.plain_class.is_some_and(|ClassCheck(f)| f(lc));
+    let mut out = Vec::new();
+    for (i, op) in op_array.ops.iter().enumerate() {
+        let Op::New {
+            class: ClassSpec::Named(lit),
+            dst: t,
+            skip,
+        } = op
+        else {
+            continue;
+        };
+        let named = matches!(
+            op_array.literals.get(*lit as usize),
+            Some(Value::Str(name)) if plain(&name.as_bytes().to_ascii_lowercase())
+        );
+        if !named || *skip as usize != i + 2 {
+            continue;
+        }
+        let (Some(Op::DoCall { dst: None }), Some(&Op::AssignCv { cv, val, dst: None })) =
+            (op_array.ops.get(i + 1), op_array.ops.get(i + 2))
+        else {
+            continue;
+        };
+        if val != Operand::Tmp(*t) || cv < ctx.bound_cv_prefix() {
+            continue;
+        }
+        if only_through_props(op_array, cv, i + 2) {
+            out.push(LocalObject {
+                cv,
+                new_at: i,
+                call_at: i + 1,
+                assign_at: i + 2,
+            });
+        }
+    }
+    out
+}
+
+/// Whether every op but the one at `def` names `cv` only as the base of
+/// a constant-named property it reads, writes, compounds or increments.
+fn only_through_props(op_array: &OpArray, cv: u32, def: usize) -> bool {
+    let prop_place = |p: u32| {
+        op_array.places.get(p as usize).is_some_and(|pl| {
+            matches!(pl.base, PlaceBase::Cv(c) if c == cv)
+                && matches!(
+                    pl.segs.as_slice(),
+                    [Seg::Prop(Operand::Lit(l))]
+                        if matches!(op_array.literals.get(*l as usize), Some(Value::Str(_)))
+                )
+        })
+    };
+    for (j, op) in op_array.ops.iter().enumerate() {
+        if j == def {
+            continue;
+        }
+        let through_prop = match op {
+            Op::Assign { place, val, .. } | Op::AssignOp { place, val, .. } => {
+                prop_place(*place) && !matches!(val, Operand::Cv(c) if *c == cv)
+            }
+            Op::IncDec { place, .. }
+            | Op::Fetch {
+                place,
+                mode: crate::opcode::FetchMode::Read,
+                ..
+            } => prop_place(*place),
+            _ => false,
+        };
+        if through_prop {
+            continue;
+        }
+        let mut named = false;
+        let mut copy = op.clone();
+        compact::for_each_cv_mut(&mut copy, |c| named |= *c == cv);
+        compact::for_each_op_place(op, |p| {
+            if let Some(pl) = op_array.places.get(p as usize) {
+                let mut pl = pl.clone();
+                compact::for_each_place_cv_mut(&mut pl, |c| named |= *c == cv);
+            }
+        });
+        if named {
+            return false;
+        }
+    }
+    true
+}
+
+/// The fields of `op_array` the passes read and write, without its
+/// run-time caches: a copy to optimize on trial.
+fn trial_copy(op_array: &OpArray) -> OpArray {
+    OpArray {
+        ops: op_array.ops.clone(),
+        lines: op_array.lines.clone(),
+        literals: op_array.literals.clone(),
+        places: op_array.places.clone(),
+        cv_names: op_array.cv_names.clone(),
+        num_tmps: op_array.num_tmps,
+        num_iters: op_array.num_iters,
+        num_finally: op_array.num_finally,
+        num_statics: op_array.num_statics,
+        static_vars: op_array.static_vars.clone(),
+        try_table: op_array.try_table.clone(),
+        live_tmps: op_array.live_tmps.clone(),
+        dropped_tmps: op_array.dropped_tmps.clone(),
+        filename: op_array.filename.clone(),
+        strict_types: op_array.strict_types,
+        decls: op_array.decls.clone(),
+        ..OpArray::default()
+    }
+}
+
+/// php-src's partial objects and the DCE of non-escaping ones, through the
+/// array analysis: see [`LocalObject`]. The optimizer rounds run on a copy
+/// in which each such object is a local array; the copy is taken when no
+/// op names any of those variables any more.
+fn fold_local_objects(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
+    if ctx.is_main
+        || ctx.has_ref_binding()
+        || !op_array.try_table.is_empty()
+        || compact::has_dynamic_var_access(op_array)
+    {
+        return;
+    }
+    let objects = local_objects(op_array, ctx);
+    if objects.is_empty() {
+        return;
+    }
+    let mut trial = trial_copy(op_array);
+    let empty = add_or_find_literal(
+        &mut trial.literals,
+        Value::Array(php_runtime::ZArray::new()),
+    );
+    for o in &objects {
+        trial.ops[o.new_at] = Op::Nop;
+        trial.ops[o.call_at] = Op::Nop;
+        trial.ops[o.assign_at] = Op::AssignCv {
+            cv: o.cv,
+            val: Operand::Lit(empty),
+            dst: None,
+        };
+        for pl in &mut trial.places {
+            if matches!(pl.base, PlaceBase::Cv(c) if c == o.cv) {
+                if let [Seg::Prop(name)] = pl.segs.as_slice() {
+                    pl.segs = vec![Seg::Dim(*name)];
+                }
+            }
+        }
+    }
+    optimize_rounds(&mut trial, level, ctx);
+    let still_named = trial.ops.iter().any(|op| {
+        let mut named = false;
+        let mut copy = op.clone();
+        compact::for_each_cv_mut(&mut copy, |c| {
+            named |= objects.iter().any(|o| o.cv == *c);
+        });
+        compact::for_each_op_place(op, |p| {
+            if let Some(pl) = trial.places.get(p as usize) {
+                let mut pl = pl.clone();
+                compact::for_each_place_cv_mut(&mut pl, |c| {
+                    named |= objects.iter().any(|o| o.cv == *c);
+                });
+            }
+        });
+        named
+    });
+    if still_named {
+        return;
+    }
+    op_array.ops = trial.ops;
+    op_array.lines = trial.lines;
+    op_array.literals = trial.literals;
+    op_array.places = trial.places;
+    op_array.cv_names = trial.cv_names;
+    op_array.num_tmps = trial.num_tmps;
+    op_array.num_iters = trial.num_iters;
+    op_array.num_finally = trial.num_finally;
+    op_array.num_statics = trial.num_statics;
+    op_array.static_vars = trial.static_vars;
+    op_array.try_table = trial.try_table;
+    op_array.live_tmps = trial.live_tmps;
+    op_array.dropped_tmps = trial.dropped_tmps;
+}
+
+/// [`OptContext::inline`]: (name, arguments sent, result used) to the
+/// literal the call is.
+#[derive(Clone, Copy)]
+pub struct Inliner<'a>(pub &'a InlineFn<'a>);
+
+/// The lookup of an [`Inliner`].
+pub type InlineFn<'a> = dyn Fn(&[u8], u32, bool) -> Option<Value> + 'a;
+
+impl std::fmt::Debug for Inliner<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Inliner")
+    }
+}
+
+/// `zend_try_inline_call` on the calls of `op_array`: a straight-line call
+/// (`InitFCall` of a name resolved at compile time, `Send`s of literals and
+/// temporaries, `DoCall`) of a function [`OptContext::inline`] knows the
+/// literal of becomes that literal: the `InitFCall` and the literal sends
+/// go, a sent temporary is freed (`zend_delete_call_instructions`), the
+/// `DoCall` stores the literal into its result (`QM_ASSIGN`) or goes. A
+/// call with any other argument stays.
+fn inline_literal_calls(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
+    let Some(Inliner(inline)) = ctx.inline else {
+        return false;
+    };
+    let mut changed = false;
+    let mut i = 0;
+    while i < op_array.ops.len() {
+        let Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } = op_array.ops[i]
+        else {
+            i += 1;
+            continue;
+        };
+        // The call's ops: sends of literals and temporaries, the
+        // temporaries' own computation, no other call.
+        let mut sends = Vec::new();
+        let mut end = None;
+        for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+            match op {
+                Op::Send {
+                    src: ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_)),
+                } => sends.push(j),
+                Op::DoCall { dst } => {
+                    end = Some((j, *dst));
+                    break;
+                }
+                Op::Nop | Op::Bin { .. } | Op::Unary { .. } | Op::Cast { .. } | Op::Move { .. } => {
+                }
+                _ => break,
+            }
+        }
+        let Some((at, dst)) = end else {
+            i += 1;
+            continue;
+        };
+        let value = match op_array.literals.get(name as usize) {
+            Some(Value::Str(lc)) => {
+                let sent = u32::try_from(sends.len()).unwrap_or(u32::MAX);
+                inline(lc.as_bytes(), sent, dst.is_some())
+            }
+            _ => None,
+        };
+        // A static's initializer keeps its call: a value folded into it
+        // would make the static one initialised at compile time
+        // (`refresh_static_inits`), which reflection shows (it runs once).
+        let into_static = dst.is_some_and(|d| {
+            op_array
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::InitStatic { val: Operand::Tmp(t), .. } if *t == d))
+        });
+        let (Some(value), false) = (value, into_static) else {
+            i += 1;
+            continue;
+        };
+        op_array.ops[i] = Op::Nop;
+        for j in sends {
+            op_array.ops[j] = match op_array.ops[j] {
+                Op::Send {
+                    src: ArgSrc::Val(Operand::Tmp(t)),
+                } => Op::Free(Operand::Tmp(t)),
+                _ => Op::Nop,
+            };
+        }
+        op_array.ops[at] = match dst {
+            Some(d) => Op::Move {
+                src: Operand::Lit(add_or_find_literal(&mut op_array.literals, value)),
+                dst: d,
+            },
+            None => Op::Nop,
+        };
+        changed = true;
+        i = at + 1;
+    }
+    changed
+}
+
+impl std::fmt::Debug for dyn super::FunctionTable + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FunctionTable")
+    }
 }
 
 impl OptContext<'_> {
@@ -154,6 +486,24 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
         return;
     }
 
+    // `zend_optimize_func_calls`' inlining (pass 4 in php-src's order,
+    // before constant propagation reads the results).
+    if (level & PASS_16) != 0 {
+        inline_literal_calls(op_array, ctx);
+    }
+    optimize_rounds(op_array, level, ctx);
+    // Objects that never escape, as SCCP's partial objects and DCE see them.
+    if (level & (PASS_6 | PASS_8)) != 0 && (level & PASS_14) != 0 {
+        fold_local_objects(op_array, level, ctx);
+    }
+    // (The tail of the rounds' function: specialisation.)
+    finish_optimized(op_array);
+}
+
+/// The optimizer's rounds: constant folding, jump threading, SCCP, the
+/// block pass and dead code elimination feed each other until a fixed
+/// point or the round limit.
+fn optimize_rounds(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
     // Iterative optimization loop: constant folding, jump threading, SCCP,
     // block-pass, and dead code elimination feed each other until a fixed
     // point or iteration limit is reached.
@@ -184,7 +534,7 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
             }
         }
         if (level & PASS_14) != 0 {
-            changed |= dce::run_dce(op_array);
+            changed |= dce::run_dce(op_array, ctx);
             if (level & PASS_6) != 0 && !ctx.is_main {
                 changed |= block_pass::remove_unused_const_statics(op_array, ctx.bound_cv_prefix());
             }
@@ -222,7 +572,11 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
     if (level & PASS_11) != 0 {
         compact::compact_literals(op_array);
     }
+}
 
+/// What follows the rounds: handler specialisation over the optimized
+/// instructions.
+fn finish_optimized(op_array: &mut OpArray) {
     // Re-run handler specialisation over the optimized instructions
     specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
 }
@@ -240,6 +594,9 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
                 scalar_params: &[],
                 sapi_name: None,
                 verifies_return: false,
+                known: None,
+                inline: None,
+                plain_class: None,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
@@ -571,7 +928,7 @@ pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
         | Op::YieldByRefValue { dst, .. }
         | Op::YieldFrom { dst, .. }
         | Op::FuncNumArgs { dst }
-        | Op::FuncGetArgs { dst }
+        | Op::FuncGetArgs { dst, .. }
         | Op::Strlen { dst, .. }
         | Op::Count { dst, .. }
         | Op::TypeCheck { dst, .. }
@@ -607,7 +964,7 @@ pub(crate) fn clear_def_tmp(op: &mut Op) -> bool {
         | Op::YieldByRefValue { dst, .. }
         | Op::YieldFrom { dst, .. }
         | Op::FuncNumArgs { dst }
-        | Op::FuncGetArgs { dst }
+        | Op::FuncGetArgs { dst, .. }
         | Op::Strlen { dst, .. }
         | Op::Count { dst, .. }
         | Op::TypeCheck { dst, .. }
@@ -728,6 +1085,179 @@ mod tests {
         compile(&program, Rc::from(src.as_bytes()), opts).expect("compile")
     }
 
+    /// `opcache/tests/gh18050`: `in_array()` of a variable holding a known
+    /// array is `ZEND_IN_ARRAY` over the set of its values, strict as the
+    /// third argument says; a loose search among values with an integer in
+    /// digits stays a call, and so does one whose strictness is not known.
+    #[test]
+    fn in_array_of_a_known_array_is_an_opcode() {
+        use crate::opcode::{ArgSrc, Place, PlaceBase};
+        use php_runtime::{ZArray, ZStr};
+        let strings = |items: &[&str]| {
+            Value::Array(ZArray::from_values(
+                items.iter().map(|s| Value::Str(ZStr::from(*s))),
+            ))
+        };
+        // `$ary = <literal 1>; T0 = in_array($v, $ary[, <third>]); return T0;`
+        let run_with = |known: bool, haystack: Value, third: Option<Operand>| {
+            // Variables are sent as places (0: `$v`, 1: `$ary`, 2: `$s`).
+            let send = |arg: Operand| Op::Send {
+                src: match arg {
+                    Operand::Cv(cv) => ArgSrc::Place(cv),
+                    arg => ArgSrc::Val(arg),
+                },
+            };
+            let mut ops = vec![
+                Op::AssignCv {
+                    cv: 1,
+                    val: Operand::Lit(1),
+                    dst: None,
+                },
+                Op::InitFCall {
+                    name: 0,
+                    fallback: None,
+                    display: 0,
+                },
+                send(Operand::Cv(0)),
+                send(Operand::Cv(1)),
+            ];
+            if let Some(third) = third {
+                ops.push(send(third));
+            }
+            ops.push(Op::DoCall { dst: Some(0) });
+            ops.push(Op::Return {
+                val: Operand::Tmp(0),
+            });
+            let mut code = OpArray {
+                ops,
+                literals: vec![
+                    Value::Str(ZStr::from("in_array")),
+                    haystack,
+                    Value::Bool(true),
+                    Value::Bool(false),
+                ],
+                places: (0..3)
+                    .map(|cv| Place {
+                        base: PlaceBase::Cv(cv),
+                        segs: Vec::new(),
+                    })
+                    .collect(),
+                cv_names: vec![ZStr::from("v"), ZStr::from("ary"), ZStr::from("s")],
+                num_tmps: 1,
+                ..OpArray::default()
+            };
+            // `in_array()` takes its arguments by value; with no callee
+            // known, a variable sent may become a reference.
+            let by_value = |name: &[u8]| {
+                (known && name == b"in_array").then(crate::compiler::FunctionInfo::default)
+            };
+            let ctx = OptContext {
+                bound_cvs: &[(0, false), (2, false)],
+                known: Some(&by_value),
+                ..OptContext::default()
+            };
+            sccp::run_sccp(&mut code, &ctx);
+            code.ops.iter().find_map(|op| match op {
+                Op::InArray { a, set, strict, .. } => Some((
+                    *a,
+                    *strict,
+                    match code.literals.get(*set as usize) {
+                        Some(Value::Array(set)) => set.len(),
+                        _ => usize::MAX,
+                    },
+                )),
+                _ => None,
+            })
+        };
+        let run = |haystack: Value, third: Option<Operand>| run_with(true, haystack, third);
+        assert_eq!(
+            run(strings(&["x", "y", "x"]), None),
+            Some((Operand::Cv(0), false, 2))
+        );
+        // The callee is not known: `$ary` may become a reference there.
+        assert_eq!(run_with(false, strings(&["x", "y"]), None), None);
+        assert_eq!(
+            run(strings(&["x", "y"]), Some(Operand::Lit(2))),
+            Some((Operand::Cv(0), true, 2))
+        );
+        assert_eq!(
+            run(strings(&["x", "y"]), Some(Operand::Lit(3))),
+            Some((Operand::Cv(0), false, 2))
+        );
+        // An integer in digits: loosely no byte comparison, strictly a key.
+        assert_eq!(run(strings(&["1", "a"]), None), None);
+        assert_eq!(
+            run(strings(&["1", "a"]), Some(Operand::Lit(2))),
+            Some((Operand::Cv(0), true, 2))
+        );
+        // A float among them, a nested array: a call.
+        let mixed = Value::Array(ZArray::from_values([Value::Int(1), Value::Float(1.5)]));
+        assert_eq!(run(mixed, Some(Operand::Lit(2))), None);
+        // The strictness is a variable nothing is known of.
+        assert_eq!(run(strings(&["x", "y"]), Some(Operand::Cv(2))), None);
+    }
+
+    /// `zend_try_inline_call`: a straight-line call of a function the
+    /// context knows the literal of becomes that literal; a call with a
+    /// variable argument, or of another function, stays.
+    #[test]
+    fn calls_of_literal_functions_are_their_literal() {
+        use crate::opcode::ArgSrc;
+        use php_runtime::ZStr;
+        let call = |args: Vec<ArgSrc>, dst: Option<u32>| {
+            let mut ops = vec![Op::InitFCall {
+                name: 0,
+                fallback: None,
+                display: 0,
+            }];
+            ops.extend(args.into_iter().map(|src| Op::Send { src }));
+            ops.push(Op::DoCall { dst });
+            ops.push(Op::Return {
+                val: Operand::Unused,
+            });
+            OpArray {
+                ops,
+                literals: vec![Value::Str(ZStr::from("foo")), Value::Int(1)],
+                cv_names: vec![ZStr::from("v")],
+                num_tmps: 2,
+                ..OpArray::default()
+            }
+        };
+        let known = |name: &[u8], sent: u32, _used: bool| {
+            (name == b"foo" && sent <= 1).then_some(Value::Int(42))
+        };
+        let ctx = OptContext {
+            inline: Some(Inliner(&known)),
+            ..OptContext::default()
+        };
+        // `T0 = foo(1)`: the literal into T0.
+        let mut code = call(vec![ArgSrc::Val(Operand::Lit(1))], Some(0));
+        assert!(inline_literal_calls(&mut code, &ctx));
+        assert!(matches!(code.ops[0], Op::Nop));
+        assert!(matches!(code.ops[1], Op::Nop));
+        assert!(
+            matches!(code.ops[2], Op::Move { src: Operand::Lit(l), dst: 0 }
+                if matches!(code.literals[l as usize], Value::Int(42)))
+        );
+        // `foo(T1);`: the temporary freed, no result.
+        let mut code = call(vec![ArgSrc::Val(Operand::Tmp(1))], None);
+        assert!(inline_literal_calls(&mut code, &ctx));
+        assert!(matches!(code.ops[1], Op::Free(Operand::Tmp(1))));
+        assert!(matches!(code.ops[2], Op::Nop));
+        // A variable argument, two arguments, another name: the call stays.
+        for args in [
+            vec![ArgSrc::Place(0)],
+            vec![ArgSrc::Val(Operand::Lit(1)), ArgSrc::Val(Operand::Lit(1))],
+        ] {
+            let mut code = call(args, Some(0));
+            assert!(!inline_literal_calls(&mut code, &ctx));
+            assert!(matches!(code.ops[0], Op::InitFCall { .. }));
+        }
+        let mut code = call(Vec::new(), Some(0));
+        code.literals[0] = Value::Str(ZStr::from("bar"));
+        assert!(!inline_literal_calls(&mut code, &ctx));
+    }
+
     /// Pass 13 keeps an assignment whose variable is only read through an
     /// opcode it has no explicit rule for (here the argument of a call):
     /// `$c = $a = $b; var_dump($c);` once lost `$c` (opcache `jit/assign_020`).
@@ -838,6 +1368,24 @@ mod tests {
         assert!(
             !folded,
             "return folded to the pre-loop value: {:?}",
+            code.ops
+        );
+    }
+
+    /// Pass 13 keeps an append made in a loop, as php-src's DCE does (an
+    /// append may throw): with it gone, `while (true) { $a[] = 'x'; }`
+    /// became an empty endless loop instead of reaching memory_limit
+    /// (Zend/tests/oom_error_get_last.phpt at the default level).
+    #[test]
+    fn appends_in_a_loop_are_kept() {
+        let unit = compile_src(
+            "<?php function f() { $a = []; while (true) { $a[] = 'x'; } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.cv_names.iter().any(|n| n.as_bytes() == b"a") && code.ops.len() > 1,
+            "the append was removed: {:?}",
             code.ops
         );
     }
@@ -1077,7 +1625,8 @@ mod tests {
     #[test]
     fn void_cast_keeps_call_result() {
         let unit = compile_src(
-            "<?php function t() { return 1; } function u() { (void)t(); }",
+            // (`t` is no literal return, which a call would be inlined as.)
+            "<?php function t() { echo 1; return 1; } function u() { (void)t(); }",
             DEFAULT_OPTIMIZATION_LEVEL,
         );
         let funcs = unit.main.code.decls.functions.borrow();
@@ -1153,7 +1702,7 @@ mod tests {
 
     /// Both arms of `$c ? 1 : 1` give `1`, so `substr('foo', 1, ...)` is
     /// evaluated at compile time (opcache `ct_eval_frameless_002`;
-    /// `/usr/bin/php` prints "o"); different arms stay a run-time choice.
+    /// `/usr/bin/php8.5` prints "o"); different arms stay a run-time choice.
     #[test]
     fn sccp_joins_equal_constants_of_both_branches() {
         let unit = compile_src(
@@ -1176,9 +1725,13 @@ mod tests {
             "{:?}",
             f.ops
         );
+        // (The call that stays is one frameless op at its `DoCall`: its
+        // third argument is computed first.)
         let g = find_code(&unit, named(b"g"));
         assert!(
-            g.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            g.ops
+                .iter()
+                .any(|op| matches!(op, Op::DoCall { .. } | Op::FramelessICall(_))),
             "{:?}",
             g.ops
         );
@@ -1734,7 +2287,7 @@ mod tests {
 
     /// `isset()`/`empty()` of a known string offset or array element folds
     /// (opcache `opt/sccp_isset_isempty_string_dim`, `opt/sccp_031`);
-    /// expectations from php 8.3.
+    /// expectations from `/usr/bin/php8.5 -n`.
     #[test]
     fn sccp_folds_isset_and_empty_of_known_dims() {
         let unit = compile_src(
@@ -1940,45 +2493,30 @@ mod tests {
         );
     }
 
-    /// The block pass must not turn `T = BOOL_NOT(X); T = JMPZ_EX(T)` into
-    /// `JMPNZ_EX(X)`: the jump stores the tested value, so the result would
-    /// hold `X`'s truth where `!X` is expected and `!$a && !$b` would be
-    /// true for a truthy `$a`. Each negation has to survive.
+    /// `!$a && !$b` and `!$a || !$b`: a jump that keeps its result tests
+    /// the negation itself, never the variable (its result would be
+    /// `(bool) $a` where the code after it expects `!$a`).
     #[test]
-    fn block_pass_keeps_the_negation_feeding_a_value_producing_jump() {
+    fn negation_stays_in_front_of_a_jump_that_keeps_its_result() {
         let unit = compile_src(
-            "<?php function foo($a, $b) { if (!$a && !$b) { return 1; } return 2; }",
-            1 << 4,
+            "<?php function m($a, $b, $c) { $r = 0; if (!$a && !$b) { $r |= 1; } \
+             if (!$a || !$c) { $r |= 2; } $x = !$a && !$b; $y = !$a || !$c; return [$r, $x, $y]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
         );
-        let funcs = unit.main.code.decls.functions.borrow();
-        let foo = funcs
-            .iter()
-            .find(|f| f.name.as_bytes() == b"foo")
-            .expect("foo");
-        let mut seen = 0;
-        for (i, op) in foo.code.ops.iter().enumerate() {
-            let (Op::JmpZEx { a, .. } | Op::JmpNzEx { a, .. }) = op else {
-                continue;
-            };
-            seen += 1;
-            // The operand of a value-producing jump is still the negated
-            // temporary, defined by the opline before it.
-            assert!(
-                matches!(
-                    (i.checked_sub(1).map(|p| &foo.code.ops[p]), a),
-                    (
-                        Some(Op::Unary {
-                            op: crate::opcode::UnKind::Not,
-                            dst,
-                            ..
-                        }),
-                        Operand::Tmp(t)
-                    ) if dst == t
-                ),
-                "{:?}",
-                foo.code.ops
-            );
-        }
-        assert_eq!(seen, 1, "{:?}", foo.code.ops);
+        let code = find_code(&unit, named(b"m"));
+        assert!(
+            !code.ops.iter().any(|op| matches!(
+                op,
+                Op::JmpZEx {
+                    a: Operand::Cv(_),
+                    ..
+                } | Op::JmpNzEx {
+                    a: Operand::Cv(_),
+                    ..
+                }
+            )),
+            "{:?}",
+            code.ops
+        );
     }
 }

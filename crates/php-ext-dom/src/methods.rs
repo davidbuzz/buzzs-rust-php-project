@@ -251,6 +251,16 @@ fn construct(vm: &mut Vm, a: &Args, this: &Obj, builtin: &'static str) -> VmResu
     );
     let dargs = convert_args(vm, a, &meta)?;
     match dom_object(this) {
+        Some(DomObject::XPath(x)) if x.is_evaluating() => {
+            // `%pS` of the object's class: in full, anonymous ones too.
+            return Err(vm.throw(
+                "Error",
+                &format!(
+                    "Cannot call {}::__construct() while an XPath evaluation is in progress",
+                    class_of(this).name.to_string_lossy()
+                ),
+            ));
+        }
         Some(d) => {
             let r = run::call(vm, a, || dispatch::construct(&d, &dargs, &VmHost))?;
             if let Some(Some(newobj)) = check(vm, r, Some(&ctx))? {

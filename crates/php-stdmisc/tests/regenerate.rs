@@ -1,13 +1,13 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Regenerates the oracle fixtures from `/usr/bin/php`:
+//! Regenerates the oracle fixtures from `/usr/bin/php8.5`:
 //! `cargo test -p php-stdmisc --test regenerate -- --ignored`.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-#[ignore = "needs /usr/bin/php; rewrites tests/fixtures"]
+#[ignore = "needs /usr/bin/php8.5; rewrites tests/fixtures"]
 fn regenerate_fixtures() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let mut scripts: Vec<_> = std::fs::read_dir(root.join("gen"))
@@ -23,7 +23,7 @@ fn regenerate_fixtures() {
             .expect("stem")
             .to_string_lossy()
             .into_owned();
-        let out = Command::new("/usr/bin/php")
+        let out = Command::new("/usr/bin/php8.5")
             .args([
                 "-n",
                 "-d",

@@ -490,7 +490,19 @@ pub extern "C" fn phprust_version_component() -> *const c_char {
 /// `child_init`.
 #[no_mangle]
 pub extern "C" fn phprust_child_init() {
+    php_memlimit::set_hard_limit_handler(hard_limit);
     crate::handler::child_init();
+}
+
+/// An allocation crossed the hard ceiling above `memory_limit`: PHP's
+/// message goes to the error log (the child's standard error), then the
+/// child exits without unwinding, as the `php` binaries do.
+fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(format!("{e} in Unknown on line 0\n").as_bytes());
+    // SAFETY: `_exit` ends the process at once; nothing relies on
+    // destructors or atexit handlers (Apache starts another child).
+    unsafe { libc::_exit(137) }
 }
 
 /// The content handler; returns `OK` (0), `DECLINED` (-1) or an HTTP

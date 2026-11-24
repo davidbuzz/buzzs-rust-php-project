@@ -220,6 +220,13 @@ impl Collator {
         self.coll.set_strength(i32_of(s));
     }
 
+    /// `getRules()`: `ucol_getRules()` in UTF-8.
+    pub fn rules(&self) -> Result<String> {
+        let rules = self.coll.rules();
+        ustr::from_u16(&rules)
+            .map_err(|c| Error::intl(c, "Error converting collation rules to UTF-8"))
+    }
+
     /// `getLocale($type)`.
     pub fn locale(&self, ty: i64) -> Result<String> {
         self.coll

@@ -115,7 +115,7 @@ pub const PDO_MYSQL_CLASS_CONSTANTS: &[(&str, i64)] = &[
 pub use php_mysqlnd::CLIENT_INFO;
 
 /// `PDO_MYSQL_UNIX_ADDR`: the compiled-in default of
-/// `pdo_mysql.default_socket` (Debian/Ubuntu layout, as `/usr/bin/php`).
+/// `pdo_mysql.default_socket` (Debian/Ubuntu layout, as `/usr/bin/php8.5`).
 pub const DEFAULT_SOCKET: &str = "/var/run/mysqld/mysqld.sock";
 
 /// The `pdo_mysql` driver entry.

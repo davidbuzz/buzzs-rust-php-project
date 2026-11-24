@@ -18,7 +18,6 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::net::TcpStream;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -100,17 +99,15 @@ pub struct RequestCtx {
     pub body: RefCell<Body>,
     /// `client->post_read_offset`.
     pub post_read_offset: Cell<usize>,
-    /// Temporary files of uploads a later multipart parse
-    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
-    /// no longer uploaded files, deleted at request end (php-src leaks
-    /// them).
-    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `header_register_callback()` callable.
     pub header_callback: RefCell<Option<Value>>,
     /// The router returned `false` (set by the return hook).
     pub router_declined: Cell<bool>,
     /// Set when the request runs under the CGI SAPI (`php-cgi`).
     pub cgi: Option<CgiInfo>,
+    /// The `FastCGI` connection a `php-cgi` request writes to instead of
+    /// standard output and standard error.
+    pub fcgi: Option<Rc<dyn FastCgiStreams>>,
     /// The exit status of the request's `Vm::shutdown`.
     pub exit_status: Cell<i32>,
 }
@@ -118,7 +115,7 @@ pub struct RequestCtx {
 /// What the CGI SAPI (`sapi/cgi/cgi_main.c`, used by `php-cgi`) changes in
 /// a request: standard output instead of a socket, `Status:` headers, the
 /// environment as `$_SERVER`, and the command-line switches.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct CgiInfo {
     /// `SG(request_info).no_headers` (`-q`, `-f`, `-l`).
     pub no_headers: bool,
@@ -132,11 +129,69 @@ pub struct CgiInfo {
     pub rfc2616_headers: Cell<bool>,
     /// `cgi.nph`.
     pub nph: Cell<bool>,
+    /// The `FastCGI` request's environment (`request->env`: its `PARAMS`
+    /// after `init_request_info()`), in the order the names were first
+    /// set; `fcgi_loadenv()` visits them newest first. `None` for a plain
+    /// CGI request, whose environment is the process environment.
+    pub fcgi_env: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    /// A response the SAPI gives instead of running the script (FPM's
+    /// status and ping pages, "File not found.", "Access denied.").
+    pub reply: Option<CgiReply>,
+    /// FPM: `fastcgi.error_header` after a fatal error, and this logger
+    /// for "Unable to open primary script" (`zlog(ZLOG_ERROR, ...)`).
+    pub fpm_log: Option<fn(&str)>,
+}
+
+/// A response made without running a script.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CgiReply {
+    /// `SG(sapi_headers).http_response_code`.
+    pub status: i32,
+    /// Header lines (`sapi_add_header_ex`), replacing earlier ones.
+    pub headers: Vec<Vec<u8>>,
+    /// The body (`PUTS`).
+    pub body: Vec<u8>,
+}
+
+impl CgiInfo {
+    /// `fcgi_getenv(request, name)`: `name` in the `FastCGI` environment.
+    pub fn fcgi_getenv(&self, name: &[u8]) -> Option<&[u8]> {
+        self.fcgi_env
+            .as_ref()?
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_slice())
+    }
+}
+
+/// The streams of a request `php-cgi` read from a `FastCGI` connection
+/// (`fcgi_write()` of `main/fastcgi.c`): the response goes out as
+/// `FCGI_STDOUT` records and log messages as `FCGI_STDERR` records.
+pub trait FastCgiStreams: std::fmt::Debug {
+    /// `fcgi_write(request, FCGI_STDOUT, ...)`; `false` when the
+    /// connection failed.
+    fn stdout(&self, data: &[u8]) -> bool;
+    /// `fcgi_write(request, FCGI_STDERR, ...)`; `false` when the
+    /// connection failed.
+    fn stderr(&self, data: &[u8]) -> bool;
+    /// `fcgi_flush(request, 0)`: sends what is buffered.
+    fn flush(&self) -> bool;
+    /// `fcgi_is_closed()`, or the request ended through `finish`.
+    fn is_finished(&self) -> bool {
+        false
+    }
+    /// `fcgi_end()` and `fcgi_close(request, 0, 0)` for
+    /// `fastcgi_finish_request()`: `false` when the request already ended.
+    /// Output written afterwards is dropped.
+    fn finish(&self) -> bool {
+        false
+    }
 }
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
     static ORIG_ERROR_LOG: Cell<Option<NativeFn>> = const { Cell::new(None) };
+    static ORIG_GETENV: Cell<Option<NativeFn>> = const { Cell::new(None) };
 }
 
 /// Runs `f` with the current request context (`None` outside a request).
@@ -170,10 +225,10 @@ impl RequestCtx {
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
             post_read_offset: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: None,
+            fcgi: None,
             exit_status: Cell::new(0),
         }
     }
@@ -197,12 +252,20 @@ impl RequestCtx {
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
             post_read_offset: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
             cgi: Some(cgi),
+            fcgi: None,
             exit_status: Cell::new(0),
         }
+    }
+
+    /// This CGI request's output and log messages go to `streams` (a
+    /// `FastCGI` connection).
+    #[must_use]
+    pub fn with_fastcgi(mut self, streams: Rc<dyn FastCgiStreams>) -> Self {
+        self.fcgi = Some(streams);
+        self
     }
 
     /// Applies a header operation.
@@ -221,13 +284,15 @@ impl RequestCtx {
         if self.aborted.get() {
             return;
         }
-        let ok = match &self.stream {
-            Some(stream) => {
+        let ok = match (&self.stream, &self.fcgi) {
+            (Some(stream), _) => {
                 let mut s: &TcpStream = stream;
                 s.write_all(data).is_ok()
             }
+            // `sapi_fcgi_ub_write()`.
+            (None, Some(fcgi)) => fcgi.stdout(data),
             // `sapi_cgi_ub_write()`.
-            None => std::io::stdout().write_all(data).is_ok(),
+            (None, None) => std::io::stdout().write_all(data).is_ok(),
         };
         if !ok {
             self.aborted.set(true);
@@ -587,7 +652,8 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     setcookie_common(vm, a, true)
 }
 
-/// `flush()`: `sapi_cli_server_flush` sends the headers.
+/// `flush()`: `sapi_cli_server_flush` sends the headers; under `FastCGI`
+/// `sapi_fcgi_flush` also sends the buffered records.
 #[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.flush_stdout();
@@ -595,6 +661,11 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     if let Some(ctx) = ctx {
         call_header_callback(vm, &ctx);
         ctx.send_headers();
+        if let Some(fcgi) = &ctx.fcgi {
+            if !fcgi.flush() {
+                ctx.aborted.set(true);
+            }
+        }
     }
     vm.headers_sent = true;
     Ok(Value::Null)
@@ -635,20 +706,125 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value(CGI_SAPI_NAME))
 }
 
-/// `sapi_cgi_log_message()`: the message and a newline on stderr.
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
+fn php_sapi_name_fpm(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(str_value(FPM_SAPI_NAME))
+}
+
+/// `fastcgi_finish_request()` (`fpm_main.c`): the output buffers end and
+/// the headers go out, then the `FastCGI` request ends while the script
+/// goes on; `false` when it had already ended.
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
+fn fastcgi_finish_request(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(ctx) = current() else {
+        return Ok(Value::Bool(false));
+    };
+    let Some(fcgi) = ctx.fcgi.clone() else {
+        return Ok(Value::Bool(false));
+    };
+    if fcgi.is_finished() {
+        return Ok(Value::Bool(false));
+    }
+    php_support::output::end_all(vm);
+    vm.flush_stdout();
+    call_header_callback(vm, &ctx);
+    ctx.send_headers();
+    vm.headers_sent = true;
+    Ok(Value::Bool(fcgi.finish()))
+}
+
+thread_local! {
+    /// `fpm_get_status()`'s implementation: the `php-fpm` binary reads its
+    /// scoreboard.
+    static FPM_STATUS: Cell<Option<NativeFn>> = const { Cell::new(None) };
+}
+
+/// Installs `fpm_get_status()`'s implementation.
+pub fn set_fpm_status_hook(f: NativeFn) {
+    FPM_STATUS.with(|c| c.set(Some(f)));
+}
+
+/// `fpm_get_status()`: the pool's status as an array, `false` outside a
+/// request.
+fn fpm_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match FPM_STATUS.with(Cell::get) {
+        Some(f) => f(vm, a),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+/// `sapi_cgi_log_message()`: the message and a newline on stderr, or
+/// in an `FCGI_STDERR` record under `FastCGI` with `fastcgi.logging`.
 fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ty = if a.has(1) { a.int(1) } else { 0 };
     if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
         vm.flush_stdout();
+        // `php_log_err()` -> `sapi_module.log_message`: the SAPI's logger
+        // when it installed one (FPM's "PHP message: ..." through zlog).
+        if let Some(mut hook) = vm.log_hook.take() {
+            hook(a.str(0).as_bytes());
+            vm.log_hook = Some(hook);
+            return Ok(Value::Bool(true));
+        }
         let mut line = a.str(0).as_bytes().to_vec();
         line.push(b'\n');
-        let _ = std::io::stderr().write_all(&line);
+        let fcgi = current().and_then(|c| c.fcgi.clone().map(|f| (c, f)));
+        match fcgi {
+            Some((ctx, f)) if vm.ini_bool("fastcgi.logging") => {
+                if !f.stderr(&line) {
+                    ctx.aborted.set(true);
+                }
+            }
+            _ => {
+                let _ = std::io::stderr().write_all(&line);
+            }
+        }
         return Ok(Value::Bool(true));
     }
     match ORIG_ERROR_LOG.with(Cell::get) {
         Some(orig) => orig(vm, a),
         None => Ok(Value::Bool(false)),
     }
+}
+
+/// `getenv()` under the CGI SAPI. For a `FastCGI` request a name is looked
+/// up in the request's environment before the process environment
+/// (`sapi_fcgi_getenv`, unless `$local_only`), and without a name the
+/// result is the process environment plus the request's environment
+/// (`php_load_environment_variables()` through
+/// `cgi_php_import_environment_variables`). A plain CGI request gets the
+/// standard function.
+fn getenv_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let orig = ORIG_GETENV.with(Cell::get);
+    let fcgi_env = with_ctx(|c| c.cgi.as_ref().and_then(|g| g.fcgi_env.clone())).flatten();
+    let Some(fcgi_env) = fcgi_env else {
+        return orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a));
+    };
+    if !a.has(0) || a.at(0).is_null() {
+        let mut all = ZArray::new();
+        for (k, v) in std::env::vars_os() {
+            all.make_mut()
+                .insert(ArrayKey::from_bytes(k.as_bytes()), str_value(v.as_bytes()));
+        }
+        for (k, v) in fcgi_env.iter().rev() {
+            crate::vars::register_server_var(vm, k, str_value(v), &mut all);
+        }
+        return Ok(Value::Array(all));
+    }
+    let local_only = a.has(1) && a.bool(1);
+    if !local_only {
+        let name = a.str(0);
+        let name = name.as_bytes();
+        // `sapi_getenv()`: "Ugly fix for HTTP_PROXY issue, see bug #72573"
+        // (`strncasecmp(name, "HTTP_PROXY", name_len)`).
+        let proxy = name.len() <= 10 && name.eq_ignore_ascii_case(&b"HTTP_PROXY"[..name.len()]);
+        if !proxy {
+            if let Some((_, v)) = fcgi_env.iter().find(|(k, _)| k == name) {
+                return Ok(str_value(v));
+            }
+        }
+    }
+    orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a))
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -755,6 +931,21 @@ impl Extension for Rfc1867Constants {
 /// `cgi_sapi_module.name`.
 pub const CGI_SAPI_NAME: &str = "cgi-fcgi";
 
+/// `cgi_sapi_module.name` of `fpm_main.c`.
+pub const FPM_SAPI_NAME: &str = "fpm-fcgi";
+
+/// The INI entries of `fpm_main.c` (`PHP_INI_BEGIN`), as [`CGI_INI`].
+const FPM_INI: &[(&str, Option<&str>, bool, bool)] = &[
+    ("cgi.rfc2616_headers", Some("0"), true, true),
+    ("cgi.nph", Some("0"), true, true),
+    ("cgi.fix_pathinfo", Some("1"), false, true),
+    ("cgi.discard_path", Some("0"), false, true),
+    ("fastcgi.script_path_encoded", Some("1"), false, true),
+    ("fastcgi.logging", Some("1"), false, true),
+    ("fastcgi.error_header", None, false, false),
+    ("fpm.config", None, false, false),
+];
+
 /// The `cgi` module's INI entries (`PHP_INI_BEGIN` of `cgi_main.c`):
 /// name, default, whether `PHP_INI_ALL` (else `PHP_INI_SYSTEM`), boolean.
 const CGI_INI: &[(&str, Option<&str>, bool, bool)] = &[
@@ -775,11 +966,16 @@ const CGI_INI: &[(&str, Option<&str>, bool, bool)] = &[
 pub struct CliServerModule {
     /// Register as the CGI SAPI.
     pub cgi: bool,
+    /// Register as the FPM SAPI (`sapi/fpm/fpm/fpm_main.c`, a fork of the
+    /// CGI SAPI): with `cgi`.
+    pub fpm: bool,
 }
 
 impl Extension for CliServerModule {
     fn name(&self) -> &'static str {
-        if self.cgi {
+        if self.fpm {
+            FPM_SAPI_NAME
+        } else if self.cgi {
             CGI_SAPI_NAME
         } else {
             "cli_server"
@@ -791,7 +987,12 @@ impl Extension for CliServerModule {
         m.vm().response_header_hook = Some(add_response_header);
         m.vm().parse_body_hook = Some(crate::vars::parse_body);
         if self.cgi {
-            for &(name, default, all, boolean) in CGI_INI {
+            let (table, module) = if self.fpm {
+                (FPM_INI, FPM_SAPI_NAME)
+            } else {
+                (CGI_INI, CGI_SAPI_NAME)
+            };
+            for &(name, default, all, boolean) in table {
                 m.ini(IniDirective::new(
                     name,
                     default,
@@ -801,7 +1002,7 @@ impl Extension for CliServerModule {
                     } else {
                         ModifyHandler::String
                     },
-                    CGI_SAPI_NAME,
+                    module,
                 ));
             }
         } else {
@@ -815,22 +1016,27 @@ impl Extension for CliServerModule {
         }
         {
             let vm = m.vm();
-            // cli-server has no STDIN/STDOUT/STDERR constants.  The stream
-            // resources own descriptors 0-2, so dropping them would close
-            // the server's console: keep them alive, unreachable.
+            // cli-server, CGI and FPM have no STDIN/STDOUT/STDERR: only the
+            // CLI registers them (`cli_register_file_handles`). The streams
+            // are `NO_CLOSE`, so dropping them leaves descriptors 0-2 open;
+            // the request's resources are numbered from #1, as C's are.
             for c in ["STDIN", "STDOUT", "STDERR"] {
-                if let Some(v) = vm.constants.remove(c.as_bytes()) {
-                    std::mem::forget(v);
-                }
+                vm.constants.remove(c.as_bytes());
             }
+            php_runtime::Resource::set_next_handle(1);
             if let Some(b) = vm.native_function("error_log") {
                 ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
+            }
+            if let Some(b) = vm.native_function("getenv") {
+                ORIG_GETENV.with(|c| c.set(Some(b.handler)));
             }
         }
         for (name, v) in UPLOAD_ERR {
             m.constant(name, Value::Int(*v));
         }
-        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.cgi {
+        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.fpm {
+            (FPM_SAPI_NAME, php_sapi_name_fpm, error_log_cgi)
+        } else if self.cgi {
             (CGI_SAPI_NAME, php_sapi_name_cgi, error_log_cgi)
         } else {
             ("cli-server", php_sapi_name, error_log)
@@ -860,9 +1066,19 @@ impl Extension for CliServerModule {
                 log,
             )
             .function_static("apache_request_headers(): array", apache_request_headers)
-            .function_static("getallheaders(): array", apache_request_headers)
-            .function_static("apache_response_headers(): array", apache_response_headers);
-        if !self.cgi {
+            .function_static("getallheaders(): array", apache_request_headers);
+        if self.fpm {
+            m.function_static("fastcgi_finish_request(): bool", fastcgi_finish_request)
+                .function_static("fpm_get_status(): array|false", fpm_get_status);
+        } else {
+            m.function_static("apache_response_headers(): array", apache_response_headers);
+        }
+        if self.cgi {
+            m.function_static(
+                "getenv(?string $name = null, bool $local_only = false): array|string|false",
+                getenv_cgi,
+            );
+        } else {
             m.function(
                 &format!("{}(mixed $value): mixed", crate::router::RETURN_HOOK),
                 router_return,
@@ -947,14 +1163,13 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     ctx.exit_status.set(vm.shutdown(r));
     call_header_callback(vm, ctx);
     ctx.send_headers();
-    cleanup_uploads(vm, ctx);
+    cleanup_uploads(vm);
 }
 
 /// `destroy_uploaded_files_hash()`: deletes the uploads that were not
-/// moved, and those an earlier hash held.
-fn cleanup_uploads(vm: &mut Vm, ctx: &RequestCtx) {
+/// moved.
+fn cleanup_uploads(vm: &mut Vm) {
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// A VM created ahead of its request (module startup is the expensive
@@ -1022,10 +1237,37 @@ fn run_request_inner(
     ctx.refresh_facts(vm);
 
     // php_cli_server_request_startup() + php_request_startup()
+    // The streams layer's per-request state (the `php://input` body it
+    // caches, per-request wrapper and filter registrations, the stat
+    // cache) starts empty: a php-cgi FastCGI process serves many
+    // requests on this thread.
+    php_streams::state::reset_request();
     let auth = crate::vars::auth_data(ctx.request.header(b"authorization"));
+    // php_cli_server_client_populate_request_info(), php_handle_auth_data()
+    // and sapi_activate() (cookie_data, headers_only).
+    let req = &ctx.request;
+    let method = req.method.as_str().as_bytes().to_vec();
+    vm.request_info = php_sapi::RequestInfo {
+        headers_only: php_sapi::RequestInfo::is_head(Some(&method)),
+        request_method: Some(method),
+        query_string: req.query_string.clone(),
+        cookie_data: req.header(b"cookie").map(<[u8]>::to_vec),
+        content_length: crate::vars::content_length(ctx),
+        path_translated: req.path_translated.clone(),
+        request_uri: req.request_uri.clone(),
+        content_type: req.header(b"content-type").map(<[u8]>::to_vec),
+        auth_user: auth.0.clone(),
+        auth_password: auth.1.clone(),
+        auth_digest: auth.2.clone(),
+        proto_num: req.protocol_version,
+        ..php_sapi::RequestInfo::default()
+    };
     let ob = vm.ini.get_long("output_buffering");
     let implicit_flush = vm.ini.get_bool("implicit_flush");
     php_support::output::request_startup(vm, None, ob, implicit_flush);
+    // zend_activate() and zend_set_timeout(): the collector's clock and
+    // the execution timer start with every request.
+    vm.activate();
     if vm.ini_bool("expose_php") {
         let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
         let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
@@ -1061,7 +1303,13 @@ fn run_request_inner(
     if let Some(router) = &cfg.router {
         let src = std::fs::read(std::ffi::OsStr::from_bytes(router)).unwrap_or_default();
         let src = crate::router::rewrite(&src).unwrap_or(src);
+        // `php_cli_server_dispatch_router()`: the working directory the
+        // router leaves is undone (requests share the process).
+        let old_cwd = std::env::current_dir().ok();
         r = execute_script(vm, &src, router);
+        if let Some(dir) = old_cwd {
+            let _ = std::env::set_current_dir(dir);
+        }
         let declined = r.is_ok() && ctx.router_declined.get();
         if !declined {
             finish(vm, ctx, r);
@@ -1081,6 +1329,8 @@ fn run_request_inner(
             let _ = std::env::set_current_dir(dir);
         }
         r = if let Ok(src) = std::fs::read(p) {
+            // php_execute_script(): max_execution_time after max_input_time.
+            vm.script_timer();
             execute_script(vm, &src, &path)
         } else {
             let msg = format!(
@@ -1107,7 +1357,7 @@ fn run_request_inner(
     ctx.discard_headers.set(true);
     vm.shutdown(r);
     ctx.send_headers();
-    cleanup_uploads(vm, ctx);
+    cleanup_uploads(vm);
     Outcome::ServeStatic
 }
 
@@ -1116,41 +1366,78 @@ fn run_request_inner(
 /// fails), the change to the script's directory (`php_execute_script`,
 /// unless `-C`), then the script and request shutdown.
 fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
+    if let Some(reply) = &cgi.reply {
+        // `SG(sapi_headers).http_response_code = 200` for the status and
+        // ping pages too: `init_request_info()` may have set 404 for the
+        // (non-existent) script file.
+        let _ = ctx.header_op(HeaderOp::SetStatus(reply.status));
+        for h in &reply.headers {
+            let _ = ctx.header_op(HeaderOp::Replace(h, 0));
+        }
+        vm.output(&reply.body);
+        finish(vm, ctx, Ok(()));
+        return;
+    }
     let path = ctx.request.path_translated.clone().unwrap_or_default();
     let (src, shown) = if let Some(src) = &cgi.source {
         (src.clone(), b"Standard input code".to_vec())
     } else {
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&path));
-        match std::fs::read(p)
+        let Some(src) = std::fs::read(p)
             .ok()
             .filter(|_| !path.is_empty() && p.is_file())
-        {
-            Some(src) => {
-                if !cgi.no_chdir {
-                    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
-                        let _ = std::env::set_current_dir(dir);
-                    }
-                }
-                (src, path.clone())
+        else {
+            let denied = std::fs::File::open(p)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+                && !path.is_empty();
+            if let Some(log) = cgi.fpm_log {
+                let err = std::fs::File::open(p).err().map_or_else(
+                    || "No such file or directory".to_string(),
+                    |e| {
+                        let s = e.to_string();
+                        s.split(" (os error").next().unwrap_or_default().to_string()
+                    },
+                );
+                log(&format!(
+                    "Unable to open primary script: {} ({err})",
+                    String::from_utf8_lossy(&path)
+                ));
             }
-            None => {
-                let denied = std::fs::File::open(p)
-                    .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
-                    && !path.is_empty();
-                let (code, msg): (i32, &[u8]) = if denied {
-                    (403, &b"Access denied.\n"[..])
-                } else {
-                    (404, &b"No input file specified.\n"[..])
-                };
-                let _ = ctx.header_op(HeaderOp::SetStatus(code));
-                vm.output(msg);
-                finish(vm, ctx, Ok(()));
+            let (code, msg): (i32, &[u8]) = if denied {
+                (403, &b"Access denied.\n"[..])
+            } else {
+                (404, &b"No input file specified.\n"[..])
+            };
+            let _ = ctx.header_op(HeaderOp::SetStatus(code));
+            vm.output(msg);
+            finish(vm, ctx, Ok(()));
+            // CGI ends with FAILURE; `FastCGI` goes on to the next request
+            // (`goto fastcgi_request_done`) with `EG(exit_status)` as is.
+            if cgi.fcgi_env.is_none() {
                 ctx.exit_status.set(255);
-                return;
+            }
+            return;
+        };
+        if !cgi.no_chdir {
+            if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                let _ = std::env::set_current_dir(dir);
             }
         }
+        (src, path.clone())
     };
+    // php_execute_script(): max_execution_time after max_input_time.
+    vm.script_timer();
     let r = execute_script(vm, &src, &shown);
+    // FPM: "if (EG(exit_status) == 255)" the `fastcgi.error_header` line
+    // replaces the status while the headers are not sent.
+    if cgi.fpm_log.is_some() && vm.exit_status == 255 && !ctx.headers_sent() {
+        if let Some(h) = vm
+            .ini_string("fastcgi.error_header")
+            .filter(|h| !h.is_empty())
+        {
+            let _ = ctx.header_op(HeaderOp::Replace(&h, 0));
+        }
+    }
     finish(vm, ctx, r);
 }
 
@@ -1230,6 +1517,5 @@ mod tests {
         assert_eq!(ctx.input(), b"");
         ctx.buffer_body();
         assert_eq!(ctx.request_body(), Some(&b""[..]));
-        assert!(ctx.orphaned_uploads.borrow().is_empty());
     }
 }

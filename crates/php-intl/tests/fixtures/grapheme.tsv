@@ -749,10 +749,10 @@ s:extract	s:abc	i:100	i:2	i:2	s:c	i:3
 s:extract	s:abc	i:100	i:2	i:3	s:!U_ILLEGAL_ARGUMENT_ERROR	i:3
 s:extract	s:abc	i:100	i:2	i:-1	s:c	i:3
 s:extract	s:abc	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:abc	i:1	s:!Error
-s:split	s:abc	i:2	s:!Error
-s:split	s:abc	i:3	s:!Error
-s:split	s:abc	i:10	s:!Error
+s:split	s:abc	i:1	a:["a","b","c"]
+s:split	s:abc	i:2	a:["ab","c"]
+s:split	s:abc	i:3	a:["abc"]
+s:split	s:abc	i:10	a:["abc"]
 s:len	s:ab\\r\\nc	i:7
 s:pos	s:grapheme_strpos	s:ab\\r\\nc	s:a	i:0	i:0
 s:pos	s:grapheme_stripos	s:ab\\r\\nc	s:a	i:0	i:0
@@ -1504,10 +1504,10 @@ s:extract	s:ab\\r\\nc	i:100	i:2	i:2	s:\\r\\nc	i:7
 s:extract	s:ab\\r\\nc	i:100	i:2	i:3	s:r\\nc	i:7
 s:extract	s:ab\\r\\nc	i:100	i:2	i:-1	s:c	i:7
 s:extract	s:ab\\r\\nc	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:ab\\r\\nc	i:1	s:!Error
-s:split	s:ab\\r\\nc	i:2	s:!Error
-s:split	s:ab\\r\\nc	i:3	s:!Error
-s:split	s:ab\\r\\nc	i:10	s:!Error
+s:split	s:ab\\r\\nc	i:1	a:["a","b","\\","r","\\","n","c"]
+s:split	s:ab\\r\\nc	i:2	a:["ab","\\r","\\n","c"]
+s:split	s:ab\\r\\nc	i:3	a:["ab\\","r\\n","c"]
+s:split	s:ab\\r\\nc	i:10	a:["ab\\r\\nc"]
 s:len	s:ábc̈	i:3
 s:pos	s:grapheme_strpos	s:ábc̈	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:ábc̈	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -1811,24 +1811,24 @@ s:strstr	s:ábc̈	s:ab	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_ERR
 s:strstr	s:ábc̈	s:ab	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strpos	s:ábc̈	s:	i:0	i:0
 s:pos	s:grapheme_stripos	s:ábc̈	s:	i:0	i:0
-s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:0	i:5
-s:pos	s:grapheme_strripos	s:ábc̈	s:	i:0	i:5
-s:pos	s:grapheme_strpos	s:ábc̈	s:	i:1	i:2
-s:pos	s:grapheme_stripos	s:ábc̈	s:	i:1	i:2
-s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:1	i:5
-s:pos	s:grapheme_strripos	s:ábc̈	s:	i:1	i:5
-s:pos	s:grapheme_strpos	s:ábc̈	s:	i:2	i:3
-s:pos	s:grapheme_stripos	s:ábc̈	s:	i:2	i:3
-s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:2	i:5
-s:pos	s:grapheme_strripos	s:ábc̈	s:	i:2	i:5
-s:pos	s:grapheme_strpos	s:ábc̈	s:	i:-1	i:3
-s:pos	s:grapheme_stripos	s:ábc̈	s:	i:-1	i:3
-s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:-1	i:3
-s:pos	s:grapheme_strripos	s:ábc̈	s:	i:-1	i:3
-s:pos	s:grapheme_strpos	s:ábc̈	s:	i:-2	i:2
-s:pos	s:grapheme_stripos	s:ábc̈	s:	i:-2	i:2
-s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:-2	i:2
-s:pos	s:grapheme_strripos	s:ábc̈	s:	i:-2	i:2
+s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:0	i:3
+s:pos	s:grapheme_strripos	s:ábc̈	s:	i:0	i:3
+s:pos	s:grapheme_strpos	s:ábc̈	s:	i:1	i:1
+s:pos	s:grapheme_stripos	s:ábc̈	s:	i:1	i:1
+s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:1	i:3
+s:pos	s:grapheme_strripos	s:ábc̈	s:	i:1	i:3
+s:pos	s:grapheme_strpos	s:ábc̈	s:	i:2	i:2
+s:pos	s:grapheme_stripos	s:ábc̈	s:	i:2	i:2
+s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:2	i:3
+s:pos	s:grapheme_strripos	s:ábc̈	s:	i:2	i:3
+s:pos	s:grapheme_strpos	s:ábc̈	s:	i:-1	i:2
+s:pos	s:grapheme_stripos	s:ábc̈	s:	i:-1	i:2
+s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:-1	i:2
+s:pos	s:grapheme_strripos	s:ábc̈	s:	i:-1	i:2
+s:pos	s:grapheme_strpos	s:ábc̈	s:	i:-2	i:1
+s:pos	s:grapheme_stripos	s:ábc̈	s:	i:-2	i:1
+s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:-2	i:1
+s:pos	s:grapheme_strripos	s:ábc̈	s:	i:-2	i:1
 s:pos	s:grapheme_strpos	s:ábc̈	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_stripos	s:ábc̈	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_strrpos	s:ábc̈	s:	i:-5	s:!ValueError
@@ -2159,31 +2159,31 @@ s:extract	s:ábc̈	i:0	i:0	i:-1	s:	i:6
 s:extract	s:ábc̈	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:1	i:0	i:0	s:á	i:3
 s:extract	s:ábc̈	i:1	i:0	i:1	s:́	i:3
-s:extract	s:ábc̈	i:1	i:0	i:2	s:b	i:3
+s:extract	s:ábc̈	i:1	i:0	i:2	s:b	i:4
 s:extract	s:ábc̈	i:1	i:0	i:3	s:b	i:4
 s:extract	s:ábc̈	i:1	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:2	i:0	i:0	s:áb	i:4
 s:extract	s:ábc̈	i:2	i:0	i:1	s:́b	i:4
-s:extract	s:ábc̈	i:2	i:0	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:2	i:0	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:2	i:0	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:2	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:3	i:0	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:3	i:0	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:3	i:0	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:3	i:0	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:3	i:0	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:3	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:5	i:0	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:5	i:0	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:5	i:0	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:5	i:0	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:0	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:100	i:0	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:100	i:0	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:100	i:0	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:100	i:0	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:0	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -2195,31 +2195,31 @@ s:extract	s:ábc̈	i:0	i:1	i:-1	s:	i:6
 s:extract	s:ábc̈	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:1	i:1	i:0	s:	i:0
 s:extract	s:ábc̈	i:1	i:1	i:1	s:	i:1
-s:extract	s:ábc̈	i:1	i:1	i:2	s:b	i:3
+s:extract	s:ábc̈	i:1	i:1	i:2	s:b	i:4
 s:extract	s:ábc̈	i:1	i:1	i:3	s:b	i:4
 s:extract	s:ábc̈	i:1	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:2	i:1	i:0	s:	i:0
 s:extract	s:ábc̈	i:2	i:1	i:1	s:́	i:3
-s:extract	s:ábc̈	i:2	i:1	i:2	s:b	i:3
+s:extract	s:ábc̈	i:2	i:1	i:2	s:b	i:4
 s:extract	s:ábc̈	i:2	i:1	i:3	s:b	i:4
 s:extract	s:ábc̈	i:2	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:3	i:1	i:0	s:á	i:3
 s:extract	s:ábc̈	i:3	i:1	i:1	s:́b	i:4
-s:extract	s:ábc̈	i:3	i:1	i:2	s:b	i:3
+s:extract	s:ábc̈	i:3	i:1	i:2	s:b	i:4
 s:extract	s:ábc̈	i:3	i:1	i:3	s:b	i:4
 s:extract	s:ábc̈	i:3	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:5	i:1	i:0	s:áb	i:4
 s:extract	s:ábc̈	i:5	i:1	i:1	s:́b	i:4
-s:extract	s:ábc̈	i:5	i:1	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:5	i:1	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:1	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:100	i:1	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:100	i:1	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:100	i:1	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:100	i:1	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:1	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -2231,38 +2231,38 @@ s:extract	s:ábc̈	i:0	i:2	i:-1	s:	i:6
 s:extract	s:ábc̈	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:1	i:2	i:0	s:	i:0
 s:extract	s:ábc̈	i:1	i:2	i:1	s:́	i:3
-s:extract	s:ábc̈	i:1	i:2	i:2	s:b	i:3
+s:extract	s:ábc̈	i:1	i:2	i:2	s:b	i:4
 s:extract	s:ábc̈	i:1	i:2	i:3	s:b	i:4
 s:extract	s:ábc̈	i:1	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:2	i:2	i:0	s:á	i:3
 s:extract	s:ábc̈	i:2	i:2	i:1	s:́b	i:4
-s:extract	s:ábc̈	i:2	i:2	i:2	s:b	i:3
+s:extract	s:ábc̈	i:2	i:2	i:2	s:b	i:4
 s:extract	s:ábc̈	i:2	i:2	i:3	s:b	i:4
 s:extract	s:ábc̈	i:2	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:3	i:2	i:0	s:áb	i:4
 s:extract	s:ábc̈	i:3	i:2	i:1	s:́b	i:4
-s:extract	s:ábc̈	i:3	i:2	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:3	i:2	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:3	i:2	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:3	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:5	i:2	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:5	i:2	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:5	i:2	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:5	i:2	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:2	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:5	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ábc̈	i:100	i:2	i:0	s:ábc̈	i:7
 s:extract	s:ábc̈	i:100	i:2	i:1	s:́bc̈	i:7
-s:extract	s:ábc̈	i:100	i:2	i:2	s:bc̈	i:6
+s:extract	s:ábc̈	i:100	i:2	i:2	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:2	i:3	s:bc̈	i:7
 s:extract	s:ábc̈	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:6
 s:extract	s:ábc̈	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:ábc̈	i:1	s:!Error
-s:split	s:ábc̈	i:2	s:!Error
-s:split	s:ábc̈	i:3	s:!Error
-s:split	s:ábc̈	i:10	s:!Error
+s:split	s:ábc̈	i:1	a:["á","b","c̈"]
+s:split	s:ábc̈	i:2	a:["áb","c̈"]
+s:split	s:ábc̈	i:3	a:["ábc̈"]
+s:split	s:ábc̈	i:10	a:["ábc̈"]
 s:len	s:Ação é boa	i:10
 s:pos	s:grapheme_strpos	s:Ação é boa	s:a	i:0	i:9
 s:pos	s:grapheme_stripos	s:Ação é boa	s:a	i:0	i:0
@@ -2914,31 +2914,31 @@ s:extract	s:Ação é boa	i:0	i:0	i:-1	s:	i:12
 s:extract	s:Ação é boa	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:1	i:0	i:0	s:A	i:1
 s:extract	s:Ação é boa	i:1	i:0	i:1	s:ç	i:3
-s:extract	s:Ação é boa	i:1	i:0	i:2	s:ã	i:4
+s:extract	s:Ação é boa	i:1	i:0	i:2	s:ã	i:5
 s:extract	s:Ação é boa	i:1	i:0	i:3	s:ã	i:5
 s:extract	s:Ação é boa	i:1	i:0	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:2	i:0	i:0	s:Aç	i:3
 s:extract	s:Ação é boa	i:2	i:0	i:1	s:çã	i:5
-s:extract	s:Ação é boa	i:2	i:0	i:2	s:ão	i:5
+s:extract	s:Ação é boa	i:2	i:0	i:2	s:ão	i:6
 s:extract	s:Ação é boa	i:2	i:0	i:3	s:ão	i:6
 s:extract	s:Ação é boa	i:2	i:0	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:3	i:0	i:0	s:Açã	i:5
 s:extract	s:Ação é boa	i:3	i:0	i:1	s:ção	i:6
-s:extract	s:Ação é boa	i:3	i:0	i:2	s:ão 	i:6
+s:extract	s:Ação é boa	i:3	i:0	i:2	s:ão 	i:7
 s:extract	s:Ação é boa	i:3	i:0	i:3	s:ão 	i:7
 s:extract	s:Ação é boa	i:3	i:0	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:5	i:0	i:0	s:Ação 	i:7
 s:extract	s:Ação é boa	i:5	i:0	i:1	s:ção é	i:9
-s:extract	s:Ação é boa	i:5	i:0	i:2	s:ão é 	i:9
+s:extract	s:Ação é boa	i:5	i:0	i:2	s:ão é 	i:10
 s:extract	s:Ação é boa	i:5	i:0	i:3	s:ão é 	i:10
 s:extract	s:Ação é boa	i:5	i:0	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:100	i:0	i:0	s:Ação é boa	i:13
 s:extract	s:Ação é boa	i:100	i:0	i:1	s:ção é boa	i:13
-s:extract	s:Ação é boa	i:100	i:0	i:2	s:ão é boa	i:12
+s:extract	s:Ação é boa	i:100	i:0	i:2	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:0	i:3	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:0	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -2950,31 +2950,31 @@ s:extract	s:Ação é boa	i:0	i:1	i:-1	s:	i:12
 s:extract	s:Ação é boa	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:1	i:1	i:0	s:A	i:1
 s:extract	s:Ação é boa	i:1	i:1	i:1	s:	i:1
-s:extract	s:Ação é boa	i:1	i:1	i:2	s:	i:2
+s:extract	s:Ação é boa	i:1	i:1	i:2	s:	i:3
 s:extract	s:Ação é boa	i:1	i:1	i:3	s:	i:3
 s:extract	s:Ação é boa	i:1	i:1	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:2	i:1	i:0	s:A	i:1
 s:extract	s:Ação é boa	i:2	i:1	i:1	s:ç	i:3
-s:extract	s:Ação é boa	i:2	i:1	i:2	s:ã	i:4
+s:extract	s:Ação é boa	i:2	i:1	i:2	s:ã	i:5
 s:extract	s:Ação é boa	i:2	i:1	i:3	s:ã	i:5
 s:extract	s:Ação é boa	i:2	i:1	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:3	i:1	i:0	s:Aç	i:3
 s:extract	s:Ação é boa	i:3	i:1	i:1	s:ç	i:3
-s:extract	s:Ação é boa	i:3	i:1	i:2	s:ão	i:5
+s:extract	s:Ação é boa	i:3	i:1	i:2	s:ão	i:6
 s:extract	s:Ação é boa	i:3	i:1	i:3	s:ão	i:6
 s:extract	s:Ação é boa	i:3	i:1	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:5	i:1	i:0	s:Açã	i:5
 s:extract	s:Ação é boa	i:5	i:1	i:1	s:ção	i:6
-s:extract	s:Ação é boa	i:5	i:1	i:2	s:ão 	i:6
+s:extract	s:Ação é boa	i:5	i:1	i:2	s:ão 	i:7
 s:extract	s:Ação é boa	i:5	i:1	i:3	s:ão 	i:7
 s:extract	s:Ação é boa	i:5	i:1	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:100	i:1	i:0	s:Ação é boa	i:13
 s:extract	s:Ação é boa	i:100	i:1	i:1	s:ção é boa	i:13
-s:extract	s:Ação é boa	i:100	i:1	i:2	s:ão é boa	i:12
+s:extract	s:Ação é boa	i:100	i:1	i:2	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:1	i:3	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:1	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -2986,38 +2986,38 @@ s:extract	s:Ação é boa	i:0	i:2	i:-1	s:	i:12
 s:extract	s:Ação é boa	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:1	i:2	i:0	s:A	i:1
 s:extract	s:Ação é boa	i:1	i:2	i:1	s:ç	i:3
-s:extract	s:Ação é boa	i:1	i:2	i:2	s:ã	i:4
+s:extract	s:Ação é boa	i:1	i:2	i:2	s:ã	i:5
 s:extract	s:Ação é boa	i:1	i:2	i:3	s:ã	i:5
 s:extract	s:Ação é boa	i:1	i:2	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:2	i:2	i:0	s:Aç	i:3
 s:extract	s:Ação é boa	i:2	i:2	i:1	s:çã	i:5
-s:extract	s:Ação é boa	i:2	i:2	i:2	s:ão	i:5
+s:extract	s:Ação é boa	i:2	i:2	i:2	s:ão	i:6
 s:extract	s:Ação é boa	i:2	i:2	i:3	s:ão	i:6
 s:extract	s:Ação é boa	i:2	i:2	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:3	i:2	i:0	s:Açã	i:5
 s:extract	s:Ação é boa	i:3	i:2	i:1	s:ção	i:6
-s:extract	s:Ação é boa	i:3	i:2	i:2	s:ão 	i:6
+s:extract	s:Ação é boa	i:3	i:2	i:2	s:ão 	i:7
 s:extract	s:Ação é boa	i:3	i:2	i:3	s:ão 	i:7
 s:extract	s:Ação é boa	i:3	i:2	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:5	i:2	i:0	s:Ação 	i:7
 s:extract	s:Ação é boa	i:5	i:2	i:1	s:ção é	i:9
-s:extract	s:Ação é boa	i:5	i:2	i:2	s:ão é 	i:9
+s:extract	s:Ação é boa	i:5	i:2	i:2	s:ão é 	i:10
 s:extract	s:Ação é boa	i:5	i:2	i:3	s:ão é 	i:10
 s:extract	s:Ação é boa	i:5	i:2	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:Ação é boa	i:100	i:2	i:0	s:Ação é boa	i:13
 s:extract	s:Ação é boa	i:100	i:2	i:1	s:ção é boa	i:13
-s:extract	s:Ação é boa	i:100	i:2	i:2	s:ão é boa	i:12
+s:extract	s:Ação é boa	i:100	i:2	i:2	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:2	i:3	s:ão é boa	i:13
 s:extract	s:Ação é boa	i:100	i:2	i:-1	s:a	i:13
 s:extract	s:Ação é boa	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:Ação é boa	i:1	s:!Error
-s:split	s:Ação é boa	i:2	s:!Error
-s:split	s:Ação é boa	i:3	s:!Error
-s:split	s:Ação é boa	i:10	s:!Error
+s:split	s:Ação é boa	i:1	a:["A","ç","ã","o"," ","é"," ","b","o","a"]
+s:split	s:Ação é boa	i:2	a:["Aç","ão"," é"," b","oa"]
+s:split	s:Ação é boa	i:3	a:["Açã","o é"," bo","a"]
+s:split	s:Ação é boa	i:10	a:["Ação é boa"]
 s:len	s:👨‍👩‍👧x🇵🇹y	i:4
 s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -3287,8 +3287,8 @@ s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:x	i:4	s:!U_ILLEGAL_ARGU
 s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:x	i:4	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:x	i:4	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:x	i:4	s:!U_ILLEGAL_ARGUMENT_ERROR
-s:strstr	s:👨‍👩‍👧x🇵🇹y	s:x	~F	s:y	s:y
-s:strstr	s:👨‍👩‍👧x🇵🇹y	s:x	~T	s:👨‍👩‍👧x🇵🇹	s:👨‍👩‍👧x🇵🇹
+s:strstr	s:👨‍👩‍👧x🇵🇹y	s:x	~F	s:x🇵🇹y	s:x🇵🇹y
+s:strstr	s:👨‍👩‍👧x🇵🇹y	s:x	~T	s:👨‍👩‍👧	s:👨‍👩‍👧
 s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:ab	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:ab	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:ab	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -3321,32 +3321,32 @@ s:strstr	s:👨‍👩‍👧x🇵🇹y	s:ab	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U
 s:strstr	s:👨‍👩‍👧x🇵🇹y	s:ab	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:0
 s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:0
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:14
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:14
-s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:8
-s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:8
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:14
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:14
-s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:9
-s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:9
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:14
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:14
-s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:13
-s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:13
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:13
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:13
-s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:9
-s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:9
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:9
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:9
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:4
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:0	i:4
+s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:1
+s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:1
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:4
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:1	i:4
+s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:2
+s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:2
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:4
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:2	i:4
+s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:3
+s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:3
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:3
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-1	i:3
+s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:2
+s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:2
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:2
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-2	i:2
 s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:-5	s:!ValueError
-s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:14
-s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:14
-s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:14
-s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:14
+s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:4
+s:pos	s:grapheme_stripos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:4
+s:pos	s:grapheme_strrpos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:4
+s:pos	s:grapheme_strripos	s:👨‍👩‍👧x🇵🇹y	s:	i:4	i:4
 s:strstr	s:👨‍👩‍👧x🇵🇹y	s:	~F	s:👨‍👩‍👧x🇵🇹y	s:👨‍👩‍👧x🇵🇹y
 s:strstr	s:👨‍👩‍👧x🇵🇹y	s:	~T	s:	s:
 s:pos	s:grapheme_strpos	s:👨‍👩‍👧x🇵🇹y	s:ä	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -3668,33 +3668,33 @@ s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:0	i:3	s:	i:3
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:0	i:-1	s:	i:27
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:0	s:👨‍👩‍👧	i:18
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:0	s:👨‍👩‍👧x	i:19
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:1	s:‍👩‍👧	i:15
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:2	s:‍👩‍👧	i:16
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:3	s:‍👩‍👧	i:17
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:1	s:‍👩‍👧	i:18
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:2	s:‍👩‍👧	i:18
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:3	s:‍👩‍👧	i:18
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:0	s:👨‍👩‍👧x🇵🇹	i:27
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:1	s:‍👩‍👧x	i:16
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:2	s:‍👩‍👧x	i:17
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:3	s:‍👩‍👧x	i:18
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:1	s:‍👩‍👧x	i:19
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:2	s:‍👩‍👧x	i:19
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:3	s:‍👩‍👧x	i:19
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:0	s:👨‍👩‍👧x🇵🇹y	i:28
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:1	s:‍👩‍👧x🇵🇹y	i:25
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:2	s:‍👩‍👧x🇵🇹y	i:26
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:3	s:‍👩‍👧x🇵🇹y	i:27
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:1	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:2	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:3	s:‍👩‍👧x🇵🇹y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:0	s:👨‍👩‍👧x🇵🇹y	i:28
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:1	s:‍👩‍👧x🇵🇹y	i:25
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:2	s:‍👩‍👧x🇵🇹y	i:26
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:3	s:‍👩‍👧x🇵🇹y	i:27
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:1	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:2	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:3	s:‍👩‍👧x🇵🇹y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:1	i:0	s:	i:0
@@ -3704,33 +3704,33 @@ s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:1	i:3	s:	i:3
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:1	i:-1	s:	i:27
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:1	s:	i:1
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:2	s:	i:2
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:3	s:	i:3
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:1	s:	i:4
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:2	s:	i:4
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:3	s:	i:4
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:1	s:	i:1
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:2	s:	i:2
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:3	s:	i:3
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:1	s:	i:4
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:2	s:	i:4
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:3	s:	i:4
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:0	s:👨‍👩‍👧x🇵🇹y	i:28
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:1	s:‍👩‍👧x🇵🇹y	i:25
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:2	s:‍👩‍👧x🇵🇹y	i:26
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:3	s:‍👩‍👧x🇵🇹y	i:27
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:1	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:2	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:3	s:‍👩‍👧x🇵🇹y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:2	i:0	s:	i:0
@@ -3740,39 +3740,39 @@ s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:2	i:3	s:	i:3
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:2	i:-1	s:	i:27
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:0	s:	i:0
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:1	s:‍	i:4
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:2	s:‍	i:5
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:3	s:‍	i:6
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:1	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:2	s:‍	i:7
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:3	s:‍	i:7
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:0	s:👨‍👩‍👧	i:18
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:1	s:‍👩‍👧x	i:16
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:2	s:‍👩‍👧x	i:17
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:3	s:‍👩‍👧x	i:18
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:1	s:‍👩‍👧x	i:19
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:2	s:‍👩‍👧x	i:19
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:3	s:‍👩‍👧x	i:19
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:0	s:👨‍👩‍👧x🇵🇹y	i:28
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:1	s:‍👩‍👧x🇵🇹y	i:25
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:2	s:‍👩‍👧x🇵🇹y	i:26
-s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:3	s:‍👩‍👧x🇵🇹y	i:27
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:1	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:2	s:‍👩‍👧x🇵🇹y	i:28
+s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:3	s:‍👩‍👧x🇵🇹y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:-1	s:y	i:28
 s:extract	s:👨‍👩‍👧x🇵🇹y	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:👨‍👩‍👧x🇵🇹y	i:1	s:!Error
-s:split	s:👨‍👩‍👧x🇵🇹y	i:2	s:!Error
-s:split	s:👨‍👩‍👧x🇵🇹y	i:3	s:!Error
-s:split	s:👨‍👩‍👧x🇵🇹y	i:10	s:!Error
+s:split	s:👨‍👩‍👧x🇵🇹y	i:1	a:["👨‍👩‍👧","x","🇵🇹","y"]
+s:split	s:👨‍👩‍👧x🇵🇹y	i:2	a:["👨‍👩‍👧x","🇵🇹y"]
+s:split	s:👨‍👩‍👧x🇵🇹y	i:3	a:["👨‍👩‍👧x🇵🇹","y"]
+s:split	s:👨‍👩‍👧x🇵🇹y	i:10	a:["👨‍👩‍👧x🇵🇹y"]
 s:len	s:ööÖ	i:3
 s:pos	s:grapheme_strpos	s:ööÖ	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:ööÖ	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -3952,8 +3952,8 @@ s:pos	s:grapheme_strpos	s:ööÖ	s:ö	i:4	s:!ValueError
 s:pos	s:grapheme_stripos	s:ööÖ	s:ö	i:4	s:!ValueError
 s:pos	s:grapheme_strrpos	s:ööÖ	s:ö	i:4	s:!ValueError
 s:pos	s:grapheme_strripos	s:ööÖ	s:ö	i:4	s:!ValueError
-s:strstr	s:ööÖ	s:ö	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:ööÖ
-s:strstr	s:ööÖ	s:ö	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:
+s:strstr	s:ööÖ	s:ö	~F	s:ööÖ	s:ööÖ
+s:strstr	s:ööÖ	s:ö	~T	s:	s:
 s:pos	s:grapheme_strpos	s:ööÖ	s:ö	i:0	i:0
 s:pos	s:grapheme_stripos	s:ööÖ	s:ö	i:0	i:0
 s:pos	s:grapheme_strrpos	s:ööÖ	s:ö	i:0	i:1
@@ -4076,24 +4076,24 @@ s:strstr	s:ööÖ	s:ab	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_E
 s:strstr	s:ööÖ	s:ab	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strpos	s:ööÖ	s:	i:0	i:0
 s:pos	s:grapheme_stripos	s:ööÖ	s:	i:0	i:0
-s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:0	i:6
-s:pos	s:grapheme_strripos	s:ööÖ	s:	i:0	i:6
-s:pos	s:grapheme_strpos	s:ööÖ	s:	i:1	i:2
-s:pos	s:grapheme_stripos	s:ööÖ	s:	i:1	i:2
-s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:1	i:6
-s:pos	s:grapheme_strripos	s:ööÖ	s:	i:1	i:6
-s:pos	s:grapheme_strpos	s:ööÖ	s:	i:2	i:4
-s:pos	s:grapheme_stripos	s:ööÖ	s:	i:2	i:4
-s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:2	i:6
-s:pos	s:grapheme_strripos	s:ööÖ	s:	i:2	i:6
-s:pos	s:grapheme_strpos	s:ööÖ	s:	i:-1	i:4
-s:pos	s:grapheme_stripos	s:ööÖ	s:	i:-1	i:4
-s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:-1	i:4
-s:pos	s:grapheme_strripos	s:ööÖ	s:	i:-1	i:4
-s:pos	s:grapheme_strpos	s:ööÖ	s:	i:-2	i:2
-s:pos	s:grapheme_stripos	s:ööÖ	s:	i:-2	i:2
-s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:-2	i:2
-s:pos	s:grapheme_strripos	s:ööÖ	s:	i:-2	i:2
+s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:0	i:3
+s:pos	s:grapheme_strripos	s:ööÖ	s:	i:0	i:3
+s:pos	s:grapheme_strpos	s:ööÖ	s:	i:1	i:1
+s:pos	s:grapheme_stripos	s:ööÖ	s:	i:1	i:1
+s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:1	i:3
+s:pos	s:grapheme_strripos	s:ööÖ	s:	i:1	i:3
+s:pos	s:grapheme_strpos	s:ööÖ	s:	i:2	i:2
+s:pos	s:grapheme_stripos	s:ööÖ	s:	i:2	i:2
+s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:2	i:3
+s:pos	s:grapheme_strripos	s:ööÖ	s:	i:2	i:3
+s:pos	s:grapheme_strpos	s:ööÖ	s:	i:-1	i:2
+s:pos	s:grapheme_stripos	s:ööÖ	s:	i:-1	i:2
+s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:-1	i:2
+s:pos	s:grapheme_strripos	s:ööÖ	s:	i:-1	i:2
+s:pos	s:grapheme_strpos	s:ööÖ	s:	i:-2	i:1
+s:pos	s:grapheme_stripos	s:ööÖ	s:	i:-2	i:1
+s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:-2	i:1
+s:pos	s:grapheme_strripos	s:ööÖ	s:	i:-2	i:1
 s:pos	s:grapheme_strpos	s:ööÖ	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_stripos	s:ööÖ	s:	i:-5	s:!ValueError
 s:pos	s:grapheme_strrpos	s:ööÖ	s:	i:-5	s:!ValueError
@@ -4424,31 +4424,31 @@ s:extract	s:ööÖ	i:0	i:0	i:-1	s:	i:8
 s:extract	s:ööÖ	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:1	i:0	i:0	s:ö	i:3
 s:extract	s:ööÖ	i:1	i:0	i:1	s:̈	i:3
-s:extract	s:ööÖ	i:1	i:0	i:2	s:ö	i:5
+s:extract	s:ööÖ	i:1	i:0	i:2	s:ö	i:6
 s:extract	s:ööÖ	i:1	i:0	i:3	s:ö	i:6
 s:extract	s:ööÖ	i:1	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:2	i:0	i:0	s:öö	i:6
 s:extract	s:ööÖ	i:2	i:0	i:1	s:̈ö	i:6
-s:extract	s:ööÖ	i:2	i:0	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:2	i:0	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:2	i:0	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:2	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:3	i:0	i:0	s:ööÖ	i:9
 s:extract	s:ööÖ	i:3	i:0	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:3	i:0	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:3	i:0	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:3	i:0	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:3	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:5	i:0	i:0	s:ööÖ	i:9
 s:extract	s:ööÖ	i:5	i:0	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:5	i:0	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:5	i:0	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:5	i:0	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:5	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:100	i:0	i:0	s:ööÖ	i:9
 s:extract	s:ööÖ	i:100	i:0	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:100	i:0	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:100	i:0	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:0	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -4460,31 +4460,31 @@ s:extract	s:ööÖ	i:0	i:1	i:-1	s:	i:8
 s:extract	s:ööÖ	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:1	i:1	i:0	s:	i:0
 s:extract	s:ööÖ	i:1	i:1	i:1	s:	i:1
-s:extract	s:ööÖ	i:1	i:1	i:2	s:	i:2
+s:extract	s:ööÖ	i:1	i:1	i:2	s:	i:3
 s:extract	s:ööÖ	i:1	i:1	i:3	s:	i:3
 s:extract	s:ööÖ	i:1	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:2	i:1	i:0	s:	i:0
 s:extract	s:ööÖ	i:2	i:1	i:1	s:̈	i:3
-s:extract	s:ööÖ	i:2	i:1	i:2	s:	i:2
+s:extract	s:ööÖ	i:2	i:1	i:2	s:	i:3
 s:extract	s:ööÖ	i:2	i:1	i:3	s:	i:3
 s:extract	s:ööÖ	i:2	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:3	i:1	i:0	s:ö	i:3
 s:extract	s:ööÖ	i:3	i:1	i:1	s:̈	i:3
-s:extract	s:ööÖ	i:3	i:1	i:2	s:ö	i:5
+s:extract	s:ööÖ	i:3	i:1	i:2	s:ö	i:6
 s:extract	s:ööÖ	i:3	i:1	i:3	s:ö	i:6
 s:extract	s:ööÖ	i:3	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:5	i:1	i:0	s:ö	i:3
 s:extract	s:ööÖ	i:5	i:1	i:1	s:̈ö	i:6
-s:extract	s:ööÖ	i:5	i:1	i:2	s:ö	i:5
+s:extract	s:ööÖ	i:5	i:1	i:2	s:ö	i:6
 s:extract	s:ööÖ	i:5	i:1	i:3	s:ö	i:6
 s:extract	s:ööÖ	i:5	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:100	i:1	i:0	s:ööÖ	i:9
 s:extract	s:ööÖ	i:100	i:1	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:100	i:1	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:100	i:1	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:1	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -4496,38 +4496,38 @@ s:extract	s:ööÖ	i:0	i:2	i:-1	s:	i:8
 s:extract	s:ööÖ	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:1	i:2	i:0	s:	i:0
 s:extract	s:ööÖ	i:1	i:2	i:1	s:̈	i:3
-s:extract	s:ööÖ	i:1	i:2	i:2	s:	i:2
+s:extract	s:ööÖ	i:1	i:2	i:2	s:	i:3
 s:extract	s:ööÖ	i:1	i:2	i:3	s:	i:3
 s:extract	s:ööÖ	i:1	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:2	i:2	i:0	s:ö	i:3
 s:extract	s:ööÖ	i:2	i:2	i:1	s:̈	i:3
-s:extract	s:ööÖ	i:2	i:2	i:2	s:ö	i:5
+s:extract	s:ööÖ	i:2	i:2	i:2	s:ö	i:6
 s:extract	s:ööÖ	i:2	i:2	i:3	s:ö	i:6
 s:extract	s:ööÖ	i:2	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:3	i:2	i:0	s:ö	i:3
 s:extract	s:ööÖ	i:3	i:2	i:1	s:̈ö	i:6
-s:extract	s:ööÖ	i:3	i:2	i:2	s:ö	i:5
+s:extract	s:ööÖ	i:3	i:2	i:2	s:ö	i:6
 s:extract	s:ööÖ	i:3	i:2	i:3	s:ö	i:6
 s:extract	s:ööÖ	i:3	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:5	i:2	i:0	s:öö	i:6
 s:extract	s:ööÖ	i:5	i:2	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:5	i:2	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:5	i:2	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:5	i:2	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:5	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ööÖ	i:100	i:2	i:0	s:ööÖ	i:9
 s:extract	s:ööÖ	i:100	i:2	i:1	s:̈öÖ	i:9
-s:extract	s:ööÖ	i:100	i:2	i:2	s:öÖ	i:8
+s:extract	s:ööÖ	i:100	i:2	i:2	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:2	i:3	s:öÖ	i:9
 s:extract	s:ööÖ	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:8
 s:extract	s:ööÖ	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:ööÖ	i:1	s:!Error
-s:split	s:ööÖ	i:2	s:!Error
-s:split	s:ööÖ	i:3	s:!Error
-s:split	s:ööÖ	i:10	s:!Error
+s:split	s:ööÖ	i:1	a:["ö","ö","Ö"]
+s:split	s:ööÖ	i:2	a:["öö","Ö"]
+s:split	s:ööÖ	i:3	a:["ööÖ"]
+s:split	s:ööÖ	i:10	a:["ööÖ"]
 s:len	s:	i:0
 s:pos	s:grapheme_strpos	s:	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -5279,10 +5279,10 @@ s:extract	s:	i:100	i:2	i:2	s:!U_ILLEGAL_ARGUMENT_ERROR	i:2
 s:extract	s:	i:100	i:2	i:3	s:!U_ILLEGAL_ARGUMENT_ERROR	i:3
 s:extract	s:	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:-1
 s:extract	s:	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:	i:1	s:!Error
-s:split	s:	i:2	s:!Error
-s:split	s:	i:3	s:!Error
-s:split	s:	i:10	s:!Error
+s:split	s:	i:1	a:[]
+s:split	s:	i:2	a:[]
+s:split	s:	i:3	a:[]
+s:split	s:	i:10	a:[]
 s:len	b:7a7aff	s:!U_INVALID_CHAR_FOUND
 s:pos	s:grapheme_strpos	b:7a7aff	s:a	i:0	s:!U_INVALID_CHAR_FOUND
 s:pos	s:grapheme_stripos	b:7a7aff	s:a	i:0	s:!U_INVALID_CHAR_FOUND
@@ -6034,10 +6034,10 @@ s:extract	b:7a7aff	i:100	i:2	i:2	s:!U_ILLEGAL_ARGUMENT_ERROR	i:2
 s:extract	b:7a7aff	i:100	i:2	i:3	s:!U_ILLEGAL_ARGUMENT_ERROR	i:3
 s:extract	b:7a7aff	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:2
 s:extract	b:7a7aff	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	b:7a7aff	i:1	s:!Error
-s:split	b:7a7aff	i:2	s:!Error
-s:split	b:7a7aff	i:3	s:!Error
-s:split	b:7a7aff	i:10	s:!Error
+s:split	b:7a7aff	i:1	a:["z","z","�"]
+s:split	b:7a7aff	i:2	a:["zz","�"]
+s:split	b:7a7aff	i:3	a:["zz�"]
+s:split	b:7a7aff	i:10	a:["zz�"]
 s:len	s:ÄÖÜäöü	i:6
 s:pos	s:grapheme_strpos	s:ÄÖÜäöü	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:ÄÖÜäöü	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -6247,8 +6247,8 @@ s:pos	s:grapheme_strpos	s:ÄÖÜäöü	s:ö	i:4	i:4
 s:pos	s:grapheme_stripos	s:ÄÖÜäöü	s:ö	i:4	i:4
 s:pos	s:grapheme_strrpos	s:ÄÖÜäöü	s:ö	i:4	i:4
 s:pos	s:grapheme_strripos	s:ÄÖÜäöü	s:ö	i:4	i:4
-s:strstr	s:ÄÖÜäöü	s:ö	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:ÖÜäöü
-s:strstr	s:ÄÖÜäöü	s:ö	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:Ä
+s:strstr	s:ÄÖÜäöü	s:ö	~F	s:öü	s:ÖÜäöü
+s:strstr	s:ÄÖÜäöü	s:ö	~T	s:ÄÖÜä	s:Ä
 s:pos	s:grapheme_strpos	s:ÄÖÜäöü	s:O	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:ÄÖÜäöü	s:O	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strrpos	s:ÄÖÜäöü	s:O	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -6688,33 +6688,33 @@ s:extract	s:ÄÖÜäöü	i:0	i:0	i:3	s:	i:3
 s:extract	s:ÄÖÜäöü	i:0	i:0	i:-1	s:	i:11
 s:extract	s:ÄÖÜäöü	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:1	i:0	i:0	s:Ä	i:2
-s:extract	s:ÄÖÜäöü	i:1	i:0	i:1	s:Ö	i:3
+s:extract	s:ÄÖÜäöü	i:1	i:0	i:1	s:Ö	i:4
 s:extract	s:ÄÖÜäöü	i:1	i:0	i:2	s:Ö	i:4
-s:extract	s:ÄÖÜäöü	i:1	i:0	i:3	s:Ü	i:5
+s:extract	s:ÄÖÜäöü	i:1	i:0	i:3	s:Ü	i:6
 s:extract	s:ÄÖÜäöü	i:1	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:2	i:0	i:0	s:ÄÖ	i:4
-s:extract	s:ÄÖÜäöü	i:2	i:0	i:1	s:ÖÜ	i:5
+s:extract	s:ÄÖÜäöü	i:2	i:0	i:1	s:ÖÜ	i:6
 s:extract	s:ÄÖÜäöü	i:2	i:0	i:2	s:ÖÜ	i:6
-s:extract	s:ÄÖÜäöü	i:2	i:0	i:3	s:Üä	i:7
+s:extract	s:ÄÖÜäöü	i:2	i:0	i:3	s:Üä	i:8
 s:extract	s:ÄÖÜäöü	i:2	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:3	i:0	i:0	s:ÄÖÜ	i:6
-s:extract	s:ÄÖÜäöü	i:3	i:0	i:1	s:ÖÜä	i:7
+s:extract	s:ÄÖÜäöü	i:3	i:0	i:1	s:ÖÜä	i:8
 s:extract	s:ÄÖÜäöü	i:3	i:0	i:2	s:ÖÜä	i:8
-s:extract	s:ÄÖÜäöü	i:3	i:0	i:3	s:Üäö	i:9
+s:extract	s:ÄÖÜäöü	i:3	i:0	i:3	s:Üäö	i:10
 s:extract	s:ÄÖÜäöü	i:3	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:5	i:0	i:0	s:ÄÖÜäö	i:10
-s:extract	s:ÄÖÜäöü	i:5	i:0	i:1	s:ÖÜäöü	i:11
+s:extract	s:ÄÖÜäöü	i:5	i:0	i:1	s:ÖÜäöü	i:12
 s:extract	s:ÄÖÜäöü	i:5	i:0	i:2	s:ÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:5	i:0	i:3	s:Üäöü	i:11
+s:extract	s:ÄÖÜäöü	i:5	i:0	i:3	s:Üäöü	i:12
 s:extract	s:ÄÖÜäöü	i:5	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:100	i:0	i:0	s:ÄÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:0	i:1	s:ÖÜäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:0	i:1	s:ÖÜäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:0	i:2	s:ÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:0	i:3	s:Üäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:0	i:3	s:Üäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:0	i:1	i:0	s:	i:0
@@ -6724,33 +6724,33 @@ s:extract	s:ÄÖÜäöü	i:0	i:1	i:3	s:	i:3
 s:extract	s:ÄÖÜäöü	i:0	i:1	i:-1	s:	i:11
 s:extract	s:ÄÖÜäöü	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:1	i:1	i:0	s:	i:0
-s:extract	s:ÄÖÜäöü	i:1	i:1	i:1	s:	i:1
+s:extract	s:ÄÖÜäöü	i:1	i:1	i:1	s:	i:2
 s:extract	s:ÄÖÜäöü	i:1	i:1	i:2	s:	i:2
-s:extract	s:ÄÖÜäöü	i:1	i:1	i:3	s:	i:3
+s:extract	s:ÄÖÜäöü	i:1	i:1	i:3	s:	i:4
 s:extract	s:ÄÖÜäöü	i:1	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:2	i:1	i:0	s:Ä	i:2
-s:extract	s:ÄÖÜäöü	i:2	i:1	i:1	s:Ö	i:3
+s:extract	s:ÄÖÜäöü	i:2	i:1	i:1	s:Ö	i:4
 s:extract	s:ÄÖÜäöü	i:2	i:1	i:2	s:Ö	i:4
-s:extract	s:ÄÖÜäöü	i:2	i:1	i:3	s:Ü	i:5
+s:extract	s:ÄÖÜäöü	i:2	i:1	i:3	s:Ü	i:6
 s:extract	s:ÄÖÜäöü	i:2	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:3	i:1	i:0	s:Ä	i:2
-s:extract	s:ÄÖÜäöü	i:3	i:1	i:1	s:Ö	i:3
+s:extract	s:ÄÖÜäöü	i:3	i:1	i:1	s:Ö	i:4
 s:extract	s:ÄÖÜäöü	i:3	i:1	i:2	s:Ö	i:4
-s:extract	s:ÄÖÜäöü	i:3	i:1	i:3	s:Ü	i:5
+s:extract	s:ÄÖÜäöü	i:3	i:1	i:3	s:Ü	i:6
 s:extract	s:ÄÖÜäöü	i:3	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:5	i:1	i:0	s:ÄÖ	i:4
-s:extract	s:ÄÖÜäöü	i:5	i:1	i:1	s:ÖÜ	i:5
+s:extract	s:ÄÖÜäöü	i:5	i:1	i:1	s:ÖÜ	i:6
 s:extract	s:ÄÖÜäöü	i:5	i:1	i:2	s:ÖÜ	i:6
-s:extract	s:ÄÖÜäöü	i:5	i:1	i:3	s:Üä	i:7
+s:extract	s:ÄÖÜäöü	i:5	i:1	i:3	s:Üä	i:8
 s:extract	s:ÄÖÜäöü	i:5	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:100	i:1	i:0	s:ÄÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:1	i:1	s:ÖÜäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:1	i:1	s:ÖÜäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:1	i:2	s:ÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:1	i:3	s:Üäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:1	i:3	s:Üäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:0	i:2	i:0	s:	i:0
@@ -6760,39 +6760,39 @@ s:extract	s:ÄÖÜäöü	i:0	i:2	i:3	s:	i:3
 s:extract	s:ÄÖÜäöü	i:0	i:2	i:-1	s:	i:11
 s:extract	s:ÄÖÜäöü	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:1	i:2	i:0	s:Ä	i:2
-s:extract	s:ÄÖÜäöü	i:1	i:2	i:1	s:Ö	i:3
+s:extract	s:ÄÖÜäöü	i:1	i:2	i:1	s:Ö	i:4
 s:extract	s:ÄÖÜäöü	i:1	i:2	i:2	s:Ö	i:4
-s:extract	s:ÄÖÜäöü	i:1	i:2	i:3	s:Ü	i:5
+s:extract	s:ÄÖÜäöü	i:1	i:2	i:3	s:Ü	i:6
 s:extract	s:ÄÖÜäöü	i:1	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:2	i:2	i:0	s:ÄÖ	i:4
-s:extract	s:ÄÖÜäöü	i:2	i:2	i:1	s:ÖÜ	i:5
+s:extract	s:ÄÖÜäöü	i:2	i:2	i:1	s:ÖÜ	i:6
 s:extract	s:ÄÖÜäöü	i:2	i:2	i:2	s:ÖÜ	i:6
-s:extract	s:ÄÖÜäöü	i:2	i:2	i:3	s:Üä	i:7
+s:extract	s:ÄÖÜäöü	i:2	i:2	i:3	s:Üä	i:8
 s:extract	s:ÄÖÜäöü	i:2	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:3	i:2	i:0	s:ÄÖÜ	i:6
-s:extract	s:ÄÖÜäöü	i:3	i:2	i:1	s:ÖÜä	i:7
+s:extract	s:ÄÖÜäöü	i:3	i:2	i:1	s:ÖÜä	i:8
 s:extract	s:ÄÖÜäöü	i:3	i:2	i:2	s:ÖÜä	i:8
-s:extract	s:ÄÖÜäöü	i:3	i:2	i:3	s:Üäö	i:9
+s:extract	s:ÄÖÜäöü	i:3	i:2	i:3	s:Üäö	i:10
 s:extract	s:ÄÖÜäöü	i:3	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:5	i:2	i:0	s:ÄÖÜäö	i:10
-s:extract	s:ÄÖÜäöü	i:5	i:2	i:1	s:ÖÜäöü	i:11
+s:extract	s:ÄÖÜäöü	i:5	i:2	i:1	s:ÖÜäöü	i:12
 s:extract	s:ÄÖÜäöü	i:5	i:2	i:2	s:ÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:5	i:2	i:3	s:Üäöü	i:11
+s:extract	s:ÄÖÜäöü	i:5	i:2	i:3	s:Üäöü	i:12
 s:extract	s:ÄÖÜäöü	i:5	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:ÄÖÜäöü	i:100	i:2	i:0	s:ÄÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:2	i:1	s:ÖÜäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:2	i:1	s:ÖÜäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:2	i:2	s:ÖÜäöü	i:12
-s:extract	s:ÄÖÜäöü	i:100	i:2	i:3	s:Üäöü	i:11
+s:extract	s:ÄÖÜäöü	i:100	i:2	i:3	s:Üäöü	i:12
 s:extract	s:ÄÖÜäöü	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:11
 s:extract	s:ÄÖÜäöü	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:ÄÖÜäöü	i:1	s:!Error
-s:split	s:ÄÖÜäöü	i:2	s:!Error
-s:split	s:ÄÖÜäöü	i:3	s:!Error
-s:split	s:ÄÖÜäöü	i:10	s:!Error
+s:split	s:ÄÖÜäöü	i:1	a:["Ä","Ö","Ü","ä","ö","ü"]
+s:split	s:ÄÖÜäöü	i:2	a:["ÄÖ","Üä","öü"]
+s:split	s:ÄÖÜäöü	i:3	a:["ÄÖÜ","äöü"]
+s:split	s:ÄÖÜäöü	i:10	a:["ÄÖÜäöü"]
 s:len	s:ABCabcABC	i:9
 s:pos	s:grapheme_strpos	s:ABCabcABC	s:a	i:0	i:3
 s:pos	s:grapheme_stripos	s:ABCabcABC	s:a	i:0	i:0
@@ -7544,10 +7544,10 @@ s:extract	s:ABCabcABC	i:100	i:2	i:2	s:CabcABC	i:9
 s:extract	s:ABCabcABC	i:100	i:2	i:3	s:abcABC	i:9
 s:extract	s:ABCabcABC	i:100	i:2	i:-1	s:C	i:9
 s:extract	s:ABCabcABC	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:ABCabcABC	i:1	s:!Error
-s:split	s:ABCabcABC	i:2	s:!Error
-s:split	s:ABCabcABC	i:3	s:!Error
-s:split	s:ABCabcABC	i:10	s:!Error
+s:split	s:ABCabcABC	i:1	a:["A","B","C","a","b","c","A","B","C"]
+s:split	s:ABCabcABC	i:2	a:["AB","Ca","bc","AB","C"]
+s:split	s:ABCabcABC	i:3	a:["ABC","abc","ABC"]
+s:split	s:ABCabcABC	i:10	a:["ABCabcABC"]
 s:len	s:a\r\nb\r\nc	i:5
 s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:a	i:0	i:0
 s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:a	i:0	i:0
@@ -7851,32 +7851,32 @@ s:strstr	s:a\r\nb\r\nc	s:ab	~F	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT
 s:strstr	s:a\r\nb\r\nc	s:ab	~T	s:!U_ILLEGAL_ARGUMENT_ERROR	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:0	i:0
 s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:0	i:0
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:0	i:7
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:0	i:7
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:0	i:5
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:0	i:5
 s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:1	i:1
 s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:1	i:1
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:1	i:7
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:1	i:7
-s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:2	i:3
-s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:2	i:3
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:2	i:7
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:2	i:7
-s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:-1	i:6
-s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:-1	i:6
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:-1	i:6
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:-1	i:6
-s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:-2	i:4
-s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:-2	i:4
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:-2	i:4
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:-2	i:4
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:1	i:5
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:1	i:5
+s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:2	i:2
+s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:2	i:2
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:2	i:5
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:2	i:5
+s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:-1	i:4
+s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:-1	i:4
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:-1	i:4
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:-1	i:4
+s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:-2	i:3
+s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:-2	i:3
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:-2	i:3
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:-2	i:3
 s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:-5	i:0
 s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:-5	i:0
 s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:-5	i:0
 s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:-5	i:0
-s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:4	i:6
-s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:4	i:6
-s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:4	i:7
-s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:4	i:7
+s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:	i:4	i:4
+s:pos	s:grapheme_stripos	s:a\r\nb\r\nc	s:	i:4	i:4
+s:pos	s:grapheme_strrpos	s:a\r\nb\r\nc	s:	i:4	i:5
+s:pos	s:grapheme_strripos	s:a\r\nb\r\nc	s:	i:4	i:5
 s:strstr	s:a\r\nb\r\nc	s:	~F	s:a\r\nb\r\nc	s:a\r\nb\r\nc
 s:strstr	s:a\r\nb\r\nc	s:	~T	s:	s:
 s:pos	s:grapheme_strpos	s:a\r\nb\r\nc	s:ä	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -8299,10 +8299,10 @@ s:extract	s:a\r\nb\r\nc	i:100	i:2	i:2	s:\nb\r\nc	i:7
 s:extract	s:a\r\nb\r\nc	i:100	i:2	i:3	s:b\r\nc	i:7
 s:extract	s:a\r\nb\r\nc	i:100	i:2	i:-1	s:c	i:7
 s:extract	s:a\r\nb\r\nc	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:a\r\nb\r\nc	i:1	s:!Error
-s:split	s:a\r\nb\r\nc	i:2	s:!Error
-s:split	s:a\r\nb\r\nc	i:3	s:!Error
-s:split	s:a\r\nb\r\nc	i:10	s:!Error
+s:split	s:a\r\nb\r\nc	i:1	a:["a","\r\n","b","\r\n","c"]
+s:split	s:a\r\nb\r\nc	i:2	a:["a\r\n","b\r\n","c"]
+s:split	s:a\r\nb\r\nc	i:3	a:["a\r\nb","\r\nc"]
+s:split	s:a\r\nb\r\nc	i:10	a:["a\r\nb\r\nc"]
 s:len	s:Straße STRASSE	i:14
 s:pos	s:grapheme_strpos	s:Straße STRASSE	s:a	i:0	i:3
 s:pos	s:grapheme_stripos	s:Straße STRASSE	s:a	i:0	i:3
@@ -9054,10 +9054,10 @@ s:extract	s:Straße STRASSE	i:100	i:2	i:2	s:raße STRASSE	i:15
 s:extract	s:Straße STRASSE	i:100	i:2	i:3	s:aße STRASSE	i:15
 s:extract	s:Straße STRASSE	i:100	i:2	i:-1	s:E	i:15
 s:extract	s:Straße STRASSE	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:Straße STRASSE	i:1	s:!Error
-s:split	s:Straße STRASSE	i:2	s:!Error
-s:split	s:Straße STRASSE	i:3	s:!Error
-s:split	s:Straße STRASSE	i:10	s:!Error
+s:split	s:Straße STRASSE	i:1	a:["S","t","r","a","ß","e"," ","S","T","R","A","S","S","E"]
+s:split	s:Straße STRASSE	i:2	a:["St","ra","ße"," S","TR","AS","SE"]
+s:split	s:Straße STRASSE	i:3	a:["Str","aße"," ST","RAS","SE"]
+s:split	s:Straße STRASSE	i:10	a:["Straße STR","ASSE"]
 s:len	s:日本語テキスト日本	i:9
 s:pos	s:grapheme_strpos	s:日本語テキスト日本	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
 s:pos	s:grapheme_stripos	s:日本語テキスト日本	s:a	i:0	s:!U_ILLEGAL_ARGUMENT_ERROR
@@ -9708,32 +9708,32 @@ s:extract	s:日本語テキスト日本	i:0	i:0	i:3	s:	i:3
 s:extract	s:日本語テキスト日本	i:0	i:0	i:-1	s:	i:26
 s:extract	s:日本語テキスト日本	i:0	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:1	i:0	i:0	s:日	i:3
-s:extract	s:日本語テキスト日本	i:1	i:0	i:1	s:本	i:4
-s:extract	s:日本語テキスト日本	i:1	i:0	i:2	s:本	i:5
+s:extract	s:日本語テキスト日本	i:1	i:0	i:1	s:本	i:6
+s:extract	s:日本語テキスト日本	i:1	i:0	i:2	s:本	i:6
 s:extract	s:日本語テキスト日本	i:1	i:0	i:3	s:本	i:6
 s:extract	s:日本語テキスト日本	i:1	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:1	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:2	i:0	i:0	s:日本	i:6
-s:extract	s:日本語テキスト日本	i:2	i:0	i:1	s:本語	i:7
-s:extract	s:日本語テキスト日本	i:2	i:0	i:2	s:本語	i:8
+s:extract	s:日本語テキスト日本	i:2	i:0	i:1	s:本語	i:9
+s:extract	s:日本語テキスト日本	i:2	i:0	i:2	s:本語	i:9
 s:extract	s:日本語テキスト日本	i:2	i:0	i:3	s:本語	i:9
 s:extract	s:日本語テキスト日本	i:2	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:2	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:3	i:0	i:0	s:日本語	i:9
-s:extract	s:日本語テキスト日本	i:3	i:0	i:1	s:本語テ	i:10
-s:extract	s:日本語テキスト日本	i:3	i:0	i:2	s:本語テ	i:11
+s:extract	s:日本語テキスト日本	i:3	i:0	i:1	s:本語テ	i:12
+s:extract	s:日本語テキスト日本	i:3	i:0	i:2	s:本語テ	i:12
 s:extract	s:日本語テキスト日本	i:3	i:0	i:3	s:本語テ	i:12
 s:extract	s:日本語テキスト日本	i:3	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:3	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:5	i:0	i:0	s:日本語テキ	i:15
-s:extract	s:日本語テキスト日本	i:5	i:0	i:1	s:本語テキス	i:16
-s:extract	s:日本語テキスト日本	i:5	i:0	i:2	s:本語テキス	i:17
+s:extract	s:日本語テキスト日本	i:5	i:0	i:1	s:本語テキス	i:18
+s:extract	s:日本語テキスト日本	i:5	i:0	i:2	s:本語テキス	i:18
 s:extract	s:日本語テキスト日本	i:5	i:0	i:3	s:本語テキス	i:18
 s:extract	s:日本語テキスト日本	i:5	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:5	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:100	i:0	i:0	s:日本語テキスト日本	i:27
-s:extract	s:日本語テキスト日本	i:100	i:0	i:1	s:本語テキスト日本	i:25
-s:extract	s:日本語テキスト日本	i:100	i:0	i:2	s:本語テキスト日本	i:26
+s:extract	s:日本語テキスト日本	i:100	i:0	i:1	s:本語テキスト日本	i:27
+s:extract	s:日本語テキスト日本	i:100	i:0	i:2	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:0	i:3	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:0	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:100	i:0	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -9744,32 +9744,32 @@ s:extract	s:日本語テキスト日本	i:0	i:1	i:3	s:	i:3
 s:extract	s:日本語テキスト日本	i:0	i:1	i:-1	s:	i:26
 s:extract	s:日本語テキスト日本	i:0	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:1	i:1	i:0	s:	i:0
-s:extract	s:日本語テキスト日本	i:1	i:1	i:1	s:	i:1
-s:extract	s:日本語テキスト日本	i:1	i:1	i:2	s:	i:2
+s:extract	s:日本語テキスト日本	i:1	i:1	i:1	s:	i:3
+s:extract	s:日本語テキスト日本	i:1	i:1	i:2	s:	i:3
 s:extract	s:日本語テキスト日本	i:1	i:1	i:3	s:	i:3
 s:extract	s:日本語テキスト日本	i:1	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:1	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:2	i:1	i:0	s:	i:0
-s:extract	s:日本語テキスト日本	i:2	i:1	i:1	s:	i:1
-s:extract	s:日本語テキスト日本	i:2	i:1	i:2	s:	i:2
+s:extract	s:日本語テキスト日本	i:2	i:1	i:1	s:	i:3
+s:extract	s:日本語テキスト日本	i:2	i:1	i:2	s:	i:3
 s:extract	s:日本語テキスト日本	i:2	i:1	i:3	s:	i:3
 s:extract	s:日本語テキスト日本	i:2	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:2	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:3	i:1	i:0	s:日	i:3
-s:extract	s:日本語テキスト日本	i:3	i:1	i:1	s:本	i:4
-s:extract	s:日本語テキスト日本	i:3	i:1	i:2	s:本	i:5
+s:extract	s:日本語テキスト日本	i:3	i:1	i:1	s:本	i:6
+s:extract	s:日本語テキスト日本	i:3	i:1	i:2	s:本	i:6
 s:extract	s:日本語テキスト日本	i:3	i:1	i:3	s:本	i:6
 s:extract	s:日本語テキスト日本	i:3	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:3	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:5	i:1	i:0	s:日	i:3
-s:extract	s:日本語テキスト日本	i:5	i:1	i:1	s:本	i:4
-s:extract	s:日本語テキスト日本	i:5	i:1	i:2	s:本	i:5
+s:extract	s:日本語テキスト日本	i:5	i:1	i:1	s:本	i:6
+s:extract	s:日本語テキスト日本	i:5	i:1	i:2	s:本	i:6
 s:extract	s:日本語テキスト日本	i:5	i:1	i:3	s:本	i:6
 s:extract	s:日本語テキスト日本	i:5	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:5	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:100	i:1	i:0	s:日本語テキスト日本	i:27
-s:extract	s:日本語テキスト日本	i:100	i:1	i:1	s:本語テキスト日本	i:25
-s:extract	s:日本語テキスト日本	i:100	i:1	i:2	s:本語テキスト日本	i:26
+s:extract	s:日本語テキスト日本	i:100	i:1	i:1	s:本語テキスト日本	i:27
+s:extract	s:日本語テキスト日本	i:100	i:1	i:2	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:1	i:3	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:1	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:100	i:1	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
@@ -9780,36 +9780,36 @@ s:extract	s:日本語テキスト日本	i:0	i:2	i:3	s:	i:3
 s:extract	s:日本語テキスト日本	i:0	i:2	i:-1	s:	i:26
 s:extract	s:日本語テキスト日本	i:0	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:1	i:2	i:0	s:日	i:3
-s:extract	s:日本語テキスト日本	i:1	i:2	i:1	s:本	i:4
-s:extract	s:日本語テキスト日本	i:1	i:2	i:2	s:本	i:5
+s:extract	s:日本語テキスト日本	i:1	i:2	i:1	s:本	i:6
+s:extract	s:日本語テキスト日本	i:1	i:2	i:2	s:本	i:6
 s:extract	s:日本語テキスト日本	i:1	i:2	i:3	s:本	i:6
 s:extract	s:日本語テキスト日本	i:1	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:1	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:2	i:2	i:0	s:日本	i:6
-s:extract	s:日本語テキスト日本	i:2	i:2	i:1	s:本語	i:7
-s:extract	s:日本語テキスト日本	i:2	i:2	i:2	s:本語	i:8
+s:extract	s:日本語テキスト日本	i:2	i:2	i:1	s:本語	i:9
+s:extract	s:日本語テキスト日本	i:2	i:2	i:2	s:本語	i:9
 s:extract	s:日本語テキスト日本	i:2	i:2	i:3	s:本語	i:9
 s:extract	s:日本語テキスト日本	i:2	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:2	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:3	i:2	i:0	s:日本語	i:9
-s:extract	s:日本語テキスト日本	i:3	i:2	i:1	s:本語テ	i:10
-s:extract	s:日本語テキスト日本	i:3	i:2	i:2	s:本語テ	i:11
+s:extract	s:日本語テキスト日本	i:3	i:2	i:1	s:本語テ	i:12
+s:extract	s:日本語テキスト日本	i:3	i:2	i:2	s:本語テ	i:12
 s:extract	s:日本語テキスト日本	i:3	i:2	i:3	s:本語テ	i:12
 s:extract	s:日本語テキスト日本	i:3	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:3	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:5	i:2	i:0	s:日本語テキ	i:15
-s:extract	s:日本語テキスト日本	i:5	i:2	i:1	s:本語テキス	i:16
-s:extract	s:日本語テキスト日本	i:5	i:2	i:2	s:本語テキス	i:17
+s:extract	s:日本語テキスト日本	i:5	i:2	i:1	s:本語テキス	i:18
+s:extract	s:日本語テキスト日本	i:5	i:2	i:2	s:本語テキス	i:18
 s:extract	s:日本語テキスト日本	i:5	i:2	i:3	s:本語テキス	i:18
 s:extract	s:日本語テキスト日本	i:5	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:5	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
 s:extract	s:日本語テキスト日本	i:100	i:2	i:0	s:日本語テキスト日本	i:27
-s:extract	s:日本語テキスト日本	i:100	i:2	i:1	s:本語テキスト日本	i:25
-s:extract	s:日本語テキスト日本	i:100	i:2	i:2	s:本語テキスト日本	i:26
+s:extract	s:日本語テキスト日本	i:100	i:2	i:1	s:本語テキスト日本	i:27
+s:extract	s:日本語テキスト日本	i:100	i:2	i:2	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:2	i:3	s:本語テキスト日本	i:27
 s:extract	s:日本語テキスト日本	i:100	i:2	i:-1	s:!U_ILLEGAL_ARGUMENT_ERROR	i:26
 s:extract	s:日本語テキスト日本	i:100	i:2	i:50	s:!U_ILLEGAL_ARGUMENT_ERROR	i:50
-s:split	s:日本語テキスト日本	i:1	s:!Error
-s:split	s:日本語テキスト日本	i:2	s:!Error
-s:split	s:日本語テキスト日本	i:3	s:!Error
-s:split	s:日本語テキスト日本	i:10	s:!Error
+s:split	s:日本語テキスト日本	i:1	a:["日","本","語","テ","キ","ス","ト","日","本"]
+s:split	s:日本語テキスト日本	i:2	a:["日本","語テ","キス","ト日","本"]
+s:split	s:日本語テキスト日本	i:3	a:["日本語","テキス","ト日本"]
+s:split	s:日本語テキスト日本	i:10	a:["日本語テキスト日本"]

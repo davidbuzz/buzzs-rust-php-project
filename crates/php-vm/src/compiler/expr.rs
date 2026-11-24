@@ -13,7 +13,7 @@ use crate::ast::{
 use crate::func::flags;
 use crate::opcode::{
     type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Label,
-    MatchKey, MatchTable, Op, Operand, Place, PlaceBase, Seg, UnKind,
+    MatchKey, MatchTable, NullChain, Op, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 
@@ -112,19 +112,60 @@ impl Compiler<'_> {
         if jumps.is_empty() {
             return Ok(op);
         }
+        // `zend_short_circuiting_commit()`: the jumps write the result of
+        // the chain's last instruction.
+        if let Some(t) = self.last_result(op) {
+            self.finish_short_circuit(jumps, t);
+            return Ok(op);
+        }
         let dst = self.tmp();
         self.emit(Op::Move { src: op, dst });
         self.finish_short_circuit(jumps, dst);
         Ok(Operand::Tmp(dst))
     }
 
+    /// The temporary `op` names when the last instruction emitted defines
+    /// it.
+    pub(crate) fn last_result(&mut self, op: Operand) -> Option<u32> {
+        let Operand::Tmp(t) = op else {
+            return None;
+        };
+        let last = self.f().ops.last()?;
+        (super::optimizer::def_tmp(last) == Some(t)).then_some(t)
+    }
+
     pub(crate) fn finish_short_circuit(&mut self, jumps: Vec<usize>, dst: u32) {
+        self.commit_short_circuit(jumps, dst, None);
+    }
+
+    /// Points the chain's jumps past its last instruction, writing `dst`,
+    /// as `isset()` / `empty()` when `chain` says so.
+    fn commit_short_circuit(&mut self, jumps: Vec<usize>, dst: u32, chain: Option<NullChain>) {
         let here = self.here();
         for j in jumps {
-            if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
+            if let Op::JmpNull {
+                dst: d,
+                target,
+                chain: c,
+                ..
+            } = &mut self.f().ops[j]
+            {
                 *d = dst;
                 *target = here;
+                if let Some(chain) = chain {
+                    *c = chain;
+                }
             }
+        }
+    }
+
+    /// The short-circuit kind of a `JMP_NULL` emitted now
+    /// (`ZEND_JMP_NULL_BP_VAR_IS` in a quiet fetch).
+    fn null_chain(&mut self) -> NullChain {
+        if self.f().sc_quiet {
+            NullChain::Quiet
+        } else {
+            NullChain::Expr
         }
     }
 
@@ -494,19 +535,7 @@ impl Compiler<'_> {
                     let (p, jumps) = self.compile_is_place(inner)?;
                     let pid = self.place(p);
                     self.emit(Op::Empty { place: pid, dst: t });
-                    if !jumps.is_empty() {
-                        let skip = self.emit(Op::Jmp(0));
-                        let tt = self.lit(Value::Bool(true));
-                        let here = self.here();
-                        for j in jumps {
-                            if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
-                                *d = t;
-                                *target = here;
-                            }
-                        }
-                        self.emit(Op::Move { src: tt, dst: t });
-                        self.patch_here(skip);
-                    }
+                    self.commit_short_circuit(jumps, t, Some(NullChain::Empty));
                 } else {
                     let a = self.compile_expr(inner)?;
                     self.emit(Op::Unary {
@@ -1185,42 +1214,33 @@ impl Compiler<'_> {
             } => {
                 let mut p = self.compile_place_base(object)?;
                 if *nullsafe {
-                    let quiet = self.f().sc_quiet;
-                    let mode = if quiet {
+                    let chain = self.null_chain();
+                    let mode = if chain == NullChain::Quiet {
                         FetchMode::Is
                     } else {
                         FetchMode::Read
                     };
-                    let v = if p.segs.is_empty() {
-                        match p.base {
-                            PlaceBase::Value(op) => op,
-                            PlaceBase::Cv(cv) if !quiet => {
-                                let t = self.tmp();
-                                self.emit(Op::Move {
-                                    src: Operand::Cv(cv),
-                                    dst: t,
-                                });
-                                Operand::Tmp(t)
-                            }
-                            base => self.fetch_place(
-                                Place {
-                                    base,
-                                    segs: Vec::new(),
-                                },
-                                mode,
-                            ),
+                    // `zend_emit_jmp_null()` on the variable itself, which
+                    // the property fetch then reads again.
+                    let (v, base) = match p.base {
+                        PlaceBase::Value(op) if p.segs.is_empty() => (op, PlaceBase::Value(op)),
+                        PlaceBase::Cv(cv) if p.segs.is_empty() => {
+                            (Operand::Cv(cv), PlaceBase::Cv(cv))
                         }
-                    } else {
-                        self.fetch_place(p, mode)
+                        _ => {
+                            let v = self.fetch_place(p, mode);
+                            (v, PlaceBase::Value(v))
+                        }
                     };
                     let j = self.emit(Op::JmpNull {
                         a: Compiler::keep(v),
                         dst: 0,
                         target: 0,
+                        chain,
                     });
                     self.f().sc_jumps.push(j);
                     p = Place {
-                        base: PlaceBase::Value(v),
+                        base,
                         segs: Vec::new(),
                     };
                 }
@@ -1423,19 +1443,7 @@ impl Compiler<'_> {
         let (p, jumps) = self.compile_is_place(v)?;
         let pid = self.place(p);
         self.emit(Op::Isset { place: pid, dst: t });
-        if !jumps.is_empty() {
-            let skip = self.emit(Op::Jmp(0));
-            let here = self.here();
-            for j in jumps {
-                if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
-                    *d = t;
-                    *target = here;
-                }
-            }
-            let f = self.lit(Value::Bool(false));
-            self.emit(Op::Move { src: f, dst: t });
-            self.patch_here(skip);
-        }
+        self.commit_short_circuit(jumps, t, Some(NullChain::Isset));
         Ok(Operand::Tmp(t))
     }
 
@@ -1959,6 +1967,35 @@ impl Compiler<'_> {
         line: u32,
     ) -> CResult<Option<Operand>> {
         if op == AB::Coalesce {
+            // A plain local is read as `??` reads it, `ZEND_COALESCE` of
+            // the CV itself (`zend_compile_assign_coalesce` compiles the
+            // variable for `BP_VAR_IS`, which is the CV operand), and
+            // written as `=` writes it.
+            if let ExprKind::Var(VarName::Name(id)) = &target.kind {
+                if id.name != b"this" && id.name != b"GLOBALS" && !is_superglobal(&id.name) {
+                    self.note_cv_write(&id.name);
+                    let cv = self.cv(&id.name);
+                    let t = self.tmp();
+                    let j = self.emit(Op::Coalesce {
+                        a: Operand::Cv(cv),
+                        dst: t,
+                        target: 0,
+                    });
+                    let v = self.compile_expr(value)?;
+                    self.f().line = line;
+                    self.emit(Op::AssignCv {
+                        cv,
+                        val: v,
+                        dst: Some(t),
+                    });
+                    self.patch_here(j);
+                    if need {
+                        return Ok(Some(Operand::Tmp(t)));
+                    }
+                    self.free(Operand::Tmp(t));
+                    return Ok(None);
+                }
+            }
             let p = self.compile_write_place(target)?;
             let temps = place_tmps(&p);
             let mut pk = p.clone();
@@ -2200,10 +2237,12 @@ impl Compiler<'_> {
                 } else {
                     let o = self.compile_chain(object)?;
                     if *nullsafe {
+                        let chain = self.null_chain();
                         let j = self.emit(Op::JmpNull {
                             a: Compiler::keep(o),
                             dst: 0,
                             target: 0,
+                            chain,
                         });
                         self.f().sc_jumps.push(j);
                     }
@@ -2376,7 +2415,7 @@ impl Compiler<'_> {
             });
             return Ok(Some(Operand::Tmp(t)));
         }
-        self.compile_args(args, fbc)?;
+        self.compile_args(args, fbc.as_ref())?;
         // `zend_compile_call_common` gives the call opcode the call's own
         // line (`opline->lineno = lineno`) but leaves `CG(zend_lineno)`
         // where compiling the last argument put it, so the opcodes that
@@ -2501,7 +2540,7 @@ impl Compiler<'_> {
         }
         let lc = name.to_ascii_lowercase();
         if let Some(info) = self.known_functions.get(&lc) {
-            return Some(*info);
+            return Some(info.clone());
         }
         self.functions?.find(&lc)
     }
@@ -2557,13 +2596,13 @@ impl Compiler<'_> {
     /// an argument for a by-value parameter is compiled for reading
     /// (`BP_VAR_R`): `f($a[])` and `f($a[]->b)` are the compile error
     /// "Cannot use [] for reading". Otherwise a variable is a
-    /// `BP_VAR_FUNC_ARG` fetch, which appends or throws at run time.
-    /// Named arguments are not matched to parameters here, so they are
-    /// compiled as for an unknown `fbc`.
+    /// `BP_VAR_FUNC_ARG` fetch, which appends or throws at run time. A
+    /// named argument for a parameter of a known `fbc` (`zend_get_arg_num`)
+    /// is compiled for that parameter's mode.
     pub(crate) fn compile_args(
         &mut self,
         args: &ArgList,
-        fbc: Option<super::FunctionInfo>,
+        fbc: Option<&super::FunctionInfo>,
     ) -> CResult<()> {
         let mut seen_named = false;
         let mut seen_unpack = false;
@@ -2602,6 +2641,17 @@ impl Compiler<'_> {
                 }
                 ArgKind::Named { name, value } => {
                     seen_named = true;
+                    // An unpacked argument makes `fbc` unknown. (php-src also
+                    // sends an argument in its place positionally; a named send
+                    // behaves the same, and keeps the call off the frameless
+                    // path, as `zend_args_contain_unpack_or_named` does.)
+                    let by_value = fbc.filter(|_| !seen_unpack).is_some_and(|f| {
+                        f.arg_num(&name.name)
+                            .is_some_and(|n| !f.sends_by_ref(n - 1))
+                    });
+                    if by_value && reads_append(value) {
+                        return self.err("Cannot use [] for reading", value.span.line);
+                    }
                     let n = self.lit_str(&name.name);
                     let src = self.arg_src_for(value)?;
                     self.emit(Op::SendNamed { name: n, src });
@@ -2633,14 +2683,23 @@ impl Compiler<'_> {
         }
         // Cheap shape checks first: nothing is emitted for a callback the
         // optimisation does not cover.
-        match &callback.kind {
-            ExprKind::Call { args, .. } if args.is_first_class_callable() => {}
+        let pfa = match &callback.kind {
+            ExprKind::Call { args, callee, .. } => {
+                // `zend_is_pipe_optimizable_callable_name`.
+                if matches!(&**callee, Callee::Name(n) if n.name.eq_ignore_ascii_case(b"assert")) {
+                    return Ok(None);
+                }
+                args
+            }
             ExprKind::StaticCall {
                 name: MemberName::Ident(_),
                 args,
                 ..
-            } if args.is_first_class_callable() => {}
+            } => args,
             _ => return Ok(None),
+        };
+        if !partial_applies(pfa) {
+            return Ok(None);
         }
         let mark = self.fref().ops.len();
         let num_tmps = self.fref().num_tmps;
@@ -2725,9 +2784,36 @@ impl Compiler<'_> {
                 self.emit(Op::InitStaticCall { class, name });
             }
         }
-        self.emit(Op::Send {
-            src: ArgSrc::Val(Operand::Tmp(val)),
-        });
+        // `zend_partial_apply`: the element where the placeholder stands,
+        // the literals where they stand.
+        for a in &pfa.args {
+            let elem = ArgSrc::Val(Operand::Tmp(val));
+            match &a.kind {
+                ArgKind::Placeholder | ArgKind::VariadicPlaceholder => {
+                    self.emit(Op::Send { src: elem });
+                }
+                ArgKind::NamedPlaceholder(id) => {
+                    let name = self.lit_str(&id.name);
+                    self.emit(Op::SendNamed { name, src: elem });
+                }
+                ArgKind::Positional(e) => {
+                    let lit = self.compile_expr(e)?;
+                    self.emit(Op::Send {
+                        src: ArgSrc::Val(lit),
+                    });
+                }
+                ArgKind::Named { name, value } => {
+                    let n = self.lit_str(&name.name);
+                    let lit = self.compile_expr(value)?;
+                    self.emit(Op::SendNamed {
+                        name: n,
+                        src: ArgSrc::Val(lit),
+                    });
+                }
+                // (Refused by `partial_applies`.)
+                ArgKind::Unpack(_) => {}
+            }
+        }
         let ret = self.tmp();
         self.emit(Op::DoCall { dst: Some(ret) });
         self.emit(Op::ArrayAdd {
@@ -2745,7 +2831,40 @@ impl Compiler<'_> {
         }
         Ok(Some(Operand::Tmp(result)))
     }
+}
 
+/// Whether the arguments `args` of `array_map()`'s callback make a partial
+/// application the loop can call directly (`zend_compile_func_array_map`
+/// with `zend_partial_apply`): exactly one placeholder (`?`, `name: ?` or
+/// `...`), every other argument an integer, float or string literal, and no
+/// variadic placeholder together with named arguments.
+fn partial_applies(args: &ArgList) -> bool {
+    let mut placeholders = 0;
+    let mut variadic = false;
+    let mut named = false;
+    for a in &args.args {
+        match &a.kind {
+            ArgKind::Placeholder | ArgKind::NamedPlaceholder(_) => placeholders += 1,
+            ArgKind::VariadicPlaceholder => {
+                placeholders += 1;
+                variadic = true;
+            }
+            ArgKind::Positional(e) | ArgKind::Named { value: e, .. } => {
+                if !matches!(
+                    e.kind,
+                    ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
+                ) {
+                    return false;
+                }
+                named |= matches!(a.kind, ArgKind::Named { .. });
+            }
+            ArgKind::Unpack(_) => return false,
+        }
+    }
+    placeholders == 1 && !(variadic && named)
+}
+
+impl Compiler<'_> {
     /// An operand of [`Self::compile_array_map_foreach`]'s loop: a literal
     /// as is; anything else in a temporary (`ZEND_QM_ASSIGN` of a
     /// variable) that every iteration reads without consuming.
@@ -2820,6 +2939,32 @@ impl Compiler<'_> {
             b"chr" | b"ord" if fb.is_none() && only_positional && positional.len() == 1 => {
                 Ok(self.fold_chr_ord(&lc, positional[0]))
             }
+            // zend_compile_func_array_slice: `array_slice(func_get_args(), n)`
+            // inside a function, `n` a non-negative int literal.
+            b"array_slice"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 2
+                    && !self.f().func_name.is_empty()
+                    && self.special_builtin_enabled(b"array_slice") =>
+            {
+                let ExprKind::Int(n) = positional[1].kind else {
+                    return Ok(None);
+                };
+                let (Ok(skip), true) = (u32::try_from(n), self.is_func_get_args(positional[0]))
+                else {
+                    return Ok(None);
+                };
+                self.f().line = line;
+                let dst = need.then(|| self.tmp());
+                self.emit(Op::FuncGetArgs {
+                    dst,
+                    skip: Some(skip),
+                });
+                Ok(Some(
+                    dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+                ))
+            }
             // Without `array_key_exists` registered as an internal function,
             // only the float-key lifetime case finishes a pending call.
             b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
@@ -2893,7 +3038,7 @@ impl Compiler<'_> {
                 if lc.as_slice() == b"func_num_args" {
                     self.emit(Op::FuncNumArgs { dst });
                 } else {
-                    self.emit(Op::FuncGetArgs { dst });
+                    self.emit(Op::FuncGetArgs { dst, skip: None });
                 }
                 Ok(Some(
                     dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
@@ -2916,7 +3061,7 @@ impl Compiler<'_> {
                 // `zend_compile_assert`: the internal `assert()` is the
                 // `fbc`, except for a namespaced call.
                 let fbc = self.known_fbc(n);
-                self.compile_args(args, fbc)?;
+                self.compile_args(args, fbc.as_ref())?;
                 if args.args.len() == 1 {
                     if matches!(args.args[0].kind, ArgKind::Unpack(_)) {
                         return self.err(
@@ -3046,6 +3191,19 @@ impl Compiler<'_> {
         Ok(Some(
             dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
         ))
+    }
+
+    /// Whether `e` is a call `func_get_args()` without arguments whose name
+    /// resolves to the global function (`zend_resolve_function_name`).
+    fn is_func_get_args(&self, e: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let ast::Callee::Name(n) = &**callee else {
+            return false;
+        };
+        let (resolved, fb) = self.resolve_function_name(n);
+        fb.is_none() && args.args.is_empty() && resolved.eq_ignore_ascii_case(b"func_get_args")
     }
 
     /// Whether `lc` is currently registered as an internal function
@@ -3820,5 +3978,66 @@ mod match_tests {
             optimizer::DEFAULT_OPTIMIZATION_LEVEL,
         );
         assert!(match_op(&code).is_none(), "{:?}", code.ops);
+    }
+}
+
+#[cfg(test)]
+mod special_call_tests {
+    //! `zend_try_compile_special_func`: calls compiled to opcodes.
+    use crate::compiler::{compile, special_builtin_bit, CompileOptions};
+    use crate::opcode::Op;
+    use std::rc::Rc;
+
+    /// The ops of the first declared function, with `array_slice` an
+    /// internal function or not.
+    fn function_ops(src: &str, builtin: bool) -> Vec<Op> {
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+        let opts = CompileOptions {
+            filename: "t.php".into(),
+            special_builtins: if builtin {
+                special_builtin_bit(b"array_slice").unwrap_or(0)
+            } else {
+                0
+            },
+            ..CompileOptions::default()
+        };
+        let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+        let found = unit.decls.functions.borrow()[0].code.ops.clone();
+        found
+    }
+
+    fn skips(ops: &[Op]) -> Vec<Option<u32>> {
+        ops.iter()
+            .filter_map(|op| match op {
+                Op::FuncGetArgs { skip, .. } => Some(*skip),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `zend_compile_func_array_slice`: `array_slice(func_get_args(), n)`
+    /// with a non-negative literal `n` is `FUNC_GET_ARGS n`; other forms
+    /// stay calls.
+    #[test]
+    fn array_slice_of_func_get_args_is_one_opcode() {
+        let src = "<?php function f() { return array_slice(func_get_args(), 2); }";
+        assert_eq!(skips(&function_ops(src, true)), vec![Some(2)]);
+        let fq = "<?php function f() { return \\array_slice(\\func_get_args(), 0); }";
+        assert_eq!(skips(&function_ops(fq, true)), vec![Some(0)]);
+        // Not registered as an internal function: a call of `array_slice`.
+        assert_eq!(skips(&function_ops(src, false)), vec![None]);
+        for other in [
+            "<?php function f() { $n = 1; return array_slice(func_get_args(), $n); }",
+            "<?php function f() { return array_slice(func_get_args(), 1, 1); }",
+            "<?php namespace N; function f() { return \\array_slice(func_get_args(), 1); }",
+        ] {
+            assert!(
+                skips(&function_ops(other, true))
+                    .iter()
+                    .all(Option::is_none),
+                "{other}"
+            );
+        }
     }
 }

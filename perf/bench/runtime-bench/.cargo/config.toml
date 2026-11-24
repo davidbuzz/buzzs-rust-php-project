@@ -1,0 +1,5 @@
+# Build into the repository's own target/ (bench builds land in target/release),
+# never a directory of its own (project rule: binaries only in ./target/debug or
+# ./target/release). Relative to perf/bench/runtime-bench/.
+[build]
+target-dir = "../../../target"

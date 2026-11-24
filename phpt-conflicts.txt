@@ -1,0 +1,22 @@
+# Conflict keys php-src's tests lack (paths relative to modules/php-src).
+#
+# Some php-src tests share a file without declaring it (no --CONFLICTS-- section, no directory
+# CONFLICTS file), so when they run at the same time one deletes or rewrites what the other is
+# still using, and either can fail. C PHP's run-tests.php -j races them the same way. php-src is
+# read-only here, so the keys are recorded in this file.
+#
+# phpt-runner reads this file by default and adds the keys to the tests' own conflict keys:
+# tests that share a key never run at the same time. `--no-extra-conflicts` ignores it.
+# One test per line: its path, then one or more keys, separated by white space; `#` starts a
+# comment. Found with a scan for tests in one directory that delete the same literal file name
+# (22 Nov 2026).
+
+# Both write and delete stream_server_reneg_limit.pem.tmp (CertificateGenerator.inc writes and
+# deletes its .cnf next to it). Failed once in the 22 Nov evidence run: openssl_csr_new() read a
+# missing .cnf, returned false, and the server had no certificate (TIMEOUT).
+ext/openssl/tests/stream_server_reneg_limit.phpt             stream_server_reneg_limit.pem.tmp
+ext/openssl/tests/stream_server_reneg_limit_trampoline.phpt  stream_server_reneg_limit.pem.tmp
+
+# Both write, load and delete ext/dom/tests/80268.html.
+ext/dom/tests/bug80268.phpt    80268.html
+ext/dom/tests/bug80268_2.phpt  80268.html

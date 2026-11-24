@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn round_large_places_locale_decimal_point() {
-        // /usr/bin/php under setlocale(LC_ALL, "en_DK.utf8") (decimal
+        // /usr/bin/php8.5 under setlocale(LC_ALL, "en_DK.utf8") (decimal
         // comma) vs "C".
         let m = RoundingMode::HalfUp;
         assert_eq!(php_round_dp(1.5e-20, 25, m, b'.'), 1.5e-20);
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn number_format_floats() {
-        // Expectations from /usr/bin/php.
+        // Expectations from /usr/bin/php8.5.
         assert_eq!(nf(f64::INFINITY, 2), "inf");
         assert_eq!(nf(f64::NEG_INFINITY, 0), "inf");
         assert_eq!(nf(f64::NAN, 3), "nan");

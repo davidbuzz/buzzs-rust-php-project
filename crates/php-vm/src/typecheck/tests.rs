@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of type-declaration coercion (expected output from
-//! `/usr/bin/php -n`, paths normalised to `t.php`).
+//! `/usr/bin/php8.5 -n`, paths normalised to `t.php`).
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -142,7 +142,7 @@ fn anonymous_self_union_diagnostics() {
     assert_eq!(
         run(src),
         "TypeError: class@anonymous\0t.php:2$0::testParam(): Argument #1 ($a) must be of type class@anonymous|string, null given, called in t.php on line 6\n\
-         TypeError: class@anonymous::test(): Return value must be of type class@anonymous|string, stdClass returned\n"
+         TypeError: class@anonymous\0t.php:2$0::test(): Return value must be of type class@anonymous|string, stdClass returned\n"
     );
 }
 
@@ -215,7 +215,7 @@ fn anonymous_parent_union_diagnostics() {
     assert_eq!(
         run(src),
         "Base@anonymous\0t.php:4$1::param(): Argument #1 ($value) must be of type class@anonymous|string, null given, called in t.php on line 9\n\
-         Base@anonymous::result(): Return value must be of type class@anonymous|string, stdClass returned\n"
+         Base@anonymous\0t.php:4$1::result(): Return value must be of type class@anonymous|string, stdClass returned\n"
     );
 }
 
@@ -235,7 +235,7 @@ fn anonymous_never_and_static_return_diagnostics() {
     assert_eq!(
         run(src),
         "class@anonymous\0t.php:2$0::neverReturn(): never-returning method must not implicitly return\n\
-         class@anonymous::staticReturn(): Return value must be of type class@anonymous\0t.php:2$0|string, stdClass returned\n"
+         class@anonymous\0t.php:2$0::staticReturn(): Return value must be of type class@anonymous\0t.php:2$0|string, stdClass returned\n"
     );
 }
 
@@ -882,7 +882,7 @@ fn class_refs_are_computed_once_per_declaration() {
 /// the references held by them, also for an alias registered after the
 /// declaration. A name absent from the table never matches, and the
 /// diagnostics keep the declared names (expected output from
-/// `/usr/bin/php -n`).
+/// `/usr/bin/php8.5 -n`).
 #[test]
 fn class_alias_types_accept_the_aliased_class() {
     let src = r#"<?php

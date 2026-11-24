@@ -717,6 +717,20 @@ pub fn zend_gcvt(value: f64, ndigit: i32, dec_point: u8, exponent: u8) -> String
     s
 }
 
+/// The digit count a `precision`/`serialize_precision` value gives
+/// `zend_gcvt`: the setting is a `zend_long`, and php-src passes it on as
+/// `(int) EG(precision)` / `(int) PG(serialize_precision)`, which keeps its
+/// low 32 bits (`99999999999999999999` saturates to `i64::MAX`, which is
+/// -1: the shortest form; `4294967296` is 0, printed as one digit).
+/// Every negative count is the shortest form in `zend_gcvt` (mode 0), and
+/// no double has more than 1000 significant decimal digits, so the result
+/// is clamped to -1..=1000 without changing what is printed.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // C's `(int)` conversion, on purpose
+pub fn precision_digits(precision: i64) -> i32 {
+    (precision as i32).clamp(-1, 1000)
+}
+
 /// `smart_str_append_double(num, precision, zero_fraction)`: formats with
 /// `zend_gcvt(num, precision ? precision : 1, '.', 'E')` and optionally appends
 /// `".0"` to finite values that have no decimal point.
@@ -726,7 +740,7 @@ pub fn zend_gcvt(value: f64, ndigit: i32, dec_point: u8, exponent: u8) -> String
 /// `serialize` and `json_encode`.
 #[must_use]
 pub fn format_double(num: f64, precision: i64, zero_fraction: bool) -> String {
-    let p = i32::try_from(precision.clamp(-1, 1000)).unwrap_or(17);
+    let p = precision_digits(precision);
     let mut s = zend_gcvt(num, if p == 0 { 1 } else { p }, b'.', b'E');
     if zero_fraction && num.is_finite() && !s.contains('.') {
         s.push_str(".0");
@@ -762,7 +776,7 @@ pub fn format_double_buf(
     zero_fraction: bool,
     buf: &mut DoubleBuf,
 ) -> Option<&[u8]> {
-    let p = i32::try_from(precision.clamp(-1, 1000)).unwrap_or(17);
+    let p = precision_digits(precision);
     let ndigit = if p == 0 { 1 } else { p };
     if ndigit > 17 {
         return None;
@@ -803,7 +817,7 @@ pub fn format_double_h(num: f64, precision: i64) -> String {
     if num.is_infinite() {
         return if num > 0.0 { "INF" } else { "-INF" }.to_string();
     }
-    let p = i32::try_from(precision.clamp(-1, 1000)).unwrap_or(17);
+    let p = precision_digits(precision);
     zend_gcvt(num, if p == 0 { 1 } else { p }, b'.', b'E')
 }
 
@@ -841,6 +855,27 @@ mod tests {
         assert_eq!(format_double_h(1e16, -1), "10000000000000000");
         assert_eq!(format_double_h(f64::NAN, -1), "NAN");
         assert_eq!(format_double_h(f64::NEG_INFINITY, -1), "-INF");
+    }
+
+    /// `precision`/`serialize_precision` reach `zend_gcvt` as C's `(int)`
+    /// of the `zend_long` setting; values from PHP 8.5
+    /// (`php -n -d precision=V -r 'echo 1/3;'`).
+    #[test]
+    fn precision_settings_convert_like_c_int() {
+        let third = 1.0 / 3.0;
+        for (precision, want) in [
+            (i64::MAX, "0.3333333333333333"),
+            (4_294_967_295, "0.3333333333333333"),
+            (4_294_967_296, "0.3"),
+            (4_294_967_297, "0.3"),
+            (2_147_483_648, "0.3333333333333333"),
+            (17, "0.33333333333333331"),
+            (-1, "0.3333333333333333"),
+        ] {
+            assert_eq!(format_double(third, precision, false), want, "{precision}");
+        }
+        assert_eq!(format_double_h(0.1, i64::MAX), "0.1");
+        assert_eq!(format_double_h(0.1, 17), "0.10000000000000001");
     }
 
     #[test]
@@ -992,7 +1027,7 @@ mod tests {
 
     /// `(string)` at `precision=14` and `5` where the shortest digits are
     /// longer than the precision (rounded from them, or by the exact
-    /// formatter near a half). Expectations from `/usr/bin/php -n`.
+    /// formatter near a half). Expectations from `/usr/bin/php8.5 -n`.
     #[test]
     fn precision_rounding_of_long_shortest_digits() {
         let cases: [(f64, &str, &str); 9] = [
@@ -1117,7 +1152,7 @@ mod tests {
     }
 
     /// Shortest-digit ties round to even like `zend_dtoa` mode 0.
-    /// Expectations from `/usr/bin/php -n`.
+    /// Expectations from `/usr/bin/php8.5 -n`.
     #[test]
     #[allow(clippy::excessive_precision)]
     fn shortest_ties_round_to_even() {

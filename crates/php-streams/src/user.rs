@@ -464,7 +464,7 @@ pub struct UserStreamOps {
 
 thread_local! {
     /// Streams running a user-space method with `PHP_STREAM_FLAG_NO_FCLOSE`
-    /// set (read, write, eof, seek, tell, cast, set_option).
+    /// set (read, write, flush, eof, seek, tell, cast, set_option).
     static GUARDED: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -473,6 +473,18 @@ thread_local! {
 pub fn in_guarded_call(id: u64) -> bool {
     // User filters run with the flag set too (`userfilter_filter`).
     GUARDED.with(|g| g.borrow().contains(&id)) || crate::filter::user::filtering_eof(id).is_some()
+}
+
+/// Runs `f` with stream `id` flagged `PHP_STREAM_FLAG_NO_FCLOSE` for
+/// `fclose()`: a PHP callback that the stream's own operation calls (the
+/// TLS handshake's PSK and session callbacks) cannot close it.
+pub fn without_fclose<R>(id: u64, f: impl FnOnce() -> R) -> R {
+    GUARDED.with(|g| g.borrow_mut().push(id));
+    let r = f();
+    GUARDED.with(|g| {
+        g.borrow_mut().pop();
+    });
+    r
 }
 
 impl UserStreamOps {
@@ -632,11 +644,14 @@ impl StreamOps for UserStreamOps {
         0
     }
 
-    fn flush(&mut self, _st: &mut StreamState) -> i32 {
+    fn flush(&mut self, st: &mut StreamState) -> i32 {
         if self.dir {
             return 0;
         }
-        if self.obj.call(methods::FLUSH, &mut []).is_true() {
+        // With `PHP_STREAM_FLAG_NO_FCLOSE` too (GH-25586): a
+        // `stream_flush()` that closes its own stream only gets a warning,
+        // as the stream is still in use by the caller of the flush.
+        if self.guarded(st, methods::FLUSH, &mut []).is_true() {
             0
         } else {
             -1

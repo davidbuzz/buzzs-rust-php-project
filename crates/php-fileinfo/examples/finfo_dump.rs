@@ -3,7 +3,7 @@
 //! Prints `finfo_file()` / `finfo_buffer()` results for the given files
 //! under several flag combinations, one line each, in the same format as
 //! the PHP oracle script used to cross-check this crate:
-//! `php -d memory_limit=1G finfo_dump.php FILES…`.
+//! `/usr/bin/php8.5 -d memory_limit=1G finfo_dump.php FILES…`.
 
 use php_fileinfo::{
     Finfo, FILEINFO_APPLE, FILEINFO_EXTENSION, FILEINFO_MIME, FILEINFO_MIME_ENCODING,

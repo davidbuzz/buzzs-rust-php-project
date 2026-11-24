@@ -310,6 +310,54 @@ pub(crate) struct FuncShape {
     pub bound: Vec<(u32, bool)>,
     /// `ZEND_TYPE_PURE_MASK` of the declared return type, if any.
     pub ret: Option<u32>,
+    /// The lower-case classes of the declared return type that the
+    /// optimizer resolves ([`ret_classes`]).
+    pub ret_classes: Vec<Vec<u8>>,
+    /// The lower-case name of the class scope.
+    pub scope: Option<Vec<u8>>,
+}
+
+/// The classes of the union return type `t` that
+/// `zend_optimizer_get_class_entry` finds (`known`), lower-case: `self`
+/// is the scope (`zend_compile_single_typename`). An intersection type
+/// gives none.
+pub(crate) fn ret_classes(
+    t: Option<&crate::types::TypeDecl>,
+    scope: Option<&[u8]>,
+    known: &dyn Fn(&[u8]) -> bool,
+) -> Vec<Vec<u8>> {
+    let Some(t) = t.filter(|t| t.intersections.is_empty()) else {
+        return Vec::new();
+    };
+    t.classes
+        .iter()
+        .filter_map(|c| {
+            let lc = c.as_bytes().to_ascii_lowercase();
+            match lc.as_slice() {
+                b"self" => scope.map(<[u8]>::to_vec),
+                b"parent" | b"static" => None,
+                _ => (scope == Some(lc.as_slice()) || known(&lc)).then_some(lc),
+            }
+        })
+        .collect()
+}
+
+/// The lower-case class of the object `NEW` made temporary `t` with, when
+/// the last definition of `t` before line `i` is that `NEW`
+/// (`zend_optimizer_get_class_entry_from_op1`).
+fn new_class(lines: &[ZLine], i: usize, t: u32, scope: Option<&[u8]>) -> Option<Vec<u8>> {
+    let l = lines[..i].iter().rev().find(|l| l.res.tmp() == Some(t))?;
+    if l.op != "NEW" {
+        return None;
+    }
+    match &l.op1 {
+        Z::Const(Value::Str(s)) => {
+            let lc = s.as_bytes().to_ascii_lowercase();
+            Some(lc.strip_prefix(b"\\").map_or(lc.clone(), <[u8]>::to_vec))
+        }
+        Z::Text(x) if x.starts_with("(self)") => scope.map(<[u8]>::to_vec),
+        _ => None,
+    }
 }
 
 fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
@@ -321,11 +369,83 @@ fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
     }
 }
 
+/// The internal functions php-src's function info types as returning
+/// arrays with int keys only (`MAY_BE_ARRAY_KEY_LONG` without
+/// `MAY_BE_ARRAY_KEY_STRING`, or packed: `zend_func_infos.h`,
+/// `zend_range_info`).
+const INT_KEYED_RESULTS: &[&[u8]] = &[
+    b"range",
+    b"array_fill",
+    b"array_keys",
+    b"array_values",
+    b"array_rand",
+    b"explode",
+    b"str_getcsv",
+    b"str_split",
+    b"str_word_count",
+    b"count_chars",
+    b"sscanf",
+    b"file",
+    b"scandir",
+    b"glob",
+    b"fgetcsv",
+    b"fscanf",
+    b"func_get_args",
+    b"get_included_files",
+    b"get_declared_classes",
+    b"get_declared_interfaces",
+    b"get_declared_traits",
+    b"get_loaded_extensions",
+    b"debug_backtrace",
+    b"headers_list",
+    b"hash_algos",
+    b"hash_hmac_algos",
+    b"mb_split",
+    b"mb_list_encodings",
+    b"stream_get_wrappers",
+    b"stream_get_transports",
+    b"stream_get_filters",
+    b"timezone_identifiers_list",
+    b"gzfile",
+    b"sys_getloadavg",
+    b"ob_list_handlers",
+    b"gethostbynamel",
+    b"dns_get_record",
+];
+
 /// The key types of iterators over literal arrays (`FE_RESET_R` of a
-/// constant), by iterator temporary.
+/// constant) and over the results of the internal functions in
+/// [`INT_KEYED_RESULTS`], by iterator temporary.
 fn literal_iter_keys(lines: &[ZLine]) -> HashMap<u32, u32> {
     let mut m = HashMap::new();
+    // The temporaries those functions' calls left their results in.
+    let mut int_keyed: Vec<u32> = Vec::new();
+    let mut calls: Vec<Option<Vec<u8>>> = Vec::new();
     for l in lines {
+        if is_init_call(l.op) {
+            calls.push(match (&l.op, &l.op2) {
+                (&"INIT_FCALL", Z::Const(Value::Str(name))) => {
+                    Some(name.as_bytes().to_ascii_lowercase())
+                }
+                _ => None,
+            });
+        } else if is_do_call(l.op) {
+            let name = calls.pop().flatten();
+            if let (Some(t), "DO_ICALL", Some(name)) = (l.res.tmp(), l.op, name) {
+                if INT_KEYED_RESULTS.contains(&name.as_slice()) {
+                    int_keyed.push(t);
+                }
+            }
+        } else if l.op == "CALLABLE_CONVERT" || l.op == "CALLABLE_CONVERT_PARTIAL" {
+            calls.pop();
+        }
+        if matches!(l.op, "FE_RESET_R" | "FE_RESET_RW") {
+            if let (Some(t), Z::Tmp(src)) = (l.res.tmp(), &l.op1) {
+                if int_keyed.contains(src) {
+                    m.insert(t, ty::LONG | ty::NULL);
+                }
+            }
+        }
         if let (Some(t), Z::Const(Value::Array(a))) = (l.res.tmp(), &l.op1) {
             let mut k = 0;
             for (key, _) in a.iter() {
@@ -758,7 +878,17 @@ pub(crate) fn dfa(lines: &mut [ZLine], types: &Types, shape: &FuncShape) {
                                 _ => false,
                             }
                     });
-                if returned && t & !allowed == 0 {
+                // `can_elide_list_type`: an object of a class the return
+                // type names.
+                let of_class = || {
+                    t & !allowed == ty::OBJECT
+                        && match &l.op1 {
+                            Z::Tmp(x) => new_class(lines, i, *x, shape.scope.as_deref())
+                                .is_some_and(|c| shape.ret_classes.contains(&c)),
+                            _ => false,
+                        }
+                };
+                if returned && (t & !allowed == 0 || of_class()) {
                     lines[i] = ZLine::new("NOP");
                 }
             }
@@ -926,6 +1056,50 @@ pub(crate) fn resolve_labels(lines: &mut [ZLine], first_z: &[u32]) {
     }
 }
 
+/// `FE_RESET_R` of an empty array constant (a class constant pass 1
+/// replaced by its value: the VM's own code still fetches it, see
+/// `lower.rs`): sccp.c takes only its jump, the loop it guards is
+/// unreachable, and dce.c removes the reset and the `FE_FREE` of its
+/// iterator (`opt/dce_009`). The oplines from the reset up to its target
+/// become NOPs when nothing outside them jumps between the two, and the
+/// `FE_FREE` at the target with them.
+pub(crate) fn drop_empty_foreach(lines: &mut [ZLine]) {
+    let label = |z: &Z| match z {
+        Z::ZLabel(t) => Some(*t as usize),
+        _ => None,
+    };
+    for i in 0..lines.len() {
+        let reset = &lines[i];
+        if reset.op != "FE_RESET_R"
+            || !matches!(&reset.op1, Z::Const(Value::Array(a)) if a.is_empty())
+        {
+            continue;
+        }
+        let (Some(iter), Some(end)) = (reset.res.tmp(), reset.targets().find_map(label)) else {
+            continue;
+        };
+        if end <= i || end > lines.len() {
+            continue;
+        }
+        let inside = |at: usize| at > i && at < end;
+        let entered = lines
+            .iter()
+            .enumerate()
+            .any(|(at, l)| !inside(at) && at != i && l.targets().filter_map(label).any(inside));
+        if entered {
+            continue;
+        }
+        for l in &mut lines[i..end] {
+            *l = ZLine::new("NOP");
+        }
+        if let Some(free) = lines.get_mut(end) {
+            if free.op == "FE_FREE" && free.op1.tmp() == Some(iter) {
+                *free = ZLine::new("NOP");
+            }
+        }
+    }
+}
+
 /// Removes NOPs, retargeting jumps to the next remaining opline; also
 /// returns the new index of each old one.
 pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
@@ -944,7 +1118,20 @@ pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
             *z = Z::ZLabel(new_idx[(t as usize).min(n)]);
         }
     };
-    let mut out: Vec<ZLine> = lines.into_iter().filter(|l| !l.is_nop()).collect();
+    // A dropped line's early temporaries go to the next line kept.
+    let mut carried: Vec<u32> = Vec::new();
+    let mut out: Vec<ZLine> = Vec::with_capacity(n);
+    for mut l in lines {
+        if l.is_nop() {
+            carried.append(&mut l.pre);
+            continue;
+        }
+        if !carried.is_empty() {
+            carried.append(&mut l.pre);
+            l.pre = std::mem::take(&mut carried);
+        }
+        out.push(l);
+    }
     for l in &mut out {
         for z in l.label_slots_mut() {
             map(z);
@@ -1153,6 +1340,12 @@ pub(crate) fn number_tmps(lines: &mut [ZLine]) -> u32 {
     let mut map: HashMap<u32, u32> = HashMap::new();
     let mut next: u32 = 0;
     for l in lines.iter() {
+        for &t in &l.pre {
+            map.entry(t).or_insert_with(|| {
+                next += 1;
+                next - 1
+            });
+        }
         for z in [&l.res, &l.op1, &l.op2] {
             if let Some(t) = z.tmp() {
                 map.entry(t).or_insert_with(|| {

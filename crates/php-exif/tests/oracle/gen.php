@@ -1,6 +1,6 @@
 <?php
 // Regenerates tests/oracle/*.txt from the C implementation:
-//   php -d memory_limit=1G tests/oracle/gen.php
+//   /usr/bin/php8.5 -d memory_limit=1G tests/oracle/gen.php
 // Every case is "#CASE <id>", zero or more "#DIAG <level> <hex message>",
 // then "#RESULT <length>" followed by the raw serialize(result) ("FileDateTime" zeroed).
 $root = dirname(__DIR__) . '/fixtures';

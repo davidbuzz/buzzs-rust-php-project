@@ -85,10 +85,13 @@ impl Vm {
     /// for an object bound without a scope); only an unscoped one prints
     /// its bare name.
     #[allow(clippy::unused_self)] // method-style API used across the VM
+    /// `Class::method` (or `function`) as error messages name it: the full
+    /// class name, so an anonymous class keeps its NUL byte and the file and
+    /// line after it (GH-25352).
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
         let name = func.name().to_string_lossy();
         match scope {
-            Some(c) => format!("{}::{}", object::display_name(&c.name), name),
+            Some(c) => format!("{}::{}", c.name.to_string_lossy(), name),
             None => name,
         }
     }
@@ -578,8 +581,8 @@ impl Vm {
     /// (`$this->name()` where the compiler found `$this` guaranteed) the
     /// frame's `$this`, otherwise the operand's value. A frame without one
     /// (a closure nested in a closure that was unbound from its object)
-    /// throws as `ZEND_FETCH_THIS` would (PHP 8.3; master's handler assumes
-    /// an object).
+    /// throws as `ZEND_FETCH_THIS` would (as PHP 8.3 did; the handler of 8.5
+    /// and master assumes an object, and 8.5 crashes on such a script).
     #[inline]
     pub(crate) fn method_object(&mut self, obj: Operand) -> VmResult<Value> {
         if !matches!(obj, Operand::Unused) {
@@ -942,7 +945,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Call to {vis} method {}::{}() from {}",
-                    object::display_name(&m.scope().name),
+                    m.scope().name.to_string_lossy(),
                     name.to_string_lossy(),
                     scope_display(scope.as_ref())
                 ),
@@ -1144,7 +1147,7 @@ impl Vm {
                             "Error",
                             &format!(
                                 "Call to {vis} method {}::{}() from {}",
-                                object::display_name(&m.scope().name),
+                                m.scope().name.to_string_lossy(),
                                 name.to_string_lossy(),
                                 scope_display(scope.as_ref())
                             ),
@@ -1462,7 +1465,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Call to {vis} {}::{}() from {}",
-                    object::display_name(&ctor.scope().name),
+                    ctor.scope().name.to_string_lossy(),
                     ctor.name,
                     scope_display(scope.as_ref())
                 ),
@@ -2280,6 +2283,8 @@ impl Vm {
             // and the length store can panic. Forgetting the rest of the
             // element leaks nothing (see above).
             let func = unsafe { std::ptr::read(&call.func) };
+            // SAFETY: as above: `call` was the last element and its handle
+            // was read out, so the shorter vector never drops it again.
             unsafe { caller.calls.set_len(pending - 1) };
             if same_func {
                 // The frame holds this function already: the call's handle
@@ -2336,8 +2341,8 @@ impl Vm {
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
     /// Only the shape the call workloads return through — an untyped
-    /// user function returning a plain scalar into a caller temporary
-    /// holding a scalar — runs here, small and without spilled registers;
+    /// user function returning a scalar, null, a string or such a literal
+    /// into a caller temporary holding a scalar — runs here, small and without spilled registers;
     /// anything else goes to [`Vm::return_generic`], which repeats the
     /// tests for it (the operand shape is dispatched before this
     /// function's prologue, so the common fallbacks do not pay it twice).
@@ -2348,7 +2353,7 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
-        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_)) {
+        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_)) {
             return self.return_generic::<false>(val, base, ip);
         }
         if self.observer.enabled {
@@ -2389,23 +2394,16 @@ impl Vm {
                 },
                 RetTarget::Discard => None,
             };
-            // A string moves as a scalar does: it has no destructor to run
-            // and nothing for `gc::frame_released` to record.
+            // A scalar, null or a string: none is a possible cycle root,
+            // so it moves out (a literal is copied) without changing what
+            // `gc::frame_released` records. With a declared return type,
+            // only a value the type takes as it is (`return_accepts`).
             let v = match val {
                 Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
                     Some(slot)
-                        if matches!(
-                            slot.get(),
-                            Some(
-                                Value::Int(_)
-                                    | Value::Bool(_)
-                                    | Value::Float(_)
-                                    | Value::Null
-                                    | Value::Str(_)
-                            )
-                        ) && slot
-                            .get()
-                            .is_some_and(|v| rt.is_none() || return_accepts(rt, v)) =>
+                        if slot.get().is_some_and(|v| {
+                            returns_directly(v) && (rt.is_none() || return_accepts(rt, v))
+                        }) =>
                     {
                         slot.as_mut().take()?
                     }
@@ -2413,16 +2411,17 @@ impl Vm {
                 },
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
                     Some(slot)
-                        if matches!(
-                            slot,
-                            Value::Int(_)
-                                | Value::Bool(_)
-                                | Value::Float(_)
-                                | Value::Null
-                                | Value::Str(_)
-                        ) && (rt.is_none() || return_accepts(rt, slot)) =>
+                        if returns_directly(slot) && (rt.is_none() || return_accepts(rt, slot)) =>
                     {
                         std::mem::take(slot)
+                    }
+                    _ => return self.return_generic::<false>(val, base, ip),
+                },
+                Operand::Lit(l) => match frame.code.literals.get(l as usize) {
+                    Some(lit)
+                        if returns_directly(lit) && (rt.is_none() || return_accepts(rt, lit)) =>
+                    {
+                        clone_value(lit)
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
@@ -2433,12 +2432,12 @@ impl Vm {
             // The store runs before the `gc` step: the value's register
             // is then dead across the out-of-line `frame_released` call
             // (it only reads the frame and the caller's `$this`, and the
-            // frame is released after both). The slot held a scalar: it
-            // has nothing to drop; an unused string result is released.
+            // frame is released after both). The slot held a scalar:
+            // nothing to drop. A discarded string is released.
             match dst {
                 Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
-                None if is_scalar(&v) => std::mem::forget(v),
-                None => drop(v),
+                None if matches!(v, Value::Str(_)) => drop(v),
+                None => std::mem::forget(v),
             }
             gc_on_release(frame, caller);
             // `FrameStack::release_top` of the frame at hand: released in
@@ -3064,6 +3063,13 @@ impl Vm {
         if let Some(spare) = spare_args {
             self.put_arg_vec(spare);
         }
+        // A pending `memory_limit` violation is raised as a `__call` /
+        // `__callStatic` trampoline is entered (`ZEND_VM_ENTER`): the
+        // backtrace shows the trampoline (GHSA-8mjj-2r7p-4hg2).
+        if php_memlimit::is_pending() && self.frames[idx].magic_name.is_some() && closure.is_none()
+        {
+            self.trampoline_entry = Some(idx);
+        }
         if let Some(c) = closure {
             self.bind_closure_vars(idx, &c);
             self.frames[idx].closure = Some(c);
@@ -3255,10 +3261,88 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
 /// with one argument, so the frameless call needs no handler, argument
 /// buffers or signature for them.
 ///
-/// The names are matched most frequent first; a name that is not one of
-/// them (an alias, say) falls back to the handler.
+/// The names are matched most frequent first ([`float_fn_id`]); a name
+/// that is not one of them (an alias, say) falls back to the handler.
 #[inline]
 pub(crate) fn float_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    float_fn_eval(float_fn_id(name)?, val)
+}
+
+/// The functions [`float_builtin_eval`] evaluates, by the id
+/// [`float_fn_id`] gives their names: what a caller that resolved the name
+/// once (a tape instruction) carries instead of it.
+pub(crate) mod ff {
+    pub(crate) const SQRT: u8 = 0;
+    pub(crate) const SIN: u8 = 1;
+    pub(crate) const COS: u8 = 2;
+    pub(crate) const FLOOR: u8 = 3;
+    pub(crate) const CEIL: u8 = 4;
+    pub(crate) const ROUND: u8 = 5;
+    pub(crate) const EXP: u8 = 6;
+    pub(crate) const TAN: u8 = 7;
+    pub(crate) const ATAN: u8 = 8;
+    pub(crate) const LOG: u8 = 9;
+    pub(crate) const LOG10: u8 = 10;
+    pub(crate) const ASIN: u8 = 11;
+    pub(crate) const ACOS: u8 = 12;
+    pub(crate) const SINH: u8 = 13;
+    pub(crate) const COSH: u8 = 14;
+    pub(crate) const TANH: u8 = 15;
+    pub(crate) const ASINH: u8 = 16;
+    pub(crate) const ACOSH: u8 = 17;
+    pub(crate) const ATANH: u8 = 18;
+    pub(crate) const EXPM1: u8 = 19;
+    pub(crate) const LOG1P: u8 = 20;
+    pub(crate) const DEG2RAD: u8 = 21;
+    pub(crate) const RAD2DEG: u8 = 22;
+    pub(crate) const IS_NAN: u8 = 23;
+    pub(crate) const IS_FINITE: u8 = 24;
+    pub(crate) const IS_INFINITE: u8 = 25;
+    /// One more than the largest id.
+    pub(crate) const COUNT: u8 = 26;
+}
+
+/// The id ([`ff`]) of the function of [`float_builtin_eval`] named `name`
+/// (lower case); `None` for any other name.
+#[inline]
+pub(crate) fn float_fn_id(name: &[u8]) -> Option<u8> {
+    Some(match name {
+        b"sqrt" => ff::SQRT,
+        b"sin" => ff::SIN,
+        b"cos" => ff::COS,
+        b"floor" => ff::FLOOR,
+        b"ceil" => ff::CEIL,
+        b"round" => ff::ROUND,
+        b"exp" => ff::EXP,
+        b"tan" => ff::TAN,
+        b"atan" => ff::ATAN,
+        // `log()` without a base: `log(num)`.
+        b"log" => ff::LOG,
+        b"log10" => ff::LOG10,
+        b"asin" => ff::ASIN,
+        b"acos" => ff::ACOS,
+        b"sinh" => ff::SINH,
+        b"cosh" => ff::COSH,
+        b"tanh" => ff::TANH,
+        b"asinh" => ff::ASINH,
+        b"acosh" => ff::ACOSH,
+        b"atanh" => ff::ATANH,
+        b"expm1" => ff::EXPM1,
+        b"log1p" => ff::LOG1P,
+        b"deg2rad" => ff::DEG2RAD,
+        b"rad2deg" => ff::RAD2DEG,
+        b"is_nan" => ff::IS_NAN,
+        b"is_finite" => ff::IS_FINITE,
+        b"is_infinite" => ff::IS_INFINITE,
+        _ => return None,
+    })
+}
+
+/// [`float_builtin_eval`] of the function with id `id` ([`ff`]); `None`
+/// for an id that names none and for an argument that is neither an int
+/// nor a float.
+#[inline]
+pub(crate) fn float_fn_eval(id: u8, val: &Value) -> Option<Value> {
     use php_stdstr::math as m;
     let x = match val {
         Value::Float(f) => *f,
@@ -3268,41 +3352,40 @@ pub(crate) fn float_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
             // `math::round_long(num, 0)`).
             #[allow(clippy::cast_precision_loss)]
             let f = *i as f64;
-            if matches!(name, b"floor" | b"ceil" | b"round") {
+            if matches!(id, ff::FLOOR | ff::CEIL | ff::ROUND) {
                 return Some(Value::Float(f));
             }
             f
         }
         _ => return None,
     };
-    let r = match name {
-        b"sqrt" => x.sqrt(),
-        b"sin" => x.sin(),
-        b"cos" => x.cos(),
-        b"floor" => x.floor(),
-        b"ceil" => x.ceil(),
-        b"round" => php_support::fmt::php_round(x, 0, php_support::fmt::RoundingMode::HalfUp),
-        b"exp" => x.exp(),
-        b"tan" => x.tan(),
-        b"atan" => x.atan(),
-        // `log()` without a base: `log(num)`.
-        b"log" => x.ln(),
-        b"log10" => x.log10(),
-        b"asin" => x.asin(),
-        b"acos" => x.acos(),
-        b"sinh" => x.sinh(),
-        b"cosh" => x.cosh(),
-        b"tanh" => x.tanh(),
-        b"asinh" => m::asinh(x),
-        b"acosh" => m::acosh(x),
-        b"atanh" => m::atanh(x),
-        b"expm1" => x.exp_m1(),
-        b"log1p" => x.ln_1p(),
-        b"deg2rad" => m::deg2rad(x),
-        b"rad2deg" => m::rad2deg(x),
-        b"is_nan" => return Some(Value::Bool(x.is_nan())),
-        b"is_finite" => return Some(Value::Bool(x.is_finite())),
-        b"is_infinite" => return Some(Value::Bool(x.is_infinite())),
+    let r = match id {
+        ff::SQRT => x.sqrt(),
+        ff::SIN => x.sin(),
+        ff::COS => x.cos(),
+        ff::FLOOR => x.floor(),
+        ff::CEIL => x.ceil(),
+        ff::ROUND => php_support::fmt::php_round(x, 0, php_support::fmt::RoundingMode::HalfUp),
+        ff::EXP => x.exp(),
+        ff::TAN => x.tan(),
+        ff::ATAN => x.atan(),
+        ff::LOG => x.ln(),
+        ff::LOG10 => x.log10(),
+        ff::ASIN => x.asin(),
+        ff::ACOS => x.acos(),
+        ff::SINH => x.sinh(),
+        ff::COSH => x.cosh(),
+        ff::TANH => x.tanh(),
+        ff::ASINH => m::asinh(x),
+        ff::ACOSH => m::acosh(x),
+        ff::ATANH => m::atanh(x),
+        ff::EXPM1 => x.exp_m1(),
+        ff::LOG1P => x.ln_1p(),
+        ff::DEG2RAD => m::deg2rad(x),
+        ff::RAD2DEG => m::rad2deg(x),
+        ff::IS_NAN => return Some(Value::Bool(x.is_nan())),
+        ff::IS_FINITE => return Some(Value::Bool(x.is_finite())),
+        ff::IS_INFINITE => return Some(Value::Bool(x.is_infinite())),
         _ => return None,
     };
     Some(Value::Float(r))
@@ -3348,6 +3431,11 @@ impl Vm {
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
+        // A resolution left by an earlier builtin's callable argument is
+        // not this call's.
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
         let ctor_this = if call.is_ctor {
             call.this.clone()
         } else {
@@ -3634,6 +3722,9 @@ impl Vm {
                 };
             }
         }
+        if let Some(f) = self.frames.get(depth - 1) {
+            root_released_args(&f.args);
+        }
         self.pop_frames_to(depth);
         if let Some(t) = &ctor_this {
             // `zend_object_store_ctor_failed` for native constructors.
@@ -3670,20 +3761,41 @@ impl Vm {
             &b.params[nparams - 1]
         };
         let Some(ty) = &p.ty else { return Ok(()) };
-        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
-        let pname = p.name.to_string_lossy();
         let ctx = TypeCtx {
             scope: call.scope.as_ref(),
             called: call.called.as_ref(),
             strict,
-            internal_arg: Some((&fname, i + 1, &pname)),
+            internal_arg: Some(crate::typecheck::InternalArg {
+                func: b,
+                argn: i + 1,
+                param: &p.name,
+            }),
+        };
+        // The function's and the parameter's display names, for the
+        // messages only (most calls need neither).
+        let names = |vm: &Self| {
+            (
+                vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref()),
+                p.name.to_string_lossy(),
+            )
         };
         if ty.mask & crate::types::mask::CALLABLE != 0
             && !ty.has_classes()
             && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
             && !(ty.allows_null() && v.is_null())
         {
-            if let Err(why) = self.zend_is_callable(v, true)? {
+            let resolved = self.zend_is_callable(v, true)?;
+            if let Ok(call) = resolved {
+                // `Z_PARAM_FUNC` hands the resolution to the function
+                // (`zend_fcall_info_cache`): `call_user_func[_array]()`
+                // takes it instead of resolving the callable again, when
+                // resolving it cannot raise a callable deprecation.
+                if plain_callable(v) {
+                    self.checked_callable = Some((v.clone(), call));
+                }
+                return Ok(());
+            }
+            if let Err(why) = resolved {
                 // `Z_PARAM_FUNC` checks without suppressing the callable
                 // deprecations; a valid callable emits them when the
                 // function resolves it, an invalid one here (a class that
@@ -3691,6 +3803,7 @@ impl Vm {
                 if !why.contains("not found") {
                     let _ = self.zend_is_callable(v, false)?;
                 }
+                let (fname, pname) = names(self);
                 let nul = if ty.allows_null() { " or null" } else { "" };
                 return Err(self.make_throw(
                     "TypeError",
@@ -3703,6 +3816,7 @@ impl Vm {
             return Ok(());
         }
         if !self.verify_type(ty, v, &ctx)? {
+            let (fname, pname) = names(self);
             let msg = if ty.mask & crate::types::mask::CALLABLE != 0
                 && !ty.has_classes()
                 && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
@@ -4247,11 +4361,13 @@ impl Vm {
         // with `%s`. The strings are only built for an error
         // (`zend_verify_return_error`), not for a value that coerces.
         let error_names = || {
+            // `get_function_or_method_name()`: both names whole (a closure
+            // of an anonymous class carries that class's full name too).
             let fname = func.as_ref().map_or_else(String::new, |f| {
-                let name = object::display_name(f.name());
+                let name = f.name().to_string_lossy();
                 match scope.as_ref() {
-                    Some(c) => format!("{}::{name}", object::display_name(&c.name)),
-                    None => name.to_string_lossy(),
+                    Some(c) => format!("{}::{name}", c.name.to_string_lossy()),
+                    None => name,
                 }
             });
             let tyname = rt.display(
@@ -4493,6 +4609,16 @@ impl Vm {
             call.args = call_args;
             return self.call_pending(call);
         }
+        // A pure int function compiled whole, every parameter passed an
+        // int (`array_map(fn($x) => $x & 1, $ints)`): the call is made in
+        // machine code, as the tape makes it (`exec::tape::calls::compiled`).
+        if !template.is_ctor {
+            if let Func::User(uf) = &template.func {
+                if let Some(r) = self.native_callback(uf, args) {
+                    return r;
+                }
+            }
+        }
         // `call_pending` for a by-value user callee: the interrupt check,
         // dereferenced arguments, the deprecation, then the frame.
         self.check_interrupt()?;
@@ -4529,6 +4655,50 @@ impl Vm {
             Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
             r => r,
         }
+    }
+
+    /// [`Vm::call_prepared`] of a user function whose whole body runs as
+    /// machine code (`exec::tape::jit::native_call`: a pure int function,
+    /// counted and compiled there once it is called often enough): a plain
+    /// call that passes every declared parameter an int. Such a body reads
+    /// no `$this`, scope or bound variable, so a closure's, a method's and
+    /// a function's call are the same call. `None`, nothing changed, when
+    /// it does not apply or the native code declined (an overflow, a
+    /// pending safe point): the call is then made with its frame.
+    #[inline]
+    fn native_callback(
+        &mut self,
+        uf: &Rc<UserFunction>,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        use crate::exec::tape::jit;
+        let n = args.len();
+        if uf.call_shape.native.get() == jit::NATIVE_REFUSED
+            || n != uf.params.len()
+            || n > jit::NATIVE_MAX_ARGS
+            || self.observer.enabled
+            || uf.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || uf.call_shape() == crate::func::CallShape::NOT_PLAIN
+        {
+            return None;
+        }
+        let mut ints = [0i64; jit::NATIVE_MAX_ARGS];
+        for (slot, a) in ints.iter_mut().zip(args.iter()) {
+            let Value::Int(i) = a else {
+                return None;
+            };
+            *slot = *i;
+        }
+        // The interrupt check of `call_pending`, before the call.
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let r = jit::native_call(uf, &ints[..n])?;
+        // The arguments are moved out, as the framed call leaves them.
+        for a in args.iter_mut() {
+            *a = Value::Null;
+        }
+        Some(Ok(Value::Int(r)))
     }
 
     /// Calls a callable with named arguments too.
@@ -4810,6 +4980,37 @@ fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
     }
 }
 
+/// A callable whose resolution raises no deprecation, with or without
+/// them suppressed: a function name, a closure or invokable object, or an
+/// object with a plain method name (`self::`/`parent::`/`static::` forms
+/// and `Class::method` strings are left out).
+fn plain_callable(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => !s.as_bytes().contains(&b':'),
+        Value::Object(_) => true,
+        Value::Array(a) => {
+            a.len() == 2
+                && matches!(
+                    a.get(&php_runtime::ArrayKey::Int(0)),
+                    Some(Value::Object(_))
+                )
+                && matches!(a.get(&php_runtime::ArrayKey::Int(1)),
+                    Some(Value::Str(m)) if !m.as_bytes().contains(&b':'))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `a` and `b` are the same callable value (the same handle).
+pub(crate) fn same_callable(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Str(x), Value::Str(y)) => ZStr::ptr_eq(x, y),
+        (Value::Object(x), Value::Object(y)) => php_runtime::Obj::ptr_eq(x, y),
+        (Value::Array(x), Value::Array(y)) => php_runtime::ZArray::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
 /// `v.clone()` with the scalar cases inline: the derived `Clone` of
 /// [`Value`] is an out-of-line call even for an integer.
 #[inline(always)]
@@ -4833,6 +5034,36 @@ fn gc_on_release(frame: &crate::vm::Frame, caller: &crate::vm::Frame) {
     if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
         crate::gc::frame_released(frame, caller.this.as_ref());
     }
+}
+
+/// The arguments of a returning native call, about to be dropped
+/// (`zend_vm_stack_free_args`, `zval_ptr_dtor_nogc`): an array or a
+/// reference whose last handle they hold releases its contents
+/// (`zend_array_destroy`), buffering the objects still referenced
+/// elsewhere as possible roots; the arguments themselves are not buffered.
+#[inline]
+fn root_released_args(args: &[Option<Value>]) {
+    for v in args.iter().flatten() {
+        let last = match v {
+            Value::Array(a) => a.refcount() == 1,
+            Value::Reference(r) => r.refcount() == 1,
+            _ => false,
+        };
+        if last {
+            crate::gc::possible_root(v);
+        }
+    }
+}
+
+/// A value [`Vm::return_simple`] returns as it is: a scalar, null or a
+/// string (no possible cycle root, nothing for `gc::frame_released`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per return
+fn returns_directly(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    )
 }
 
 /// Whether `v` is a scalar, whose release does nothing.
@@ -4914,7 +5145,7 @@ fn push_closure_user_call_in(calls: &mut Vec<PendingCall>, o: &Obj) -> bool {
 /// resolves it); `None` for any other spec, or when the frame has no such
 /// class.
 #[inline]
-fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Class>> {
+pub(crate) fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Class>> {
     match spec {
         ClassSpec::SelfClass => f.scope.as_ref(),
         ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref(),
@@ -5706,7 +5937,7 @@ mod fast_builtin_tests {
         }
     }
 
-    /// Expectations from `/usr/bin/php -n` (`var_dump` of each call).
+    /// Expectations from `/usr/bin/php8.5 -n` (`var_dump` of each call).
     #[test]
     fn float_math_matches_the_handlers() {
         assert_eq!(float("sqrt", Value::Int(2)), 1.414_213_562_373_095_1);
@@ -5771,8 +6002,7 @@ mod fast_builtin_tests {
 
 /// Call-site caches of `INIT_METHOD_CALL`, `INIT_STATIC_METHOD_CALL` with
 /// `self`/`parent`/`static`, and closure calls: scripts whose sites run
-/// several times (fill, then hit). Expected output from `/usr/bin/php -n`
-/// (PHP 8.3.6).
+/// several times (fill, then hit). Expected output from `/usr/bin/php8.5 -n`.
 #[cfg(test)]
 #[allow(clippy::needless_raw_string_hashes)]
 mod method_site_cache_tests {
@@ -6029,10 +6259,11 @@ Closure Q p-secret k=5 calls=1
     /// (no `JMP_NULL`: allowed with a callable conversion), first-class
     /// callables, generators, `Closure::bind()` refusing to unbind a
     /// closure whose only `$this` is a method call, the error of a nested
-    /// closure that lost `$this` (PHP 8.3's; master's handler assumes an
-    /// object), and the destructor of an object whose last outside
+    /// closure that lost `$this` (PHP 8.3's error; the handler of 8.5 and
+    /// master assumes an object, and `/usr/bin/php8.5` crashes on this
+    /// script), and the destructor of an object whose last outside
     /// reference goes while a `$this->m()` call holds it. Expected output
-    /// from `/usr/bin/php -n` (8.3.6) with master's warning text.
+    /// from `/usr/bin/php8.3 -n` with master's warning text.
     #[test]
     fn implicit_this_receivers_match_fetch_this() {
         let src = r###"<?php

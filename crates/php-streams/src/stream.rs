@@ -285,9 +285,21 @@ pub struct WrapperInfo {
 /// released (`php_io_poll_stream_notify_close()`).
 pub type CloseHook = std::rc::Rc<dyn Fn(u64)>;
 
+/// Takes the next resource number for a new stream.
+pub type ResourceNumberHook = fn() -> i64;
+
 thread_local! {
     static NEXT_STREAM_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     static CLOSE_HOOK: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) };
+    static RESOURCE_NUMBER_HOOK: std::cell::Cell<Option<ResourceNumberHook>> = const { std::cell::Cell::new(None) };
+}
+
+/// Installs the hook that numbers new streams. `php_stream_alloc()`
+/// registers every stream as a resource, also one a function opens for
+/// itself and closes before it returns (`file_get_contents()`, `copy()`,
+/// `scandir()`), so each takes a `Resource id #N` when it is allocated.
+pub fn set_resource_number_hook(hook: Option<ResourceNumberHook>) {
+    RESOURCE_NUMBER_HOOK.with(|h| h.set(hook));
 }
 
 /// Installs the stream close hook.
@@ -335,6 +347,9 @@ pub struct Stream {
     /// `stream->wrapperdata` set by a built-in wrapper (the `http://`
     /// response headers); user-space wrapper objects are VM-side.
     pub wrapper_data: Option<Value>,
+    /// The resource number taken when the stream was allocated (0 when no
+    /// numbering hook is installed).
+    resource_number: i64,
     /// `wrapper->wops->stream_closer`, run once after the stream's own
     /// close (the `ftp://` wrapper reads the transfer result from its
     /// control connection and sends `QUIT`).
@@ -359,22 +374,33 @@ pub type MetaData = Vec<(String, Value)>;
 impl Stream {
     /// `php_stream_alloc()`.
     pub fn new(ops: Box<dyn StreamOps>, mode: &str) -> Self {
-        let detect = crate::state::settings().auto_detect_line_endings;
-        let mut s = Self::alloc(ops, mode);
-        if detect {
-            s.state.flags |= flags::DETECT_EOL;
-        }
-        s
+        let number = RESOURCE_NUMBER_HOOK
+            .with(std::cell::Cell::get)
+            .map_or(0, |f| f());
+        Self::alloc(ops, mode, number)
     }
 
-    fn alloc(ops: Box<dyn StreamOps>, mode: &str) -> Self {
+    /// `php_stream_alloc()` of a stream that takes the place of one
+    /// allocated for it first (a transport that connects or accepts
+    /// through a plain socket stream, then wraps its descriptor): it keeps
+    /// that stream's resource `number` instead of taking one, as php-src
+    /// allocates a single stream.
+    pub fn new_numbered(ops: Box<dyn StreamOps>, mode: &str, number: Option<i64>) -> Self {
+        match number {
+            Some(n) => Self::alloc(ops, mode, n),
+            None => Self::new(ops, mode),
+        }
+    }
+
+    fn alloc(ops: Box<dyn StreamOps>, mode: &str, resource_number: i64) -> Self {
+        let detect = crate::state::settings().auto_detect_line_endings;
         Stream {
             ops,
             state: StreamState {
                 id: fresh_id(),
                 eof: false,
                 fatal_error: false,
-                flags: 0,
+                flags: if detect { flags::DETECT_EOL } else { 0 },
                 wrapper_label: "stream",
                 has_buffered_data: false,
                 last_errno: 0,
@@ -394,6 +420,7 @@ impl Stream {
             lock_flag: 0,
             is_include: false,
             wrapper_data: None,
+            resource_number,
             closer: None,
         }
     }
@@ -401,6 +428,20 @@ impl Stream {
     /// The stream id (used for `Value::Stream`, user filter `$this->stream`).
     pub fn id(&self) -> u64 {
         self.state.id
+    }
+
+    /// The resource number this stream took when it was allocated.
+    #[must_use]
+    pub fn resource_number(&self) -> Option<i64> {
+        (self.resource_number > 0).then_some(self.resource_number)
+    }
+
+    /// Gives this stream the number an inner stream allocated before it
+    /// took, for a stream C allocates before its inner one.
+    pub(crate) fn take_number_of(&mut self, inner: &Stream) {
+        if inner.resource_number > 0 {
+            self.resource_number = inner.resource_number;
+        }
     }
 
     /// Installs the wrapper's `stream_closer`, run after the stream's own
@@ -1215,6 +1256,18 @@ impl Stream {
     /// Casts to a file descriptor (`php_stream_cast`). With
     /// `report_errors` false this is a capability check.
     pub fn cast(&mut self, kind: CastAs, report_errors: bool) -> Option<RawFd> {
+        // `_php_stream_cast()`: "synchronize our buffer (if possible)", so
+        // the descriptor is at the stream's position with nothing buffered.
+        if kind != CastAs::FdForSelect {
+            self.flush();
+            if self.ops.can_seek() && !self.has_flag(flags::NO_SEEK) {
+                let mut dummy = self.position;
+                self.ops
+                    .seek(&mut self.state, self.position, SEEK_SET, &mut dummy);
+                self.readpos = 0;
+                self.writepos = 0;
+            }
+        }
         if self.is_filtered() && kind != CastAs::FdForSelect {
             if report_errors {
                 diag::warning("Cannot cast a filtered stream on this system");
@@ -1254,10 +1307,30 @@ impl Stream {
 
     /// `stream_isatty()` / `posix_isatty()` on the stream.
     pub fn isatty(&mut self) -> bool {
-        let fd = self
-            .cast(CastAs::FdForSelect, false)
-            .or_else(|| self.cast(CastAs::Fd, false));
-        fd.is_some_and(crate::sys::isatty)
+        self.any_fd().is_some_and(crate::sys::isatty)
+    }
+
+    /// `php_stream_can_cast()`: whether the stream can be cast to `kind`,
+    /// asked without the buffer sync a real cast makes.
+    pub fn can_cast(&mut self, kind: CastAs) -> bool {
+        if self.is_filtered() && kind != CastAs::FdForSelect {
+            return false;
+        }
+        self.ops.cast(&mut self.state, kind, false).is_some()
+    }
+
+    /// The descriptor `stream_isatty()` and `posix_isatty()` use: a
+    /// `select()`able one if the stream can give one, else a plain one,
+    /// each kind tried with [`Stream::can_cast`] first, so a stream that
+    /// cannot be cast is neither flushed nor repositioned.
+    pub fn any_fd(&mut self) -> Option<RawFd> {
+        if self.can_cast(CastAs::FdForSelect) {
+            self.cast(CastAs::FdForSelect, false)
+        } else if self.can_cast(CastAs::Fd) {
+            self.cast(CastAs::Fd, false)
+        } else {
+            None
+        }
     }
 
     /// Reads the next directory entry (`php_stream_readdir`).
@@ -1363,13 +1436,16 @@ impl Stream {
                     let mut input = Brigade::from(vec![Bucket::new(data.clone())]);
                     let mut out = Brigade::new();
                     let f = &mut self.read_filters.filters[idx].filter;
-                    let mut status = f.filter(
-                        &mut env,
-                        &mut input,
-                        &mut out,
-                        Some(&mut consumed),
-                        FilterFlags::Normal,
-                    );
+                    let sid = env.stream_id;
+                    let mut status = crate::diag::applying_chain(sid, || {
+                        f.filter(
+                            &mut env,
+                            &mut input,
+                            &mut out,
+                            Some(&mut consumed),
+                            FilterFlags::Normal,
+                        )
+                    });
                     if self.readpos + consumed > self.writepos {
                         status = FilterStatus::ErrFatal;
                     }
@@ -1536,6 +1612,14 @@ impl Stream {
 
     /// Closes, optionally preserving the underlying handle.
     pub fn close_ex(&mut self, preserve_handle: bool) -> i32 {
+        self.close_ex_then(preserve_handle, &mut || {})
+    }
+
+    /// [`Stream::close_ex`] with `after_flush` run between the closing
+    /// flush and the rest of the close: `_php_stream_free()` flushes (a
+    /// user filter's last call, which may use `$this->stream`) before it
+    /// closes the resource (`zend_list_close()`).
+    pub fn close_ex_then(&mut self, preserve_handle: bool, after_flush: &mut dyn FnMut()) -> i32 {
         if self.closed {
             return 0;
         }
@@ -1546,6 +1630,7 @@ impl Stream {
         } else {
             0
         };
+        after_flush();
         // `try_with`: streams owned by thread-locals close during their
         // destruction, after the hook slot may be gone.
         let hook = CLOSE_HOOK

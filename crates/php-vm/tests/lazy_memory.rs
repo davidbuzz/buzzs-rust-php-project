@@ -4,7 +4,7 @@
 //! php-src preallocates or keeps outside the Zend heap: the global symbol
 //! table's entries for the main script's variables, the GC root buffer,
 //! run-time caches and a class's default property table. Expected output
-//! from php 8.3 (every delta is 0).
+//! from `/usr/bin/php8.5 -n` (every delta is 0).
 //!
 //! One test function on purpose: the counting allocator is process-wide,
 //! so scripts running on parallel test threads would disturb each other's

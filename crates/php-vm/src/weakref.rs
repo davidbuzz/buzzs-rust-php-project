@@ -75,6 +75,13 @@ pub(crate) fn reset() {
     MAPS.with(|m| m.borrow_mut().clear());
 }
 
+/// Whether a weak reference or a weak map entry exists (or may: the
+/// flag cannot be read): an object's death is then somebody's business.
+#[inline]
+pub(crate) fn is_active() -> bool {
+    ACTIVE.try_with(Cell::get).unwrap_or(true)
+}
+
 /// Called by the engine when an object is freed (`zend_weakrefs_notify`):
 /// drops the `WeakMap` entries keyed by it (releasing their values) and its
 /// `WeakReference` registration. Must run before the handle is recycled.
@@ -977,7 +984,7 @@ mod tests {
              try { $m[new stdClass]; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }");
         // Handles: WeakMap #1; the caught TypeError #2, the first Error #3
         // (freeing #2 when `$e` is overwritten), the second Error #2 (freeing
-        // #3), so the stdClass is #3 (`/usr/bin/php -n` agrees).
+        // #3), so the stdClass is #3 (`/usr/bin/php8.5 -n` agrees).
         assert_eq!(
             out,
             "WeakMap key must be an object\nCannot append to WeakMap\nCannot append to WeakMap\nObject stdClass#3 not contained in WeakMap\n"

@@ -2,8 +2,19 @@
 
 David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust whose goal is
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
-than the classic C impl. Passing tests: 99.9% (100% on the engine suite);
-Speed (as fast as C): 17 of 82 workloads (21%).
+than the classic C impl. Passing tests: 21,842 of the 21,843 in-scope tests that run
+(21,827 pass, 15 expected failures; the one failure, ext/openssl's
+`stream_server_reneg_limit`, failed in the parallel run and passes on its own). Recorded in
+[22-NOV-2026.full-test-run.log](22-NOV-2026.full-test-run.log) with the build, the Rust tests
+and the timing below.
+
+Speed: total runtime 0.49x the C implementation (PHP 8.5.12) on identical inputs, both at
+their defaults (`perf/bench/timing.py`), every input faster.
+
+|  | C PHP 8.5.12 (`/usr/bin/php8.5`) | Ours (release build of `725007d4`) | Ratio |
+| --- | --- | --- | --- |
+| Total wall-clock | 3.330 s | 1.637 s | **0.49×** |
+| Total CPU (user + system) | 3.319 s | 1.628 s | 0.49× |
 
 The original PHP is written in C. This project ports it to idiomatic, best-practice Rust
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
@@ -41,7 +52,7 @@ target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts modules/p
 ```
 
 `env -u LANGUAGE` matters only if your shell exports `LANGUAGE` (glibc's gettext lets it override
-`LC_ALL`, which fails six ext/gettext tests under any PHP, including `/usr/bin/php`). Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
+`LC_ALL`, which fails six ext/gettext tests under any PHP, including `/usr/bin/php8.5`). Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
 `--json report.json` plus `scripts/update_feature_gap.py report.json` rewrites the `%` column
 of FEATURE_GAP.md from a run. `phpt-baseline.txt` lists known failures so CI only fails on
 regressions (`--baseline phpt-baseline.txt`, refresh with `--update-baseline`).
@@ -52,6 +63,20 @@ Per-crate checks, as required before any work is declared done:
 cargo fmt && cargo clippy --all-targets -p <crate> && cargo test -p <crate>
 ```
 
+The full run, recorded as evidence in git, is one command:
+
+```sh
+./run-all-tests.sh               # add --no-commit to write the log without committing it
+```
+
+It builds the whole workspace in release mode, runs `cargo test --workspace --release`, the
+full in-scope PHPT suite on the release `php` (every PASS/FAIL line, a diff for each failure,
+checked against `phpt-baseline.txt`) and `perf/bench/timing.py` against `/usr/bin/php8.5`. All of
+the output goes to `<DD-MON-YYYY>.full-test-run.log` in the repository root, ending in a summary
+of the four phases, and the script commits that file locally (it never pushes).
+The latest is `22-NOV-2026.full-test-run.log`; `16-NOV-2026.full-test-run.log` is an earlier
+run in the same layout, without the timing phase.
+
 Use these incremental dev-profile builds for correctness checks and scoped PHPT
 runs. Reserve `--release` for performance measurements: the release profile uses
 thin LTO and one codegen unit, which makes rebuilding test executables expensive.
@@ -60,14 +85,31 @@ For multiple affected crates, combine their `-p` selectors in one command.
 
 ## Performance
 
-The goal is to be as fast as, or faster than, the C implementation on every workload. It is
-measured per workload: each one may cost at most 1.10x the C implementation's measured
-user-space instruction count (the goal recorded in `perf/bench/goal.tsv`, checked by
-`scripts/acceptance.sh`). **17 of the 82 workloads meet the criterion** (release build of
-`3abd4d3f`, 16 Nov 2026): best are `zend:simplecall` at 0.67x, `ops:empty_loop` at 0.73x and
-`ops:int_add` at 0.74x. The other 65 are slower than C PHP, from 1.28x on
-`micro:self_cc_x_eq_0` to 10.39x on `zend:ackermann`, with user function calls at 5.41x.
-The performance work is in progress.
+The deliverable is one number: run the C implementation and this one side by side on
+identical inputs, each with its default configuration, and the total runtime of ours must be
+at most 1.10x the total runtime of C. C's CLI default has opcache loaded but disabled
+(`opcache.enable_cli=0`) and no JIT; ours runs with its own trace JIT on (`BUZZS_JIT=0` turns
+it off).
+
+```sh
+python3 perf/bench/timing.py     # builds the release php if needed, then compares it with /usr/bin/php8.5
+```
+
+`perf/bench/timing.py` builds the release `php` of the checkout (`cargo build --release -p php-cli`,
+so `target/release/php`, the binary `scripts/acceptance.sh` measures too; give a binary as the
+argument to measure that one instead), then runs Zend/bench.php, Zend/micro_bench.php, `perf/bench/suite/*.php`
+and the `perf/bench/<op>.php` loops under both binaries, alternately on the same cores, takes
+the fastest of 5 rounds per input and compares the totals. **Met** (release build of
+`725007d4` against PHP 8.5.12, 22 Nov 2026, PHASE 4 of `22-NOV-2026.full-test-run.log`): ours
+1.637 s against C's 3.330 s, **0.49x** wall-clock (0.49x CPU time). Every one of the 31 inputs
+is faster, from 0.33x (`suite/calls.php`) to 0.95x (`suite/builtins.php`).
+
+`scripts/acceptance.sh` is the per-workload guide: it builds a release binary and counts the
+user-space instructions of 82 workloads against the counts recorded for C in
+`perf/bench/goal.tsv` (each may cost at most 1.10x), recorded from `/usr/bin/php8.5`
+(PHP 8.5.12) on 22 Nov 2026. 80 of the 82 are within it with the JIT on; `suite:builtins`
+(1.15x) and `zend:hash1` (1.12x) are over, where 8.5 is 9% and 3% cheaper than the 8.3
+the earlier goal came from. `perf/README.md` explains the instruction-count method.
 
 ## Reference source
 
@@ -81,13 +123,13 @@ scripts/fetch-phpt-tests.sh
 ```
 
 The tests are under the PHP License 3.01. The script pins the revision the conformance numbers
-below were measured against — `0c7255dc521` ("Merge branch 'PHP-8.6'", 2 Nov 2026) — because
+are measured against — `cb90f9a2377` (php-src master of 22 Nov 2026; until 22 Nov
+`0c7255dc521` of 2 Nov, against which the numbers below were measured) — because
 `phpt-baseline.txt` and the pass rate are only meaningful for one php-src revision;
 `scripts/fetch-phpt-tests.sh --verify` checks an existing checkout against that pin. Moving to
 a newer php-src means editing the pin and re-baselining.
 
-`/usr/bin/php` (PHP 8.3.6) is used as an oracle by the library test suites. Where 8.3 and
-php-src master differ, the port follows master.
+`/usr/bin/php8.5` (PHP 8.5.12) is used as an oracle by the library test suites. Where 8.5 and php-src master differ, the port follows master.
 
 ## License
 

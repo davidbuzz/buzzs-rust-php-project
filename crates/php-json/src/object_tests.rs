@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object-related behaviour (`JsonSerializable`, enums, recursion, resources,
-//! decoding to objects), with expectations taken from `/usr/bin/php`.
+//! decoding to objects), with expectations taken from `/usr/bin/php8.5`.
 
 #![allow(clippy::many_single_char_names)]
 
@@ -338,7 +338,7 @@ fn argument_errors() {
     );
     assert_eq!(
         err(json_decode(&mut state, &mut h, b"[]", None, 1 << 31, 0)),
-        "json_decode(): Argument #3 ($depth) must be less than 2147483647"
+        "json_decode(): Argument #3 ($depth) must be less than or equal to 2147483647"
     );
     assert_eq!(
         err(json_encode(&mut state, &mut h, &Value::Null, 0, 1 << 31)),

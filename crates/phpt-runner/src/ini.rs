@@ -12,7 +12,7 @@ pub const E_ALL: u32 = 30719;
 /// `extension_dir` given to binaries that do not load a php.ini: a directory that does not
 /// exist, so a binary whose built-in `extension_dir` points at a system PHP installation cannot
 /// pick up that installation's shared modules (via `--EXTENSIONS--`, `dl()` or SKIPIF probes).
-/// A binary that loads php.ini files (e.g. a distribution `/usr/bin/php`, whose `extension=`
+/// A binary that loads php.ini files (e.g. a distribution `/usr/bin/php8.5`, whose `extension=`
 /// lines need the real directory) keeps its own. `-d extension_dir=...` overrides either way.
 pub const NO_EXTENSION_DIR: &str = "/nonexistent/phpt-runner-extension-dir";
 

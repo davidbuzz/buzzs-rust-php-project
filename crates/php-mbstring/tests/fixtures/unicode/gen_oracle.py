@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the oracle fixtures in this directory with /usr/bin/php.
+"""Regenerate the oracle fixtures in this directory with /usr/bin/php8.5.
 
 * `phpt.tsv`: every mb_convert_encoding / mb_check_encoding / mb_strcut call
   made by the php-src .phpt tests listed below (run against the real PHP,
@@ -29,7 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parents[4] / "modules" / "php-src"
 TESTS = SRC / "ext/mbstring/tests"
-PHP = "/usr/bin/php"
+PHP = "/usr/bin/php8.5"
 
 PHPTS = """
 utf_encodings ucs2_encoding ucs4_encoding utf7imap_encoding base64_encoding
@@ -75,7 +75,7 @@ def run_phpt(name: str, workdir: Path, log: Path) -> None:
     # Prepend the prelude without disturbing line structure of the test.
     code = re.sub(r"^\s*<\?php", "", code, count=1)
     script.write_text(prelude + "\n" + code, encoding="latin-1")
-    args = [PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0"]
+    args = [PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0"]
     for ini in sec.get("INI", "").splitlines():
         if ini.strip():
             args += ["-d", ini.strip()]
@@ -97,7 +97,7 @@ def canonical_names() -> dict:
         'foreach (mb_list_encodings() as $e) { $n = [$e, mb_preferred_mime_name($e) ?: $e];'
         ' foreach (array_merge($n, mb_encoding_aliases($e)) as $a) echo strtolower($a), "\\t", $e, "\\n"; }'
     )
-    res = subprocess.run([PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0", "-r", code],
+    res = subprocess.run([PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0", "-r", code],
                          capture_output=True, text=True, check=True)
     names = {}
     for line in res.stdout.splitlines():
@@ -154,7 +154,7 @@ def main() -> None:
     print(f"phpt.tsv: {len(uniq)} lines")
     env = dict(os.environ)
     with open(HERE / "fuzz.tsv", "w") as f:
-        subprocess.run([PHP, "-n", "-d", "extension=mbstring", "-d", "error_reporting=0",
+        subprocess.run([PHP, "-n", "-d", "memory_limit=1G", "-d", "extension=mbstring", "-d", "error_reporting=0",
                         str(HERE / "fuzz.php")], stdout=f, check=True, env=env)
     print("fuzz.tsv written")
 

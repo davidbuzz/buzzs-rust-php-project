@@ -73,11 +73,12 @@
 
 use super::hot::{self, DECLINED, LEFT, NO_SAFE_POINT, SWITCHED};
 use super::Num;
-use crate::opcode::{BinKind, ClassSpec, Op, OpArray, Operand};
+use crate::opcode::{BinKind, ClassSpec, FetchMode, Op, OpArray, Operand};
 use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value};
 use std::cell::OnceCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI32, AtomicUsize};
 use std::sync::OnceLock;
 
 /// log2 of the size of a slot (a compiled variable, a temporary, a
@@ -105,28 +106,109 @@ const _: () = {
 /// compiler allocated; decoding on first use must not show as memory the
 /// script allocated between two readings).
 #[derive(Default)]
-pub(crate) struct Tape(OnceCell<Box<[Inst]>>);
+pub(crate) struct Tape {
+    insts: OnceCell<Box<[Inst]>>,
+    /// The trace JIT's per-instruction hot-loop tables (see [`jit`]),
+    /// created when the tape is decoded with the JIT enabled. Their raw
+    /// pointers sit beside the cell so [`run_tape`] reads them with two
+    /// plain loads; `kill` nulls them (freeing the traces for later
+    /// frames of this tape) while the cell keeps the arrays alive for
+    /// frames already running.
+    jit: OnceCell<jit::Tables>,
+    jit_cnt: std::sync::atomic::AtomicPtr<AtomicI32>,
+    jit_tr: std::sync::atomic::AtomicPtr<AtomicUsize>,
+    /// A trace from this tape has proved useful (see [`Tape::jit_good`]).
+    jit_good: std::sync::atomic::AtomicBool,
+    /// What `calls::new_stored` found out about each `new` instruction that
+    /// ran a constructor as stores, by the instruction's site number
+    /// (`Inst.p`): see [`calls::NewSite`]. Grown outside the counted heap,
+    /// like the op array's other run-time caches.
+    new_sites: std::cell::RefCell<Vec<calls::NewSite>>,
+}
 
 impl Tape {
     /// The instructions, decoded from `code` on first use.
     #[inline]
     fn get(&self, code: &OpArray) -> &[Inst] {
-        self.0
-            .get_or_init(|| php_memlimit::persistent(|| lower(code)))
+        self.insts.get_or_init(|| {
+            php_memlimit::persistent(|| {
+                let tape = lower(code);
+                // Tables only for a tape that has a loop the JIT could
+                // ever compile: without them `run_tape` picks the core
+                // without the back-edge hook for every frame of it.
+                if jit::enabled() && jit::has_loop_close(&tape) {
+                    self.jit_init(&tape);
+                }
+                tape
+            })
+        })
+    }
+
+    /// The hot-loop tables, created with the tape.
+    fn jit_init(&self, tape: &[Inst]) {
+        let jt = self.jit.get_or_init(|| jit::Tables::new(tape));
+        self.jit_cnt.store(
+            jt.cnt() as *mut AtomicI32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.jit_tr.store(
+            jt.tr() as *mut AtomicUsize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Stop arming traces for this tape (a trace was refused or its
+    /// guards failed): frames entered after this run the tape fully
+    /// interpreted, without the per-back-edge hook.
+    pub(crate) fn jit_kill(&self) {
+        self.jit_cnt
+            .store(std::ptr::null_mut(), std::sync::atomic::Ordering::Relaxed);
+        self.jit_tr
+            .store(std::ptr::null_mut(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// This tape produced a trace that paid for itself (compiled, or ran
+    /// to a poll/cap): never kill its tracing.
+    pub(crate) fn jit_good(&self) {
+        self.jit_good
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A loop of this tape that was refused or whose trace failed its
+    /// entry guards has run on for a while (`jit::back_edge` counts its
+    /// back edges). If this tape has not produced a useful trace yet, stop
+    /// hooking its back edges (frames entered after this run it fully
+    /// interpreted); the per-back-edge hook is worth its cost once a trace
+    /// has paid off. Returns whether the tape was killed (so callers can
+    /// stop hooking their own back edges too).
+    pub(crate) fn jit_bad(&self) -> bool {
+        if self.jit_good.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        self.jit_kill();
+        true
     }
 }
 
 impl Drop for Tape {
     fn drop(&mut self) {
-        if let Some(buf) = self.0.take() {
+        if let Some(buf) = self.insts.take() {
             php_memlimit::persistent(|| drop(buf));
+        }
+        let sites = self.new_sites.get_mut();
+        if sites.capacity() != 0 {
+            // The class handles go as the counted memory they pin, the
+            // buffer as it came.
+            sites.clear();
+            let sites = std::mem::take(sites);
+            php_memlimit::persistent(|| drop(sites));
         }
     }
 }
 
 impl std::fmt::Debug for Tape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.get() {
+        match self.insts.get() {
             Some(t) => write!(f, "Tape({} instructions)", t.len()),
             None => f.write_str("Tape(not decoded)"),
         }
@@ -144,6 +226,10 @@ const KI: u8 = 2;
 /// Operand kind: any other numeric literal (byte offset in the literal
 /// table).
 const KL: u8 = 3;
+/// Operand kind: a byte offset from `rdx`, the JIT's per-trace scratch
+/// buffer holding an inlined callee's slots (JIT-only; no tape family
+/// emits it).
+const KR: u8 = 4;
 
 /// One pre-decoded instruction (32 bytes, the size of an [`Op`] and of a
 /// `zend_op`).
@@ -370,12 +456,50 @@ const WHY_CALL: u8 = 4;
 /// Why [`run_core`] stopped: the jump at `at` was taken (to `ip`) and a safe
 /// point is due.
 const WHY_POLL: u8 = 2;
+/// Why [`run_core`] stopped: the op at `ip` is one [`run_vm_op`] runs with
+/// the VM at hand (a read through the global scope, a frameless call).
+const WHY_VM: u8 = 5;
 
 /// Where and why [`run_core`] stopped.
 struct Out {
     ip: *const Inst,
     at: *const Inst,
     why: u8,
+}
+
+/// The truth of the temporary a jump tests, which the jump consumes
+/// (`ZEND_JMPZ` / `ZEND_JMPNZ` of a `TMP`: `i_zend_is_true`, then the
+/// operand's release): a bool, an int, a null, a float that is no NaN, or a
+/// string (released out of line). `None`, nothing changed, for anything
+/// else: a NaN (the generic op reports it), an array or an object (their
+/// release may queue a destructor), a reference.
+#[inline(always)]
+// The test of the tape's jumps on a temporary; a float's truth is its
+// comparison with zero.
+#[allow(clippy::inline_always, clippy::float_cmp)]
+fn tmp_truth(slot: &mut Value) -> Option<bool> {
+    let truth = match *slot {
+        Value::Bool(b) => b,
+        Value::Int(i) => i != 0,
+        Value::Null => false,
+        Value::Float(x) if !x.is_nan() => x != 0.0,
+        Value::Str(_) => return Some(str_truth(slot)),
+        _ => return None,
+    };
+    // A scalar owns nothing: overwritten without the drop glue.
+    std::mem::forget(std::mem::take(slot));
+    Some(truth)
+}
+
+/// [`tmp_truth`] of a temporary holding a string, which is released: false
+/// for `""` and `"0"` (`zend_is_true` of a string).
+#[inline(never)]
+fn str_truth(slot: &mut Value) -> bool {
+    match std::mem::take(slot) {
+        Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+        // Not reached: the caller saw a string.
+        _ => false,
+    }
 }
 
 #[inline(always)]
@@ -404,7 +528,7 @@ fn loop_exit(ip: *const Inst) -> *const Inst {
 /// and allocate nothing, so only an asynchronous request (a signal, a
 /// timeout) can be pending, and it is seen here.
 macro_rules! take_jump {
-    ($ip:ident, $inst:ident) => {{
+    ($ip:ident, $inst:ident, $st:ident, $jit:expr, $ctx:expr) => {{
         let at = $ip;
         #[allow(clippy::cast_possible_wrap)]
         {
@@ -417,18 +541,55 @@ macro_rules! take_jump {
                 why: WHY_POLL,
             };
         }
+        // The trace JIT: a backward jump onto a tape instruction is a loop
+        // back edge (a jump of an instruction onto itself included: an
+        // empty `for` loop is one fused step-compare-jump instruction),
+        // and the hook counts it and may run (or compile and run) the
+        // loop as machine code.  It returns the instruction to
+        // continue at, which is the target itself when the loop is not
+        // hot yet or cannot be compiled.  `$jit` is `run_core`'s const
+        // generic: a frame without a live context runs the instantation
+        // where the hook is compiled out entirely (its two-instruction
+        // test measurably reshapes `run_core`: +114M instructions on
+        // `fib`).  `$ctx` is `run_core`'s context parameter: non-null
+        // exactly when `$jit` is true.
+        if $jit && $ip <= at {
+            // SAFETY: guaranteed by `$jit` and the test just made the
+            // jump backward. (Reached from `run_core`'s `unsafe` block,
+            // hence no `unsafe` here.)  The hook gets the frame, from
+            // which it derives the slot bases when it needs them: `st`
+            // is never passed by address (that keeps it a memory local
+            // and demotes every slot-base access to the stack; measured:
+            // +210M instructions on `fib`).
+            $ip = jit::back_edge($st.f, &*$ctx, at, $ip);
+            // A compiled loop leaves when the safe point comes due inside
+            // it (at its head, at a nested loop's back edge, after a row
+            // that allocates): it is serviced before the next instruction
+            // runs, as the check above does for an interpreted jump, and
+            // reported at the row the trace named.
+            if crate::interrupt::safe_point_due() {
+                return Out {
+                    ip: $ip,
+                    at: (&*$ctx).poll_at(at),
+                    why: WHY_POLL,
+                };
+            }
+        }
     }};
 }
 
-/// What a family handler that may jump decided.
+/// What a family handler that may jump decided. A trace calls such a
+/// handler itself and reads the answer as a byte (`jit::Emitter::emit_row`):
+/// the values are part of that contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum Br {
-    /// Its operands are not what it handles; nothing changed.
-    Decline,
     /// Done; execution goes on after the ops the instruction covers.
-    Fall,
+    Fall = 0,
+    /// Its operands are not what it handles; nothing changed.
+    Decline = 1,
     /// Done; execution goes on at the instruction's jump target.
-    Jump,
+    Jump = 2,
 }
 
 /// The arm of a `family` row in [`run_core`]: `$h` is the handler, `$n`
@@ -447,13 +608,13 @@ macro_rules! fam_arm {
     // and reads any slot base from it (`frame_st`). Passed all four bases,
     // the calls raise their weight in the loop's register allocation: three
     // more such arms put the variables' base of every op on the stack.
-    (plain_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (plain_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st.f, $inst) {
             return step_out($ip);
         }
         $ip = $ip.add($n);
     }};
-    (poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st.f, $inst) {
             return step_out($ip);
         }
@@ -467,14 +628,14 @@ macro_rules! fam_arm {
             };
         }
     }};
-    (branch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st.f, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => $ip = $ip.add($n),
-            Br::Jump => take_jump!($ip, $inst),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (branch_poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st.f, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => {
@@ -488,16 +649,16 @@ macro_rules! fam_arm {
                     };
                 }
             }
-            Br::Jump => take_jump!($ip, $inst),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st, $inst) {
             return step_out($ip);
         }
         $ip = $ip.add($n);
     }};
-    (poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st, $inst) {
             return step_out($ip);
         }
@@ -511,14 +672,14 @@ macro_rules! fam_arm {
             };
         }
     }};
-    (branch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => $ip = $ip.add($n),
-            Br::Jump => take_jump!($ip, $inst),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (branch_poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => {
@@ -532,7 +693,7 @@ macro_rules! fam_arm {
                     };
                 }
             }
-            Br::Jump => take_jump!($ip, $inst),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
 }
@@ -567,6 +728,8 @@ macro_rules! tape_ops {
             CallInit,
             /// `Op::Send` of a value ([`calls`]).
             CallSend,
+            /// An op that is no call but needs the VM ([`run_vm_op`]).
+            VmOp,
             /// `Op::Jmp`.
             Jmp,
             /// `Op::JmpZ` of a temporary (a bool, int or null on the tape).
@@ -642,6 +805,60 @@ macro_rules! tape_ops {
                 $( if matches!(op, BinaryOp::$oop) && kb == $okb { return Some(TOp::$on); } )*
                 None
             }
+
+            /// The trace JIT's [`jit::JitMeta`] for a fused row (see
+            /// [`jit`]'s whitelist); `None` for every row the JIT does
+            /// not compile in this version.
+            pub(crate) fn jit_meta(self) -> Option<jit::JitMeta> {
+                match self {
+                    $(
+                        TOp::$cn => Some(jit::JitMeta {
+                            class: jit::J_CMP,
+                            ka: $cka,
+                            kb: $ckb,
+                            mask: $cm,
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    $(
+                        TOp::$in => Some(jit::JitMeta {
+                            class: jit::J_INCCMP,
+                            kb: $ikb,
+                            mask: $im,
+                            inc: $iinc,
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    $(
+                        TOp::$vn => Some(jit::JitMeta {
+                            class: jit::J_ARITH_CV,
+                            ka: $vka,
+                            kb: $vkb,
+                            arith: jit::jit_arith_id!($vop),
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    $(
+                        TOp::$an => Some(jit::JitMeta {
+                            class: jit::J_ARITH_TMP,
+                            ka: $aka,
+                            kb: $akb,
+                            arith: jit::jit_arith_id!($aop),
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    $(
+                        TOp::$on => Some(jit::JitMeta {
+                            class: jit::J_ASSIGN_OP,
+                            ka: KC,
+                            kb: $okb,
+                            arith: jit::jit_arith_id!($oop),
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    _ => None,
+                }
+            }
         }
 
         /// Runs specialised instructions from `ip` until one stops it
@@ -661,8 +878,12 @@ macro_rules! tape_ops {
             // bases of `Vec<Value>` and `Vec<CvSlot>` buffers.
             clippy::cast_ptr_alignment
         )]
-        unsafe fn run_core(st: St, mut ip: *const Inst) -> Out {
-            // SAFETY (the whole loop): `ip` stays inside the tape (every
+        unsafe fn run_core<const JIT: bool>(
+            st: St,
+            ctx: *const jit::JitCtx,
+            mut ip: *const Inst,
+        ) -> Out {
+            // SAFETY: (the whole loop) `ip` stays inside the tape (every
             // instruction advances it by what `lower` validated: the next
             // op, the ops a fused instruction covers, or a jump target, and
             // the sentinel stops a run past the last op), and every slot
@@ -679,41 +900,52 @@ macro_rules! tape_ops {
                         return Out { ip, at: ip, why: WHY_EXT };
                     }
                     TOp::CallInit | TOp::CallSend => {
-                        return Out { ip, at: ip, why: WHY_CALL };
+                        // `new C` of a class without a constructor is no
+                        // call: the object, then the jump over the
+                        // constructor call's ops (with the jump's poll).
+                        if inst.k != calls::CALL_NEW {
+                            return Out { ip, at: ip, why: WHY_CALL };
+                        }
+                        match calls::new_plain(st.f, inst) {
+                            calls::NEW_MADE => take_jump!(ip, inst, st, JIT, ctx),
+                            // Made in the block of the object the assigned
+                            // variable held: the assignment the jump goes
+                            // to is done as well, so on past it, with the
+                            // jump's poll.
+                            calls::NEW_OVER => {
+                                let at = ip;
+                                #[allow(clippy::cast_possible_wrap)]
+                                {
+                                    ip = ip.byte_offset(inst.c as i32 as isize).add(1);
+                                }
+                                if crate::interrupt::safe_point_due() {
+                                    return Out { ip, at, why: WHY_POLL };
+                                }
+                            }
+                            _ => return Out { ip, at: ip, why: WHY_CALL },
+                        }
                     }
-                    TOp::Jmp => take_jump!(ip, inst),
+                    TOp::VmOp => {
+                        return Out { ip, at: ip, why: WHY_VM };
+                    }
+                    TOp::Jmp => take_jump!(ip, inst, st, JIT, ctx),
                     TOp::JmpZT => {
-                        let s = tmp_slot(st, inst.a);
-                        // The values that need no release: a comparison's
-                        // bool, or the int of `count()`, `strlen()`, `&`, ...
-                        let b = match *s {
-                            Value::Bool(b) => b,
-                            Value::Int(i) => i != 0,
-                            Value::Null => false,
-                            _ => return step_out(ip),
+                        // The temporary is consumed ([`tmp_truth`]).
+                        let Some(b) = tmp_truth(tmp_slot(st, inst.a)) else {
+                            return step_out(ip);
                         };
-                        // Consumed, as `hot::take_bool` does (nothing to
-                        // release).
-                        std::ptr::write(s, Value::Null);
                         if b {
                             ip = ip.add(1);
                         } else {
-                            take_jump!(ip, inst);
+                            take_jump!(ip, inst, st, JIT, ctx);
                         }
                     }
                     TOp::JmpNzT => {
-                        let s = tmp_slot(st, inst.a);
-                        // The values that need no release: a comparison's
-                        // bool, or the int of `count()`, `strlen()`, `&`, ...
-                        let b = match *s {
-                            Value::Bool(b) => b,
-                            Value::Int(i) => i != 0,
-                            Value::Null => false,
-                            _ => return step_out(ip),
+                        let Some(b) = tmp_truth(tmp_slot(st, inst.a)) else {
+                            return step_out(ip);
                         };
-                        std::ptr::write(s, Value::Null);
                         if b {
-                            take_jump!(ip, inst);
+                            take_jump!(ip, inst, st, JIT, ctx);
                         } else {
                             ip = ip.add(1);
                         }
@@ -783,7 +1015,18 @@ macro_rules! tape_ops {
                         if !matches!(&*s, Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
-                            return step_out(ip);
+                            // A string, an array or an object on either
+                            // side: copied and released out of line, then
+                            // the poll every releasing op ends with.
+                            if !scalar::assign_cv_any(st.f, inst, false) {
+                                return step_out(ip);
+                            }
+                            let at = ip;
+                            ip = ip.add(1);
+                            if crate::interrupt::safe_point_due() {
+                                return Out { ip, at, why: WHY_POLL };
+                            }
+                            continue;
                         }
                         // The destination is undefined or a scalar: nothing
                         // to release. `copy`, not `copy_nonoverlapping`:
@@ -801,7 +1044,16 @@ macro_rules! tape_ops {
                         if matches!(&*s, Value::Reference(_))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
-                            return step_out(ip);
+                            // As in `AssignC`.
+                            if !scalar::assign_cv_any(st.f, inst, true) {
+                                return step_out(ip);
+                            }
+                            let at = ip;
+                            ip = ip.add(1);
+                            if crate::interrupt::safe_point_due() {
+                                return Out { ip, at, why: WHY_POLL };
+                            }
+                            continue;
                         }
                         std::ptr::write(d, Some(std::ptr::read(s)));
                         // The temporary is consumed (`std::mem::take` in
@@ -845,7 +1097,7 @@ macro_rules! tape_ops {
                                 None => return step_out(ip),
                             };
                             if jump {
-                                take_jump!(ip, inst);
+                                take_jump!(ip, inst, st, JIT, ctx);
                             } else {
                                 // Past the jump op the comparison decided.
                                 ip = ip.add(2);
@@ -868,7 +1120,7 @@ macro_rules! tape_ops {
                             };
                             *i = n;
                             if int_test::<$im>(n, y) {
-                                take_jump!(ip, inst);
+                                take_jump!(ip, inst, st, JIT, ctx);
                             } else {
                                 // Past the smart branch and its jump op: the
                                 // loop's exit, once per loop (the jump back
@@ -996,7 +1248,7 @@ macro_rules! tape_ops {
                         }
                     )*
                     $(
-                        TOp::$fname => fam_arm!($fmode, $fh, $fskip, st, inst, ip),
+                        TOp::$fname => fam_arm!($fmode, $fh, $fskip, st, inst, ip, ctx),
                     )*
                 }
             } }
@@ -1055,24 +1307,39 @@ tape_ops! {
         NumBinT = (scalar::num_bin_tmp, 1, plain_f),
         NumBinC = (scalar::num_bin_cv, 2, plain_f),
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
+        AbsN = (scalar::abs_num, 2, plain_f),
+        MoveT = (scalar::move_tmp, 1, plain_f),
+        AssignR = (scalar::assign_res, 1, plain_f),
+        JmpSetC = (scalar::jmp_set_cv, 1, branch_f),
+        CoalesceC = (scalar::coalesce_cv, 1, branch_f),
+        CoalesceT = (scalar::coalesce_tmp, 1, branch_f),
 
         // ---- end of scalar ----
         //
         //
         //
         // ---- dims (exec/tape/dims.rs) ----
-        FetchDimC = (dims::fetch_dim, 1, branch_poll_f),
+        FetchDimC = (dims::fetch_dim_key, 1, branch_poll_f),
         FetchDimIC = (dims::fetch_dim_int, 1, branch_poll_f),
+        FetchDimIT = (dims::fetch_dim_tmp, 1, branch_poll_f),
         FetchDimSC = (dims::fetch_dim_str, 1, branch_poll_f),
         FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
         IssetDimC = (dims::isset_dim, 1, poll_f),
-        AssignDimC = (dims::assign_dim, 1, poll_f),
+        AssignDimC = (dims::assign_dim_key, 1, poll_f),
         AssignDimIC = (dims::assign_dim_int, 1, poll_f),
         AssignDimsC = (dims::assign_dims, 1, poll_f),
         AssignOpDimC = (dims::assign_op_dim, 1, poll_f),
         AssignOpDimsC = (dims::assign_op_dims, 1, poll_f),
         IncDecDimC = (dims::incdec_dim, 1, poll_f),
         ConcatCv = (dims::concat_cv, 1, poll_f),
+        ConcatT = (dims::concat_tmp, 1, poll_f),
+        RopeT = (dims::rope_tmp, 1, poll_f),
+        CastStrT = (dims::cast_str_tmp, 1, poll_f),
+        InitArrayT = (dims::init_array, 1, poll_f),
+        ArrayAddT = (dims::array_add, 1, poll_f),
+        FeFetchA = (dims::fe_fetch, 1, branch_poll_f),
+        FeFetchV = (dims::fe_fetch_v, 2, branch_poll_f),
+        FeFetchKV = (dims::fe_fetch_kv, 3, branch_poll_f),
 
         // ---- end of dims ----
         //
@@ -1085,6 +1352,9 @@ tape_ops! {
         AssignOpObjProp = (props::prop_in, 1, poll_f),
         IncDecObjProp = (props::prop_in, 1, poll_f),
         IssetObjProp = (props::prop_in, 1, poll_f),
+        IncDecStatic = (props::incdec_static, 1, poll_f),
+        ThisConst = (props::this_const, 2, poll_f),
+        ThisConstTo = (props::this_const_to, 2, branch_poll_f),
 
         // ---- end of props ----
         //
@@ -1097,6 +1367,7 @@ tape_ops! {
         TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch_f),
         IssetC = (strs::isset_cv, 1, plain_f),
         IssetJmpC = (strs::isset_jmp_cv, 2, branch_f),
+        FramelessQ = (strs::frameless_quick, 1, branch_poll_f),
 
         // ---- end of strs ----
         //
@@ -1118,7 +1389,7 @@ fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
 /// The kind and operand field of a numeric operand; `None` when it has no
 /// specialised form (not a number literal, or out of range).
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn src(code: &OpArray, o: Operand) -> Option<(u8, u32)> {
+pub(crate) fn src(code: &OpArray, o: Operand) -> Option<(u8, u32)> {
     match o {
         Operand::Cv(i) => Some((KC, cv_off(code, i)?)),
         Operand::Tmp(t) | Operand::TmpKeep(t) => Some((KT, tmp_off(code, t)?)),
@@ -1140,7 +1411,7 @@ fn cv_off(code: &OpArray, cv: u32) -> Option<u32> {
 }
 
 /// The byte offset of a temporary; `None` when out of range.
-fn tmp_off(code: &OpArray, t: u32) -> Option<u32> {
+pub(crate) fn tmp_off(code: &OpArray, t: u32) -> Option<u32> {
     (t < code.num_tmps && t < SLOT_LIMIT).then_some(t << SLOT_SHIFT)
 }
 
@@ -1319,7 +1590,21 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_tmp(op, ka, kb)?)
             }
         }
+        // Also the form the compiler fused with the `CmpJmp` after it (a
+        // rotated loop's step and condition, `for (...; $i < $n; $i = $i +
+        // 1)`): on the tape the step is this instruction, which covers the
+        // kept `AssignCv`, and the comparison runs as its own instruction
+        // right after. The `CmpJmp` stays in the op array (the loop is
+        // entered at it), so the two are exactly what the fused op stands
+        // for; left unlowered, the step left the core on every iteration.
         Op::BinAssignCv {
+            op: BinKind::Arith(op),
+            a,
+            b,
+            cv,
+            ..
+        }
+        | Op::BinAssignCvCmpJmp {
             op: BinKind::Arith(op),
             a,
             b,
@@ -1335,13 +1620,15 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::arith_cv(op, ka, kb)?)
             }
         }
+        // As above for `$cv op= val` (`for (...; $k <= $n; $k += $i)`).
         Op::AssignOpCv {
             cv,
             op,
             val,
             dst: None,
             ..
-        } => {
+        }
+        | Op::AssignOpCvCmpJmp { cv, op, val, .. } => {
             let (kb, fb) = src(code, val)?;
             Inst {
                 a: cv_off(code, cv)?,
@@ -1406,6 +1693,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         }));
     }
     tape.push(Inst::plain(TOp::Exit));
+    calls::number_new_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a
     // specialised instruction when the tape also runs what follows it.
@@ -1544,6 +1832,12 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
             let tbase = tape.as_ptr();
+            // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
+            // counts hot back edges through them and may run or compile a
+            // trace. Built once per frame entry (two relaxed loads off the
+            // op array); dead when the JIT is off or this tape's tracing
+            // was killed.
+            let jctx = jit::JitCtx::maybe_for_tape(&c.tape, tape);
             // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, a
             // frame's stored resume point, or what a hot op continued at),
             // at most `ops.len()`: inside the tape, whose last element is
@@ -1569,14 +1863,28 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 // SAFETY: the frame is `usable` for this tape (tested
                 // above; a hot op that attaches a symbol table sends the
                 // frame back through that test below), and `p` points into
-                // the tape.
-                let out = unsafe { run_core(st, p) };
+                // the tape.  The `JIT` parameter picks the instantation:
+                // with a dead (or absent) context the back-edge hook is
+                // compiled out of the loop entirely.
+                let out = match &jctx {
+                    Some(j) => {
+                        // For the rows of a compiled loop that read through
+                        // the global scope (`jit::JitCtx::set_vm`).
+                        j.set_vm(std::ptr::from_mut(vm));
+                        // SAFETY: as above; `j` is this tape's live context.
+                        unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) }
+                    }
+                    // SAFETY: as above; no context, so no back-edge hook.
+                    None => unsafe { run_core::<false>(st, std::ptr::null(), p) },
+                };
                 // SAFETY: both point into the tape.
                 #[allow(clippy::cast_sign_loss)]
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;
                 let next = match out.why {
                     WHY_CALL => {
-                        let next = run_call(vm, &mut prep, ops, lits, at);
+                        // SAFETY: `out.ip` points into the tape (the
+                        // instruction that stopped the core).
+                        let next = run_call(vm, &mut prep, ops, lits, at, unsafe { &*out.ip });
                         if next == ENTERED {
                             // The call was entered: the tape goes on in the
                             // callee's frame, as after an entered `DoCall`
@@ -1615,6 +1923,26 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             }
                             d + 1
                         }
+                    }
+                    WHY_VM => {
+                        // The interrupt check after a frameless call's
+                        // handler is a safe point: a call being prepared
+                        // becomes the pending call first. (The reads run
+                        // no user code and leave the frame stack alone.)
+                        if matches!(ops.get(at), Some(Op::FramelessICall(_))) {
+                            flush(vm, &mut prep);
+                        }
+                        let next = run_vm_op(vm, ops, at);
+                        let Some(f) = vm.frames.last_mut() else {
+                            flush(vm, &mut prep);
+                            return (0, NO_SAFE_POINT);
+                        };
+                        fp = f;
+                        if next != DECLINED && next & CALL_THREW != 0 {
+                            // As after a builtin's call that threw.
+                            return ((next & !CALL_THREW) | switched, hot::THREW);
+                        }
+                        next
                     }
                     WHY_EXT => {
                         // An argument the generic `Send` passes goes to the
@@ -1705,6 +2033,16 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             }
                         }
                     }
+                    // A function compiled whole: the call is made in
+                    // machine code and is done, as the builtin's above.
+                    Some(call) if calls::compiled(vm, &call, dst) => {
+                        fresh = false;
+                        if crate::interrupt::safe_point_due() {
+                            return ((at + 1) | switched, at);
+                        }
+                        ip = at + 1;
+                        continue 'frames;
+                    }
                     Some(call) => match calls::enter(vm, call, dst, at + 1) {
                         Ok(()) => true,
                         Err(call) => {
@@ -1712,65 +2050,62 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             vm.push_simple_ucall(dst, at + 1)
                         }
                     },
-                    None => {
-                        let ok = vm.push_simple_ucall(dst, at + 1);
-                        if !ok && pending_builtin(vm) {
-                            // `ZEND_DO_ICALL` of a builtin the generic call
-                            // path makes (a method of a builtin class, a
-                            // function its `InitFCall` left pending): run
-                            // here as `Vm::run`'s generic `DoCall` arm runs
-                            // it, instead of a way out to `Vm::run` and back.
+                    // `ZEND_FRAMELESS_ICALL_n` of a pending call the tape
+                    // did not prepare (one started while another was
+                    // being prepared): in place, as `Vm::op_do_call` runs
+                    // it, and the caller goes on as after a builtin's call
+                    // above.
+                    None => match frameless_pending(vm, dst, at + 1) {
+                        Some(Ok(())) => {
                             fresh = false;
-                            if let Some(f) = vm.frames.last_mut() {
-                                f.ip = at + 1;
+                            if crate::interrupt::safe_point_due() {
+                                return ((at + 1) | switched, at);
                             }
-                            match vm.op_do_call(dst) {
-                                Ok(false) => {
-                                    if crate::interrupt::safe_point_due() {
-                                        return ((at + 1) | switched, at);
-                                    }
-                                    ip = at + 1;
-                                    continue 'frames;
-                                }
-                                Ok(true) => true,
-                                Err(t) => {
-                                    vm.tape_throw = Some(t);
-                                    return (at | switched, hot::THREW);
-                                }
-                            }
-                        } else {
-                            ok
+                            ip = at + 1;
+                            continue 'frames;
                         }
-                    }
+                        Some(Err(t)) => {
+                            vm.tape_throw = Some(t);
+                            return (at | switched, hot::THREW);
+                        }
+                        None => {
+                            let ok = vm.push_simple_ucall(dst, at + 1);
+                            if !ok && pending_builtin(vm) {
+                                // `ZEND_DO_ICALL` of a builtin the generic
+                                // call path makes (a method of a builtin
+                                // class, a function its `InitFCall` left
+                                // pending): run here as `Vm::run`'s generic
+                                // `DoCall` arm runs it, instead of a way out
+                                // to `Vm::run` and back.
+                                fresh = false;
+                                if let Some(f) = vm.frames.last_mut() {
+                                    f.ip = at + 1;
+                                }
+                                match vm.op_do_call(dst) {
+                                    Ok(false) => {
+                                        if crate::interrupt::safe_point_due() {
+                                            return ((at + 1) | switched, at);
+                                        }
+                                        ip = at + 1;
+                                        continue 'frames;
+                                    }
+                                    Ok(true) => true,
+                                    Err(t) => {
+                                        vm.tape_throw = Some(t);
+                                        return (at | switched, hot::THREW);
+                                    }
+                                }
+                            } else {
+                                ok
+                            }
+                        }
+                    },
                 }
             }
             Some(&Op::Return { val }) => {
                 flush(vm, &mut prep);
                 fresh = false;
                 vm.return_simple(val, base, at + 1).is_some()
-            }
-            // `ZEND_FRAMELESS_ICALL_n` in place, as `Vm::run`'s pre-match
-            // runs it (`Vm::frameless_icall_op`), and the tape goes on past
-            // the `Nop`s of the call ops it replaced, instead of a way out
-            // to `Vm::run` and back for each such call.
-            Some(Op::FramelessICall(fc)) => {
-                flush(vm, &mut prep);
-                fresh = false;
-                match vm.frameless_icall_op(fc, at + 1) {
-                    Some(Ok(())) => {
-                        let next = at + usize::from(fc.argc) + 2;
-                        if crate::interrupt::safe_point_due() {
-                            return (next | switched, at);
-                        }
-                        ip = next;
-                        continue 'frames;
-                    }
-                    Some(Err(t)) => {
-                        vm.tape_throw = Some(t);
-                        return (at | switched, hot::THREW);
-                    }
-                    None => false,
-                }
             }
             _ => false,
         };
@@ -1800,6 +2135,33 @@ fn pending_builtin(vm: &Vm) -> bool {
         .last()
         .and_then(|f| f.calls.last())
         .is_some_and(|c| matches!(c.func, crate::func::Func::Builtin(_)))
+}
+
+/// `ZEND_FRAMELESS_ICALL_n` of the current frame's newest pending call
+/// (`Vm::frameless_icall_in_place`), its result stored in `dst`; the
+/// frame's resume point is `caller_ip` (`SAVE_OPLINE()`, which
+/// `Vm::run` stores before its own generic `DoCall`). `None`, the call
+/// untouched, when it is not a frameless one.
+#[inline(never)]
+fn frameless_pending(
+    vm: &mut Vm,
+    dst: Option<u32>,
+    caller_ip: usize,
+) -> Option<crate::vm::VmResult<()>> {
+    let frame = vm.frames.last_mut()?;
+    if !matches!(
+        frame.calls.last().map(|c| &c.func),
+        Some(crate::func::Func::Builtin(b)) if b.flags & crate::func::flags::FRAMELESS != 0
+    ) {
+        return None;
+    }
+    frame.ip = caller_ip;
+    let r = vm.frameless_icall_in_place(dst)?;
+    Some(r.map(|v| {
+        if let Some(d) = dst {
+            vm.set_tmp(d, v);
+        }
+    }))
 }
 
 /// Turns a prepared call back into the generic pending call
@@ -1835,10 +2197,19 @@ fn run_call(
     ops: &[Op],
     lits: &[Value],
     at: usize,
+    inst: &Inst,
 ) -> usize {
     match ops.get(at) {
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
+            // `f(<expression>)` of a builtin that needs no handler: nothing
+            // to ready; its `Send` makes the call.
+            if inst.k == calls::CALL_QUICK {
+                if let Some(call) = calls::prepare_quick(vm, name, inst.e, inst.d, at) {
+                    *prep = Some(call);
+                    return at + 1;
+                }
+            }
             if let Some(call) = calls::prepare(vm, name) {
                 return send_and_enter(vm, prep, call, ops, at);
             }
@@ -1875,10 +2246,17 @@ fn run_call(
                 None => {}
             }
         }
-        Some(&Op::InitStaticCall { .. }) => {
+        Some(Op::InitStaticCall { class, name }) => {
             flush(vm, prep);
-            // Not a hot op: else the generic op in `Vm::run`.
-            return match calls::prepare_static(vm, at) {
+            // `Class::name()` by the call site's cache; `self::`,
+            // `parent::` and `static::` by the op's slot of the method
+            // cache. Not a hot op: else the generic op in `Vm::run`.
+            let call = match (class, name) {
+                (ClassSpec::Named(_), _) => calls::prepare_static(vm, at),
+                (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
+                _ => None,
+            };
+            return match call {
                 Some(call) => send_and_enter(vm, prep, call, ops, at),
                 None => DECLINED,
             };
@@ -1900,7 +2278,13 @@ fn run_call(
         }
         Some(Op::Send { src }) => {
             if let Some(call) = prep.as_mut() {
-                if calls::send(vm, call, src) {
+                if let Some(id) = call.quick_id() {
+                    // The argument and the call at once, past the `DoCall`.
+                    if let Some(next) = calls::quick_send(vm, id, src, ops, at) {
+                        *prep = None;
+                        return next;
+                    }
+                } else if calls::send(vm, call, src) {
                     return at + 1;
                 }
             }
@@ -1912,6 +2296,235 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// Runs the op at `at` that needs the VM without being a call's start
+/// ([`WHY_VM`]), on the fast path `Vm::run`'s own arm takes for it.
+/// Returns where execution continues, [`DECLINED`] (nothing changed: the
+/// generic op in `Vm::run`), or the op's index with [`CALL_THREW`] when a
+/// frameless call's handler threw (the throw is in `Vm::tape_throw`).
+///
+/// A function of its own, and small: inside [`run_call`], whose frame the
+/// calls' many paths make large, each of these reads paid for all of it.
+#[inline(never)]
+fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
+    match ops.get(at) {
+        // A global variable by name: its run-time cache hit, the value
+        // into the temporary or straight into the variable of the
+        // `AssignCv` folded behind the op (then skipped).
+        Some(&Op::FetchGlobal {
+            place,
+            dst,
+            to,
+            mode,
+        }) => match vm.fetch_global_hit(place, mode, dst, to) {
+            Some(stored) => at + 1 + usize::from(stored),
+            None => fetch_global_slow(vm, place, dst, to, mode, at),
+        },
+        // A superglobal read as a whole.
+        Some(&Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            dst,
+        }) => match vm.fetch_place_fast(place) {
+            Some(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // An element of an object's property, on a property cache hit
+        // (`Vm::run`'s own arms for these ops): a read into its temporary
+        // or the variable of the `AssignCv` folded behind it (then
+        // skipped), a write, a compound write, `++`/`--`, `isset`/`empty`.
+        Some(&Op::FetchObjPropDim {
+            place,
+            dim,
+            dst,
+            to,
+            mode,
+        }) => match vm.fetch_obj_prop_dim_fast(place, dim, dst, to, mode) {
+            Some(stored) => at + 1 + usize::from(stored),
+            None => DECLINED,
+        },
+        Some(&Op::AssignObjPropDim {
+            place,
+            dim,
+            val,
+            dst,
+        }) => {
+            if vm.assign_obj_prop_dim_fast(place, dim, val, dst) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::AssignOpObjPropDim {
+            place,
+            dim,
+            op,
+            val,
+            dst,
+        }) => {
+            if vm.assign_op_obj_prop_dim_fast(place, dim, op, val, dst) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::IncDecObjPropDim {
+            place,
+            dim,
+            kind,
+            dst,
+        }) => match vm.incdec_obj_prop_dim_fast(place, dim, kind) {
+            Some(r) => {
+                vm.set_dst(dst, r);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        Some(&Op::IssetObjPropDim {
+            place,
+            dim,
+            dst,
+            empty,
+        }) => match vm.isset_obj_prop_dim_fast(place, dim, empty) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`),
+        // past the `Nop`s of the call ops it replaced.
+        Some(Op::FramelessICall(fc)) => match vm.frameless_icall_op(fc, at + 1) {
+            Some(Ok(())) => at + 1 + fc.tail(),
+            Some(Err(t)) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+            None => DECLINED,
+        },
+        _ => DECLINED,
+    }
+}
+
+/// The address of the slot the read through the global scope at op `at`
+/// of frame `f` reads now, for a compiled loop that copies the value out
+/// itself (`jit::C_GREAD`): the main frame's variable or the global store's
+/// slot the run-time cache of an [`Op::FetchGlobal`] names
+/// (`Vm::fetch_global_hit`'s two cases), or the slot of a superglobal read
+/// as a whole (`Vm::fetch_place_fast`: its cached slot). 0 when the cache
+/// holds nothing for the op, the slot does not exist, or the op is no such
+/// read. The address holds while nothing adds a global variable or
+/// replaces the main frame's variables.
+pub(super) fn global_slot_addr(vm: &Vm, f: &Frame, at: usize) -> usize {
+    use crate::rtcache::GlobalSlot;
+    let store_slot = match f.code.ops.get(at) {
+        Some(&Op::FetchGlobal { place, .. }) => {
+            let cached = f
+                .code
+                .rt_cache
+                .globals
+                .try_borrow()
+                .ok()
+                .and_then(|c| c.get(place as usize).copied());
+            match cached {
+                Some(GlobalSlot::GlobalCv(cv)) => {
+                    return vm
+                        .frames
+                        .vec
+                        .first()
+                        .and_then(|main| main.cvs.get(cv as usize))
+                        .map_or(0, |slot| std::ptr::from_ref(slot) as usize);
+                }
+                Some(GlobalSlot::GlobalStore(idx)) => Some(idx),
+                _ => None,
+            }
+        }
+        Some(&Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            ..
+        }) => auto_global_of(&f.code, place)
+            .and_then(|i| vm.ext.auto_globals.cached_slots.get(i).copied().flatten()),
+        _ => None,
+    };
+    let Some(idx) = store_slot else {
+        return 0;
+    };
+    let Ok(globals) = vm.globals.try_borrow() else {
+        return 0;
+    };
+    globals
+        .slots
+        .get(idx as usize)
+        .map_or(0, |slot| std::ptr::from_ref(slot) as usize)
+}
+
+/// The registration index of the superglobal `place` names as a whole
+/// (`$_GET` is 0), as `Vm::fetch_place_fast` finds it; `None` for any
+/// other place.
+fn auto_global_of(code: &OpArray, place: u32) -> Option<usize> {
+    let p = code.places.get(place as usize)?;
+    if !p.segs.is_empty() {
+        return None;
+    }
+    let crate::opcode::PlaceBase::Global(Operand::Lit(lit)) = &p.base else {
+        return None;
+    };
+    let Value::Str(name) = code.literals.get(*lit as usize)? else {
+        return None;
+    };
+    let name = name.as_bytes();
+    if name == b"_GET" {
+        Some(0)
+    } else if name.first() == Some(&b'_') {
+        crate::auto_globals::index(name)
+    } else {
+        None
+    }
+}
+
+/// The reads of [`run_vm_op`] on their fast paths alone, for a compiled
+/// loop (`jit::jit_row_vm_read`): the run-time cache hit of
+/// [`Op::FetchGlobal`] (`mode` given), or a superglobal read as a whole
+/// (`Op::Fetch`, no `mode`), the value into `dst` or the variable `to`.
+/// `Some(stored in the variable)`; `None`, nothing changed, when the
+/// interpreted row has to decide (a miss, an undefined variable read with a
+/// warning).
+pub(super) fn vm_read(
+    vm: &mut Vm,
+    place: u32,
+    dst: u32,
+    to: Option<u32>,
+    mode: Option<FetchMode>,
+) -> Option<bool> {
+    if let Some(mode) = mode {
+        return vm.fetch_global_hit(place, mode, dst, to);
+    }
+    let v = vm.fetch_place_fast(place)?;
+    vm.set_tmp(dst, v);
+    Some(false)
+}
+
+/// [`Op::FetchGlobal`] on a cache miss: the name is resolved and the slot
+/// filled (`Vm::fetch_global_fast`).
+#[cold]
+#[inline(never)]
+fn fetch_global_slow(
+    vm: &mut Vm,
+    place: u32,
+    dst: u32,
+    to: Option<u32>,
+    mode: FetchMode,
+    at: usize,
+) -> usize {
+    match vm.fetch_global_fast(place, mode) {
+        Some(v) => at + 1 + usize::from(vm.store_fetched(dst, to, v)),
+        None => DECLINED,
+    }
 }
 
 /// [`run_call`]'s answer when it entered the call it prepared: the
@@ -1957,6 +2570,11 @@ fn send_and_enter(
                 Err(back) => call = back,
             }
         } else {
+            // A function compiled whole: the call is made in machine code
+            // and is done, as a builtin's is.
+            if calls::compiled(vm, &call, dst) {
+                return next | CALLED;
+            }
             match calls::enter(vm, call, dst, next + 1) {
                 Ok(()) => return ENTERED,
                 Err(back) => call = back,
@@ -1987,6 +2605,7 @@ fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize
 
 mod calls;
 mod dims;
+pub(crate) mod jit;
 mod props;
 mod scalar;
 mod strs;

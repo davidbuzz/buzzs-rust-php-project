@@ -308,7 +308,9 @@ fn calc_dimension_12(s: &[u8]) -> SoapResult<usize> {
         }
         p += 1;
     }
-    Ok(i)
+    // At least one dimension (GHSA-q23r-hr55-xmpg, CVE-2026-15353: an
+    // empty or digit-less `SOAP-ENC:arraySize` is one-dimensional).
+    Ok(if i != 0 { i } else { 1 })
 }
 
 fn add_digit(pos: &mut i32, digit: u8) -> SoapResult<()> {
@@ -1509,8 +1511,11 @@ impl<'h> EncodeCtx<'h> {
             let mut list: Vec<u8> = Vec::new();
             for item in items {
                 let dummy = self.master_to_xml(doc, list_enc, &item, SOAP_LITERAL, ret)?;
+                // `dummy->children->type == XML_TEXT_NODE`: an item that
+                // encodes to elements (an array) is no list item.
                 let content = dummy
                     .and_then(|d| doc.first_child(d))
+                    .filter(|&c| matches!(doc.kind(c), Kind::Text | Kind::TextNoEnc))
                     .map(|c| doc.content(c).to_vec());
                 if let Some(c) = content {
                     if !list.is_empty() {
@@ -1518,6 +1523,17 @@ impl<'h> EncodeCtx<'h> {
                     }
                     list.extend_from_slice(&c);
                 } else {
+                    // `to_xml_list_item_error()` (GH-25303).
+                    let union = enc
+                        .sdl_type
+                        .zip(sdl.as_deref())
+                        .is_some_and(|(t, sdl)| sdl.ty(t).kind == TypeKind::Union);
+                    if union {
+                        bail!(
+                            "Encoding: Value does not match any member type of union type '{}'",
+                            enc.type_name()
+                        );
+                    }
                     let le = list_enc.map(|e| self.enc(e));
                     bail!(
                         "Encoding: Failed to encode list item of type '{}' for list type '{}'",

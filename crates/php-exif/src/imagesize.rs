@@ -718,8 +718,10 @@ pub(crate) fn get_wbmp<R: Read + Seek>(s: &mut PhpStream<R>, _check: bool) -> Op
     Some((dims[0], dims[1]))
 }
 
-/// `sscanf(line, "#define %s %d", name, &value) == 2`.
-fn scan_define(line: &[u8]) -> Option<(&[u8], i32)> {
+/// `sscanf(line, "#define %s %n", name, &offset) == 1`, then the value as
+/// `strtol()` reads it there: `None` without digits, or when it does not
+/// fit a long (`errno` set).
+fn scan_define(line: &[u8]) -> Option<(&[u8], i64)> {
     let ws = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C);
     let rest = line.strip_prefix(b"#define")?;
     let mut i = 0;
@@ -760,24 +762,13 @@ fn scan_define(line: &[u8]) -> Option<(&[u8], i32)> {
     if i == dstart {
         return None;
     }
-    let v = if overflow {
-        if neg {
-            i64::MIN
-        } else {
-            i64::MAX
-        }
-    } else if neg {
-        -v
-    } else {
-        v
-    };
-    // strtol's long result stored into an int.
-    #[allow(clippy::cast_possible_truncation)]
-    Some((name, v as i32))
+    if overflow {
+        return None;
+    }
+    Some((name, if neg { -v } else { v }))
 }
 
 /// `php_get_xbm()`: `Some((width, height))` when both `#define`s are found.
-#[allow(clippy::cast_sign_loss)]
 pub(crate) fn get_xbm<R: Read + Seek>(
     s: &mut PhpStream<R>,
     budget: &mut Budget,
@@ -798,19 +789,23 @@ pub(crate) fn get_xbm<R: Read + Seek>(
             Some(p) => &line[..p],
             None => &line[..],
         };
-        if let Some((name, value)) = scan_define(line) {
+        // Only a size in `1..=INT_MAX` counts.
+        let define = scan_define(line)
+            .and_then(|(name, v)| Some((name, u32::try_from(v).ok().filter(|&v| v > 0)?)))
+            .filter(|&(_, v)| v <= i32::MAX.unsigned_abs());
+        if let Some((name, value)) = define {
             let ty = match name.iter().rposition(|&b| b == b'_') {
                 Some(p) => &name[p + 1..],
                 None => name,
             };
             if ty == b"width" {
-                width = value as u32;
+                width = value;
                 if height != 0 {
                     break;
                 }
             }
             if ty == b"height" {
-                height = value as u32;
+                height = value;
                 if width != 0 {
                     break;
                 }
@@ -901,6 +896,12 @@ mod tests {
         assert_eq!(scan_define(b"#define x"), None);
         assert_eq!(scan_define(b" #define x 1"), None);
         assert_eq!(scan_define(b"#define x y"), None);
+        // strtol's range: a long, or nothing.
+        assert_eq!(
+            scan_define(b"#define x 4294967298"),
+            Some((&b"x"[..], 4_294_967_298))
+        );
+        assert_eq!(scan_define(b"#define x 99999999999999999999"), None);
     }
 
     #[test]

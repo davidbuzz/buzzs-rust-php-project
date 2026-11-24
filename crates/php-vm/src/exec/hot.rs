@@ -51,7 +51,8 @@ use super::spec::{
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{
-    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, Op, Operand, UnKind,
+    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, NullChain, Op, Operand,
+    UnKind,
 };
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
@@ -346,7 +347,12 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             Some(false) => {}
             None => return DECLINED,
         },
-        Op::JmpNull { a, dst, target } => match jmp_null_in(f, a, dst) {
+        Op::JmpNull {
+            a,
+            dst,
+            target,
+            chain,
+        } => match jmp_null_in(f, a, dst, chain) {
             Some(true) => ip = target as usize,
             Some(false) => {}
             None => return DECLINED,
@@ -1019,11 +1025,12 @@ fn recv_literal_default_in(
             return None;
         }
     }
-    let slot = f.cvs.get(cv as usize)?;
+    let value = crate::call::clone_value(value);
+    let slot = f.cvs.get_mut(cv as usize)?;
     if slot.get().is_some() {
         return None;
     }
-    let old = slot.set(Some(crate::call::clone_value(value)));
+    let old = slot.set(Some(value));
     debug_assert!(old.is_none());
     drop(old);
     Some(at + 2)
@@ -2030,7 +2037,7 @@ fn jmp_set_tmp_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
 /// for an undefined variable and any other operand.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
+fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32, chain: NullChain) -> Option<bool> {
     let Operand::Cv(cv) = a else {
         return None;
     };
@@ -2040,7 +2047,7 @@ fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
         _ => Some(false),
     })?;
     if null {
-        put_tmp(&mut f.tmps[dst as usize], Value::Null);
+        put_tmp(&mut f.tmps[dst as usize], chain.value());
     }
     Some(null)
 }
@@ -2221,7 +2228,7 @@ mod tests {
 /// Scripts through both routes of [`step`]: its inline core ops and the
 /// hot ops it hands to [`step_ext`], in the same loops, and ops whose fast
 /// path declines on either route. Expected output from
-/// `/usr/bin/php -n` (PHP 8.3), paths normalised to `t.php`.
+/// `/usr/bin/php8.5 -n`, paths normalised to `t.php`.
 #[cfg(test)]
 mod route_tests {
     #![allow(clippy::needless_raw_string_hashes)]

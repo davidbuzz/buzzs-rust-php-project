@@ -170,10 +170,13 @@ DirectoryIndex index.php index.html
 </Directory>
 <Directory "{d}/slow">
   php_value max_execution_time 1
+  # php-src master's default is log_errors=0; the timeout is logged when on.
+  php_flag log_errors on
 </Directory>
 <Directory "{d}/sess">
   php_value session.save_path {root}/sessions
   php_flag session.use_strict_mode off
+  php_flag session.upload_progress.enabled on
   php_flag session.upload_progress.cleanup off
   php_value session.upload_progress.freq 0
   php_value session.upload_progress.min_freq 0
@@ -519,10 +522,16 @@ SERVER_PORT={PORT}\nSERVER_PROTOCOL=HTTP/1.1\nSERVER_SIGNATURE=\nSERVER_SOFTWARE
         format!("{:?}", r.headers),
     );
 
-    // HEAD: headers, no body.
+    // HEAD: headers, no body. With `-I` curl writes the header block to
+    // its `-o` file as well; nothing may follow it.
     let r = curl(&root, &[&url("/hello.php"), "-I"]);
     c.eq("HEAD status", &r.status.clone(), "HTTP/1.1 200 OK");
-    c.eq("HEAD body", &r.body.clone(), "");
+    let after_head = r
+        .body
+        .split_once("\r\n\r\n")
+        .map_or(r.body.as_str(), |(_, rest)| rest)
+        .to_string();
+    c.eq("HEAD body", &after_head, "");
     let r = curl(&root, &[&url("/redirect.php")]);
     c.eq("redirect", &r.status.clone(), "HTTP/1.1 302 Found");
     c.eq(

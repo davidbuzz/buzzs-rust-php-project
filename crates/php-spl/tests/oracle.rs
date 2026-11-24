@@ -84,11 +84,17 @@ fn oracle_scripts() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// Rewrites the `.out` files from `/usr/bin/php8.5`. Three lines are then
+/// put back to php-src master's (8.5.12 differs): the class name quoted in
+/// `setIteratorClass()`'s error (`bug80719.phpt`), `fgetcsv()` of a blank
+/// line returning `false` (`fgetcsv_blank_file.phpt`), and the
+/// `SplFileObject::__construct()` / `DirectoryIterator::__construct()`
+/// warning origins without arguments (`error_include_args` off).
 #[test]
-#[ignore = "regenerates the expected outputs with /usr/bin/php"]
+#[ignore = "regenerates the expected outputs with /usr/bin/php8.5"]
 fn regen_oracle() {
     for p in scripts() {
-        let out = std::process::Command::new("/usr/bin/php")
+        let out = std::process::Command::new("/usr/bin/php8.5")
             .args([
                 "-d",
                 "memory_limit=1G",

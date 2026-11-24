@@ -29,11 +29,38 @@ fn dump(src: &str) -> String {
             num_params: 2,
             variadic: true,
             by_ref: 0,
+            param_names: std::rc::Rc::from([]),
         })
     };
     let end = main_line_end(src.as_bytes(), None);
     let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
     let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8")
+}
+
+/// [`dump`] of `src` compiled at the level it is dumped at, as `include.rs`
+/// compiles a script opcache dumps: the optimizer has run on the code.
+fn dump_optimized(src: &str) -> String {
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
     String::from_utf8(dump_unit(
         &unit,
         &table,
@@ -576,6 +603,316 @@ BB0:
     assert_eq!(String::from_utf8(out).expect("utf-8"), expected);
 }
 
+/// `opt/coalesce`: `??` and `??=` of a local nothing has assigned go on to
+/// the next op, which is also where the op (kept: its operand is no
+/// constant) jumps; the variable's first store goes with its last reader.
+#[test]
+fn coalesce_of_an_unassigned_local_goes_on() {
+    let out = dump_optimized(
+        "<?php\nfunction a() {\n    $test = $test ?? true;\n    return $test;\n}\n\
+         function b() {\n    $test ??= true;\n    return $test;\n}\n\
+         function h($x) {\n    if ($x) { echo 1; }\n    $test = $test ?? true;\n    return $test;\n}\n\
+         function p($p) {\n    $x = $p ?? true;\n    return $x;\n}\n\
+         function q($c) {\n    $v = $v ?? 1;\n    if ($c) { $v = 2; }\n    return $v;\n}\n",
+    );
+    let folded = "0000 T1 = COALESCE CV0($test) 0001\n0001 RETURN bool(true)\n";
+    assert_eq!(out.matches(folded).count(), 2, "{out}");
+    assert!(
+        out.contains("0003 T2 = COALESCE CV1($test) 0004\n0004 RETURN bool(true)\n"),
+        "{out}"
+    );
+    // A parameter may hold anything: both paths stay.
+    assert!(
+        out.contains("0001 T2 = COALESCE CV0($p) 0003\n0002 T2 = QM_ASSIGN bool(true)\n"),
+        "{out}"
+    );
+    // A store that a later op reads stays.
+    assert!(out.contains("CV1($v) = QM_ASSIGN int(1)\n"), "{out}");
+}
+
+/// `opt/dce_001`: concatenations of scalar-typed parameters that nothing
+/// reads go, the inner ones with the outer one; an operand that may be an
+/// array or an object keeps its concatenation (it may warn or call
+/// `__toString()`).
+#[test]
+fn dead_concatenations_of_scalars_are_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction foo(string $s1, string $s2, string $s3, string $s4) {\n\
+         $x = ($s1 . $s2) . ($s3 . $s4);\n    $x = 0;\n    return $x;\n}\n",
+    );
+    assert!(out.contains("(lines=5, args=4, vars=4, tmps=0)"), "{out}");
+    assert!(out.contains("0004 RETURN int(0)\n"), "{out}");
+    let kept = [
+        // No declared type.
+        "function foo($s1, string $s2) { $x = $s1 . $s2; $x = 0; return $x; }",
+        // A type that takes an array.
+        "function foo(array|string $s1, string $s2) { $x = $s1 . $s2; $x = 0; return $x; }",
+        // A parameter the function assigns.
+        "function foo(string $s1, string $s2) { $s1 = [$s2]; $x = $s1 . $s2; $x = 0; return $x; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("CONCAT"), "{body}: {out}");
+    }
+}
+
+/// `opt/dce_007`: an array literal that nothing reads goes when building
+/// it can raise nothing; a key after which an append fails, a variable
+/// that may be unassigned (reading it warns) or a key that is no literal
+/// keeps it.
+#[test]
+fn dead_array_builds_are_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction esc($x) {\n    $a = [$x];\n    $b = [$a];\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=3, args=1, vars=2, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 CV1($a) = INIT_ARRAY 1 (packed) CV0($x) NEXT\n0002 RETURN CV1($a)\n"),
+        "{out}"
+    );
+    let out = dump_optimized(
+        "<?php\nfunction f($x) { $b = ['k' => $x, 2 => 1, $x, 'z' => $x]; return $x; }\n",
+    );
+    assert!(!out.contains("INIT_ARRAY"), "{out}");
+    let kept = [
+        // The append after the largest int key throws.
+        "function f($x) { $b = [9223372036854775807 => $x, $x]; return $x; }",
+        // `$u` may be unassigned.
+        "function f($x) { if ($x) { $u = 1; } $b = [$u]; return $x; }",
+        // The key is a variable.
+        "function f($x) { $b = [$x => 1]; return $x; }",
+        // `$x` is unset on the way.
+        "function f($x) { unset($x); $b = [$x]; return 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+    }
+}
+
+/// `opt/dce_009`: a `foreach` over a class constant that is an empty array
+/// leaves nothing; over one with elements it stays.
+#[test]
+fn foreach_over_an_empty_class_constant_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nclass Loop {\n    const VALUES = [];\n    const SOME = [1];\n\
+         public static function test2() {\n        foreach (self::VALUES as $x) {\n        }\n    }\n\
+         public static function kept() {\n        foreach (self::SOME as $x) {\n        }\n    }\n}\n",
+    );
+    let test2 = section_named(&out, "Loop::test2");
+    assert!(test2.contains("(lines=1, args=0, vars=0, tmps=0)"), "{out}");
+    assert!(test2.contains("0000 RETURN null"), "{out}");
+    assert!(
+        section_named(&out, "Loop::kept").contains("FE_RESET_R"),
+        "{out}"
+    );
+}
+
+/// `opt/dce_008`: a store of a locally built array of scalars into an
+/// array nothing reads goes; one of a value that may hold an object, or of
+/// a variable that may be unassigned, stays.
+#[test]
+fn dead_store_of_an_array_of_scalars_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction esc(int $x) {\n    $a[0] = $x;\n    $b[0] = $a;\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=1, vars=2, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ASSIGN_DIM CV1($a) int(0)\n0002 OP_DATA CV0($x)\n0003 RETURN CV1($a)\n"),
+        "{out}"
+    );
+    let kept = [
+        // An untyped parameter may hold an object.
+        "function esc($x) { $a[0] = $x; $b[0] = $a; return $a; }",
+        // `$a` may be unassigned where it is read.
+        "function esc(int $x) { if ($x) { $a[0] = $x; } $b[0] = $a; return $x; }",
+        // `$a` is assigned something else as well.
+        "function esc(int $x) { $a[0] = $x; $a = new stdClass; $b[0] = $a; return $x; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("ASSIGN_DIM CV2($b)"), "{body}: {out}");
+    }
+}
+
+/// `opt/sccp_005`, `opt/sccp_002`: an array literal with an element that
+/// is no constant is known in its other elements, and so is what a store
+/// under a literal key puts there; with every read a literal, the array
+/// goes. An element under a key the build does not fix, or one a later
+/// element replaces, is not known.
+#[test]
+fn array_literal_with_a_variable_is_partly_known() {
+    let out =
+        dump_optimized("<?php\nfunction foo(int $x) {\n    $a = [1,2,$x];\n    echo $a[1];\n}\n");
+    assert!(out.contains("(lines=3, args=1, vars=1, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ECHO string(\"2\")\n0002 RETURN null\n"),
+        "{out}"
+    );
+    let out = dump_optimized(
+        "<?php\nfunction foo(int $x) {\n    $a = [$x];\n    $i = 1;\n    $c = $i < 2;\n    if ($c) {\n        $k = 2 * $i;\n        $a[$k] = $i;\n        echo $a[$k];\n    }\n    echo $a[2];\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=1, vars=1, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0001 ECHO string(\"1\")\n0002 ECHO string(\"1\")\n0003 RETURN null\n"),
+        "{out}"
+    );
+    let kept = [
+        // The element read is the one that is not known.
+        "function foo(int $x) { $a = [1, 2, $x]; echo $a[2]; }",
+        // A key that is no literal may be any key.
+        "function foo(int $x) { $a = [1, $x => 5, 3]; echo $a[0]; }",
+        // The known element is replaced by one that is not.
+        "function foo(int $x) { $a = [1 => 7, 1 => $x]; echo $a[1]; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("FETCH_DIM_R"), "{body}: {out}");
+    }
+    // A later literal under the key of an unknown element is known again.
+    let out =
+        dump_optimized("<?php\nfunction foo(int $x) { $a = [1 => $x, 1 => 7]; echo $a[1]; }\n");
+    assert!(out.contains("ECHO string(\"7\")"), "{out}");
+}
+
+/// What goes with an array nothing reads: an append only with a constant
+/// value and room for it. php-src keeps `ASSIGN_DIM ... NEXT` of a value it
+/// does not know, and the append after the largest int key throws.
+#[test]
+fn unread_append_stays_unless_constant_and_safe() {
+    for (body, kept) in [
+        ("$a = [$x]; $a[] = 1;", false),
+        ("$a = [1, 2]; $a[] = $x;", true),
+        ("$a = [9223372036854775807 => 5]; $a[] = 1;", true),
+        ("$a[5] = $x; $a[] = 1;", false),
+        ("$a = []; $a[] = $x;", true),
+        ("$a = [1, 2]; $a[] = 3;", false),
+        ("$a = [9223372036854775807 => $x]; $a[] = 1;", true),
+        ("$a = [1]; $a[9223372036854775807] = $x; $a[] = 1;", true),
+        ("$a = [1]; $a['9223372036854775807'] = $x; $a[] = 1;", true),
+    ] {
+        let out = dump_optimized(&format!(
+            "<?php
+function f(int $x) {{ {body} }}
+"
+        ));
+        assert_eq!(out.contains("ASSIGN_DIM"), kept, "{body}: {out}");
+    }
+}
+
+/// GH-24063: `0.0` and `-0.0` are identical (`===`) but two constants: a
+/// join of the two knows no element, whichever way the arrays were made.
+#[test]
+fn signed_zeros_are_two_constants() {
+    for body in [
+        "function f(float $n) { if ($n < 0) { $a['k'] = -0.0; } else { $a['k'] = 0.0; } return $a['k']; }",
+        "function f(float $n) { if ($n < 0) { $a = [1, -0.0]; } else { $a = [1, 0.0]; } return $a[1]; }",
+        "function f(float $n, $x) { $a = ['x' => $x]; if ($n < 0) { $a['k'] = -0.0; } else { $a['k'] = 0.0; } return $a['k']; }",
+        "function f(float $n) { $a = [5]; if ($n < 0) { $a[1] = [-0.0, 2]; } else { $a[1] = [0.0, 2]; } return $a[1][0]; }",
+    ] {
+        let out = dump_optimized(&format!("<?php
+{body}
+"));
+        assert!(out.contains("FETCH_DIM_R"), "{body}: {out}");
+    }
+    // The same zero on both paths is one constant.
+    let out = dump_optimized(
+        "<?php
+function f(float $n) { if ($n < 0) { $a = [1, -0.0]; } else { $a = [2, -0.0]; } return $a[1]; }
+",
+    );
+    assert!(out.contains("RETURN float(-0)"), "{out}");
+}
+
+/// `opt/dce_004`: an array a variable holds only until the next assignment
+/// replaces it goes, with the element stores into it; one that is read
+/// first, holds a value that may be an object, or is replaced on one path
+/// only, stays.
+#[test]
+fn array_replaced_before_it_is_read_is_dropped() {
+    let out = dump_optimized(
+        "<?php\nfunction foo(int $x, int $y) {\n    $a = [$x];\n    $a[1] = $y;\n    $a = $y;\n    return $a;\n}\n",
+    );
+    assert!(out.contains("(lines=4, args=2, vars=3, tmps=0)"), "{out}");
+    assert!(
+        out.contains("0002 CV2($a) = QM_ASSIGN CV1($y)\n0003 RETURN CV2($a)\n"),
+        "{out}"
+    );
+    let kept = [
+        // Read before it is replaced.
+        "function foo(int $x, int $y) { $a = [$x]; $a[1] = $y; $b = count($a); $a = $y; return $a + $b; }",
+        // An untyped parameter may hold an object.
+        "function foo($x, int $y) { $a = [$x]; $a[1] = $y; $a = $y; return $a; }",
+        // Replaced on one path only.
+        "function foo(int $x, int $y) { $a = [$x]; $a[1] = $y; if ($x) { $a = $y; } return $a; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+    }
+}
+
+/// `opt/sccp_017`, `opt/sccp_019`: once the read of a known element is a
+/// literal, the copy of the locally built array and both arrays' element
+/// stores go; a copy of a variable that may be unassigned (the read warns)
+/// or may hold an object stays.
+#[test]
+fn dead_copies_of_an_array_of_scalars_are_dropped() {
+    for body in [
+        "$a[0] = 5; $a[1] = $x; $b = $a; return $b[0];",
+        "$a[0] = 5; $a[1] = $x; $b = $a; $b[0] = 42; return $a[0];",
+    ] {
+        let out = dump_optimized(&format!("<?php\nfunction foo(int $x) {{ {body} }}\n"));
+        assert!(
+            out.contains("(lines=2, args=1, vars=1, tmps=0)"),
+            "{body}: {out}"
+        );
+        assert!(out.contains("0001 RETURN int(5)\n"), "{body}: {out}");
+    }
+    let kept = [
+        // `$a` may be unassigned where it is copied.
+        "function foo(int $x) { if ($x) { $a[0] = 5; } $b = $a; return $x; }",
+        // An untyped parameter may hold an object.
+        "function foo($x) { $a[0] = $x; $b = $a; return 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("CV2($b)"), "{body}: {out}");
+    }
+}
+
+/// An array literal that may be the last holder of an object keeps its
+/// store, even into a variable nothing reads (the object lives to the end
+/// of the function in PHP); one built from variables that keep their
+/// values to the end does not.
+#[test]
+fn array_literal_holding_an_object_keeps_its_store() {
+    let kept = [
+        // The array is the object's only holder.
+        "function f() { $a = [new stdClass]; echo 1; }",
+        // `$o` gives its handle up before the end.
+        "function f($o) { $b = [$o]; $o = null; echo 1; }",
+        "function f() { $o = new stdClass; $b = ['k' => $o]; unset($o); echo 1; }",
+        // An array of such an array.
+        "function f() { $a = [new stdClass]; $b = [$a]; $a = null; echo 1; }",
+    ];
+    for body in kept {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(out.contains("INIT_ARRAY"), "{body}: {out}");
+        assert!(!out.contains("FREE"), "{body}: {out}");
+    }
+    let dropped = [
+        // A parameter the function never writes keeps its value.
+        "function f($x) { $b = [$x]; echo 1; }",
+        // So does a local assigned once, before.
+        "function f($x) { $a = [$x]; $b = [$a]; return $a; }",
+    ];
+    for body in dropped {
+        let out = dump_optimized(&format!("<?php\n{body}\n"));
+        assert!(!out.contains("($b)"), "{body}: {out}");
+    }
+}
+
 /// Without the DFA bits, or without passes 6 and 7, nothing is dumped.
 #[test]
 fn ssa_dump_needs_the_dfa_pass() {
@@ -595,4 +932,247 @@ fn ssa_dump_needs_the_dfa_pass() {
         super::DUMP_BEFORE_DFA_PASS
     )
     .is_empty());
+}
+
+/// `zend_emit_jmp_null()` on the variable itself and
+/// `zend_short_circuiting_commit()`: every `JMP_NULL` of a chain writes the
+/// result of its last instruction, which under `isset()` is the
+/// `ISSET_ISEMPTY_PROP_OBJ` (and the jump gives `false`).
+#[test]
+fn nullsafe_jumps_write_the_chain_result() {
+    let out = dump("<?php\nfunction f($o) { return isset($o?->next?->foo); }\n");
+    let s = section(&out, "f:");
+    assert!(
+        s.contains(
+            "0001 T1 = JMP_NULL CV0($o) 0005\n\
+             0002 T2 = FETCH_OBJ_IS CV0($o) string(\"next\")\n\
+             0003 T1 = JMP_NULL T2 0005\n\
+             0004 T1 = ISSET_ISEMPTY_PROP_OBJ (isset) T2 string(\"foo\")\n\
+             0005 RETURN T1\n"
+        ),
+        "{s}"
+    );
+    let out = dump("<?php\nfunction f($o) { return $o?->foo; }\n");
+    let s = section(&out, "f:");
+    assert!(
+        s.contains(
+            "0001 T1 = JMP_NULL CV0($o) 0003\n\
+             0002 T1 = FETCH_OBJ_R CV0($o) string(\"foo\")\n\
+             0003 RETURN T1\n"
+        ),
+        "{s}"
+    );
+}
+
+/// A chain on a variable known to be null is skipped: the use reads the
+/// value it gives (`sccp.c`'s `ZEND_JMP_NULL` result and edge).
+#[test]
+fn known_null_chains_fold() {
+    let out = dump_optimized(
+        "<?php\nfunction f() { $n = null; return $n?->m()->foo; }\n\
+         function g() { $n = null; return empty($n?->foo); }\n",
+    );
+    let has = |f: &str, line: &str| section(&out, f).lines().any(|l| l == line);
+    assert!(has("f:", "0000 RETURN null"), "{out}");
+    assert!(has("g:", "0000 RETURN bool(true)"), "{out}");
+}
+
+/// `place_essa_pis()`: the fall-through edge of a `JMP_NULL` of a CV
+/// narrows the variable to non-null, so the fetch reads an object.
+#[test]
+fn jmp_null_places_a_pi_on_the_fall_through_edge() {
+    let src = "<?php\nclass T { public int $p; }\nfunction f(?T $t) { var_dump($t?->p); }\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let out = String::from_utf8(super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        super::DUMP_BEFORE_DFA_PASS,
+    ))
+    .expect("utf-8");
+    assert!(
+        out.contains(
+            " = Pi<BB0>(#1.CV0($t) [null, object (instanceof T)] & TYPE [ref, bool, long, \
+             double, string, array of [any, ref], object, resource])\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("[null] = JMP_NULL"), "{out}");
+}
+
+/// `zend_compile_args_ex` with a known function: named arguments in order
+/// are positional; one out of order stays named (with the parameter's
+/// send mode), the `INIT_*` count is the positional ones, and
+/// `CHECK_UNDEF_ARGS` precedes the call.
+#[test]
+fn named_arguments_resolve_against_a_known_function() {
+    let out = dump(
+        "<?php\nfunction f($a, $b = 2, &$c = null) { return $a; }\n\
+         function t1() { return f(a: 1); }\n\
+         function t2() { return f(b: 5, a: 1); }\n\
+         function t3($v) { return f(1, c: $v); }\n\
+         function t4() { return unknown_fn(a: 1); }\n",
+    );
+    let s = section(&out, "t1:");
+    assert!(
+        s.contains("0000 INIT_FCALL 1 ") && s.contains("0001 SEND_VAL int(1) 1\n"),
+        "{s}"
+    );
+    let s = section(&out, "t2:");
+    assert!(
+        s.contains("0000 INIT_FCALL 0 ")
+            && s.contains(
+                "0001 SEND_VAL int(5) string(\"b\")\n\
+                 0002 SEND_VAL int(1) string(\"a\")\n\
+                 0003 CHECK_UNDEF_ARGS\n"
+            ),
+        "{s}"
+    );
+    let s = section(&out, "t3:");
+    assert!(
+        s.contains("0001 INIT_FCALL 1 ")
+            && s.contains("0003 SEND_REF CV0($v) string(\"c\")\n0004 CHECK_UNDEF_ARGS\n"),
+        "{s}"
+    );
+    let s = section(&out, "t4:");
+    assert!(
+        s.contains(
+            "0000 INIT_FCALL_BY_NAME 0 string(\"unknown_fn\")\n\
+             0001 SEND_VAL_EX int(1) string(\"a\")\n\
+             0002 CHECK_UNDEF_ARGS\n"
+        ),
+        "{s}"
+    );
+}
+
+/// `zend_ssa_escape_analysis`: an array only a local variable holds does
+/// not escape (`NOESC`, with the types `assign_dim_array_result_type`
+/// gives it); a returned one does.
+#[test]
+fn local_arrays_do_not_escape() {
+    let src = "<?php\nfunction f(int $p, int $k) { $a = [$p]; $r = ($a[$k] += 1); return $r; }\n\
+               function g(int $p) { $a = [$p]; return $a; }\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let out = String::from_utf8(super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        super::DUMP_AFTER_DFA_PASS,
+    ))
+    .expect("utf-8");
+    let f = section(&out, "f:");
+    assert!(
+        f.contains("NOESC [[packed, hash] array [long] of [long]] = INIT_ARRAY 1 (packed)"),
+        "{f}"
+    );
+    assert!(
+        f.contains("NOVAL NOESC [[packed, hash] array [long] of [long, double]]"),
+        "{f}"
+    );
+    assert!(f.contains("; return  [long, double]"), "{f}");
+    let g = section(&out, "g:");
+    assert!(g.contains("INIT_ARRAY") && !g.contains("NOESC"), "{g}");
+}
+
+/// The block pass assembles the live blocks only (`zend_optimize_cfg`,
+/// `zend_mark_reachable_blocks`): after an endless loop in a `try` the
+/// `FAST_CALL` and the return go, while the `finally` block and its
+/// `FAST_RET` stay live through the exception path. Without pass 9 the
+/// temporaries keep `zend_compile`'s numbers: the `BOOL_NOT` folded into
+/// the jump and the `finally` variable allocated where the `try` starts.
+#[test]
+fn block_pass_keeps_only_live_blocks() {
+    let src = "<?php\nif (!isset($badvar)) {\n    throw new Exception(\"a\");\n}\n\
+               try {\n    while (true) { }\n} finally {\n    throw new Exception(\"b\");\n}\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::PASS_5;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    assert!(out.contains("0001 JMPNZ T1 0006\n0002 T3 = NEW 1"), "{out}");
+    assert!(out.contains("0006 JMP 0006\n0007 T6 = NEW 1"), "{out}");
+    assert!(out.contains("0011 FAST_RET T5\nEXCEPTION TABLE:"), "{out}");
+    assert!(!out.contains("RETURN"), "{out}");
+}
+
+/// The block pass sends an `||` / `&&` chain's jumps where their results
+/// lead, and SCCP knows a variable's type on the edges of a jump on its
+/// `TYPE_CHECK`: on the right side of `!is_string($v) || ...` `$v` is a
+/// string, `is_object($v)` is false and the call behind it is dead
+/// (`opt/sccp_026`).
+#[test]
+fn type_checks_narrow_on_their_edges() {
+    let src = "<?php\nfunction t($var) {\n    if (!is_string($var) || (is_object($var) && !method_exists($var, '__toString'))) {\n        return;\n    }\n    var_dump($username);\n}\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        // `is_string()` & co. are registered builtins: `TYPE_CHECK`.
+        special_builtins: u32::MAX,
+        ..CompileOptions::default()
+    };
+    // `method_exists()` takes its arguments by value: the variable cannot
+    // become a reference there.
+    let table = |lc: &[u8]| {
+        matches!(lc, b"method_exists" | b"var_dump").then_some(FunctionInfo {
+            internal: true,
+            required: 1,
+            num_params: 2,
+            variadic: lc == b"var_dump",
+            by_ref: 0,
+            param_names: std::rc::Rc::from([]),
+        })
+    };
+    let unit =
+        crate::compiler::compile_with_functions(&program, Rc::from(src.as_bytes()), opts, &table)
+            .expect("compile");
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    let s = section(&out, "t:");
+    assert!(
+        s.contains(
+            "0001 T2 = TYPE_CHECK (string) CV0($var)\n0002 JMPZ T2 0004\n0003 JMP 0005\n0004 RETURN null\n"
+        ),
+        "{s}"
+    );
+    assert!(!s.contains("method_exists"), "{s}");
 }

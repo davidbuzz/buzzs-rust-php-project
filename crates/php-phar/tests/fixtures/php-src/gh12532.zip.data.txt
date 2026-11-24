@@ -6,4 +6,4 @@ compressed: false
 format: zip
 metadata: NONE
 stub: d41d8cd98f00b204e9800998ecf8427e 0
-entry sample.txt dir=0 size=13 perms=100666 mtime=1680255860 csize=15 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=59ca0efa9f5633cb0371bbc0355478d8
+entry sample.txt dir=0 size=13 perms=100666 mtime=1680284661 csize=15 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=59ca0efa9f5633cb0371bbc0355478d8

@@ -1150,7 +1150,7 @@ mod tests {
 
     /// `zend_version()` and `dirname()` are evaluated at compile time
     /// (ext/opcache/tests/zend_version.phpt, ct_eval_frameless_001.phpt);
-    /// expectations from `/usr/bin/php`.
+    /// expectations from `/usr/bin/php8.5`.
     #[test]
     fn zend_version_and_dirname_are_evaluated() {
         assert!(matches!(

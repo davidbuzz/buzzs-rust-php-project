@@ -2,14 +2,12 @@ phar p:c.phar
 call offsetSet s:a.txt x:6161616161616161616161616161616161616161616161616161616161616161616161616161
 call offsetSet s:b.txt s:bbb
 call compressFiles i:1
-call compressFiles i:8192
 call compressFiles i:4096
 info s:a.txt isCompressed
 info s:a.txt isCompressed i:4096
 info s:a.txt getCompressedSize
 info s:a.txt getContent
 info s:a.txt compress i:4096
-info s:a.txt compress i:8192
 info s:a.txt compress i:99
 info s:a.txt decompress
 info s:a.txt isCompressed

@@ -54,9 +54,28 @@ fn meet_cv(a: CvLattice, b: CvLattice, literals: &mut Vec<Value>) -> CvLattice {
     }
 }
 
-/// The elements two array literals share, key and identical value
-/// (sccp.c `join_partial_arrays`), as an array literal; `None` unless both
-/// are arrays.
+/// Whether two constants are the same value to the propagation (sccp.c
+/// `sccp_values_differ`): as `===`, but `0.0` and `-0.0` are two values
+/// (`===` holds them equal, and a join that kept one of them for both
+/// paths gave the wrong sign on the other, GH-24063), in an array as well;
+/// arrays are the same with the same keys and the same values in the same
+/// order.
+fn same_constant(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|((ka, va), (kb, vb))| ka == kb && same_constant(va, vb))
+        }
+        _ => php_runtime::ops::is_identical(a, b).unwrap_or(false),
+    }
+}
+
+/// The elements two array literals share, key and same value
+/// ([`same_constant`]; sccp.c `join_partial_arrays`), as an array literal;
+/// `None` unless both are arrays.
 fn common_elements(literals: &mut Vec<Value>, l1: u32, l2: u32) -> Option<u32> {
     let (Some(Value::Array(a)), Some(Value::Array(b))) =
         (literals.get(l1 as usize), literals.get(l2 as usize))
@@ -66,9 +85,7 @@ fn common_elements(literals: &mut Vec<Value>, l1: u32, l2: u32) -> Option<u32> {
     let mut common = ZArray::new();
     let h = common.make_mut();
     for (k, v) in a.iter() {
-        if b.get(k)
-            .is_some_and(|w| php_runtime::ops::is_identical(v, w).unwrap_or(false))
-        {
+        if b.get(k).is_some_and(|w| same_constant(v, w)) {
             h.insert(k.clone(), v.clone());
         }
     }
@@ -396,6 +413,69 @@ fn plain_cv_update(
     Some((cv, res.map(|v| add_or_find_literal(literals, v))))
 }
 
+/// `$cv[k] op= v` and `++$cv[k]` & co. (one dimension, CV base): the CV and,
+/// when the CV holds a known array with a known element under a literal or
+/// known key, and `v` is known, the literals of the new array and of the
+/// new element. `(cv, None)` when the result is not known.
+fn dim_cv_update(
+    op: &Op,
+    places: &[Place],
+    cur_state: &[CvLattice],
+    literals: &mut Vec<Value>,
+) -> Option<(u32, Option<(u32, u32)>)> {
+    let place = match op {
+        Op::AssignOp { place, .. } | Op::IncDec { place, .. } => *place,
+        _ => return None,
+    };
+    let p = places.get(place as usize)?;
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    let [Seg::Dim(k)] = p.segs.as_slice() else {
+        return None;
+    };
+    let CvLattice::Const(cur) = *cur_state.get(cv as usize)? else {
+        return Some((cv, None));
+    };
+    let new = (|| {
+        let Value::Array(arr) = literals.get(cur as usize)? else {
+            return None;
+        };
+        let key = match literals.get(cv_or_lit(k, cur_state)? as usize)? {
+            Value::Int(n) => ArrayKey::Int(*n),
+            Value::Str(s) => ArrayKey::from_zstr(s),
+            _ => return None,
+        };
+        let elem = arr.get(&key)?.clone();
+        let res = match op {
+            Op::AssignOp { op: bop, val, .. } => {
+                let rhs = literals.get(cv_or_lit(val, cur_state)? as usize)?.clone();
+                fold_bin_op(BinKind::Arith(*bop), &elem, &rhs)?
+            }
+            Op::IncDec { kind, .. } => match elem {
+                Value::Int(i) => Value::Int(match kind {
+                    IncDecKind::PreInc | IncDecKind::PostInc => i.checked_add(1)?,
+                    IncDecKind::PreDec | IncDecKind::PostDec => i.checked_sub(1)?,
+                }),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut arr = arr.clone();
+        arr.make_mut().insert(key, res.clone());
+        Some((arr, res))
+    })();
+    Some((
+        cv,
+        new.map(|(arr, res)| {
+            (
+                add_or_find_array_literal(literals, arr),
+                add_or_find_literal(literals, res),
+            )
+        }),
+    ))
+}
+
 /// The literal of `operand` when it is a literal or a CV with a known
 /// constant.
 fn cv_or_lit(operand: &Operand, cur_state: &[CvLattice]) -> Option<u32> {
@@ -409,14 +489,16 @@ fn cv_or_lit(operand: &Operand, cur_state: &[CvLattice]) -> Option<u32> {
     }
 }
 
-/// The literal index of an array equal (`===`) to `arr`, adding it when
-/// there is none, so the dataflow sees the same constant on every visit
-/// (a fresh index for an identical array would meet as overdefined).
+/// The literal index of an array that is the same constant as `arr`
+/// ([`same_constant`]), adding it when there is none, so the dataflow sees
+/// the same constant on every visit (a fresh index for the same array
+/// would meet as overdefined).
 fn add_or_find_array_literal(literals: &mut Vec<Value>, arr: ZArray) -> u32 {
     let val = Value::Array(arr);
-    if let Some(i) = literals.iter().position(|l| {
-        matches!(l, Value::Array(_)) && php_runtime::ops::is_identical(l, &val).unwrap_or(false)
-    }) {
+    if let Some(i) = literals
+        .iter()
+        .position(|l| matches!(l, Value::Array(_)) && same_constant(l, &val))
+    {
         return u32::try_from(i).unwrap_or(u32::MAX);
     }
     add_or_find_literal(literals, val)
@@ -503,6 +585,17 @@ fn single_dim_store<'a>(op: &Op, places: &'a [Place]) -> Option<(u32, &'a Operan
 /// container of a one-dimension store, which [`partial_assign_dim`]
 /// handles: only ops this analysis understands keep a CV undefined.
 fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
+    // `COALESCE` reads its variable without a warning and leaves it as it
+    // is.
+    if matches!(
+        op,
+        Op::Coalesce {
+            a: Operand::Cv(_),
+            ..
+        }
+    ) {
+        return;
+    }
     let own = single_dim_store(op, places).map(|(cv, _)| cv);
     let mut named = Vec::new();
     let mut op = op.clone();
@@ -516,6 +609,54 @@ fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
             }
         }
     }
+}
+
+/// Whether a `COALESCE` of `a` always goes on to the next op, its result
+/// not written: the operand is a variable no path has assigned (`state`
+/// at the op), or null (sccp.c `sccp_mark_feasible_successors`: successor
+/// 1 for a null operand).
+fn coalesce_falls_through(a: Operand, state: &[CvLattice], literals: &[Value]) -> bool {
+    let null = |l: u32| matches!(literals.get(l as usize), Some(Value::Null));
+    match a {
+        Operand::Cv(cv) => match state.get(cv as usize) {
+            Some(CvLattice::Undef) => true,
+            Some(CvLattice::Const(l)) => null(*l),
+            _ => false,
+        },
+        Operand::Lit(l) => null(l),
+        _ => false,
+    }
+}
+
+/// Gives the result of each `COALESCE` at `at` a temporary of its own
+/// when another op writes or reads the one it has. These ops read a
+/// variable no path has assigned: they go on to the next op without
+/// writing their result, and php-src keeps them, the variable being no
+/// constant operand (opt/coalesce: `T1 = COALESCE CV0($test) 0001`). With
+/// the result apart, the temporary has the one definition the other path
+/// makes, which the propagation of temporaries then follows.
+fn own_coalesce_results(op_array: &mut OpArray, at: &[usize]) -> bool {
+    let mut changed = false;
+    for &i in at {
+        let Some(&Op::Coalesce { dst, .. }) = op_array.ops.get(i) else {
+            continue;
+        };
+        let n = op_array.num_tmps as usize;
+        let (mut uses, mut defs) = (vec![0u32; n], vec![0u32; n]);
+        super::count_tmp_uses(op_array, &mut uses);
+        super::dce::count_defs(op_array, &mut defs);
+        let alone = uses.get(dst as usize) == Some(&0) && defs.get(dst as usize) == Some(&1);
+        if alone {
+            continue;
+        }
+        let fresh = op_array.num_tmps;
+        op_array.num_tmps += 1;
+        if let Some(Op::Coalesce { dst, .. }) = op_array.ops.get_mut(i) {
+            *dst = fresh;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `$cv[k] = v` with a known integer or string key on a CV that is
@@ -578,6 +719,255 @@ fn partial_assign_dim(
     ))
 }
 
+/// sccp.c `ct_eval_array_key_exists` (through `fetch_array_elem`): whether
+/// `key` is a key of the known `array`, or `None` when that is left to run
+/// time: a null key, a float that is not an integer, another type.
+fn fold_key_exists(key: &Value, array: &Value) -> Option<bool> {
+    let Value::Array(arr) = array else {
+        return None;
+    };
+    Some(match key {
+        Value::Bool(b) => arr.get_int(i64::from(*b)).is_some(),
+        Value::Int(i) => arr.get_int(*i).is_some(),
+        // `zend_dval_to_lval_silent` + `zend_is_long_compatible`.
+        Value::Float(f) => {
+            if f.fract() != 0.0
+                || !(-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(f)
+            {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation)] // integral and in range
+            let l = *f as i64;
+            arr.get_int(l).is_some()
+        }
+        Value::Str(s) => arr.get_sym(s.as_bytes()).is_some(),
+        _ => return None,
+    })
+}
+
+/// `in_array($needle, $haystack[, $strict])` at `i` (its `InitFCall`)
+/// whose haystack is a known array and whose `strict` argument, if there
+/// is one, a known value: the call becomes `ZEND_IN_ARRAY` over the set of
+/// the array's values, where its `DoCall` stood (`zend_dfa_optimize_calls`
+/// of php-src's DFA pass). As there, the set is the values as keys:
+/// strings and ints for a strict search; for a loose one strings only,
+/// none of them an integer in digits (`ZEND_HANDLE_NUMERIC`: its loose
+/// comparison with a number is no byte comparison). The call is
+/// straight-line (only `Nop`s between its steps), each argument a value or
+/// a plain variable (which `in_array()` takes by value); the function is
+/// the global one, resolved at compile time and not disabled. `false`,
+/// nothing changed, for anything else.
+fn in_array_call(op_array: &mut OpArray, i: usize, state: &[CvLattice]) -> bool {
+    let Some(Op::InitFCall {
+        name,
+        fallback: None,
+        ..
+    }) = op_array.ops.get(i)
+    else {
+        return false;
+    };
+    let named = matches!(
+        op_array.literals.get(*name as usize),
+        Some(Value::Str(f)) if f.as_bytes().eq_ignore_ascii_case(b"in_array")
+    );
+    if !named || super::is_disabled_function(b"in_array") {
+        return false;
+    }
+    let mut args = Vec::new();
+    let mut call = None;
+    for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+        match op {
+            Op::Nop => {}
+            Op::Send { src } if args.len() < 3 => {
+                let arg = match src {
+                    ArgSrc::Val(arg) => *arg,
+                    // A variable: the function takes it by value.
+                    ArgSrc::Place(place) => match plain_cv(&op_array.places, *place) {
+                        Some(cv) => Operand::Cv(cv),
+                        None => break,
+                    },
+                    _ => break,
+                };
+                args.push((j, arg));
+            }
+            Op::DoCall { dst } => {
+                call = Some((j, *dst));
+                break;
+            }
+            _ => break,
+        }
+    }
+    let (Some((at, dst)), [(_, needle), (_, haystack), rest @ ..]) = (call, &args[..]) else {
+        return false;
+    };
+    let literal = |o: &Operand| op_array.literals.get(cv_or_lit(o, state)? as usize);
+    let strict = match rest {
+        [] => false,
+        [(_, flag)] => match literal(flag).and_then(const_truthiness) {
+            Some(strict) => strict,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let Some(Value::Array(haystack)) = literal(haystack) else {
+        return false;
+    };
+    let mut set = php_runtime::HashTable::with_capacity(haystack.len());
+    for v in haystack.values() {
+        let key = match v {
+            Value::Str(s) if strict => ArrayKey::Str(s.clone()),
+            Value::Str(s) => match ArrayKey::from_zstr(s) {
+                key @ ArrayKey::Str(_) => key,
+                ArrayKey::Int(_) => return false,
+            },
+            Value::Int(n) if strict => ArrayKey::Int(*n),
+            _ => return false,
+        };
+        // A value listed twice is one key (`zend_hash_add` fails quietly).
+        let _ = set.add(key, Value::Bool(true));
+    }
+    let Ok(set_lit) = u32::try_from(op_array.literals.len()) else {
+        return false;
+    };
+    let needle = *needle;
+    let steps: Vec<usize> = args.iter().map(|(j, _)| *j).collect();
+    op_array
+        .literals
+        .push(Value::Array(ZArray::from_table(set)));
+    op_array.ops[i] = Op::Nop;
+    for j in steps {
+        op_array.ops[j] = Op::Nop;
+    }
+    op_array.ops[at] = Op::InArray {
+        a: needle,
+        set: set_lit,
+        strict,
+        dst,
+    };
+    true
+}
+
+/// Whether `op` reads, writes or adds to the temporary `t`.
+fn names_tmp(op: &Op, places: &[Place], t: u32) -> bool {
+    let is = |o: &Operand| matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
+    let mut op = op.clone();
+    let mut named = super::def_tmp(&op) == Some(t)
+        || super::array_build_tmp_mut(&mut op).is_some_and(|a| *a == t);
+    for_each_operand_mut(&mut op, |o| named |= is(o));
+    super::compact::for_each_op_place(&op, |p| {
+        if let Some(place) = places.get(p as usize) {
+            for_each_place_operand_mut(&mut place.clone(), |o| named |= is(o));
+        }
+    });
+    named
+}
+
+/// The array literals a variable is assigned as they are built (`$v = [1,
+/// 2, $x]`): by the op of each such assignment, the literal of the elements
+/// the build certainly gives. sccp.c evaluates `INIT_ARRAY` and
+/// `ADD_ARRAY_ELEMENT` on partial arrays the same way: an element whose
+/// value is not known makes its key unknown, and the variable holds an
+/// array either way. Only a build in one straight line (`leaders`: no jump
+/// into it or out of it) that goes to the variable at once, each element by
+/// value, appended or under an int or string literal key (another key type
+/// may deprecate; an append past `PHP_INT_MAX` throws). A build of
+/// constants alone is one literal before this runs
+/// ([`fold_const_array_builds`]).
+fn partial_array_builds(
+    op_array: &mut OpArray,
+    leaders: &[bool],
+) -> std::collections::HashMap<usize, u32> {
+    let mut built = std::collections::HashMap::new();
+    for start in 0..op_array.ops.len() {
+        let Op::InitArray { dst: tmp } = op_array.ops[start] else {
+            continue;
+        };
+        let mut arr = ZArray::new();
+        // The keys whose element is not known (a placeholder holds each
+        // one's position meanwhile).
+        let mut unknown: Vec<ArrayKey> = Vec::new();
+        let mut taken = None;
+        for at in start + 1..op_array.ops.len() {
+            if leaders.get(at).copied().unwrap_or(true) {
+                break;
+            }
+            match &op_array.ops[at] {
+                Op::ArrayAdd {
+                    arr: into,
+                    key,
+                    val,
+                } if *into == tmp => {
+                    let known = match val {
+                        Operand::Lit(lit) => op_array.literals.get(*lit as usize).cloned(),
+                        _ => None,
+                    };
+                    let is_known = known.is_some();
+                    let value = known.unwrap_or(Value::Null);
+                    let table = arr.make_mut();
+                    let at_key = match key {
+                        None => match table.push(value) {
+                            Ok(index) => ArrayKey::Int(index),
+                            Err(_) => break,
+                        },
+                        Some(Operand::Lit(lit)) => {
+                            let fixed = match op_array.literals.get(*lit as usize) {
+                                Some(Value::Int(n)) => ArrayKey::Int(*n),
+                                Some(Value::Str(s)) => ArrayKey::from_zstr(s),
+                                _ => break,
+                            };
+                            table.insert(fixed.clone(), value);
+                            fixed
+                        }
+                        Some(_) => break,
+                    };
+                    unknown.retain(|other| *other != at_key);
+                    if !is_known {
+                        unknown.push(at_key);
+                    }
+                }
+                Op::AssignCv {
+                    val: Operand::Tmp(from),
+                    dst: None,
+                    ..
+                } if *from == tmp => {
+                    taken = Some(at);
+                    break;
+                }
+                other => {
+                    if names_tmp(other, &op_array.places, tmp) {
+                        break;
+                    }
+                }
+            }
+        }
+        let Some(at) = taken else {
+            continue;
+        };
+        let table = arr.make_mut();
+        for key in &unknown {
+            table.remove(key);
+        }
+        built.insert(at, add_or_find_array_literal(&mut op_array.literals, arr));
+    }
+    built
+}
+
+/// After [`update_cv_state_for_op`] of the op at `at`: the variable an
+/// array build goes to there ([`partial_array_builds`]) holds its known
+/// elements.
+fn take_built(
+    built: &std::collections::HashMap<usize, u32>,
+    at: usize,
+    op: &Op,
+    cur_state: &mut [CvLattice],
+) {
+    if let (Some(&lit), Op::AssignCv { cv, .. }) = (built.get(&at), op) {
+        if let Some(slot) = cur_state.get_mut(*cv as usize) {
+            *slot = CvLattice::Partial(lit);
+        }
+    }
+}
+
 fn update_cv_state_for_op(
     op: &Op,
     places: &[crate::opcode::Place],
@@ -603,6 +993,12 @@ fn update_cv_state_for_op(
     if let Some((cv, lit)) = const_assign_dim(op, places, cur_state, literals) {
         if let Some(slot) = cur_state.get_mut(cv as usize) {
             *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
+            return;
+        }
+    }
+    if let Some((cv, new)) = dim_cv_update(op, places, cur_state, literals) {
+        if let Some(slot) = cur_state.get_mut(cv as usize) {
+            *slot = new.map_or(CvLattice::Bottom, |(arr, _)| CvLattice::Const(arr));
             return;
         }
     }
@@ -935,9 +1331,6 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
         | Op::BindStatic { .. }
         | Op::InitStatic { .. }
         | Op::FeReset { place: Some(_), .. }
-        | Op::Send {
-            src: ArgSrc::Place(_),
-        }
         | Op::SendNamed {
             src: ArgSrc::Place(_),
             ..
@@ -949,12 +1342,63 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
         _ => false,
     });
     ref_op
+        || place_sends_may_bind(op_array, ctx)
         || op_array.places.iter().any(|place| {
             matches!(
                 place.base,
                 PlaceBase::VarVar(_) | PlaceBase::Global(_) | PlaceBase::GlobalsArray
             )
         })
+}
+
+/// Whether a variable sent as a place (`f($v)`, `f($a[0])`) may be bound
+/// by reference: its callee is not known when the code is compiled
+/// ([`OptContext::known`]), or takes that argument by reference. Any other
+/// such send only reads (php-src's `SEND_VAR`, where an unknown callee
+/// makes it `SEND_VAR_EX` and a by-reference parameter `SEND_REF`).
+fn place_sends_may_bind(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
+    // The calls being prepared, innermost last: the callee when known,
+    // and how many arguments it was sent.
+    let mut calls: Vec<(Option<crate::compiler::FunctionInfo>, usize)> = Vec::new();
+    for op in &op_array.ops {
+        match op {
+            Op::InitFCall { name, fallback, .. } => {
+                let callee = match (fallback, op_array.literals.get(*name as usize)) {
+                    (None, Some(Value::Str(lc))) => {
+                        ctx.known.and_then(|known| known.find(lc.as_bytes()))
+                    }
+                    _ => None,
+                };
+                calls.push((callee, 0));
+            }
+            Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. } => calls.push((None, 0)),
+            Op::Send { src } => {
+                let Some((callee, sent)) = calls.last_mut() else {
+                    return true;
+                };
+                if matches!(src, ArgSrc::Place(_))
+                    && callee.as_ref().is_none_or(|info| info.sends_by_ref(*sent))
+                {
+                    return true;
+                }
+                *sent += 1;
+            }
+            Op::SendPlaceholder { .. } => {
+                if let Some((_, sent)) = calls.last_mut() {
+                    *sent += 1;
+                }
+            }
+            Op::DoCall { .. } | Op::CallableConvert { .. } | Op::CallablePartial { .. } => {
+                calls.pop();
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The CV an op names as a dynamic class (`$o instanceof $c`, `new $c`,
@@ -1259,6 +1703,36 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         // Fold pure expressions on known temporary constants
         for op in &mut op_array.ops {
             match op {
+                // `array_key_exists()` of a known key in a known array.
+                Op::KeyExists {
+                    key,
+                    array,
+                    dst: Some(dst),
+                } => {
+                    let (Some(lk), Some(la)) =
+                        (known_lit(key, &lit_def), known_lit(array, &lit_def))
+                    else {
+                        continue;
+                    };
+                    let folded = match (
+                        op_array.literals.get(lk as usize),
+                        op_array.literals.get(la as usize),
+                    ) {
+                        (Some(k), Some(a)) => fold_key_exists(k, a),
+                        _ => None,
+                    };
+                    if let Some(res) = folded {
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                        if def_count.get(*dst as usize).copied() == Some(1) {
+                            lit_def[*dst as usize] = Some(lit);
+                        }
+                        *op = Op::Move {
+                            src: Operand::Lit(lit),
+                            dst: *dst,
+                        };
+                        changed = true;
+                    }
+                }
                 Op::Bin {
                     op: bkind,
                     a,
@@ -1647,6 +2121,11 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
 
     if !has_hazard && num_cvs > 0 && len > 0 {
         let leaders = super::block_pass::find_leaders(op_array);
+        let built = partial_array_builds(op_array, &leaders);
+        // Whether a call may change a variable: none is a reference here
+        // (`has_hazard`), so only by name (`compact()`, `extract()`, a
+        // variable variable, an include).
+        let calls_reach_cvs = super::compact::has_dynamic_var_access(op_array);
         let mut block_starts = Vec::new();
         for i in 0..len {
             if leaders[i] {
@@ -1725,7 +2204,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         | Op::InitStaticCall { .. }
                 );
                 if is_call {
-                    cur_state.fill(CvLattice::Bottom);
+                    if calls_reach_cvs {
+                        cur_state.fill(CvLattice::Bottom);
+                    }
                     continue;
                 }
 
@@ -1736,6 +2217,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     &mut cur_state,
                     &mut op_array.literals,
                 );
+                take_built(&built, i, op, &mut cur_state);
             }
 
             out_state[b] = cur_state;
@@ -1878,6 +2360,13 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             }
                         }
                     }
+                    Op::Coalesce { a, .. }
+                        if coalesce_falls_through(*a, &out_state[b], &op_array.literals) =>
+                    {
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
+                    }
                     Op::CmpJmp { target: t, .. }
                     | Op::JmpZEx { target: t, .. }
                     | Op::JmpNzEx { target: t, .. }
@@ -1973,6 +2462,10 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         }
 
         // Apply constant CVs across all reachable blocks
+        let mut unassigned_coalesces = Vec::new();
+        // The stores of a literal into a variable no path has assigned
+        // (it holds nothing a store could release).
+        let mut first_stores = Vec::new();
         for b in 0..num_blocks {
             if !block_reachable[b] {
                 continue;
@@ -1982,7 +2475,27 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             let mut cur_state = in_state[b].clone();
 
             for i in b_start..b_end {
+                // `in_array()` of a known array: `ZEND_IN_ARRAY`.
+                changed |= in_array_call(op_array, i, &cur_state);
                 let op = &mut op_array.ops[i];
+                if let Op::Coalesce {
+                    a: Operand::Cv(cv), ..
+                } = op
+                {
+                    if cur_state.get(*cv as usize) == Some(&CvLattice::Undef) {
+                        unassigned_coalesces.push(i);
+                    }
+                }
+                if let Op::AssignCv {
+                    cv,
+                    val: Operand::Lit(_),
+                    dst: None,
+                } = op
+                {
+                    if cur_state.get(*cv as usize) == Some(&CvLattice::Undef) {
+                        first_stores.push((i, *cv));
+                    }
+                }
                 let is_call = matches!(
                     op,
                     Op::DoCall { .. }
@@ -1992,7 +2505,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         | Op::InitStaticCall { .. }
                 );
                 if is_call {
-                    cur_state.fill(CvLattice::Bottom);
+                    if calls_reach_cvs {
+                        cur_state.fill(CvLattice::Bottom);
+                    }
                     continue;
                 }
 
@@ -2073,6 +2588,28 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     }
                 }
 
+                // `$cv[k] op= c` / `++$cv[k]` on a known element of a
+                // known array, its result unused: the plain store of the
+                // new element.
+                let unused = matches!(
+                    op,
+                    Op::AssignOp { dst: None, .. } | Op::IncDec { dst: None, .. }
+                );
+                if unused {
+                    if let Some((_, Some((_, elem)))) =
+                        dim_cv_update(op, &op_array.places, &cur_state, &mut op_array.literals)
+                    {
+                        if let Op::AssignOp { place, .. } | Op::IncDec { place, .. } = *op {
+                            *op = Op::Assign {
+                                place,
+                                val: Operand::Lit(elem),
+                                dst: None,
+                            };
+                            changed = true;
+                        }
+                    }
+                }
+
                 // Fold newly constant operations
                 match op {
                     // `$cv[c]` of a CV holding a known array or string.
@@ -2128,6 +2665,29 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             }
                             fold_isset_dim(container, dim, empty)
                         });
+                        if let Some(res) = folded {
+                            let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                            *op = Op::Move {
+                                src: Operand::Lit(lit),
+                                dst,
+                            };
+                            changed = true;
+                        }
+                    }
+                    // `array_key_exists()` of a known key in a known array.
+                    Op::KeyExists {
+                        key: Operand::Lit(k),
+                        array: Operand::Lit(a),
+                        dst: Some(dst),
+                    } => {
+                        let dst = *dst;
+                        let folded = match (
+                            op_array.literals.get(*k as usize),
+                            op_array.literals.get(*a as usize),
+                        ) {
+                            (Some(key), Some(array)) => fold_key_exists(key, array),
+                            _ => None,
+                        };
                         if let Some(res) = folded {
                             let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
                             *op = Op::Move {
@@ -2298,16 +2858,254 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     &mut cur_state,
                     &mut op_array.literals,
                 );
+                take_built(&built, i, op, &mut cur_state);
             }
         }
 
+        changed |= own_coalesce_results(op_array, &unassigned_coalesces);
+        changed |= super::dce::drop_unread_first_stores(op_array, ctx, &first_stores);
         changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
     }
 
     // 3. A literal store that propagation left unread (php-src's DCE
     // removes it with the dead SSA variable it defines).
     changed |= super::dce::remove_dead_entry_stores(op_array, ctx, refs_possible);
+    changed |= super::dce::remove_overwritten_arrays(op_array, ctx, refs_possible);
+    if !refs_possible {
+        changed |= narrow_type_checks(op_array);
+    }
 
+    changed
+}
+
+/// The types a variable may have in [`narrow_type_checks`]: the
+/// [`type_mask`] bits, and [`MAYBE_UNDEF`].
+const ANY_TYPE: u16 = 0xFF;
+/// The variable may be unassigned (reading it warns).
+const MAYBE_UNDEF: u16 = 0x100;
+
+/// The variables `op` may write: its variable fields (an assignment's
+/// target, `RECV`, ...) and the base of a place it does not only read.
+fn written_cvs(op: &Op, places: &[Place]) -> Vec<u32> {
+    let mut reads = Vec::new();
+    super::for_each_operand_mut(&mut op.clone(), |o| {
+        if let Operand::Cv(c) = o {
+            reads.push(*c);
+        }
+    });
+    let mut out = Vec::new();
+    super::compact::for_each_cv_mut(&mut op.clone(), |c| {
+        if let Some(at) = reads.iter().position(|r| r == c) {
+            reads.swap_remove(at);
+        } else {
+            out.push(*c);
+        }
+    });
+    let reads_place = matches!(
+        op,
+        Op::Fetch {
+            mode: FetchMode::Read | FetchMode::Is,
+            ..
+        } | Op::Isset { .. }
+            | Op::Empty { .. }
+    );
+    if !reads_place {
+        super::compact::for_each_op_place(op, |p| {
+            if let Some(PlaceBase::Cv(c)) = places.get(p as usize).map(|pl| &pl.base) {
+                out.push(*c);
+            }
+        });
+    }
+    out
+}
+
+/// What a variable's type is known to be on each edge out of a block that
+/// ends in the jump on its `TYPE_CHECK` (`place_essa_pis`' type
+/// constraints): the edge and the types kept. `is_null()` of an
+/// unassigned variable is true; `is_resource()` of a closed resource is
+/// false, so that type is never ruled out.
+fn type_check_edges(ops: &[Op], start: usize, end: usize) -> Option<(usize, u32, u16, u16)> {
+    let last = (start..end).rev().find(|&i| !matches!(ops[i], Op::Nop))?;
+    let prev = (start..last).rev().find(|&i| !matches!(ops[i], Op::Nop))?;
+    let Op::TypeCheck {
+        a: Operand::Cv(c),
+        mask,
+        dst: Some(t),
+    } = ops[prev]
+    else {
+        return None;
+    };
+    let mask = u16::from(mask);
+    let on_true = mask
+        | if mask & u16::from(type_mask::NULL) != 0 {
+            MAYBE_UNDEF
+        } else {
+            0
+        };
+    let on_false = (ANY_TYPE & !mask)
+        | (mask & u16::from(type_mask::RESOURCE))
+        | if mask & u16::from(type_mask::NULL) == 0 {
+            MAYBE_UNDEF
+        } else {
+            0
+        };
+    match ops[last] {
+        Op::JmpZ(Operand::Tmp(x), _)
+        | Op::JmpZEx {
+            a: Operand::Tmp(x), ..
+        } if x == t => Some((last, c, on_true, on_false)),
+        Op::JmpNz(Operand::Tmp(x), _)
+        | Op::JmpNzEx {
+            a: Operand::Tmp(x), ..
+        } if x == t => Some((last, c, on_false, on_true)),
+        _ => None,
+    }
+}
+
+/// SCCP's `ZEND_TYPE_CHECK` over the types the type checks of the branches
+/// leading to it leave (e-SSA pi nodes with type constraints): a check
+/// whose answer those types decide, of a variable that is surely assigned,
+/// is that constant (`!is_string($v) || is_object($v)`: on the right side
+/// `$v` is a string, `is_object($v)` is false; `opt/sccp_026`). Functions
+/// with try blocks or variables reached by name are left alone.
+#[allow(clippy::too_many_lines)]
+fn narrow_type_checks(op_array: &mut OpArray) -> bool {
+    let ncv = op_array.cv_names.len();
+    let len = op_array.ops.len();
+    if ncv == 0
+        || !op_array.try_table.is_empty()
+        || super::compact::has_dynamic_var_access(op_array)
+        || !op_array.ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::TypeCheck {
+                    a: Operand::Cv(_),
+                    ..
+                }
+            )
+        })
+    {
+        return false;
+    }
+    let leaders = super::block_pass::find_leaders(op_array);
+    let starts: Vec<usize> = (0..len).filter(|&i| leaders[i]).chain([len]).collect();
+    let nb = starts.len() - 1;
+    let mut block_of = vec![0usize; len + 1];
+    for b in 0..nb {
+        block_of[starts[b]..starts[b + 1]].fill(b);
+    }
+    block_of[len] = nb;
+    let transfer = |ops: &[Op], places: &[Place], i: usize, st: &mut [u16]| {
+        for c in written_cvs(&ops[i], places) {
+            if let Some(slot) = st.get_mut(c as usize) {
+                *slot = ANY_TYPE;
+            }
+        }
+    };
+    let mut state: Vec<Option<Vec<u16>>> = vec![None; nb];
+    state[0] = Some(vec![ANY_TYPE | MAYBE_UNDEF; ncv]);
+    let mut work = vec![0usize];
+    while let Some(b) = work.pop() {
+        let Some(mut st) = state[b].clone() else {
+            continue;
+        };
+        let (start, end) = (starts[b], starts[b + 1]);
+        for i in start..end {
+            transfer(&op_array.ops, &op_array.places, i, &mut st);
+        }
+        let last = (start..end)
+            .rev()
+            .find(|&i| !matches!(op_array.ops[i], Op::Nop));
+        let mut succ: Vec<(usize, Option<(u32, u16)>)> = Vec::new();
+        let edges = type_check_edges(&op_array.ops, start, end);
+        if let Some(l) = last {
+            let mut op = op_array.ops[l].clone();
+            super::for_each_label_mut(&mut op, |t| {
+                let narrowed = edges.map(|(_, c, _, on_target)| (c, on_target));
+                succ.push((block_of[(*t as usize).min(len)], narrowed));
+            });
+            let ends_flow = matches!(
+                op_array.ops[l],
+                Op::Jmp(_)
+                    | Op::Return { .. }
+                    | Op::ReturnRef { .. }
+                    | Op::ReturnByRefValue { .. }
+                    | Op::Throw(_)
+                    | Op::Rethrow
+                    | Op::Exit(_)
+                    | Op::FastRet { .. }
+            );
+            if !ends_flow {
+                let narrowed = edges.map(|(_, c, on_follow, _)| (c, on_follow));
+                succ.push((b + 1, narrowed));
+            }
+        } else {
+            succ.push((b + 1, None));
+        }
+        for (s, narrowed) in succ {
+            if s >= nb {
+                continue;
+            }
+            let mut out = st.clone();
+            if let Some((c, keep)) = narrowed {
+                if let Some(slot) = out.get_mut(c as usize) {
+                    *slot &= keep;
+                }
+            }
+            let merged = match &state[s] {
+                None => out,
+                Some(old) => old.iter().zip(&out).map(|(a, b)| a | b).collect(),
+            };
+            if state[s].as_ref() != Some(&merged) {
+                state[s] = Some(merged);
+                work.push(s);
+            }
+        }
+    }
+    let mut changed = false;
+    for b in 0..nb {
+        let Some(mut st) = state[b].clone() else {
+            continue;
+        };
+        for i in starts[b]..starts[b + 1] {
+            if let Op::TypeCheck {
+                a: Operand::Cv(c),
+                mask,
+                dst,
+            } = op_array.ops[i]
+            {
+                let known = st
+                    .get(c as usize)
+                    .copied()
+                    .unwrap_or(ANY_TYPE | MAYBE_UNDEF);
+                let mask = u16::from(mask);
+                let resource = u16::from(type_mask::RESOURCE);
+                let answer = if known & MAYBE_UNDEF != 0 {
+                    None
+                } else if known & mask == 0 {
+                    Some(false)
+                } else if known & !mask == 0 && known & resource == 0 {
+                    Some(true)
+                } else {
+                    None
+                };
+                if let Some(v) = answer {
+                    op_array.ops[i] = match dst {
+                        Some(t) => Op::Move {
+                            src: Operand::Lit(super::add_or_find_literal(
+                                &mut op_array.literals,
+                                Value::Bool(v),
+                            )),
+                            dst: t,
+                        },
+                        None => Op::Nop,
+                    };
+                    changed = true;
+                }
+            }
+            transfer(&op_array.ops, &op_array.places, i, &mut st);
+        }
+    }
     changed
 }
 
