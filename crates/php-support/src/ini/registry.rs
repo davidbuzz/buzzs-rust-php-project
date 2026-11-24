@@ -6,6 +6,7 @@
 //! PHP's core directives.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::quantity::{escape, parse_bool, parse_quantity, parse_uquantity, quantity_warning};
@@ -175,13 +176,45 @@ pub struct IniEntryInfo {
     pub access: u8,
 }
 
+/// The `FxHash` multiply-rotate hash (rustc's): directive names are short
+/// and looked up on every diagnostic, `assert()` and `ini_get()`, where the
+/// default SipHash cost more than the rest of the lookup.
+#[derive(Default, Clone, Copy)]
+struct NameHasher(u64);
+
+impl Hasher for NameHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            let mut w = [0u8; 8];
+            w.copy_from_slice(c);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(K);
+        }
+        for &b in chunks.remainder() {
+            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(K);
+        }
+    }
+
+    fn write_u8(&mut self, b: u8) {
+        self.write(&[b]);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A map keyed by directive name.
+type NameMap<V> = HashMap<String, V, BuildHasherDefault<NameHasher>>;
+
 /// The registry of INI directives.
 #[derive(Debug, Clone)]
 pub struct IniRegistry {
-    entries: HashMap<String, Entry>,
+    entries: NameMap<Entry>,
     order: Vec<String>,
     /// Configuration values (`php.ini`, `-d`) consulted at registration.
-    config: HashMap<String, Vec<u8>>,
+    config: NameMap<Vec<u8>>,
     modified: Vec<String>,
     modules: Vec<String>,
     /// Current memory usage reported by `memory_limit` failures
@@ -216,9 +249,9 @@ impl IniRegistry {
     /// An empty registry.
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: NameMap::default(),
             order: Vec::new(),
-            config: HashMap::new(),
+            config: NameMap::default(),
             modified: Vec::new(),
             modules: Vec::new(),
             memory_usage: 2 * 1024 * 1024,
