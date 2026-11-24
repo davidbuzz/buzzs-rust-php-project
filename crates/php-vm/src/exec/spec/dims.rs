@@ -36,9 +36,9 @@
 use super::super::{num_bin, Num};
 use super::{
     assign_dims, assign_op_dims, copy_value, cv_dim_hit_in, dim_int_in, dim_key_in, dim_ref_in,
-    dims_value_in, discard_plain, isset_dim_in, plain_value_in, put_tmp, release_place_str_tmps,
-    release_str_tmp_in, store_fetched_in, string_offset_char, table_dim, table_dim_mut,
-    write_keys_in, DimRef,
+    dim_value_in, dims_value_in, discard_plain, isset_dim_in, plain_value_in, put_tmp,
+    release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char, table_dim,
+    table_dim_mut, write_keys_in, DimRef,
 };
 use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceId};
 use crate::vm::{CvSlot, ForeachIter, Frame, Vm};
@@ -355,23 +355,38 @@ pub(in crate::exec) fn incdec_dim_cv_in(
 }
 
 /// `tbl[i] = v` for an int offset (`zend_fetch_dimension_address_inner_W`
-/// + `zend_assign_to_variable`): an existing plain element of a packed
-/// table is overwritten where it is (`zend_hash_index_find` on
-/// `HT_IS_PACKED`, inline); otherwise the element is found or added
-/// (`zend_hash_index_lookup`, as null, then overwritten). `false`, nothing
-/// changed, when the existing element is not plain (a reference, array,
-/// object: the generic assignment handles it).
+/// and `zend_assign_to_variable`): an existing element of a packed table
+/// is overwritten where it is (`zend_hash_index_find` on `HT_IS_PACKED`,
+/// inline); otherwise the element is found or added
+/// (`zend_hash_index_lookup`, as null, then overwritten). The replaced
+/// element is released ([`release_elem`]). `false`, nothing changed, when
+/// the existing element is a reference (the generic assignment writes
+/// through it).
 #[inline(always)]
 #[allow(clippy::inline_always)] // the packed overwrite is the hot `$a[$i] = $v`
 fn assign_int_dim(tbl: &mut HashTable, i: i64, v: Value) -> bool {
     if let Some(slot) = tbl.get_packed_mut(i) {
-        if !slot.is_plain() {
+        if matches!(slot, Value::Reference(_)) {
             return false;
         }
-        discard_plain(std::mem::replace(slot, v));
+        release_elem(std::mem::replace(slot, v));
         return true;
     }
     assign_int_dim_other(tbl, i, v)
+}
+
+/// Releases the element an element write replaced: a plain value
+/// ([`discard_plain`]), or an array or object as `zend_assign_to_variable`
+/// releases one (a possible collection root; a destructor its last handle
+/// queues runs at the next safe point, `object::queue_destructor`).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn release_elem(old: Value) {
+    if old.is_plain() {
+        discard_plain(old);
+    } else {
+        super::super::release_rooted(Some(old));
+    }
 }
 
 /// [`assign_int_dim`] past a packed hit: an append or a hash table.
@@ -380,39 +395,39 @@ fn assign_int_dim_other(tbl: &mut HashTable, i: i64, v: Value) -> bool {
     let v = match tbl.assign_packed_int(i, v) {
         Ok(old) => {
             if let Some(old) = old {
-                discard_plain(old);
+                release_elem(old);
             }
             return true;
         }
         Err(v) => v,
     };
     let (slot, added) = tbl.lookup_ex(ArrayKey::Int(i));
-    if !added && !slot.is_plain() {
+    if !added && matches!(slot, Value::Reference(_)) {
         return false;
     }
-    discard_plain(std::mem::replace(slot, v));
+    release_elem(std::mem::replace(slot, v));
     true
 }
 
 /// `tbl[s] = v` for a string offset with symbol-table semantics: an
 /// existing element is found (`zend_symtable_find`) and overwritten
 /// without building a key; a missing one is added under the key the
-/// string converts to. `false`, nothing changed, when the existing
-/// element is not plain.
+/// string converts to. The replaced element is released
+/// ([`release_elem`]); `false`, nothing changed, when it is a reference.
 #[inline(never)]
 fn assign_str_dim(tbl: &mut HashTable, s: &ZStr, v: Value) -> bool {
     if let Some(slot) = tbl.get_sym_zstr_mut(s) {
-        if !slot.is_plain() {
+        if matches!(slot, Value::Reference(_)) {
             return false;
         }
-        discard_plain(std::mem::replace(slot, v));
+        release_elem(std::mem::replace(slot, v));
         return true;
     }
     let (slot, added) = tbl.lookup_ex(ArrayKey::from_zstr(s));
-    if !added && !slot.is_plain() {
+    if !added && matches!(slot, Value::Reference(_)) {
         return false;
     }
-    discard_plain(std::mem::replace(slot, v));
+    release_elem(std::mem::replace(slot, v));
     true
 }
 
@@ -440,8 +455,8 @@ fn assign_write_dim(tbl: &mut HashTable, dim: WriteDim<'_>, v: Value) -> bool {
 
 /// [`Op::AssignDimCv`](crate::opcode::Op::AssignDimCv): `$cv[dim] = val;`
 /// when `$cv` holds an array (directly or through a reference), the offset
-/// is an int or string, the value is plain and the element it replaces
-/// (if any) is plain: the `zend_fetch_dimension_address_inner_W` and
+/// is an int or string, the value is plain, an array or an object, and the
+/// element it replaces (if any) is not a reference: the `zend_fetch_dimension_address_inner_W` and
 /// `zend_assign_to_variable` path of `ZEND_ASSIGN_DIM` on an array,
 /// separating a shared array first (`SEPARATE_ARRAY`): an existing element
 /// is overwritten where it is, a missing key added (as null, then
@@ -456,7 +471,7 @@ pub(in crate::exec) fn assign_dim_cv_in(
     dim: Operand,
     val: Operand,
 ) -> bool {
-    let Some(v) = plain_value_in(f, val) else {
+    let Some(v) = dim_value_in(f, val) else {
         return false;
     };
     // A string offset stays borrowed: an existing element needs no key of

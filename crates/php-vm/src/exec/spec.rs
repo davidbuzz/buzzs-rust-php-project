@@ -463,6 +463,24 @@ fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
     }
 }
 
+/// [`plain_value_in`], and an array or an object as well (a handle added:
+/// `ZVAL_COPY` of the `OP_DATA` operand of `ZEND_ASSIGN_DIM`): the value
+/// an element write stores, which, unlike a plain value read elsewhere,
+/// needs no release where it is read.
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot OP_DATA operand read for AssignDimCv
+pub(super) fn dim_value_in(f: &Frame, op: Operand) -> Option<Value> {
+    let v = match op {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Lit(_) | Operand::Unused => return plain_value_in(f, op),
+    };
+    match v {
+        Value::Array(_) | Value::Object(_) => Some(v.clone()),
+        _ => plain_value_in(f, op),
+    }
+}
+
 /// The deepest dimension chain of [`Op::AssignDimsCv`] /
 /// [`Op::AssignOpDimsCv`] (the compiler's `MAX_WRITE_DIMS`).
 ///
@@ -1044,6 +1062,11 @@ impl Vm {
     #[allow(clippy::inline_always)] // hot OP_DATA operand read in the dispatch pre-match
     pub(super) fn peek_plain_value(&self, op: Operand) -> Option<Value> {
         plain_value_in(self.frame(), op)
+    }
+
+    /// [`dim_value_in`] of the current frame.
+    pub(super) fn peek_dim_value(&self, op: Operand) -> Option<Value> {
+        dim_value_in(self.frame(), op)
     }
 
     /// The generic `Op::Assign { place, val, dst: None }`, the op
