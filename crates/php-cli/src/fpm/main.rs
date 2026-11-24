@@ -1249,7 +1249,12 @@ fn worker(cfg: &Config, m: &master::Master, pi: usize, slot: usize, id: &Ident) 
     let mut ini = if let Some(start) = start {
         report_rejected(&start.rejected);
         request::adopt_worker_vm(start.vm);
-        start.ini
+        let mut ini = start.ini;
+        // What applying the values reports (a warning from an INI
+        // handler, opcache's "can't be temporarily enabled") comes from
+        // the worker, as in C.
+        ini.replay_pool(pool);
+        ini
     } else {
         let mut ini = WorkerIni::new(cfg);
         report_rejected(&ini.apply_pool(pool));
@@ -1575,7 +1580,7 @@ fn prepare_pools(cfg: &Config, m: &master::Master) {
         .iter()
         .map(|p| {
             let mut ini = WorkerIni::new(cfg);
-            let rejected = ini.apply_pool(&p.conf);
+            let rejected = ini.apply_pool_quietly(&p.conf);
             let vm = request::prepare_worker_vm(&ini.cfg, &[], Some(worker_vm_setup));
             Some(PoolStart { ini, rejected, vm })
         })
@@ -1649,6 +1654,43 @@ impl WorkerIni {
             }
         }
         rejected
+    }
+
+    /// [`apply_pool`](Self::apply_pool) in the master, before it forks:
+    /// what the handlers report is not shown here (standard error and the
+    /// probe's log are silenced) but by each worker, which runs them again
+    /// with [`replay_pool`](Self::replay_pool), as C applies the values in
+    /// the child (`fpm_php_init_child()`).
+    fn apply_pool_quietly(&mut self, pool: &conf::Pool) -> Vec<(bool, String)> {
+        let hook = self.probe.log_hook.take();
+        let saved = os::dup(libc::STDERR_FILENO);
+        let null = std::fs::OpenOptions::new().write(true).open("/dev/null");
+        if let Ok(null) = &null {
+            use std::os::fd::AsRawFd;
+            os::dup2(null.as_raw_fd(), libc::STDERR_FILENO);
+        }
+        let rejected = self.apply_pool(pool);
+        if saved >= 0 {
+            os::dup2(saved, libc::STDERR_FILENO);
+            os::close(saved);
+        }
+        self.probe.log_hook = hook;
+        rejected
+    }
+
+    /// Runs the INI handlers of the pool's values again for what they
+    /// report, without changing the values (the worker's half of
+    /// [`apply_pool_quietly`](Self::apply_pool_quietly)).
+    fn replay_pool(&mut self, pool: &conf::Pool) {
+        for (k, v) in pool.php_values.iter().chain(&pool.php_admin_values) {
+            if k != "extension" && self.known.contains(k.as_str()) {
+                let _ = self.probe.run_ini_modify_hook(
+                    k,
+                    v.as_bytes(),
+                    php_vm::ext::IniStage::Activate,
+                );
+            }
+        }
     }
 
     /// `fpm_php_apply_defines_ex()`: `false` for a directive that does not
