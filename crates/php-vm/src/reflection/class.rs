@@ -1180,8 +1180,16 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method("__toString(): string", PUB, rc_to_string)
         .method("getName(): string", PUB | flags::PURE, rc_get_name)
-        .method("isInternal(): bool", PUB, rc_is_internal)
-        .method("isUserDefined(): bool", PUB, rc_is_user)
+        .method(
+            "isInternal(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_internal,
+        )
+        .method(
+            "isUserDefined(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_user,
+        )
         .method("isAnonymous(): bool", PUB, rc_is_anon)
         .method("isInstantiable(): bool", PUB, rc_is_instantiable)
         .method("isCloneable(): bool", PUB, rc_is_cloneable)
@@ -1235,16 +1243,40 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method("getInterfaces(): array", PUB, rc_get_interfaces)
         .method("getInterfaceNames(): array", PUB, rc_get_interface_names)
-        .method("isInterface(): bool", PUB, rc_is_interface)
-        .method("getTraits(): array", PUB, rc_get_traits)
+        .method(
+            "isInterface(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_interface,
+        )
+        .method(
+            "getTraits(): array",
+            PUB | crate::func::flags::PURE,
+            rc_get_traits,
+        )
         .method("getTraitNames(): array", PUB, rc_get_trait_names)
         .method("getTraitAliases(): array", PUB, rc_get_trait_aliases)
-        .method("isTrait(): bool", PUB, rc_is_trait)
-        .method("isEnum(): bool", PUB, rc_is_enum)
-        .method("isAbstract(): bool", PUB, rc_is_abstract)
-        .method("isFinal(): bool", PUB, rc_is_final)
+        .method(
+            "isTrait(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_trait,
+        )
+        .method("isEnum(): bool", PUB | crate::func::flags::PURE, rc_is_enum)
+        .method(
+            "isAbstract(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_abstract,
+        )
+        .method(
+            "isFinal(): bool",
+            PUB | crate::func::flags::PURE,
+            rc_is_final,
+        )
         .method("isReadOnly(): bool", PUB, rc_is_readonly)
-        .method("getModifiers(): int", PUB, rc_get_modifiers)
+        .method(
+            "getModifiers(): int",
+            PUB | crate::func::flags::PURE,
+            rc_get_modifiers,
+        )
         .method("isInstance(object $object): bool", PUB, rc_is_instance)
         .method("newInstance(mixed ...$args): object", PUB, rc_new_instance)
         .method(
@@ -1299,7 +1331,7 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method(
             "getParentClass(): ReflectionClass|false",
-            PUB,
+            PUB | crate::func::flags::PURE,
             rc_get_parent,
         )
         .method(
@@ -1345,7 +1377,11 @@ pub(crate) fn register(vm: &mut Vm) {
             rc_get_extension_name,
         )
         .method("inNamespace(): bool", PUB, rc_in_ns)
-        .method("getNamespaceName(): string", PUB, rc_get_ns)
+        .method(
+            "getNamespaceName(): string",
+            PUB | crate::func::flags::PURE,
+            rc_get_ns,
+        )
         .method(
             "getShortName(): string",
             PUB | flags::PURE,

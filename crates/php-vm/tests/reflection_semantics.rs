@@ -537,3 +537,418 @@ sm
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// The other pure reflection getters (class, function and method
+/// modifiers and kinds, parameters, return and parameter types) on user,
+/// internal, abstract, final, interface, trait and enum declarations,
+/// closures and variadics; every one of them on an uninitialized object,
+/// whose error comes from the call made again with its frame. Expected
+/// output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // a script and its expected output
+fn pure_reflection_getters_all() {
+    let src = r#"<?php
+namespace App;
+interface I {} trait T { public function t() {} } enum E: string { case A = 'a'; }
+abstract class Base implements I { use T; abstract protected function ab(); final public static function fs(int ...$v): ?int { return null; } }
+final class C extends Base { public function __construct(public readonly int $x = 1, &$r = null, ?array $q = [], int|string $u = 0) {} protected function ab() {} private function pv(): static { return $this; } }
+function f(\Countable&\Traversable $a, $b = PHP_EOL, ?C ...$c): void {}
+function dump($v) { return var_export($v, true); }
+function run() {
+    $targets = [new \ReflectionClass(C::class), new \ReflectionClass(Base::class), new \ReflectionClass(I::class), new \ReflectionClass(T::class), new \ReflectionClass(E::class), new \ReflectionClass(\Exception::class)];
+    foreach ($targets as $c) {
+        echo $c->getName(), ' ', dump([$c->isInternal(), $c->isUserDefined(), $c->isInterface(), $c->isTrait(), $c->isEnum(), $c->isAbstract(), $c->isFinal(), $c->getModifiers(), $c->getNamespaceName(), $c->getParentClass() ? $c->getParentClass()->getName() : false, count($c->getTraits())]), "\n";
+    }
+    $fns = [new \ReflectionFunction('App\f'), new \ReflectionFunction('strlen'), new \ReflectionFunction(fn(int $z = 3) => $z), new \ReflectionMethod(C::class, '__construct'), new \ReflectionMethod(Base::class, 'fs'), new \ReflectionMethod(C::class, 'pv'), new \ReflectionMethod(C::class, 'ab')];
+    foreach ($fns as $f) {
+        echo $f->getName(), ' ', dump([$f->isInternal(), $f->isUserDefined(), $f->isVariadic(), $f->getNamespaceName(), $f->getNumberOfParameters(), $f->getNumberOfRequiredParameters(), $f->hasReturnType(), (string)$f->getReturnType()]), "\n";
+        if ($f instanceof \ReflectionMethod) { echo '  ', dump([$f->isPublic(), $f->isPrivate(), $f->isProtected(), $f->isAbstract(), $f->isFinal(), $f->isConstructor(), $f->getModifiers()]), "\n"; }
+        foreach ($f->getParameters() as $p) {
+            $t = $p->getType();
+            echo '  $', $p->getName(), ' ', dump([$p->isPassedByReference(), $p->hasType(), (string)$t, $p->allowsNull(), $p->getPosition(), $p->isOptional(), $p->isDefaultValueAvailable(), $p->isVariadic(), $t instanceof \ReflectionNamedType ? [$t->isBuiltin(), $t->allowsNull(), $t->getName()] : get_debug_type($t)]), "\n";
+        }
+    }
+    foreach ([\ReflectionClass::class, \ReflectionMethod::class, \ReflectionFunction::class, \ReflectionParameter::class, \ReflectionNamedType::class, \ReflectionProperty::class] as $rc) {
+        $u = (new \ReflectionClass($rc))->newInstanceWithoutConstructor();
+        foreach (['getName', 'isInternal', 'getModifiers', 'getPosition', 'isBuiltin', 'getParentClass', 'getTraits', 'getParameters', 'isStatic', 'allowsNull'] as $m) {
+            if (!method_exists($u, $m)) continue;
+            try { echo $rc, '::', $m, ' ', dump($u->$m()), "\n"; } catch (\Throwable $e) { echo $rc, '::', $m, ' ', get_class($e), ': ', $e->getMessage(), ' #0 ', $e->getTrace()[0]['class'] ?? '', '->', $e->getTrace()[0]['function'] ?? '', "\n"; }
+            try { echo $rc, '::', $m, ' direct ', dump(match ($m) { 'getName' => $u->getName(), 'isInternal' => $u->isInternal(), default => null }), "\n"; } catch (\Throwable $e) { echo '  direct ', get_class($e), ': ', $e->getMessage(), ' #0 ', $e->getTrace()[0]['function'] ?? '', "\n"; }
+        }
+    }
+}
+run();
+"#;
+    let expected = r#"App\C array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => false,
+  4 => false,
+  5 => false,
+  6 => true,
+  7 => 32,
+  8 => 'App',
+  9 => 'App\\Base',
+  10 => 0,
+)
+App\Base array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => false,
+  4 => false,
+  5 => true,
+  6 => false,
+  7 => 64,
+  8 => 'App',
+  9 => false,
+  10 => 1,
+)
+App\I array (
+  0 => false,
+  1 => true,
+  2 => true,
+  3 => false,
+  4 => false,
+  5 => false,
+  6 => false,
+  7 => 0,
+  8 => 'App',
+  9 => false,
+  10 => 0,
+)
+App\T array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => true,
+  4 => false,
+  5 => false,
+  6 => false,
+  7 => 0,
+  8 => 'App',
+  9 => false,
+  10 => 0,
+)
+App\E array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => false,
+  4 => true,
+  5 => false,
+  6 => true,
+  7 => 32,
+  8 => 'App',
+  9 => false,
+  10 => 0,
+)
+Exception array (
+  0 => true,
+  1 => false,
+  2 => false,
+  3 => false,
+  4 => false,
+  5 => false,
+  6 => false,
+  7 => 0,
+  8 => '',
+  9 => false,
+  10 => 0,
+)
+App\f array (
+  0 => false,
+  1 => true,
+  2 => true,
+  3 => 'App',
+  4 => 3,
+  5 => 1,
+  6 => true,
+  7 => 'void',
+)
+  $a array (
+  0 => false,
+  1 => true,
+  2 => 'Countable&Traversable',
+  3 => false,
+  4 => 0,
+  5 => false,
+  6 => false,
+  7 => false,
+  8 => 'ReflectionIntersectionType',
+)
+  $b array (
+  0 => false,
+  1 => false,
+  2 => '',
+  3 => true,
+  4 => 1,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 'null',
+)
+  $c array (
+  0 => false,
+  1 => true,
+  2 => '?App\\C',
+  3 => true,
+  4 => 2,
+  5 => true,
+  6 => false,
+  7 => true,
+  8 => 
+  array (
+    0 => false,
+    1 => true,
+    2 => 'App\\C',
+  ),
+)
+strlen array (
+  0 => true,
+  1 => false,
+  2 => false,
+  3 => '',
+  4 => 1,
+  5 => 1,
+  6 => true,
+  7 => 'int',
+)
+  $string array (
+  0 => false,
+  1 => true,
+  2 => 'string',
+  3 => false,
+  4 => 0,
+  5 => false,
+  6 => false,
+  7 => false,
+  8 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => 'string',
+  ),
+)
+{closure:App\run():13} array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => '',
+  4 => 1,
+  5 => 0,
+  6 => false,
+  7 => '',
+)
+  $z array (
+  0 => false,
+  1 => true,
+  2 => 'int',
+  3 => false,
+  4 => 0,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => 'int',
+  ),
+)
+__construct array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => '',
+  4 => 4,
+  5 => 0,
+  6 => false,
+  7 => '',
+)
+  array (
+  0 => true,
+  1 => false,
+  2 => false,
+  3 => false,
+  4 => false,
+  5 => true,
+  6 => 1,
+)
+  $x array (
+  0 => false,
+  1 => true,
+  2 => 'int',
+  3 => false,
+  4 => 0,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => 'int',
+  ),
+)
+  $r array (
+  0 => true,
+  1 => false,
+  2 => '',
+  3 => true,
+  4 => 1,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 'null',
+)
+  $q array (
+  0 => false,
+  1 => true,
+  2 => '?array',
+  3 => true,
+  4 => 2,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => 'array',
+  ),
+)
+  $u array (
+  0 => false,
+  1 => true,
+  2 => 'string|int',
+  3 => false,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => false,
+  8 => 'ReflectionUnionType',
+)
+fs array (
+  0 => false,
+  1 => true,
+  2 => true,
+  3 => '',
+  4 => 1,
+  5 => 0,
+  6 => true,
+  7 => '?int',
+)
+  array (
+  0 => true,
+  1 => false,
+  2 => false,
+  3 => false,
+  4 => true,
+  5 => false,
+  6 => 49,
+)
+  $v array (
+  0 => false,
+  1 => true,
+  2 => 'int',
+  3 => false,
+  4 => 0,
+  5 => true,
+  6 => false,
+  7 => true,
+  8 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => 'int',
+  ),
+)
+pv array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => '',
+  4 => 0,
+  5 => 0,
+  6 => true,
+  7 => 'static',
+)
+  array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => false,
+  4 => false,
+  5 => false,
+  6 => 4,
+)
+ab array (
+  0 => false,
+  1 => true,
+  2 => false,
+  3 => '',
+  4 => 0,
+  5 => 0,
+  6 => false,
+  7 => '',
+)
+  array (
+  0 => false,
+  1 => false,
+  2 => true,
+  3 => false,
+  4 => false,
+  5 => false,
+  6 => 2,
+)
+ReflectionClass::getName ReflectionClass::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionClass->getName
+ReflectionClass::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionClass::isInternal ReflectionClass::isInternal Error: Internal error: Failed to retrieve the reflection object #0 ReflectionClass->isInternal
+ReflectionClass::isInternal direct   direct Error: Internal error: Failed to retrieve the reflection object #0 isInternal
+ReflectionClass::getModifiers ReflectionClass::getModifiers Error: Internal error: Failed to retrieve the reflection object #0 ReflectionClass->getModifiers
+ReflectionClass::getModifiers direct NULL
+ReflectionClass::getParentClass ReflectionClass::getParentClass Error: Internal error: Failed to retrieve the reflection object #0 ReflectionClass->getParentClass
+ReflectionClass::getParentClass direct NULL
+ReflectionClass::getTraits ReflectionClass::getTraits Error: Internal error: Failed to retrieve the reflection object #0 ReflectionClass->getTraits
+ReflectionClass::getTraits direct NULL
+ReflectionMethod::getName ReflectionMethod::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->getName
+ReflectionMethod::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionMethod::isInternal ReflectionMethod::isInternal Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->isInternal
+ReflectionMethod::isInternal direct   direct Error: Internal error: Failed to retrieve the reflection object #0 isInternal
+ReflectionMethod::getModifiers ReflectionMethod::getModifiers Error: Internal error: Failed to retrieve the reflection object #0 ReflectionMethod->getModifiers
+ReflectionMethod::getModifiers direct NULL
+ReflectionMethod::getParameters ReflectionMethod::getParameters Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->getParameters
+ReflectionMethod::getParameters direct NULL
+ReflectionMethod::isStatic ReflectionMethod::isStatic Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->isStatic
+ReflectionMethod::isStatic direct NULL
+ReflectionFunction::getName ReflectionFunction::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->getName
+ReflectionFunction::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionFunction::isInternal ReflectionFunction::isInternal Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->isInternal
+ReflectionFunction::isInternal direct   direct Error: Internal error: Failed to retrieve the reflection object #0 isInternal
+ReflectionFunction::getParameters ReflectionFunction::getParameters Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->getParameters
+ReflectionFunction::getParameters direct NULL
+ReflectionFunction::isStatic ReflectionFunction::isStatic Error: Internal error: Failed to retrieve the reflection object #0 ReflectionFunctionAbstract->isStatic
+ReflectionFunction::isStatic direct NULL
+ReflectionParameter::getName ReflectionParameter::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionParameter->getName
+ReflectionParameter::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionParameter::getPosition ReflectionParameter::getPosition Error: Internal error: Failed to retrieve the reflection object #0 ReflectionParameter->getPosition
+ReflectionParameter::getPosition direct NULL
+ReflectionParameter::allowsNull ReflectionParameter::allowsNull Error: Internal error: Failed to retrieve the reflection object #0 ReflectionParameter->allowsNull
+ReflectionParameter::allowsNull direct NULL
+ReflectionNamedType::getName ReflectionNamedType::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionNamedType->getName
+ReflectionNamedType::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionNamedType::isBuiltin ReflectionNamedType::isBuiltin Error: Internal error: Failed to retrieve the reflection object #0 ReflectionNamedType->isBuiltin
+ReflectionNamedType::isBuiltin direct NULL
+ReflectionNamedType::allowsNull ReflectionNamedType::allowsNull Error: Internal error: Failed to retrieve the reflection object #0 ReflectionType->allowsNull
+ReflectionNamedType::allowsNull direct NULL
+ReflectionProperty::getName ReflectionProperty::getName Error: Internal error: Failed to retrieve the reflection object #0 ReflectionProperty->getName
+ReflectionProperty::getName direct   direct Error: Internal error: Failed to retrieve the reflection object #0 getName
+ReflectionProperty::getModifiers ReflectionProperty::getModifiers Error: Internal error: Failed to retrieve the reflection object #0 ReflectionProperty->getModifiers
+ReflectionProperty::getModifiers direct NULL
+ReflectionProperty::isStatic ReflectionProperty::isStatic Error: Internal error: Failed to retrieve the reflection object #0 ReflectionProperty->isStatic
+ReflectionProperty::isStatic direct NULL
+"#;
+    assert_eq!(run(src), expected);
+}
