@@ -52,6 +52,10 @@ jobs:
           echo "mmap calls for php -r '': $n"
           test "$n" -lt 2000
 
+      # Before the engine tests: some of them (`frame_reuse`) read php-src's .phpt files.
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+
       - name: Unit tests (heap, values, streams)
         run: cargo test --release --no-fail-fast -p php-memlimit -p php-runtime -p php-streams
 
@@ -60,9 +64,6 @@ jobs:
       - name: Engine unit tests (informational)
         continue-on-error: true
         run: cargo test --release -p php-vm --no-fail-fast
-
-      - name: Fetch the php-src tests (pinned)
-        run: scripts/fetch-phpt-tests.sh
 
       - name: PHPT, Zend and core tests (informational)
         continue-on-error: true
