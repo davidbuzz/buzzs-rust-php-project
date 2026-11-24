@@ -115,33 +115,45 @@ enum Width {
     D,
 }
 
-/// Whether the `AArch64` backend emits every row of `p`: the loop rows of
-/// ints, bools, nulls and floats (`Jmp`, `++`/`--`, the assignments, the
-/// fused compare-and-branch and `++`-compare, the arithmetic into a
-/// variable or a temporary and its float forms, the moves, the truth jumps,
-/// `?:`, `??`, `abs()`), the array element rows (in place for a list,
-/// else through their helpers), the tape handlers a trace calls and the
-/// reads through the global scope; no inlined call, no property, static
-/// property or constant row. Anything else is refused, so the interpreter
-/// runs it.
+/// Whether the `AArch64` backend emits every row of `p`: every row class
+/// the x86-64 emitter has, inlined calls included (their bodies checked
+/// row by row). Anything else is refused, so the interpreter runs it.
 pub(super) fn supports(p: &Plan) -> bool {
-    if p.has_calls {
-        return false;
-    }
-    p.class.iter().zip(&p.meta).all(|(&c, m)| match c {
-        0 | C_JMP | C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | C_NOP | J_CMP | J_INCCMP
-        | C_ASSIGN_R | C_INCDEC_T | C_ABS | C_MOVE | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE
-        | C_JMPZT | C_JMPNZT | J_CMPS | J_ASSIGN_T | C_DIMR | C_DIMW | C_DIMOP | C_DIMSR
-        | C_DIMKEY | C_GREAD | C_VMREAD | C_ROW | C_ROWBR => true,
-        J_ARITH_CV | J_ARITH_TMP | J_ASSIGN_OP | J_NUMBIN_T | J_NUMBIN_C | J_NUMBIN_D => {
-            matches!(
-                m.arith,
-                0 | 1 | 2 | 5 | OPA_BITAND | OPA_BITOR | OPA_BITXOR | ARITH_SHL | ARITH_SAR
-            )
-        }
-        J_ASSIGN_OPS => m.arith <= 2,
+    p.class
+        .iter()
+        .zip(&p.meta)
+        .enumerate()
+        .all(|(j, (&c, m))| match c {
+            0 | C_JMP | J_CMP | J_INCCMP | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE | C_JMPZT
+            | C_JMPNZT | J_CMPS | C_MOVE | C_DIMR | C_DIMW | C_DIMOP | C_DIMSR | C_DIMKEY
+            | C_GREAD | C_VMREAD | C_ROW | C_ROWBR | C_PROP | C_PROPW | C_PROPINC | C_PROPISSET
+            | C_PROPOPA | C_SPROP | C_SPROPW | C_SPROPISSET | C_SPROPINC | C_CONSTI
+            | J_ASSIGN_T => true,
+            J_ASSIGN_OPS => m.arith <= 2,
+            // An inlined call: its body's rows are property rows or rows
+            // `emit_op` writes.
+            C_CALL => p.calls.get(j).and_then(Option::as_ref).is_some_and(|cp| {
+                cp.classes.iter().zip(&cp.metas).all(|(&c, m)| {
+                    matches!(c, C_PROP | C_PROPW | C_PROPINC | C_PROPOPA) || op_supported(c, m)
+                })
+            }),
+            _ => op_supported(c, m),
+        })
+}
+
+/// Whether [`A64::emit_op`] writes row class `c` (a region row, or a row
+/// of an inlined body).
+fn op_supported(c: u16, m: &JitMeta) -> bool {
+    match c {
+        C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | C_NOP | C_ASSIGN_R | C_INCDEC_T | C_ABS => true,
+        // `ANY_SRC` is the tape's own assignment, which `emit_instr` calls.
+        J_ASSIGN_T => m.mask != ANY_SRC,
+        J_ARITH_CV | J_ARITH_TMP | J_ASSIGN_OP | J_NUMBIN_T | J_NUMBIN_C | J_NUMBIN_D => matches!(
+            m.arith,
+            0 | 1 | 2 | 5 | OPA_BITAND | OPA_BITOR | OPA_BITXOR | ARITH_SHL | ARITH_SAR
+        ),
         _ => false,
-    })
+    }
 }
 
 /// The base register of a slot kind (`KC`, `KT`, `KR`).
@@ -443,6 +455,16 @@ impl A64 {
                 self.bcond(cc, self.jump_tgt(j));
             }
             C_MOVE => self.emit_move(m, &inst, Target::Side(i)),
+            C_PROP => self.emit_prop(m, Target::Side(i)),
+            C_PROPW => self.emit_propw(m, Target::Side(i)),
+            C_PROPINC => self.emit_propinc(m, Target::Side(i)),
+            C_PROPISSET => self.emit_propisset(m, Target::Side(i)),
+            C_PROPOPA => self.emit_propopa(m, Target::Side(i)),
+            C_SPROP => self.emit_sprop(m, Target::Side(i)),
+            C_SPROPW => self.emit_spropw(m, Target::Side(i)),
+            C_SPROPISSET => self.emit_spropisset(m, Target::Side(i)),
+            C_SPROPINC => self.emit_spropinc(m, Target::Side(i)),
+            C_CONSTI => self.emit_consti(m, Target::Side(i)),
             C_DIMR => self.emit_dimr(m, i),
             C_DIMW => self.emit_dimw(m, i, jit_dim_set as *const () as usize, 0),
             C_DIMOP => self.emit_dimw(m, i, jit_dim_op as *const () as usize, u32::from(m.arith)),
@@ -1447,6 +1469,476 @@ impl A64 {
         self.store_payload(RC, m.kc, m.db);
     }
 
+    // ------------------------------------------------------ properties
+
+    /// `cset wd, eq` (`csinc wd, wzr, wzr, ne`).
+    fn cset_eq(&mut self, rd: u32) {
+        self.put(0x1A9F_17E0 | rd);
+    }
+
+    /// `mov wd, #v` (`v < 65536`).
+    fn mov_w(&mut self, rd: u32, v: u32) {
+        self.put(0x5280_0000 | ((v & 0xFFFF) << 5) | rd);
+    }
+
+    /// A frame field must hold the word `want` (0: be null), else `fail`.
+    fn frame_word_guard(&mut self, field: u32, want: i64, fail: Target) {
+        self.mem(true, Width::X, RA, FRAME, field);
+        if want == 0 {
+            self.cbnz_x(RA, fail);
+        } else {
+            self.mov_imm(RC, want);
+            self.cmp_x(RA, RC);
+            self.bcond(NE, fail);
+        }
+    }
+
+    /// `x10` = the frame's `$this` handle, leaving through `fail` when
+    /// there is none.
+    fn this_rb(&mut self, fail: Target) {
+        self.mem(true, Width::X, RB, FRAME, THIS_FIELD);
+        self.cbz_x(RB, fail);
+    }
+
+    /// `x10` = the raw `Rc<Class>` field word of the object whose handle
+    /// is in `x10`.
+    fn obj_class_rb(&mut self) {
+        self.mem(
+            true,
+            Width::X,
+            RB,
+            RB,
+            OBJ_PAYLOAD.wrapping_add(CLASS_FIELD),
+        );
+    }
+
+    /// `x10` = the handle of a receiver the trace already checked.
+    fn load_receiver_rb(&mut self, kind: u8, off: u32) {
+        if kind == KTHIS {
+            self.mem(true, Width::X, RB, FRAME, THIS_FIELD);
+        } else {
+            self.load_payload(RB, KC, off);
+        }
+    }
+
+    /// The x86 `emit_prop_slots`: on fall-through `x9` is the slot array.
+    fn emit_prop_slots(&mut self, m: JitMeta, jo: Target) {
+        if m.bare {
+            self.load_receiver_rb(m.ka, m.sb);
+            self.mem(true, Width::X, RA, RB, SLOTS_FIRST);
+            return;
+        }
+        if m.ka == KTHIS {
+            self.this_rb(jo);
+        } else {
+            self.cmp_tag(KC, m.sb, TAG_OBJECT);
+            self.bcond(NE, jo);
+            self.load_payload(RB, KC, m.sb);
+        }
+        self.frame_word_guard(SCOPE_FIELD, m.lit_b, jo);
+        self.mem(
+            true,
+            Width::X,
+            RA,
+            RB,
+            OBJ_PAYLOAD.wrapping_add(CLASS_FIELD),
+        );
+        self.mov_imm(RC, m.lit_a);
+        self.cmp_x(RA, RC);
+        self.bcond(NE, jo); // another class
+        self.obj_state_checks(&[], m.slot.wrapping_add(1), jo);
+        self.mem(true, Width::X, RA, RB, SLOTS_FIRST);
+    }
+
+    /// The receiver in `x10`: its `lazy` cell unborrowed and empty, its
+    /// `slots` cell unborrowed and at least `len` long.
+    fn obj_state_checks(&mut self, _slots: &[u32], len: u32, jo: Target) {
+        for off in [
+            OBJ_LAZY.wrapping_add(REFCELL_BORROW),
+            OBJ_LAZY.wrapping_add(REFCELL_VALUE),
+            SLOTS_BORROW,
+        ] {
+            self.mem(true, Width::X, T0, RB, off);
+            self.cbnz_x(T0, jo);
+        }
+        self.mem(true, Width::X, RA, RB, SLOTS_LEN);
+        self.mov_imm(T0, i64::from(len));
+        self.cmp_x(RA, T0);
+        self.bcond(LO, jo); // a slot past the array
+    }
+
+    /// The `Int` check of the slot (`x9` the slot array).
+    fn emit_prop_int_slot(&mut self, m: JitMeta, jo: Target) {
+        if m.bare {
+            return;
+        }
+        self.mem(true, Width::B, T0, RA, m.slot << SLOT_SHIFT);
+        self.cmp_w_imm(T0, u32::from(TAG_INT));
+        self.bcond(NE, jo);
+    }
+
+    /// The value a property row writes into `x11` (the x86
+    /// `prop_src_rcx`).
+    fn prop_src_rc(&mut self, m: JitMeta, jo: Target) {
+        match m.sc {
+            KT => {
+                self.cmp_tag(KT, m.sw, TAG_INT);
+                self.bcond(NE, jo);
+                self.load_payload(RC, KT, m.sw);
+            }
+            KC | KR => self.load_payload(RC, m.sc, m.sw),
+            _ => self.mov_imm(RC, m.lit_c),
+        }
+    }
+
+    fn emit_prop(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        self.mem(true, Width::X, RA, RA, so.wrapping_add(PAYLOAD));
+        self.store_payload(RA, m.kd, m.db);
+        self.store_tag(m.kd, m.db, TAG_INT);
+    }
+
+    fn emit_propw(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        self.prop_src_rc(m, jo);
+        if m.db != NO_DST {
+            self.store_payload(RC, m.kd, m.db);
+            self.store_tag(m.kd, m.db, TAG_INT);
+        }
+        self.mem(false, Width::X, RC, RA, so.wrapping_add(PAYLOAD));
+        if m.consume {
+            self.store_imm(m.sc, m.sw, 0);
+            self.store_tag(m.sc, m.sw, TAG_NULL);
+        }
+    }
+
+    /// `x11 = x11 ± 1` setting the flags.
+    fn step_rc(&mut self, inc: bool) {
+        let op = if inc { 0xB100_0000 } else { 0xF100_0000 };
+        self.put(op | (1 << 10) | (RC << 5) | RC);
+    }
+
+    /// `++`/`--` of the `Int` at `[x9 + at]` in place: the old value in
+    /// `x10` for a post op (`post`), the new one in `x11`; the result
+    /// temporary of `m.db` (base `kd`) gets the expression's value.
+    fn incdec_at(&mut self, m: JitMeta, at: u32, post: bool, kd: u8, jo: Target) {
+        self.mem(true, Width::X, RC, RA, at);
+        if post {
+            self.mov_reg(RB, RC);
+        }
+        self.step_rc(m.inc);
+        self.bcond(VS, jo); // overflow, before any store
+        self.mem(false, Width::X, RC, RA, at);
+        if m.db != NO_DST {
+            self.store_payload(if post { RB } else { RC }, kd, m.db);
+            self.store_tag(kd, m.db, TAG_INT);
+        }
+    }
+
+    fn emit_propinc(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        self.incdec_at(m, so.wrapping_add(PAYLOAD), m.kc != 0, m.kd, jo);
+    }
+
+    /// `isset()`/`empty()` (`m.inc`) of the value at `[x9 + at]` by its
+    /// tag (`Int`, `Null`, `Bool` inline, anything else `jo`), the clean
+    /// `Bool` into the temporary `m.db`.
+    fn isset_at(&mut self, m: JitMeta, at: u32, jo: Target) {
+        let (l_int, l_null, l_bool, l_end) = (
+            self.synth_label(),
+            self.synth_label(),
+            self.synth_label(),
+            self.synth_label(),
+        );
+        self.mem(true, Width::B, T0, RA, at);
+        self.cmp_w_imm(T0, u32::from(TAG_INT));
+        self.bcond(EQ, Target::Label(l_int));
+        self.cmp_w_imm(T0, u32::from(TAG_NULL));
+        self.bcond(EQ, Target::Label(l_null));
+        self.cmp_w_imm(T0, u32::from(TAG_BOOL));
+        self.bcond(EQ, Target::Label(l_bool));
+        self.b(jo);
+        self.set_label(l_int);
+        if m.inc {
+            self.mem(true, Width::X, RC, RA, at.wrapping_add(PAYLOAD));
+            self.cmp_x_imm(RC, 0);
+            self.cset_eq(RC);
+        } else {
+            self.mov_w(RC, 1);
+        }
+        self.b(Target::Label(l_end));
+        self.set_label(l_null);
+        self.mov_w(RC, u32::from(m.inc));
+        self.b(Target::Label(l_end));
+        self.set_label(l_bool);
+        if m.inc {
+            self.mem(true, Width::B, T0, RA, at.wrapping_add(BOOL_BYTE));
+            self.cmp_w_imm(T0, 0);
+            self.cset_eq(RC);
+        } else {
+            self.mov_w(RC, 1);
+        }
+        self.set_label(l_end);
+        self.stb_rc(KT, m.db.wrapping_add(BOOL_BYTE));
+        self.store_tag(KT, m.db, TAG_BOOL);
+    }
+
+    fn emit_propisset(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.isset_at(m, m.slot << SLOT_SHIFT, jo);
+    }
+
+    /// `xd = xd op xm` for the compound writes (`+ - *` exit `jo` on
+    /// overflow before any store; `& | ^` cannot fail).
+    fn opa(&mut self, arith: u8, rd: u32, rm: u32, jo: Target) {
+        let rrr = |op: u32| op | (rm << 16) | (rd << 5) | rd;
+        match arith {
+            0 => {
+                self.put(rrr(0xAB00_0000));
+                self.bcond(VS, jo);
+            }
+            1 => {
+                self.put(rrr(0xEB00_0000));
+                self.bcond(VS, jo);
+            }
+            2 => {
+                self.put(0x9B00_7C00 | (rm << 16) | (rd << 5) | T0);
+                self.put(0x9B40_7C00 | (rm << 16) | (rd << 5) | T1);
+                self.put(0xEB80_0000 | (T0 << 16) | (63 << 10) | (T1 << 5) | ZR);
+                self.bcond(NE, jo);
+                self.mov_reg(rd, T0);
+            }
+            OPA_BITAND => self.put(rrr(0x8A00_0000)),
+            OPA_BITOR => self.put(rrr(0xAA00_0000)),
+            _ => self.put(rrr(0xCA00_0000)),
+        }
+    }
+
+    fn emit_propopa(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        self.prop_src_rc(m, jo);
+        self.mem(true, Width::X, RB, RA, so.wrapping_add(PAYLOAD));
+        self.opa(m.arith, RB, RC, jo);
+        self.mem(false, Width::X, RB, RA, so.wrapping_add(PAYLOAD));
+        if m.db != NO_DST {
+            self.store_payload(RB, m.kd, m.db);
+            self.store_tag(m.kd, m.db, TAG_INT);
+        }
+        if m.consume {
+            self.store_imm(m.sc, m.sw, 0);
+            self.store_tag(m.sc, m.sw, TAG_NULL);
+        }
+    }
+
+    // ------------------------------------------- static properties
+
+    fn emit_sprop_guards(&mut self, m: JitMeta, jo: Target) {
+        if m.sg {
+            self.frame_word_guard(SCOPE_FIELD, m.lit_b, jo);
+        }
+        if m.cg {
+            self.frame_word_guard(CALLED_FIELD, m.wc, jo);
+        }
+    }
+
+    /// `x9` = the pinned cell, which must be unborrowed.
+    fn emit_sprop_cell(&mut self, m: JitMeta, jo: Target) {
+        self.mov_imm(RA, m.lit_a);
+        self.mem(true, Width::X, T0, RA, 0);
+        self.cbnz_x(T0, jo);
+    }
+
+    /// The cell's value must be an `Int`.
+    fn sprop_int(&mut self, jo: Target) {
+        self.mem(true, Width::B, T0, RA, REFCELL_VALUE);
+        self.cmp_w_imm(T0, u32::from(TAG_INT));
+        self.bcond(NE, jo);
+    }
+
+    fn emit_sprop(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        self.emit_sprop_cell(m, jo);
+        self.sprop_int(jo);
+        self.mem(true, Width::X, RA, RA, REFCELL_VALUE.wrapping_add(PAYLOAD));
+        self.store_payload(RA, KT, m.db);
+        self.store_tag(KT, m.db, TAG_INT);
+    }
+
+    fn emit_spropw(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        self.emit_sprop_cell(m, jo);
+        self.sprop_int(jo);
+        match m.sc {
+            KT => {
+                self.cmp_tag(KT, m.sw, TAG_INT);
+                self.bcond(NE, jo);
+                self.load_payload(RC, KT, m.sw);
+            }
+            KC => self.load_payload(RC, KC, m.sw),
+            _ => self.mov_imm(RC, m.lit_c),
+        }
+        if m.db != NO_DST {
+            self.store_payload(RC, KT, m.db);
+            self.store_tag(KT, m.db, TAG_INT);
+        }
+        self.mem(false, Width::X, RC, RA, REFCELL_VALUE.wrapping_add(PAYLOAD));
+        if m.consume {
+            self.store_imm(KT, m.sw, 0);
+            self.store_tag(KT, m.sw, TAG_NULL);
+        }
+    }
+
+    fn emit_spropinc(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        self.emit_sprop_cell(m, jo);
+        self.sprop_int(jo);
+        self.incdec_at(m, REFCELL_VALUE.wrapping_add(PAYLOAD), m.kc != 0, KT, jo);
+    }
+
+    fn emit_spropisset(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        self.emit_sprop_cell(m, jo);
+        self.isset_at(m, REFCELL_VALUE, jo);
+    }
+
+    fn emit_consti(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        if m.ka == KTHIS {
+            self.this_rb(jo);
+            self.obj_class_rb();
+            self.mov_imm(RA, m.lit_c);
+            self.cmp_x(RA, RB);
+            self.bcond(NE, jo); // another class
+        }
+        match m.arith {
+            CONST_NULL => {
+                self.store_imm(KT, m.db, 0);
+                self.store_tag(KT, m.db, TAG_NULL);
+            }
+            CONST_BOOL => {
+                self.mov_w(RC, u32::from(m.lit_a != 0));
+                self.stb_rc(KT, m.db.wrapping_add(BOOL_BYTE));
+                self.store_tag(KT, m.db, TAG_BOOL);
+            }
+            _ => {
+                self.store_imm(KT, m.db, m.lit_a);
+                self.store_tag(KT, m.db, TAG_INT);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------- calls
+
+    /// An inlined call, as the x86 `emit_call`.
+    fn emit_call(&mut self, cp: &CallPlan) {
+        let side = Target::Side(cp.callove);
+        if let Some((rk, roff, cls_addr)) = cp.recv {
+            if rk == KTHIS {
+                self.this_rb(side);
+            } else {
+                self.cmp_tag(rk, roff, TAG_OBJECT);
+                self.bcond(NE, side);
+                self.load_payload(RB, rk, roff);
+            }
+            self.obj_class_rb();
+            #[allow(clippy::cast_possible_wrap)]
+            self.mov_imm(RA, cls_addr.wrapping_sub(u64::from(RC_VALUE_OFFSET)) as i64);
+            self.cmp_x(RA, RB);
+            self.bcond(NE, side); // another class
+            self.frame_word_guard(SCOPE_FIELD, cp.recv_scope, side);
+        }
+        if let Some((scope, called, needs_this)) = cp.rel {
+            self.frame_word_guard(SCOPE_FIELD, scope, side);
+            if let Some(called) = called {
+                self.frame_word_guard(CALLED_FIELD, called, side);
+            }
+            if needs_this {
+                self.this_rb(side);
+            }
+        }
+        if let Some((off, word)) = cp.callee_obj {
+            if let Some(o) = &cp.callee_pin {
+                self.pins.push((word, o.clone()));
+            }
+            self.cmp_tag(KC, off, TAG_OBJECT);
+            self.bcond(NE, side);
+            self.load_payload(RB, KC, off);
+            #[allow(clippy::cast_possible_wrap)]
+            self.mov_imm(RA, word as i64);
+            self.cmp_x(RA, RB);
+            self.bcond(NE, side); // another object
+        }
+        if let (false, Some((rk, roff, _))) = (cp.prop_slots.is_empty(), cp.recv) {
+            self.load_receiver_rb(rk, roff);
+            let top = cp.prop_slots.iter().copied().max().unwrap_or(0);
+            self.obj_state_checks(&cp.prop_slots, top.wrapping_add(1), side);
+            self.mem(true, Width::X, RA, RB, SLOTS_FIRST);
+            for &slot in &cp.prop_slots {
+                self.mem(true, Width::B, T0, RA, slot << SLOT_SHIFT);
+                self.cmp_w_imm(T0, u32::from(TAG_INT));
+                self.bcond(NE, side);
+            }
+        }
+        for (n, arg) in cp.sends.iter().enumerate() {
+            if arg.kind == KSKIP {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let off = cp.base.wrapping_add((n as u32) << SLOT_SHIFT);
+            self.chk_int(arg.chk, arg.off, side);
+            self.operand(RB, arg.kind, arg.off, arg.lit);
+            self.store_payload(RB, KR, off);
+            self.store_tag(KR, off, TAG_INT);
+        }
+        for k in 0..cp.classes.len() {
+            let (c, m) = (cp.classes[k], cp.metas[k]);
+            match c {
+                C_PROP => self.emit_prop(m, side),
+                C_PROPW => self.emit_propw(m, side),
+                C_PROPINC => self.emit_propinc(m, side),
+                C_PROPOPA => self.emit_propopa(m, side),
+                _ => self.emit_op(c, m, &cp.rows[k], Target::Disarm(cp.callove)),
+            }
+        }
+        if cp.ret.kind == KQUICK {
+            if let Some(d) = cp.dst {
+                self.emit_helper(
+                    jit_quick_tail as *const () as usize,
+                    [HArg::Slot(KR, cp.ret.off), HArg::Slot(KT, d), HArg::Null],
+                    u32::try_from(cp.ret.lit).unwrap_or(u32::MAX),
+                    side,
+                );
+            }
+            return;
+        }
+        if let Some(d) = cp.dst {
+            match cp.ret.kind {
+                KNULL_ARG => {
+                    self.store_imm(KT, d, 0);
+                    self.store_tag(KT, d, TAG_NULL);
+                }
+                KR => {
+                    self.load_payload(RB, KR, cp.ret.off);
+                    self.store_payload(RB, KT, d);
+                    self.store_tag(KT, d, TAG_INT);
+                }
+                KL => {
+                    self.store_imm(KT, d, cp.ret.lit);
+                    self.store_tag(KT, d, TAG_INT);
+                }
+                _ => {}
+            }
+        }
+    }
+
     // ---------------------------------------------------------- driver
 
     /// Emit the whole region (branches still need `resolve`).
@@ -1540,7 +2032,15 @@ impl A64 {
                 if let Some(&from) = inner.get(&(head + j)) {
                     self.poll(Target::Poll(head + j, from));
                 }
-                self.emit_instr(j);
+                if self.plan.class[j] == C_CALL {
+                    // Each call plan is consumed once.
+                    match self.plan.calls[j].take() {
+                        Some(cp) => self.emit_call(&cp),
+                        None => self.b(Target::Side(head + j)),
+                    }
+                } else {
+                    self.emit_instr(j);
+                }
                 j += self.plan.span[j] as usize;
             } else {
                 j += 1;
@@ -2022,5 +2522,44 @@ function a12() { $a = [0]; for ($i = 0; $i < 4000; $i++) { $a[0] = PHP_INT_MAX; 
 a12();
 ");
         assert_eq!(out, "int(24995000)\nint(5000)\nint(12498500)\nint(3000)\nint(8002002)\narray(2) {\n  [\"x\"]=>\n  int(3999)\n  [\"y\"]=>\n  int(2)\n}\nint(12000)\nint(6000)\nint(7994006)\narray(1) {\n  [0]=>\n  int(3999)\n}\nint(3000)\nint(2999)\nint(20000)\nint(7998000)\nint(30385)\nfloat(1999.5)\nint(10)\narray(1) {\n  [0]=>\n  float(9.223372036854776E+18)\n}\n");
+    }
+
+    /// Property, static-property and constant rows and inlined calls
+    /// (functions, methods, closures), compiled, give the interpreter's
+    /// answers (`BUZZS_JIT=0`).
+    #[test]
+    fn object_rows_and_calls_run_compiled() {
+        let (out, _) = run(r"<?php
+class P { public $x = 0; public $y = 1; protected $z = 2; public static $s = 0; const K = 7;
+  function inc() { $this->x++; return $this->x; }
+  function addz($v) { $this->z += $v; return $this->z; }
+  function run() { $t = 0; for ($i = 0; $i < 4000; $i++) { $this->x = $i; $t += $this->x + $this->y; $this->y++; $t += self::K; if (isset($this->x)) $t++; } return $t; }
+  static function srun() { $t = 0; for ($i = 0; $i < 4000; $i++) { self::$s++; $t += self::$s; static::$s = static::$s + 1; if (isset(self::$s)) $t++; } return $t; }
+}
+function sq($a) { return $a * $a; }
+function add3($a, $b, $c) { return $a + $b + $c; }
+function nothing($a) { return; }
+function c0() { $p = new P; var_dump($p->run(), $p->x, $p->y); }
+c0();
+function c1() { var_dump(P::srun(), P::$s); }
+c1();
+function c2() { $t = 0; for ($i = 0; $i < 4000; $i++) { $t += sq($i) + add3($i, 1, 2); } var_dump($t); }
+c2();
+function c3() { $p = new P; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $p->inc(); $t += $p->addz(1); } var_dump($t); }
+c3();
+function c4() { $f = function ($a) { return $a + 1; }; $t = 0; for ($i = 0; $i < 4000; $i++) { $t += $f($i); } var_dump($t); }
+c4();
+function c5() { $p = new P; $t = 0; for ($i = 0; $i < 4000; $i++) { $p->x += 3; $p->x -= 1; $p->x *= 1; $p->x |= 0; } var_dump($p->x); }
+c5();
+function c6() { $p = new P; $p->x = PHP_INT_MAX - 2000; for ($i = 0; $i < 4000; $i++) { $p->x++; } var_dump($p->x); }
+c6();
+function c7() { $ps = [new P, new P]; $t = 0; for ($i = 0; $i < 4000; $i++) { $q = $ps[$i & 1]; $q->x = $i; $t += $q->x; } var_dump($t); }
+c7();
+function c8() { $t = 0; for ($i = 0; $i < 4000; $i++) { $r = nothing($i); if ($r === null) $t++; $t += P::K + PHP_INT_SIZE; } var_dump($t); }
+c8();
+function c9() { $t = 0; for ($i = 0; $i < 4000; $i++) { $t += abs(sq($i % 7) - 20); } var_dump($t); }
+c9();
+");
+        assert_eq!(out, "int(16032000)\nint(3999)\nint(4001)\nint(16004000)\nint(8000)\nint(21333344000)\nint(16012000)\nint(8002000)\nint(8000)\nfloat(9.223372036854776E+18)\nint(7998000)\nint(64000)\nint(52016)\n");
     }
 }
