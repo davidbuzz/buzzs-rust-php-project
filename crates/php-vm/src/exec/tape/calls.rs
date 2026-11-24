@@ -1971,6 +1971,39 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     if caller.calls.len() != prep.calls_len {
         return false;
     }
+    // `ZEND_SEND_REF` (`ZEND_SEND_VAR_EX` of a by-reference parameter) of a
+    // plain variable into a builtin's by-reference parameter (`$m` of
+    // `preg_match()`): the variable becomes a reference in place, as
+    // `Vm::place_make_ref` makes it, and the reference is passed. Anything
+    // else sent there (a value, a dimension) is the generic send's to
+    // report or resolve.
+    if let Callee::Native(b, _) = &prep.callee {
+        let sig = b.signature();
+        let by_ref = sig
+            .params
+            .get(n)
+            .or_else(|| sig.params.last().filter(|p| p.variadic))
+            .is_some_and(|p| p.by_ref);
+        if by_ref {
+            let ArgSrc::Place(pid) = src else {
+                return false;
+            };
+            if caller.symtab_attached
+                || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
+            {
+                return false;
+            }
+            let Some(slot) =
+                place_cv(&caller.code, *pid).and_then(|cv| caller.cvs.get_mut(cv as usize))
+            else {
+                return false;
+            };
+            let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
+            frame.args.push(Some(Value::Reference(r)));
+            prep.n = n + 1;
+            return true;
+        }
+    }
     let v = match src {
         ArgSrc::Val(Operand::Lit(i)) => match caller.code.literals.get(*i as usize) {
             Some(v) => clone_value(v),
@@ -2254,7 +2287,10 @@ pub(super) fn call_native(
                 return Err(prep);
             };
             if let Some(ty) = &p.ty {
-                if p.promote & crate::opcode::UNCHECKED_TYPE == 0
+                // (A by-reference parameter's type is the handler's to
+                // check, as in `call_builtin_impl`.)
+                if !p.by_ref
+                    && p.promote & crate::opcode::UNCHECKED_TYPE == 0
                     && !ty.is_mixed()
                     && !accepts_without_coercion(ty.mask, v)
                 {

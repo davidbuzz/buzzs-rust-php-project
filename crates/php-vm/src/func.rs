@@ -600,8 +600,10 @@ impl Builtin {
     #[cold]
     #[inline(never)]
     fn plain_call_slow(&self) -> PlainCall {
-        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
-            && !self.signature().params.iter().any(|p| p.by_ref);
+        // (A by-reference parameter is no reason: the tape's `send` binds
+        // a variable to it as `ZEND_SEND_REF` does, and declines anything
+        // else for the generic send to report.)
+        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0;
         let kind = if !plain {
             PlainCall::No
         } else if matches!(

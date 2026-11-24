@@ -475,3 +475,149 @@ class B extends A {
          \nDeprecated: Callables of the form [\"B\", \"A::foo\"] are deprecated in test.php on line 8\nB4\n"
     );
 }
+
+/// By-reference arguments of builtins called from namespaced code, which
+/// the tape prepares (`ZEND_SEND_REF` of a variable binds a reference in
+/// place): sorts and pointer functions on plain variables, references and
+/// globals; a dimension, `array_multisort()`'s prefer-reference
+/// parameters, a literal (Error) and a call result (notice) take the
+/// generic send. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn by_reference_arguments_of_prepared_calls() {
+    let src = r#"namespace App;
+function f() { return [3, 1, 2]; }
+function run() {
+    for ($i = 0; $i < 2; $i++) {
+        $arr = [3, 1, 2]; sort($arr); var_dump($arr);
+        $r = [5, 4]; $ref = &$r; rsort($ref); var_dump($r);
+        $q = [1, 2, 3]; var_dump(array_shift($q), $q, end($q), key($q), reset($q));
+        $data = ['a' => [2, 1]]; sort($data['a']); var_dump($data);
+        $ar1 = [3, 1]; $ar2 = ['c', 'a']; array_multisort($ar1, $ar2); var_dump($ar1, $ar2);
+        try { sort([3, 2]); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        $t = end(f()); var_dump($t);
+    }
+}
+run();
+$g = [9, 8]; sort($g); var_dump($g, $GLOBALS['g']);
+function gl() { global $g; rsort($g); }
+gl(); var_dump($g);
+"#;
+    let expected = r#"array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(4)
+}
+int(1)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+int(3)
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+}
+Error: sort(): Argument #1 ($array) could not be passed by reference
+
+Notice: Only variables should be passed by reference in test.php on line 12
+int(2)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(4)
+}
+int(1)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+int(3)
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+}
+Error: sort(): Argument #1 ($array) could not be passed by reference
+
+Notice: Only variables should be passed by reference in test.php on line 12
+int(2)
+array(2) {
+  [0]=>
+  int(8)
+  [1]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  int(8)
+  [1]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(8)
+}
+"#;
+    assert_eq!(run(src), expected);
+}
