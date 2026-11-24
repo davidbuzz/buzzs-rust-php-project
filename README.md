@@ -4,7 +4,9 @@ David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust w
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
 than the classic C impl. Passing tests: 21,842 of the 21,843 in-scope tests that run
 (21,827 pass, 15 expected failures; the one failure, ext/openssl's
-`stream_server_reneg_limit`, failed in the parallel run and passes on its own). Recorded in
+`stream_server_reneg_limit`, failed in the parallel run because it and
+`stream_server_reneg_limit_trampoline` write and delete the same temporary certificate; since
+`125e811f` the runner keeps the two apart, `phpt-conflicts.txt`, and both pass). Recorded in
 [22-NOV-2026.full-test-run.log](22-NOV-2026.full-test-run.log) with the build, the Rust tests
 and the timing below.
 
