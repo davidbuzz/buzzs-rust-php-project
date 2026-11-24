@@ -160,34 +160,7 @@ fn parse_bool(v: &str) -> bool {
     {
         return true;
     }
-    atol(t) != 0
-}
-
-/// `ZEND_ATOL`-style leading-integer parse (no unit suffixes needed here).
-fn atol(v: &str) -> i64 {
-    let b = v.trim_start().as_bytes();
-    let mut i = 0;
-    let neg = match b.first() {
-        Some(b'-') => {
-            i = 1;
-            true
-        }
-        Some(b'+') => {
-            i = 1;
-            false
-        }
-        _ => false,
-    };
-    let mut n: i64 = 0;
-    while i < b.len() && b[i].is_ascii_digit() {
-        n = n.saturating_mul(10).saturating_add(i64::from(b[i] - b'0'));
-        i += 1;
-    }
-    if neg {
-        -n
-    } else {
-        n
-    }
+    php_support::atol(t.as_bytes()) != 0
 }
 
 /// Applies an INI change. Returns `false` when the directive is unknown or
@@ -203,18 +176,21 @@ pub fn set(name: &str, value: Option<&str>) -> bool {
             "mysqlnd.debug" => s.debug = value.map(str::to_string),
             "mysqlnd.trace_alloc" => s.trace_alloc = value.map(str::to_string),
             "mysqlnd.net_cmd_buffer_size" => {
-                let n = atol(v);
+                let n = php_support::atol(v.as_bytes());
                 match usize::try_from(n) {
                     Ok(n) if n >= NET_CMD_BUFFER_MIN_SIZE => s.net_cmd_buffer_size = n,
                     _ => return false,
                 }
             }
             "mysqlnd.net_read_buffer_size" => {
-                s.net_read_buffer_size = usize::try_from(atol(v)).unwrap_or(0);
+                s.net_read_buffer_size =
+                    usize::try_from(php_support::atol(v.as_bytes())).unwrap_or(0);
             }
-            "mysqlnd.net_read_timeout" => s.net_read_timeout = atol(v),
-            "mysqlnd.log_mask" => s.log_mask = atol(v),
-            "mysqlnd.mempool_default_size" => s.mempool_default_size = atol(v),
+            "mysqlnd.net_read_timeout" => s.net_read_timeout = php_support::atol(v.as_bytes()),
+            "mysqlnd.log_mask" => s.log_mask = php_support::atol(v.as_bytes()),
+            "mysqlnd.mempool_default_size" => {
+                s.mempool_default_size = php_support::atol(v.as_bytes());
+            }
             "mysqlnd.sha256_server_public_key" => {
                 s.sha256_server_public_key = value.map(str::to_string);
             }

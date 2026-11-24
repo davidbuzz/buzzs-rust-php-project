@@ -860,7 +860,7 @@ pub fn parse_with_events(
                     }
                 }
                 if normalize_protected_variable(&param).eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
-                    max_file_size = crate::headers::strtol(c_str(&value));
+                    max_file_size = php_support::atol(c_str(&value));
                 }
                 continue;
             }

@@ -409,7 +409,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     // FastCGI: the `-b` socket, or the one on standard input.
     let listener = if let Some(path) = &bindpath {
         if let Ok(b) = std::env::var("PHP_FCGI_BACKLOG") {
-            let backlog = fastcgi::atoi(&b);
+            let backlog = i64::from(php_support::atoi(b.as_bytes()));
             if backlog < -1 || backlog > i64::from(libc::SOMAXCONN) {
                 let _ = std::io::stderr().write_all(
                     format!(
@@ -729,9 +729,11 @@ fn second_pass(
         }
         if c == i32::from(b'T') {
             let arg = v.unwrap_or_default();
+            // `atoi(php_optarg)`, as `-T` reads its counts.
+            let atoi = |s: &[u8]| i64::from(php_support::atoi(s));
             timing = Some(match arg.iter().position(|&b| b == b',') {
-                Some(i) => (env::atol(&arg[..i]), env::atol(&arg[i + 1..])),
-                None => (0, env::atol(&arg)),
+                Some(i) => (atoi(&arg[..i]), atoi(&arg[i + 1..])),
+                None => (0, atoi(&arg)),
             });
         }
     }
@@ -756,7 +758,7 @@ fn fastcgi_main(
     };
     let mut max_requests: i64 = 500;
     if let Ok(v) = std::env::var("PHP_FCGI_MAX_REQUESTS") {
-        max_requests = fastcgi::atoi(&v);
+        max_requests = i64::from(php_support::atoi(v.as_bytes()));
         if max_requests < 0 {
             return fail("PHP_FCGI_MAX_REQUESTS is not valid\n");
         }
@@ -764,7 +766,7 @@ fn fastcgi_main(
     let children_str = std::env::var("PHP_FCGI_CHILDREN").ok();
     let mut children = 0;
     if let Some(c) = &children_str {
-        children = fastcgi::atoi(c);
+        children = i64::from(php_support::atoi(c.as_bytes()));
         if children < 0 {
             return fail("PHP_FCGI_CHILDREN is not valid\n");
         }

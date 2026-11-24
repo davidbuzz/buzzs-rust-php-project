@@ -12,10 +12,11 @@ use crate::diag::StreamErrorCode;
 use crate::memory::{memory_create, memory_open, temp_create, MAX_MEM};
 use crate::mode::TempMode;
 use crate::stream::{OpFailed, Stream, StreamOps, StreamState, WrapperInfo, SEEK_SET};
-use crate::util::{starts_with_ci, strtol};
+use crate::util::starts_with_ci;
 use crate::value::Value;
 use crate::wrapper::{wrapper_warn, OpenError, Wrapper, STREAM_OPEN_FOR_INCLUDE};
 use crate::{state, sys};
+use php_support::strtol;
 
 /// The wrapper label.
 pub const LABEL: &str = "PHP";

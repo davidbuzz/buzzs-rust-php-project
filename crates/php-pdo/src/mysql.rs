@@ -157,35 +157,6 @@ pub struct DsnParts {
     pub password: Option<Vec<u8>>,
 }
 
-/// C `atoi()`: leading whitespace, optional sign, digits.
-fn atoi(s: &[u8]) -> i64 {
-    let mut i = 0;
-    while i < s.len() && (s[i] == b' ' || (b'\t'..=b'\r').contains(&s[i])) {
-        i += 1;
-    }
-    let neg = match s.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    let mut n: i64 = 0;
-    while let Some(d) = s.get(i).filter(|c| c.is_ascii_digit()) {
-        n = n.wrapping_mul(10).wrapping_add(i64::from(d - b'0'));
-        i += 1;
-    }
-    if neg {
-        n.wrapping_neg()
-    } else {
-        n
-    }
-}
-
 /// Parses a `mysql:` data source like `pdo_mysql_handle_factory()`.
 pub fn parse_dsn(data_source: &[u8], default_socket: Option<&[u8]>) -> DsnParts {
     let mut vars: [(&str, Option<Vec<u8>>); 7] = [
@@ -201,7 +172,7 @@ pub fn parse_dsn(data_source: &[u8], default_socket: Option<&[u8]>) -> DsnParts 
     let [charset, dbname, host, port, socket, user, password] = vars.map(|(_, v)| v);
     let host = host.unwrap_or_default();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let port = port.map_or(3306, |p| atoi(&p) as u32);
+    let port = port.map_or(3306, |p| php_support::atoi(&p) as u32);
     let unix_socket = if host == b"localhost" { socket } else { None };
     DsnParts {
         charset,
@@ -1537,7 +1508,6 @@ mod tests {
     fn dsn_explicit_socket() {
         let d = parse_dsn(b"unix_socket=/x.sock", None);
         assert_eq!(d.unix_socket.as_deref(), Some(&b"/x.sock"[..]));
-        assert_eq!(atoi(b"  -12ab"), -12);
     }
 
     #[test]

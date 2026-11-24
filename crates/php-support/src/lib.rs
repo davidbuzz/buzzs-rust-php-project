@@ -30,4 +30,4 @@ mod numeric;
 pub mod output;
 
 pub use diag::{Diagnostic, ErrorLevel};
-pub use numeric::{atol, is_numeric_str, NumericValue};
+pub use numeric::{atoi, atol, is_numeric_str, strtol, NumericValue};

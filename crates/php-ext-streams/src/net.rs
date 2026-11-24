@@ -1100,7 +1100,7 @@ fn parse_network_address(addr: &[u8]) -> Option<std::net::SocketAddr> {
         let colon = addr.iter().position(|&c| c == b':')?;
         (&addr[..colon], &addr[colon + 1..])
     };
-    let (port, _) = php_streams::util::strtol(port);
+    let (port, _) = php_support::strtol(port);
     let port = u16::try_from(port).ok()?;
     let host = std::str::from_utf8(host).ok()?;
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {

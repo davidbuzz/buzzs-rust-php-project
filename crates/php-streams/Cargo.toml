@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-support = { path = "../php-support" }
 libc = "0.2"
 php-stdstr = { path = "../php-stdstr" }
 php-uri = { path = "../php-uri" }

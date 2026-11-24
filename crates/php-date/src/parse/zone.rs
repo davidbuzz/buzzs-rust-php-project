@@ -5,6 +5,7 @@
 
 use crate::time::{Time, ZoneType};
 use crate::tz;
+use php_support::atol;
 
 /// glibc's `_POSIX_TZNAME_MAX`: only words shorter than this are tried as
 /// abbreviations.
@@ -37,19 +38,6 @@ impl<'a> Cur<'a> {
     }
 }
 
-/// `strtol(s, NULL, 10)` on a byte string (leading digits only; our inputs
-/// never carry whitespace or signs here).
-pub(crate) fn strtol(s: &[u8]) -> i64 {
-    let mut v: i64 = 0;
-    for &b in s {
-        if !b.is_ascii_digit() {
-            break;
-        }
-        v = v.saturating_mul(10).saturating_add(i64::from(b - b'0'));
-    }
-    v
-}
-
 #[allow(clippy::cast_possible_truncation)]
 fn s_hour(a: i64) -> i64 {
     i64::from(a.wrapping_mul(3600) as i32)
@@ -71,29 +59,28 @@ fn parse_tz_cor(c: &mut Cur<'_>) -> (i64, bool) {
     let at = |k: usize| b.get(k).copied().unwrap_or(0);
     let from = |k: usize| b.get(k..).unwrap_or(&[]);
     match b.len() {
-        1 | 2 => (s_hour(strtol(b)), true),
+        1 | 2 => (s_hour(atol(b)), true),
         3 | 4 => {
             if at(1) == b':' {
-                (s_hour(strtol(b)) + s_min(strtol(from(2))), true)
+                (s_hour(atol(b)) + s_min(atol(from(2))), true)
             } else if at(2) == b':' {
-                (s_hour(strtol(b)) + s_min(strtol(from(3))), true)
+                (s_hour(atol(b)) + s_min(atol(from(3))), true)
             } else {
-                let tmp = strtol(b);
+                let tmp = atol(b);
                 (s_hour(tmp / 100) + s_min(tmp % 100), true)
             }
         }
-        5 if at(2) == b':' => (s_hour(strtol(b)) + s_min(strtol(from(3))), true),
+        5 if at(2) == b':' => (s_hour(atol(b)) + s_min(atol(from(3))), true),
         6 => {
-            let tmp = strtol(b);
+            let tmp = atol(b);
             (
                 s_hour(tmp / 10000) + s_min((tmp / 100) % 100) + (tmp % 100),
                 true,
             )
         }
-        8 if at(2) == b':' && at(5) == b':' => (
-            s_hour(strtol(b)) + s_min(strtol(from(3))) + strtol(from(6)),
-            true,
-        ),
+        8 if at(2) == b':' && at(5) == b':' => {
+            (s_hour(atol(b)) + s_min(atol(from(3))) + atol(from(6)), true)
+        }
         _ => (0, false),
     }
 }

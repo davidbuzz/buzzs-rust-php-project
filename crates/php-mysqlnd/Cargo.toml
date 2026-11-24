@@ -10,6 +10,7 @@ rust-version.workspace = true
 php-runtime = { path = "../php-runtime" }
 php-hash = { path = "../php-hash" }
 php-memlimit = { path = "../php-memlimit" }
+php-support = { path = "../php-support" }
 openssl = "0.10"
 
 [lints]

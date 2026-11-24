@@ -195,7 +195,8 @@ pub(crate) fn is_numeric_long_type_only(s: &[u8]) -> bool {
 /// Decimal only, as `atoi()`/`atol()`/`ZEND_ATOL()` read: `"0x10"` is 0.
 /// The `0x`/`0o`/`0b` prefixes belong to `zend_ini_parse_quantity()`
 /// ([`crate::ini::parse_quantity`]), which `OnUpdateLong` uses.
-pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
+#[must_use]
+pub fn strtol(s: &[u8]) -> (i64, usize) {
     let start = s.iter().take_while(|&&c| is_ws(c)).count();
     let sign = usize::from(matches!(s.get(start), Some(b'+' | b'-')));
     let digits = s[start + sign..]
@@ -223,8 +224,10 @@ pub fn atol(s: &[u8]) -> i64 {
     strtol(s).0
 }
 
-/// C `atoi()` as glibc implements it: `(int) strtol(s, NULL, 10)`.
-pub(crate) fn atoi(s: &[u8]) -> i32 {
+/// C `atoi()` as glibc implements it: `(int) strtol(s, NULL, 10)`, so a
+/// value outside `int` keeps its low 32 bits (`"4294967297"` is 1).
+#[must_use]
+pub fn atoi(s: &[u8]) -> i32 {
     #[allow(clippy::cast_possible_truncation)]
     let v = atol(s) as i32;
     v

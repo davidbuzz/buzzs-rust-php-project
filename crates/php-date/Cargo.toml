@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true

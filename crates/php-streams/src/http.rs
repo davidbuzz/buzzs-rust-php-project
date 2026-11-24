@@ -396,12 +396,6 @@ fn cstr(s: &[u8]) -> &[u8] {
     s.iter().position(|&c| c == 0).map_or(s, |i| &s[..i])
 }
 
-/// `atoi()`.
-fn atoi(s: &[u8]) -> i64 {
-    let (v, _) = crate::util::strtol(s);
-    i64::from(i32::try_from(v).unwrap_or(0))
-}
-
 /// `php_url_decode()`.
 fn url_decode(s: &[u8]) -> Vec<u8> {
     php_stdstr::url::urldecode(s)
@@ -410,7 +404,7 @@ fn url_decode(s: &[u8]) -> Vec<u8> {
 /// The response code of a status line (`atoi(line + 9)`).
 fn status_code(line: &[u8]) -> i64 {
     if line.len() > 9 {
-        atoi(&line[9..])
+        i64::from(php_support::atoi(&line[9..]))
     } else {
         0
     }

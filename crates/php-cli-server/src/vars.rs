@@ -134,7 +134,7 @@ pub fn display_errors(vm: &Vm) -> bool {
     let v = ini_bytes(vm, "display_errors").to_ascii_lowercase();
     match v.as_slice() {
         b"on" | b"yes" | b"true" | b"stdout" | b"stderr" => true,
-        _ => crate::headers::strtol(&v) != 0,
+        _ => php_support::atol(&v) != 0,
     }
 }
 
@@ -387,7 +387,7 @@ impl Limits {
                 .unwrap_or_else(|| vm.ini_long("max_input_vars")),
             max_multipart_body_parts: options.max_multipart_body_parts.unwrap_or_else(|| {
                 vm.ini_string("max_multipart_body_parts")
-                    .map_or(-1, |v| crate::headers::strtol(&v))
+                    .map_or(-1, |v| php_support::atol(&v))
             }),
             post_max_size: options
                 .post_max_size

@@ -660,7 +660,7 @@ pub fn display_errors(vm: &Vm) -> bool {
     let v = v.to_ascii_lowercase();
     match v.as_slice() {
         b"on" | b"yes" | b"true" | b"stdout" | b"stderr" => true,
-        _ => crate::headers::strtol(&v) != 0,
+        _ => php_support::atol(&v) != 0,
     }
 }
 

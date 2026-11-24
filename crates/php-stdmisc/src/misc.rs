@@ -15,33 +15,8 @@ pub const ASSERT_CONSTANTS: &[(&str, i64)] = &[
     ("ASSERT_EXCEPTION", 5),
 ];
 
-/// `zend_ini_parse_bool()`: "true"/"yes"/"on" (any case) or a non-zero
-/// integer prefix.
-#[must_use]
-pub fn ini_parse_bool(s: &[u8]) -> bool {
-    let l = s.to_ascii_lowercase();
-    if matches!(l.as_slice(), b"true" | b"yes" | b"on") {
-        return true;
-    }
-    // atoi()
-    let t: Vec<u8> = s
-        .iter()
-        .skip_while(|c| c.is_ascii_whitespace())
-        .copied()
-        .collect();
-    let (neg, digits) = match t.first() {
-        Some(b'-') => (true, &t[1..]),
-        Some(b'+') => (false, &t[1..]),
-        _ => (false, &t[..]),
-    };
-    let n: i64 = digits
-        .iter()
-        .take_while(|c| c.is_ascii_digit())
-        .fold(0i64, |a, &c| {
-            a.wrapping_mul(10).wrapping_add(i64::from(c - b'0'))
-        });
-    (if neg { -n } else { n }) != 0
-}
+/// `zend_ini_parse_bool()`.
+pub use php_support::ini::parse_bool as ini_parse_bool;
 
 /// The `assert.*` settings (`ASSERTG`; one bool per INI directive).
 #[derive(Debug, Clone)]
@@ -217,6 +192,8 @@ mod tests {
                 && ini_parse_bool(b" 2")
                 && !ini_parse_bool(b"off")
                 && !ini_parse_bool(b"0")
+                // atoi(): the low 32 bits of the long are 0.
+                && !ini_parse_bool(b"4294967296")
         );
     }
 

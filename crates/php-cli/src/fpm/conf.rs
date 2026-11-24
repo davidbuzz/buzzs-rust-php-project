@@ -225,22 +225,6 @@ fn set_boolean(v: &str) -> Result<bool, String> {
     Ok(yes)
 }
 
-/// `atoi()`: the leading decimal digits, with a sign.
-fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let (neg, rest) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let mut n: i64 = 0;
-    for c in rest.bytes().take_while(u8::is_ascii_digit) {
-        n = (n * 10 + i64::from(c - b'0')).min(i64::from(i32::MAX) + 1);
-    }
-    let n = if neg { -n } else { n };
-    i32::try_from(n).unwrap_or(if neg { i32::MIN } else { i32::MAX })
-}
-
 /// `fpm_conf_set_integer()`: digits, a leading `-` allowed.
 fn set_integer(v: &str) -> Result<i32, String> {
     for (i, c) in v.bytes().enumerate() {
@@ -251,7 +235,7 @@ fn set_integer(v: &str) -> Result<i32, String> {
             return Err("is not a valid number (greater or equal than zero)".into());
         }
     }
-    Ok(atoi(v))
+    Ok(php_support::atoi(v.as_bytes()))
 }
 
 /// `fpm_conf_set_time()`: seconds, with an `s`, `m`, `h` or `d` suffix.
@@ -261,11 +245,11 @@ fn set_time(v: &str) -> Result<i32, String> {
     };
     let body = &v[..v.len() - 1];
     Ok(match suffix {
-        b'm' => atoi(body).saturating_mul(60),
-        b'h' => atoi(body).saturating_mul(3600),
-        b'd' => atoi(body).saturating_mul(86400),
-        b's' => atoi(body),
-        b'0'..=b'9' => atoi(v),
+        b'm' => php_support::atoi(body.as_bytes()).saturating_mul(60),
+        b'h' => php_support::atoi(body.as_bytes()).saturating_mul(3600),
+        b'd' => php_support::atoi(body.as_bytes()).saturating_mul(86400),
+        b's' => php_support::atoi(body.as_bytes()),
+        b'0'..=b'9' => php_support::atoi(v.as_bytes()),
         _ => return Err("unknown suffix used in time value".into()),
     })
 }
@@ -1399,6 +1383,8 @@ mod tests {
         assert_eq!(set_boolean(""), Ok(false));
         assert!(set_boolean("maybe").is_err());
         assert_eq!(set_integer("-3"), Ok(-3));
+        // atoi(): the low 32 bits, as glibc's (int) strtol().
+        assert_eq!(set_integer("4294967297"), Ok(1));
         assert!(set_integer("3x").is_err());
         assert_eq!(set_time("2m"), Ok(120));
         assert_eq!(set_time("15"), Ok(15));

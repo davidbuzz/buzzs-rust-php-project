@@ -17,7 +17,7 @@ use openssl::ssl::{Ssl, SslContext, SslMethod, SslOptions, SslSession, SslSessio
 
 use crate::channel::{self, io_strerror, secs, Channel};
 use crate::list::{ascii_get_chunk, ascii_nb_chunk, split_listing};
-use crate::text::{cstr, parse_epsv, parse_mdtm, parse_pasv, strtol};
+use crate::text::{cstr, parse_epsv, parse_mdtm, parse_pasv};
 
 /// `FTP_BUFSIZE`: the size of the reply buffer and of transfer chunks.
 pub const BUFSIZE: usize = 4096;
@@ -670,7 +670,7 @@ impl Ftp {
         if !self.set_type(TransferType::Image) || !self.command(b"SIZE", path, |r| r == 213) {
             return -1;
         }
-        strtol(self.last_reply())
+        php_support::atol(self.last_reply())
     }
 
     /// `ftp_mdtm`: `MDTM path` as a Unix timestamp; -1 on failure.

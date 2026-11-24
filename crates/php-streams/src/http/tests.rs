@@ -159,3 +159,11 @@ fn header_helpers() {
     assert_eq!(redirect_url(&r, &t, b"/c"), b"http://h:8080/c");
     assert_eq!(redirect_url(&r, &t, b"http://x/y"), b"http://x/y");
 }
+
+#[test]
+fn status_code_reads_like_atoi() {
+    assert_eq!(status_code(b"HTTP/1.1 404 Not Found"), 404);
+    assert_eq!(status_code(b"HTTP/1.1"), 0);
+    // atoi(): the low 32 bits of the long, as glibc's (int) strtol().
+    assert_eq!(status_code(b"HTTP/1.1 4294967497 X"), 201);
+}

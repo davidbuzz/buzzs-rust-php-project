@@ -37,46 +37,6 @@ pub fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// `ZEND_STRTOL(s, &end, 10)`: returns the value and the number of bytes
-/// consumed (0 when no digits were found).
-pub fn strtol(s: &[u8]) -> (i64, usize) {
-    let mut i = 0;
-    while i < s.len() && matches!(s[i], b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    let start = i;
-    let mut val: i64 = 0;
-    let mut overflow = false;
-    while i < s.len() && s[i].is_ascii_digit() {
-        let d = i64::from(s[i] - b'0');
-        if !overflow {
-            match val.checked_mul(10).and_then(|v| {
-                if neg {
-                    v.checked_sub(d)
-                } else {
-                    v.checked_add(d)
-                }
-            }) {
-                Some(v) => val = v,
-                None => overflow = true,
-            }
-        }
-        i += 1;
-    }
-    if i == start {
-        return (0, 0);
-    }
-    if overflow {
-        val = if neg { i64::MIN } else { i64::MAX };
-    }
-    (val, i)
-}
-
 /// Lossy display of bytes.
 pub fn lossy(s: &[u8]) -> String {
     String::from_utf8_lossy(s).into_owned()
@@ -104,14 +64,6 @@ pub fn reserve_more(v: &mut Vec<u8>, additional: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn strtol_cases() {
-        assert_eq!(strtol(b"123abc"), (123, 3));
-        assert_eq!(strtol(b"  -5"), (-5, 4));
-        assert_eq!(strtol(b"x"), (0, 0));
-        assert_eq!(strtol(b"99999999999999999999").0, i64::MAX);
-    }
 
     #[test]
     fn finders() {

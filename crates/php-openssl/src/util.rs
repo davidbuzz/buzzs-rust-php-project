@@ -149,29 +149,6 @@ pub fn timegm(year: i64, mon0: i64, mday: i64, hour: i64, min: i64, sec: i64) ->
     days * 86400 + hour * 3600 + min * 60 + sec
 }
 
-/// C `atoi` on a byte slice (leading whitespace, optional sign, digits).
-pub fn atoi(s: &[u8]) -> i64 {
-    let mut i = 0;
-    while i < s.len() && s[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    let mut v: i64 = 0;
-    while i < s.len() && s[i].is_ascii_digit() {
-        v = v.wrapping_mul(10).wrapping_add(i64::from(s[i] - b'0'));
-        i += 1;
-    }
-    if neg {
-        -v
-    } else {
-        v
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,12 +185,5 @@ mod tests {
         assert_eq!(timegm(1970, 0, 1, 0, 0, 0), 0);
         assert_eq!(timegm(2000, 1, 29, 12, 0, 0), 951_825_600);
         assert_eq!(timegm(2038, 0, 19, 3, 14, 8), 2_147_483_648);
-    }
-
-    #[test]
-    fn atoi_c() {
-        assert_eq!(atoi(b" 42x"), 42);
-        assert_eq!(atoi(b"-7"), -7);
-        assert_eq!(atoi(b"x"), 0);
     }
 }

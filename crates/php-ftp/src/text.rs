@@ -9,37 +9,6 @@ pub(crate) fn cstr(s: &[u8]) -> &[u8] {
     s.iter().position(|&c| c == 0).map_or(s, |p| &s[..p])
 }
 
-/// `strtol(s, NULL, 10)` (`ZEND_ATOL`): leading whitespace, optional sign,
-/// decimal digits; saturates on overflow; 0 when nothing parses.
-pub(crate) fn strtol(s: &[u8]) -> i64 {
-    let mut i = 0;
-    while i < s.len() && is_space(s[i]) {
-        i += 1;
-    }
-    let neg = match s.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    let mut v: i64 = 0;
-    while let Some(d) = s.get(i).filter(|c| c.is_ascii_digit()) {
-        let d = i64::from(d - b'0');
-        v = if neg {
-            v.saturating_mul(10).saturating_sub(d)
-        } else {
-            v.saturating_mul(10).saturating_add(d)
-        };
-        i += 1;
-    }
-    v
-}
-
 /// C `isspace` in the "C" locale.
 fn is_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
@@ -212,14 +181,6 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn strtol_edges() {
-        assert_eq!(strtol(b"5368709120"), 5_368_709_120);
-        assert_eq!(strtol(b"  -12abc"), -12);
-        assert_eq!(strtol(b"x"), 0);
-        assert_eq!(strtol(b"99999999999999999999999"), i64::MAX);
-    }
 
     #[test]
     fn pasv_reply() {
