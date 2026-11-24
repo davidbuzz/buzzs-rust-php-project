@@ -262,7 +262,7 @@ pub(crate) fn fastcgi_request(
 }
 
 /// A worker's VM and the INI settings it was made from.
-type KeptVm = (Vec<(String, String)>, PreparedVm);
+pub(crate) type KeptVm = (Vec<(String, String)>, PreparedVm);
 
 thread_local! {
     /// The FastCGI worker's VM between requests (see [`worker_vm`]).
@@ -285,6 +285,30 @@ fn worker_vm(cfg: &Config, ini: &[(String, String)], setup: Option<fn(&mut Vm)>)
         f(&mut p.vm);
     }
     p
+}
+
+/// The VM [`worker_vm`] would make for a request with these settings
+/// (`cfg` and the hooks' `extra_ini`), made ahead: php-fpm's master and
+/// php-cgi's parent make it before they fork, so module startup runs once
+/// and the workers share its pages copy-on-write (`fpm_php_init_main()`).
+pub(crate) fn prepare_worker_vm(
+    cfg: &Config,
+    extra_ini: &[(String, String)],
+    setup: Option<fn(&mut Vm)>,
+) -> KeptVm {
+    let mut ini = sapi_ini(cfg);
+    ini.extend(extra_ini.iter().cloned());
+    let mut p = new_prepared_vm(cfg, ini.clone());
+    if let Some(f) = setup {
+        f(&mut p.vm);
+    }
+    (ini, p)
+}
+
+/// Makes `kept` (from [`prepare_worker_vm`]) the worker's VM: its first
+/// request takes it instead of making one.
+pub(crate) fn adopt_worker_vm(kept: KeptVm) {
+    WORKER_VM.with(|w| *w.borrow_mut() = Some(kept));
 }
 
 /// `php_request_shutdown()` for the worker: its VM goes back to its
