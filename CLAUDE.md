@@ -20,6 +20,12 @@ target/debug/php -r 'echo 1+2, "\n";'            # smoke test
 cargo fmt && cargo clippy --all-targets -p <crate> && cargo test -p <crate>
 cargo test -p <crate> <test_name_substring>      # one Rust test
 
+# What a change affects: the changed crates and every crate depending on them (vs master,
+# or the unpushed commits on master; --base REF to choose), and their php-src test folders:
+cargo test $(scripts/affected.py)                 # -p list, or --workspace for shared files
+scripts/affected.py --list                        # the crates, and why each one is in
+target/debug/phpt-runner --php target/debug/php -j 3 -q $(scripts/affected.py --phpt)
+
 # .phpt tests, the real acceptance criterion (file or directory):
 target/debug/phpt-runner --php target/debug/php modules/php-src/Zend/tests/foo.phpt
 env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 3 -q --no-artifacts \
