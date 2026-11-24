@@ -4679,6 +4679,7 @@ impl Vm {
             || self.observer.enabled
             || uf.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
             || uf.call_shape() == crate::func::CallShape::NOT_PLAIN
+            || uf.flags & flags::VARIADIC != 0
         {
             return None;
         }

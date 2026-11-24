@@ -1316,7 +1316,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
                 return None;
             }
             ready_frame(frame, &uf);
-            let limit = uf.plain_params().min(MAX_ARGS);
+            let limit = user_limit(&uf);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
@@ -1422,6 +1422,19 @@ pub(super) fn quick_send(
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
 /// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
+/// How many arguments a prepared call of `uf` (a plain declaration) takes:
+/// one per parameter it binds ([`UserFunction::plain_params`]), and for a
+/// function with a trailing variadic parameter up to [`MAX_ARGS`] in all,
+/// the extra ones going to the frame's argument buffer ([`send`]).
+#[inline]
+fn user_limit(uf: &UserFunction) -> usize {
+    if uf.flags & flags::VARIADIC != 0 {
+        MAX_ARGS
+    } else {
+        uf.plain_params().min(MAX_ARGS)
+    }
+}
+
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     debug_assert!(
         frame.this.is_none()
@@ -1527,7 +1540,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: user_limit(&uf),
         callee: Callee::User(uf),
         n: 0,
         calls_len,
@@ -1575,7 +1588,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     frame.scope = scope;
     frame.called = called_class;
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: user_limit(&uf),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1715,7 +1728,7 @@ pub(super) fn prepare_relative_static(
     frame.scope = Some(scope);
     frame.called = Some(late_bound);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit: user_limit(&uf),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1774,7 +1787,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     frame.closure = if d.fake { None } else { Some(o.clone()) };
     drop(internal);
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: user_limit(&uf),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1853,7 +1866,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     frame.called = Some(cls);
     crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: user_limit(&uf),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1911,6 +1924,15 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
         _ => return false,
     };
     match prep.callee {
+        Callee::User(ref uf) if n >= uf.plain_params() => {
+            // An argument past the bound parameters of a variadic function
+            // (`user_limit`): in the argument buffer at its position, as the
+            // generic call leaves it, for the callee's `RECV_VARIADIC` (and
+            // `func_get_args()`, traces) to find; the positions of the bound
+            // ones hold `None` (their values are in compiled variables).
+            frame.args.resize(n, None);
+            frame.args.push(Some(v));
+        }
         Callee::User(_) => {
             let Some(slot) = frame.cvs.get_mut(n) else {
                 return false;
@@ -1962,7 +1984,9 @@ pub(super) fn enter(
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
     };
-    if n < uf.required as usize || n > uf.plain_params() {
+    let bound = uf.plain_params();
+    // (More arguments only for a variadic function: `user_limit`.)
+    if n < uf.required as usize {
         return Err(prep);
     }
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
@@ -1973,7 +1997,7 @@ pub(super) fn enter(
         return Err(prep);
     }
     if uf.call_shape() == CallShape::TYPED {
-        for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
+        for (p, slot) in uf.params.iter().zip(&frame.cvs[..n.min(bound)]) {
             if let Some(ty) = &p.ty {
                 if !slot
                     .get()
@@ -1990,8 +2014,9 @@ pub(super) fn enter(
     frame.is_ctor = prep.ctor;
     // The passed-argument count (`ZEND_CALL_NUM_ARGS`): each argument is
     // already in its compiled variable, so the buffer stays empty and the
-    // count is kept instead (`Frame::num_args`).
-    if !frame.args.is_empty() {
+    // count is kept instead (`Frame::num_args`); extra arguments of a
+    // variadic function are in the buffer, at their positions (`send`).
+    if n <= bound && !frame.args.is_empty() {
         frame.args.clear();
     }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
@@ -2034,7 +2059,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
         return false;
     }
     let n = prep.n;
-    if n != uf.params.len() || n > super::jit::NATIVE_MAX_ARGS {
+    if n != uf.params.len() || n > super::jit::NATIVE_MAX_ARGS || uf.flags & flags::VARIADIC != 0 {
         return false;
     }
     let live = vm.frames.live;
@@ -2362,6 +2387,9 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
             return;
         }
     };
+    // (A variadic function's extra arguments are in the frame's argument
+    // buffer, at their positions: `send`.)
+    let bound = uf.plain_params().min(prep.n);
     let mut call = PendingCall {
         direct: prep.fcall,
         dynamic: prep.closure,
@@ -2372,8 +2400,14 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
         closure: frame.closure.take(),
         ..PendingCall::new(Func::User(uf))
     };
-    for (arg, slot) in call.inline_args.iter_mut().zip(&mut frame.cvs[..prep.n]) {
+    for (arg, slot) in call.inline_args.iter_mut().zip(&mut frame.cvs[..bound]) {
         *arg = slot.as_mut().take();
+    }
+    for (arg, sent) in call.inline_args[bound..prep.n]
+        .iter_mut()
+        .zip(frame.args.iter_mut().skip(bound))
+    {
+        *arg = sent.take();
     }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
     {

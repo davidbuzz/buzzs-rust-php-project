@@ -221,8 +221,10 @@ impl CallShape {
     /// Not worked out yet.
     const UNKNOWN: u8 = 0;
     /// Deprecated, `#[\NoDiscard]`, body-less or a generator, with static
-    /// variables, foreach or finally slots, a by-reference or variadic
-    /// parameter, or more parameters than compiled variables.
+    /// variables, finally slots, a by-reference parameter, a variadic one
+    /// that is not the last, or more parameters than compiled variables.
+    /// (A trailing variadic parameter is plain:
+    /// [`UserFunction::plain_params`].)
     pub const NOT_PLAIN: u8 = 1;
     /// Plain, and no parameter has a type other than `mixed`.
     pub const UNTYPED: u8 = 2;
@@ -253,9 +255,12 @@ impl UserFunction {
         s
     }
 
-    /// How many arguments a plain call (`Vm::push_simple_ucall`) passes
-    /// at most: one per parameter (a function with a variadic parameter
-    /// is not plain, see [`CallShape::NOT_PLAIN`]). Read from the call
+    /// How many arguments a plain call (`Vm::push_simple_ucall`) binds
+    /// to parameters at most: one per parameter, but none to a trailing
+    /// variadic one (`...$args`), whose `RECV_VARIADIC` then runs in the
+    /// callee and collects the extra arguments a prepared call of the tape
+    /// left in the frame's argument buffer (`exec/tape/calls.rs`, `send`),
+    /// or nothing. Read from the call
     /// shape: valid once [`UserFunction::call_shape`] found a plain
     /// declaration (each plain path asks that first).
     #[inline]
@@ -346,14 +351,17 @@ impl UserFunction {
             // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
-            // A variadic parameter too: the plain paths of the JIT and the
-            // tape's whole-function calls bind every parameter from an
-            // argument (`plain_params` is then the parameter count).
-            || self.params.iter().any(|p| p.variadic || p.by_ref)
+            || self.params.iter().any(|p| p.by_ref)
+            // A variadic parameter only last (as the parser has it): a plain
+            // call binds it nothing ([`UserFunction::plain_params`]); the
+            // JIT's plain paths, which bind every parameter from an
+            // argument, refuse such a function (`flags::VARIADIC`).
+            || self.params.iter().rev().skip(1).any(|p| p.variadic)
         {
             return CallShape::NOT_PLAIN;
         }
-        let Ok(plain) = u32::try_from(self.params.len()) else {
+        let plain = self.params.len() - usize::from(self.params.last().is_some_and(|p| p.variadic));
+        let Ok(plain) = u32::try_from(plain) else {
             return CallShape::NOT_PLAIN;
         };
         self.call_shape.plain_params.set(plain);

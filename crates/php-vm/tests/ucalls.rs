@@ -822,3 +822,39 @@ for ($i = 0; $i < 2; $i++) {
     let line = "1,[2],8,xy,NULL,6 9,[2],8,xy,NULL,6 9,8,8,xy,NULL,6 9,8,7,xy,NULL,6 9,8,7,6,NULL,6 9,8,7,6,5,6 9,8,7,6,5,4\n123120\n";
     assert_eq!(run(source), line.repeat(2));
 }
+
+/// A call of a function with a trailing variadic parameter is prepared on
+/// the tape like any plain call; the arguments past the bound parameters
+/// wait in the frame's argument buffer for its `RECV_VARIADIC` (with its
+/// type check), `func_get_args()` and the backtrace's `args`. Expected
+/// output: php-src's (PHP 8.4 CLI).
+#[test]
+fn variadic_calls_with_extra_arguments_take_the_plain_path() {
+    let src = r#"<?php
+class D {
+    static function t(string $p, string $l, mixed ...$args) { return $p . $l . '|' . implode(',', $args) . '|' . func_num_args() . '|' . implode(',', func_get_args()); }
+    function m($a, int ...$n) { return $a . ':' . implode('+', $n); }
+}
+function f($a, ...$r) { return count($r) . ':' . count(debug_backtrace()[0]['args']); }
+function run() {
+    $d = new D;
+    for ($i = 0; $i < 3; $i++) {
+        echo D::t('p', 'l'), ' ', D::t('p', 'l', $i), ' ', D::t('p', 'l', $i, 'x', 'y', 'z'), "\n";
+        echo $d->m('a'), ' ', $d->m('b', 1, 2, 3), ' ', f(1), ' ', f(1, [2], 'three'), "\n";
+        try { $d->m('c', 1, 'x'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+run();
+"#;
+    let expected = r#"pl||2|p,l pl|0|3|p,l,0 pl|0,x,y,z|6|p,l,0,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+pl||2|p,l pl|1|3|p,l,1 pl|1,x,y,z|6|p,l,1,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+pl||2|p,l pl|2|3|p,l,2 pl|2,x,y,z|6|p,l,2,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+"#;
+    assert_eq!(run(src), expected);
+}

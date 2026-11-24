@@ -4845,6 +4845,10 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     if shape == crate::func::CallShape::NOT_PLAIN || !uf.uses.is_empty() {
         rj!("callee not plain or has `use`s");
     }
+    // (Its extra sends would be its variadic parameter's, not dead.)
+    if uf.flags & crate::func::flags::VARIADIC != 0 {
+        rj!("callee is variadic");
+    }
     if uf.required as usize > ns {
         rj!("too few args");
     }
@@ -8406,7 +8410,10 @@ fn plan_native(uf: &Rc<crate::func::UserFunction>) -> Option<NPlan> {
     }
     let code = &uf.code;
     let (ncvs, ntmps, nparams) = (code.cv_names.len(), code.num_tmps as usize, uf.params.len());
-    if uf.call_shape() == crate::func::CallShape::NOT_PLAIN || !uf.uses.is_empty() {
+    if uf.call_shape() == crate::func::CallShape::NOT_PLAIN
+        || !uf.uses.is_empty()
+        || uf.flags & crate::func::flags::VARIADIC != 0
+    {
         no!("its declaration rules out a plain call");
     }
     if nparams > NATIVE_MAX_ARGS || nparams > ncvs || ncvs + ntmps > NATIVE_MAX_SLOTS {
