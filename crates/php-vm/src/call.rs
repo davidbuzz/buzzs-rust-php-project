@@ -649,27 +649,7 @@ impl Vm {
         let cls_addr = Rc::as_ptr(cls) as usize;
         let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
 
-        let hit = if let Some(Some(cached)) = f.code.method_cache.borrow().get(slot) {
-            if cached.class_addr == cls_addr
-                && cached.scope_addr == scope_addr
-                && cached.name_lit == Some(lit)
-            {
-                cached.func.get().map(|func| {
-                    (
-                        func,
-                        cached
-                            .method_scope
-                            .as_ref()
-                            .and_then(std::rc::Weak::upgrade),
-                        cached.is_static,
-                    )
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let hit = method_entry_hit(&f.code, slot, cls_addr, scope_addr, lit);
 
         if let Some((func, scope, is_static)) = hit {
             let called = cls.clone();
@@ -713,7 +693,17 @@ impl Vm {
             let size = f.code.ops.len().max(slot + 1);
             crate::rtcache::grow_slots(&mut cache, size, || None);
         }
-        cache[slot] = Some(entry);
+        // The entry of another class this one replaces becomes the site's
+        // second entry ([`method_entry_hit`]).
+        if let Some(old) = cache[slot].replace(entry) {
+            if old.class_addr != cls_addr {
+                let second = second_method_slot(&f.code, slot);
+                if cache.len() <= second {
+                    crate::rtcache::grow_slots(&mut cache, second + 1, || None);
+                }
+                cache[second] = Some(old);
+            }
+        }
         drop(cache);
 
         self.push_pending(PendingCall {
@@ -5024,26 +5014,9 @@ pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slo
     }
     let cls_addr = Rc::as_ptr(cls) as usize;
     let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-    let hit = match frame.code.method_cache.borrow().get(slot) {
-        Some(Some(cached))
-            if cached.class_addr == cls_addr
-                && cached.scope_addr == scope_addr
-                && cached.name_lit == Some(lit) =>
-        {
-            cached.func.get().map(|func| {
-                (
-                    func,
-                    cached
-                        .method_scope
-                        .as_ref()
-                        .and_then(std::rc::Weak::upgrade),
-                    cached.is_static,
-                )
-            })
-        }
-        _ => None,
-    };
-    let Some((func, scope, is_static)) = hit else {
+    let Some((func, scope, is_static)) =
+        method_entry_hit(&frame.code, slot, cls_addr, scope_addr, lit)
+    else {
         return false;
     };
     let called = Rc::clone(cls);
@@ -5071,6 +5044,88 @@ pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slo
     });
     drop(released);
     true
+}
+
+/// A method call site's cached resolution for an object of the class at
+/// `cls_addr` called from the scope at `scope_addr` (the method, its
+/// declaring scope, whether it is static), when the site's
+/// [`OpArray::method_cache`] entry was filled for them. A site keeps two
+/// entries (php-src's is monomorphic; a call site that sees two classes in
+/// turn, `$item->render()` over a list of two kinds, missed every time):
+/// the first is tested inline; on a class mismatch the second is, and a
+/// hit there swaps the two ([`promote_method_entry`]).
+///
+/// [`OpArray::method_cache`]: crate::opcode::OpArray::method_cache
+#[inline(always)]
+#[allow(clippy::inline_always)] // the method call start's cache probe
+pub(crate) fn method_entry_hit(
+    code: &crate::opcode::OpArray,
+    slot: usize,
+    cls_addr: usize,
+    scope_addr: usize,
+    lit: u32,
+) -> Option<(Func, Option<Rc<Class>>, bool)> {
+    let other_class = {
+        let cache = code.method_cache.borrow();
+        match cache.get(slot) {
+            Some(Some(cached)) if cached.class_addr == cls_addr => {
+                return cached_method(cached, scope_addr, lit);
+            }
+            Some(Some(_)) => true,
+            _ => false,
+        }
+    };
+    if other_class && promote_method_entry(code, slot, cls_addr) {
+        let cache = code.method_cache.borrow();
+        return cached_method(cache.get(slot)?.as_ref()?, scope_addr, lit);
+    }
+    None
+}
+
+/// [`method_entry_hit`]'s test of an entry filled for the right class.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn cached_method(
+    cached: &crate::opcode::MethodCallCacheEntry,
+    scope_addr: usize,
+    lit: u32,
+) -> Option<(Func, Option<Rc<Class>>, bool)> {
+    if cached.scope_addr != scope_addr || cached.name_lit != Some(lit) {
+        return None;
+    }
+    cached.func.get().map(|func| {
+        (
+            func,
+            cached
+                .method_scope
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade),
+            cached.is_static,
+        )
+    })
+}
+
+/// Where call site `slot` keeps its second method cache entry: past the
+/// first entries of every op.
+fn second_method_slot(code: &crate::opcode::OpArray, slot: usize) -> usize {
+    code.ops.len() + slot
+}
+
+/// Swaps call site `slot`'s two method cache entries when the second one
+/// was filled for the class at `cls_addr` (see [`method_entry_hit`]).
+#[inline(never)]
+fn promote_method_entry(code: &crate::opcode::OpArray, slot: usize, cls_addr: usize) -> bool {
+    let Ok(mut cache) = code.method_cache.try_borrow_mut() else {
+        return false;
+    };
+    let second = second_method_slot(code, slot);
+    match cache.get(second) {
+        Some(Some(e)) if e.class_addr == cls_addr => {
+            cache.swap(slot, second);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Appends the pending call `make` builds to `calls`, written straight

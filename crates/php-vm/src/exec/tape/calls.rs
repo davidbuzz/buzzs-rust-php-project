@@ -351,24 +351,8 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     }
     let cls_addr = Rc::as_ptr(cls) as usize;
     let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-    let (func, scope, is_static) = {
-        let cache = caller.code.method_cache.borrow();
-        let cached = cache.get(slot)?.as_ref()?;
-        if cached.class_addr != cls_addr
-            || cached.scope_addr != scope_addr
-            || cached.name_lit != Some(lit)
-        {
-            return None;
-        }
-        (
-            cached.func.get()?,
-            cached
-                .method_scope
-                .as_ref()
-                .and_then(std::rc::Weak::upgrade),
-            cached.is_static,
-        )
-    };
+    let (func, scope, is_static) =
+        crate::call::method_entry_hit(&caller.code, slot, cls_addr, scope_addr, lit)?;
     let uf = match func {
         Func::User(uf) => uf,
         Func::Builtin(b) => {
