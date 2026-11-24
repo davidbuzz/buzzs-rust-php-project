@@ -262,14 +262,25 @@ pub(crate) fn ends_on_page_boundary(bytes: &[u8]) -> bool {
 }
 
 /// `bytes` followed by a NUL, in a buffer of its own: the subject's bytes
-/// with a readable byte after them (see [`ends_on_page_boundary`]).
+/// with a readable byte after them (see [`ends_on_page_boundary`]). Made
+/// once per `preg_*()` call (`Exec::new`), not once per match: a
+/// `preg_match_all()` over a subject that ends on a page boundary matches
+/// it again for every match it finds.
 #[cold]
 #[inline(never)]
-fn padded_copy(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn padded_copy(bytes: &[u8]) -> Vec<u8> {
+    #[cfg(test)]
+    PADDED_COPIES.with(|n| n.set(n.get() + 1));
     let mut v = Vec::with_capacity(bytes.len() + 1);
     v.extend_from_slice(bytes);
     v.push(0);
     v
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread made a [`padded_copy`] (the tests).
+    pub(crate) static PADDED_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 thread_local! {
@@ -472,20 +483,11 @@ impl MatchData {
         options: u32,
         ctx: &MatchContext,
     ) -> i32 {
-        // A subject that ends on a page boundary is matched in a copy with
-        // a byte after it ([`ends_on_page_boundary`]); the offsets PCRE2
-        // reports are relative to the subject, so the copy is invisible.
-        let padded;
-        let subject = if ends_on_page_boundary(subject) {
-            padded = padded_copy(subject);
-            &padded[..subject.len()]
-        } else {
-            subject
-        };
         // SAFETY: all pointers are valid for the duration of the call; the
         // subject slice is live (an empty one is given a real address, see
-        // `nonempty_ptr`, and the byte after a non-empty one is readable,
-        // see above) and its exact length is passed; PCRE2 checks `start`
+        // `nonempty_ptr`, and the byte after a non-empty one is readable:
+        // `Exec` passes a subject that ends on a page boundary as its
+        // `padded_copy`) and its exact length is passed; PCRE2 checks `start`
         // against the length itself (PCRE2_ERROR_BADOFFSET). Nothing keeps
         // the subject's address past the call (only the ovector's offsets
         // and the mark, which is in the pattern, are read afterwards).

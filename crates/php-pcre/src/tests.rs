@@ -445,3 +445,44 @@ fn subjects_ending_before_an_unreadable_page_are_matched() {
         assert_eq!(libc::munmap(base.cast(), 2 * page), 0);
     }
 }
+
+/// A `preg_match_all()` over a subject that ends on a page boundary copies
+/// it once, not once per match: with a copy per match, a 2 MiB subject of
+/// 2 Mi matches (`ext/pcre/tests/oom_preg_match_all.phpt`) copied 2 MiB two
+/// million times and never finished.
+#[test]
+fn a_subject_ending_on_a_page_boundary_is_copied_once_per_call() {
+    // SAFETY (test only): two fresh anonymous pages, the second made
+    // inaccessible; the subject is a slice of the first that ends where it
+    // ends. Both are unmapped at the end, after the last use of the slice.
+    unsafe {
+        let page = usize::try_from(libc::sysconf(libc::_SC_PAGESIZE)).expect("page size");
+        let base = libc::mmap(
+            std::ptr::null_mut(),
+            2 * page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert_ne!(base, libc::MAP_FAILED);
+        let base = base.cast::<u8>();
+        assert_eq!(
+            libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE),
+            0
+        );
+        let len = 1000;
+        let start = base.add(page - len);
+        std::ptr::write_bytes(start, b'a', len);
+        let subject = std::slice::from_raw_parts(start, len);
+        assert!(super::ffi::ends_on_page_boundary(subject));
+        let re = Regex::compile(b"/a/").expect("compiles");
+        let cfg = MatchConfig::default();
+        let before = super::ffi::PADDED_COPIES.with(std::cell::Cell::get);
+        let o = match_all(&re, &cfg, subject, false, PREG_PATTERN_ORDER, 0);
+        assert_eq!(o.result.ok(), Some(1000));
+        let copies = super::ffi::PADDED_COPIES.with(std::cell::Cell::get) - before;
+        assert_eq!(copies, 1, "one copy for the call, not one per match");
+        assert_eq!(libc::munmap(base.cast(), 2 * page), 0);
+    }
+}

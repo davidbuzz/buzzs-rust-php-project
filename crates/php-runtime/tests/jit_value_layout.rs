@@ -4,6 +4,10 @@
 //! at offset 0 and an `Int`'s payload at offset 8. `php-vm`'s JIT guards
 //! compiled-variable slots by comparing that byte directly; if rustc
 //! ever lays `Value` out differently, this test fails first.
+//!
+//! `None`'s tag is the compiler's choice of niche (9 with older rustc, 255
+//! with rustc 1.100 on AArch64); the JIT reads it from the layout at compile
+//! time, so this pins only that it lies above every `Value` tag.
 
 use php_runtime::{Obj, Value};
 
@@ -38,7 +42,7 @@ fn tag_byte_and_int_payload() {
     let n: Option<Value> = None;
     // SAFETY: `Option<Value>` is 16 bytes, as `value_is_16_bytes` pins.
     let b: [u8; 16] = unsafe { std::mem::transmute_copy(&n) };
-    assert_eq!(b[0], 9);
+    assert!(b[0] >= 9, "None's tag {} collides with a Value tag", b[0]);
     let b = bytes(&n.unwrap_or(Value::Int(42)));
     assert_eq!(b[0], 2);
     assert_eq!(u64::from_le_bytes(b[8..16].try_into().unwrap()), 42);

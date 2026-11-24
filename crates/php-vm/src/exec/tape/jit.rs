@@ -20,7 +20,8 @@
 //! instruction against the whitelist (`Jmp`, `++`/`--`, the small-int
 //! and int-literal assignments, the fused comparison-and-branch, the
 //! fused `++`-compare, and the fused `+ - *` into a variable), and
-//! `emit` writes one region of x86-64 code that runs the whole loop,
+//! `emit` writes one region of x86-64 code (on AArch64 Linux, the `a64`
+//! backend's A64 code, from the same plan) that runs the whole loop,
 //! jumping back internally at the close. Nothing else is compiled in
 //! this version; a region with anything else in it is not compiled.
 //!
@@ -77,6 +78,8 @@ use crate::place::propcache::{PC_DYN, PC_ISSET, PC_READ, PC_WRITE};
 use crate::types::mask;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
+
+mod a64;
 
 /// Whether a hook observer is installed (set once by `Vm::set_observer`).
 /// An observed call runs the function's `pass_two` observers on entry and
@@ -196,9 +199,26 @@ const OBJ_LAZY: u32 = OBJ_PAYLOAD + std::mem::offset_of!(crate::object::ObjectDa
 /// Inside an inline `RefCell<T>`: the borrow source at 0, the value at 8.
 const REFCELL_BORROW: u32 = 0;
 const REFCELL_VALUE: u32 = 8;
-/// `Option::None`: a `Value` tag never reaches it, and its niche is the
-/// all-ones tag word, so the tag byte reads as this.
-const TAG_NONE: u8 = 9;
+/// `Option::None` of a slot: a `Value` tag never reaches it. Which byte
+/// the compiler picks for the niche is its choice (9, the first value
+/// after the last variant, with older compilers; 255 with rustc 1.100), so
+/// it is read from the layout itself here, at compile time. The layout
+/// tests' `value_layout` pins it above every `Value` tag.
+const TAG_NONE: u8 = {
+    union Bytes {
+        slot: std::mem::ManuallyDrop<Option<php_runtime::Value>>,
+        bytes: [std::mem::MaybeUninit<u8>; 16],
+    }
+    let none = Bytes {
+        slot: std::mem::ManuallyDrop::new(None),
+    };
+    // SAFETY: byte 0 of a `None` slot is its niche tag, initialized (the
+    // compile-time evaluator rejects a read of an uninitialized byte).
+    unsafe { none.bytes[0].assume_init() }
+};
+// Every guard that tells "nothing" from a value relies on this: `None`
+// reads above every `Value` tag (above `Str`, the first non-scalar).
+const _: () = assert!(TAG_NONE > TAG_REF);
 /// The byte offset of an `Int` payload (the slot's `i64`) in its slot.
 const PAYLOAD: u32 = 8;
 /// The byte offset of a `Bool`'s value in its slot: the `bool` is the
@@ -400,8 +420,9 @@ const MAX_TRACES: usize = 4096;
 const ITER_CAP: u32 = 1 << 24;
 
 /// Whether the JIT is enabled for this process (read once): on by default
-/// where the emitted code can run - x86-64 Linux, the platform of the
-/// emitter's encodings and of the `mmap` constants below - and switched
+/// where the emitted code can run - x86-64 Linux ([`Emitter`]) and `AArch64`
+/// Linux ([`a64`], which compiles the rows it supports and refuses every
+/// other plan), the platforms of the `mmap` constants below - and switched
 /// off with `BUZZS_JIT=0`.
 ///
 /// It used to be opt-in (`BUZZS_JIT=1`), which left every ordinary run,
@@ -411,8 +432,10 @@ const ITER_CAP: u32 = 1 << 24;
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        cfg!(all(target_arch = "x86_64", target_os = "linux"))
-            && std::env::var_os("BUZZS_JIT").is_none_or(|v| v != "0")
+        cfg!(all(
+            any(target_arch = "x86_64", target_arch = "aarch64"),
+            target_os = "linux"
+        )) && std::env::var_os("BUZZS_JIT").is_none_or(|v| v != "0")
     })
 }
 
@@ -2897,6 +2920,14 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
     let dk = inst.k & 7;
     match inst.op {
         TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
+            // A string's offsets are the interpreter's: the row's helpers
+            // decline a variable that holds no array, so a trace would
+            // leave at this row in every iteration until it is switched
+            // off, its compile wasted (`read_str_offset` in
+            // Zend/micro_bench.php).
+            if matches!(cv_now(st, sb), Some(php_runtime::Value::Str(_))) {
+                return None;
+            }
             let (kb, slot, lit_b, _) = operand(dk, inst.b, true)?;
             // The destination: the variable of the folded `AssignCv`
             // (`inst.d`; the row then covers that op as well, as the
@@ -8727,7 +8758,11 @@ fn compile_native(uf: &Rc<crate::func::UserFunction>) -> Option<usize> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let plan = plan_native(uf)?;
-    let (code, body) = emit_native(&plan);
+    let (code, body) = if cfg!(target_arch = "aarch64") {
+        a64::emit_native(&plan)?
+    } else {
+        emit_native(&plan)
+    };
     let entry = place(&code)? as usize;
     TRACES.fetch_add(1, Ordering::Relaxed);
     uf.call_shape.native_body.set(entry + body);
@@ -8838,6 +8873,10 @@ fn place(code: &[u8]) -> Option<*mut u8> {
     // SAFETY: `p` is the fresh writable mapping of `len >= code.len()` bytes, distinct from
     // `code`.
     unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), p.cast::<u8>(), code.len()) };
+    // AArch64's instruction fetch does not see the data cache: the new
+    // code is cleaned to the point of unification first.
+    #[cfg(target_arch = "aarch64")]
+    a64::flush_icache(p.cast::<u8>(), code.len());
     // SAFETY: `p .. p + len` is the mapping made above; only its protection changes.
     if unsafe { mprotect(p, len, PROT_READ | PROT_EXEC) } != 0 {
         return None;
@@ -8984,6 +9023,12 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             return if again { REFUSED_FOR_NOW } else { usize::MAX };
         }
     };
+    if cfg!(target_arch = "aarch64") && !a64::supports(&p) {
+        if debug_on() {
+            eprintln!("jit: region {head}..={close} has a row the AArch64 backend does not emit");
+        }
+        return usize::MAX;
+    }
     if debug_on() {
         for g in &p.guards {
             eprintln!(
@@ -9060,32 +9105,43 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
         }
         gtable = ptr as i64;
     }
-    let mut em = Emitter::new(p, tape.to_vec(), scratch);
-    em.gtable = gtable;
-    em.tbase = ctx.tbase as usize;
-    em.emit();
-    em.resolve();
+    let (code, pins) = if cfg!(target_arch = "aarch64") {
+        let mut em = a64::A64::new(p, tape.to_vec(), scratch);
+        em.gtable = gtable;
+        em.tbase = ctx.tbase as usize;
+        em.emit();
+        if !em.resolve() {
+            return usize::MAX;
+        }
+        (em.bytes(), std::mem::take(&mut em.pins))
+    } else {
+        let mut em = Emitter::new(p, tape.to_vec(), scratch);
+        em.gtable = gtable;
+        em.tbase = ctx.tbase as usize;
+        em.emit();
+        em.resolve();
+        let pins = std::mem::take(&mut em.pins);
+        (em.code, pins)
+    };
     if debug_on() {
         eprintln!(
             "jit: region {head}..={close} compiled to {} bytes",
-            em.code.len()
+            code.len()
         );
         eprintln!(
             "jit: bytes {}",
-            em.code
-                .iter()
+            code.iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<Vec<_>>()
                 .join("")
         );
     }
-    match place(&em.code) {
+    match place(&code) {
         Some(p) => {
             TRACES.fetch_add(1, Ordering::Relaxed);
             // The closures the trace names stay alive as long as it does
             // (for good). Kept outside the counted heap, like the tape:
             // compiling a loop must not show in `memory_get_usage()`.
-            let pins = std::mem::take(&mut em.pins);
             if !pins.is_empty() {
                 php_memlimit::persistent(|| {
                     PINNED_OBJS.with(|all| {

@@ -3117,7 +3117,7 @@ impl Vm {
         store: &Rc<RefCell<VarStore>>,
         idx: usize,
         op: BinaryOp,
-        rhs: Value,
+        rhs: &Value,
     ) -> VmResult<Value> {
         let mut held = None;
         let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
@@ -3128,7 +3128,7 @@ impl Vm {
             held = self.rw_undefined_var(&name)?;
             Value::Null
         };
-        let nv = match self.assign_op_value(op, &cur, &rhs) {
+        let nv = match self.assign_op_value(op, &cur, rhs) {
             Ok(nv) => nv,
             Err(e) => return Err(held.unwrap_or(e)),
         };
@@ -3213,9 +3213,9 @@ impl Vm {
                     return Ok(Value::Array(a.clone()));
                 }
                 drop(st);
-                self.write_var_root_assign_op(store, idx, BinaryOp::Add, Value::Array(rhs))
+                self.write_var_root_assign_op(store, idx, BinaryOp::Add, &Value::Array(rhs))
             }
-            WOp::AssignOp(op, rhs) => self.write_var_root_assign_op(store, idx, op, rhs),
+            WOp::AssignOp(op, rhs) => self.write_var_root_assign_op(store, idx, op, &rhs),
             WOp::MakeRef => {
                 let mut st = store.borrow_mut();
                 let slot = st.slots[idx].get_or_insert(Value::Null);

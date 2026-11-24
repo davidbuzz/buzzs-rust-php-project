@@ -7,7 +7,7 @@
 //! A [`Coroutine`] owns an `mmap`ed stack with a guard page and runs a
 //! closure on it. [`Coroutine::resume`] switches from the current stack to
 //! the coroutine; [`Suspender::suspend`] switches back. Only the callee-saved
-//! registers (plus the SSE/x87 control words) are saved, because a switch is
+//! registers (on x86-64 plus the SSE/x87 control words) are saved, because a switch is
 //! an ordinary function call as far as the compiler is concerned.
 //!
 //! This is the one place in the VM that needs `unsafe`: switching stacks
@@ -349,7 +349,109 @@ mod arch {
     }
 }
 
-#[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+mod arch {
+    pub const SUPPORTED: bool = true;
+
+    // Callee-saved state per AAPCS64 (boost.context's
+    // `jump_arm64_aapcs_elf_gas.S`): x19-x28, the frame pointer x29, the
+    // link register x30 (the resume address) and the low halves d8-d15 of
+    // v8-v15. One 160-byte frame keeps sp 16-byte aligned.
+    std::arch::global_asm!(
+        ".text",
+        ".p2align 4",
+        ".globl phprust_fiber_switch",
+        ".type phprust_fiber_switch,%function",
+        "phprust_fiber_switch:",
+        ".cfi_startproc",
+        "sub sp, sp, #160",
+        "stp d8, d9, [sp, #0]",
+        "stp d10, d11, [sp, #16]",
+        "stp d12, d13, [sp, #32]",
+        "stp d14, d15, [sp, #48]",
+        "stp x19, x20, [sp, #64]",
+        "stp x21, x22, [sp, #80]",
+        "stp x23, x24, [sp, #96]",
+        "stp x25, x26, [sp, #112]",
+        "stp x27, x28, [sp, #128]",
+        "stp x29, x30, [sp, #144]",
+        "mov x9, sp",
+        "str x9, [x0]",
+        "mov sp, x1",
+        "ldp d8, d9, [sp, #0]",
+        "ldp d10, d11, [sp, #16]",
+        "ldp d12, d13, [sp, #32]",
+        "ldp d14, d15, [sp, #48]",
+        "ldp x19, x20, [sp, #64]",
+        "ldp x21, x22, [sp, #80]",
+        "ldp x23, x24, [sp, #96]",
+        "ldp x25, x26, [sp, #112]",
+        "ldp x27, x28, [sp, #128]",
+        "ldp x29, x30, [sp, #144]",
+        "add sp, sp, #160",
+        "ret",
+        ".cfi_endproc",
+        ".size phprust_fiber_switch, .-phprust_fiber_switch",
+        "",
+        ".p2align 4",
+        ".globl phprust_fiber_trampoline",
+        ".type phprust_fiber_trampoline,%function",
+        "phprust_fiber_trampoline:",
+        ".cfi_startproc",
+        ".cfi_undefined x30",
+        "mov x0, x19",
+        "blr x20",
+        "brk #0",
+        ".cfi_endproc",
+        ".size phprust_fiber_trampoline, .-phprust_fiber_trampoline",
+    );
+
+    extern "C" {
+        fn phprust_fiber_switch(save: *mut *mut u8, to: *mut u8);
+        fn phprust_fiber_trampoline();
+    }
+
+    /// Saves the current context, storing its stack pointer in `*save`,
+    /// and resumes the context whose stack pointer is `to`.
+    ///
+    /// # Safety
+    /// `to` must be a stack pointer produced by [`init_stack`] or saved by
+    /// a previous `switch` whose context has not been resumed since.
+    pub unsafe fn switch(save: *mut *mut u8, to: *mut u8) {
+        // SAFETY: forwarded preconditions.
+        unsafe { phprust_fiber_switch(save, to) }
+    }
+
+    /// Lays out an initial frame on a fresh stack so that the first
+    /// `switch` to it calls `entry(arg)` through the trampoline.
+    ///
+    /// # Safety
+    /// `top` must be the 16-byte aligned end of a writable region of at
+    /// least 160 bytes.
+    pub unsafe fn init_stack(top: *mut u8, entry: usize, arg: usize) -> *mut u8 {
+        // The 20 slots `phprust_fiber_switch` restores, from the new sp
+        // upwards: d8-d15, x19-x28, x29, x30. x19 carries `arg` and x20
+        // `entry` into the trampoline, x30 (the "return" address) is the
+        // trampoline itself, and a zero x29 ends frame-pointer walks.
+        // After the restore sp is `top`, 16-byte aligned.
+        #[allow(clippy::cast_ptr_alignment)] // `top` is 16-byte aligned
+        let sp = top.wrapping_sub(160).cast::<usize>();
+        let mut slots = [0usize; 20];
+        slots[8] = arg;
+        slots[9] = entry;
+        slots[19] = phprust_fiber_trampoline as *const () as usize;
+        for (i, v) in slots.into_iter().enumerate() {
+            // SAFETY: within the region guaranteed by the caller.
+            unsafe { sp.add(i).write(v) };
+        }
+        sp.cast()
+    }
+}
+
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_os = "linux"),
+    all(target_arch = "aarch64", target_os = "linux")
+)))]
 mod arch {
     pub const SUPPORTED: bool = false;
 
