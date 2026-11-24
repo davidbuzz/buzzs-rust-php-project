@@ -123,6 +123,9 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..
         } if auto_global_place(code, *place) => Some(plain(TOp::VmOp)),
         Op::FetchGlobal { .. } => Some(plain(TOp::VmOp)),
+        // `ZEND_ASSERT_CHECK`: reads `zend.assertions`, so run with the VM
+        // at hand (`run_vm_op`) rather than leaving the tape.
+        Op::AssertCheck { .. } => Some(plain(TOp::VmOp)),
         // An element of an object's property (`$o->p[k]` read, written,
         // compounded, incremented, tested): the property cache hits of
         // `exec/spec/props.rs`, which need the VM.

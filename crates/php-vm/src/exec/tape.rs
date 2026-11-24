@@ -2326,6 +2326,16 @@ fn run_call(
 #[inline(never)]
 fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
     match ops.get(at) {
+        // `ZEND_ASSERT_CHECK`, as `Vm::run`'s arm makes it: with
+        // assertions off at run time, `true` and past the assertion.
+        Some(&Op::AssertCheck { dst, skip }) => {
+            if crate::builtins::assert_ini(vm).0 == 1 {
+                at + 1
+            } else {
+                vm.set_tmp(dst, Value::Bool(true));
+                skip as usize
+            }
+        }
         // A global variable by name: its run-time cache hit, the value
         // into the temporary or straight into the variable of the
         // `AssignCv` folded behind the op (then skipped).

@@ -2761,7 +2761,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::AssertCheck { dst, skip } => {
-                        let a = self.ini.get_long("zend.assertions");
+                        let a = crate::builtins::assert_ini(self).0;
                         if a != 1 {
                             self.set_tmp(*dst, Value::Bool(true));
                             ip = *skip as usize;

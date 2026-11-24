@@ -178,7 +178,7 @@ pub struct IniEntryInfo {
 
 /// The `FxHash` multiply-rotate hash (rustc's): directive names are short
 /// and looked up on every diagnostic, `assert()` and `ini_get()`, where the
-/// default SipHash cost more than the rest of the lookup.
+/// default `SipHash` cost more than the rest of the lookup.
 #[derive(Default, Clone, Copy)]
 struct NameHasher(u64);
 

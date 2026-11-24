@@ -4,6 +4,7 @@
 
 pub mod classbuilder;
 mod core;
+pub(crate) use core::assert_ini;
 pub(crate) mod dump;
 pub(crate) mod fasthash;
 pub(crate) mod headers;
