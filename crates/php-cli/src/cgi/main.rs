@@ -34,6 +34,8 @@ mod fastcgi;
 #[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
+#[path = "../main_stack.rs"]
+mod main_stack;
 #[allow(dead_code)]
 #[path = "../memcap.rs"]
 mod memcap;
@@ -280,6 +282,7 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    let on_main_thread = main_stack::ensure(&argv);
     // The request heap: `memory_limit` accounting and the address-space
     // cap, as in the `php` binary.
     memcap::limit_memory();
@@ -297,8 +300,14 @@ fn main() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-    // The VM runs on a thread with a large stack (deep recursion); the
-    // signals go to it (see `mask_process_signals`).
+    // The VM runs on the main thread, as in C: the process stays
+    // single-threaded, so `PHP_FCGI_CHILDREN` children fork from a
+    // single-threaded parent.
+    if on_main_thread {
+        finish(run(&argv));
+    }
+    // Fallback: a thread with a large stack (deep recursion); the signals
+    // go to it (see `mask_process_signals`).
     sys::mask_process_signals(true);
     let status = std::thread::Builder::new()
         .stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX))

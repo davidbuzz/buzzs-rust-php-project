@@ -26,6 +26,8 @@ mod fastcgi;
 #[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
+#[path = "../main_stack.rs"]
+mod main_stack;
 #[allow(dead_code)]
 #[path = "../memcap.rs"]
 mod memcap;
@@ -211,6 +213,7 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    let on_main_thread = main_stack::ensure(&argv);
     // `memory_limit` accounting and the address-space cap, as in the
     // `php` and `php-cgi` binaries.
     memcap::limit_memory();
@@ -231,9 +234,14 @@ fn main() {
     // `fpm_signals_init_mask()`, `fpm_signals_block()`: until the master's
     // handlers are in place (the VM thread inherits this mask).
     os::block_signals(&os::BLOCK_SIGNALS);
-    // Every process (the master and each worker it forks from this thread)
-    // ends inside `run` with `finish`: a forked worker has no main thread
-    // to return to.
+    // The VM runs on the main thread, as in C: the master is
+    // single-threaded when it forks its workers. Every process (the
+    // master and each worker) ends inside `run` with `finish`.
+    if on_main_thread {
+        finish(run(&argv));
+    }
+    // Fallback: a thread with a large stack. A worker forked from it has
+    // no main thread to return to, so it ends inside `run` as well.
     let _ = std::thread::Builder::new()
         .stack_size(usize::try_from(request::VM_STACK).unwrap_or(usize::MAX))
         .spawn(move || finish(run(&argv)))

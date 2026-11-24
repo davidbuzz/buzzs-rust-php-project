@@ -21,8 +21,7 @@ use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Stack the VM needs for deep recursion in user code.
-pub(crate) const VM_STACK: u64 = 256 << 20;
+pub(crate) use crate::main_stack::VM_STACK;
 
 /// The INI defaults of the CGI SAPI where they differ from what the VM
 /// applies for the CLI (`main.c` defaults; the CGI SAPI has no

@@ -492,8 +492,11 @@ pub enum Fork {
 
 /// `fork()`.
 pub fn fork() -> io::Result<Fork> {
-    // SAFETY: fork(2); the processes are single-threaded here, so the
-    // child continues with a consistent copy of this thread's state.
+    // SAFETY: fork(2); the VM runs on the main thread (`main_stack`), so
+    // the process is single-threaded here and the child continues with a
+    // consistent copy of its state. Only in the fallback, when the main
+    // stack cannot grow, a second thread exists; it waits in `join` and
+    // holds no lock.
     match unsafe { libc::fork() } {
         -1 => Err(io::Error::last_os_error()),
         0 => Ok(Fork::Child),
