@@ -672,3 +672,33 @@ Notice: Indirect modification of overloaded element of A has no effect in t.php 
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `instanceof` of anything but an object is false without the class
+/// being looked at (`ZEND_INSTANCEOF`): arrays, scalars, null, a
+/// reference and a call result against an interface, a class never
+/// declared and an interface never used. Expected output: php-src's (PHP
+/// 8.4 CLI).
+#[test]
+fn instanceof_of_a_non_object_is_false() {
+    let src = r#"<?php
+namespace App;
+interface Nope {}
+class A implements \ArrayAccess { function offsetExists($o): bool { return false; } function offsetGet($o): mixed { return null; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+function f() { return [1]; }
+function run() {
+    $vals = [[1], 'str', 1, null, 1.5, true, new A, new \stdClass];
+    $ref = &$vals[0];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($vals as $v) {
+            echo var_export($v instanceof \ArrayAccess, true), var_export($v instanceof Missing, true), var_export($v instanceof Nope, true), ' ';
+        }
+        echo var_export($ref instanceof Missing, true), var_export(f() instanceof Missing2, true), var_export(new A instanceof \ArrayAccess, true), "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse truefalsefalse falsefalsefalse falsefalsetrue
+falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse truefalsefalse falsefalsefalse falsefalsetrue
+"#;
+    assert_eq!(run(src), expected);
+}
