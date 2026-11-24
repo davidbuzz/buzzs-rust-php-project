@@ -1693,6 +1693,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         }));
     }
     tape.push(Inst::plain(TOp::Exit));
+    dims::shape_literals(code, &mut tape);
     calls::number_new_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a

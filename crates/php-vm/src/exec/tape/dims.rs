@@ -571,12 +571,13 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 },
                 Some(_) => return None,
             };
-            let (count, keys) = literal_shape(code, i, arr);
+            // (The literal's shape goes to its first element afterwards:
+            // `shape_literals`.)
             Inst {
                 a: arr,
                 b,
-                d: count,
-                e: e | (keys << KEYS_SHIFT),
+                d: 0,
+                e: e | (KEYS_OTHER << KEYS_SHIFT),
                 k: vk << 3,
                 p: vi as usize,
                 ..plain(TOp::ArrayAddT)
@@ -2097,60 +2098,87 @@ const ADD_KEYED: u8 = 1;
 /// How far [`literal_shape`] looks for the elements of a literal.
 const LITERAL_SCAN: usize = 4096;
 
-/// The number of elements of the array literal that the op at `i` adds an
-/// element to (in the temporary `dst`), and what their keys are
-/// ([`KEYS_NONE`], [`KEYS_STRING`], [`KEYS_OTHER`]): the size and the
-/// `ZEND_ARRAY_NOT_PACKED` flag `zend_compile_array` gives `ZEND_INIT_ARRAY`.
-/// The elements are the adds to `dst` after the `InitArray` that started
-/// the literal, up to the next literal started in that temporary. `(0,
-/// KEYS_OTHER)`, a table that takes its shape from its first element, when
-/// the start is not within [`LITERAL_SCAN`] ops.
-fn literal_shape(code: &OpArray, i: usize, dst: u32) -> (u32, u8) {
-    // Only the literal's first element makes its table: a later one meets
-    // an earlier add to `dst` before the `InitArray`, and has no shape to
-    // carry (each element scanning the whole literal made a literal of n
-    // elements cost n times its length to decode: Composer's 18k-entry
-    // class map took a second).
-    let Some((back, Op::InitArray { .. })) = code.ops.get(..i).and_then(|before| {
-        before
-            .iter()
-            .rev()
-            .take(LITERAL_SCAN)
-            .enumerate()
-            .find(|(_, op)| match op {
-                Op::InitArray { dst: d } => *d == dst,
-                Op::ArrayAdd { arr, .. }
-                | Op::ArrayAddRef { arr, .. }
-                | Op::ArrayUnpack { arr, .. }
-                | Op::ConstArrayUnpack { arr, .. } => *arr == dst,
-                _ => false,
-            })
-    }) else {
-        return (0, KEYS_OTHER);
+/// The number of elements of each array literal of `code` and what their
+/// keys are ([`KEYS_NONE`], [`KEYS_STRING`], [`KEYS_OTHER`]): the size and
+/// the `ZEND_ARRAY_NOT_PACKED` flag `zend_compile_array` gives
+/// `ZEND_INIT_ARRAY`, written into the instruction of the literal's first
+/// element (the one that makes its table: [`array_add`]; the others carry
+/// none). The elements are the adds to the literal's temporary after the
+/// `InitArray` that started it, up to the next literal started in that
+/// temporary and within [`LITERAL_SCAN`] ops of the start; a literal whose
+/// first add is not within that distance, or that an unpack starts, has no
+/// shape (its table takes the shape of its first element). One pass over
+/// the ops: each element working the shape out for itself scanned the
+/// literal once per element (Composer's 18k-entry class map took a second
+/// to decode).
+pub(super) fn shape_literals(code: &OpArray, tape: &mut [Inst]) {
+    /// An open literal: its `InitArray`, its first add (`Some(None)`: an
+    /// unpack came first), its element count and key kind.
+    struct Open {
+        start: usize,
+        first: Option<Option<usize>>,
+        count: u32,
+        keys: u8,
+    }
+    let finish = |o: Open, tape: &mut [Inst]| {
+        if let Some(Some(f)) = o.first {
+            if let Some(inst) = tape.get_mut(f) {
+                if inst.op == TOp::ArrayAddT {
+                    inst.d = o.count;
+                    inst.e = (inst.e & ((1 << KEYS_SHIFT) - 1)) | (o.keys << KEYS_SHIFT);
+                }
+            }
+        }
     };
-    let start = i - 1 - back;
-    let (mut count, mut keys) = (0u32, KEYS_NONE);
-    for op in code.ops.iter().skip(start + 1).take(LITERAL_SCAN) {
-        let key = match op {
-            Op::InitArray { dst: other } if *other == dst => break,
-            Op::ArrayAdd { arr, key, .. } | Op::ArrayAddRef { arr, key, .. } if *arr == dst => key,
-            _ => continue,
-        };
-        count = count.saturating_add(1);
-        let string = matches!(
-            key,
-            Some(Operand::Lit(l)) if matches!(
-                code.literals.get(*l as usize),
-                Some(Value::Str(s)) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_))
-            )
-        );
-        if string {
-            keys = KEYS_STRING;
-        } else if key.is_some() && keys == KEYS_NONE {
-            keys = KEYS_OTHER;
+    let mut open: std::collections::HashMap<u32, Open> = std::collections::HashMap::new();
+    for (i, op) in code.ops.iter().enumerate() {
+        match op {
+            Op::InitArray { dst } => {
+                let fresh = Open {
+                    start: i,
+                    first: None,
+                    count: 0,
+                    keys: KEYS_NONE,
+                };
+                if let Some(o) = open.insert(*dst, fresh) {
+                    finish(o, tape);
+                }
+            }
+            Op::ArrayAdd { arr, key, .. } | Op::ArrayAddRef { arr, key, .. } => {
+                let Some(o) = open.get_mut(arr) else {
+                    continue;
+                };
+                if i - o.start > LITERAL_SCAN {
+                    continue;
+                }
+                if o.first.is_none() {
+                    o.first = Some(Some(i));
+                }
+                o.count = o.count.saturating_add(1);
+                let string = matches!(
+                    key,
+                    Some(Operand::Lit(l)) if matches!(
+                        code.literals.get(*l as usize),
+                        Some(Value::Str(s)) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_))
+                    )
+                );
+                if string {
+                    o.keys = KEYS_STRING;
+                } else if key.is_some() && o.keys == KEYS_NONE {
+                    o.keys = KEYS_OTHER;
+                }
+            }
+            Op::ArrayUnpack { arr, .. } | Op::ConstArrayUnpack { arr, .. } => {
+                if let Some(o) = open.get_mut(arr) {
+                    o.first.get_or_insert(None);
+                }
+            }
+            _ => {}
         }
     }
-    (count, keys)
+    for (_, o) in open.drain() {
+        finish(o, tape);
+    }
 }
 
 /// `Op::InitArray`: the shared empty table in the result temporary, as
