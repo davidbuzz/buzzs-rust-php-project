@@ -151,16 +151,14 @@ pub fn collect_statistics() -> bool {
         .unwrap_or(false)
 }
 
-/// PHP's `zend_ini_parse_bool` for `OnUpdateBool`.
+/// `OnUpdateBool`: `zend_ini_parse_bool()`.
 fn parse_bool(v: &str) -> bool {
-    let t = v.trim();
-    if t.eq_ignore_ascii_case("true")
-        || t.eq_ignore_ascii_case("yes")
-        || t.eq_ignore_ascii_case("on")
-    {
-        return true;
-    }
-    php_support::atol(t.as_bytes()) != 0
+    php_support::ini::parse_bool(v.as_bytes())
+}
+
+/// `OnUpdateLong`: `zend_ini_parse_quantity()` (`"64K"`, `"0x10"`).
+fn parse_long(v: &str) -> i64 {
+    php_support::ini::parse_quantity(v.as_bytes()).0
 }
 
 /// Applies an INI change. Returns `false` when the directive is unknown or
@@ -176,6 +174,7 @@ pub fn set(name: &str, value: Option<&str>) -> bool {
             "mysqlnd.debug" => s.debug = value.map(str::to_string),
             "mysqlnd.trace_alloc" => s.trace_alloc = value.map(str::to_string),
             "mysqlnd.net_cmd_buffer_size" => {
+                // OnUpdateNetCmdBufferSize reads it with ZEND_ATOL().
                 let n = php_support::atol(v.as_bytes());
                 match usize::try_from(n) {
                     Ok(n) if n >= NET_CMD_BUFFER_MIN_SIZE => s.net_cmd_buffer_size = n,
@@ -183,14 +182,11 @@ pub fn set(name: &str, value: Option<&str>) -> bool {
                 }
             }
             "mysqlnd.net_read_buffer_size" => {
-                s.net_read_buffer_size =
-                    usize::try_from(php_support::atol(v.as_bytes())).unwrap_or(0);
+                s.net_read_buffer_size = usize::try_from(parse_long(v)).unwrap_or(0);
             }
-            "mysqlnd.net_read_timeout" => s.net_read_timeout = php_support::atol(v.as_bytes()),
-            "mysqlnd.log_mask" => s.log_mask = php_support::atol(v.as_bytes()),
-            "mysqlnd.mempool_default_size" => {
-                s.mempool_default_size = php_support::atol(v.as_bytes());
-            }
+            "mysqlnd.net_read_timeout" => s.net_read_timeout = parse_long(v),
+            "mysqlnd.log_mask" => s.log_mask = parse_long(v),
+            "mysqlnd.mempool_default_size" => s.mempool_default_size = parse_long(v),
             "mysqlnd.sha256_server_public_key" => {
                 s.sha256_server_public_key = value.map(str::to_string);
             }
@@ -222,5 +218,21 @@ mod tests {
         assert!(!set("mysqlnd.bogus", Some("1")));
         reset();
         assert_eq!(ENTRIES.len(), 10);
+    }
+
+    #[test]
+    fn values_parse_like_their_handlers() {
+        reset();
+        // OnUpdateLong: zend_ini_parse_quantity().
+        assert!(set("mysqlnd.net_read_buffer_size", Some("64K")));
+        assert_eq!(settings().net_read_buffer_size, 65536);
+        assert!(set("mysqlnd.log_mask", Some("0x10")));
+        assert_eq!(settings().log_mask, 16);
+        // OnUpdateNetCmdBufferSize: ZEND_ATOL(), no suffix.
+        assert!(!set("mysqlnd.net_cmd_buffer_size", Some("8K")));
+        // OnUpdateBool: zend_ini_parse_bool() does not trim.
+        assert!(set("mysqlnd.collect_statistics", Some(" on")));
+        assert!(!collect_statistics());
+        reset();
     }
 }
