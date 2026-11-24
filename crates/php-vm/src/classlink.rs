@@ -316,10 +316,21 @@ impl Vm {
                 let c = self.read(*op)?;
                 match c {
                     Value::Object(o) => object::class_of(&o).clone(),
-                    Value::Str(s) => match self.find_class(s.as_bytes()) {
-                        Some(c) => c,
-                        None => return Ok(false),
-                    },
+                    // An object of the named class, a subclass or an
+                    // implementation answers by name, without the class
+                    // table lookup; anything else (an alias, another
+                    // class, no object) is looked up.
+                    Value::Str(s) => {
+                        if let Value::Object(o) = v {
+                            if object::class_of(o).instance_of_name_ci(s.as_bytes()) {
+                                return Ok(true);
+                            }
+                        }
+                        match self.find_class(s.as_bytes()) {
+                            Some(c) => c,
+                            None => return Ok(false),
+                        }
+                    }
                     _ => {
                         return Err(self
                             .make_throw("Error", "Class name must be a valid object or a string"))
