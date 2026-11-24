@@ -132,7 +132,34 @@ pub fn get_substr(
         let rest = &input[from..];
         return rest[..len.min(rest.len())].to_vec();
     }
+    // Valid UTF-8 is sliced on codepoint boundaries without being decoded
+    // (`mb_get_substr`'s `ZSTR_IS_VALID_UTF8` case): decoding and encoding
+    // it again gives the same bytes. Anything else is decoded, its errors
+    // substituted.
+    if enc.is_utf8() && std::str::from_utf8(input).is_ok() {
+        return utf8_slice(input, from, len).to_vec();
+    }
     get_substr_slow(input, from, len, enc, substchar, mode)
+}
+
+/// The `len` codepoints of valid UTF-8 `s` from codepoint `from` on (as
+/// many as there are).
+fn utf8_slice(s: &[u8], from: usize, len: usize) -> &[u8] {
+    // The byte offset of each codepoint: the bytes that are no
+    // continuation byte (`10xxxxxx`).
+    let mut starts = s
+        .iter()
+        .enumerate()
+        .filter(|(_, &b)| b & 0xC0 != 0x80)
+        .map(|(i, _)| i);
+    let Some(start) = starts.nth(from) else {
+        return &[];
+    };
+    let stop = match len.checked_sub(1) {
+        Some(more) => starts.nth(more).unwrap_or(s.len()),
+        None => start,
+    };
+    &s[start..stop]
 }
 
 /// `memnstr`: first occurrence of `needle` in `hay`.
@@ -438,12 +465,14 @@ impl MbState {
         len: Option<i64>,
         encoding: Option<&[u8]>,
     ) -> MbResult<Vec<u8>> {
-        let range = format!("must be between {} and {}", i64::MIN + 1, i64::MAX);
+        // (The message only on the error: formatted for every call, it was
+        // a fifth of a short `mb_substr()`.)
+        let range = || format!("must be between {} and {}", i64::MIN + 1, i64::MAX);
         if from == i64::MIN {
-            return Err(MbError::arg_value(2, "start", range));
+            return Err(MbError::arg_value(2, "start", range()));
         }
         if len == Some(i64::MIN) {
-            return Err(MbError::arg_value(3, "length", range));
+            return Err(MbError::arg_value(3, "length", range()));
         }
         let enc = self.get_encoding(encoding, 4, "encoding")?;
         let mblen = if from < 0 || len.is_some_and(|l| l < 0) {
@@ -1091,4 +1120,37 @@ pub fn check_str_encoding(s: &[u8], enc: &'static Encoding) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod substr_tests {
+    use super::{get_substr, get_substr_slow};
+    use crate::encoding::utf8;
+
+    /// Valid UTF-8 sliced on codepoint boundaries is what decoding it gives
+    /// (`mb_get_substr`'s valid-UTF-8 case), for every start and length
+    /// over strings of one- to four-byte codepoints.
+    #[test]
+    fn valid_utf8_slices_match_the_decoding_path() {
+        let mode = crate::state::MbState::default().illegal_mode();
+        for s in [
+            "",
+            "a",
+            "hello",
+            "héllo wörld",
+            "日本語テキスト",
+            "a\u{1F600}b\u{1F601}c",
+        ] {
+            let b = s.as_bytes();
+            for from in 0..=b.len() + 1 {
+                for len in [0, 1, 2, 3, 7, usize::MAX] {
+                    assert_eq!(
+                        get_substr(b, from, len, utf8(), 0x3F, mode),
+                        get_substr_slow(b, from, len, utf8(), 0x3F, mode),
+                        "{s:?} {from} {len}"
+                    );
+                }
+            }
+        }
+    }
 }
