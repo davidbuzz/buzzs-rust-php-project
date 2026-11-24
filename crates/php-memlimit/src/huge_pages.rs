@@ -8,7 +8,9 @@
 //! (measured with 10 php-fpm workers: 4.8 MB private per worker after a
 //! request with huge pages, 2.9 MB without).
 
-use std::ffi::{c_int, c_long, c_void};
+#[cfg(target_os = "linux")]
+use std::ffi::c_void;
+use std::ffi::{c_int, c_long};
 
 extern "C" {
     fn mi_option_set(option: c_int, value: c_long);
@@ -38,6 +40,13 @@ pub fn set_huge_pages(on: bool) {
     }
     // SAFETY: mimalloc's option setter takes any option and value.
     unsafe { mi_option_set(MI_OPTION_ALLOW_THP, 0) };
+    unmark_heap_mapping();
+}
+
+/// Takes `MADV_HUGEPAGE` back from the mapping that holds the heap (Linux:
+/// `/proc/self/maps`, `MADV_NOHUGEPAGE`).
+#[cfg(target_os = "linux")]
+fn unmark_heap_mapping() {
     let probe = Box::new(0u64);
     let addr = std::ptr::from_ref::<u64>(&probe) as usize;
     let Some((start, end)) = std::fs::read("/proc/self/maps")
@@ -53,8 +62,13 @@ pub fn set_huge_pages(on: bool) {
     }
 }
 
+/// Elsewhere mimalloc's option is all there is.
+#[cfg(not(target_os = "linux"))]
+fn unmark_heap_mapping() {}
+
 /// The start and end of the mapping in the `/proc/self/maps` listing
 /// `maps` that contains `addr`.
+#[cfg(any(target_os = "linux", test))]
 fn mapping_of(maps: &[u8], addr: usize) -> Option<(usize, usize)> {
     maps.split(|&c| c == b'\n').find_map(|line| {
         let range = line.split(|&c| c == b' ').next()?;
