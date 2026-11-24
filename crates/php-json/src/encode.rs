@@ -115,8 +115,9 @@ fn u_escape(us: u32) -> [u8; 6] {
 /// Formats a double like `php_json_encode_double` (`zend_gcvt` with
 /// `serialize_precision`, lowercase `e`, optional `.0`).
 pub(crate) fn format_double(d: f64, precision: i64, options: i64) -> String {
-    let p = i32::try_from(precision).unwrap_or(if precision < 0 { -1 } else { i32::MAX });
-    let mut s = zend_gcvt(d, p.min(1000), b'.', b'e');
+    // `(int) PG(serialize_precision)`, as php-src passes it.
+    let p = php_runtime::float::precision_digits(precision);
+    let mut s = zend_gcvt(d, p, b'.', b'e');
     if options & PRESERVE_ZERO_FRACTION != 0 && !s.contains('.') {
         s.push_str(".0");
     }
@@ -568,4 +569,19 @@ pub fn encode_string(s: &[u8], flags: i64) -> Option<Vec<u8>> {
         .escape_string(&mut buf, s, flags & !PARTIAL_OUTPUT_ON_ERROR)
         .ok()?;
     encoded.then_some(buf)
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use super::format_double;
+
+    /// `(int) PG(serialize_precision)`: `json_encode(0.1)` with
+    /// `serialize_precision` at `i64::MAX` (99999999999999999999 saturated)
+    /// is -1 in C, the shortest form; values from PHP 8.5.
+    #[test]
+    fn serialize_precision_converts_like_c_int() {
+        assert_eq!(format_double(0.1, i64::MAX, 0), "0.1");
+        assert_eq!(format_double(0.1, 4_294_967_296, 0), "0.1");
+        assert_eq!(format_double(0.1, 17, 0), "0.10000000000000001");
+    }
 }
