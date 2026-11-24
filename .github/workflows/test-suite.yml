@@ -586,7 +586,10 @@ jobs:
       - name: Fetch the php-src tests and benchmarks (pinned)
         run: |
           scripts/fetch-phpt-tests.sh
-          git -C modules/php-src sparse-checkout add /benchmark/
+          # The fetch's sparse checkout is non-cone (.git/info/sparse-checkout written
+          # directly), so its pattern list is extended the same way.
+          echo '/benchmark/' >> modules/php-src/.git/info/sparse-checkout
+          git -C modules/php-src read-tree -mu HEAD
       - name: make install
         run: |
           set -x

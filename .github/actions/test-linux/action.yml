@@ -55,6 +55,9 @@ runs:
         fi
         mkdir -p reports
         report="reports/${{ inputs.name }}"
+        # `shell: bash` runs with -e and pipefail: a failing run must still write its
+        # summary and hand its own exit status back.
+        set +e
         env -u LANGUAGE "$PHP_BIN_DIR/phpt-runner" --php "$PHP_BIN_DIR/php" -q ${{ inputs.runTestsParameters }} \
           ${{ inputs.enableOpcache == 'true' && '-d opcache.enable_cli=1' || '' }} \
           -d opcache.jit=${{ inputs.jitType }} \
