@@ -3143,6 +3143,45 @@ impl Vm {
         result
     }
 
+    /// [`Vm::fast_builtin_call`] of a prepared one-argument call of `b`
+    /// (`exec/tape/calls.rs`, `call_native`): the argument sent into the
+    /// pooled frame is evaluated without the handler, as the frameless call
+    /// of `Vm::frameless_icall_prepared` evaluates its quick functions, the
+    /// caller's resume point saved (`SAVE_OPLINE`), the argument released
+    /// and the result stored in `dst`. `None`, nothing changed, when the
+    /// function needs its handler for the argument.
+    pub(crate) fn fast_eval_prepared(
+        &mut self,
+        b: &Builtin,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        if b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let id = b.fast_eval_id();
+        let live = self.frames.live;
+        let (callers, pool) = self.frames.vec.split_at_mut(live);
+        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+            return None;
+        };
+        if caller.calls.len() != calls_len || frame.args.len() != 1 {
+            return None;
+        }
+        let v = match frame.args[0].as_ref()? {
+            Value::Reference(r) => fast_eval(id, &*r.try_borrow()?)?,
+            val => fast_eval(id, val)?,
+        };
+        caller.ip = caller_ip;
+        frame.args.clear();
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        self.put_call_result(dst, v);
+        Some(Ok(()))
+    }
+
     /// Fast path for single-argument builtin calls matching deterministic type
     /// predicates (`is_int`, `is_string`, `is_array`, etc.) or scalar functions
     /// (`strlen`, `count`). Avoids full call-frame setup and parameter reflection.
@@ -3152,7 +3191,9 @@ impl Vm {
         b: &Builtin,
         call: &mut PendingCall,
     ) -> Option<VmResult<Value>> {
-        if b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+        let id = b.fast_eval_id();
+        if id == fe::NONE
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
             || call.has_named
             || !call.named.is_empty()
             || call.is_ctor
@@ -3175,9 +3216,9 @@ impl Vm {
         let res = match raw {
             Value::Reference(r) => {
                 let borrowed = r.try_borrow()?;
-                fast_builtin_eval(b.name.as_bytes(), &borrowed)?
+                fast_eval(id, &borrowed)?
             }
-            val => fast_builtin_eval(b.name.as_bytes(), val)?,
+            val => fast_eval(id, val)?,
         };
         if let Err(e) = self.check_interrupt() {
             return Some(Err(e));
@@ -3194,50 +3235,104 @@ impl Vm {
     }
 }
 
-#[inline]
-fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+/// The functions [`fast_builtin_call`](Vm::fast_builtin_call) evaluates
+/// without their handlers, by the id [`fast_eval_id`] gives their names
+/// (kept by each [`Builtin`]: `Builtin::fast_eval_id`), so a call matches
+/// one byte instead of the name against each of them.
+pub(crate) mod fe {
+    /// Not one of them.
+    pub(crate) const NONE: u8 = 0;
+    pub(crate) const IS_INT: u8 = 1;
+    pub(crate) const IS_STRING: u8 = 2;
+    pub(crate) const IS_ARRAY: u8 = 3;
+    pub(crate) const IS_BOOL: u8 = 4;
+    pub(crate) const IS_NULL: u8 = 5;
+    pub(crate) const IS_FLOAT: u8 = 6;
+    pub(crate) const IS_OBJECT: u8 = 7;
+    pub(crate) const IS_RESOURCE: u8 = 8;
+    pub(crate) const IS_SCALAR: u8 = 9;
+    pub(crate) const IS_NUMERIC: u8 = 10;
+    pub(crate) const STRLEN: u8 = 11;
+    pub(crate) const COUNT: u8 = 12;
+    pub(crate) const ABS: u8 = 13;
+    pub(crate) const ORD: u8 = 14;
+    pub(crate) const CHR: u8 = 15;
+    /// A math function of [`super::float_builtin_eval`]: this plus its
+    /// [`super::ff`] id.
+    pub(crate) const FLOAT_BASE: u8 = 64;
+}
+
+/// The [`fe`] id of the builtin named `name`.
+pub(crate) fn fast_eval_id(name: &[u8]) -> u8 {
     match name {
-        b"is_int" | b"is_integer" | b"is_long" => Some(Value::Bool(matches!(val, Value::Int(_)))),
-        b"is_string" => Some(Value::Bool(matches!(val, Value::Str(_)))),
-        b"is_array" => Some(Value::Bool(matches!(val, Value::Array(_)))),
-        b"is_bool" => Some(Value::Bool(matches!(val, Value::Bool(_)))),
-        b"is_null" => Some(Value::Bool(matches!(val, Value::Null))),
-        b"is_float" | b"is_double" | b"is_real" => {
-            Some(Value::Bool(matches!(val, Value::Float(_))))
-        }
-        b"is_object" => Some(Value::Bool(matches!(val, Value::Object(_)))),
-        b"is_resource" => Some(Value::Bool(
+        b"is_int" | b"is_integer" | b"is_long" => fe::IS_INT,
+        b"is_string" => fe::IS_STRING,
+        b"is_array" => fe::IS_ARRAY,
+        b"is_bool" => fe::IS_BOOL,
+        b"is_null" => fe::IS_NULL,
+        b"is_float" | b"is_double" | b"is_real" => fe::IS_FLOAT,
+        b"is_object" => fe::IS_OBJECT,
+        b"is_resource" => fe::IS_RESOURCE,
+        b"is_scalar" => fe::IS_SCALAR,
+        b"is_numeric" => fe::IS_NUMERIC,
+        b"strlen" => fe::STRLEN,
+        b"count" | b"sizeof" => fe::COUNT,
+        b"abs" => fe::ABS,
+        b"ord" => fe::ORD,
+        b"chr" => fe::CHR,
+        _ => float_fn_id(name).map_or(fe::NONE, |f| fe::FLOAT_BASE + f),
+    }
+}
+
+#[cfg(test)]
+fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    fast_eval(fast_eval_id(name), val)
+}
+
+/// What the builtin with [`fe`] id `id` returns for `val`, when its handler
+/// reports nothing for it; `None` otherwise (the handler runs).
+#[inline]
+fn fast_eval(id: u8, val: &Value) -> Option<Value> {
+    match id {
+        fe::IS_INT => Some(Value::Bool(matches!(val, Value::Int(_)))),
+        fe::IS_STRING => Some(Value::Bool(matches!(val, Value::Str(_)))),
+        fe::IS_ARRAY => Some(Value::Bool(matches!(val, Value::Array(_)))),
+        fe::IS_BOOL => Some(Value::Bool(matches!(val, Value::Bool(_)))),
+        fe::IS_NULL => Some(Value::Bool(matches!(val, Value::Null))),
+        fe::IS_FLOAT => Some(Value::Bool(matches!(val, Value::Float(_)))),
+        fe::IS_OBJECT => Some(Value::Bool(matches!(val, Value::Object(_)))),
+        fe::IS_RESOURCE => Some(Value::Bool(
             matches!(val, Value::Resource(r) if !r.is_closed()),
         )),
-        b"is_scalar" => Some(Value::Bool(matches!(
+        fe::IS_SCALAR => Some(Value::Bool(matches!(
             val,
             Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_)
         ))),
-        b"is_numeric" => Some(Value::Bool(match val {
+        fe::IS_NUMERIC => Some(Value::Bool(match val {
             Value::Int(_) | Value::Float(_) => true,
             Value::Str(s) => {
                 php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some()
             }
             _ => false,
         })),
-        b"strlen" => match val {
+        fe::STRLEN => match val {
             Value::Str(s) => Some(Value::Int(i64::try_from(s.len()).unwrap_or(i64::MAX))),
             _ => None,
         },
-        b"count" | b"sizeof" => match val {
+        fe::COUNT => match val {
             Value::Array(a) => Some(Value::Int(i64::try_from(a.len()).unwrap_or(i64::MAX))),
             _ => None,
         },
-        b"abs" => match val {
+        fe::ABS => match val {
             Value::Int(i) if *i != i64::MIN => Some(Value::Int(i.abs())),
             Value::Float(f) => Some(Value::Float(f.abs())),
             _ => None,
         },
-        b"ord" => match val {
+        fe::ORD => match val {
             Value::Str(s) if s.len() == 1 => Some(Value::Int(i64::from(s.as_bytes()[0]))),
             _ => None,
         },
-        b"chr" => match val {
+        fe::CHR => match val {
             // The shared one-character string (`ZSTR_CHAR`), as the
             // handler returns it.
             Value::Int(c) => u8::try_from(*c)
@@ -3245,7 +3340,8 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
                 .map(|c| Value::Str(ZStr::from_byte(c))),
             _ => None,
         },
-        _ => float_builtin_eval(name, val),
+        id if id >= fe::FLOAT_BASE => float_fn_eval(id - fe::FLOAT_BASE, val),
+        _ => None,
     }
 }
 

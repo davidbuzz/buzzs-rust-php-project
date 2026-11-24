@@ -1168,7 +1168,7 @@ fn quick_call(code: &OpArray, i: usize) -> Option<(u8, u32)> {
 fn preparable(op: &Op) -> bool {
     matches!(
         op,
-        Op::InitFCall { fallback: None, .. }
+        Op::InitFCall { .. }
             | Op::InitMethodCall {
                 name: Operand::Lit(_),
                 ..
@@ -1341,6 +1341,80 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         n: 0,
         calls_len: caller.calls.len(),
         fcall: true,
+        closure: false,
+        ctor: false,
+    })
+}
+
+/// `ZEND_INIT_NS_FCALL_BY_NAME` (an unqualified call from namespaced
+/// code, `InitFCall` with a fallback) at `at`, when the call site's
+/// run-time cache resolves it to a builtin the tape calls by name: looked
+/// up as `init_ns_fcall_in` looks it up (the site's own slot `site`, where
+/// a resolved global fallback is cached, else the namespaced name's), the
+/// call is prepared as [`prepare`] prepares a builtin's, not direct (as
+/// the generic op pushes it). `None`, nothing changed, otherwise (a user
+/// function's call starts the generic way).
+pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared> {
+    if vm.observer.enabled {
+        return None;
+    }
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return None;
+    };
+    // A pooled frame's argument buffer is empty.
+    if !frame.args.is_empty() {
+        return None;
+    }
+    let func = {
+        let cache = caller.code.fcall_cache.borrow();
+        let entry = match cache.get(site).and_then(Option::as_ref) {
+            Some(entry) => entry,
+            None => cache.get(name as usize)?.as_ref()?,
+        };
+        if let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func {
+            if b.plain_call() != PlainCall::Named {
+                return None;
+            }
+        }
+        entry.get()?
+    };
+    let b = match func {
+        Func::Builtin(b) => b,
+        Func::User(uf) => {
+            if uf.call_shape() == CallShape::NOT_PLAIN {
+                return None;
+            }
+            ready_frame(frame, &uf);
+            return Some(Prepared {
+                limit: user_limit(&uf),
+                callee: Callee::User(uf),
+                n: 0,
+                calls_len: caller.calls.len(),
+                fcall: false,
+                closure: false,
+                ctor: false,
+            });
+        }
+    };
+    // Past the declared parameters only into a variadic one (else the
+    // generic call reports the count).
+    let limit = if b.flags & flags::VARIADIC != 0 {
+        MAX_ARGS
+    } else {
+        b.signature().params.len().min(MAX_ARGS)
+    };
+    Some(Prepared {
+        callee: Callee::Native(b, PlainCall::Named),
+        limit,
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
         closure: false,
         ctor: false,
     })
@@ -2142,6 +2216,13 @@ pub(super) fn call_native(
     let Callee::Native(b, kind) = &prep.callee else {
         return Err(prep);
     };
+    // A one-argument call `Vm::fast_builtin_call` evaluates without the
+    // handler (`is_string()`, `count()`, ...): the same, in place.
+    if prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
+        if let Some(r) = vm.fast_eval_prepared(b, prep.calls_len, dst, caller_ip) {
+            return Ok(r);
+        }
+    }
     // `ZEND_FRAMELESS_ICALL_n`: a function with a frameless class, called
     // on the caller's frame when its arguments allow it.
     if b.flags & flags::FRAMELESS != 0 {

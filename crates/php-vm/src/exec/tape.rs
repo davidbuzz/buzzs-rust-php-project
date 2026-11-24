@@ -2200,6 +2200,16 @@ fn run_call(
     inst: &Inst,
 ) -> usize {
     match ops.get(at) {
+        Some(&Op::InitFCall {
+            name,
+            fallback: Some(_),
+            ..
+        }) => {
+            flush(vm, prep);
+            if let Some(call) = calls::prepare_ns(vm, name, lits.len() + at + 1) {
+                return send_and_enter(vm, prep, call, ops, at);
+            }
+        }
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
             // `f(<expression>)` of a builtin that needs no handler: nothing

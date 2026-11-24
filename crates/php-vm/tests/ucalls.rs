@@ -858,3 +858,77 @@ D::m(): Argument #3 must be of type int, string given, called in t.php on line 1
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Unqualified calls from namespaced code (`ZEND_INIT_NS_FCALL_BY_NAME`)
+/// are prepared on the tape when the call site's cache resolves them:
+/// builtins evaluated without their handler (`is_string()`, `count()`),
+/// others with their frame (errors, `func_num_args()`), user functions
+/// with extra arguments, and a site that resolved the global function
+/// keeps it after the namespaced one is declared. Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+fn namespaced_unqualified_calls_are_prepared() {
+    let src = r#"<?php
+namespace App;
+function f($x, ...$r) { return $x . '|' . count($r) . '|' . func_num_args(); }
+function run() {
+    $s = "abc"; $a = [3, 1, 2]; $r = &$s; $o = new \stdClass;
+    for ($i = 0; $i < 3; $i++) {
+        echo var_export([is_string($s), is_string($r), is_array($a), count($a), strlen($s), is_object($o), is_numeric("12"), count([]), is_int($i)], true), "\n";
+        echo f($i), ' ', f($i, 1, 2), ' ', implode(",", $a), "\n";
+        try { count($s); } catch (\TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+        try { strlen(); } catch (\ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+        if ($i == 1) { eval('namespace App; function strlen($x) { return "mine"; }'); }
+        echo strlen('xyz'), "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+0|0|1 0|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+1|0|1 1|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+2|0|1 2|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+"#;
+    assert_eq!(run(src), expected);
+}

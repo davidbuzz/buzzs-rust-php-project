@@ -1188,7 +1188,7 @@ impl Vm {
     /// Stores a call's result in its temporary, or releases it when the
     /// result is unused (a scalar without the out-of-line drop call).
     #[inline]
-    fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
+    pub(crate) fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
         match dst {
             Some(d) => self.set_tmp(d, v),
             None => {
