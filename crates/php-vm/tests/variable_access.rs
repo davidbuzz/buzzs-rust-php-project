@@ -548,3 +548,126 @@ t();
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `$cv[$k] = $v` and `$cv[$k]` (also under `??`) of an object of a user
+/// `ArrayAccess` class call its `offsetSet()` / `offsetGet()` (and
+/// `offsetExists()`) directly (`zend_std_write_dimension`,
+/// `zend_std_read_dimension`): offsets passed as written (int, string,
+/// integer string, bool, a variable), an inherited implementation, a
+/// by-reference `offsetGet()`, an exception, an undefined value, the
+/// assignment's result; appends, `isset`/`empty`/`unset` and nested writes
+/// keep the general path. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn array_access_dimensions_call_the_methods_directly() {
+    let src = r#"<?php
+class A implements ArrayAccess {
+    public $d = [];
+    function offsetExists($o): bool { echo "exists(", var_export($o, true), ") "; return isset($this->d[$o]); }
+    function offsetGet($o): mixed { echo "get(", var_export($o, true), ") "; if ($o === 'throw') throw new Exception("boom"); return $this->d[$o] ?? null; }
+    function offsetSet($o, $v): void { echo "set(", var_export($o, true), ",", var_export($v, true), ") "; if ($o === null) { $this->d[] = $v; } else { $this->d[$o] = $v; } }
+    function offsetUnset($o): void { echo "unset(", var_export($o, true), ") "; unset($this->d[$o]); }
+}
+class B extends A {}
+class R implements ArrayAccess { private $d = ['x' => [1]]; function offsetExists($o): bool { return true; } function &offsetGet($o): mixed { return $this->d[$o]; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+function run() {
+    $a = new A; $b = new B; $r = new R; $s = 'k'; $f = 1.5; $o = new stdClass; $ref = &$a;
+    for ($i = 0; $i < 2; $i++) {
+        $a['k'] = $i; $a[1] = 'one'; $a['1'] = 'str1'; $a[$s] = 'via'; $a[true] = 't'; $a[$i + 10] = [$i]; $a[] = 'app'; $ref['r'] = 'byref';
+        echo "\n";
+        var_dump($a['k'], $a[1], $a['nope'] ?? 'dflt', $a['k'] ?? 'dflt', $b['z'] ?? 'bz');
+        $b['x'] = $a; echo "\n";
+        try { $a['throw']; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+        $x = $r['x']; var_dump($x);
+        $v = 5; $w = ($a['w'] = $v); var_dump($w);
+        $a['u'] = $undefined;
+        echo "\n";
+        var_dump(isset($a['k']), empty($a['k']));
+        unset($a['k']);
+        echo "\n";
+        $a['n']['m'] = 1;
+        echo "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"set('k',0) set(1,'one') set('1','str1') set('k','via') set(true,'t') set(10,array (
+  0 => 0,
+)) set(NULL,'app') set('r','byref') 
+get('k') get(1) exists('nope') exists('k') get('k') exists('z') string(3) "via"
+string(1) "t"
+string(4) "dflt"
+string(3) "via"
+string(2) "bz"
+set('x',\A::__set_state(array(
+   'd' => 
+  array (
+    'k' => 'via',
+    1 => 't',
+    10 => 
+    array (
+      0 => 0,
+    ),
+    11 => 'app',
+    'r' => 'byref',
+  ),
+))) 
+get('throw') caught boom
+array(1) {
+  [0]=>
+  int(1)
+}
+set('w',5) int(5)
+
+Warning: Undefined variable $undefined in t.php on line 21
+set('u',NULL) 
+exists('k') exists('k') get('k') bool(true)
+bool(false)
+unset('k') 
+get('n') 
+Notice: Indirect modification of overloaded element of A has no effect in t.php on line 26
+
+set('k',1) set(1,'one') set('1','str1') set('k','via') set(true,'t') set(11,array (
+  0 => 1,
+)) set(NULL,'app') set('r','byref') 
+get('k') get(1) exists('nope') exists('k') get('k') exists('z') string(3) "via"
+string(1) "t"
+string(4) "dflt"
+string(3) "via"
+string(2) "bz"
+set('x',\A::__set_state(array(
+   'd' => 
+  array (
+    1 => 't',
+    10 => 
+    array (
+      0 => 0,
+    ),
+    11 => 
+    array (
+      0 => 1,
+    ),
+    'r' => 'byref',
+    'w' => 5,
+    'u' => NULL,
+    'k' => 'via',
+    12 => 'app',
+  ),
+))) 
+get('throw') caught boom
+array(1) {
+  [0]=>
+  int(1)
+}
+set('w',5) int(5)
+
+Warning: Undefined variable $undefined in t.php on line 21
+set('u',NULL) 
+exists('k') exists('k') get('k') bool(true)
+bool(false)
+unset('k') 
+get('n') 
+Notice: Indirect modification of overloaded element of A has no effect in t.php on line 26
+
+"#;
+    assert_eq!(run(src), expected);
+}

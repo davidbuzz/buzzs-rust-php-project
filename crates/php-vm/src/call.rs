@@ -3487,6 +3487,30 @@ pub(crate) fn float_fn_eval(id: u8, val: &Value) -> Option<Value> {
     Some(Value::Float(r))
 }
 
+/// The method of `cls` named `name` (any case), looked up by its lower-case
+/// name; a short name is lowered on the stack (`offsetGet`, `current` and
+/// the others the engine calls by name, each call: a `String` each time
+/// before).
+fn method_by_name(cls: &Class, name: &str) -> Option<Rc<Method>> {
+    let b = name.as_bytes();
+    if !b.iter().any(u8::is_ascii_uppercase) {
+        return cls.methods.get(b).cloned();
+    }
+    let mut buf = [0u8; 32];
+    match buf.get_mut(..b.len()) {
+        Some(lc) => {
+            for (d, c) in lc.iter_mut().zip(b) {
+                *d = c.to_ascii_lowercase();
+            }
+            cls.methods.get(&*lc).cloned()
+        }
+        None => cls
+            .methods
+            .get(name.to_ascii_lowercase().as_bytes())
+            .cloned(),
+    }
+}
+
 impl Vm {
     /// `zend_try_compile_special_func()`: statically named calls without
     /// named arguments that php-src compiles to dedicated opcodes, so no
@@ -4876,12 +4900,40 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
+        self.give_args(&mut call, args);
+        self.call_pending(call)
+    }
+
+    /// Puts the arguments of a call made from native code (`offsetGet()`,
+    /// `__get()`, `__toString()`, ...) into `call`: inline, dereferenced
+    /// (as `call_pending_ex` dereferences them), for a user function with
+    /// neither a by-reference nor a variadic parameter, so that
+    /// `push_user_call` takes its plain branch (which only takes inline
+    /// arguments); in the argument buffer otherwise.
+    fn give_args(&mut self, call: &mut PendingCall, args: Vec<Value>) {
+        if let Func::User(uf) = &call.func {
+            if args.len() <= call.inline_args.len()
+                && call.magic_name.is_none()
+                && !uf.params.iter().any(|p| p.by_ref || p.variadic)
+            {
+                #[allow(clippy::cast_possible_truncation)] // at most the inline buffer's 6
+                {
+                    call.inline_count = args.len() as u8;
+                }
+                for (slot, v) in call.inline_args.iter_mut().zip(args) {
+                    *slot = Some(match v {
+                        Value::Reference(r) => r.get(),
+                        v => v,
+                    });
+                }
+                return;
+            }
+        }
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
-        self.call_pending(call)
     }
 
     /// Calls a method by name (with `__call` fallback), dereferencing the
@@ -4903,22 +4955,12 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            cls.methods.get(name.as_bytes()).cloned()
-        } else {
-            let lc = name.to_ascii_lowercase();
-            cls.methods.get(lc.as_bytes()).cloned()
-        };
-        let call = match m {
+        let m = method_by_name(&cls, name);
+        let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
         };
-        let mut call = call;
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.give_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4933,12 +4975,7 @@ impl Vm {
         args: Vec<Option<Value>>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            cls.methods.get(name.as_bytes()).cloned()
-        } else {
-            let lc = name.to_ascii_lowercase();
-            cls.methods.get(lc.as_bytes()).cloned()
-        };
+        let m = method_by_name(&cls, name);
         let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,

@@ -540,12 +540,14 @@ impl Class {
         if self.interfaces.iter().any(|i| i.lc_name.as_bytes() == lc) {
             return true;
         }
-        let mut c = self.parent.clone();
+        // (By reference: a clone of each parent's handle cost an increment
+        // and a decrement per step, on every `ArrayAccess` dimension.)
+        let mut c = self.parent.as_ref();
         while let Some(p) = c {
             if p.lc_name.as_bytes() == lc {
                 return true;
             }
-            c = p.parent.clone();
+            c = p.parent.as_ref();
         }
         false
     }
