@@ -503,6 +503,16 @@ fn optimize_rounds(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
     // Iterative optimization loop: constant folding, jump threading, SCCP,
     // block-pass, and dead code elimination feed each other until a fixed
     // point or iteration limit is reached.
+    //
+    // The block pass removes unreachable code first thing, and in most
+    // functions there is some: the implicit `RETURN null` after a final
+    // `return`. Removed inside round 0, that alone counted as a change and
+    // sent two functions in three through a whole second round that found
+    // nothing; removed here, before the rounds, round 0 sees what it would
+    // have seen in round 1.
+    if (level & PASS_5) != 0 {
+        dce::drop_unreachable(op_array);
+    }
     for round in 0..8 {
         let mut changed = false;
 
