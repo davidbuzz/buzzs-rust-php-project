@@ -3,6 +3,7 @@
 //! `set_huge_pages(false)` takes `MADV_HUGEPAGE` back from the mapping that
 //! holds the heap (mimalloc marks its arenas by default), as php-src uses
 //! no huge pages without `USE_ZEND_ALLOC_HUGE_PAGES`.
+#![cfg(target_os = "linux")]
 
 php_memlimit::install_global_allocator!();
 
