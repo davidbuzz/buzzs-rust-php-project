@@ -31,12 +31,10 @@
 //! Only the rows [`supports`] accepts are emitted; a plan with any other
 //! row is refused, and the interpreter runs the loop.
 
-use super::{
-    jcc_for, jump_target, poll_word, replan_word, Inst, JitMeta, Plan, Target, ARITH_SAR,
-    ARITH_SHL, C_ASSIGN_I, C_ASSIGN_L, C_DEC, C_INC, C_JMP, C_NOP, ITER_CAP, J_ARITH_CV,
-    J_ARITH_TMP, J_ASSIGN_OP, J_ASSIGN_T, J_CMP, J_INCCMP, J_NUMBIN_C, J_NUMBIN_D, J_NUMBIN_T, KC,
-    KI, KR, KT, OPA_BITAND, OPA_BITOR, OPA_BITXOR, PAYLOAD, TAG_INT, TAG_NONE, TAG_NULL, TAG_STR,
-};
+// The backend speaks the parent's whole vocabulary: its plan types, row
+// classes, meta flags, layout constants and helpers.
+#[allow(clippy::wildcard_imports)]
+use super::*;
 use std::collections::HashMap;
 
 /// An index or a code position as a signed word (both are far below
@@ -55,6 +53,7 @@ const ITER: u32 = 24;
 /// The x86 emitter's `rax`, `r9` and `rcx`.
 const RA: u32 = 9;
 const RB: u32 = 10;
+const RC: u32 = 11;
 /// Scratch for an address offset (`T0`) and a stored immediate (`T1`).
 const T0: u32 = 16;
 const T1: u32 = 17;
@@ -67,8 +66,11 @@ const EQ: u32 = 0;
 const NE: u32 = 1;
 const HS: u32 = 2;
 const LO: u32 = 3;
+const MI: u32 = 4;
+const PL: u32 = 5;
 const VS: u32 = 6;
 const HI: u32 = 8;
+const LS: u32 = 9;
 const GE: u32 = 10;
 const LT: u32 = 11;
 const GT: u32 = 12;
@@ -82,7 +84,7 @@ fn cond_of(jcc: u8) -> u32 {
         0x82 => LO,
         0x83 => HS,
         0x84 => EQ,
-        0x86 => 9, // ls
+        0x86 => LS,
         0x87 => HI,
         0x8C => LT,
         0x8D => GE,
@@ -102,33 +104,41 @@ enum Fix {
 
 /// The access widths of [`A64::mem`].
 #[derive(Clone, Copy)]
-enum W {
+enum Width {
     /// A 64-bit word.
     X,
+    /// A 32-bit word (zero-extended on a load).
+    W,
     /// A byte (zero-extended into a `w` register on a load).
     B,
+    /// A double, into or out of a `d` register.
+    D,
 }
 
-/// Whether the `AArch64` backend emits every row of `p`: the minimal loop
-/// rows (`Jmp`, int `++`/`--`, the int assignments, the fused
-/// compare-and-branch and `++`-compare, the int arithmetic into a variable
-/// or a temporary, `$cv = TMP` of an int) and no inlined call, frame read
-/// or global read. Anything else is refused, so the interpreter runs it.
+/// Whether the `AArch64` backend emits every row of `p`: the loop rows of
+/// ints, bools, nulls and floats (`Jmp`, `++`/`--`, the assignments, the
+/// fused compare-and-branch and `++`-compare, the arithmetic into a
+/// variable or a temporary and its float forms, the moves, the truth jumps,
+/// `?:`, `??`, `abs()`) and no inlined call, helper call, frame read or
+/// global read. Anything else is refused, so the interpreter runs it.
 pub(super) fn supports(p: &Plan) -> bool {
     if p.has_calls || p.frame {
         return false;
     }
     p.class.iter().zip(&p.meta).all(|(&c, m)| match c {
-        0 | C_JMP | C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | C_NOP | J_CMP | J_INCCMP => true,
+        0 | C_JMP | C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | C_NOP | J_CMP | J_INCCMP
+        | C_ASSIGN_R | C_INCDEC_T | C_ABS | C_MOVE | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE
+        | C_JMPZT | C_JMPNZT | J_CMPS => true,
         J_ARITH_CV | J_ARITH_TMP | J_ASSIGN_OP | J_NUMBIN_T | J_NUMBIN_C | J_NUMBIN_D => {
             matches!(
                 m.arith,
                 0 | 1 | 2 | 5 | OPA_BITAND | OPA_BITOR | OPA_BITXOR | ARITH_SHL | ARITH_SAR
             )
         }
-        // The int path only: a bool, null, scalar or owned value source
-        // is a later row.
-        J_ASSIGN_T => m.mask == 0,
+        // An owned value over a string, an object or a resource is the
+        // tape's own assignment (a helper call: a later row).
+        J_ASSIGN_T => m.mask != ANY_SRC,
+        J_ASSIGN_OPS => m.arith <= 2,
         _ => false,
     })
 }
@@ -227,12 +237,16 @@ impl A64 {
     /// unsigned-offset form when `off` fits it, else the register-offset
     /// form through `T0` (never the stored register: stores of an
     /// immediate go through `T1`).
-    fn mem(&mut self, load: bool, w: W, rt: u32, rn: u32, off: u32) {
+    fn mem(&mut self, load: bool, w: Width, rt: u32, rn: u32, off: u32) {
         let (imm, reg, scale) = match (w, load) {
-            (W::X, true) => (0xF940_0000, 0xF860_6800, 8),
-            (W::X, false) => (0xF900_0000, 0xF820_6800, 8),
-            (W::B, true) => (0x3940_0000, 0x3860_6800, 1),
-            (W::B, false) => (0x3900_0000, 0x3820_6800, 1),
+            (Width::X, true) => (0xF940_0000, 0xF860_6800, 8),
+            (Width::X, false) => (0xF900_0000, 0xF820_6800, 8),
+            (Width::W, true) => (0xB940_0000, 0xB860_6800, 4),
+            (Width::W, false) => (0xB900_0000, 0xB820_6800, 4),
+            (Width::D, true) => (0xFD40_0000, 0xFC60_6800, 8),
+            (Width::D, false) => (0xFD00_0000, 0xFC20_6800, 8),
+            (Width::B, true) => (0x3940_0000, 0x3860_6800, 1),
+            (Width::B, false) => (0x3900_0000, 0x3820_6800, 1),
         };
         if off % scale == 0 && off / scale < 4096 {
             self.put(imm | ((off / scale) << 10) | (rn << 5) | rt);
@@ -254,18 +268,30 @@ impl A64 {
 
     /// `T0` = the tag byte of slot `base + off`, compared with `imm`.
     fn cmp_tag(&mut self, kind: u8, off: u32, imm: u8) {
-        self.mem(true, W::B, T0, base_reg(kind), off);
+        self.mem(true, Width::B, T0, base_reg(kind), off);
         self.cmp_w_imm(T0, u32::from(imm));
     }
 
     /// `ldr rd, [base + off + 8]`: the payload of an `Int` slot.
     fn load_payload(&mut self, rd: u32, kind: u8, off: u32) {
-        self.mem(true, W::X, rd, base_reg(kind), off.wrapping_add(PAYLOAD));
+        self.mem(
+            true,
+            Width::X,
+            rd,
+            base_reg(kind),
+            off.wrapping_add(PAYLOAD),
+        );
     }
 
     /// `str rs, [base + off + 8]`.
     fn store_payload(&mut self, rs: u32, kind: u8, off: u32) {
-        self.mem(false, W::X, rs, base_reg(kind), off.wrapping_add(PAYLOAD));
+        self.mem(
+            false,
+            Width::X,
+            rs,
+            base_reg(kind),
+            off.wrapping_add(PAYLOAD),
+        );
     }
 
     /// An int payload store of the constant `v`.
@@ -281,10 +307,10 @@ impl A64 {
     /// The tag store (after the payload store, as on x86-64).
     fn store_tag(&mut self, kind: u8, off: u32, tag: u8) {
         if tag == 0 {
-            self.mem(false, W::B, ZR, base_reg(kind), off);
+            self.mem(false, Width::B, ZR, base_reg(kind), off);
         } else {
             self.put(0x5280_0000 | (u32::from(tag) << 5) | T1); // movz w17, #tag
-            self.mem(false, W::B, T1, base_reg(kind), off);
+            self.mem(false, Width::B, T1, base_reg(kind), off);
         }
     }
 
@@ -321,6 +347,12 @@ impl A64 {
     fn cbz_x(&mut self, rt: u32, t: Target) {
         self.fixups.push((self.code.len(), Fix::I19, t));
         self.put(0xB400_0000 | rt);
+    }
+
+    /// `cbnz xt, t`.
+    fn cbnz_x(&mut self, rt: u32, t: Target) {
+        self.fixups.push((self.code.len(), Fix::I19, t));
+        self.put(0xB500_0000 | rt);
     }
 
     /// The safe-point poll: `ldrb w16, [x23]; cbnz w16, t`.
@@ -372,6 +404,7 @@ impl A64 {
 
     // ------------------------------------------------------------ rows
 
+    #[allow(clippy::too_many_lines)] // one arm per row class, as the x86 `emit_instr`
     fn emit_instr(&mut self, j: usize) {
         let i = self.plan.head + j;
         let inst = self.tape[i];
@@ -399,10 +432,74 @@ impl A64 {
                 let cc = cond_of(jcc_for(m.mask).unwrap_or(0x85));
                 self.bcond(cc, self.jump_tgt(j));
             }
+            C_MOVE => self.emit_move(m, &inst, Target::Side(i)),
+            C_JMPZT | C_JMPNZT => {
+                if m.ca {
+                    let (is_bool, tested) = (self.synth_label(), self.synth_label());
+                    self.cmp_tag(KT, inst.a, TAG_BOOL);
+                    self.bcond(EQ, Target::Label(is_bool));
+                    self.cmp_w_imm(T0, u32::from(TAG_INT));
+                    self.bcond(NE, Target::Side(i));
+                    self.load_payload(RA, KT, inst.a);
+                    self.cmp_x_imm(RA, 0);
+                    self.put(0x1A9F_07E0 | RC); // cset w11, ne
+                    self.b(Target::Label(tested));
+                    self.set_label(is_bool);
+                    self.ldb_rc(KT, inst.a.wrapping_add(BOOL_BYTE));
+                    self.set_label(tested);
+                } else {
+                    self.ldb_rc(KT, inst.a.wrapping_add(BOOL_BYTE));
+                }
+                self.store_imm(KT, inst.a, 0);
+                self.store_tag(KT, inst.a, TAG_NULL);
+                let tgt = self.jump_tgt(j);
+                self.cb_rc(self.plan.class[j] == C_JMPNZT, tgt);
+            }
+            C_JMPZ | C_JMPNZ => {
+                let end = self.synth_label();
+                let (on_true, on_false) = if self.plan.class[j] == C_JMPNZ {
+                    (self.jump_tgt(j), Target::Label(end))
+                } else {
+                    (Target::Label(end), self.jump_tgt(j))
+                };
+                self.emit_cv_truth(inst.a, m.arr, on_true, on_false, Target::Side(i));
+                self.set_label(end);
+            }
+            C_JMPSET => {
+                let (copy, end) = (self.synth_label(), self.synth_label());
+                self.emit_cv_truth(
+                    inst.a,
+                    m.arr,
+                    Target::Label(copy),
+                    Target::Label(end),
+                    Target::Side(i),
+                );
+                self.set_label(copy);
+                if m.arr {
+                    self.copy_cv_value(inst.a, inst.b, true, Target::Side(i));
+                } else {
+                    self.copy_slot(KC, inst.a, KT, inst.b);
+                }
+                self.b(self.jump_tgt(j));
+                self.set_label(end);
+            }
+            C_COALESCE => {
+                let end = self.synth_label();
+                self.cmp_tag(KC, inst.a, TAG_NULL);
+                self.bcond(EQ, Target::Label(end));
+                self.cmp_w_imm(T0, u32::from(TAG_NONE));
+                self.bcond(EQ, Target::Label(end));
+                self.copy_cv_value(inst.a, inst.b, m.arr, Target::Side(i));
+                self.b(self.jump_tgt(j));
+                self.set_label(end);
+            }
+            J_CMPS => self.emit_cmps(m, &inst, i, j),
+            J_ASSIGN_OPS => self.emit_assign_ops(m, &inst, i),
             c => self.emit_op(c, m, &inst, Target::Side(i)),
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per row class, as the x86 `emit_op`
     fn emit_op(&mut self, c: u16, m: JitMeta, inst: &Inst, jo: Target) {
         match c {
             C_INC | C_DEC => {
@@ -421,12 +518,83 @@ impl A64 {
                 self.store_tag(m.ka, inst.a, TAG_INT);
             }
             C_NOP => {}
-            // `$cv = TMP` of an int: copy it, then consume the temporary.
-            J_ASSIGN_T => {
+            // `$cv = v` with the result kept: into the variable and the
+            // result temporary, a consumed source left null first.
+            C_ASSIGN_R => {
                 self.chk_int(m.cb, inst.b, jo);
-                self.load_payload(RA, m.kb, inst.b);
-                self.store_payload(RA, m.ka, inst.a);
-                self.store_tag(m.ka, inst.a, TAG_INT);
+                self.operand(RA, m.kb, inst.b, m.lit_b);
+                if m.consume {
+                    self.store_imm(KT, inst.b, 0);
+                    self.store_tag(KT, inst.b, TAG_NULL);
+                }
+                self.store_payload(RA, KC, inst.a);
+                self.store_tag(KC, inst.a, TAG_INT);
+                self.store_payload(RA, KT, inst.c);
+                self.store_tag(KT, inst.c, TAG_INT);
+            }
+            // `++`/`--` with the result kept (`arr`: the value before).
+            C_INCDEC_T => {
+                self.load_payload(RA, KC, inst.a);
+                self.step_ra(m.inc);
+                self.bcond(VS, jo);
+                self.store_payload(RA, KC, inst.a);
+                if m.arr {
+                    // The step undone (`sub`/`add x9, x9, #1`, no flags).
+                    let op = if m.inc { 0xD100_0000 } else { 0x9100_0000 };
+                    self.put(op | (1 << 10) | (RA << 5) | RA);
+                }
+                self.store_payload(RA, KT, inst.c);
+                self.store_tag(KT, inst.c, TAG_INT);
+            }
+            // `abs(x)`: `PHP_INT_MIN`, which `negs` overflows on, is the
+            // interpreted row's.
+            C_ABS => {
+                self.chk_int(m.ca, inst.a, jo);
+                if inst.c != u32::MAX {
+                    let skip = self.synth_label();
+                    self.operand(RA, m.ka, inst.a, m.lit_a);
+                    self.cmp_x_imm(RA, 0);
+                    self.bcond(PL, Target::Label(skip));
+                    self.put(0xEB00_03E0 | (RA << 16) | RA); // negs x9, x9
+                    self.bcond(VS, jo);
+                    self.set_label(skip);
+                    self.store_payload(RA, KT, inst.c);
+                    self.store_tag(KT, inst.c, TAG_INT);
+                }
+            }
+            // `$cv = TMP`, by what the temporary holds, then the temporary
+            // consumed.
+            J_ASSIGN_T => {
+                if m.mask == BOOL_SRC {
+                    self.ldb_rc(m.kb, inst.b.wrapping_add(BOOL_BYTE));
+                    self.stb_rc(m.ka, inst.a.wrapping_add(BOOL_BYTE));
+                    self.store_tag(m.ka, inst.a, TAG_BOOL);
+                } else if m.mask == NULL_SRC {
+                    self.store_imm(m.ka, inst.a, 0);
+                    self.store_tag(m.ka, inst.a, TAG_NULL);
+                } else if m.mask == SCALAR_SRC {
+                    self.copy_slot(m.kb, inst.b, m.ka, inst.a);
+                } else if m.mask == VAL_SRC {
+                    // The variable's array from the iteration before loses
+                    // a handle, unless it is the last; nothing changes
+                    // before the last test.
+                    let store = self.synth_label();
+                    self.cmp_tag(KC, inst.a, TAG_FLOAT);
+                    self.bcond(LS, Target::Label(store)); // a scalar
+                    self.cmp_w_imm(T0, u32::from(TAG_NONE));
+                    self.bcond(EQ, Target::Label(store)); // undefined
+                    self.cmp_w_imm(T0, u32::from(TAG_ARRAY));
+                    self.bcond(NE, jo);
+                    self.load_payload(RA, KC, inst.a);
+                    self.count_dec_not_last(jo);
+                    self.set_label(store);
+                    self.copy_slot(m.kb, inst.b, m.ka, inst.a);
+                } else {
+                    self.chk_int(m.cb, inst.b, jo);
+                    self.load_payload(RA, m.kb, inst.b);
+                    self.store_payload(RA, m.ka, inst.a);
+                    self.store_tag(m.ka, inst.a, TAG_INT);
+                }
                 self.store_imm(m.kb, inst.b, 0);
                 self.store_tag(m.kb, inst.b, TAG_NULL);
             }
@@ -505,6 +673,294 @@ impl A64 {
         }
     }
 
+    // ------------------------------------------------- step 2 primitives
+
+    /// `cmp xn, #imm` (`imm < 4096`).
+    fn cmp_x_imm(&mut self, rn: u32, imm: u32) {
+        self.put(0xF100_001F | ((imm & 0xFFF) << 10) | (rn << 5));
+    }
+
+    /// `ldr xd, [base + off]` / `str` of a slot's first word (the tag
+    /// with the bytes after it) or any word.
+    fn ld(&mut self, rd: u32, kind: u8, off: u32) {
+        self.mem(true, Width::X, rd, base_reg(kind), off);
+    }
+
+    fn st(&mut self, rs: u32, kind: u8, off: u32) {
+        self.mem(false, Width::X, rs, base_reg(kind), off);
+    }
+
+    /// Copies a whole slot (the tag word and the payload word).
+    fn copy_slot(&mut self, from_base: u8, from: u32, to_base: u8, to: u32) {
+        self.ld(RA, from_base, from);
+        self.ld(RC, from_base, from.wrapping_add(PAYLOAD));
+        self.st(RA, to_base, to);
+        self.st(RC, to_base, to.wrapping_add(PAYLOAD));
+    }
+
+    /// The strong count of the array whose handle is in `x9`: `+ 1`.
+    fn count_inc(&mut self) {
+        self.put(0xF940_0000 | (RA << 5) | T0); // ldr x16, [x9]
+        self.put(0x9100_0000 | (1 << 10) | (T0 << 5) | T0); // add x16, x16, #1
+        self.put(0xF900_0000 | (RA << 5) | T0); // str x16, [x9]
+    }
+
+    /// The strong count of the array whose handle is in `x9`: `- 1`,
+    /// leaving through `jo` (nothing changed) when it is the last.
+    fn count_dec_not_last(&mut self, jo: Target) {
+        self.put(0xF940_0000 | (RA << 5) | T0); // ldr x16, [x9]
+        self.put(0xF100_001F | (1 << 10) | (T0 << 5)); // cmp x16, #1
+        self.bcond(EQ, jo);
+        self.put(0xD100_0000 | (1 << 10) | (T0 << 5) | T0); // sub x16, x16, #1
+        self.put(0xF900_0000 | (RA << 5) | T0); // str x16, [x9]
+    }
+
+    /// `ldrb w11, [base + off]` / `strb w11, [base + off]`.
+    fn ldb_rc(&mut self, kind: u8, off: u32) {
+        self.mem(true, Width::B, RC, base_reg(kind), off);
+    }
+
+    fn stb_rc(&mut self, kind: u8, off: u32) {
+        self.mem(false, Width::B, RC, base_reg(kind), off);
+    }
+
+    /// `ldr d<x>, [slot payload]`.
+    fn ld_d(&mut self, x: u32, kind: u8, off: u32) {
+        self.mem(true, Width::D, x, base_reg(kind), off.wrapping_add(PAYLOAD));
+    }
+
+    /// `scvtf d<x>, x<r>`: an int as a double (round to nearest).
+    fn scvtf(&mut self, x: u32, r: u32) {
+        self.put(0x9E62_0000 | (r << 5) | x);
+    }
+
+    /// `d<x>` = the int of slot `kind + off` (tag checked `Int`).
+    fn scvtf_slot(&mut self, x: u32, kind: u8, off: u32) {
+        self.load_payload(RB, kind, off);
+        self.scvtf(x, RB);
+    }
+
+    /// `cbz wt, t` / `cbnz wt, t` on `w11`.
+    fn cb_rc(&mut self, nz: bool, t: Target) {
+        self.fixups.push((self.code.len(), Fix::I19, t));
+        self.put(if nz { 0x3500_0000 } else { 0x3400_0000 } | RC);
+    }
+
+    // ------------------------------------------------------- step 2 rows
+
+    /// Copies the compiled variable `from` into the temporary `to` when
+    /// it holds a scalar or (`arr`) an array, one more handle on it.
+    fn copy_cv_value(&mut self, from: u32, to: u32, arr: bool, jo: Target) {
+        let copy = self.synth_label();
+        if arr {
+            let other = self.synth_label();
+            self.cmp_tag(KC, from, TAG_ARRAY);
+            self.bcond(NE, Target::Label(other));
+            self.load_payload(RA, KC, from);
+            self.count_inc();
+            self.b(Target::Label(copy));
+            self.set_label(other);
+        }
+        self.cmp_tag(KC, from, TAG_FLOAT);
+        self.bcond(HI, jo); // not a scalar (or undefined)
+        self.set_label(copy);
+        self.copy_slot(KC, from, KT, to);
+    }
+
+    /// Branches on the truth of the compiled variable at `off` (see the
+    /// x86 `emit_cv_truth`): every path ends in a jump.
+    fn emit_cv_truth(
+        &mut self,
+        off: u32,
+        arr: bool,
+        on_true: Target,
+        on_false: Target,
+        jo: Target,
+    ) {
+        if arr {
+            let other = self.synth_label();
+            self.cmp_tag(KC, off, TAG_ARRAY);
+            self.bcond(NE, Target::Label(other));
+            self.load_payload(RA, KC, off);
+            self.mem(true, Width::W, T0, RA, ARRAY_COUNT); // ldr w16, [x9 + count]
+            self.cbnz_w(T0, on_true);
+            self.b(on_false);
+            self.set_label(other);
+        }
+        let not_bool = self.synth_label();
+        self.cmp_tag(KC, off, TAG_BOOL);
+        self.bcond(NE, Target::Label(not_bool));
+        self.mem(true, Width::B, T0, CVS, off.wrapping_add(BOOL_BYTE));
+        self.cbnz_w(T0, on_true);
+        self.b(on_false);
+        self.set_label(not_bool);
+        let not_int = self.synth_label();
+        self.cmp_tag(KC, off, TAG_INT);
+        self.bcond(NE, Target::Label(not_int));
+        self.load_payload(T0, KC, off);
+        self.cbnz_x(T0, on_true);
+        self.b(on_false);
+        self.set_label(not_int);
+        self.cmp_tag(KC, off, TAG_NULL);
+        self.bcond(NE, jo);
+        self.b(on_false);
+    }
+
+    /// One `C_MOVE` row (`Op::Move` into the temporary `inst.c`).
+    fn emit_move(&mut self, m: JitMeta, inst: &Inst, jo: Target) {
+        match m.sc {
+            KC => self.copy_cv_value(inst.a, inst.c, m.arr, jo),
+            KT => {
+                if m.ca {
+                    self.cmp_tag(KT, inst.a, TAG_FLOAT);
+                    self.bcond(HI, jo);
+                }
+                self.copy_slot(KT, inst.a, KT, inst.c);
+                if m.consume && inst.a != inst.c {
+                    self.store_imm(KT, inst.a, 0);
+                    self.store_tag(KT, inst.a, TAG_NULL);
+                }
+            }
+            _ => match m.arith {
+                CONST_NULL => {
+                    self.store_imm(KT, inst.c, 0);
+                    self.store_tag(KT, inst.c, TAG_NULL);
+                }
+                CONST_BOOL => {
+                    self.put(0x5280_0000 | (u32::from(m.lit_c != 0) << 5) | RC); // mov w11, #b
+                    self.stb_rc(KT, inst.c.wrapping_add(BOOL_BYTE));
+                    self.store_tag(KT, inst.c, TAG_BOOL);
+                }
+                _ => {
+                    self.store_imm(KT, inst.c, m.lit_c);
+                    self.store_tag(KT, inst.c, TAG_INT);
+                }
+            },
+        }
+    }
+
+    /// `$cv op= v` (`+ - *`) by the operands' tags: two ints as ints, a
+    /// float variable with a float or an int as doubles; anything else
+    /// the interpreter's.
+    fn emit_assign_ops(&mut self, m: JitMeta, inst: &Inst, i: usize) {
+        let side = Target::Side(i);
+        let slot = |k: u8| k == KC || k == KT;
+        let (a_other, done) = (self.synth_label(), self.synth_label());
+        self.cmp_tag(KC, inst.a, TAG_INT);
+        self.bcond(NE, Target::Label(a_other));
+        if slot(m.kb) {
+            self.cmp_tag(m.kb, inst.b, TAG_INT);
+            self.bcond(NE, side); // the variable becomes a float
+        }
+        self.load_payload(RA, KC, inst.a);
+        self.operand(RB, m.kb, inst.b, m.lit_b);
+        self.arith(m.arith.min(2), side);
+        self.store_payload(RA, KC, inst.a);
+        self.b(Target::Label(done));
+        self.set_label(a_other);
+        self.cmp_tag(KC, inst.a, TAG_FLOAT);
+        self.bcond(NE, side);
+        self.ld_d(0, KC, inst.a);
+        if slot(m.kb) {
+            let (b_int, op) = (self.synth_label(), self.synth_label());
+            self.cmp_tag(m.kb, inst.b, TAG_FLOAT);
+            self.bcond(NE, Target::Label(b_int));
+            self.ld_d(1, m.kb, inst.b);
+            self.b(Target::Label(op));
+            self.set_label(b_int);
+            self.cmp_tag(m.kb, inst.b, TAG_INT);
+            self.bcond(NE, side);
+            self.scvtf_slot(1, m.kb, inst.b);
+            self.set_label(op);
+        } else {
+            self.operand(RA, m.kb, inst.b, m.lit_b);
+            self.scvtf(1, RA);
+        }
+        // fadd / fsub / fmul d0, d0, d1
+        self.put([0x1E61_2800, 0x1E61_3800, 0x1E61_0800][usize::from(m.arith.min(2))]);
+        self.mem(false, Width::D, 0, CVS, inst.a.wrapping_add(PAYLOAD));
+        self.set_label(done);
+    }
+
+    /// A comparison and its jump by the operands' tags (see the x86
+    /// `emit_cmps`): two ints as ints, a float with a float or an int as
+    /// doubles (`fcmp`: unordered sets `V`, tested first), anything else
+    /// the interpreter's.
+    fn emit_cmps(&mut self, m: JitMeta, inst: &Inst, i: usize, j: usize) {
+        use crate::opcode::cmp_outcome::UNORDERED;
+        let side = Target::Side(i);
+        let tgt = self.jump_tgt(j);
+        let slot = |k: u8| k == KC || k == KT;
+        let (a_other, b_other) = (self.synth_label(), self.synth_label());
+        let (floats, done) = (self.synth_label(), self.synth_label());
+        if slot(m.ka) {
+            self.cmp_tag(m.ka, inst.a, TAG_INT);
+            self.bcond(NE, Target::Label(a_other));
+        }
+        if slot(m.kb) {
+            self.cmp_tag(m.kb, inst.b, TAG_INT);
+            self.bcond(NE, Target::Label(b_other));
+        }
+        self.operand(RA, m.ka, inst.a, m.lit_a);
+        self.operand(RB, m.kb, inst.b, m.lit_b);
+        self.cmp_x(RA, RB);
+        if let Some(cc) = jcc_for(m.mask) {
+            self.bcond(cond_of(cc), tgt);
+        }
+        self.b(Target::Label(done));
+        if slot(m.kb) {
+            self.set_label(b_other);
+            self.cmp_tag(m.kb, inst.b, TAG_FLOAT);
+            self.bcond(NE, side);
+            if slot(m.ka) {
+                self.scvtf_slot(0, m.ka, inst.a);
+            } else {
+                self.operand(RA, m.ka, inst.a, m.lit_a);
+                self.scvtf(0, RA);
+            }
+            self.ld_d(1, m.kb, inst.b);
+            self.b(Target::Label(floats));
+        }
+        if slot(m.ka) {
+            self.set_label(a_other);
+            self.cmp_tag(m.ka, inst.a, TAG_FLOAT);
+            self.bcond(NE, side);
+            self.ld_d(0, m.ka, inst.a);
+            if slot(m.kb) {
+                let b_int = self.synth_label();
+                self.cmp_tag(m.kb, inst.b, TAG_FLOAT);
+                self.bcond(NE, Target::Label(b_int));
+                self.ld_d(1, m.kb, inst.b);
+                self.b(Target::Label(floats));
+                self.set_label(b_int);
+                self.cmp_tag(m.kb, inst.b, TAG_INT);
+                self.bcond(NE, side);
+                self.scvtf_slot(1, m.kb, inst.b);
+            } else {
+                self.operand(RA, m.kb, inst.b, m.lit_b);
+                self.scvtf(1, RA);
+            }
+        }
+        self.set_label(floats);
+        self.put(0x1E61_2000); // fcmp d0, d1
+        if inst.k & UNORDERED != 0 {
+            self.bcond(VS, tgt);
+        } else {
+            self.bcond(VS, Target::Label(done));
+        }
+        match inst.k & 7 {
+            1 => self.bcond(MI, tgt), // less
+            2 => self.bcond(EQ, tgt),
+            3 => self.bcond(LS, tgt), // less or equal
+            4 => self.bcond(HI, tgt), // greater
+            5 => self.bcond(NE, tgt),
+            6 => self.bcond(HS, tgt), // greater or equal
+            7 => self.b(tgt),
+            _ => {}
+        }
+        self.set_label(done);
+    }
+
     // ---------------------------------------------------------- driver
 
     /// Emit the whole region (branches still need `resolve`).
@@ -549,7 +1005,7 @@ impl A64 {
         }
         if self.plan.has_calls || self.plan.version_guard {
             self.mov_imm(T0, crate::func::FUNC_TABLE_VERSION.as_ptr() as i64);
-            self.mem(true, W::X, T0, T0, 0);
+            self.mem(true, Width::X, T0, T0, 0);
             #[allow(clippy::cast_possible_wrap)]
             self.mov_imm(T1, self.plan.version as i64);
             self.cmp_x(T0, T1);
@@ -900,7 +1356,7 @@ echo $y, "\n";
     /// and the interpreter goes on in floats.
     #[test]
     fn overflow_leaves_the_trace() {
-        let (out, _) = run(r#"<?php
+        let (out, _) = run(r"<?php
 $s = PHP_INT_MAX - 50000;
 for ($i = 0; $i < 100000; $i++) { $s += 1; }
 var_dump($s);
@@ -913,7 +1369,7 @@ var_dump($k);
 $c = 0;
 for ($i = PHP_INT_MAX - 5000; $i < PHP_INT_MAX; $i++) { $c++; }
 var_dump($i, $c);
-"#);
+");
         assert_eq!(
             out,
             "float(9.223372036854776E+18)\nfloat(-9.223372036854776E+18)\nfloat(INF)\n\
@@ -950,5 +1406,82 @@ var_dump($r);
             "DivisionByZeroError: Modulo by zero\nArithmeticError: Bit shift by negative number\n\
              int(-5000)\nint(4999)\n"
         );
+    }
+
+    /// Floats, bools, nulls, the truth jumps, `?:`, `??`, `abs()` and the
+    /// increments that keep their result, compiled, give the interpreter's
+    /// answers (`BUZZS_JIT=0`).
+    #[test]
+    fn scalar_rows_run_compiled() {
+        // One function per loop: a refused loop gives its whole tape up.
+        let (out, _) = run(r"<?php
+function f0() {
+  $f = 0.5;
+  for ($i = 0; $i < 5000; $i++) { $f += $i; $f -= 0.25; $f *= 1.0; }
+  var_dump($f);
+}
+f0();
+function f1() {
+  $g = 1.5; $n = 0;
+  for ($i = 0; $i < 5000; $i++) { if ($g < $i) { $n++; } if ($i > 2.5) { $n += 2; } if ($g == 1.5) { $n--; } }
+  var_dump($n);
+}
+f1();
+function f2() {
+  $nan = NAN; $c = 0;
+  for ($i = 0; $i < 3000; $i++) { if ($nan < $i) $c++; if ($nan != $i) $c += 10; if ($nan >= 1.0) $c += 100; }
+  var_dump($c);
+}
+f2();
+function f3() {
+  $t = 0; $b = true;
+  for ($i = 0; $i < 5000; $i++) { $b = !$b; if ($b) { $t++; } $x = $i ?: 7; $t += $x; }
+  var_dump($t);
+}
+f3();
+function f4() {
+  $u = null; $s = 0;
+  for ($i = 0; $i < 5000; $i++) { $v = $u ?? 3; $s += $v; $w = ($i & 1) ? 1 : 2; $s += $w; }
+  var_dump($s);
+}
+f4();
+function f5() {
+  $a = 0; $r = 0;
+  for ($i = -2500; $i < 2500; $i++) { $r += abs($i); $p = $a++; $q = ++$a; $r += $q - $p; $z = $a--; }
+  var_dump($r, $a);
+}
+f5();
+function f6() {
+  $m = PHP_INT_MIN; $k = 0;
+  for ($i = 0; $i < 3000; $i++) { $y = abs($m); }
+  var_dump($y);
+}
+f6();
+function f7() {
+  $arr = [1,2]; $e = []; $cnt = 0;
+  for ($i = 0; $i < 4000; $i++) { if ($arr) $cnt++; if ($e) $cnt += 100; $copy = $arr ?: $e; }
+  var_dump($cnt, $copy);
+}
+f7();
+function f8() {
+  $x = 0; $y = 5;
+  for ($i = 0; $i < 4000; $i++) { $x = $y = $i; }
+  var_dump($x, $y);
+}
+f8();
+function f9() {
+  $h = 0;
+  for ($i = 0; $i < 4000; $i++) { $h = $i % 3 == 0 ? $h + 1 : $h; $j = isset($h) ? 1 : 0; $h += $j; }
+  var_dump($h);
+}
+f9();
+function f10() {
+  $fl = 1;
+  for ($i = 0; $i < 4000; $i++) { $fl = $fl * 1.5; if ($fl > 1e300) $fl = 1; }
+  var_dump($fl);
+}
+f10();
+");
+        assert_eq!(out, "float(12496250.5)\nint(9992)\nint(30000)\nint(12500007)\nint(22500)\nint(6260000)\nint(5000)\nfloat(9.223372036854776E+18)\nint(4000)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nint(3999)\nint(3999)\nint(5334)\nfloat(1.76207894137449E+104)\n");
     }
 }
