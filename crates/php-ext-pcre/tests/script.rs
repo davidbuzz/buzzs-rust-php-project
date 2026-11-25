@@ -176,6 +176,22 @@ fn split_grep_quote() {
     assert_eq!(out, "a|b|c;xz;1;a\\.b\\*c\\#");
 }
 
+/// `preg_quote()` returns its argument itself when nothing is escaped
+/// and the interned empty string for an empty one (`/usr/bin/php8.5 -n`).
+#[test]
+fn preg_quote_returns_its_argument_when_nothing_is_escaped() {
+    let out = run(r"$s = str_repeat('abc', 3);
+        $q = preg_quote($s);
+        debug_zval_dump($q);
+        debug_zval_dump(preg_quote(''));
+        debug_zval_dump(preg_quote(str_repeat('a.', 2)));
+        debug_zval_dump(preg_quote(str_repeat('a/', 2), '/'));");
+    assert_eq!(
+        out,
+        "string(9) \"abcabcabc\" refcount(3)\nstring(0) \"\" interned\nstring(6) \"a\\.a\\.\" refcount(1)\nstring(6) \"a\\/a\\/\" refcount(1)\n"
+    );
+}
+
 #[test]
 fn compile_errors_warn_and_set_last_error() {
     let out = run(r"var_dump(@preg_match('/(/', 'a'));

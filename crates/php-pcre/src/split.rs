@@ -165,29 +165,69 @@ where
     Ok(kept)
 }
 
+/// Whether `preg_quote()` escapes byte `c` (the first byte of the
+/// delimiter is `delim`, 0 for none).
+#[inline]
+fn quoted(c: u8, delim: u8) -> bool {
+    matches!(
+        c,
+        b'.' | b'\\'
+            | b'+'
+            | b'*'
+            | b'?'
+            | b'['
+            | b'^'
+            | b']'
+            | b'$'
+            | b'('
+            | b')'
+            | b'{'
+            | b'}'
+            | b'='
+            | b'!'
+            | b'>'
+            | b'<'
+            | b'|'
+            | b':'
+            | b'-'
+            | b'#'
+            | 0
+    ) || c == delim
+}
+
 /// `preg_quote($str, $delimiter)`: backslash-escapes
 /// `. \ + * ? [ ^ ] $ ( ) { } = ! > < | : - #`, turns NUL into `\000` and
 /// also escapes the first byte of `delimiter` when given.
 pub fn quote(input: &[u8], delimiter: Option<&[u8]>) -> Vec<u8> {
+    quote_if_needed(input, delimiter).unwrap_or_else(|| input.to_vec())
+}
+
+/// [`quote`], or `None` when nothing in `input` is escaped: `preg_quote()`
+/// then returns its argument itself (`RETURN_STR_COPY(str)` once its
+/// counting pass found `extra_len == 0`). The result is allocated at its
+/// exact length, as `zend_string_safe_alloc(1, len, extra_len, 0)`.
+pub fn quote_if_needed(input: &[u8], delimiter: Option<&[u8]>) -> Option<Vec<u8>> {
     let delim = delimiter.map_or(0, |d| d.first().copied().unwrap_or(0));
-    let mut out = Vec::with_capacity(input.len() + input.len() / 4);
+    let extra: usize = input
+        .iter()
+        .filter(|&&c| quoted(c, delim))
+        .map(|&c| if c == 0 { 3 } else { 1 })
+        .sum();
+    if extra == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(input.len() + extra);
     for &c in input {
-        match c {
-            b'.' | b'\\' | b'+' | b'*' | b'?' | b'[' | b'^' | b']' | b'$' | b'(' | b')' | b'{'
-            | b'}' | b'=' | b'!' | b'>' | b'<' | b'|' | b':' | b'-' | b'#' => {
+        if c == 0 {
+            out.extend_from_slice(b"\\000");
+        } else {
+            if quoted(c, delim) {
                 out.push(b'\\');
-                out.push(c);
             }
-            0 => out.extend_from_slice(b"\\000"),
-            _ => {
-                if c == delim {
-                    out.push(b'\\');
-                }
-                out.push(c);
-            }
+            out.push(c);
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -254,5 +294,14 @@ mod tests {
         assert_eq!(quote(b"a/b#c\0", Some(b"/x")), b"a\\/b\\#c\\000");
         assert_eq!(quote(b"", Some(b"/")), b"");
         assert_eq!(quote(b"a\0", Some(b"")), b"a\\000");
+        // Nothing to escape: no copy (the binding returns its argument).
+        assert_eq!(quote_if_needed(b"abc", None), None);
+        assert_eq!(quote_if_needed(b"", Some(b"/")), None);
+        assert_eq!(quote_if_needed(b"a/b", Some(b"#")), None);
+        let q = quote_if_needed(b"a/b", Some(b"/")).unwrap();
+        assert_eq!(q, b"a\\/b");
+        assert_eq!(q.capacity(), 4, "exact size");
+        // A delimiter that is special anyway is escaped once.
+        assert_eq!(quote(b"a#b", Some(b"#")), b"a\\#b");
     }
 }

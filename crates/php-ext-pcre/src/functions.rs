@@ -621,8 +621,17 @@ fn preg_quote(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(Value::Str(d)) => Some(d),
         _ => None,
     };
-    let out = php_pcre::quote(s.as_bytes(), delim.as_ref().map(ZStr::as_bytes));
-    Ok(Value::Str(ZStr::from(out)))
+    // `RETURN_EMPTY_STRING()` for an empty string, the argument itself
+    // (`RETURN_STR_COPY`) when nothing in it is escaped.
+    if s.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    Ok(Value::Str(
+        match php_pcre::quote_if_needed(s.as_bytes(), delim.as_ref().map(ZStr::as_bytes)) {
+            Some(out) => ZStr::from(out),
+            None => s,
+        },
+    ))
 }
 
 #[allow(clippy::unnecessary_wraps)] // the `NativeFn` signature
