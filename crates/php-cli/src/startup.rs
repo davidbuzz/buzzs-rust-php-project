@@ -392,11 +392,15 @@ pub fn module_startup(cfg: &Config) -> Result<(), i32> {
     }
     for d in REMOVED {
         if cfg_long(cfg, d) != 0 {
+            // E_CORE_ERROR once module_initialized is set: the error is
+            // displayed (with the {main} backtrace), zend_bailout() fails
+            // php_module_startup() and php_cli.c exits with 1 (php8.5).
             r.report(
                 16,
                 &format!("Directive '{d}' is no longer available in PHP"),
             );
-            return Err(254);
+            r.startup_backtrace(cfg);
+            return Err(1);
         }
     }
     Ok(())

@@ -382,3 +382,33 @@ fn define_syntax_error_stops_the_later_defines() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn removed_directive_fails_startup_with_status_1() {
+    let d = temp_dir("removed");
+    let out = php_in(&d, &["-d", "register_globals=1", "-r", "echo 1;"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nFatal error: Directive 'register_globals' is no longer available in PHP in Unknown \
+         on line 0\nStack trace:\n#0 {main}\n"
+    );
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "fatal_error_backtraces=0",
+            "-d",
+            "register_globals=1",
+            "-r",
+            "echo 1;",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nFatal error: Directive 'register_globals' is no longer available in PHP in Unknown \
+         on line 0\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
