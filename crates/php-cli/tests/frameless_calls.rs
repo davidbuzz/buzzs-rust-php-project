@@ -458,3 +458,126 @@ child-private7 child-private7 child-private7
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Static property elements read and tested in place (`isset(self::$a[$k])`,
+/// `static::$a[k]`, `parent::$p[k]`, `A::$a[k]`) and `self::class` /
+/// `static::class` / `parent::class` without the generic ops: int,
+/// numeric-string and string keys, null and reference elements, missing
+/// ones (the read's warning, `??`), private and protected properties from
+/// inside and outside (the access errors), a string property's offset, an
+/// uninitialized typed property, float and bool keys, subclasses, traits
+/// and static closures. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // the script and its expected output
+fn static_property_elements_and_class_names() {
+    let src = r#"<?php
+namespace App;
+trait T { function tname() { return [self::class, static::class]; } }
+class P { protected static $prot = ['p' => 1]; static function pn() { return static::class; } }
+class A extends P { use T;
+  public static $a = ['k' => 1, 5 => 'five', 'n' => null, '7' => 'seven'];
+  private static $priv = ['x' => 'secret'];
+  public static string $s = 'str';
+  public static array $typed;
+  public static $r;
+  static function t() {
+    $x = 'refd'; self::$a['ref'] = &$x;
+    foreach (['k', 5, '5', 'n', 'missing', '7', 7, 'ref'] as $k) { echo json_encode([isset(self::$a[$k]), isset(static::$a[$k]), isset(A::$a[$k])]), ' '; }
+    echo "\n";
+    var_dump(self::$a['k'], static::$a[5], self::$a['5'], self::$a['n'], self::$a['ref'], isset(self::$priv['x']), self::$priv['x'], isset(parent::$prot['p']), parent::$prot['p'], isset(self::$s[0]), self::$s[1]);
+    var_dump(self::$a['nope'] ?? 'dflt');
+    echo self::$a['missing'], "|\n";
+    try { var_dump(isset(self::$typed['a'])); var_dump(self::$typed['a']); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    var_dump(isset(self::$a[1.5]), isset(self::$a[true]));
+    var_dump(self::class, static::class, parent::class, (new static)->tname(), static::pn(), (static function () { return [self::class, static::class]; })());
+  }
+}
+class B extends A {}
+A::t(); B::t();
+var_dump(isset(A::$a['k']), A::$a['k']);
+try { var_dump(isset(A::$priv['x'])); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+try { echo A::$priv['x']; } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+"#;
+    let expected = r#"[true,true,true] [true,true,true] [true,true,true] [false,false,false] [false,false,false] [true,true,true] [true,true,true] [true,true,true] 
+int(1)
+string(4) "five"
+string(4) "five"
+NULL
+string(4) "refd"
+bool(true)
+string(6) "secret"
+bool(true)
+int(1)
+bool(true)
+string(1) "t"
+string(4) "dflt"
+
+Warning: Undefined array key "missing" in Standard input code on line 17
+|
+bool(false)
+Error: Typed static property App\A::$typed must not be accessed before initialization
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in Standard input code on line 19
+bool(false)
+bool(false)
+string(5) "App\A"
+string(5) "App\A"
+string(5) "App\P"
+array(2) {
+  [0]=>
+  string(5) "App\A"
+  [1]=>
+  string(5) "App\A"
+}
+string(5) "App\A"
+array(2) {
+  [0]=>
+  string(5) "App\A"
+  [1]=>
+  string(5) "App\A"
+}
+[true,true,true] [true,true,true] [true,true,true] [false,false,false] [false,false,false] [true,true,true] [true,true,true] [true,true,true] 
+int(1)
+string(4) "five"
+string(4) "five"
+NULL
+string(4) "refd"
+bool(true)
+string(6) "secret"
+bool(true)
+int(1)
+bool(true)
+string(1) "t"
+string(4) "dflt"
+
+Warning: Undefined array key "missing" in Standard input code on line 17
+|
+bool(false)
+Error: Typed static property App\A::$typed must not be accessed before initialization
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in Standard input code on line 19
+bool(false)
+bool(false)
+string(5) "App\A"
+string(5) "App\B"
+string(5) "App\P"
+array(2) {
+  [0]=>
+  string(5) "App\A"
+  [1]=>
+  string(5) "App\B"
+}
+string(5) "App\B"
+array(2) {
+  [0]=>
+  string(5) "App\A"
+  [1]=>
+  string(5) "App\B"
+}
+bool(true)
+int(1)
+bool(false)
+Cannot access private property App\A::$priv
+"#;
+    assert_eq!(run(src), expected);
+}

@@ -230,6 +230,26 @@ impl Vm {
     /// in an evaluated constant expression (see [`Op::FetchClassName`]).
     ///
     /// [`Op::FetchClassName`]: crate::opcode::Op::FetchClassName
+    /// `self::class`, `static::class` and `parent::class` of the running
+    /// user frame, as [`Vm::op_fetch_class_name`] gives them: its scope's
+    /// name, its called class's (else the scope's), its scope's parent's.
+    /// `None` without a scope or a parent (the generic op's errors), for a
+    /// builtin frame and for any other spec.
+    pub(crate) fn class_name_fast(&self, spec: &ClassSpec) -> Option<Value> {
+        let f = self.frames.last()?;
+        if f.kind == FrameKind::Builtin {
+            return None;
+        }
+        let scope = f.scope.as_ref()?;
+        let name = match spec {
+            ClassSpec::SelfClass => &scope.name,
+            ClassSpec::Static => &f.called.as_ref().unwrap_or(scope).name,
+            ClassSpec::Parent => &scope.parent.as_ref()?.name,
+            _ => return None,
+        };
+        Some(Value::Str(name.clone()))
+    }
+
     pub(crate) fn op_fetch_class_name(
         &mut self,
         spec: &ClassSpec,

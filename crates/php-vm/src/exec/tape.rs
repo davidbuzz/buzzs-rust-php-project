@@ -2329,6 +2329,20 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
     match ops.get(at) {
         // `ZEND_ASSERT_CHECK`, as `Vm::run`'s arm makes it: with
         // assertions off at run time, `true` and past the assertion.
+        Some(Op::FetchClassName { class, dst, .. }) => match vm.class_name_fast(class) {
+            Some(v) => {
+                vm.set_tmp(*dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        Some(&Op::Isset { place, dst }) => match vm.static_dim_fast(place, true) {
+            Some(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
         Some(&Op::RecvVariadic { n, cv }) => {
             if vm.recv_variadic_fast(n, cv) {
                 at + 1

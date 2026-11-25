@@ -645,6 +645,78 @@ impl Vm {
     /// Fast path for reading places directly: direct auto-globals (`$_GET`)
     /// without breaking to the generic place fetcher.
     #[inline(always)]
+    /// `isset(A::$p[k])` (`isset` true) or the read of `A::$p[k]` without
+    /// the place walk: the static property's cell from the member cache
+    /// (`Vm::static_prop_cached`: the class resolved and the access checked
+    /// as when it was filled), holding an array; `k` a literal, a defined
+    /// variable or a temporary (consumed) that is a string or an int (looked up as an offset: a
+    /// numeric string finds its int key). The read gives the element,
+    /// dereferenced, when it exists. `None`, nothing changed, for anything
+    /// else (another place, a miss of the cache, a reference or non-array
+    /// property, another key type, a missing element to read: the generic
+    /// op, with its diagnostics).
+    pub(crate) fn static_dim_fast(&mut self, place: PlaceId, isset: bool) -> Option<Value> {
+        use crate::opcode::{PlaceBase, Seg};
+        let f = self.frames.last()?;
+        let p = f.code.places.get(place as usize)?;
+        let (
+            PlaceBase::StaticProp {
+                class,
+                name: Operand::Lit(l),
+            },
+            [Seg::Dim(dim)],
+        ) = (&p.base, p.segs.as_slice())
+        else {
+            return None;
+        };
+        if f.symtab_attached {
+            return None;
+        }
+        let dim = *dim;
+        let key = match dim {
+            Operand::Lit(i) => f.code.literals.get(i as usize)?,
+            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            _ => return None,
+        };
+        let (cell, _) = self.static_prop_cached(class, *l)?;
+        let held = cell.try_borrow().ok()?;
+        let Value::Array(arr) = &*held else {
+            return None;
+        };
+        let found = match key {
+            Value::Str(s) => arr.get_sym_zstr(s),
+            Value::Int(i) => arr.get_int(*i),
+            _ => return None,
+        };
+        let v = match found {
+            Some(Value::Reference(r)) => {
+                let inner = r.try_borrow()?;
+                if isset {
+                    Value::Bool(!matches!(*inner, Value::Null))
+                } else {
+                    crate::call::clone_value(&inner)
+                }
+            }
+            Some(v) if isset => Value::Bool(!matches!(v, Value::Null)),
+            Some(v) => crate::call::clone_value(v),
+            None if isset => Value::Bool(false),
+            None => return None,
+        };
+        drop(held);
+        // A temporary offset is consumed, as the generic walk's read of it.
+        if let Operand::Tmp(t) = dim {
+            if let Some(slot) = self
+                .frames
+                .last_mut()
+                .and_then(|f| f.tmps.get_mut(t as usize))
+            {
+                drop(std::mem::take(slot));
+            }
+        }
+        Some(v)
+    }
+
     fn fetch_place_fast(&mut self, place: PlaceId) -> Option<Value> {
         enum FastKind {
             Get,
@@ -655,6 +727,10 @@ impl Vm {
             let f = self.frames.last()?;
             let p = f.code.places.get(place as usize)?;
             if !p.segs.is_empty() {
+                // `A::$p[k]` (`ZEND_FETCH_STATIC_PROP_R` + `ZEND_FETCH_DIM_R`).
+                if matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. }) {
+                    return self.static_dim_fast(place, false);
+                }
                 FastKind::None
             } else {
                 match &p.base {
@@ -1962,8 +2038,11 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Isset { place, dst } => {
-                        let v = self.place_isset(*place, false)?;
-                        self.set_tmp(*dst, Value::Bool(v));
+                        let v = match self.static_dim_fast(*place, true) {
+                            Some(v) => v,
+                            None => Value::Bool(self.place_isset(*place, false)?),
+                        };
+                        self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::Empty { place, dst } => {
@@ -2307,7 +2386,10 @@ impl Vm {
                         dst,
                         const_expr,
                     } => {
-                        let v = self.op_fetch_class_name(class, *const_expr)?;
+                        let v = match self.class_name_fast(class) {
+                            Some(v) => v,
+                            None => self.op_fetch_class_name(class, *const_expr)?,
+                        };
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }

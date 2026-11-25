@@ -124,7 +124,17 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             place,
             mode: FetchMode::Read,
             ..
-        } if auto_global_place(code, *place) => Some(plain(TOp::VmOp)),
+        } if auto_global_place(code, *place) || static_dim_place(code, *place) => {
+            Some(plain(TOp::VmOp))
+        }
+        // `self::class`, `static::class`, `parent::class`
+        // (`Vm::class_name_fast`).
+        Op::FetchClassName {
+            class: ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
+            ..
+        } => Some(plain(TOp::VmOp)),
+        // `isset(A::$p[k])` (`Vm::static_dim_fast`).
+        Op::Isset { place, .. } if static_dim_place(code, *place) => Some(plain(TOp::VmOp)),
         Op::FetchGlobal { .. } => Some(plain(TOp::VmOp)),
         // `ZEND_ASSERT_CHECK`: reads `zend.assertions`, so run with the VM
         // at hand (`run_vm_op`) rather than leaving the tape.
@@ -182,6 +192,27 @@ fn stays_prepared(code: &OpArray, start: usize) -> bool {
         }
     }
     false
+}
+
+/// Whether `place` is `A::$name[k]`, one dimension of a static property
+/// named by a literal, keyed by a literal, a variable or a temporary: run
+/// with the VM
+/// at hand (`Vm::static_dim_fast`), rather than leaving the tape.
+fn static_dim_place(code: &OpArray, place: u32) -> bool {
+    code.places.get(place as usize).is_some_and(|p| {
+        matches!(
+            (&p.base, p.segs.as_slice()),
+            (
+                PlaceBase::StaticProp {
+                    name: Operand::Lit(_),
+                    ..
+                },
+                [crate::opcode::Seg::Dim(
+                    Operand::Lit(_) | Operand::Cv(_) | Operand::Tmp(_)
+                )]
+            )
+        )
+    })
 }
 
 /// Whether `place` is a variable named by a literal starting with an
