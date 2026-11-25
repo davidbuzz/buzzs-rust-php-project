@@ -4198,7 +4198,7 @@ impl Vm {
                 format!(
                     "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
                     i + 1,
-                    ty.to_php_string(),
+                    builtin_param_type_name(ty),
                     given_type(v)
                 )
             };
@@ -7205,6 +7205,22 @@ fn same_func(a: &Func, b: &Func) -> bool {
 
 /// Whether argument `i` (0-based) of `func` is sent by reference only when
 /// it can be (`ZEND_SEND_PREFER_REF`, `ARG_MAY_BE_SENT_BY_REF`).
+/// The type a builtin's argument `TypeError` names. That is the type the
+/// function parses with, which for an `array|object` parameter is not the
+/// stub's: `Z_PARAM_ARRAY_OR_OBJECT` and the `A`/`H` specifiers report
+/// `Z_EXPECTED_ARRAY` ("array", or "?array" when null is accepted), as
+/// `key()`, `current()`, `end()`, `array_walk()`, `http_build_query()`,
+/// `deflate_init()` and `ArrayObject::__construct()` do
+/// (ref: Zend/zend_API.h `Z_PARAM_ARRAY_OR_OBJECT_EX`, Zend/zend_API.c
+/// `zend_parse_arg_impl`).
+fn builtin_param_type_name(ty: &crate::types::TypeDecl) -> String {
+    use crate::types::mask;
+    if !ty.has_classes() && ty.mask & !mask::NULL == mask::ARRAY | mask::OBJECT {
+        return if ty.allows_null() { "?array" } else { "array" }.to_owned();
+    }
+    ty.to_php_string()
+}
+
 fn prefers_ref(func: &Func, i: usize) -> bool {
     let params = func.params();
     params
