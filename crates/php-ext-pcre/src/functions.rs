@@ -584,7 +584,9 @@ fn call_replacement(
     callback: &PendingCall,
     m: php_pcre::MatchArray,
 ) -> VmResult<Vec<u8>> {
-    let ret = vm.call_resolved(callback.clone(), vec![Value::Array(to_zarray(m, false))])?;
+    // The resolved callable as a prepared call (`zend_fcall_info_cache`):
+    // no copy of the template and no argument vector per match.
+    let ret = vm.call_prepared(callback, &mut [Value::Array(to_zarray(m, false))])?;
     match ret.deref() {
         Value::Str(s) => Ok(s.as_bytes().to_vec()),
         other => Ok(vm.value_to_string(&other)?.as_bytes().to_vec()),

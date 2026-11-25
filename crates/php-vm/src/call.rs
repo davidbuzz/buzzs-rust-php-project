@@ -5009,6 +5009,11 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
+        if named.is_empty() {
+            // `Vm::call_resolved`: positional arguments only.
+            self.fill_call_args(&mut call, args);
+            return self.call_pending(call);
+        }
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
         call_args.reserve(args.len());
