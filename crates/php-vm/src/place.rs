@@ -3806,9 +3806,17 @@ impl Vm {
                     held = self.held_value_warning(segs)?;
                 }
                 if let Some(t) = held {
-                    if crate::ext::hooks_of(&obj).is_some()
-                        || self.instance_of(&obj, b"arrayaccess")
-                    {
+                    if crate::ext::hooks_of(&obj).is_some() {
+                        let keyopt = match seg {
+                            RSeg::Dim(k) => Some(k),
+                            _ => None,
+                        };
+                        if !last {
+                            return Err(t);
+                        }
+                        return Err(self.native_dim_write_held(&obj, keyopt, &wop, t));
+                    }
+                    if self.instance_of(&obj, b"arrayaccess") {
                         return Err(t);
                     }
                     let assign_op = last && matches!(wop, WOp::AssignOp(..));
@@ -3828,7 +3836,14 @@ impl Vm {
                             WOp::Assign(v) => {
                                 if let Some(f) = h.write_dimension {
                                     if v.is_null() {
-                                        self.take_pending_value_warning(segs)?;
+                                        // `ZEND_ASSIGN_DIM` goes on with an
+                                        // exception the "Undefined
+                                        // variable" warning threw.
+                                        if let Some(t) = self.held_value_warning(segs)? {
+                                            return Err(
+                                                self.native_dim_write_held(&obj, keyopt, &wop, t)
+                                            );
+                                        }
                                     }
                                     if f(self, &obj, keyopt, v)? {
                                         return Ok(v.clone());
@@ -4358,6 +4373,108 @@ impl Vm {
             Some(name) => self.rw_undefined_var(&name),
             None => Ok(None),
         }
+    }
+
+    /// The last step of `$o[k] = v` or `$o[k] op= v` on an object with
+    /// native dimension handlers (`ArrayObject`, `SplFixedArray`, ...)
+    /// after the "Undefined variable" warning of the offset or the value
+    /// threw `held`: php-src goes on with the opcode, so the handler
+    /// still writes (`spl_array_write_dimension()` appends for a null
+    /// offset), and an error it throws is chained onto `held`
+    /// (`zend_throw_exception_internal()` while `EG(exception)` is set).
+    /// A method the class overrides in user code is not called
+    /// (`zend_call_function()` returns at once with an exception
+    /// pending), and neither does the handler then write. Returns the
+    /// exception to throw.
+    #[cold]
+    #[inline(never)]
+    fn native_dim_write_held(
+        &mut self,
+        obj: &Obj,
+        key: Option<&Value>,
+        wop: &WOp,
+        held: Throw,
+    ) -> Throw {
+        let Throw::Exception(prev) = &held else {
+            return held;
+        };
+        let Some(h) = crate::ext::hooks_of(obj) else {
+            return held;
+        };
+        let cls = object::class_of(obj).clone();
+        let user = |name: &[u8]| {
+            cls.find_method(name)
+                .is_some_and(|m| matches!(m.func, crate::func::Func::User(_)))
+        };
+        let r = self.with_diagnostics_lost(|vm| match wop {
+            WOp::Assign(v) if !user(b"offsetset") => match h.write_dimension {
+                Some(f) => f(vm, obj, key, v).map(|_| ()),
+                None => Ok(()),
+            },
+            WOp::AssignOp(op, rhs) if !user(b"offsetget") && !user(b"offsetset") => {
+                // `zend_binary_assign_op_obj_dim`: read, operate, write.
+                let k = key.cloned().unwrap_or(Value::Null);
+                match (h.read_dimension, h.write_dimension) {
+                    (Some(read), Some(write)) => match read(vm, obj, &k) {
+                        Ok(Some(cur)) => match vm.assign_op_value(*op, &cur.deref(), rhs) {
+                            Ok(nv) => {
+                                drop(cur);
+                                write(vm, obj, key, &nv).map(|_| ())
+                            }
+                            Err(e) => Err(e),
+                        },
+                        Ok(None) => Ok(()),
+                        Err(e) => Err(e),
+                    },
+                    _ => Ok(()),
+                }
+            }
+            _ => Ok(()),
+        });
+        match r {
+            Ok(()) => held,
+            Err(Throw::Exception(new)) => {
+                crate::exceptions::chain_previous(&new, prev);
+                Throw::Exception(new)
+            }
+            Err(t) => t,
+        }
+    }
+
+    /// Runs `f` as php-src runs code while an exception is pending: the
+    /// user error handler is not called (`zend_call_function()` returns at
+    /// once, and `zend_error_impl()` then reports nothing), so a
+    /// diagnostic `f` raises is neither shown nor kept for
+    /// `error_get_last()`. Errors outside the handler's mask take the
+    /// default path as before; a fatal error still stops.
+    #[cold]
+    #[inline(never)]
+    fn with_diagnostics_lost<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let mask = self
+            .error_handlers
+            .last()
+            .filter(|h| !h.callback.is_null())
+            .map_or(0, |h| h.mask);
+        let reporting = self.error_reporting;
+        self.error_reporting &= !mask;
+        let saved = self
+            .error_handlers
+            .last_mut()
+            .map(|h| std::mem::replace(&mut h.mask, 0));
+        let last = self.last_error.clone();
+        let r = f(self);
+        let lost = self
+            .last_error
+            .as_ref()
+            .is_some_and(|e| e.level & mask != 0);
+        if lost {
+            self.last_error = last;
+        }
+        self.error_reporting = reporting;
+        if let (Some(m), Some(h)) = (saved, self.error_handlers.last_mut()) {
+            h.mask = m;
+        }
+        r
     }
 
     /// The error of an array access on an object without ArrayAccess:
