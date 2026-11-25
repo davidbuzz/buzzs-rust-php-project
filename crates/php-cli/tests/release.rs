@@ -290,3 +290,25 @@ fn repeat_keeps_the_unread_openssl_errors() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
+
+/// `stream_wrapper_register()`'s `stream factory` resource is the
+/// request's (php-src frees it with the regular list): each run lists only
+/// its own, under the number the run gave it. Output of php8.5.
+#[test]
+fn repeat_starts_without_the_previous_runs_stream_factories() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "class W { public $context; } var_dump(count(get_resources('stream factory'))); \
+         stream_wrapper_register('foo', 'W'); \
+         var_dump(array_keys(get_resources('stream factory')));",
+    ]);
+    assert!(out.status.success());
+    let run = "int(0)\narray(1) {\n  [0]=>\n  int(4)\n}\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}

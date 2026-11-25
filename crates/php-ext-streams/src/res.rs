@@ -570,8 +570,8 @@ fn report_uncaught(vm: &mut Vm, e: &php_runtime::Obj) {
     let _ = vm.raise(1, &format!("Uncaught {text}\n  thrown"));
 }
 
-/// `get_resources()`: the live stream and context resources (the ones this
-/// extension owns), by handle.
+/// `get_resources()`: the live stream, context and stream factory
+/// resources (the ones this extension owns), by handle.
 pub fn live_resources() -> Vec<(i64, &'static str, Value)> {
     let mut out: Vec<(i64, &'static str, Value)> = Vec::new();
     let cells: Vec<Rc<StreamCell>> =
@@ -597,6 +597,10 @@ pub fn live_resources() -> Vec<(i64, &'static str, Value)> {
         let h = c.handle;
         let r = Resource::with_handle(h, CONTEXT, Some(Box::new(CtxRes(c))));
         out.push((h, CONTEXT, Value::Resource(r)));
+    }
+    // `stream_wrapper_register()`'s `le_protocols` entries.
+    for r in crate::userwrap::live_factories() {
+        out.push((r.handle(), "stream factory", Value::Resource(r)));
     }
     out.sort_by_key(|(h, _, _)| *h);
     out
