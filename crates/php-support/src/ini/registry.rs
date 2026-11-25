@@ -117,6 +117,11 @@ pub enum ModifyHandler {
     /// "Directive 'report_memleaks' is deprecated" docref `E_DEPRECATED`
     /// for false values.
     ReportMemleaks,
+    /// `OnChangeMemoryHardLimitPercent` (main/main.c): a quantity that is
+    /// -1 or at least 100 ("memory_hard_limit_percent must be >= 100, or
+    /// -1" otherwise). Whether the allocator can take it is checked
+    /// where the limit is applied.
+    MemoryHardLimitPercent,
 }
 
 /// How `phpinfo()`, `php -i` and `--ri` show a directive's value (the
@@ -832,6 +837,20 @@ impl IniRegistry {
                 }
                 (IniTyped::Bool(on), None)
             }
+            ModifyHandler::MemoryHardLimitPercent => match new_value {
+                Some(n) => {
+                    let value = quantity(diag, n);
+                    if value < 100 && value != -1 {
+                        warn(
+                            diag,
+                            "memory_hard_limit_percent must be >= 100, or -1".into(),
+                        );
+                        return Err(());
+                    }
+                    (IniTyped::Long(value), None)
+                }
+                None => (IniTyped::Long(-1), None),
+            },
             ModifyHandler::Long => (IniTyped::Long(quantity(diag, v)), None),
             ModifyHandler::LongGEZero => {
                 let t = quantity(diag, v);
@@ -1152,7 +1171,12 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("browscap", None, A::SYSTEM, H::None),
         c("max_memory_limit", Some("-1"), A::SYSTEM, H::MaxMemoryLimit),
         c("memory_limit", Some("128M"), A::ALL, H::MemoryLimit),
-        c("memory_hard_limit_percent", None, A::ALL, H::None),
+        c(
+            "memory_hard_limit_percent",
+            None,
+            A::ALL,
+            H::MemoryHardLimitPercent,
+        ),
         c("precision", Some("14"), A::ALL, H::Precision),
         c("sendmail_from", None, A::ALL, H::None).without_on_modify(),
         c(
@@ -1647,6 +1671,38 @@ mod tests {
         let r = IniRegistry::with_core([("mail.cr_lf_mode".to_string(), Vec::<u8>::new())], &mut d);
         assert_eq!(r.get("mail.cr_lf_mode"), Some(&b""[..]));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn memory_hard_limit_percent_is_at_least_100_or_minus_one() {
+        // php8.5 -n -d memory_hard_limit_percent=50: the warning, and the
+        // directive keeps its NULL default.
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core(
+            [("memory_hard_limit_percent".to_string(), b"50".to_vec())],
+            &mut d,
+        );
+        assert_eq!(r.raw("memory_hard_limit_percent"), None);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0].message,
+            "memory_hard_limit_percent must be >= 100, or -1"
+        );
+        assert!(!d[0].docref);
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("memory_hard_limit_percent", b"150", &mut d),
+            Some(Vec::new())
+        );
+        assert!(r
+            .ini_set("memory_hard_limit_percent", b"-1", &mut d)
+            .is_some());
+        assert!(d.is_empty());
+        assert!(r
+            .ini_set("memory_hard_limit_percent", b"abc", &mut d)
+            .is_none());
+        assert_eq!(d.len(), 2);
     }
 
     #[test]
