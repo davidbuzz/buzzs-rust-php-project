@@ -3166,7 +3166,7 @@ impl Compiler<'_> {
                         let len = i64::try_from(s.len()).unwrap_or(i64::MAX);
                         Ok(Some(self.lit(Value::Int(len))))
                     }
-                    _ => self.compile_special_opcode(&lc, positional[0], line, need),
+                    _ => self.compile_special_opcode(&lc, positional[0], need),
                 }
             }
             // zend_compile_func_strlen / _count / _typecheck / _is_scalar /
@@ -3176,7 +3176,7 @@ impl Compiler<'_> {
             | b"is_scalar" | b"boolval" | b"intval" | b"floatval" | b"strval" | b"gettype"
                 if fb.is_none() && only_positional && positional.len() == 1 =>
             {
-                self.compile_special_opcode(&lc, positional[0], line, need)
+                self.compile_special_opcode(&lc, positional[0], need)
             }
             // zend_compile_func_get_class / zend_compile_func_get_called_class.
             b"get_class" if fb.is_none() && only_positional && positional.len() <= 1 => {
@@ -3395,7 +3395,6 @@ impl Compiler<'_> {
         &mut self,
         lc: &[u8],
         arg: &Expr,
-        line: u32,
         need: bool,
     ) -> CResult<Option<Operand>> {
         enum Special {
@@ -3431,8 +3430,11 @@ impl Compiler<'_> {
             b"gettype" => Special::GetType,
             _ => return Ok(None),
         };
+        // The opcode is emitted on the line compiling the argument left
+        // (`zend_compile_func_strlen` and its siblings emit right after
+        // `zend_compile_expr()` of the argument), so `strlen(\n$s\n)`
+        // reports the line of `$s`.
         let a = self.compile_expr(arg)?;
-        self.f().line = line;
         let dst = need.then(|| self.tmp());
         let op = match special {
             Special::Cast(kind) => {
@@ -3468,11 +3470,15 @@ impl Compiler<'_> {
         if self.opts.special_builtins & bit == 0 {
             return Ok(None);
         }
+        // `ZEND_GET_CLASS` with an argument is emitted after compiling it,
+        // on the line that left (see `compile_special_opcode`).
         let a = match arg {
             Some(e) => self.compile_expr(e)?,
-            None => Operand::Unused,
+            None => {
+                self.f().line = line;
+                Operand::Unused
+            }
         };
-        self.f().line = line;
         let dst = need.then(|| self.tmp());
         if lc == b"get_called_class".as_slice() {
             self.emit(Op::GetCalledClass { dst });
