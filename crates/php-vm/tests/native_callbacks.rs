@@ -653,3 +653,73 @@ run();
 "#
     );
 }
+
+/// Argument unpacking (`...$args`): lists go into the pending call's
+/// inline slots (`Facade::__callStatic()`'s `$instance->$method(...$args)`),
+/// with references in the array, by-reference parameters, string keys,
+/// unpacking after positional arguments, too many arguments, variadics,
+/// `Traversable`s, builtins, `__call()`/`__callStatic()`; and a later
+/// unpack's positional elements after an earlier one's named ones, which
+/// php-src accepts (its check covers one unpack's elements). Expected
+/// output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn argument_unpacking() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class Svc {
+  public function get($a, $b = 'B') { return "$a|$b|" . func_num_args(); }
+  public function many(...$xs) { return implode(',', $xs) . '#' . count(func_get_args()); }
+  public function typed(int $i, string $s = 'x') { return "$i$s"; }
+  public function byref(&$r) { $r = 'changed'; return 'r'; }
+  public function __call($n, $a) { return "__call($n:" . implode(',', $a) . ')'; }
+  public static function __callStatic($n, $a) { return "static($n:" . count($a) . ')'; }
+}
+function f($a, $b, $c = 'C') { return "$a$b$c" . func_num_args(); }
+function run() {
+  $s = new Svc; $m = 'get';
+  for ($i = 0; $i < 3; $i++) {
+    $args = ['k', $i];
+    echo $s->$m(...$args), ' ', $s->get(...['only']), ' ', $s->get('p', ...[]), ' ', $s->get(...[1, 2, 3, 4]), ' ';
+    echo $s->many(...[1, 2, 3]), ' ', $s->many(0, ...[1, 2], ...[3]), ' ', f(...['a', 'b']), f('x', ...['y', 'z']), ' ';
+    $v = 'orig'; $ra = [&$v]; echo $s->get(...$ra), ' '; $ra2 = ['val']; echo $s->byref(...$ra2), $ra2[0], ' ';
+    echo $s->get(...['b' => 'named', 'a' => 'A']), ' ';
+    try { echo $s->typed(...['5', 'q']), ' ', $s->typed(...['nope']); } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    echo max(...[3, 9, 2]), ' ', count(array_merge(...[[1], [2, 3]])), ' ';
+    echo $s->undefined(...[1, 2]), ' ', Svc::stat(...[1]), ' ';
+    echo $s->get(...new \ArrayIterator(['it', 'er'])), ' ';
+    $t = function (...$q) { return count($q); }; echo $t(...range(1, 5)), ' ';
+    try { $s->get(...['a' => 1], ...[2]); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { $s->get(...7); } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    echo f(...[$i => 'z', 'q', 'r']), "\n";
+  }
+}
+run();
+"#),
+        r#"k|0|2 only|B|1 p|B|1 1|2|4 1,2,3#3 0,1,2,3#4 abC2xyz3 orig|B|1 rchanged A|named|2 5q App\Svc::typed(): Argument #1 ($i) must be of type int, string given, called in t.php on line 20 9 3 __call(undefined:1,2) static(stat:1) it|er|2 5 Only arrays and Traversables can be unpacked, int given zqr3
+k|1|2 only|B|1 p|B|1 1|2|4 1,2,3#3 0,1,2,3#4 abC2xyz3 orig|B|1 rchanged A|named|2 5q App\Svc::typed(): Argument #1 ($i) must be of type int, string given, called in t.php on line 20 9 3 __call(undefined:1,2) static(stat:1) it|er|2 5 Only arrays and Traversables can be unpacked, int given zqr3
+k|2|2 only|B|1 p|B|1 1|2|4 1,2,3#3 0,1,2,3#4 abC2xyz3 orig|B|1 rchanged A|named|2 5q App\Svc::typed(): Argument #1 ($i) must be of type int, string given, called in t.php on line 20 9 3 __call(undefined:1,2) static(stat:1) it|er|2 5 Only arrays and Traversables can be unpacked, int given zqr3
+"#
+    );
+    assert_eq!(
+        run(r#"<?php
+function g($a, $b = 'B') { return "$a|$b"; }
+try { echo g(...['a' => 1], ...[2]), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { echo g(...['a' => 1], ...[2, 3]), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+$x = [2]; try { echo g(...['a' => 1], ...$x), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { echo g(...['b' => 1], ...[2]), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { echo g(...['b' => 1, 'a' => 0], ...[2, 3]), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+function h(...$r) { return json_encode($r); }
+echo h(...['x' => 1], ...[2, 3]), "\n";
+echo h(...[1], ...['k' => 2], ...[3]), "\n";
+"#),
+        r#"1|2
+1|2
+1|2
+ArgumentCountError: g(): Argument #1 ($a) not passed
+0|1
+{"0":2,"1":3,"x":1}
+{"0":1,"1":3,"k":2}
+"#
+    );
+}

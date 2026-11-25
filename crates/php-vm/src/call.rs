@@ -1896,6 +1896,21 @@ impl Vm {
     }
 
     fn push_arg(&mut self, pos: Option<usize>, name: Option<ZStr>, value: Value) -> VmResult<()> {
+        self.push_arg_ex(pos, name, value, false)
+    }
+
+    /// [`Vm::push_arg`]; `unpacked`: a positional element of a
+    /// `ZEND_SEND_UNPACK` after a named argument of an earlier one
+    /// (`f(...['a' => 1], ...[2])`), which php-src appends at the call's
+    /// argument count (its "positional after named" check only covers the
+    /// elements of one unpack, `send_unpacked`).
+    fn push_arg_ex(
+        &mut self,
+        pos: Option<usize>,
+        name: Option<ZStr>,
+        value: Value,
+        unpacked: bool,
+    ) -> VmResult<()> {
         let frame = self.frames.last_mut().expect("active frame");
         let call = frame.calls.last_mut().expect("pending call");
         if call.inline_count > 0 {
@@ -1936,7 +1951,7 @@ impl Vm {
                 call.args[p] = Some(value);
             }
             (Some(_), None) => {
-                if call.has_named {
+                if call.has_named && !unpacked {
                     return Err(self.make_throw(
                         "Error",
                         "Cannot use positional argument after named argument",
@@ -1964,7 +1979,75 @@ impl Vm {
 
     /// `ZEND_SEND_UNPACK`: the elements of an array or `Traversable` as
     /// arguments of the pending call.
+    /// `ZEND_SEND_UNPACK` of a list (keys `0..n`, `$obj->$method(...$args)`
+    /// in Laravel's `Facade::__callStatic()`) into a pending call whose
+    /// arguments so far are its inline ones (no buffer, no named or
+    /// partial-application arguments, no `__call` trampoline), when every
+    /// parameter the elements reach takes its argument by value and they
+    /// fit the inline slots: the elements, dereferenced (a by-value send's
+    /// `ZVAL_COPY_DEREF`), go into those slots, where the call's plain
+    /// paths read them (`Vm::push_simple_ucall`), instead of moving every
+    /// argument to the buffer (`push_arg`), which sent the call down the
+    /// generic `push_user_call`. A temporary operand is consumed. `false`,
+    /// nothing changed, for anything else (string keys, a `Traversable`,
+    /// a by-reference parameter, too many arguments): the generic send.
+    fn send_unpack_inline(&mut self, src: Operand) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        if f.symtab_attached {
+            return false;
+        }
+        let arr = match src {
+            Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Array(a)) => a.clone(),
+                _ => return false,
+            },
+            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+                Some(Value::Array(a)) => a.clone(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let n = arr.len();
+        let Some(call) = f.calls.last_mut() else {
+            return false;
+        };
+        let start = call.inline_count as usize;
+        if !call.args.is_empty()
+            || call.has_named
+            || !call.named.is_empty()
+            || call.pfa.is_some()
+            || call.magic_name.is_some()
+            || start + n > call.inline_args.len()
+            || !arr.is_list()
+            || (start..start + n).any(|i| call.func.arg_by_ref(i))
+        {
+            return false;
+        }
+        for (slot, v) in call.inline_args[start..start + n]
+            .iter_mut()
+            .zip(arr.values())
+        {
+            *slot = Some(v.deref());
+        }
+        #[allow(clippy::cast_possible_truncation)] // at most the six slots
+        {
+            call.inline_count = (start + n) as u8;
+        }
+        drop(arr);
+        if let Operand::Tmp(t) = src {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        true
+    }
+
     pub(crate) fn op_send_unpack(&mut self, src: Operand) -> VmResult<()> {
+        if self.send_unpack_inline(src) {
+            return Ok(());
+        }
         let raw = match src {
             Operand::Cv(cv) => match self.cv_get(cv) {
                 Some(v) => v,
@@ -1983,8 +2066,10 @@ impl Vm {
                 // then the arguments sent so far (`cleanup_unfinished_calls`)
                 // are released.
                 let o = o.clone();
+                let mut have_named = false;
                 return self.iterate_each(&o, &mut |vm: &mut Vm, key: Value, val: Value| {
-                    vm.send_unpacked(key, val, None).map(|_| ())
+                    vm.send_unpacked(key, val, None, &mut have_named)
+                        .map(|_| ())
                 });
             }
             _ => {
@@ -1999,8 +2084,9 @@ impl Vm {
             }
         };
         let mut changed = false;
+        let mut have_named = false;
         for (k, val) in items {
-            changed |= self.send_unpacked(k, val, Some(&mut v))?;
+            changed |= self.send_unpacked(k, val, Some(&mut v), &mut have_named)?;
         }
         if changed {
             match raw {
@@ -2023,7 +2109,13 @@ impl Vm {
     /// that array, whose element becomes a reference when the parameter
     /// takes one; returns whether it did) or `Traversable` (`array: None`),
     /// as one step of `ZEND_SEND_UNPACK`.
-    fn send_unpacked(&mut self, k: Value, val: Value, array: Option<&mut Value>) -> VmResult<bool> {
+    fn send_unpacked(
+        &mut self,
+        k: Value,
+        val: Value,
+        array: Option<&mut Value>,
+        have_named: &mut bool,
+    ) -> VmResult<bool> {
         let traversable = array.is_none();
         // ZEND_SEND_UNPACK: a Traversable's numeric string keys
         // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
@@ -2035,15 +2127,20 @@ impl Vm {
             k => k,
         };
         let (pos, name) = match &k {
-            Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
+            Value::Str(s) => {
+                *have_named = true;
+                (self.arg_position(s)?, Some(s.clone()))
+            }
             Value::Int(_) => {
-                let call = self.frame().calls.last().expect("pending call");
-                if call.has_named {
+                // `have_named_params` is the one `ZEND_SEND_UNPACK`'s own: a
+                // later unpack's positional elements follow a named one.
+                if *have_named {
                     return Err(self.make_throw(
                         "Error",
                         "Cannot use positional argument after named argument during unpacking",
                     ));
                 }
+                let call = self.frame().calls.last().expect("pending call");
                 (Some(call.arg_count()), None)
             }
             _ => {
@@ -2090,7 +2187,7 @@ impl Vm {
         } else {
             val.deref()
         };
-        self.push_arg(pos, name, val)?;
+        self.push_arg_ex(pos, name, val, true)?;
         Ok(changed)
     }
 
