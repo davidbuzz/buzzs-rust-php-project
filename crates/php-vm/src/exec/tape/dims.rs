@@ -3177,16 +3177,107 @@ fn fe_assign(f: &mut Frame, cv: u32, tmp: u32, v: Value) {
     }
 }
 
-/// `Op::ConcatCv`: `$cv .= val` (`concat_cv_in`). Extends the string in
-/// place and releases a consumed value temporary, so it polls.
+/// `Op::ConcatCv`: `$cv .= val`. Without a used result the lean path
+/// ([`concat_cv_spare`]) takes it; otherwise, or when that declines,
+/// `concat_cv_in` ([`concat_cv_general`]). Extends the string in place and
+/// releases a consumed value temporary, so it polls.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe extern "C" fn concat_cv(frame: *mut Frame, inst: *const Inst) -> bool {
+    // SAFETY: the caller's contract: a row of the frame's tape.
+    let inst = unsafe { &*inst };
+    if inst.c == u32::MAX {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { concat_cv_spare(frame, inst) }
+    } else {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { concat_cv_general(frame, inst) }
+    }
+}
+
+/// `$cv .= val` with no used result, a frame without a symbol table, the
+/// variable holding a string directly and `val` a string or an int (a
+/// literal, another defined variable holding one directly, a temporary):
+/// `concat_function` with `result == op1`. A string nobody else holds
+/// grows in place, with no call to the allocator while its block has room
+/// (`ZStr::append_str_spare`: `zend_string_extend` within a size class); a
+/// shared one is copied once into a string of the final size. Anything
+/// else goes to [`concat_cv_general`], nothing changed.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn concat_cv_spare(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    if concat_cv_plain(f, lits, inst).is_some() {
+        return true;
+    }
+    // SAFETY: the caller's contract, passed on.
+    unsafe { concat_cv_general(frame, inst) }
+}
+
+/// The body of [`concat_cv_spare`]: `None`, nothing changed, when it
+/// declines.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `concat_cv_spare`
+fn concat_cv_plain(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<()> {
+    let cv = inst.a as usize;
+    let vi = inst.p;
+    let kind = val_kind(inst);
+    if f.symtab_attached || (kind == KIND_CV && vi == cv) {
+        return None;
+    }
+    if !matches!(f.cvs.get(cv).and_then(CvSlot::get), Some(Value::Str(_))) {
+        return None;
+    }
+    let plain = |v: &Value| matches!(v, Value::Str(_) | Value::Int(_));
+    // The right-hand side, checked before anything changes; a consumed
+    // temporary is taken out of its slot and released after the append
+    // (`FREE_OP2`).
+    let taken;
+    let rhs: &Value = match kind {
+        KIND_CV => f.cvs.get(vi)?.get().filter(|v| plain(v))?,
+        KIND_LIT => lits.get(vi).filter(|v| plain(v))?,
+        KIND_TMPKEEP => f.tmps.get(vi).filter(|v| plain(v))?,
+        KIND_TMP => {
+            let slot = f.tmps.get_mut(vi).filter(|v| plain(v))?;
+            taken = std::mem::take(slot);
+            &taken
+        }
+        _ => return None,
+    };
+    let slot = f.cvs.get(cv)?;
+    // SAFETY: `rhs` never points into this slot (another variable's, a
+    // literal, a kept temporary or the taken one), so the string is the
+    // only borrow of the slot.
+    let Some(Value::Str(s)) = (unsafe { slot.get_mut_unchecked() }) else {
+        return None;
+    };
+    match rhs {
+        Value::Str(t) if ZStr::ptr_eq(s, t) => s.append_self(),
+        Value::Str(t) => s.append_str_spare(t),
+        Value::Int(n) => s.append_long_spare(*n),
+        // Only strings and ints were let through above.
+        _ => {}
+    }
+    Some(())
+}
+
+/// `Op::ConcatCv` by `concat_cv_in`: a used result, a symbol table, or
+/// what [`concat_cv_spare`] declines.
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe extern "C" fn concat_cv(frame: *mut Frame, inst: *const Inst) -> bool {
-    // SAFETY: the caller's contract: a row of the frame's tape.
-    let inst = unsafe { &*inst };
+unsafe fn concat_cv_general(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
     let val = operand(val_kind(inst), inst.p as u32);
