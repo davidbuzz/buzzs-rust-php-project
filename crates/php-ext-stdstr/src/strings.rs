@@ -733,6 +733,9 @@ fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmRe
     let Some(first) = search::memnstr(hay, search) else {
         return Ok((subject, 0));
     };
+    if search.len() == replace.len() {
+        return Ok(replace_same_len(hay, first, search, replace));
+    }
     let mut count = 1usize;
     let mut p = first + search.len();
     while let Some(r) = search::memnstr(&hay[p..], search) {
@@ -765,6 +768,47 @@ fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmRe
     Ok((out.finish(), i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
+/// [`replace_cs`] when `replace` is as long as `search` (`first` is the
+/// first occurrence): `php_str_to_str_ex()`'s `needle_len == str_len`
+/// case, the subject copied once (`zend_string_init`) and each occurrence
+/// overwritten in the copy, with no counting pass and no piecewise
+/// building; one byte for one byte is a single pass over the copy.
+fn replace_same_len(hay: &[u8], first: usize, search: &[u8], replace: &[u8]) -> (ZStr, i64) {
+    let n = search.len();
+    let mut count = 0usize;
+    let out = ZStr::from_slice_mapped(hay, |b| {
+        if let ([from], [to]) = (search, replace) {
+            for c in &mut b[first..] {
+                if *c == *from {
+                    *c = *to;
+                    count += 1;
+                }
+            }
+            return;
+        }
+        let mut at = first;
+        loop {
+            b[at..at + n].copy_from_slice(replace);
+            count += 1;
+            let next = at + n;
+            match search::memnstr(&hay[next..], search) {
+                Some(r) => at = next + r,
+                None => break,
+            }
+        }
+    });
+    (out, i64::try_from(count).unwrap_or(i64::MAX))
+}
+
+/// A string argument read in place when it is a string (no copy of the
+/// handle), else converted ([`to_str`]).
+fn str_cow<'a>(vm: &mut Vm, v: &'a Value) -> VmResult<Cow<'a, ZStr>> {
+    match v {
+        Value::Str(s) => Ok(Cow::Borrowed(s)),
+        other => Ok(Cow::Owned(to_str(vm, other)?)),
+    }
+}
+
 fn replace_in_subject(
     vm: &mut Vm,
     search: &Value,
@@ -776,8 +820,8 @@ fn replace_in_subject(
         return Ok((subject, 0));
     }
     let Value::Array(searches) = search else {
-        let s = to_str(vm, search)?;
-        let r = to_str(vm, replace)?;
+        let s = str_cow(vm, search)?;
+        let r = str_cow(vm, replace)?;
         if !ci && !s.is_empty() {
             return replace_cs(vm, subject, &s, &r);
         }
@@ -842,10 +886,12 @@ fn replace_in_subject(
 }
 
 fn str_replace_common(vm: &mut Vm, a: &Args, ci: bool) -> VmResult<Value> {
-    let search = a.at(0);
-    let replace = a.at(1);
-    let subject = a.at(2);
-    if !matches!(search, Value::Array(_)) && matches!(replace, Value::Array(_)) {
+    // The arguments read in place (`Z_PARAM_ARRAY_HT_OR_STR` takes no
+    // reference): copying the three out cost a clone and a drop each.
+    let search = a.at_ref(0);
+    let replace = a.at_ref(1);
+    let subject = a.at_ref(2);
+    if !matches!(*search, Value::Array(_)) && matches!(*replace, Value::Array(_)) {
         return Err(a.type_error(
             vm,
             2,
@@ -853,7 +899,7 @@ fn str_replace_common(vm: &mut Vm, a: &Args, ci: bool) -> VmResult<Value> {
         ));
     }
     let mut count = 0;
-    let result = if let Value::Array(subjects) = subject {
+    let result = if let Value::Array(subjects) = &*subject {
         let mut out = HashTable::new();
         for (k, v) in subjects.iter() {
             let s = to_str(vm, &v.deref())?;

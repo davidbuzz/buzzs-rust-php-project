@@ -455,3 +455,30 @@ fn spn_length_argument() {
         "3142|strspn(): Argument #4 ($length) must be of type ?int, string given"
     );
 }
+
+/// `str_replace()` with arguments read in place and a replacement as long
+/// as the search patched into one copy: one byte, several bytes,
+/// overlapping candidates, the last byte, no occurrence, a replacement
+/// equal to the search, longer and empty replacements, array subjects
+/// and searches, numbers, and a reference subject (`/usr/bin/php8.5 -n`).
+#[test]
+fn str_replace_same_length_and_in_place() {
+    let out = run(
+        r"echo str_replace('l', 'L', '  Hello World  ', $c), $c, '|';
+        echo str_replace('aa', 'bb', 'aaaaa', $c), $c, '|';
+        echo str_replace('ab', 'xy', 'abab_ab', $c), $c, '|';
+        echo str_replace('z', 'y', 'abc', $c), $c, '|';
+        echo str_replace('c', 'c', 'abc', $c), $c, '|';
+        echo str_replace('d', 'D', 'abcd', $c), $c, '|';
+        echo str_replace('l', 'LL', 'hello', $c), $c, '|';
+        echo str_replace('ll', '', 'hello', $c), $c, '|';
+        echo implode(',', str_replace('a', 'A', ['x' => 'banana', 'y' => 'cherry', 3])), '|';
+        echo str_replace(['a', 'b'], ['b', 'c'], 'ab', $c), $c, '|';
+        echo str_replace(1, 2, 1213, $c), $c, '|';
+        $s = 'aXa'; $r = &$s; echo str_replace('X', 'Y', $r), $s;",
+    );
+    assert_eq!(
+        out,
+        "  HeLLo WorLd  3|bbbba2|xyxy_xy3|abc0|abc1|abcD1|heLLLLo2|heo1|bAnAnA,cherry,3|cc3|22232|aYaaXa"
+    );
+}
