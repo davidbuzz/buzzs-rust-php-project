@@ -882,6 +882,178 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
     Some(out)
 }
 
+/// The cache entry of place `pid` in frame `f` when it is filled in `f`'s
+/// class scope for a declared property and allows every access in `want`:
+/// the object's class address, the slot, the place's base and the
+/// accepted types, read under one borrow of the cache (the plain hits
+/// below need nothing else of it). An unfilled entry's class address (0)
+/// matches no object, so it is not tested here.
+#[inline(always)]
+fn plain_key(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32, u32)> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
+        return None;
+    }
+    let key = (e.class_addr, e.slot as usize, e.base, e.accept);
+    drop(cache);
+    Some(key)
+}
+
+/// The data of the object the base `base` holds directly in frame `f`
+/// (`$this`, or a compiled variable holding the object itself) when it is
+/// of the class at address `class` and not lazy: `Z_OBJ_P(container)` and
+/// `EXPECTED(zobj->ce == CACHED_PTR(cache_slot))`.
+#[inline(always)]
+fn plain_obj(f: &Frame, base: u32, class: usize) -> Option<&ObjectData> {
+    let obj: &Obj = if base == PROP_CACHE_THIS {
+        f.this.as_ref()?
+    } else {
+        match f.cvs.get(base as usize)?.get()? {
+            Value::Object(o) => o,
+            _ => return None,
+        }
+    };
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != class || !od.not_lazy() {
+        return None;
+    }
+    Some(od)
+}
+
+/// `ZEND_FETCH_OBJ_R` on a cache hit in its plainest form: a declared,
+/// initialized slot holding a value (not a reference) of an object the
+/// base holds directly, copied. `None` for anything else, which
+/// [`read_hit`] then tries.
+#[inline(always)]
+fn read_plain(f: &Frame, pid: PlaceId) -> Option<Value> {
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ)?;
+    let od = plain_obj(f, base, class)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let v = match slots.get(slot)? {
+        Some(Value::Reference(_)) | None => None,
+        Some(v) => Some(copy_value(v)),
+    };
+    drop(slots);
+    v
+}
+
+/// `ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a cache hit in its
+/// plainest form: the value (not a reference, of a type the property
+/// takes as-is) replaces the value (not a reference) of an initialized
+/// declared slot of an object the base holds directly; the old value is
+/// released once the slots are no longer borrowed (a scalar is
+/// forgotten), a consumed temporary released and the result written to
+/// `dst` when used. `false`, having changed nothing, for anything else,
+/// which [`assign_hit`] then tries.
+#[inline(always)]
+fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
+    let Some((class, slot, base, accept)) = plain_key(f, pid, PC_WRITE) else {
+        return false;
+    };
+    let src = match val {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize),
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+        Operand::Lit(lit) => f.code.literals.get(lit as usize),
+        Operand::Unused => None,
+    };
+    let Some(src) = src else {
+        return false;
+    };
+    if matches!(src, Value::Reference(_)) || !accepts(accept, src) {
+        return false;
+    }
+    let Some(od) = plain_obj(f, base, class) else {
+        return false;
+    };
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return false;
+    };
+    let Some(Some(cur)) = slots.get_mut(slot) else {
+        return false;
+    };
+    if matches!(cur, Value::Reference(_)) {
+        return false;
+    }
+    let new_val = copy_value(src);
+    let result = dst.map(|_| copy_value(&new_val));
+    let old = std::mem::replace(cur, new_val);
+    drop(slots);
+    // The old value is released once nothing is borrowed (a destructor
+    // may touch the object).
+    discard_unrooted(Some(old));
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let (Some(d), Some(r)) = (dst, result) {
+        if let Some(slot) = f.tmps.get_mut(d as usize) {
+            put_tmp(slot, r);
+        }
+    }
+    true
+}
+
+/// [`assign_hit`] out of line: the cases [`assign_plain`] declines (a
+/// dynamic property, an undefined slot, a class-typed property, a
+/// reference base).
+#[inline(never)]
+fn assign_hit_slow(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
+    assign_hit(f, pid, val, dst)
+}
+
+/// [`incdec_hit`] and the result into `dst`, out of line from the tape's
+/// handler.
+#[inline(always)]
+fn incdec_op(f: &mut Frame, pid: PlaceId, kind: IncDecKind, dst: Option<u32>) -> bool {
+    let Some(res) = incdec_hit(f, pid, kind) else {
+        return false;
+    };
+    put_dst(f, dst, res);
+    true
+}
+
+/// The single-op entry points of the tape's property handlers
+/// (`exec/tape/props.rs`). Methods, so that the tape reaches them without
+/// a re-export: each is the arm [`prop_op_in`] runs for its op, with the
+/// plainest hit tried first inline and the rest of the hit out of line.
+impl Frame {
+    /// `$o->p` read on a cache hit in its plainest form ([`read_plain`]);
+    /// the caller tries [`read_hit`] on `None`.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_read_plain(&self, pid: PlaceId) -> Option<Value> {
+        read_plain(self, pid)
+    }
+
+    /// `$o->p = v` on a cache hit ([`assign_plain`], else [`assign_hit`]),
+    /// exactly as [`prop_op_in`]'s `AssignObjProp` arm.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_assign_hit(
+        &mut self,
+        pid: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> bool {
+        assign_plain(self, pid, val, dst) || assign_hit_slow(self, pid, val, dst)
+    }
+
+    /// `$o->p++` & co. on a cache hit, exactly as [`prop_op_in`]'s
+    /// `IncDecObjProp` arm.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_incdec_hit(
+        &mut self,
+        pid: PlaceId,
+        kind: IncDecKind,
+        dst: Option<u32>,
+    ) -> bool {
+        incdec_op(self, pid, kind, dst)
+    }
+}
+
 /// The frame-local fast paths of the property ops (`exec/hot.rs`, which
 /// runs them in its own loop like the other run-time cache hits): `$o->p`
 /// read, `=`, `op=` of a number, `++`/`--` and `isset()`/`empty()` on a

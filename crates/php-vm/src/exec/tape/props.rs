@@ -337,17 +337,31 @@ pub(super) unsafe fn this_const_to(frame: *mut Frame, inst: &Inst) -> Br {
     }
 }
 
-/// Runs `prop_op_in` on the op at `inst.d`. The op is cloned from the
-/// shared `Rc<OpArray>` so the `&Op` borrow does not alias `&mut f`.
+/// The handler of the property rows but the reads and `.=`: a dispatch on
+/// the row's op and nothing else, so that it keeps no frame of its own and
+/// each arm is a tail call. `$o->p = v` and `$o->p++` run in handlers of
+/// their own (their hit paths in a small frame each); the others run
+/// `prop_op_in` on their op ([`prop_other`]).
 ///
 /// # Safety
 /// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
-    if inst.op == TOp::AssignObjProp {
-        // SAFETY: the caller's contract.
-        return unsafe { assign_prop(frame, inst) };
+    match inst.op {
+        // SAFETY: the caller's contract, for each arm.
+        TOp::AssignObjProp => unsafe { assign_prop(frame, inst) },
+        TOp::IncDecObjProp => unsafe { incdec_prop(frame, inst) },
+        _ => unsafe { prop_other(frame, inst) },
     }
+}
+
+/// Runs `prop_op_in` on the op at `inst.d` (`op=` of a number,
+/// `isset()`/`empty()`).
+///
+/// # Safety
+/// As [`prop_in`].
+#[inline(never)]
+unsafe fn prop_other(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
     // A handle of its own on the op array: the op is borrowed from it while
@@ -362,11 +376,10 @@ pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
 }
 
 /// `Op::AssignObjProp` (`ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a
-/// cache hit, `spec::props::assign_hit`) on its own: the op's operands are
-/// copied out of the op array (no handle of its own on it, no match over
-/// the other property ops), so that the hit runs in a small frame with the
-/// object's data inlined. Declines what `assign_hit` declines, having
-/// changed nothing.
+/// cache hit): the op's operands are copied out of the op array (they are
+/// `Copy`: no handle on it, no op built or dropped) and the hit is
+/// `prop_op_in`'s arm for the op (`Frame::prop_assign_hit`), its plainest
+/// case inline. Declines what that arm declines, having changed nothing.
 ///
 /// # Safety
 /// As [`prop_in`]; `inst.d` is the index of an `Op::AssignObjProp`.
@@ -377,15 +390,46 @@ unsafe fn assign_prop(frame: *mut Frame, inst: &Inst) -> bool {
     let Some(&Op::AssignObjProp { place, val, dst }) = f.code.ops.get(inst.d as usize) else {
         return false;
     };
-    // An op of a known variant on the stack: the inlined `prop_op_in`'s
-    // match folds to its `assign_hit` arm.
-    let op = Op::AssignObjProp { place, val, dst };
-    let mut ip = inst.d as usize;
-    prop_op_in(f, &op, &mut ip)
+    f.prop_assign_hit(place, val, dst)
+}
+
+/// `Op::IncDecObjProp` (`ZEND_PRE_INC_OBJ` & co. on a cache hit), as
+/// [`assign_prop`]: `prop_op_in`'s arm for the op
+/// (`Frame::prop_incdec_hit`) on operands copied out of the op array.
+///
+/// # Safety
+/// As [`prop_in`]; `inst.d` is the index of an `Op::IncDecObjProp`.
+#[inline(never)]
+unsafe fn incdec_prop(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::IncDecObjProp { place, kind, dst }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    f.prop_incdec_hit(place, kind, dst)
+}
+
+/// The value of the property of place `pid` on a cache hit: its plainest
+/// case (`Frame::prop_read_plain`: a declared slot of an object the base
+/// holds directly) inline, the rest of `read_hit` (a dynamic property, a
+/// reference in the slot or the base) out of line.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one copy in each read handler
+fn read_prop(f: &Frame, pid: crate::opcode::PlaceId) -> Option<php_runtime::Value> {
+    match f.prop_read_plain(pid) {
+        Some(v) => Some(v),
+        None => read_hit_slow(f, pid),
+    }
+}
+
+/// `read_hit`, out of line from [`read_prop`].
+#[inline(never)]
+fn read_hit_slow(f: &Frame, pid: crate::opcode::PlaceId) -> Option<php_runtime::Value> {
+    read_hit(f, pid)
 }
 
 /// `Op::FetchObjProp` (`ZEND_FETCH_OBJ_R` / `_IS` on a cache hit) into
-/// its temporary `b`: `read_hit`, the hit `prop_op_in` takes, without
+/// its temporary `b`: [`read_prop`], the hit `prop_op_in` takes, without
 /// going through the op. Declines a miss (the generic op: magic, a
 /// lazy object, an uninitialized or undeclared property).
 ///
@@ -395,7 +439,7 @@ unsafe fn assign_prop(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    let Some(v) = read_hit(f, inst.a) else {
+    let Some(v) = read_prop(f, inst.a) else {
         return false;
     };
     store_fetched_in(f, inst.b, None, v);
@@ -414,7 +458,7 @@ pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn fetch_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    let Some(v) = read_hit(f, inst.a) else {
+    let Some(v) = read_prop(f, inst.a) else {
         return Br::Decline;
     };
     if store_fetched_in(f, inst.b, Some(inst.d), v) {

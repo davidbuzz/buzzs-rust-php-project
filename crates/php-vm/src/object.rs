@@ -112,6 +112,15 @@ thread_local! {
 }
 
 impl ObjectData {
+    /// Whether the object is not lazy (`zend_object_is_lazy` false) and its
+    /// lazy state is not being changed: the property cache's hits apply.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    #[must_use]
+    pub fn not_lazy(&self) -> bool {
+        self.lazy.try_borrow().is_ok_and(|l| l.is_none())
+    }
+
     /// Whether declared slot `idx` was explicitly unset (`unset()` on a
     /// declared property, or an unserialized uninitialized one): the
     /// opposite of `IS_PROP_UNINIT` for an undefined slot.
@@ -1303,9 +1312,14 @@ impl fmt::Debug for HandleGuard {
 /// Returns our object data for an `Obj` (`Z_OBJ_P`: a type check and an
 /// offset into the one allocation).
 ///
+/// Inlined everywhere: it is a type compare and an offset, and the
+/// property handlers called it out of line (a call, and spills of the
+/// operands around it, on every `$obj->p = v`).
+///
 /// # Panics
 /// Panics if the object was not created by this VM.
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)]
 pub fn data(o: &Obj) -> &ObjectData {
     match o.downcast_ref::<ObjectData>() {
         Some(d) => d,
