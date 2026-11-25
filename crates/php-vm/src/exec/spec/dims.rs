@@ -177,7 +177,7 @@ pub(in crate::exec) fn assign_op_dim_cv_in(
     // int or string offset), and `y` is a copied number.
     let val_mut = unsafe { slot.get_mut_unchecked() };
     let Some(Value::Array(arr)) = val_mut else {
-        return false;
+        return assign_op_dim_ref_in(f, cv, dim, op, y);
     };
     // The variable's own table (no other handle, no symbol-table mirror):
     // `SEPARATE_ARRAY` is a no-op, so the element is looked up once and
@@ -304,7 +304,7 @@ pub(in crate::exec) fn incdec_dim_cv_in(
     // another operand, never this CV slot.
     let val_mut = unsafe { slot.get_mut_unchecked() };
     let Some(Value::Array(arr)) = val_mut else {
-        return None;
+        return incdec_dim_ref_in(f, cv, dim, kind);
     };
     let step = |v: &Value| -> Option<(Value, Value)> {
         Some(match v {
@@ -350,6 +350,88 @@ pub(in crate::exec) fn incdec_dim_cv_in(
     if f.symtab_attached {
         f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
     }
+    release_str_tmp_in(f, dim);
+    Some(if kind.is_post() { old } else { new })
+}
+
+/// [`assign_op_dim_cv_in`] (not `.=`) when `$cv` holds a reference to an
+/// array whose element at the offset is a plain number: `ZEND_ASSIGN_DIM_OP`
+/// on the dereferenced container (`ZVAL_DEREF`, then `SEPARATE_ARRAY` when
+/// shared) and `zend_binary_op`'s numeric fast path on the element. Out of
+/// line, as [`incdec_dim_ref_in`]; `false`, nothing changed, for the
+/// generic path.
+#[inline(never)]
+fn assign_op_dim_ref_in(f: &mut Frame, cv: u32, dim: Operand, op: BinaryOp, y: Num) -> bool {
+    let Some(key) = dim_ref_in(f, dim) else {
+        return false;
+    };
+    let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+        return false;
+    };
+    let Some(mut guard) = r.try_borrow_mut() else {
+        return false;
+    };
+    let Value::Array(arr) = &mut *guard else {
+        return false;
+    };
+    let x = match table_dim(arr, key) {
+        Some(Value::Int(i)) => Num::Int(*i),
+        Some(Value::Float(x)) => Num::Float(*x),
+        _ => return false,
+    };
+    let Some(res) = num_bin(BinKind::Arith(op), x, y) else {
+        return false;
+    };
+    let Some(el) = table_dim_mut(arr.make_mut(), key) else {
+        return false;
+    };
+    // A number replaces a number: no drop glue to run.
+    std::mem::forget(std::mem::replace(el, res));
+    drop(guard);
+    release_str_tmp_in(f, dim);
+    true
+}
+
+/// [`incdec_dim_cv_in`] when `$cv` holds a reference (a variable bound by
+/// `global` or `static`, or captured or passed by reference) to an array
+/// whose element at the (int or string) offset is an int that does not
+/// overflow, or a float: `FETCH_DIM_RW` looks through it (`ZVAL_DEREF`)
+/// and separates the referenced array only when it is shared
+/// (`SEPARATE_ARRAY`), then `PRE/POST_INC/DEC` update the element. Out of
+/// line, so that the variable-holds-an-array path stays as it was. `None`,
+/// nothing changed, for the generic path (a missing key warns there; a
+/// reference borrowed elsewhere is being iterated or walked).
+#[inline(never)]
+fn incdec_dim_ref_in(f: &mut Frame, cv: u32, dim: Operand, kind: IncDecKind) -> Option<Value> {
+    let key = dim_ref_in(f, dim)?;
+    let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+        return None;
+    };
+    let mut guard = r.try_borrow_mut()?;
+    let Value::Array(arr) = &mut *guard else {
+        return None;
+    };
+    let (old, new) = match table_dim(arr, key)? {
+        Value::Int(i) => {
+            let i = *i;
+            let n = if kind.is_inc() {
+                i.checked_add(1)?
+            } else {
+                i.checked_sub(1)?
+            };
+            (Value::Int(i), Value::Int(n))
+        }
+        Value::Float(x) => {
+            let x = *x;
+            let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
+            (Value::Float(x), Value::Float(n))
+        }
+        _ => return None,
+    };
+    let el = table_dim_mut(arr.make_mut(), key)?;
+    // A number replaces a number: no drop glue to run.
+    std::mem::forget(std::mem::replace(el, copy_value(&new)));
+    drop(guard);
     release_str_tmp_in(f, dim);
     Some(if kind.is_post() { old } else { new })
 }

@@ -7,7 +7,9 @@
 //! references, copy-on-write separation, `ArrayAccess`, magic methods,
 //! readonly and typed properties. The expected output is
 //! `/usr/bin/php8.5 -n` on each script (ref: Zend/zend_vm_def.h
-//! `ZEND_UNSET_DIM`, `ZEND_FETCH_DIM_UNSET`, `ZEND_FETCH_OBJ_UNSET`).
+//! `ZEND_UNSET_DIM`, `ZEND_FETCH_DIM_UNSET`, `ZEND_FETCH_OBJ_UNSET`,
+//! `ZEND_FETCH_OBJ_W`, `ZEND_FETCH_DIM_W`, `ZEND_ASSIGN_DIM`, `ZEND_FETCH_OBJ_IS`,
+//! `ZEND_ISSET_ISEMPTY_DIM_OBJ`, `ZEND_PRE_INC`).
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -39,6 +41,303 @@ fn run(source: &str) -> String {
     drop(vm);
     let output = sink.0.borrow().clone();
     String::from_utf8(output).expect("UTF-8 output")
+}
+
+/// Reads, `isset()`/`empty()` and assignments of `$this->p[$a][$b]`.
+#[test]
+fn prop_dims() {
+    assert_eq!(
+        run(r#"<?php
+class AA implements ArrayAccess {
+  public $d = [];
+  public function offsetExists($o): bool { echo "offsetExists $o\n"; return isset($this->d[$o]); }
+  public function offsetGet($o): mixed { echo "offsetGet $o\n"; return $this->d[$o] ?? null; }
+  public function offsetSet($o, $v): void { echo "offsetSet $o\n"; $this->d[$o] = $v; }
+  public function offsetUnset($o): void { echo "offsetUnset $o\n"; }
+}
+class H {
+  public $cb = [];
+  public $cache = ['g' => ['k' => 'v', 'z' => null, 'e' => '', 'zero' => '0']];
+  public ?array $na = null;
+  public $f = false;
+  public $s = 'abc';
+  public $i = 5;
+  public int $ti = 1;
+  public readonly array $ro;
+  public $aa;
+  public $u;
+  private $priv = ['a' => ['b' => 1]];
+  function __construct() { $this->ro = ['a' => ['b' => 1]]; $this->aa = ['x' => new AA]; unset($this->u); }
+  function __get($n) { echo "__get $n\n"; return ['m' => ['n' => 'magic']]; }
+  function add($p, $idx, $fn) { $this->cb[$p][$idx] = ['function' => $fn, 'accepted_args' => 1]; }
+  function has($p, $idx) { return isset($this->cb[$p][$idx]); }
+  function run() {
+    $g = 'g'; $k = 'k';
+    var_dump($this->cache[$g][$k], $this->cache['g']['z'], $this->cache[$g]['nope'] ?? 'dflt');
+    var_dump(isset($this->cache[$g][$k]), isset($this->cache[$g]['z']), isset($this->cache['x']['y']), empty($this->cache[$g]['e']), empty($this->cache[$g]['zero']), empty($this->cache[$g][$k]), empty($this->cache['q']['r']));
+    var_dump($this->cache[$g]['nope']);
+    var_dump($this->cache['nope'][$k]);
+    var_dump($this->cache[$g][$k][0], isset($this->cache[$g][$k][0]), isset($this->cache[$g][$k]['x']));
+    $copy = $this->cache;
+    $this->cache[$g][$k] = 'w'; $this->cache['new']['deep'] = 1; $this->cache[$g]['z'] = [1];
+    var_dump($copy['g']['k'], $this->cache);
+    $this->na['a']['b'] = 1; var_dump($this->na);
+    $this->f['a']['b'] = 1; var_dump($this->f);
+    try { $this->s['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->i['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->ti['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->ro['a']['b'] = 2; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    var_dump($this->ro['a']['b'], isset($this->ro['a']['b']));
+    try { $this->cache[$g][$k]['x'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    $this->aa['x']['y'] = 5; var_dump($this->aa['x']['y'], isset($this->aa['x']['y']));
+    var_dump($this->u['m']['n']); var_dump(isset($this->u['m']['n']));
+    $this->dyn = ['a' => ['b' => 2]]; var_dump($this->dyn['a']['b'], isset($this->dyn['a']['c']));
+    $this->dyn['a']['c'] = 3; var_dump($this->dyn);
+    $r = &$this->cache['g']; $r['k'] = 'viaref'; var_dump($this->cache['g']['k']);
+    $this->cache['g']['k'] = 'again'; var_dump($r['k']); unset($r);
+    $x = 1; $this->cache['g']['ref'] = &$x; $this->cache['g']['ref'] = 2; var_dump($x, $this->cache['g']['ref']);
+    $this->cache['1']['2'] = 'num'; var_dump($this->cache[1][2], isset($this->cache['1']['2']));
+    var_dump($this->priv['a']['b']);
+    $this->cb[10]['a'] = 1; foreach ($this->cb[10] as $kk => $vv) { $this->cb[10]['b'] = 2; echo "$kk\n"; } var_dump($this->cb[10]);
+  }
+}
+$h = new H;
+for ($i = 0; $i < 3; $i++) { $h->add(10, "f$i", "strlen"); $h->add(20, "g", "trim"); }
+var_dump($h->has(10, 'f1'), $h->has(10, 'nope'), $h->has(30, 'x'), count($h->cb[10]));
+$h->run();
+try { var_dump($h->priv['a']['b']); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+var_dump(isset($h->priv['a']['b']));
+$h->cache['g']['outside'] = 1; var_dump($h->cache['g']['outside'], isset($h->cache['g']['outside']));
+class G2 extends H { function m() { return $this->cache['g']['k']; } }
+var_dump((new G2)->m());
+"#),
+        r#"bool(true)
+bool(false)
+bool(false)
+int(3)
+string(1) "v"
+NULL
+string(4) "dflt"
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+
+Warning: Undefined array key "nope" in t.php on line 29
+NULL
+
+Warning: Undefined array key "nope" in t.php on line 30
+
+Warning: Trying to access array offset on null in t.php on line 30
+NULL
+string(1) "v"
+bool(true)
+bool(false)
+string(1) "v"
+array(2) {
+  ["g"]=>
+  array(4) {
+    ["k"]=>
+    string(1) "w"
+    ["z"]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    ["e"]=>
+    string(0) ""
+    ["zero"]=>
+    string(1) "0"
+  }
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 36
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+Error: Cannot use a scalar value as an array
+Error: Cannot use a scalar value as an array
+Error: Cannot indirectly modify readonly property H::$ro
+int(1)
+bool(true)
+TypeError: Cannot access offset of type string on string
+offsetSet y
+offsetGet y
+offsetExists y
+int(5)
+bool(true)
+__get u
+string(5) "magic"
+__get u
+bool(true)
+
+Deprecated: Creation of dynamic property H::$dyn is deprecated in t.php on line 45
+int(2)
+bool(false)
+array(1) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(2)
+    ["c"]=>
+    int(3)
+  }
+}
+string(6) "viaref"
+string(5) "again"
+int(2)
+int(2)
+string(3) "num"
+bool(true)
+int(1)
+f0
+f1
+f2
+a
+array(5) {
+  ["f0"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["f1"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["f2"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+}
+__get priv
+
+Warning: Undefined array key "a" in t.php on line 59
+
+Warning: Trying to access array offset on null in t.php on line 59
+NULL
+__get priv
+bool(false)
+int(1)
+bool(true)
+string(1) "v"
+"#
+    );
+}
+
+/// `++`/`--` and compound assignments of elements of arrays held by reference (`global`, `static`, `use (&$x)`, by-reference parameters).
+#[test]
+fn ref_dims() {
+    assert_eq!(
+        run(r#"<?php
+$counts = ['a' => 0, 'f' => 1.5, 's' => 'x', 'max' => PHP_INT_MAX, 'n' => null];
+function bump($k) { global $counts; ++$counts[$k]; $counts[$k]++; return $counts[$k]--; }
+var_dump(bump('a'), bump('f'), bump('s'), $counts);
+function over() { global $counts; $counts['max']++; var_dump($counts['max']); }
+over();
+function miss() { global $counts; $counts['zz']++; var_dump($counts['zz']); ++$counts['n']; var_dump($counts['n']); }
+miss();
+function addto($k, $v) { global $counts; $counts[$k] += $v; $counts[$k] -= 1; $counts[$k] *= 2; return $counts[$k]; }
+var_dump(addto('a', 10), addto('f', 0.5));
+function divz() { global $counts; try { $counts['a'] %= 0; } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; } }
+divz(); var_dump($counts['a']);
+function stat_counter($k) { static $c = []; $c[$k] = ($c[$k] ?? 0); ++$c[$k]; $c[$k] += 10; return $c; }
+stat_counter('x'); var_dump(stat_counter('x'));
+function cow() { global $counts; $copy = $counts; ++$counts['a']; $counts['a'] += 5; var_dump($copy['a'], $counts['a']); }
+cow();
+$fn = function () use (&$counts) { ++$counts['a']; $counts['a'] += 1; return $counts['a']; };
+var_dump($fn());
+function byref(array &$a) { ++$a['a']; $a['a'] += 2; } byref($counts); var_dump($counts['a']);
+function iter() { global $counts; foreach ($counts as $k => $v) { if ($k === 'a') { ++$counts['a']; } } var_dump($counts['a']); }
+iter();
+function iterref() { global $list; $list = [1, 2]; foreach ($list as &$v) { ++$list[1]; $list[0] += 1; } unset($v); var_dump($list); }
+iterref();
+$elref = ['x' => 1]; $rr = &$elref['x'];
+function elemref() { global $elref; ++$elref['x']; $elref['x'] += 1; } elemref(); var_dump($rr, $elref);
+"#),
+        r#"
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 3
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 3
+
+Deprecated: Decrement on non-numeric string has no effect and is deprecated in t.php on line 3
+int(2)
+float(3.5)
+string(1) "z"
+array(5) {
+  ["a"]=>
+  int(1)
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  string(1) "z"
+  ["max"]=>
+  int(9223372036854775807)
+  ["n"]=>
+  NULL
+}
+float(9.223372036854776E+18)
+
+Warning: Undefined array key "zz" in t.php on line 7
+int(1)
+int(1)
+int(20)
+float(4)
+Modulo by zero
+int(20)
+array(1) {
+  ["x"]=>
+  int(22)
+}
+int(20)
+int(26)
+int(28)
+int(31)
+int(32)
+array(2) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(4)
+}
+int(3)
+array(1) {
+  ["x"]=>
+  &int(3)
+}
+"#
+    );
 }
 
 /// unset() of elements of a function variable, a reference and a global.
