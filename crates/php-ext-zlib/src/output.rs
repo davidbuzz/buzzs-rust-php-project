@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 
 use php_runtime::{ArrayKey, Value, ZStr};
-use php_support::ini::{parse_quantity, Access, IniDirective, ModifyHandler};
+use php_support::ini::{parse_quantity, Access, IniDirective, IniDisplayer, ModifyHandler};
 use php_support::output::{self, StartHandler};
 use php_vm::ext::{Args, IniStage, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -345,13 +345,18 @@ fn zlib_get_coding_type(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers the INI entries, functions and the startup hook.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.ini(IniDirective::new(
-        "zlib.output_compression",
-        Some("0"),
-        Access::ALL,
-        ModifyHandler::None,
-        "zlib",
-    ))
+    // STD_PHP_INI_BOOLEAN in ext/zlib/zlib.c (its handler also takes a
+    // buffer size).
+    m.ini(
+        IniDirective::new(
+            "zlib.output_compression",
+            Some("0"),
+            Access::ALL,
+            ModifyHandler::None,
+            "zlib",
+        )
+        .with_displayer(IniDisplayer::Boolean),
+    )
     .ini(IniDirective::new(
         "zlib.output_compression_level",
         Some("-1"),

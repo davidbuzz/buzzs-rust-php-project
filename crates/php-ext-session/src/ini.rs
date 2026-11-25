@@ -25,7 +25,7 @@ use std::cell::Cell;
 
 use php_runtime::Value;
 use php_session::ini::DIRECTIVES;
-use php_support::ini::{Access, IniDirective, ModifyHandler, Stage};
+use php_support::ini::{Access, IniDirective, IniDisplayer, ModifyHandler, Stage};
 use php_support::Diagnostic;
 use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
 use php_vm::Vm;
@@ -89,18 +89,38 @@ macro_rules! hooks {
 const HOOKS: [php_vm::ext::IniModifyFn; 31] =
     hooks!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30);
 
+/// The directives ext/session/session.c declares with
+/// `STD_PHP_INI_BOOLEAN` (phpinfo() shows them as "On"/"Off").
+const BOOLEAN_DIRECTIVES: [&str; 11] = [
+    "session.auto_start",
+    "session.cookie_secure",
+    "session.cookie_partitioned",
+    "session.cookie_httponly",
+    "session.use_cookies",
+    "session.use_only_cookies",
+    "session.use_strict_mode",
+    "session.use_trans_sid",
+    "session.lazy_write",
+    "session.upload_progress.enabled",
+    "session.upload_progress.cleanup",
+];
+
 /// Registers the directives in the VM registry (module `session`) with
 /// their modify hooks, and the `ini_restore()` wrapper.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     debug_assert_eq!(DIRECTIVES.len(), HOOKS.len());
     for (d, hook) in DIRECTIVES.iter().zip(HOOKS) {
-        m.ini(IniDirective::new(
+        let mut def = IniDirective::new(
             d.name,
             Some(d.default),
             Access(d.access),
             ModifyHandler::None,
             "session",
-        ));
+        );
+        if BOOLEAN_DIRECTIVES.contains(&d.name) {
+            def = def.with_displayer(IniDisplayer::Boolean);
+        }
+        m.ini(def);
         m.ini_on_modify(d.name, hook);
     }
     let vm = m.vm();
@@ -157,4 +177,16 @@ fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let res = orig(vm, a);
     RESTORING.with(|r| r.set(was));
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOOLEAN_DIRECTIVES, DIRECTIVES};
+
+    #[test]
+    fn boolean_directives_are_session_directives() {
+        for name in BOOLEAN_DIRECTIVES {
+            assert!(DIRECTIVES.iter().any(|d| d.name == name), "{name}");
+        }
+    }
 }

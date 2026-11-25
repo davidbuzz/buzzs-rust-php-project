@@ -157,3 +157,18 @@ fn ri_standard_lists_directives_in_registration_order() {
         ]
     );
 }
+
+#[test]
+fn ri_main_shows_colour_and_boolean_displayers() {
+    // php8.5 -n --ri main: the colour displayer prints a <span> in text
+    // mode too (zend_uv.html_errors is always 1).
+    let output = php(&["--ri", "main"]);
+    assert!(output.status.success());
+    let s = String::from_utf8(output.stdout).unwrap();
+    assert!(s.contains(
+        "highlight.string => <span style=\"color: #DD0000\">#DD0000</span> => <span style=\"color: #DD0000\">#DD0000</span>\n"
+    ));
+    assert!(s.contains("implicit_flush => On => On\n"));
+    assert!(s.contains("display_errors => STDOUT => STDOUT\n"));
+    assert!(s.contains("zend.enable_gc => On => On\n"));
+}
