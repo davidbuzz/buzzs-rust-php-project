@@ -3018,6 +3018,10 @@ fn constant(h: &mut TestHost, f: &Frame, c: &str) -> RtResult<Value> {
     })
 }
 
+fn zstr(v: Option<&Value>) -> Option<php_runtime::ZStr> {
+    bytes(v).map(|b| php_runtime::ZStr::from(b.as_slice()))
+}
+
 fn bytes(v: Option<&Value>) -> Option<Vec<u8>> {
     match v.map(Value::deref) {
         Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
@@ -3283,10 +3287,10 @@ pub fn internal_method(
             o,
             a.first().unwrap_or(&Value::Null),
             enc,
-            bytes(a.get(2)).as_deref(),
-            bytes(a.get(3)).as_deref(),
-            bytes(a.get(4)).as_deref(),
-            bytes(a.get(5)).as_deref(),
+            zstr(a.get(2)).as_ref(),
+            zstr(a.get(3)).as_ref(),
+            zstr(a.get(4)).as_ref(),
+            zstr(a.get(5)).as_ref(),
         )?;
         return Ok(Some(Value::Null));
     }
