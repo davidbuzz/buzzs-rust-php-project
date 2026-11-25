@@ -3227,11 +3227,7 @@ impl HashTable {
     /// Builds a list (`zend_array_to_list`) from the values.
     #[must_use]
     pub fn to_list(&self) -> HashTable {
-        let mut out = HashTable::with_capacity(self.len());
-        for v in self.values() {
-            let _ = out.push(copy_for_insert(v));
-        }
-        out
+        HashTable::from_list_sized(self.len(), self.values().map(copy_for_insert))
     }
 }
 

@@ -110,3 +110,59 @@ first
 0
 "#);
 }
+
+/// Lists the array builtins build to size (array_keys, array_slice,
+/// array_reverse, array_fill from 0, array_pad of a list, array_values)
+/// next to the cases that keep or make other keys: keys, values and the
+/// next index (an append after each) as php8.5 gives them.
+#[test]
+fn array_builders_give_the_lists_and_keys_php_gives() {
+    let out = run(r#"<?php
+function show($a) { $a[] = 'n'; $o = []; foreach ($a as $k => $v) { $o[] = "$k=" . (is_array($v) ? 'A' : var_export($v, true)); } return implode(' ', $o); }
+function t() {
+    $h = [5 => 'a', 'x' => 'b', 9 => 'c'];
+    $l = ['a', 'b', 'c', 'd'];
+    unset($l[1]);
+    echo show(array_keys($h)), "\n";
+    echo show(array_keys($l)), "\n";
+    echo show(array_keys([])), "\n";
+    echo show(array_slice($l, 1)), "\n";
+    echo show(array_slice($l, 0, 2, true)), "\n";
+    echo show(array_slice(['a', 'b', 'c'], 0, 2, true)), "\n";
+    echo show(array_slice(['a', 'b', 'c'], 1, 5, true)), "\n";
+    echo show(array_reverse($l)), "\n";
+    echo show(array_reverse($l, true)), "\n";
+    echo show(array_reverse($h)), "\n";
+    echo show(array_reverse([])), "\n";
+    echo show(array_fill(0, 3, 'v')), "\n";
+    echo show(array_fill(2, 2, 'v')), "\n";
+    echo show(array_fill(-3, 2, 'v')), "\n";
+    echo show(array_pad($l, 5, 0)), "\n";
+    echo show(array_pad($l, -5, 0)), "\n";
+    echo show(array_pad($h, 4, 0)), "\n";
+    echo show(array_values($l)), "\n";
+    echo show(array_values($h)), "\n";
+}
+t();
+"#);
+    assert_eq!(out, r#"0=5 1='x' 2=9 3='n'
+0=0 1=2 2=3 3='n'
+0='n'
+0='c' 1='d' 2='n'
+0='a' 2='c' 3='n'
+0='a' 1='b' 2='n'
+1='b' 2='c' 3='n'
+0='d' 1='c' 2='a' 3='n'
+3='d' 2='c' 0='a' 4='n'
+0='c' x='b' 1='a' 2='n'
+0='n'
+0='v' 1='v' 2='v' 3='n'
+2='v' 3='v' 4='n'
+-3='v' -2='v' -1='n'
+0='a' 1='c' 2='d' 3=0 4=0 5='n'
+0=0 1=0 2='a' 3='c' 4='d' 5='n'
+0='a' x='b' 1='c' 2=0 3='n'
+0='a' 1='c' 2='d' 3='n'
+0='a' 1='b' 2='c' 3='n'
+"#);
+}

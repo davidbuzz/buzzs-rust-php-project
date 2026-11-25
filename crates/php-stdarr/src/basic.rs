@@ -395,7 +395,15 @@ pub fn array_keys<C: RuntimeContext + ?Sized>(
     if array.is_empty() {
         return Ok(ZArray::new());
     }
-    let mut out = HashTable::with_capacity(if filter.is_some() { 0 } else { array.len() });
+    // Every key: the list built to size (`array_init_size` +
+    // `ZEND_HASH_FILL_PACKED`, as php-src's array_keys() fills it).
+    if filter.is_none() {
+        return Ok(ZArray::from_list_sized(
+            array.len(),
+            array.iter().map(|(k, _)| k.to_value()),
+        ));
+    }
+    let mut out = HashTable::new();
     for (k, v) in array {
         let keep = match filter {
             None => true,
@@ -600,7 +608,15 @@ pub fn array_fill(start: i64, num: i64, value: &Value) -> RtResult<ZArray> {
             if start > i64::MAX - n + 1 {
                 return Err(cannot_add_element());
             }
-            let mut out = HashTable::with_capacity(usize::try_from(n).unwrap_or(0));
+            let size = usize::try_from(n).unwrap_or(0);
+            // From 0: a list, filled to size.
+            if start == 0 {
+                return Ok(ZArray::from_list_sized(
+                    size,
+                    std::iter::repeat_with(|| value.clone()).take(size),
+                ));
+            }
+            let mut out = HashTable::with_capacity(size);
             out.insert(start, value.clone());
             for _ in 1..n {
                 out.push(value.clone()).map_err(|_| cannot_add_element())?;
@@ -644,7 +660,19 @@ pub fn array_pad(array: &ZArray, length: i64, value: &Value) -> RtResult<ZArray>
         return Ok(array.clone());
     }
     let pads = abs - input_size;
-    let mut out = HashTable::with_capacity(usize::try_from(abs).unwrap_or(0));
+    let size = usize::try_from(abs).unwrap_or(0);
+    // A list padded at either end is a list, filled to size.
+    if array.is_packed() {
+        let pad =
+            || std::iter::repeat_with(|| value.clone()).take(usize::try_from(pads).unwrap_or(0));
+        let elems = array.values().map(Clone::clone);
+        return Ok(if length < 0 {
+            ZArray::from_list_sized(size, pad().chain(elems))
+        } else {
+            ZArray::from_list_sized(size, elems.chain(pad()))
+        });
+    }
+    let mut out = HashTable::with_capacity(size);
     let pad = |out: &mut HashTable| {
         for _ in 0..pads {
             let _ = out.push(value.clone());
@@ -673,8 +701,12 @@ pub fn array_pad(array: &ZArray, length: i64, value: &Value) -> RtResult<ZArray>
 /// `array_reverse(array $array, bool $preserve_keys = false): array`.
 #[must_use]
 pub fn array_reverse(array: &HashTable, preserve_keys: bool) -> ZArray {
-    let mut out = HashTable::with_capacity(array.len());
     let packed = array.is_packed();
+    // A list without its keys kept gives a list, filled to size.
+    if packed && !preserve_keys {
+        return ZArray::from_list_sized(array.len(), array.iter().rev().map(|(_, v)| copy_elem(v)));
+    }
+    let mut out = HashTable::with_capacity(array.len());
     for (k, v) in array.iter().rev() {
         match k {
             ArrayKey::Str(s) if !packed => {
@@ -720,14 +752,22 @@ pub fn array_slice(
     }
     let skip = usize::try_from(offset).unwrap_or(0);
     let take = usize::try_from(length).unwrap_or(usize::MAX);
-    let mut out = HashTable::with_capacity(take);
     let packed = array.is_packed();
     let list = packed && (!preserve_keys || (offset == 0 && array.is_without_holes()));
+    // `ZEND_HASH_FILL_PACKED` of a packed source: the list built to size.
+    if list {
+        return ZArray::from_list_sized(
+            take,
+            array
+                .iter()
+                .skip(skip)
+                .take(take)
+                .map(|(_, v)| copy_elem(v)),
+        );
+    }
+    let mut out = HashTable::with_capacity(take);
     for (k, v) in array.iter().skip(skip).take(take) {
         match k {
-            _ if list => {
-                let _ = out.push(copy_elem(v));
-            }
             ArrayKey::Str(s) => {
                 let _ = out.add(ArrayKey::Str(s.clone()), copy_elem(v));
             }
