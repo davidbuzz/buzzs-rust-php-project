@@ -132,6 +132,78 @@ array(1) {
     );
 }
 
+/// `array_key_exists()`: int, string and numeric-string keys, null values, references, property and literal arrays, odd keys and non-arrays.
+#[test]
+fn key_exists() {
+    assert_eq!(
+        run(r#"<?php
+class C {
+  public $map = ['a' => null, 7 => 1, '08' => 2];
+  function has($k) { return array_key_exists($k, $this->map); }
+}
+function f() {
+  $a = ['x' => null, 3 => 'three', '' => 'empty']; $r = &$a; $c = new C; $o = new ArrayObject(['x' => 1]);
+  for ($t = 0; $t < 3; $t++) {
+    $out = [];
+    foreach (['x', 3, '3', 'nope', '', '03', 4] as $k) {
+      $out[] = array_key_exists($k, $a); $out[] = array_key_exists($k, $r); $out[] = $c->has($k);
+    }
+    echo json_encode($out), "\n";
+    echo json_encode([array_key_exists('a', $c->map), array_key_exists(7, $c->map), array_key_exists('7', $c->map), array_key_exists('08', $c->map), array_key_exists(8, $c->map)]), "\n";
+    echo json_encode([array_key_exists('k', ['k' => 1]), array_key_exists('k' . $t, ['k0' => 1, 'k2' => 2])]), "\n";
+    if (array_key_exists('x', $a)) { echo "branch\n"; }
+    echo json_encode([array_key_exists(null, $a), array_key_exists(1.0, $a), array_key_exists(true, [1 => 1]), @array_key_exists($undef, $a)]), "\n";
+    try { array_key_exists('x', $o); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { array_key_exists('x', 'str'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { array_key_exists([], $a); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { array_key_exists('x', $nope); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+  }
+}
+f();
+"#),
+        r#"[true,true,false,true,true,false,true,true,false,false,false,false,true,true,false,false,false,false,false,false,false]
+[true,true,true,true,false]
+[true,true]
+branch
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+[true,false,true,true]
+array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, string given
+Cannot access offset of type array on array
+
+Warning: Undefined variable $nope in t.php on line 21
+array_key_exists(): Argument #2 ($array) must be of type array, null given
+[true,true,false,true,true,false,true,true,false,false,false,false,true,true,false,false,false,false,false,false,false]
+[true,true,true,true,false]
+[true,false]
+branch
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+[true,false,true,true]
+array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, string given
+Cannot access offset of type array on array
+
+Warning: Undefined variable $nope in t.php on line 21
+array_key_exists(): Argument #2 ($array) must be of type array, null given
+[true,true,false,true,true,false,true,true,false,false,false,false,true,true,false,false,false,false,false,false,false]
+[true,true,true,true,false]
+[true,true]
+branch
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+[true,false,true,true]
+array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, string given
+Cannot access offset of type array on array
+
+Warning: Undefined variable $nope in t.php on line 21
+array_key_exists(): Argument #2 ($array) must be of type array, null given
+"#
+    );
+}
+
 /// `isset` / `empty` / reads of an element of a temporary (`self::MAP[$k]`, `f()[$k]`) and array destructuring, hits and misses.
 #[test]
 fn tmp_element_reads() {

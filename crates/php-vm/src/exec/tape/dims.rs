@@ -25,7 +25,8 @@ use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
     concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in,
-    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
+    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_dim_cv_in, key_exists_in,
+    put_tmp, rope_in,
 };
 use crate::opcode::{BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Seg};
 use crate::vm::{CvSlot, ForeachIter, Frame};
@@ -361,6 +362,20 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 k: dk,
                 e: u8::from(empty),
                 ..plain(TOp::IssetDimC)
+            }
+        }
+        Op::KeyExists { key, array, dst } => {
+            let (kk, ki) = val_operand(code, key)?;
+            let (ak, ai) = val_operand(code, array)?;
+            Inst {
+                a: ai,
+                b: ki,
+                c: match dst {
+                    Some(d) => dst_off(code, d)?,
+                    None => NO_TO,
+                },
+                k: kk | (ak << 3),
+                ..plain(TOp::KeyExistsC)
             }
         }
         Op::AssignDimCv { cv, dim, val, .. } => {
@@ -1301,6 +1316,23 @@ pub(super) unsafe fn isset_dim(frame: *mut Frame, inst: &Inst) -> bool {
     let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     isset_dim_cv_in(f, inst.a, dim, inst.c >> SLOT_SHIFT, inst.e != 0)
+}
+
+/// `Op::KeyExists`: `array_key_exists($key, $array)` (`key_exists_in`):
+/// the key's kind in the low bits of `k`, the array's above them, the
+/// result's slot in `c` ([`NO_TO`]: none). Releases a consumed key and
+/// array, so it polls.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn key_exists(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let key = operand(dim_kind(inst), inst.b);
+    let array = operand(val_kind(inst), inst.a);
+    let dst = (inst.c != NO_TO).then_some(inst.c >> SLOT_SHIFT);
+    key_exists_in(f, key, array, dst)
 }
 
 /// `Op::AssignDimCv`: `$cv[dim] = val` (`assign_dim_cv_in`). Releases a

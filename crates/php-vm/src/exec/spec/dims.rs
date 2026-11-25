@@ -1296,3 +1296,64 @@ pub(in crate::exec) fn isset_tmp_dims_in(
     release_tmp_place(f, place, base);
     Some(r)
 }
+
+/// [`Op::KeyExists`](crate::opcode::Op::KeyExists): `array_key_exists($key,
+/// $array)` when the key peeks as an int or a string and `$array` is an
+/// array (a variable's, possibly through a reference, a literal, a kept
+/// temporary, or a consumed temporary another handle shares): php-src's
+/// `ZEND_ARRAY_KEY_EXISTS` with `zend_array_key_exists_fast` on an
+/// `IS_STRING` (`ZEND_HANDLE_NUMERIC_STR`) or `IS_LONG` key. The result
+/// goes to `dst` when there is one; a consumed string key and the
+/// consumed array temporary are released. `false`, nothing changed, for
+/// anything else (an undefined variable, a key of another type and its
+/// diagnostics, a non-array and its `TypeError`).
+#[inline(never)]
+pub(in crate::exec) fn key_exists_in(
+    f: &mut Frame,
+    key: Operand,
+    array: Operand,
+    dst: Option<u32>,
+) -> bool {
+    let (found, release) = {
+        let Some(k) = dim_ref_in(f, key) else {
+            return false;
+        };
+        let (v, release) = match array {
+            Operand::Cv(c) => match f.cvs.get(c as usize).and_then(CvSlot::get) {
+                Some(v) => (v, None),
+                None => return false,
+            },
+            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+                Some(v @ Value::Array(a)) if a.refcount() >= 2 => (v, Some(t)),
+                _ => return false,
+            },
+            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(v) => (v, None),
+                None => return false,
+            },
+            Operand::Lit(l) => match f.code.literals.get(l as usize) {
+                Some(v) => (v, None),
+                None => return false,
+            },
+            Operand::Unused => return false,
+        };
+        let found = match v {
+            Value::Array(a) => table_dim(a, k).is_some(),
+            Value::Reference(r) => match r.try_borrow().as_deref() {
+                Some(Value::Array(a)) => table_dim(a, k).is_some(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        (found, release)
+    };
+    if let Some(slot) = release.and_then(|t| f.tmps.get_mut(t as usize)) {
+        // An array whose last handle is elsewhere: only a count drops.
+        drop(std::mem::take(slot));
+    }
+    release_str_tmp_in(f, key);
+    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+        put_tmp(slot, Value::Bool(found));
+    }
+    true
+}
