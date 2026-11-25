@@ -404,3 +404,135 @@ fn helpers() {
     let e = std::io::Error::from_raw_os_error(2);
     assert_eq!(strerror(&e), "No such file or directory");
 }
+
+/// Standard base64 (with `=` padding) for the fixtures below.
+fn base64(s: &str) -> Vec<u8> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes().filter(|&c| c != b'=') {
+        let v = ALPHABET.iter().position(|&a| a == c).unwrap();
+        acc = ((acc << 6) | u32::try_from(v).unwrap()) & 0xffff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xff).unwrap());
+        }
+    }
+    out
+}
+
+/// gh25051.phpt (php-src 915072ecd03, magicdata.patch `sfnt-font`): an
+/// sfnt header with one table directory entry, in every mode the test uses.
+#[test]
+fn sfnt_fonts() {
+    let mut mime = default_finfo(FILEINFO_MIME_TYPE);
+    let mut desc = default_finfo(FILEINFO_NONE);
+    let cases: [(&[u8; 4], &[u8; 4], &str, &str, &str); 5] = [
+        (
+            b"\x00\x01\x00\x00",
+            b"head",
+            "font/ttf",
+            "ttf/tte",
+            "TrueType Font data, 1 tables, 1st \"head\"",
+        ),
+        (
+            b"true",
+            b"head",
+            "font/ttf",
+            "ttf/tte",
+            "TrueType Font data, 1 tables, 1st \"head\"",
+        ),
+        (
+            b"typ1",
+            b"head",
+            "font/ttf",
+            "ttf/tte",
+            "TrueType Font data, 1 tables, 1st \"head\"",
+        ),
+        (
+            b"\x00\x01\x00\x00",
+            b"FK  ",
+            "font/ttf",
+            "ttf/tte",
+            "TrueType (FontKit) Font data, 1 tables",
+        ),
+        (
+            b"OTTO",
+            b"CFF ",
+            "application/vnd.ms-opentype",
+            "???",
+            "OpenType font data",
+        ),
+    ];
+    let path = scratch("gh25051.tmp");
+    for (version, tag, mime_type, ext, description) in cases {
+        // version . pack('nnnn', 1, 16, 0, 0) . tag . pack('NNN', 0, 28, 0)
+        let mut font = version.to_vec();
+        font.extend_from_slice(&[0, 1, 0, 16, 0, 0, 0, 0]);
+        font.extend_from_slice(tag);
+        font.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0]);
+        let (r, _) = warnings(|warn| mime.buffer(&font, 0, warn));
+        assert_eq!(String::from_utf8(r.unwrap()).unwrap(), mime_type);
+        std::fs::write(&path, &font).unwrap();
+        let (r, _) = warnings(|warn| mime.file(bytes(&path), 0, warn));
+        assert_eq!(String::from_utf8(r.unwrap()).unwrap(), mime_type);
+        let (r, _) = warnings(|warn| mime.buffer(&font, FILEINFO_EXTENSION, warn));
+        assert_eq!(String::from_utf8(r.unwrap()).unwrap(), ext);
+        let (r, _) = warnings(|warn| desc.buffer(&font, 0, warn));
+        assert_eq!(String::from_utf8(r.unwrap()).unwrap(), description);
+    }
+}
+
+/// hwpx_mime.phpt (php-src cf2bc030211, magicdata.patch `msooxml`): an
+/// HWPX archive whose later members end in .png/.md is not OOXML, and a
+/// NuGet package whose first member is icon.png or readme.md is found.
+#[test]
+fn hwpx_and_nuget_are_not_ooxml() {
+    let mut data = base64(
+        "UEsDBBQAAAAAAAAAIQCC8EFHEwAAABMAAAAIAAAAbWltZXR5cGVhcHBsaWNhdGlvbi9od3AremlwUEsDBBQAAAAAAAAAIQB3Efq0CAAAAAgAAAASAAAAQ29udGVudHMvZmlsZTAueG1sY29udGVudHNQSwMEFAAAAAAAAAAhAHcR+rQIAAAACAAAABIAAABDb250ZW50cy9maWxlMS54bWxjb250ZW50c1BLAwQUAAAAAAAAACEAXwQ9xQUAAAAFAAAAFAAAAFByZXZpZXcvUHJ2SW1hZ2UucG5naW1hZ2VQSwMEFAAAAAAAAAAhAEs2srcBAAAAAQAAAAwAAABzZXR0aW5ncy54bWxYUEsBAhQDFAAAAAAAAAAhAILwQUcTAAAAEwAAAAgAAAAAAAAAAAAAAIABAAAAAG1pbWV0eXBlUEsBAhQDFAAAAAAAAAAhAHcR+rQIAAAACAAAABIAAAAAAAAAAAAAAIABOQAAAENvbnRlbnRzL2ZpbGUwLnhtbFBLAQIUAxQAAAAAAAAAIQB3Efq0CAAAAAgAAAASAAAAAAAAAAAAAACAAXEAAABDb250ZW50cy9maWxlMS54bWxQSwECFAMUAAAAAAAAACEAXwQ9xQUAAAAFAAAAFAAAAAAAAAAAAAAAgAGpAAAAUHJldmlldy9QcnZJbWFnZS5wbmdQSwECFAMUAAAAAAAAACEASzaytwEAAAABAAAADAAAAAAAAAAAAAAAgAHgAAAAc2V0dGluZ3MueG1sUEsFBgAAAAAFAAUAMgEAAAsBAAAAAA==",
+    );
+    // Extra zip signatures in the archive comment exercise the search path.
+    let mut comment = Vec::new();
+    for _ in 0..5 {
+        comment.extend_from_slice(&[b'X'; 128]);
+        comment.extend_from_slice(b"PK\x03\x04");
+    }
+    comment.extend_from_slice(&[b'X'; 200]);
+    data.truncate(data.len() - 2);
+    data.extend_from_slice(&u16::try_from(comment.len()).unwrap().to_le_bytes());
+    data.extend_from_slice(&comment);
+    // str_replace('PrvImage.png', 'PrvImage.md_', $data): every occurrence
+    // (the local and the central directory header).
+    let mut renamed = data.clone();
+    let mut i = 0;
+    while let Some(p) = renamed[i..].windows(12).position(|w| w == b"PrvImage.png") {
+        renamed[i + p..i + p + 12].copy_from_slice(b"PrvImage.md_");
+        i += p + 12;
+    }
+    assert!(i > 0);
+    let mut f = default_finfo(FILEINFO_MIME_TYPE);
+    let path = scratch("hwpx_mime_tmp.zip");
+    std::fs::write(&path, &data).unwrap();
+    let (r, _) = warnings(|warn| f.file(bytes(&path), 0, warn));
+    assert_eq!(r.unwrap(), b"application/x-hwp+zip");
+    let (r, _) = warnings(|warn| f.buffer(&data, 0, warn));
+    assert_eq!(r.unwrap(), b"application/x-hwp+zip");
+    let (r, _) = warnings(|warn| f.buffer(&renamed, 0, warn));
+    assert_eq!(r.unwrap(), b"application/x-hwp+zip");
+    for encoded in [
+        "UEsDBBQAAAAIAEoOYV3ZwjYRFQAAABMAAAAIAAAAaWNvbi5wbmdLyywqLlFIy8xJVUjOzytJzSspBgBQSwMEFAAAAAgASg5hXZt9CDoMAAAACgAAAA4AAABleGFtcGxlLm51c3BlY7MpSEzOTkxP1bcDAFBLAwQUAAAACABKDmFdJRaDDg8AAAANAAAADAAAAGxpYi90ZXN0LmRsbCtJLS5RSM7PK0nNKykGAFBLAQIUAxQAAAAIAEoOYV3ZwjYRFQAAABMAAAAIAAAAAAAAAAAAAACAAQAAAABpY29uLnBuZ1BLAQIUAxQAAAAIAEoOYV2bfQg6DAAAAAoAAAAOAAAAAAAAAAAAAACAATsAAABleGFtcGxlLm51c3BlY1BLAQIUAxQAAAAIAEoOYV0lFoMODwAAAA0AAAAMAAAAAAAAAAAAAACAAXMAAABsaWIvdGVzdC5kbGxQSwUGAAAAAAMAAwCsAAAArAAAAAAA",
+        "UEsDBBQAAAAIAEoOYV3ZwjYRFQAAABMAAAAJAAAAcmVhZG1lLm1kS8ssKi5RSMvMSVVIzs8rSc0rKQYAUEsDBBQAAAAIAEoOYV2bfQg6DAAAAAoAAAAOAAAAZXhhbXBsZS5udXNwZWOzKUhMzk5MT9W3AwBQSwMEFAAAAAgASg5hXSUWgw4PAAAADQAAAAwAAABsaWIvdGVzdC5kbGwrSS0uUUjOzytJzSspBgBQSwECFAMUAAAACABKDmFd2cI2ERUAAAATAAAACQAAAAAAAAAAAAAAgAEAAAAAcmVhZG1lLm1kUEsBAhQDFAAAAAgASg5hXZt9CDoMAAAACgAAAA4AAAAAAAAAAAAAAIABPAAAAGV4YW1wbGUubnVzcGVjUEsBAhQDFAAAAAgASg5hXSUWgw4PAAAADQAAAAwAAAAAAAAAAAAAAIABdAAAAGxpYi90ZXN0LmRsbFBLBQYAAAAAAwADAK0AAACtAAAAAAA=",
+    ] {
+        let (r, _) = warnings(|warn| f.buffer(&base64(encoded), 0, warn));
+        assert_eq!(r.unwrap(), b"application/vnd.nuget.package");
+        let (r, _) = warnings(|warn| f.buffer(&base64(encoded), FILEINFO_NONE, warn));
+        assert_eq!(r.unwrap(), b"application/vnd.nuget.package");
+    }
+    let mut desc = default_finfo(FILEINFO_NONE);
+    let (r, _) = warnings(|warn| desc.buffer(&data, 0, warn));
+    assert_eq!(
+        String::from_utf8(r.unwrap()).unwrap(),
+        "Hancom HWP (Hangul Word Processor) file, HWPX"
+    );
+}
