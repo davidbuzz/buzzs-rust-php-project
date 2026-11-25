@@ -509,7 +509,11 @@ fn frameless_values(class: u32, args: &[Value]) -> bool {
 /// in an emptied record's flag vector: a push each, where
 /// `Vec::resize` was an out-of-line call (~37 instructions a call).
 #[inline(always)]
-#[allow(clippy::inline_always)] // twice, in the frameless calls
+#[allow(clippy::inline_always)]
+// twice, in the frameless calls
+// A push each, not `extend`/`resize`: those are the out-of-line call this
+// replaces.
+#[allow(clippy::same_item_push)]
 fn push_passed(passed: &mut Vec<bool>, n: usize) {
     for _ in 0..n {
         passed.push(true);
