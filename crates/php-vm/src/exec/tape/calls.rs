@@ -62,6 +62,25 @@ const MAX_ARGS: usize = 6;
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     match code.ops.get(i)? {
+        // `return` of a variable, a temporary, a literal or nothing, when
+        // the core switches frames itself (`super::incore`): the operand's
+        // kind in `e` ([`RET_CV`] ...), its index in `a`, the op's own
+        // index in `d` ([`ret_core`]).
+        &Op::Return { val } if super::incore() => {
+            let (e, a) = match val {
+                Operand::Cv(x) => (RET_CV, x),
+                Operand::Tmp(x) => (RET_TMP, x),
+                Operand::Lit(x) => (RET_LIT, x),
+                Operand::Unused => (RET_NONE, 0),
+                Operand::TmpKeep(_) => return None,
+            };
+            Some(Inst {
+                e,
+                a,
+                d: u32::try_from(i).ok()?,
+                ..plain(TOp::Ret)
+            })
+        }
         // A builtin whose one-argument call needs no handler, called with
         // one computed argument: the function's id in `e`, its frameless
         // class in `d` (`prepare_quick`).
@@ -2646,6 +2665,86 @@ fn cv_value_counted(v: &Value) -> Value {
         Value::Reference(r) => r.get(),
         v => clone_value(v),
     }
+}
+
+/// [`TOp::Ret`] operand kinds (`Inst.e`): a compiled variable.
+const RET_CV: u8 = 0;
+/// [`TOp::Ret`] operand kind: a temporary.
+const RET_TMP: u8 = 1;
+/// [`TOp::Ret`] operand kind: a literal.
+const RET_LIT: u8 = 2;
+/// [`TOp::Ret`] operand kind: none (`return;`, the implicit return).
+const RET_NONE: u8 = 3;
+
+/// What a row that switches frames answers the core loop (two pointers,
+/// returned in registers): `f` null, declined, nothing changed; `f` set
+/// and `ip` null, switched to a frame the core cannot run (or none is
+/// left), the loop stops; both set, the core goes on at `ip` in `f`, the
+/// VM's current frame.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct Sw {
+    pub(super) f: *mut crate::vm::Frame,
+    pub(super) ip: *const Inst,
+}
+
+impl Sw {
+    /// Declined, nothing changed.
+    const DECLINED: Sw = Sw {
+        f: std::ptr::null_mut(),
+        ip: std::ptr::null(),
+    };
+}
+
+/// [`TOp::Ret`]: `ZEND_RETURN` and `zend_leave_helper` inside the core loop
+/// (`super::incore`): [`Vm::return_simple`]'s direct return, exactly as
+/// `run_tape`'s outer loop makes it after the row's `Exit` (with
+/// `Vm::run`'s base, the op after the return stored as the frame's
+/// resume point before the release, `SAVE_OPLINE`), then the caller's
+/// resume instruction (`LOAD_OPLINE`, `super::core_resume`). Declined,
+/// having changed nothing, when the core was entered without the VM (a
+/// call is prepared) or `return_simple` declines: the row then behaves as
+/// the `Exit` it replaces and the return runs as today.
+///
+/// # Safety
+/// `frame` is the VM's current frame, the one the core runs.
+#[inline(never)]
+pub(super) unsafe fn ret_core(frame: *mut crate::vm::Frame, inst: &Inst) -> Sw {
+    let (vmp, base) = super::core_vm();
+    if vmp.is_null() {
+        return Sw::DECLINED;
+    }
+    // SAFETY: `run_tape` set the pointer from its `&mut Vm` right before
+    // it entered the core, which it is suspended in: nothing else uses
+    // the VM until the core stops, and the core itself reads only the
+    // current frame's slots, through `frame`, which it re-derives after
+    // this switch.
+    let vm = unsafe { &mut *vmp };
+    debug_assert!(
+        vm.frames.last().is_some_and(|t| std::ptr::eq(t, frame)),
+        "the core's frame is not the current one"
+    );
+    let val = match inst.e {
+        RET_CV => Operand::Cv(inst.a),
+        RET_TMP => Operand::Tmp(inst.a),
+        RET_LIT => Operand::Lit(inst.a),
+        _ => Operand::Unused,
+    };
+    if vm.return_simple(val, base, inst.d as usize + 1).is_none() {
+        return Sw::DECLINED;
+    }
+    super::core_mark_switched();
+    let Some(caller) = vm.frames.last_mut() else {
+        // (Not reached: the frame at `base` is never returned from.)
+        return Sw {
+            f: std::ptr::NonNull::dangling().as_ptr(),
+            ip: std::ptr::null(),
+        };
+    };
+    let f: *mut crate::vm::Frame = caller;
+    // SAFETY: `f` is the current frame now.
+    let ip = unsafe { super::core_resume(f) };
+    Sw { f, ip }
 }
 
 /// `ZEND_DO_UCALL` of the prepared call (result to `dst`; the caller

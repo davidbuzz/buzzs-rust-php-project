@@ -495,6 +495,111 @@ const WHY_POLL: u8 = 2;
 /// Why [`run_core`] stopped: the op at `ip` is one [`run_vm_op`] runs with
 /// the VM at hand (a read through the global scope, a frameless call).
 const WHY_VM: u8 = 5;
+/// Why [`run_core`] stopped: a row switched frames ([`incore`]) and either
+/// the safe point after the switch is due or the new frame cannot run in
+/// this core; `ip` and `at` are meaningless (the frame they were of may be
+/// gone): [`run_tape`] goes on from the new current frame's resume point.
+const WHY_LEFT: u8 = 6;
+
+/// Whether the core loop switches frames itself (`BUZZS_INCORE=1`): a
+/// plain return runs as a [`TOp::Ret`] row and a call [`run_call`] entered
+/// goes on without a restart of [`run_tape`]'s outer loop (see the
+/// module's notes). Read once: lowered tapes are cached for the process.
+#[inline]
+pub(crate) fn incore() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("BUZZS_INCORE").is_some_and(|v| v == "1"))
+}
+
+/// What the rows that switch frames ([`TOp::Ret`]) need of the run that
+/// entered the core: set by [`run_tape`] before each entry of
+/// `run_core::<false>` ([`core_set`]).
+struct CoreVm {
+    /// The VM, or null while a call is prepared (the rows then decline:
+    /// no frame is left with a prepared call open).
+    vm: std::cell::Cell<*mut Vm>,
+    /// `Vm::run`'s base frame (never returned from in the core).
+    base: std::cell::Cell<usize>,
+    /// A row switched frames since [`core_set`].
+    switched: std::cell::Cell<bool>,
+}
+
+thread_local! {
+    static CORE: CoreVm = const {
+        CoreVm {
+            vm: std::cell::Cell::new(std::ptr::null_mut()),
+            base: std::cell::Cell::new(0),
+            switched: std::cell::Cell::new(false),
+        }
+    };
+}
+
+/// Names the VM and base the core about to be entered runs for (`vm` null:
+/// no switch allowed), and clears the switch record.
+#[inline]
+fn core_set(vm: *mut Vm, base: usize) {
+    CORE.with(|c| {
+        c.vm.set(vm);
+        c.base.set(base);
+        c.switched.set(false);
+    });
+}
+
+/// The VM and base [`core_set`] named.
+#[inline]
+fn core_vm() -> (*mut Vm, usize) {
+    CORE.with(|c| (c.vm.get(), c.base.get()))
+}
+
+/// Records that a row switched frames.
+#[inline]
+fn core_mark_switched() {
+    CORE.with(|c| c.switched.set(true));
+}
+
+/// Whether a row switched frames since [`core_set`], clearing the
+/// record (a later entry of the core with a JIT context, which sets
+/// nothing, must not read it again).
+#[inline]
+fn core_switched() -> bool {
+    CORE.with(|c| c.switched.replace(false))
+}
+
+/// Whether `t` has no live JIT context: a frame of it runs
+/// `run_core::<false>` (what [`jit::JitCtx::maybe_for_tape`] answers
+/// `None` for).
+#[inline]
+fn jit_dead(t: &Tape) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    !jit::enabled() || t.jit_cnt.load(Relaxed).is_null() || t.jit_tr.load(Relaxed).is_null()
+}
+
+/// Where the core goes on after a row switched frames to `f` (the new
+/// current frame): its resume point in its tape, or null when it cannot
+/// run in `run_core::<false>` (a symbol table attached, slots not sized
+/// for its code, a live JIT context). Its tape is decoded here if it was
+/// not yet.
+///
+/// # Safety
+/// `f` is the VM's current frame.
+#[inline(never)]
+unsafe fn core_resume(f: *mut Frame) -> *const Inst {
+    // SAFETY: the caller's contract.
+    let fr = unsafe { &*f };
+    let c: &OpArray = &fr.code;
+    if !usable(fr, c) || !jit_dead(&c.tape) {
+        return std::ptr::null();
+    }
+    let tape = c.tape.get(c);
+    // A tape decoded just now may have got JIT tables.
+    if !jit_dead(&c.tape) {
+        return std::ptr::null();
+    }
+    debug_assert_eq!(tape.len(), c.ops.len() + 1);
+    // SAFETY: at most `ops.len()`: inside the tape, whose last element is
+    // the sentinel.
+    unsafe { tape.as_ptr().add(fr.ip.min(c.ops.len())) }
+}
 
 /// Where and why [`run_core`] stopped.
 struct Out {
@@ -711,6 +816,39 @@ macro_rules! fam_arm {
                 why: WHY_POLL,
             };
         }
+    }};
+    // A row that switches frames ([`incore`]): `unsafe fn(*mut Frame,
+    // &Inst) -> calls::Sw`. Declined (nothing changed): the row is the
+    // `Exit` it replaces. Switched: the core goes on in the new frame, or
+    // stops ([`WHY_LEFT`]) when the safe point after the switch is due or
+    // the new frame cannot run here. The instantiation with a JIT context
+    // never switches (its context is the frame's).
+    (core_switch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
+        if JIT {
+            return Out {
+                ip: $ip,
+                at: $ip,
+                why: WHY_EXIT,
+            };
+        }
+        let sw: calls::Sw = ($h)($st.f, $inst);
+        if sw.ip.is_null() {
+            let why = if sw.f.is_null() { WHY_EXIT } else { WHY_LEFT };
+            return Out {
+                ip: $ip,
+                at: $ip,
+                why,
+            };
+        }
+        if crate::interrupt::safe_point_due() {
+            return Out {
+                ip: $ip,
+                at: $ip,
+                why: WHY_LEFT,
+            };
+        }
+        $st = frame_st(sw.f);
+        $ip = sw.ip;
     }};
     (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st, $inst) {
@@ -939,7 +1077,7 @@ macro_rules! tape_ops {
             clippy::cast_ptr_alignment
         )]
         unsafe fn run_core<const JIT: bool>(
-            st: St,
+            mut st: St,
             ctx: *const jit::JitCtx,
             mut ip: *const Inst,
         ) -> Out {
@@ -1473,7 +1611,7 @@ tape_ops! {
         //
         //
         // ---- calls (exec/tape/calls.rs) ----
-
+        Ret = (calls::ret_core, 1, core_switch),
 
         // ---- end of calls ----
     }
@@ -2023,6 +2161,8 @@ fn usable(f: &Frame, code: &OpArray) -> bool {
 #[inline(never)]
 #[allow(clippy::too_many_lines)]
 pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (usize, usize) {
+    // Frame switches in the core ([`incore`]), read once per run.
+    let incore = incore();
     let mut switched = 0;
     let mut code: *const OpArray = code;
     let mut ip = ip;
@@ -2062,14 +2202,14 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         // only hot ops run, which neither push nor pop frames nor replace
         // a frame's `code`; and `Vm::run`, which gets this frame's `ip`
         // back with `SWITCHED`, reloads the op array from the frame itself.
-        let c: &OpArray = unsafe { &*code };
-        let ops: &[Op] = &c.ops;
-        let lits: &[Value] = &c.literals;
+        let mut c: &OpArray = unsafe { &*code };
+        let mut ops: &[Op] = &c.ops;
+        let mut lits: &[Value] = &c.literals;
         let at = if fresh || usable(f, c) {
             fresh = false;
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
-            let tbase = tape.as_ptr();
+            let mut tbase = tape.as_ptr();
             // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
             // counts hot back edges through them and may run or compile a
             // trace. Built once per frame entry (two relaxed loads off the
@@ -2112,9 +2252,56 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                         // SAFETY: as above; `j` is this tape's live context.
                         unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) }
                     }
-                    // SAFETY: as above; no context, so no back-edge hook.
-                    None => unsafe { run_core::<false>(st, std::ptr::null(), p) },
+                    None => {
+                        if incore {
+                            // The rows that switch frames reach the VM
+                            // through this (none while a call is
+                            // prepared: they decline).
+                            let v = if prep.is_none() {
+                                std::ptr::from_mut(vm)
+                            } else {
+                                std::ptr::null_mut()
+                            };
+                            core_set(v, base);
+                        }
+                        // SAFETY: as above; no context, so no back-edge
+                        // hook.
+                        unsafe { run_core::<false>(st, std::ptr::null(), p) }
+                    }
                 };
+                if incore && core_switched() {
+                    // A row switched frames: the frame the core stopped in
+                    // is the current one, and what follows reads its op
+                    // array and tape (`LOAD_OPLINE()`).
+                    debug_assert!(prep.is_none(), "a frame was left with a prepared call open");
+                    debug_assert!(jctx.is_none());
+                    switched = SWITCHED;
+                    if out.why == WHY_LEFT {
+                        if crate::interrupt::safe_point_due() {
+                            return (0, LEFT);
+                        }
+                        reload = true;
+                        continue 'frames;
+                    }
+                    let Some(nf) = vm.frames.last_mut() else {
+                        return (0, NO_SAFE_POINT);
+                    };
+                    code = Rc::as_ptr(&nf.code);
+                    fp = nf;
+                    // SAFETY: as for `c` above, of the new current frame.
+                    c = unsafe { &*code };
+                    ops = &c.ops;
+                    lits = &c.literals;
+                    tbase = c.tape.get(c).as_ptr();
+                    debug_assert!(
+                        out.ip.addr().wrapping_sub(tbase.addr())
+                            <= ops.len() * std::mem::size_of::<Inst>(),
+                        "the core's pointer is outside the current frame's tape"
+                    );
+                }
+                // SAFETY: `fp` is the current frame (re-read above after a
+                // switch).
+                let f = unsafe { &mut *fp };
                 // SAFETY: both point into the tape.
                 #[allow(clippy::cast_sign_loss)]
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;

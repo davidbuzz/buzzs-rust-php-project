@@ -87,6 +87,7 @@ fn check(code: &OpArray) -> Box<[Inst]> {
                 | TOp::InitArrayT
                 | TOp::ArrayAddT
                 | TOp::MatchJ
+                | TOp::Ret
         ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
@@ -512,7 +513,8 @@ fn unspecialised_ops_keep_their_place() {
         };
         let Some(binop) = binop else {
             if let Op::Return { .. } = op {
-                assert_eq!(tape[i].op, TOp::Exit);
+                // (A `Ret` row when the core switches frames itself.)
+                assert!(matches!(tape[i].op, TOp::Exit | TOp::Ret));
             }
             continue;
         };
