@@ -198,6 +198,14 @@ fn intval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let base = if a.has(1) { i(a, 1) } else { 10 };
     if base != 10 {
         if let Value::Str(s) = &v {
+            // `ZEND_STRTOL(str, NULL, (int)base)`: the base is cut to a C
+            // `int`, and one `strtol()` refuses (neither 0 nor 2..=36)
+            // gives 0.
+            #[allow(clippy::cast_possible_truncation)] // php-src's `(int)base`
+            let radix = base as i32;
+            if radix != 0 && !(2..=36).contains(&radix) {
+                return Ok(Value::Int(0));
+            }
             let t = s.to_string_lossy();
             let t = t.trim_start();
             let (neg, t) = match t.strip_prefix('-') {
@@ -237,8 +245,17 @@ fn intval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 } else {
                     (10, t)
                 }
+            } else if radix == 0 || radix == 16 {
+                // What the cut to an `int` made 0 or 16 (a multiple of
+                // 2^32, or 16 more): `strtol()`'s own prefix rules.
+                match t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                    Some(r) => (16, r),
+                    None if radix == 16 => (16, t),
+                    None if t.starts_with('0') && t.len() > 1 => (8, &t[1..]),
+                    None => (10, t),
+                }
             } else {
-                (base, t)
+                (i64::from(radix), t)
             };
             let digits: String = t
                 .chars()
