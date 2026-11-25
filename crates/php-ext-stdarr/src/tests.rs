@@ -549,7 +549,7 @@ fn array_keys_reads_table_and_filter_in_place() {
 /// the element once: a reference element reads through, a copy of the
 /// array is separated and keeps its own pointer, an empty array gives
 /// `false`, an array holding a reference to itself, an object, and a
-/// TypeError (`/usr/bin/php8.5 -n`).
+/// `TypeError` (`/usr/bin/php8.5 -n`).
 #[test]
 fn pointer_functions_in_place() {
     let out = run(r#"$x = 'X'; $a = [1, &$x, 'c'];

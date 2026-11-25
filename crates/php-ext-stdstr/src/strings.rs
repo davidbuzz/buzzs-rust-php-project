@@ -730,7 +730,7 @@ fn strtr_one_pair(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<Value> {
 /// candidate finds an integer key, as php-src's table of the integer keys
 /// as strings does), each replacement converted when it is used. The
 /// subject itself when nothing is replaced (`RETURN_STR_COPY`). Copying
-/// every key and value into a vector and a SipHash map first cost ~1,000
+/// every key and value into a vector and a `SipHash` map first cost ~1,000
 /// instructions a call.
 fn strtr_table(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<ZStr> {
     let mut keys = transform::StrtrKeys::new();

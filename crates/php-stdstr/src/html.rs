@@ -904,7 +904,7 @@ fn verbatim_prefix_len(old: &[u8], flags: u32, charset: Charset) -> usize {
             b'&' | b'<' | b'>' => true,
             b'\'' => flags & QUOTE_SINGLE != 0,
             b'"' => flags & QUOTE_DOUBLE != 0,
-            0x80.. => high_stops,
+            0x80..=0xff => high_stops,
             _ => false,
         };
         if !stop {

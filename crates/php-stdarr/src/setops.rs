@@ -22,7 +22,7 @@ use php_runtime::{
 /// (`zend_hash_init(&seen, n, ...)` + `zend_hash_add_empty_element`),
 /// a hash table keyed by each string verbatim and placed by the hash the
 /// string already carries. A `HashSet<Vec<u8>>` hashed every string
-/// again with SipHash and copied it into a new vector: ~250 instructions
+/// again with `SipHash` and copied it into a new vector: ~250 instructions
 /// an element of an `array_unique()`.
 struct StrSet(HashTable);
 
@@ -44,7 +44,7 @@ impl StrSet {
             return false;
         }
         if let Err((k, v)) = self.0.lean_append(s, h, Value::Null) {
-            self.0.insert_str_raw(k, v);
+            let _ = self.0.insert_str_raw(k, v);
         }
         true
     }

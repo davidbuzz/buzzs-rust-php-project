@@ -445,7 +445,7 @@ fn memory_limit_is_enforced_for_large_results() {
 }
 
 /// `strspn()`/`strcspn()` read `$length` in place: `null`, a negative and
-/// a positive length, none, and a TypeError (`/usr/bin/php8.5 -n`).
+/// a positive length, none, and a `TypeError` (`/usr/bin/php8.5 -n`).
 #[test]
 fn spn_length_argument() {
     assert_eq!(
