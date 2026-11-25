@@ -628,3 +628,49 @@ bool(false)
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `$this` itself as a call's argument (sent to prepared calls by value):
+/// builtins and a user function, a by-reference parameter (the generic
+/// send), bound and static closures (no `$this`: the error), callbacks
+/// and a static method. Expected output: php-src's (PHP 8.5 CLI).
+#[test]
+fn this_as_an_argument() {
+    let src = r#"<?php
+namespace App;
+function byval($o) { return get_class($o); } function byref(&$o) { return 'ref'; }
+class P { function getFooAttribute() {} private function priv() {} }
+class C extends P {
+  function t() {
+    var_dump(method_exists($this, 'getFooAttribute'), method_exists($this, 'priv'), method_exists($this, 'nope'), get_class($this), byval($this), spl_object_id($this) > 0, is_object($this), is_callable([$this, 't']), $this instanceof P);
+    try { var_dump(byref($this)); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    $c = function () { return get_class($this); }; var_dump($c(), \Closure::bind($c, new P, P::class)());
+    $s = static function () { return get_class($this); };
+    try { $s(); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    var_dump(array_map(fn($x) => get_class($x), [$this]), call_user_func('get_class', $this));
+  }
+  static function st() { try { return get_class($this); } catch (\Error $e) { return $e->getMessage(); } }
+}
+(new C)->t(); var_dump(C::st());
+"#;
+    let expected = r#"bool(true)
+bool(true)
+bool(false)
+string(5) "App\C"
+string(5) "App\C"
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+string(3) "ref"
+string(5) "App\C"
+string(5) "App\P"
+Error: Using $this when not in object context
+array(1) {
+  [0]=>
+  string(5) "App\C"
+}
+string(5) "App\C"
+string(38) "Using $this when not in object context"
+"#;
+    assert_eq!(run(src), expected);
+}

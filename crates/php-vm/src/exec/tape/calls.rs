@@ -1268,7 +1268,9 @@ fn direct_src(code: &OpArray, src: &ArgSrc) -> bool {
     match src {
         ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         | ArgSrc::CallResult(Operand::Tmp(_)) => true,
-        ArgSrc::Place(pid) => place_cv(code, *pid).is_some() || this_prop_place(code, *pid),
+        ArgSrc::Place(pid) => {
+            place_cv(code, *pid).is_some() || this_prop_place(code, *pid) || this_place(code, *pid)
+        }
         _ => false,
     }
 }
@@ -1284,6 +1286,14 @@ fn this_prop_place(code: &OpArray, pid: u32) -> bool {
             (PlaceBase::This, [crate::opcode::Seg::Prop(Operand::Lit(_))])
         )
     })
+}
+
+/// Whether a place is `$this` itself (`method_exists($this, $m)`): sent by
+/// value, the frame's object.
+fn this_place(code: &OpArray, pid: u32) -> bool {
+    code.places
+        .get(pid as usize)
+        .is_some_and(|p| matches!(p.base, PlaceBase::This) && p.segs.is_empty())
 }
 
 /// The compiled variable a place stands for when it is one without
@@ -2261,6 +2271,19 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
             // property, accessible from the caller, no magic: its value,
             // dereferenced). By-reference parameters were turned away
             // above (builtins) or are not prepared (user functions).
+            // `$this` to a by-value parameter: the frame's object (a frame
+            // without one is the generic send's error).
+            None if this_place(&caller.code, *pid) => {
+                if let Callee::User(uf) = &prep.callee {
+                    if uf.params.get(n).is_some_and(|p| p.by_ref) {
+                        return false;
+                    }
+                }
+                match &caller.this {
+                    Some(o) => Value::Object(o.clone()),
+                    None => return false,
+                }
+            }
             None => {
                 // (`read_hit` reads a place's cached head: only a place that
                 // is that head alone, `$this->name`.)
