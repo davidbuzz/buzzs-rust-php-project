@@ -1032,15 +1032,18 @@ pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
 }
 
 /// The compiled variables' part of [`frame_released`]
-/// (`i_free_compiled_variables`'s `gc_check_possible_root`). Inline: a
-/// tag test per variable, a count test (and the last root's address) for
-/// an object, a count and size test for an array; only a root to buffer
-/// or an array to walk calls out.
+/// (`i_free_compiled_variables`'s `gc_check_possible_root`, which php-src
+/// reaches only for a refcounted value). Inline: a tag test per variable;
+/// only an object, an array or a reference calls out ([`possible_root`]).
+/// `possible_root` is not inlined, and calling it for every defined
+/// variable cost a return ~10 instructions for each integer, float,
+/// boolean, null or string it held (7.5 calls a return of a function of
+/// eight variables).
 #[inline(always)]
 #[allow(clippy::inline_always)] // the loop of every returning frame with roots
 pub(crate) fn cvs_released(cvs: &[crate::vm::CvSlot]) {
     for slot in cvs {
-        if let Some(v) = slot.get() {
+        if let Some(v @ (Value::Object(_) | Value::Array(_) | Value::Reference(_))) = slot.get() {
             possible_root(v);
         }
     }

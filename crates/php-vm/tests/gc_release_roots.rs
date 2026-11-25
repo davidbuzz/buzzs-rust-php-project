@@ -117,3 +117,23 @@ $s = gc_status(); echo $s['runs'], " ", $s['collected'], " ", $s['threshold'], "
     // by the calls in between put the third object first.
     assert_eq!(run(&src), "d3 d1 d2 3\n0\n3 3 10001\nd0 ");
 }
+
+/// A returning frame's scalar, string and reference-to-scalar variables
+/// buffer nothing (`i_free_compiled_variables` reaches
+/// `gc_check_possible_root` only for a collectable value); an object that
+/// stays referenced is buffered once, and an object freed with the frame
+/// is not (C: roots 0, 1, 1, 1).
+#[test]
+fn returning_frames_buffer_only_shared_objects_among_their_variables() {
+    let src = r#"<?php
+function st() { $s = gc_status(); return "roots={$s['roots']}"; }
+function scal($a, $b) { $c = $a + 1; $d = "s$b"; $e = 1.5; $f = true; $g = null; $h = &$e; return $c; }
+function held($x, $n) { $p = $x; $q = $n * 2; $s = "v$n"; return 1; }
+for ($i = 0; $i < 1000; $i++) { scal($i, $i); }
+echo st(), "\n";
+$o = new stdClass; held($o, 1); echo st(), "\n";
+held($o, 2); echo st(), "\n";
+for ($i = 0; $i < 5; $i++) { held(new stdClass, $i); } echo st(), "\n";
+"#;
+    assert_eq!(run(src), "roots=0\nroots=1\nroots=1\nroots=1\n");
+}
