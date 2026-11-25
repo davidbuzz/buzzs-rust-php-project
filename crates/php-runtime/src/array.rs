@@ -3896,7 +3896,7 @@ mod tests {
     #[test]
     fn from_list_sized_matches_pushes() {
         for (hint, count) in [
-            (0, 0),
+            (0_usize, 0_i64),
             (5, 0),
             (0, 3),
             (5, 5),
@@ -3905,7 +3905,8 @@ mod tests {
             (8, 8),
             (9, 9),
         ] {
-            let built = HashTable::from_list_sized(count.max(hint), (0..count).map(Value::Int));
+            let size = usize::try_from(count).unwrap_or(0);
+            let built = HashTable::from_list_sized(size.max(hint), (0..count).map(Value::Int));
             let built_hinted = HashTable::from_list_sized(hint, (0..count).map(Value::Int));
             let mut pushed = HashTable::with_capacity(hint);
             for i in 0..count {

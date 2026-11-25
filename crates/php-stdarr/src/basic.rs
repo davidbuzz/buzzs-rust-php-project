@@ -663,9 +663,9 @@ pub fn array_pad(array: &ZArray, length: i64, value: &Value) -> RtResult<ZArray>
     let size = usize::try_from(abs).unwrap_or(0);
     // A list padded at either end is a list, filled to size.
     if array.is_packed() {
-        let pad =
-            || std::iter::repeat_with(|| value.clone()).take(usize::try_from(pads).unwrap_or(0));
-        let elems = array.values().map(Clone::clone);
+        let pads = usize::try_from(pads).unwrap_or(0);
+        let pad = move || std::iter::repeat_with(move || value.clone()).take(pads);
+        let elems = array.values().cloned();
         return Ok(if length < 0 {
             ZArray::from_list_sized(size, pad().chain(elems))
         } else {
