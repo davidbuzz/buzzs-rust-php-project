@@ -8,7 +8,7 @@ ext=$1; let=${2:-*}; ar=${3:-all}
 tag=$(echo "${ext}_${let}_${ar}" | tr -c 'a-zA-Z0-9_\n-' 'x')
 mkdir -p $OUT/out $OUT/sigs; o=$OUT/out/$tag
 EXTS=""
-for e in ctype mbstring tokenizer iconv bcmath calendar gmp; do EXTS="$EXTS -d extension=$e"; done
+for e in ctype mbstring tokenizer iconv bcmath calendar gmp intl exif bz2 xml dom simplexml xmlwriter xmlreader gd fileinfo; do EXTS="$EXTS -d extension=$e"; done
 OURS=$(realpath "$OURS"); cd "$OUT"
 C="timeout 60 taskset -c 12 /usr/bin/php8.5 -n -d memory_limit=1G -d error_reporting=-1 $EXTS $D"
 R="timeout 60 taskset -c 12 $OURS -n -d memory_limit=1G -d error_reporting=-1 $D"

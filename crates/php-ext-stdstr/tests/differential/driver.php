@@ -79,7 +79,13 @@ const DENY_RX = '/^(
     gethostbyaddr|inet_.*|ip2long|long2ip|
     convert_uu.*|quoted_printable_.*|
     get_class|get_parent_class|get_called_class|get_object_vars|get_class_vars|get_class_methods|method_exists|property_exists|class_exists|interface_exists|trait_exists|enum_exists|function_exists|is_subclass_of|is_a|
-    set_.*|get_mangled_object_vars|array_key_.*_x
+    set_.*|get_mangled_object_vars|array_key_.*_x|
+    curl_.*|ftp_.*|mysqli_.*|pdo_.*|sqlite.*|shmop_.*|msg_.*|sem_.*|shm_.*|
+    gz(open|file|passthru|read|write|puts|gets|getc|eof|close|rewind|seek|tell)|readgzfile|
+    bz(open|read|write|close|flush|errno|error|errstr)|image.*|exif_(read_data|thumbnail|imagetype)|read_exif_data|
+    finfo_.*|mime_content_type|xmlwriter_open_uri|simplexml_load_file|dom_import_simplexml|phar.*|
+    sodium_.*(keygen|keypair|seed_keypair|_seal|randombytes).*|randombytes_.*|sodium_memzero|
+    intl_get_error.*|locale_set_default|resourcebundle_.*|msgfmt_.*|transliterator_.*
 )$/xi';
 
 // Calls the C php cannot survive (it asks for the memory the argument names, past
