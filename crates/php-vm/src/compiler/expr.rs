@@ -3044,6 +3044,24 @@ impl Compiler<'_> {
                     dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
                 ))
             }
+            // zend_compile_func_cuf / zend_compile_func_cufa: the callback
+            // is called by the ops of a call, not by the builtin.
+            b"call_user_func"
+                if fb.is_none()
+                    && only_positional
+                    && !positional.is_empty()
+                    && self.special_builtin_enabled(b"call_user_func") =>
+            {
+                self.compile_cuf(&positional, line, need)
+            }
+            b"call_user_func_array"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 2
+                    && self.special_builtin_enabled(b"call_user_func_array") =>
+            {
+                self.compile_cufa(positional[0], positional[1], line, need)
+            }
             b"clone" if only_positional && positional.len() == 1 => {
                 let v = self.compile_expr(positional[0])?;
                 self.f().line = line;
@@ -3091,6 +3109,122 @@ impl Compiler<'_> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// `zend_compile_init_user_func`: the start of the call of a
+    /// `call_user_func[_array]()` callback. A string literal naming a
+    /// function known at compile time is bound then
+    /// (`zend_try_compile_ct_bound_init_user_func`: `ZEND_INIT_FCALL`, not
+    /// a dynamic call); anything else is compiled for reading and
+    /// resolved by [`Op::InitUserCall`].
+    fn compile_init_user_func(&mut self, callee: &Expr, line: u32, array: bool) -> CResult<()> {
+        if let ExprKind::String(s) = &callee.kind {
+            let lc = s.to_ascii_lowercase();
+            if self.known_functions.contains_key(&lc)
+                || self.functions.is_some_and(|t| t.find(&lc).is_some())
+            {
+                let display = self.lit_str(s);
+                let name = self.lit_str(&lc);
+                self.f().line = line;
+                self.emit(Op::InitFCall {
+                    name,
+                    fallback: None,
+                    display,
+                });
+                return Ok(());
+            }
+        }
+        let callee = self.compile_expr(callee)?;
+        self.emit(Op::InitUserCall { callee, array });
+        Ok(())
+    }
+
+    /// `zend_compile_func_cuf`: `call_user_func($f, $a, ...)` as
+    /// `ZEND_INIT_USER_CALL`, one `ZEND_SEND_USER` per argument and
+    /// `ZEND_DO_FCALL`, each taking the line compiling what came before it
+    /// left (`CG(zend_lineno)`).
+    fn compile_cuf(&mut self, args: &[&Expr], line: u32, need: bool) -> CResult<Option<Operand>> {
+        self.f().line = line;
+        self.compile_init_user_func(args[0], line, false)?;
+        for (i, a) in args.iter().enumerate().skip(1) {
+            let src = self.compile_expr(a)?;
+            let n = u32::try_from(i).unwrap_or(u32::MAX);
+            self.emit(Op::SendUser { src, n });
+        }
+        let dst = need.then(|| self.tmp());
+        self.emit(Op::DoCall { dst });
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// `zend_compile_func_cufa`: `call_user_func_array($f, $args)` as
+    /// `ZEND_INIT_USER_CALL`, `ZEND_SEND_ARRAY` and `ZEND_DO_FCALL`. An
+    /// `$args` written `array_slice($a, n, $len)` (`n` a non-negative int
+    /// literal) sends that slice of `$a` without calling `array_slice()`.
+    fn compile_cufa(
+        &mut self,
+        callee: &Expr,
+        args: &Expr,
+        line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
+        self.f().line = line;
+        self.compile_init_user_func(callee, line, true)?;
+        if let Some((array, skip, len)) = self.cufa_slice(args) {
+            let src = self.compile_expr(array)?;
+            let len = self.compile_expr(len)?;
+            self.emit(Op::SendArray { src, len, skip });
+        } else {
+            let src = self.compile_expr(args)?;
+            self.emit(Op::SendArray {
+                src,
+                len: Operand::Unused,
+                skip: 0,
+            });
+        }
+        let dst = need.then(|| self.tmp());
+        self.emit(Op::DoCall { dst });
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// The array, offset and length of an `array_slice($a, n, $len)`
+    /// argument of `call_user_func_array()` that `zend_compile_func_cufa`
+    /// sends with `ZEND_SEND_ARRAY`'s length operand: a call named
+    /// `array_slice` as resolved at compile time (not a namespaced
+    /// fallback), with exactly three positional arguments, the second an
+    /// int literal in `0..=0x7fffffff`.
+    fn cufa_slice<'e>(&self, e: &'e Expr) -> Option<(&'e Expr, u32, &'e Expr)> {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return None;
+        };
+        let literal = match &**callee {
+            Callee::Expr(ex) => literal_function_name(ex),
+            Callee::Name(_) => None,
+        };
+        let n = match &**callee {
+            Callee::Name(n) => n,
+            Callee::Expr(_) => literal.as_ref()?,
+        };
+        let (resolved, fb) = self.resolve_function_name(n);
+        if fb.is_some() || !resolved.eq_ignore_ascii_case(b"array_slice") {
+            return None;
+        }
+        let [a, b, c] = args.args.as_slice() else {
+            return None;
+        };
+        let (ArgKind::Positional(array), ArgKind::Positional(skip), ArgKind::Positional(len)) =
+            (&a.kind, &b.kind, &c.kind)
+        else {
+            return None;
+        };
+        let ExprKind::Int(skip) = skip.kind else {
+            return None;
+        };
+        let skip = u32::try_from(skip).ok().filter(|s| *s <= 0x7fff_ffff)?;
+        Some((array, skip, len))
     }
 
     /// The one-argument builtins `zend_try_compile_special_func_ex()`
@@ -4038,6 +4172,100 @@ mod special_call_tests {
                     .all(Option::is_none),
                 "{other}"
             );
+        }
+    }
+
+    /// The call ops of the first declared function, as names, with
+    /// `call_user_func` and `call_user_func_array` internal functions.
+    fn cuf_ops(src: &str) -> Vec<&'static str> {
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+        let opts = CompileOptions {
+            filename: "t.php".into(),
+            special_builtins: special_builtin_bit(b"call_user_func").unwrap_or(0)
+                | special_builtin_bit(b"call_user_func_array").unwrap_or(0),
+            ..CompileOptions::default()
+        };
+        let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+        let ops = unit.decls.functions.borrow()[0].code.ops.clone();
+        ops.iter()
+            .filter_map(|op| match op {
+                Op::InitFCall { .. } => Some("InitFCall"),
+                Op::InitUserCall { array: false, .. } => Some("InitUserCall"),
+                Op::InitUserCall { array: true, .. } => Some("InitUserCallArray"),
+                Op::SendUser { .. } => Some("SendUser"),
+                Op::SendArray { len, .. } if *len == crate::opcode::Operand::Unused => {
+                    Some("SendArray")
+                }
+                Op::SendArray { .. } => Some("SendArraySlice"),
+                Op::Send { .. } => Some("Send"),
+                Op::SendNamed { .. } => Some("SendNamed"),
+                Op::SendUnpack { .. } => Some("SendUnpack"),
+                Op::DoCall { .. } => Some("DoCall"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `zend_compile_func_cuf` / `zend_compile_func_cufa`: the forms
+    /// lowered to `ZEND_INIT_USER_CALL` and those that keep the builtin.
+    #[test]
+    fn call_user_func_lowering() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "function f($g, $a) { return call_user_func($g, $a, 2); }",
+                &["InitUserCall", "SendUser", "SendUser", "DoCall"],
+            ),
+            (
+                "function f($g) { call_user_func($g); }",
+                &["InitUserCall", "DoCall"],
+            ),
+            (
+                "function f($g, $a) { return \\call_user_func_array($g, $a); }",
+                &["InitUserCallArray", "SendArray", "DoCall"],
+            ),
+            (
+                "function f($g, $a, $n) { return call_user_func_array($g, array_slice($a, 1, $n)); }",
+                &["InitUserCallArray", "SendArraySlice", "DoCall"],
+            ),
+            // Not the three-argument form: `array_slice()` is called.
+            (
+                "function f($g, $a) { return call_user_func_array($g, array_slice($a, 1)); }",
+                &["InitUserCallArray", "InitFCall", "Send", "Send", "DoCall", "SendArray", "DoCall"],
+            ),
+            // A callback argument that is itself such a call nests.
+            (
+                "function f($g) { return call_user_func($g, call_user_func($g)); }",
+                &["InitUserCall", "InitUserCall", "DoCall", "SendUser", "DoCall"],
+            ),
+            // Named arguments, unpacking and the argument counts the
+            // builtins reject keep the builtin call.
+            (
+                "function f($g) { return call_user_func($g, x: 1); }",
+                &["InitFCall", "Send", "SendNamed", "DoCall"],
+            ),
+            (
+                "function f($a) { return call_user_func(...$a); }",
+                &["InitFCall", "SendUnpack", "DoCall"],
+            ),
+            ("function f() { return call_user_func(); }", &["InitFCall", "DoCall"]),
+            (
+                "function f($g) { return call_user_func_array($g); }",
+                &["InitFCall", "Send", "DoCall"],
+            ),
+            // An unqualified name in a namespace is resolved at run time.
+            (
+                "namespace N; function f($g) { return call_user_func($g); }",
+                &["InitFCall", "Send", "DoCall"],
+            ),
+            (
+                "namespace N; function f($g) { return \\call_user_func($g); }",
+                &["InitUserCall", "DoCall"],
+            ),
+        ];
+        for (src, expected) in cases {
+            let src = format!("<?php {src}");
+            assert_eq!(cuf_ops(&src), *expected, "{src}");
         }
     }
 }

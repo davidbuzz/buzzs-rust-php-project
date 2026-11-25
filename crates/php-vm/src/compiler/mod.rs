@@ -209,6 +209,8 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "chr",
     "ord",
     "array_slice",
+    "call_user_func",
+    "call_user_func_array",
 ];
 
 /// The internal functions with `@frameless-function` handlers in php-src

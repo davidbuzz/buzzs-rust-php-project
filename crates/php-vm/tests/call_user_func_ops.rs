@@ -505,3 +505,46 @@ Warning: compact(): Undefined variable $x in t.php on line 15
     );
     assert_eq!(status, 0);
 }
+
+/// Through the builtin, `zend_call_function` checks no `#[\NoDiscard]`
+/// and the callback's caller is internal (no "called in"); one call site
+/// called with callables of different kinds, the cached resolution of an
+/// `[$object, "name"]` array judged again for another scope.
+#[test]
+fn dynamic_builtin_calls_and_one_site_with_many_callables() {
+    let (status, out) = run(r#"<?php
+#[\NoDiscard] function nd() { return 1; }
+$g = 'call_user_func';
+$g('nd');
+call_user_func(...['nd']);
+function u(int $x) { return $x; }
+try { $g('u', "x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { call_user_func('u', "x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$cbs = ['strtoupper', 'nd', fn($x) => "c$x", 'u'];
+foreach ($cbs as $cb) { var_dump(call_user_func($cb, "5")); }
+class P { function m($x) { return "m$x"; } static function s($x) { return "s$x"; } private function q() { return "q"; } function viaq() { return call_user_func([$this, 'q']); } }
+$p = new P;
+foreach ([[$p, 'm'], [$p, 's'], [$p, 'M'], 'P::s', [new P, 'm']] as $cb) { var_dump(call_user_func_array($cb, [1])); }
+var_dump($p->viaq(), $p->viaq());
+try { call_user_func([$p, 'q']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"u(): Argument #1 ($x) must be of type int, string given
+u(): Argument #1 ($x) must be of type int, string given, called in t.php on line 8
+string(1) "5"
+int(1)
+string(2) "c5"
+int(5)
+string(2) "m1"
+string(2) "s1"
+string(2) "m1"
+string(2) "s1"
+string(2) "m1"
+string(1) "q"
+string(1) "q"
+call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method P::q()
+"#
+    );
+    assert_eq!(status, 0);
+}
