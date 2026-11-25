@@ -3373,9 +3373,9 @@ impl Vm {
         if self.checked_callable.is_some() {
             self.checked_callable = None;
         }
-        // Lent whole for the call (`CallBufs::take_values`).
-        let mut values = self.call_bufs.take_values();
-        let mut passed = self.call_bufs.take_passed();
+        // A pooled record, taken whole for the call
+        // (`CallBufs::take_args`).
+        let mut args = self.call_bufs.take_args();
         let live = self.frames.live;
         let spare = {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
@@ -3397,7 +3397,7 @@ impl Vm {
             };
             // The handler's copies (php-src's handler reads them in the
             // frame).
-            values.extend(frame.args.iter().map(|arg| match arg {
+            args.values.extend(frame.args.iter().map(|arg| match arg {
                 Some(v) => crate::func::copy_arg(v),
                 None => Value::Null,
             }));
@@ -3418,7 +3418,8 @@ impl Vm {
         if let Some(buf) = spare.filter(|v| v.capacity() > 0) {
             self.put_arg_vec(buf);
         }
-        passed.resize(values.len(), true);
+        let given = args.values.len();
+        args.passed.resize(given, true);
         // The declared defaults of the omitted trailing parameters, not
         // marked as passed.
         let upto = if variadic {
@@ -3426,35 +3427,28 @@ impl Vm {
         } else {
             nparams
         };
-        while values.len() < upto {
-            let i = values.len();
+        while args.values.len() < upto {
+            let i = args.values.len();
             match self.builtin_default(b, i) {
                 Some(d) if i >= b.signature().required as usize => {
-                    values.push(d);
-                    passed.push(false);
+                    args.values.push(d);
+                    args.passed.push(false);
                 }
                 _ => break,
             }
         }
         self.pending_call_dst = dst;
         self.magic_call_name = None;
-        let mut args = Args {
-            values,
-            passed,
-            named: Vec::new(),
-            this: None,
-            called: None,
-            func: Some(Rc::clone(b)),
-        };
+        args.func = Some(Rc::clone(b));
         let mut r = (b.handler)(self, &mut args);
         if r.is_ok() {
             if let Err(e) = self.check_interrupt() {
                 r = Err(e);
             }
         }
-        args.release_into(&mut self.call_bufs);
-        // Emptied by `release_into`: no drop glue to run.
-        std::mem::forget(args);
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
         // Released by the handler, destructed while its frame is current.
         if object::has_pending_destructors() && self.frames.live == live + 1 {
             if let Err(e) = self.run_pending_destructors() {
