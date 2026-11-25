@@ -176,6 +176,11 @@ fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let was = RESTORING.with(|r| r.replace(true));
     let res = orig(vm, a);
     RESTORING.with(|r| r.set(was));
+    // A restore the session refused ("headers already sent", an active
+    // session) keeps the library's value; zend_restore_ini_entry_cb()
+    // keeps such an entry modified, so the VM registry, already restored,
+    // gets the value back.
+    with_host_unsynced(vm, |h| sync(h));
     res
 }
 

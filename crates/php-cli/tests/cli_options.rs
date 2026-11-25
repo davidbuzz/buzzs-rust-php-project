@@ -59,3 +59,24 @@ fn missing_auto_prepend_file_is_a_fatal_error() {
         .starts_with("1\nWarning: Unknown: Failed to open stream"));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn refused_session_ini_restore_keeps_the_value() {
+    let d = temp_dir("session-restore");
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "ini_set('session.name', 'abc'); echo \"x\\n\"; ini_restore('session.name'); \
+             var_dump(ini_get('session.name'), ini_get_all('session')['session.name']['global_value']);",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "x\n\nWarning: ini_restore(): Session ini settings cannot be changed after headers \
+         have already been sent (sent from Command line code on line 1) in Command line code \
+         on line 1\nstring(3) \"abc\"\nstring(9) \"PHPSESSID\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
