@@ -165,7 +165,11 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         // `self::class`, `static::class`, `parent::class`
         // (`Vm::class_name_fast`).
         Op::FetchClassName {
-            class: ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
+            class:
+                ClassSpec::SelfClass
+                | ClassSpec::Static
+                | ClassSpec::Parent
+                | ClassSpec::Dyn(Operand::Cv(_)),
             ..
         } => Some(plain(TOp::VmOp)),
         // `isset(A::$p[k])` (`Vm::static_dim_fast`).

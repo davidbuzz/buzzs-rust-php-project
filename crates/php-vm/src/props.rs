@@ -1082,6 +1082,11 @@ impl Vm {
 
     /// Forgets the reinitialization markers of an object.
     fn clear_reinit(&mut self, o: &Obj) {
+        // (No guard at all, the common case: nothing to look for, and the
+        // class's properties need not be scanned for a readonly one.)
+        if self.prop_guards.is_empty() {
+            return;
+        }
         if object::class_of(o).props.iter().any(|p| p.is_readonly()) {
             let h = o.handle();
             self.prop_guards.retain(|k| !(k.0 == h && k.2 == G_REINIT));
@@ -2710,6 +2715,11 @@ impl Vm {
             }
         }
         let d = object::data(&o);
+        // A reference kept in a slot (shared with another holder) makes the
+        // clone a type source of it, registered below; without one there
+        // is nothing to register (`add_object_type_sources` walks every
+        // slot).
+        let mut kept_ref = false;
         let slots: Vec<Option<Value>> = d
             .slots
             .borrow()
@@ -2717,12 +2727,17 @@ impl Vm {
             .map(|s| {
                 s.as_ref().map(|v| match v {
                     Value::Reference(r) if r.refcount() == 1 => r.get(),
-                    v => v.clone(),
+                    v => {
+                        kept_ref |= matches!(v, Value::Reference(_));
+                        v.clone()
+                    }
                 })
             })
             .collect();
         let n = object::new_object(cls.clone(), slots);
-        self.add_object_type_sources(&n);
+        if kept_ref {
+            self.add_object_type_sources(&n);
+        }
         let nd = object::data(&n);
         nd.copy_unset_flags(d);
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();

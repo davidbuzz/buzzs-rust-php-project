@@ -723,3 +723,98 @@ ArgumentCountError: g(): Argument #1 ($a) not passed
 "#
     );
 }
+
+/// `clone` (Lodata's `getModel()` clones an Eloquent model per call):
+/// references kept in slots and a typed property's reference, dynamic and
+/// unset properties, readonly properties reinitialized by `__clone()` once,
+/// a private `__clone()`, a throwing one, an enum; and `$obj::class` of a
+/// variable on the tape (Doctrine's `static fn (Type $type): string =>
+/// $type::class`) with its errors for non-objects. Expected output:
+/// `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn clone_and_object_class_name() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class P { public $a = 1; public int $t = 5; protected $arr = [1]; private $p = 'p'; public $o;
+  public function show() { return json_encode([$this->a, $this->t, $this->arr, $this->p, isset($this->dyn) ? $this->dyn : '-', isset($this->gone) ? 'g' : 'nog']); } }
+final class R { public function __construct(public readonly array $items, public readonly int $n = 0) {}
+  public function with($n) { $c = clone $this; return $c; }
+  public function __clone() { $this->n = $this->n + 1; } }
+final class RR { public function __construct(public readonly int $n = 0) {} public function __clone() { $this->n = 1; $this->n = 2; } }
+class Priv { private function __clone() {} public function dup() { return clone $this; } }
+class Thr { public function __clone() { throw new \LogicException('no clone'); } }
+enum E { case A; }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $p = new P; $p->dyn = 'd'; unset($p->a); $x = 7; $p->o = &$x; $p->t = $i;
+    $q = clone $p; $x = 8; echo $q->show(), ' ', $q->o, ' ', $p->show(), ' ';
+    $ti = 1; $tp = new P; $tp->t = &$ti; $tc = clone $tp; try { $ti = 'str'; } catch (\TypeError $e) { echo 'TE:', $e->getMessage(), ' '; } echo $tc->t, ' ';
+    $r = new R([1, 2], $i); $r2 = $r->with(9); echo $r2->n, count($r2->items), ' ';
+    try { clone new RR; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { clone new Priv; } catch (\Error $e) { echo $e->getMessage(), ' '; } echo get_class((new Priv)->dup()), ' ';
+    try { clone new Thr; } catch (\LogicException $e) { echo $e->getMessage(), ' '; }
+    try { clone E::A; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $n = clone (clone $q); echo $n->show(), "\n";
+  }
+}
+run();
+"#),
+        r#"
+Deprecated: Creation of dynamic property App\P::$dyn is deprecated in t.php on line 14
+
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,0,[1],"p","d","nog"] 8 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,0,[1],"p","d","nog"] TE:Cannot assign string to reference held by property App\P::$t of type int 1 12 Cannot modify readonly property App\RR::$n Call to private method App\Priv::__clone() from global scope App\Priv no clone Trying to clone an uncloneable object of class App\E 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,0,[1],"p","d","nog"]
+
+Deprecated: Creation of dynamic property App\P::$dyn is deprecated in t.php on line 14
+
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,1,[1],"p","d","nog"] 8 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,1,[1],"p","d","nog"] TE:Cannot assign string to reference held by property App\P::$t of type int 1 22 Cannot modify readonly property App\RR::$n Call to private method App\Priv::__clone() from global scope App\Priv no clone Trying to clone an uncloneable object of class App\E 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,1,[1],"p","d","nog"]
+
+Deprecated: Creation of dynamic property App\P::$dyn is deprecated in t.php on line 14
+
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,2,[1],"p","d","nog"] 8 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,2,[1],"p","d","nog"] TE:Cannot assign string to reference held by property App\P::$t of type int 1 32 Cannot modify readonly property App\RR::$n Call to private method App\Priv::__clone() from global scope App\Priv no clone Trying to clone an uncloneable object of class App\E 
+Warning: Undefined property: App\P::$a in t.php on line 4
+[null,2,[1],"p","d","nog"]
+"#
+    );
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class T {} class U extends T {}
+function run() {
+  $objs = [new T, new U, new \ArrayObject([]), function () {}];
+  for ($i = 0; $i < 3; $i++) {
+    echo implode(',', array_map(static fn ($o) => $o::class, $objs)), ' ';
+    foreach ($objs as $o) { echo $o::class, ' '; }
+    $s = 'App\T'; try { echo $s::class; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $n = null; try { echo $n::class; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    try { echo $undef::class; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $r = new U; $ref = &$r; echo $ref::class, ' ', (new T)::class, "\n";
+  }
+}
+run();
+"#),
+        r#"App\T,App\U,ArrayObject,Closure App\T App\U ArrayObject Closure Cannot use "::class" on string Cannot use "::class" on null 
+Warning: Undefined variable $undef in t.php on line 11
+Cannot use "::class" on null App\U App\T
+App\T,App\U,ArrayObject,Closure App\T App\U ArrayObject Closure Cannot use "::class" on string Cannot use "::class" on null 
+Warning: Undefined variable $undef in t.php on line 11
+Cannot use "::class" on null App\U App\T
+App\T,App\U,ArrayObject,Closure App\T App\U ArrayObject Closure Cannot use "::class" on string Cannot use "::class" on null 
+Warning: Undefined variable $undef in t.php on line 11
+Cannot use "::class" on null App\U App\T
+"#
+    );
+}
