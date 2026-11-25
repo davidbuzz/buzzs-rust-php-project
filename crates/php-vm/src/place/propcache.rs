@@ -287,6 +287,20 @@ fn class_accepts(code: &OpArray, idx: usize, key: &Key, value: &Value) -> bool {
     addr == key.ok_class || class_accepts_slow(code, idx, cls, addr)
 }
 
+/// [`class_accepts_slow`] of an object stored by the frame-local write
+/// (`exec::spec::props::assign_hit`): whether the entry's class-typed
+/// property takes it, remembering its class when it does, so that the
+/// next write of an object of that class passes the entry's one test.
+#[cold]
+#[inline(never)]
+pub(crate) fn learn_accepted_class(code: &OpArray, idx: usize, value: &Value) -> bool {
+    let Value::Object(obj) = value else {
+        return false;
+    };
+    let cls = object::class_of(obj);
+    class_accepts_slow(code, idx, cls, Rc::as_ptr(cls) as usize)
+}
+
 /// [`class_accepts`] by name, remembering an accepted class.
 #[cold]
 #[inline(never)]

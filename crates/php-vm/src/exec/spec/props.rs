@@ -62,6 +62,29 @@ struct Hit {
     flags: u8,
 }
 
+/// [`hit_key`] of a write: an entry with [`PC_WRITE`] or [`PC_INIT`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // the key of every cached property write
+fn write_hit_key(f: &Frame, pid: PlaceId) -> Option<Hit> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.class_addr == 0 || e.flags & (PC_WRITE | PC_INIT) == 0 || e.scope_addr != scope_addr(f) {
+        return None;
+    }
+    Some(Hit {
+        class: e.class_addr,
+        slot: e.slot as usize,
+        ok_class: e.ok_class_addr,
+        base: e.base,
+        lit: e.lit,
+        accept: e.accept,
+        flags: e.flags,
+    })
+}
+
 /// The entry of place `pid` in frame `f`'s property cache when it is filled
 /// in `f`'s class scope, allows every access in `want` and has none of the
 /// `PC_*` bits in `refuse` (`PC_DYN`: a declared property only); the
@@ -576,6 +599,14 @@ fn store_in(
     let slot = hit.slot;
     let mut slots = od.slots.try_borrow_mut().ok()?;
     let cell = slots.get_mut(slot)?;
+    // An init-only entry (a readonly property: `PC_INIT` without
+    // `PC_WRITE`) takes only the uninitialized slot, and not while the
+    // object is being cloned (its reinitialization is the generic op's).
+    if hit.flags & PC_WRITE == 0
+        && (cell.is_some() || od.flags.get() & crate::object::oflags::CLONING != 0)
+    {
+        return None;
+    }
     match cell {
         Some(Value::Reference(_)) => None,
         Some(cur) => Some(Some(std::mem::replace(cur, new_val))),
@@ -603,7 +634,9 @@ fn store_in(
 /// `dst` when used. Returns `false`, having changed nothing, otherwise.
 #[inline(always)]
 fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
-    let Some(hit) = hit_key(f, pid, PC_WRITE, 0) else {
+    // A write, or a readonly property's initialization (`PC_INIT` alone:
+    // `store_in` takes only its uninitialized slot).
+    let Some(hit) = write_hit_key(f, pid) else {
         return false;
     };
     let dyn_key = match dyn_name(f, &hit) {
@@ -620,7 +653,10 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
     let Some(src) = src else {
         return false;
     };
-    if matches!(src, Value::Reference(_)) || !hit_accepts(&hit, src) {
+    if matches!(src, Value::Reference(_))
+        || !(hit_accepts(&hit, src)
+            || crate::place::propcache::learn_accepted_class(&f.code, pid as usize, src))
+    {
         return false;
     }
     let new_val = copy_value(src);

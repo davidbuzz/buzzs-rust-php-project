@@ -936,3 +936,65 @@ v2u Error: Cannot modify readonly property App\Id::$value 2 Cannot modify readon
 "#
     );
 }
+
+/// Class-typed property writes on the cache hit: the class the entry
+/// accepts is learned by the frame-local write too, so readonly and
+/// uninitialized class-typed properties (promoted constructor parameters
+/// of objects) are initialized there; subclasses, interfaces, nullable and
+/// union types, wrong classes and their `TypeError`s, a readonly property's
+/// second write. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn class_typed_property_writes() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+interface I {} class A implements I {} class B extends A {} class C {}
+class H { public A $a; public I $i; public ?A $n = null; public readonly A $ro; public A|C $u;
+  function set($x) { $this->a = $x; return get_class($this->a); } function seti($x) { $this->i = $x; return get_class($this->i); }
+  function setn($x) { $this->n = $x; return $this->n ? get_class($this->n) : 'null'; } function setro($x) { $this->ro = $x; return get_class($this->ro); }
+  function setu($x) { $this->u = $x; return get_class($this->u); } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $h = new H;
+    foreach ([new A, new B, new C, new A] as $x) { try { echo $h->set($x), ' '; } catch (\TypeError $e) { echo 'TE ', substr($e->getMessage(), 0, 40), ' '; } }
+    foreach ([new A, new B, new C] as $x) { try { echo $h->seti($x), ' '; } catch (\TypeError $e) { echo 'TEi '; } }
+    foreach ([new B, null, new C] as $x) { try { echo $h->setn($x), ' '; } catch (\TypeError $e) { echo 'TEn '; } }
+    try { echo $h->setro(new B), ' '; echo $h->setro(new A); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { $h2 = new H; echo $h2->setro(new C); } catch (\TypeError $e) { echo 'TEro '; }
+    foreach ([new A, new C, new B, 5] as $x) { try { echo $h->setu($x), ' '; } catch (\TypeError $e) { echo 'TEu '; } }
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"App\A App\B TE Cannot assign App\C to property App\H::$ App\A App\A App\B TEi App\B null TEn App\B Cannot modify readonly property App\H::$ro TEro App\A App\C App\B TEu 
+App\A App\B TE Cannot assign App\C to property App\H::$ App\A App\A App\B TEi App\B null TEn App\B Cannot modify readonly property App\H::$ro TEro App\A App\C App\B TEu 
+App\A App\B TE Cannot assign App\C to property App\H::$ App\A App\A App\B TEi App\B null TEn App\B Cannot modify readonly property App\H::$ro TEro App\A App\C App\B TEu 
+"#
+    );
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+final class Ident { public function __construct(public readonly string $v) {} }
+final class GenericName { private readonly array $ids; public function __construct(private readonly Ident $first, Ident ...$rest) { $this->ids = [$first, ...$rest]; }
+  public function n() { return count($this->ids) . $this->first->v; } public function again(Ident $x) { $this->first = $x; } }
+class Holder { public function __construct(private readonly \stdClass $o, private readonly ?Ident $id = null) {} public function o() { return get_class($this->o) . ($this->id?->v ?? '-'); } }
+class Cl { public function __construct(public readonly Ident $id) {} public function __clone() { $this->id = new Ident('cloned'); } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $g = new GenericName(new Ident("a$i"), new Ident('b')); echo $g->n(), ' ';
+    try { $g->again(new Ident('x')); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { new GenericName(new \stdClass); } catch (\TypeError $e) { echo substr($e->getMessage(), 0, 60), ' '; }
+    echo (new Holder(new \stdClass))->o(), (new Holder(new \stdClass, new Ident('i')))->o(), ' ';
+    try { new Holder(new Ident('z')); } catch (\TypeError $e) { echo 'TE ', substr($e->getMessage(), 0, 50), ' '; }
+    $c = new Cl(new Ident('orig')); $d = clone $c; echo $c->id->v, $d->id->v, "\n";
+  }
+}
+run();
+"#),
+        r#"2a0 Cannot modify readonly property App\GenericName::$first App\GenericName::__construct(): Argument #1 ($first) must be stdClass-stdClassi TE App\Holder::__construct(): Argument #1 ($o) must b origcloned
+2a1 Cannot modify readonly property App\GenericName::$first App\GenericName::__construct(): Argument #1 ($first) must be stdClass-stdClassi TE App\Holder::__construct(): Argument #1 ($o) must b origcloned
+2a2 Cannot modify readonly property App\GenericName::$first App\GenericName::__construct(): Argument #1 ($first) must be stdClass-stdClassi TE App\Holder::__construct(): Argument #1 ($o) must b origcloned
+"#
+    );
+}
