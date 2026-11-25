@@ -749,3 +749,25 @@ fn set_operations_reflect_their_stub_types() {
     assert_eq!(sig("array_udiff"), "array $array,  ...$rest req=1");
     assert_eq!(sig("array_uintersect_uassoc"), "array $array,  ...$rest req=1");
 }
+
+#[test]
+fn count_parses_its_mode_before_it_types_the_value() {
+    // PHP_FUNCTION(count) takes Z_PARAM_ZVAL + Z_PARAM_LONG, checks the mode,
+    // and only then the value (expected output from php8.5).
+    let out = run(
+        r#"set_error_handler(function ($n, $m) { echo "[$n] $m\n"; return true; });
+foreach ([fn() => count("abc", -1), fn() => count("abc", null), fn() => count(1, []),
+          fn() => sizeof(null, 5), fn() => count([1, [2]], 1)] as $f) {
+    try { var_dump($f()); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE\n\
+         [8192] count(): Passing null to parameter #2 ($mode) of type int is deprecated\n\
+         TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given\n\
+         TypeError: count(): Argument #2 ($mode) must be of type int, array given\n\
+         ValueError: sizeof(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE\n\
+         int(3)\n"
+    );
+}

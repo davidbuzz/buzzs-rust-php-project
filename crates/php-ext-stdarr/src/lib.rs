@@ -37,8 +37,8 @@ pub struct StdArray;
 
 /// `(stub signature, handler)` of every array function.
 const FUNCTIONS: &[(&str, NativeFn)] = &[
-    ("count(Countable|array $value, int $mode = COUNT_NORMAL): int", f::count),
-    ("sizeof(Countable|array $value, int $mode = COUNT_NORMAL): int", f::count),
+    ("count(@unchecked Countable|array $value, int $mode = COUNT_NORMAL): int", f::count),
+    ("sizeof(@unchecked Countable|array $value, int $mode = COUNT_NORMAL): int", f::count),
     ("in_array(mixed $needle, array $haystack, bool $strict = false): bool", f::in_array),
     ("array_search(mixed $needle, array $haystack, bool $strict = false): int|string|false", f::array_search),
     ("array_keys(array $array, mixed $filter_value = UNKNOWN, bool $strict = false): array", f::array_keys),
