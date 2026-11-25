@@ -2352,7 +2352,8 @@ impl Vm {
     /// `run`, not the main script's, not a generator's, has no symbol table
     /// attached and does not return by reference, with no observer, when
     /// the operand is a defined compiled variable, a temporary not holding
-    /// a reference, or a literal, and the value is accepted by the return
+    /// a reference, a literal, or none (`return;`, the implicit return of
+    /// a body, without a return type or with `void`), and the value is accepted by the return
     /// type as it is (`verify_return`'s fast path). The result is then the
     /// one `op_return` gives: the same checks, the same release order
     /// ([`Frame::release_returning`]: the possible roots, then the release) and a
@@ -2377,7 +2378,10 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
-        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_)) {
+        if !matches!(
+            val,
+            Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_) | Operand::Unused
+        ) {
             return self.return_generic::<false>(val, base, ip);
         }
         if self.observer.enabled {
@@ -2451,6 +2455,13 @@ impl Vm {
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
+                // `return;` and the implicit return at the end of a body (a
+                // constructor's, a procedure's): null, for no return type
+                // or `void` (`verify_return(None)`; any other type goes on
+                // to its diagnostics in `return_generic`).
+                Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => {
+                    Err(Value::Null)
+                }
                 _ => return self.return_generic::<false>(val, base, ip),
             };
             // `SAVE_OPLINE()`: the release below may report this line.

@@ -634,3 +634,71 @@ n2u2r32u2fp2p2s2k2u2n2
 "#
     );
 }
+
+/// `return;` and the implicit return at the end of a body on the direct
+/// return: constructors (with a default filled), procedures whose result
+/// is used or not, a `void` function, an early `return;`, and a body
+/// whose local object is destroyed at the return (before the caller goes
+/// on).
+#[test]
+fn returns_without_a_value() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __destruct() { echo "destruct\n"; } }
+class K { public $a; public $b; function __construct($a, $b = 2) { $this->a = $a; $this->b = $b; } }
+class E { public $d; function __construct() { $this->d = new D; } }
+function proc($x) { global $log; $log .= $x; }
+function early($x) { if ($x) { return; } echo "fell\n"; }
+function vd($x): void { if ($x > 1) { return; } }
+function local() { $d = new D; }
+function nt(): ?int { if (false) { return 1; } return null; }
+function run() {
+    global $log;
+    for ($i = 0; $i < 3; $i++) {
+        $k = new K($i);
+        echo $k->a, $k->b, "\n";
+        proc($i);
+        $r = proc($i);
+        var_dump($r);
+        early($i);
+        var_dump(vd($i));
+        local();
+        echo "after local\n";
+        $e = new E;
+        $e = null;
+        echo "after e\n";
+        var_dump(nt());
+    }
+    echo $log, "\n";
+}
+run();
+"#),
+        r#"02
+NULL
+fell
+NULL
+destruct
+after local
+destruct
+after e
+NULL
+12
+NULL
+NULL
+destruct
+after local
+destruct
+after e
+NULL
+22
+NULL
+NULL
+destruct
+after local
+destruct
+after e
+NULL
+001122
+"#
+    );
+}
