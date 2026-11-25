@@ -2635,18 +2635,31 @@ pub(super) fn call_native(
     }
     // `zend_vm_stack_push_call_frame` + `EG(current_execute_data) = call`:
     // the frame as `FrameStack::push_builtin` leaves it.
+    //
+    // A released frame's `func` and `builtin_name` are empty
+    // (`Frame::release_native`), as `magic_call_name` normally is: each
+    // is stored through `replace`, whose old value is dropped only when
+    // there is one (a plain assignment called the out-of-line drop of the
+    // old `Option` every time).
     {
         let frame = &mut vm.frames.vec[live];
         frame.reinit_for_builtin(&vm.empty_code);
-        frame.func = Some(Func::Builtin(Rc::clone(&b)));
-        frame.builtin_name = (kind == PlainCall::Named).then(|| b.name.clone());
+        if let Some(old) = frame.func.replace(Func::Builtin(Rc::clone(&b))) {
+            drop(old);
+        }
+        let name = (kind == PlainCall::Named).then(|| b.name.clone());
+        if let Some(old) = std::mem::replace(&mut frame.builtin_name, name) {
+            drop(old);
+        }
         frame.observer_hidden = false;
     }
     // `SAVE_OPLINE()`: the handler may report the caller's line.
     vm.frames.vec[live - 1].ip = caller_ip;
     vm.frames.live = live + 1;
     vm.pending_call_dst = dst;
-    vm.magic_call_name = None;
+    if vm.magic_call_name.is_some() {
+        vm.magic_call_name = None;
+    }
     let handler = b.handler;
     // A method's `$this` and called scope, readied on the frame by
     // `prepare_method` (a function's frame has none).

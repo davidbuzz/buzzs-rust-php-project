@@ -692,15 +692,26 @@ impl Builtin {
     /// once.
     #[inline]
     pub(crate) fn plain_call(&self) -> PlainCall {
-        match self.plain.get() {
+        match self.plain_code() {
             PLAIN_NAMED => PlainCall::Named,
             PLAIN_UNNAMED => PlainCall::Unnamed,
-            PLAIN_NO | PLAIN_NAMED_REF => PlainCall::No,
-            _ => {
-                self.plain_call_slow();
-                self.plain_call()
-            }
+            _ => PlainCall::No,
         }
+    }
+
+    /// The worked-out [`Builtin::plain`] code. Not recursive (the slow path
+    /// stores it, then it is read again), so that the two answers above
+    /// inline into their callers: as a recursive function each was an
+    /// out-of-line call of ~36 instructions in the tape's native call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load and a test
+    fn plain_code(&self) -> u8 {
+        let code = self.plain.get();
+        if code != PLAIN_UNKNOWN {
+            return code;
+        }
+        self.plain_call_slow();
+        self.plain.get()
     }
 
     /// [`Builtin::plain_call`] decided per call rather than per function:
@@ -714,15 +725,11 @@ impl Builtin {
     /// plain. Worked out once.
     #[inline]
     pub(crate) fn plain_call_upto(&self) -> (PlainCall, usize) {
-        match self.plain.get() {
+        match self.plain_code() {
             PLAIN_NAMED => (PlainCall::Named, usize::MAX),
             PLAIN_UNNAMED => (PlainCall::Unnamed, usize::MAX),
             PLAIN_NAMED_REF => (PlainCall::Named, usize::from(self.first_ref.get())),
-            PLAIN_NO => (PlainCall::No, usize::MAX),
-            _ => {
-                self.plain_call_slow();
-                self.plain_call_upto()
-            }
+            _ => (PlainCall::No, usize::MAX),
         }
     }
 
