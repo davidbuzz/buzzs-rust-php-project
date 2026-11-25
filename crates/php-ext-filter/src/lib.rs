@@ -158,6 +158,22 @@ fn request_startup(vm: &mut Vm) {
     }
     let flags =
         php_filter::parse_default_flags_ini(vm.ini_string("filter.default_flags").as_deref());
+    // php-src filters `$_SERVER` and `$_ENV` as their variables are
+    // registered, also when they are JIT auto-globals created later; ours
+    // filters the arrays here, so it has them created first (an armed
+    // `$_REQUEST` is merged from the filtered GET/POST/COOKIE when named).
+    // Only under a filter other than `unsafe_raw` (the deprecated setting).
+    if vm.ini_bool("auto_globals_jit") {
+        for name in [b"_SERVER".as_slice(), b"_ENV"] {
+            vm.is_auto_global(name);
+        }
+        INPUTS.with(|i| {
+            if let Some(inputs) = i.borrow_mut().as_mut() {
+                inputs.env = superglobal(vm, b"_ENV");
+                inputs.server = superglobal(vm, b"_SERVER");
+            }
+        });
+    }
     // `$_REQUEST` is built from the filtered GET/POST/COOKIE values;
     // filtering its raw copies gives the same strings.
     for name in [

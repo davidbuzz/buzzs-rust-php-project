@@ -718,3 +718,29 @@ fn jit_request_merges_the_filtered_inputs_once() {
         "&#60;b&#62; &#60;b&#62; g [\"p\",\"q\",\"a\"]\n"
     );
 }
+
+/// `filter.default` filters a JIT `$_SERVER` too, and `INPUT_SERVER`
+/// keeps the raw value. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn filter_default_reaches_a_jit_server() {
+    let files = [(
+        "s.php",
+        "<?php echo $_SERVER[\"HTTP_X_FOO\"], \"|\", json_encode(array_keys($GLOBALS)), \"|\", filter_input(INPUT_SERVER, \"HTTP_X_FOO\"), \"\\n\";\n",
+    )];
+    let args = [
+        "-d",
+        "filter.default=special_chars",
+        "-d",
+        "error_reporting=24575",
+    ];
+    let srv = start_with("srvflt", &files, None, &args);
+    let r = request(
+        srv.port,
+        "GET /s.php HTTP/1.1\r\nHost: x\r\nX-Foo: <b>\r\nConnection: close\r\n\r\n",
+    );
+    assert_eq!(
+        split(&r).1,
+        "&#60;b&#62;|[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\"]|<b>\n"
+    );
+}
