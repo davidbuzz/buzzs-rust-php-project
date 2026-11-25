@@ -184,3 +184,34 @@ bool(false)
 "#
     );
 }
+
+/// get_resource_id() and get_resource_type() parse with
+/// `Z_PARAM_RESOURCE`: anything else is a `TypeError`, in either mode.
+#[test]
+fn resource_functions_refuse_other_values() {
+    let out = run(r#"<?php
+declare(strict_types=1);
+foreach ([1, "x", null, 1.5, [], new stdClass, false] as $v) {
+    try { get_resource_id($v); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { get_resource_type($v); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(
+        out,
+        "get_resource_id(): Argument #1 ($resource) must be of type resource, int given
+get_resource_type(): Argument #1 ($resource) must be of type resource, int given
+get_resource_id(): Argument #1 ($resource) must be of type resource, string given
+get_resource_type(): Argument #1 ($resource) must be of type resource, string given
+get_resource_id(): Argument #1 ($resource) must be of type resource, null given
+get_resource_type(): Argument #1 ($resource) must be of type resource, null given
+get_resource_id(): Argument #1 ($resource) must be of type resource, float given
+get_resource_type(): Argument #1 ($resource) must be of type resource, float given
+get_resource_id(): Argument #1 ($resource) must be of type resource, array given
+get_resource_type(): Argument #1 ($resource) must be of type resource, array given
+get_resource_id(): Argument #1 ($resource) must be of type resource, stdClass given
+get_resource_type(): Argument #1 ($resource) must be of type resource, stdClass given
+get_resource_id(): Argument #1 ($resource) must be of type resource, false given
+get_resource_type(): Argument #1 ($resource) must be of type resource, false given
+"
+    );
+}

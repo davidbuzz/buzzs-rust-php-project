@@ -2504,20 +2504,35 @@ pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
     0
 }
 
-fn get_resource_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+/// `Z_PARAM_RESOURCE` of an untyped stub parameter: anything but a
+/// resource (closed or not) is a `TypeError`, in either mode
+/// (ref: Zend/zend_builtin_functions.c `get_resource_type`,
+/// `get_resource_id`; Zend/zend_API.c `zend_wrong_parameter_type_error`).
+fn resource_arg(vm: &mut Vm, a: &Args) -> VmResult<php_runtime::Resource> {
     match a.at(0) {
-        Value::Resource(r) => Ok(sv(r
-            .type_name()
-            .map_or_else(|| "Unknown".to_string(), |t| t.to_string_lossy()))),
-        _ => Ok(Value::Bool(false)),
+        Value::Resource(r) => Ok(r),
+        other => {
+            let given = crate::typecheck::given_type(&other);
+            Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be of type resource, {given} given"),
+            ))
+        }
     }
 }
 
-fn get_resource_id(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    match a.at(0) {
-        Value::Resource(r) => Ok(Value::Int(r.handle())),
-        _ => Ok(Value::Int(0)),
-    }
+fn get_resource_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = resource_arg(vm, a)?;
+    Ok(sv(r.type_name().map_or_else(
+        || "Unknown".to_string(),
+        |t| t.to_string_lossy(),
+    )))
+}
+
+fn get_resource_id(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(resource_arg(vm, a)?.handle()))
 }
 
 fn enum_cases(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
