@@ -441,7 +441,14 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     if let Err(status) = preload::startup(&cfg) {
         return status;
     }
-    startup::final_status(do_cli(argv, &cfg))
+    let status = startup::final_status(do_cli(argv, &cfg));
+    // A failed write to standard output set EG(exit_status) to 255
+    // (sapi_cli_ub_write()), also when it happened in the final flush.
+    if status == 0 && sapi::stdout_failed() {
+        255
+    } else {
+        status
+    }
 }
 
 /// `context.mode` (`php_cli.h`; the order matters).

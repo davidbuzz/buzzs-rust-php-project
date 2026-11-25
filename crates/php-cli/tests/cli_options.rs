@@ -412,3 +412,55 @@ fn removed_directive_fails_startup_with_status_1() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn failed_stdout_write_aborts_with_255() {
+    let d = temp_dir("stdout-gone");
+    // php8.5: the echo after fclose(STDOUT) ends the script (no "y").
+    let out = php_in(
+        &d,
+        &["-r", "fclose(STDOUT); echo 'x'; fwrite(STDERR, 'y');"],
+    );
+    assert_eq!(out.status.code(), Some(255));
+    assert!(out.stderr.is_empty(), "{:?}", out.stderr);
+    // Buffered output fails only in the final flush: the script ran.
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "fclose(STDOUT); ob_start(); echo 'x'; fwrite(STDERR, 'y');",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(255));
+    assert_eq!(out.stderr, b"y");
+    // Nothing written, nothing failed.
+    let out = php_in(&d, &["-r", "fclose(STDOUT); fwrite(STDERR, 'y');"]);
+    assert_eq!(out.status.code(), Some(0));
+    // A reader that goes away (`php ... | head -c1`) ends an endless
+    // writer instead of leaving it looping on EPIPE.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_php"))
+        .args(["-n", "-r", "while (1) echo 1;"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn php");
+    {
+        use std::io::Read as _;
+        let mut stdout = child.stdout.take().unwrap();
+        let mut one = [0u8; 1];
+        stdout.read_exact(&mut one).unwrap();
+    }
+    let mut status = None;
+    for _ in 0..200 {
+        if let Some(s) = child.try_wait().unwrap() {
+            status = Some(s);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert_eq!(status.and_then(|s| s.code()), Some(255));
+    let _ = std::fs::remove_dir_all(&d);
+}

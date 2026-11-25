@@ -332,6 +332,7 @@ thread_local! {
 /// normally leaves (php8.5 -d mail.cr_lf_mode=abc runs the script and
 /// exits with 255). An explicit `exit(0)` in C would reset it; the
 /// status this sees cannot tell that apart from a normal end.
+#[must_use]
 pub fn final_status(status: i32) -> i32 {
     if status == 0 && STARTUP_FATAL.with(std::cell::Cell::get) {
         255
