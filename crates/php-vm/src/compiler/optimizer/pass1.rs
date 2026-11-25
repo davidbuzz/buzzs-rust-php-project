@@ -997,7 +997,8 @@ mod tests {
         assert_eq!(ev(b"ord", &[&bstr(b"")]), None);
         assert_eq!(ev(b"ord", &[&bstr(b"Hello")]), None);
         assert_eq!(ev(b"ord", &[&bstr(b"A")]), dbg(Value::Int(65)));
-        for alias in [&b"is_double"[..], b"is_integer", b"is_long", b"doubleval"] {
+        let aliases: [&[u8]; 4] = [b"is_double", b"is_integer", b"is_long", b"doubleval"];
+        for alias in aliases {
             assert_eq!(ev(alias, &[&Value::Int(1)]), None);
             assert!(!is_typecheck_fn(alias));
         }
