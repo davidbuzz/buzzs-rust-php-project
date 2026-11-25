@@ -1407,11 +1407,8 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     };
     let (target, limit) = match func {
         Func::User(uf) => {
-            if !prepares(&uf) {
-                return None;
-            }
+            let limit = prepares(&uf)?;
             ready_frame(frame, &uf);
-            let limit = uf.params.len().min(MAX_ARGS);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
@@ -1515,15 +1512,31 @@ pub(super) fn quick_send(
     Some(at + 2)
 }
 
-/// Whether a call of `uf` by name or as a method may be prepared: a
-/// declaration that makes a plain call ([`UserFunction::call_shape`]), or
-/// one whose only difference from that is its static variables
-/// (`crate::call::statics_only`). One load and compare for every plain
-/// function.
+/// Whether a call of `uf` by name or as a method may be prepared, and how
+/// many arguments [`send`] then takes: a declaration that makes a plain
+/// call ([`UserFunction::call_shape`]) takes its declared parameters; one
+/// whose only differences from that are its static variables, a trailing
+/// variadic parameter or by-reference parameters
+/// ([`UserFunction::near_plain_limit`]) takes as many as that allows (the
+/// arguments for a variadic parameter wait in the frame's compiled
+/// variables from the variadic one's on, so no more than it has: [`enter`]
+/// moves them to the argument buffer). One load and compare for every
+/// plain function.
 #[inline(always)]
 #[allow(clippy::inline_always)] // every prepared call
-fn prepares(uf: &UserFunction) -> bool {
-    uf.call_shape() != CallShape::NOT_PLAIN || crate::call::statics_only(uf)
+fn prepares(uf: &UserFunction) -> Option<usize> {
+    if uf.call_shape() != CallShape::NOT_PLAIN {
+        return Some(uf.params.len().min(MAX_ARGS));
+    }
+    near_limit(uf)
+}
+
+/// [`prepares`] of a declaration of shape [`CallShape::NOT_PLAIN`].
+#[cold]
+#[inline(never)]
+fn near_limit(uf: &UserFunction) -> Option<usize> {
+    let most = uf.near_plain_limit()?;
+    Some(most.min(MAX_ARGS).min(uf.code.cv_names.len()))
 }
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
@@ -1610,9 +1623,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
             return prepare_native_method(caller, frame, obj, b, scope, is_static, called_class);
         }
     };
-    if !prepares(&uf) {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     let called_class = Rc::clone(cls);
     // The call's `$this`, as `Vm::init_method_call_fast` takes it: the
     // temporary's handle moved out, or a copy of the variable's object;
@@ -1633,7 +1644,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len,
@@ -1674,14 +1685,12 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     let Func::User(uf) = func else {
         return None;
     };
-    if !prepares(&uf) {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     ready_frame(frame, &uf);
     frame.scope = scope;
     frame.called = called_class;
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1799,9 +1808,7 @@ pub(super) fn prepare_relative_static(
             .and_then(std::rc::Weak::upgrade)?;
         (uf, scope, cached.is_static)
     };
-    if !prepares(&uf) {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     let (this, late_bound) = if is_static {
         let late_bound = match caller.called.as_ref() {
             Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
@@ -1821,7 +1828,7 @@ pub(super) fn prepare_relative_static(
     frame.scope = Some(scope);
     frame.called = Some(late_bound);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1869,9 +1876,10 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     let Func::User(uf) = &d.func else {
         return None;
     };
-    if d.magic_name.is_some() || uf.call_shape() == CallShape::NOT_PLAIN {
+    if d.magic_name.is_some() {
         return None;
     }
+    let limit = prepares(uf)?;
     let uf = Rc::clone(uf);
     ready_frame(frame, &uf);
     frame.this = d.this.clone();
@@ -1880,7 +1888,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     frame.closure = if d.fake { None } else { Some(o.clone()) };
     drop(internal);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -2105,7 +2113,9 @@ pub(super) fn enter(
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
     };
-    if n < uf.required as usize || n > uf.params.len() {
+    // (`n <= prep.limit`, at most the declared parameters but into a
+    // variadic one: `prepares`.)
+    if n < uf.required as usize || n > prep.limit {
         return Err(prep);
     }
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
@@ -2137,6 +2147,12 @@ pub(super) fn enter(
     if !frame.args.is_empty() {
         frame.args.clear();
     }
+    // The arguments past a variadic function's declared parameters were
+    // sent into the compiled variables from the variadic one's on: they
+    // go to the argument buffer, where its `RECV_VARIADIC` collects them.
+    if uf.flags & flags::VARIADIC != 0 && n >= uf.params.len() {
+        variadic_extras(frame, uf.params.len() - 1, n);
+    }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
     {
         frame.direct_argc = n as u32;
@@ -2151,6 +2167,25 @@ pub(super) fn enter(
     caller.ip = caller_ip;
     vm.frames.live = live + 1;
     Ok(())
+}
+
+/// The arguments `v..n` of a prepared call of a variadic function, sent
+/// into the compiled variables from the variadic parameter's (`v`) on,
+/// moved to the frame's argument buffer after a `None` for each declared
+/// parameter bound into its variable: `Vm::push_user_call`'s layout, which
+/// `RECV_VARIADIC` (`Vm::op_recv_variadic`), `func_get_args()` and
+/// backtraces read. The variables are left undefined, as a call leaves
+/// them.
+#[cold]
+#[inline(never)]
+fn variadic_extras(frame: &mut crate::vm::Frame, v: usize, n: usize) {
+    for _ in 0..v {
+        frame.args.push(None);
+    }
+    for i in v..n {
+        let arg = frame.cvs.get_mut(i).and_then(|slot| slot.as_mut().take());
+        frame.args.push(arg);
+    }
 }
 
 /// `ZEND_DO_UCALL` of the prepared call when the function's whole body
@@ -2627,15 +2662,15 @@ pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared
         Func::User(uf) => {
             // A closure's static variables are its own (as for `$f()`,
             // [`prepare_closure`]).
-            let plain = if call.closure.is_some() {
-                uf.call_shape() != CallShape::NOT_PLAIN
+            let limit = if call.closure.is_some() {
+                (uf.call_shape() != CallShape::NOT_PLAIN).then(|| uf.params.len().min(MAX_ARGS))
             } else {
                 prepares(uf)
             };
-            if !plain {
+            let Some(limit) = limit else {
                 return Err(call);
-            }
-            (Callee::User(Rc::clone(uf)), uf.params.len().min(MAX_ARGS))
+            };
+            (Callee::User(Rc::clone(uf)), limit)
         }
         Func::Builtin(b) => {
             if call.this.is_some()
@@ -2735,14 +2770,12 @@ fn user_call_static(
     let Func::User(uf) = func else {
         return None;
     };
-    if !prepares(&uf) {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     ready_frame(frame, &uf);
     frame.scope = scope;
     frame.called = Some(called);
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -2780,11 +2813,8 @@ fn user_call_function(
     }
     let (callee, limit) = match func {
         Func::User(uf) => {
-            if !prepares(&uf) {
-                return None;
-            }
+            let limit = prepares(&uf)?;
             ready_frame(frame, &uf);
-            let limit = uf.params.len().min(MAX_ARGS);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
@@ -2856,15 +2886,13 @@ fn user_call_method(
         };
         (uf, scope, e.is_static)
     };
-    if !prepares(&uf) {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     ready_frame(frame, &uf);
     frame.this = (!is_static).then(|| o.clone());
     frame.scope = scope;
     frame.called = Some(Rc::clone(cls));
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -2921,9 +2949,7 @@ fn user_call_object(
     let Func::User(uf) = &m.func else {
         return None;
     };
-    if !prepares(uf) {
-        return None;
-    }
+    let limit = prepares(uf)?;
     let scope = m.scope.upgrade()?;
     let uf = Rc::clone(uf);
     ready_frame(frame, &uf);
@@ -2931,7 +2957,7 @@ fn user_call_object(
     frame.scope = Some(scope);
     frame.called = Some(Rc::clone(cls));
     Some(Prepared {
-        limit: uf.params.len().min(MAX_ARGS),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len,

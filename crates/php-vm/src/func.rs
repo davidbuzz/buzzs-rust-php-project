@@ -185,7 +185,15 @@ pub struct CallShape {
     /// is nothing else ([`UserFunction::ctor_fold`]), worked out on first
     /// use.
     fold: std::cell::OnceCell<Option<Box<[FoldStep]>>>,
+    /// [`UserFunction::near_plain_limit`]'s answer for a declaration of
+    /// shape [`CallShape::NOT_PLAIN`]: 0 while unknown, [`NEAR_NO`] when
+    /// its calls stay generic, else one more than the most arguments a
+    /// plain call of it passes.
+    near: Cell<u8>,
 }
+
+/// [`CallShape::near`] of a declaration whose calls all stay generic.
+const NEAR_NO: u8 = u8::MAX;
 
 impl Drop for CallShape {
     fn drop(&mut self) {
@@ -261,6 +269,65 @@ impl UserFunction {
             Some(c) if self.call_shape.kind.get() > CallShape::NOT_PLAIN => c.get() as usize,
             _ => first_op_after_recv(&self.code, n) as usize,
         }
+    }
+
+    /// For a declaration of shape [`CallShape::NOT_PLAIN`] that differs
+    /// from a plain one only by its static variables, a trailing variadic
+    /// parameter or by-reference parameters, the most arguments a call of
+    /// it may pass and still take the plain call paths (the tape's
+    /// prepared call, `Vm::push_simple_ucall`); `None` for any other.
+    ///
+    /// php-src makes no difference between such calls and others at the
+    /// call: the static variables live with the function and
+    /// `ZEND_BIND_STATIC` binds them as the body runs; the arguments past
+    /// the declared ones wait in the call frame for `ZEND_RECV_VARIADIC`
+    /// (here: in the frame's argument buffer, after a `None` for each
+    /// declared parameter bound into its compiled variable, as the generic
+    /// call leaves them); a by-reference parameter that the call does not
+    /// reach (fewer arguments than its position, the limit) is bound from
+    /// its default by its `RECV_INIT` like any other. Every parameter must
+    /// be untyped (or `mixed`): the plain paths check argument types only
+    /// for [`CallShape::TYPED`]. A closure with static variables is left
+    /// out (its variables are its object's, `Frame::statics`).
+    ///
+    /// The JIT and the tape's whole-function paths read only
+    /// [`UserFunction::call_shape`] and keep away from these.
+    #[inline]
+    pub(crate) fn near_plain_limit(&self) -> Option<usize> {
+        let mut s = self.call_shape.near.get();
+        if s == 0 {
+            s = self.compute_near();
+            self.call_shape.near.set(s);
+        }
+        (s != NEAR_NO).then(|| usize::from(s - 1))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compute_near(&self) -> u8 {
+        let nparams = self.params.len();
+        let plain_rest = self.flags
+            & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR)
+            == 0
+            && (self.flags & flags::CLOSURE == 0 || self.code.num_statics == 0)
+            && self.code.num_finally == 0
+            && nparams <= self.code.cv_names.len()
+            && self.params.iter().enumerate().all(|(i, p)| {
+                (!p.variadic || i + 1 == nparams) && p.ty.as_ref().is_none_or(TypeDecl::is_mixed)
+            });
+        if !plain_rest {
+            return NEAR_NO;
+        }
+        let variadic = self.params.last().is_some_and(|p| p.variadic);
+        let most = if variadic { usize::MAX } else { nparams };
+        let first_ref = self
+            .params
+            .iter()
+            .position(|p| p.by_ref)
+            .unwrap_or(usize::MAX);
+        // (At most 253: the count is kept in a byte, next to `NEAR_NO`.)
+        let limit = most.min(first_ref).min(usize::from(NEAR_NO) - 2);
+        u8::try_from(limit + 1).unwrap_or(NEAR_NO)
     }
 
     /// The steps of this function's body when the whole of it, called

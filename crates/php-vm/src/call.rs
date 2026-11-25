@@ -2252,14 +2252,26 @@ impl Vm {
             // stores; the buffer only grows on a first call this deep):
             // `extend` of a mapped range compiled to an out-of-line
             // `Vec::extend_trusted` call of ~30 instructions per call.
-            for _ in 0..n {
+            //
+            // A variadic function's arguments past its declared parameters
+            // stay in the buffer for its `RECV_VARIADIC` (`push_user_call`'s
+            // layout); every other argument has its parameter (`simple_ucall`).
+            let bound = if uf.flags & flags::VARIADIC == 0 {
+                n
+            } else {
+                n.min(uf.params.len().saturating_sub(1))
+            };
+            for _ in 0..bound {
                 frame.args.push(None);
             }
-            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..n]) {
+            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..bound]) {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
                     drop(old);
                 }
+            }
+            if bound < n {
+                variadic_extras(&mut frame.args, &mut call.inline_args[bound..n]);
             }
             // `RECV` of an argument that was passed and needs no coercion
             // has nothing left to do: start after it (after a `RECV_INIT`'s
@@ -4226,7 +4238,10 @@ impl Vm {
                 &format!("{fname}(): Argument #{} (${}) not passed", n + 1, p.name),
             );
         }
-        let exact = uf.required as usize == uf.params.len() && uf.flags & flags::VARIADIC == 0;
+        // `required_num_args == num_args`, where `num_args` leaves the
+        // variadic parameter out (`f($a, $b, ...$c)` needs "exactly 2").
+        let declared = uf.params.len() - usize::from(uf.flags & flags::VARIADIC != 0);
+        let exact = uf.required as usize == declared;
         let mut msg = format!("Too few arguments to function {fname}(), {passed} passed");
         let caller = self
             .frames
@@ -4962,15 +4977,21 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
     // `n <= params.len() <= cv_names.len()` (the shape),
     // so every argument has its compiled variable, and a trailing variadic
     // parameter gets none (its `RECV_VARIADIC` collects nothing).
-    if (shape == CallShape::NOT_PLAIN && !statics_only(uf))
-        || !call.args.is_empty()
+    if !call.args.is_empty()
         || !call.named.is_empty()
         || call.magic_name.is_some()
         || call.pfa.is_some()
         || n < uf.required as usize
-        || n > uf.params.len()
         || n > call.inline_args.len()
     {
+        return false;
+    }
+    if shape == CallShape::NOT_PLAIN {
+        // Static variables, a trailing variadic parameter, a by-reference
+        // parameter past the arguments passed (`near_plain`).
+        return near_plain(uf, n);
+    }
+    if n > uf.params.len() {
         return false;
     }
     if shape == CallShape::TYPED {
@@ -4988,41 +5009,43 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
 }
 
 /// A function or method that would make a plain call but for its `static`
-/// variables (`function f() { static $n = 0; return ++$n; }`): such calls
-/// took the generic `InitFCall`/`Send`/`DoCall` (`Vm::push_user_call`),
-/// about a thousand instructions more per call. The tape's prepared call
-/// (`exec/tape/calls.rs`) and [`Vm::push_simple_ucall`] take them. php-src makes no
-/// difference between them at the call: the static variables live with
-/// the function (`ZEND_MAP_PTR(op_array->static_variables_ptr)`), and
-/// `ZEND_BIND_STATIC` binds them from there when the body runs.
+/// variables (`function f() { static $n = 0; return ++$n; }`), a trailing
+/// variadic parameter (`function f($name, ...$args)`) or a by-reference
+/// parameter the call does not reach (`function get($k, &$found = null)`
+/// called as `get($k)`), called with `n` arguments: such calls took the
+/// generic `InitFCall`/`Send`/`DoCall` (`Vm::push_user_call`), about a
+/// thousand instructions more per call. The tape's prepared call
+/// (`exec/tape/calls.rs`) and [`Vm::push_simple_ucall`] take them
+/// ([`UserFunction::near_plain_limit`] says which, and how many arguments).
 ///
-/// The same holds here: a frame of such a function never holds the
-/// variables (`Frame::statics` is only set for a closure, whose variables
-/// are its object's, and closures are excluded); `Vm::static_slot` and
-/// `Vm::static_init` read the function's own store
+/// Static variables: a frame of such a function never holds them
+/// (`Frame::statics` is only set for a closure, whose variables are its
+/// object's, and closures with statics are excluded); `Vm::static_slot`
+/// and `Vm::static_init` read the function's own store
 /// (`UserFunction::statics`) through `Frame::ufunc`, which the prepared
-/// frame holds as the generic call's does. At the
-/// return, `Frame::keeps_function` declines a function with statics, so
-/// the frame drops its handles as after a generic call. Typed parameters
-/// are left to the generic call: the plain paths check the arguments only
-/// for the shape that says so (`CallShape::TYPED`). The JIT and the tape's
-/// whole-function paths still see `CallShape::NOT_PLAIN` and keep away.
+/// frame holds as the generic call's does. At the return,
+/// `Frame::keeps_function` declines a function with statics, so the frame
+/// drops its handles as after a generic call.
+///
+/// A variadic parameter: the arguments past the declared ones go to the
+/// frame's argument buffer after a `None` for each declared parameter, as
+/// `push_user_call` leaves them, where `RecvVariadic`, `func_get_args()`
+/// and backtraces read them.
 #[cold]
 #[inline(never)]
-pub(crate) fn statics_only(uf: &UserFunction) -> bool {
-    uf.code.num_statics != 0
-        && uf.flags
-            & (flags::DEPRECATED
-                | flags::NODISCARD
-                | flags::NO_BODY
-                | flags::GENERATOR
-                | flags::CLOSURE)
-            == 0
-        && uf.code.num_finally == 0
-        && uf.params.len() <= uf.code.cv_names.len()
-        && uf.params.iter().all(|p| {
-            !p.variadic && !p.by_ref && p.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed)
-        })
+pub(crate) fn near_plain(uf: &UserFunction, n: usize) -> bool {
+    uf.near_plain_limit().is_some_and(|most| n <= most)
+}
+
+/// The arguments of a plain call of a variadic function past its declared
+/// parameters (`extra`, moved out), appended to the frame's argument
+/// buffer where its `RECV_VARIADIC` collects them (`Vm::op_recv_variadic`).
+#[cold]
+#[inline(never)]
+fn variadic_extras(args: &mut Vec<Option<Value>>, extra: &mut [Option<Value>]) {
+    for a in extra {
+        args.push(a.take());
+    }
 }
 
 /// Whether a value is returned as it is from a function with return type
