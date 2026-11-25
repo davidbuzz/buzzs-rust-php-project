@@ -4380,7 +4380,9 @@ impl Vm {
         let variadic = b.flags & flags::VARIADIC != 0;
         let nparams = b.params.len();
         let required = b.required as usize;
-        let (kind, n) = if given < required {
+        let (kind, n) = if let Some(exact) = zpp_exact_count(b.name.as_bytes(), given) {
+            ("exactly", exact)
+        } else if given < required {
             if let Some(min) = zpp_min_args(b.name.as_bytes()) {
                 ("at least", min)
             } else if required == nparams && !variadic {
@@ -7225,6 +7227,18 @@ fn zpp_min_args(name: &[u8]) -> Option<usize> {
         | b"array_intersect_ukey"
         | b"array_intersect_uassoc" => Some(2),
         b"array_udiff_uassoc" | b"array_uintersect_uassoc" => Some(3),
+        _ => None,
+    }
+}
+
+/// The exact argument count of a builtin whose zpp depends on how many
+/// arguments it got, for a count its stub's range refuses: strtr()
+/// parses `(2, 2)` for up to two arguments and `(3, 3)` for more, so it
+/// "expects exactly 2 arguments, 1 given" and "exactly 3 arguments, 4
+/// given" (ref: ext/standard/string.c `PHP_FUNCTION(strtr)`).
+fn zpp_exact_count(name: &[u8], given: usize) -> Option<usize> {
+    match name {
+        b"strtr" => Some(if given <= 2 { 2 } else { 3 }),
         _ => None,
     }
 }

@@ -247,3 +247,28 @@ ArgumentCountError: array_udiff() expects at least 2 arguments, 0 given
 "
     );
 }
+
+/// strtr() parses exactly two arguments, or exactly three when it got
+/// more than two: its count errors say "exactly", by name or dynamically.
+#[test]
+fn strtr_argument_count_is_exact() {
+    let out = run(r#"<?php
+$f = 'strtr';
+foreach ([[], ['a'], ['a', 'b', 'c', 'd']] as $args) {
+    try { strtr(...$args); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+    try { $f(...$args); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+}
+try { strtr('a'); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "strtr() expects exactly 2 arguments, 0 given
+strtr() expects exactly 2 arguments, 0 given
+strtr() expects exactly 2 arguments, 1 given
+strtr() expects exactly 2 arguments, 1 given
+strtr() expects exactly 3 arguments, 4 given
+strtr() expects exactly 3 arguments, 4 given
+strtr() expects exactly 2 arguments, 1 given
+"
+    );
+}
