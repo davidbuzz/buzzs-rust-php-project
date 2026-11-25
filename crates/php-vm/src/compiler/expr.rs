@@ -426,8 +426,10 @@ impl Compiler<'_> {
                 .unwrap_or(Operand::Unused),
             ExprKind::Binary { op, left, right } => self.compile_binary(*op, left, right)?,
             ExprKind::Unary { op, expr } => {
+                // `zend_ast_create_1()` gives a prefix operator's node the
+                // line of its operand, and the opcode is emitted after the
+                // operand is compiled: keep the line that left.
                 let a = self.compile_expr(expr)?;
-                self.f().line = line;
                 let t = self.tmp();
                 match op {
                     UnaryOp::Minus => {
@@ -477,8 +479,10 @@ impl Compiler<'_> {
                 Operand::Tmp(t)
             }
             ExprKind::Cast { kind, expr } => {
+                // `zend_ast_create_1()` gives a prefix operator's node the
+                // line of its operand, and the opcode is emitted after the
+                // operand is compiled: keep the line that left.
                 let a = self.compile_expr(expr)?;
-                self.f().line = line;
                 let t = self.tmp();
                 let k = match kind {
                     ast::CastKind::Int => CastKind::Int,
@@ -654,8 +658,9 @@ impl Compiler<'_> {
                         // notices unless a call (ZEND_RETURNS_FUNCTION)
                         // returned a reference.
                         let call = is_call_expr(v);
+                        // ZEND_YIELD is emitted on the line compiling the
+                        // value left (the node has the operand's line).
                         let val = self.compile_expr(v)?;
-                        self.f().line = line;
                         self.emit(Op::YieldByRefValue {
                             key: k,
                             val,
@@ -665,11 +670,15 @@ impl Compiler<'_> {
                         return Ok(Operand::Tmp(t));
                     }
                 }
+                // With a value, ZEND_YIELD is emitted on the line compiling
+                // it left; a bare `yield` is on its own line.
                 let v = match value {
                     Some(v) => Some(self.compile_expr(v)?),
-                    None => None,
+                    None => {
+                        self.f().line = line;
+                        None
+                    }
                 };
-                self.f().line = line;
                 self.emit(Op::Yield {
                     key: k,
                     val: v,
@@ -686,8 +695,8 @@ impl Compiler<'_> {
                         line,
                     );
                 }
+                // On the operand's line, as a prefix operator.
                 let v = self.compile_expr(inner)?;
-                self.f().line = line;
                 let t = self.tmp();
                 self.emit(Op::YieldFrom {
                     src: v,
@@ -696,8 +705,8 @@ impl Compiler<'_> {
                 Operand::Tmp(t)
             }
             ExprKind::Throw(inner) => {
+                // On the operand's line, as a prefix operator.
                 let v = self.compile_expr(inner)?;
-                self.f().line = line;
                 self.emit(Op::Throw(v));
                 self.lit(Value::Null)
             }
