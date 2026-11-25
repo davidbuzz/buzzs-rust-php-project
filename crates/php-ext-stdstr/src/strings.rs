@@ -203,6 +203,9 @@ fn implode_zstr(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> VmResult<ZStr> {
             }
         }
     }
+    if let Some(r) = implode_strings(vm, glue, pieces) {
+        return r;
+    }
     let mut known = 0usize;
     let mut valid = pieces.len() == 1 || glue.is_valid_utf8();
     for (_, v) in pieces.iter() {
@@ -237,6 +240,32 @@ fn implode_zstr(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> VmResult<ZStr> {
         out.mark_valid_utf8();
     }
     Ok(out)
+}
+
+/// [`implode_zstr`] of two or more pieces that are all strings (not behind
+/// references), the common case: `php_implode()`'s first pass sums the
+/// lengths, then the result is allocated once and each piece and glue is
+/// copied in (`ZStr::join_exact`), with no per-piece capacity or flag
+/// work. `None`, having done nothing, when a piece is anything else.
+fn implode_strings(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> Option<VmResult<ZStr>> {
+    let mut known = 0usize;
+    let mut valid = glue.is_valid_utf8();
+    for v in pieces.values() {
+        let Value::Str(s) = v else {
+            return None;
+        };
+        known = known.saturating_add(s.len());
+        valid &= s.is_valid_utf8();
+    }
+    let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
+    if let Err(e) = mem::check(vm, mem::zstr(total)) {
+        return Some(Err(e));
+    }
+    let strs = pieces.values().map(|v| match v {
+        Value::Str(s) => s.as_bytes(),
+        _ => &[],
+    });
+    Some(Ok(ZStr::join_exact(glue.as_bytes(), total, valid, strs)))
 }
 
 fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1277,6 +1306,23 @@ mod tests {
                 vec![Value::Null, Value::Bool(true), valid("z")],
                 &b"-1-z"[..],
             ),
+            // All strings: the one-allocation path (`implode_strings`).
+            (
+                ZStr::from(","),
+                vec![valid("a"), valid("bc"), valid(""), valid("d")],
+                &b"a,bc,,d"[..],
+            ),
+            (ZStr::from(""), vec![valid("a"), valid("b")], &b"ab"[..]),
+            (
+                ZStr::from(&b"\xff"[..]),
+                vec![valid("a"), valid("b")],
+                &b"a\xffb"[..],
+            ),
+            (
+                ZStr::from(" | "),
+                vec![valid("x"), raw(b"y\xc3")],
+                &b"x | y\xc3"[..],
+            ),
         ];
         for (glue, pieces, joined) in cases {
             let arr = ZArray::from_values(pieces);
@@ -1289,6 +1335,23 @@ mod tests {
                 out.is_valid_utf8()
             );
         }
+    }
+
+    /// A list with a hole (an unset element) and a reference among strings
+    /// joins what is left, as `ZEND_HASH_FOREACH_VAL` + `ZVAL_DEREF` read
+    /// it (`/usr/bin/php8.5 -n`: `$a = ['a', 'b', 'c']; unset($a[1]);
+    /// implode(',', $a)` is `a,c`).
+    #[test]
+    fn implode_skips_holes_and_reads_references() {
+        let mut vm = php_vm::Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()));
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        let mut arr = ZArray::from_values([s("a"), s("b"), s("c")]);
+        arr.make_mut().remove(&php_runtime::ArrayKey::Int(1));
+        let out = implode_zstr(&mut vm, &ZStr::from(","), &arr).unwrap();
+        assert_eq!(out.as_bytes(), b"a,c");
+        let arr = ZArray::from_values([s("a"), Value::Reference(PhpRef::new(s("r"))), s("c")]);
+        let out = implode_zstr(&mut vm, &ZStr::from(","), &arr).unwrap();
+        assert_eq!(out.as_bytes(), b"a,r,c");
     }
 
     fn list(items: Vec<Value>) -> ZArray {

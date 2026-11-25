@@ -1566,6 +1566,62 @@ impl ZStr {
         }
     }
 
+    /// `php_implode()`'s result: the `pieces` with `glue` between each two,
+    /// in one allocation of `total` bytes, the length worked out before the
+    /// first copy (`zend_string_safe_alloc` of the summed lengths, then a
+    /// `memcpy` of each piece and glue). `total` is the caller's sum of the
+    /// pieces' lengths and the glues'; were the pieces longer, the string
+    /// stops at `total` bytes. The result is `IS_STR_VALID_UTF8` when
+    /// `valid_utf8` says so (the caller's `ZSTR_GET_COPYABLE_CONCAT_PROPERTIES`
+    /// of the glue and every piece). Pieces and glue of zero or one byte
+    /// are stored without a `memcpy` call.
+    #[must_use]
+    pub fn join_exact<'a, I>(glue: &[u8], total: usize, valid_utf8: bool, pieces: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        if total > CAP_MASK {
+            capacity_overflow();
+        }
+        let block = alloc_block(total);
+        // SAFETY: `block` is a fresh allocation of `HEADER + total` bytes,
+        // aligned for `Header`; the inline area right after the header has
+        // room for `total` bytes, of which `pos` are written: every copy is
+        // bounded by the room left (`put`), and the sources are other
+        // allocations. The header is written last, with `len = pos`, so no
+        // byte past what was written is ever readable.
+        unsafe {
+            let data = block.as_ptr().cast::<u8>().add(HEADER);
+            let mut pos = 0usize;
+            let mut put = |bytes: &[u8]| -> bool {
+                let n = bytes.len();
+                if n > total - pos {
+                    return false;
+                }
+                match bytes {
+                    [] => {}
+                    [c] => data.add(pos).write(*c),
+                    _ => ptr::copy_nonoverlapping(bytes.as_ptr(), data.add(pos), n),
+                }
+                pos += n;
+                true
+            };
+            for (i, piece) in pieces.into_iter().enumerate() {
+                if (i > 0 && !put(glue)) || !put(piece) {
+                    break;
+                }
+            }
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len: pos,
+                meta: Cell::new(total | if valid_utf8 { VALID_UTF8 } else { 0 }),
+            });
+        }
+        ZStr(block)
+    }
+
     /// Case-insensitive (ASCII) equality.
     #[must_use]
     pub fn eq_ignore_ascii_case(&self, other: &[u8]) -> bool {
@@ -1901,6 +1957,30 @@ impl fmt::Display for ZStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `join_exact` gives `php_implode()`'s bytes in a string of exactly
+    /// the summed length, flagged as asked, and stops at `total`.
+    #[test]
+    fn join_exact_joins_with_glue_in_one_block() {
+        let parts: [&[u8]; 4] = [b"a", b"", b"bcd", b"e"];
+        let s = ZStr::join_exact(b", ", 11, true, parts);
+        assert_eq!(s.as_bytes(), b"a, , bcd, e");
+        assert!(s.is_valid_utf8());
+        let s = ZStr::join_exact(b"", 3, false, [&b"x"[..], b"yz"]);
+        assert_eq!(s.as_bytes(), b"xyz");
+        assert!(!s.is_valid_utf8());
+        let s = ZStr::join_exact(b"-", 3, false, [&b"one"[..]]);
+        assert_eq!(s.as_bytes(), b"one");
+        // A total short of the pieces: the string ends there.
+        let s = ZStr::join_exact(b"-", 4, false, [&b"ab"[..], b"cd"]);
+        assert_eq!(s.as_bytes(), b"ab-");
+        let s = ZStr::join_exact(b"-", 0, true, std::iter::empty());
+        assert!(s.is_empty());
+        // The result is an ordinary unique string: appends and hashes work.
+        let s = ZStr::join_exact(b"|", 3, true, [&b"a"[..], b"b"]).concat_owned(b"c");
+        assert_eq!(s.as_bytes(), b"a|bc");
+        assert_eq!(s, ZStr::from("a|bc"));
+    }
 
     #[test]
     fn case_mapping_reuses_unchanged_strings() {
