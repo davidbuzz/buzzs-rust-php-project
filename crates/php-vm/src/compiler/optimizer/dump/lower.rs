@@ -394,7 +394,11 @@ pub(crate) fn literal_return_value(
         // `ZEND_ACC_HAS_TYPE_HINTS` in `zend_try_inline_call`).
         Op::Return {
             val: Operand::Unused,
-        } if f.return_type.as_ref().is_none_or(crate::types::TypeDecl::is_void) => {
+        } if f
+            .return_type
+            .as_ref()
+            .is_none_or(crate::types::TypeDecl::is_void) =>
+        {
             Value::Null
         }
         _ => return None,
