@@ -12,7 +12,7 @@
 //! default texts are classified by their first bytes instead of being
 //! copied or run through the standard library's pattern machinery.
 
-use crate::opcode::{ParamInfo, PREFER_REF, UNCHECKED_TYPE};
+use crate::opcode::{ParamInfo, PREFER_REF, UNCHECKED_TYPE, ZPP_NOT_NULL, ZPP_NUMBER};
 use crate::types::{mask, TypeDecl, TypeMember};
 use php_runtime::{Value, ZArray, ZStr};
 
@@ -500,7 +500,8 @@ struct ParamParts<'a> {
     variadic: bool,
     sensitive: bool,
     /// The [`NATIVE_PARAM_BITS`](crate::opcode::NATIVE_PARAM_BITS) of the
-    /// `@prefer-ref` and `@unchecked` markers.
+    /// `@prefer-ref`, `@unchecked`, `@zpp-number` and `@zpp-not-null`
+    /// markers.
     native: u32,
 }
 
@@ -514,9 +515,10 @@ fn split_param(p: &str) -> ParamParts<'_> {
         Some(eq) => (trim(&p[..eq]), Some(trim(&p[eq + 1..]))),
         None => (p, None),
     };
-    // Native markers: `#[\SensitiveParameter]`, `@prefer-ref` and
-    // `@unchecked` (an arginfo-only type). They all start with `#` or `@`,
-    // which no type or `$name` does.
+    // Native markers: `#[\SensitiveParameter]`, `@prefer-ref`,
+    // `@unchecked` (an arginfo-only type) and the `@zpp-*` markers of a
+    // parse type that differs from the arginfo one. They all start with
+    // `#` or `@`, which no type or `$name` does.
     let mut sensitive = false;
     let mut native = 0;
     while matches!(decl.as_bytes().first(), Some(b'#' | b'@')) {
@@ -531,6 +533,12 @@ fn split_param(p: &str) -> ParamParts<'_> {
             decl = r.trim_start();
         } else if let Some(r) = decl.strip_prefix("@unchecked") {
             native |= UNCHECKED_TYPE;
+            decl = r.trim_start();
+        } else if let Some(r) = decl.strip_prefix("@zpp-number") {
+            native |= ZPP_NUMBER;
+            decl = r.trim_start();
+        } else if let Some(r) = decl.strip_prefix("@zpp-not-null") {
+            native |= ZPP_NOT_NULL;
             decl = r.trim_start();
         } else {
             break;
@@ -630,7 +638,7 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
         let ty = if p.ty.is_empty() {
             None
         } else {
-            Some(parse_type(p.ty))
+            Some(zpp_type(parse_type(p.ty), p.native))
         };
         if p.variadic {
             variadic = true;
@@ -674,6 +682,20 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
         variadic,
         by_ref_return,
     }
+}
+
+/// The type a native parameter is parsed with, from its arginfo type and
+/// its `@zpp-*` markers: `@zpp-number` adds `int` (`Z_PARAM_NUMBER` of
+/// an arginfo `float`), `@zpp-not-null` drops `null` (`Z_PARAM_STR` of
+/// an arginfo `?string`). [`ParamInfo::arginfo_type`] undoes it.
+fn zpp_type(mut ty: TypeDecl, native: u32) -> TypeDecl {
+    if native & ZPP_NUMBER != 0 {
+        ty.mask |= mask::LONG;
+    }
+    if native & ZPP_NOT_NULL != 0 {
+        ty.mask &= !mask::NULL;
+    }
+    ty
 }
 
 /// What registration needs of a stub signature without parsing it: the
@@ -798,7 +820,7 @@ mod int_literal_tests {
 #[cfg(test)]
 mod marker_tests {
     use super::parse_sig;
-    use crate::opcode::{PREFER_REF, UNCHECKED_TYPE};
+    use crate::opcode::{PREFER_REF, UNCHECKED_TYPE, ZPP_NOT_NULL, ZPP_NUMBER};
     use crate::types::mask;
 
     #[test]
@@ -816,6 +838,39 @@ mod marker_tests {
         assert!(b.by_ref);
         assert_eq!(c.promote, 0);
         assert_eq!(s.required, 2);
+    }
+
+    /// `@zpp-number float` parses as `int|float` and declares `float`;
+    /// `@zpp-not-null ?string` parses as `string` and declares `?string`
+    /// (`number_format()`'s `$num`, `strtr()`'s `$to`).
+    #[test]
+    fn zpp_markers_split_the_parse_type_from_the_arginfo_type() {
+        let s = parse_sig(
+            "f(@zpp-number float $num, @zpp-not-null ?string $to = null, ?string $s = null)",
+        );
+        let [num, to, plain] = &s.params[..] else {
+            panic!("three parameters");
+        };
+        assert_eq!(num.promote, ZPP_NUMBER);
+        assert_eq!(
+            num.ty.as_ref().map(|t| t.mask),
+            Some(mask::LONG | mask::DOUBLE)
+        );
+        let declared = num.arginfo_type().map(|t| t.to_php_string());
+        assert_eq!(declared.as_deref(), Some("float"));
+        assert_eq!(
+            num.ty.as_ref().map(|t| t.to_php_string()).as_deref(),
+            Some("int|float")
+        );
+        assert_eq!(to.promote, ZPP_NOT_NULL);
+        assert_eq!(to.ty.as_ref().map(|t| t.mask), Some(mask::STRING));
+        let declared = to.arginfo_type().map(|t| t.to_php_string());
+        assert_eq!(declared.as_deref(), Some("?string"));
+        assert!(to.has_default);
+        assert_eq!(plain.promote, 0);
+        let declared = plain.arginfo_type().map(|t| t.to_php_string());
+        assert_eq!(declared.as_deref(), Some("?string"));
+        assert_eq!(s.required, 1);
     }
 
     #[test]

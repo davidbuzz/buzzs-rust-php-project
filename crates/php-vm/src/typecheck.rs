@@ -234,7 +234,14 @@ impl Vm {
         // Internal functions: null to scalar coerces with a deprecation.
         if let (Value::Null, Some(arg)) = (&*v, ctx.internal_arg) {
             if !ctx.strict && m & (mask::LONG | mask::DOUBLE | mask::STRING | mask::BOOL) != 0 {
-                let tyname = ty.to_php_string();
+                // The arginfo type (`zend_null_arg_deprecated`), which a
+                // `@zpp-*` marker sets apart from the parsed `ty`.
+                let params = &arg.func.params;
+                let tyname = params
+                    .get(arg.argn.saturating_sub(1))
+                    .or_else(|| params.last())
+                    .and_then(crate::opcode::ParamInfo::arginfo_type)
+                    .map_or_else(|| ty.to_php_string(), |t| t.to_php_string());
                 let fname =
                     self.func_display(&crate::func::Func::Builtin(arg.func.clone()), ctx.scope);
                 let pname = arg.param.to_string_lossy();

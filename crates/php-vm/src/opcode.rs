@@ -1408,9 +1408,25 @@ pub const PREFER_REF: u32 = 1 << 31;
 /// does in php-src, so the VM neither checks nor coerces it.
 pub const UNCHECKED_TYPE: u32 = 1 << 30;
 
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@zpp-number float $x`: arginfo declares `float`, the C function
+/// parses with `Z_PARAM_NUMBER` (`number_format()`'s `$num`), so
+/// [`ParamInfo::ty`] holds the parsed `int|float` (what the VM checks
+/// and what a `TypeError` names) and [`ParamInfo::arginfo_type`] gives
+/// back `float` (what the null deprecation names).
+pub const ZPP_NUMBER: u32 = 1 << 29;
+
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@zpp-not-null ?string $x`: arginfo declares the type nullable, the C
+/// function parses without `_OR_NULL` (`strtr()`'s `$to`), so
+/// [`ParamInfo::ty`] holds the type without `null` (null is deprecated
+/// in weak mode, a `TypeError` names `string`) and
+/// [`ParamInfo::arginfo_type`] gives back `?string`.
+pub const ZPP_NOT_NULL: u32 = 1 << 28;
+
 /// The [`ParamInfo::promote`] bits that mark native parameters rather than
 /// constructor promotion.
-pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE;
+pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE | ZPP_NUMBER | ZPP_NOT_NULL;
 
 /// Information about one declared parameter.
 #[derive(Clone, Debug)]
@@ -1436,6 +1452,29 @@ pub struct ParamInfo {
     pub default_expr: Option<crate::class::ConstExpr>,
     /// Attributes.
     pub attributes: Vec<crate::class::AttributeInfo>,
+}
+
+impl ParamInfo {
+    /// The type the parameter's arginfo declares: [`ParamInfo::ty`] (the
+    /// type the function parses with) unless a `@zpp-*` marker
+    /// ([`ZPP_NUMBER`], [`ZPP_NOT_NULL`]) made the two differ. php-src
+    /// names the arginfo type in the null-to-scalar deprecation
+    /// (`zend_null_arg_deprecated` reads `arg_info->type`) and in
+    /// Reflection, the parsed one in a zpp `TypeError`.
+    pub fn arginfo_type(&self) -> Option<std::borrow::Cow<'_, TypeDecl>> {
+        let ty = self.ty.as_ref()?;
+        if self.promote & (ZPP_NUMBER | ZPP_NOT_NULL) == 0 {
+            return Some(std::borrow::Cow::Borrowed(ty));
+        }
+        let mut declared = ty.clone();
+        if self.promote & ZPP_NUMBER != 0 {
+            declared.mask &= !crate::types::mask::LONG;
+        }
+        if self.promote & ZPP_NOT_NULL != 0 {
+            declared.mask |= crate::types::mask::NULL;
+        }
+        Some(std::borrow::Cow::Owned(declared))
+    }
 }
 
 /// One `static $name = init;` declaration ([`OpArray::static_vars`]).

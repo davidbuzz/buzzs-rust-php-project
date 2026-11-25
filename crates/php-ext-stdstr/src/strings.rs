@@ -1350,7 +1350,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("ucfirst(string $string): string", ucfirst)
         .function_static("lcfirst(string $string): string", lcfirst)
         .function_static("ucwords(string $string, string $separators = \" \\t\\r\\n\\f\\v\"): string", ucwords)
-        .function_static("strtr(string $string, mixed $from, ?string $to = null): string", strtr)
+        .function_static("strtr(string $string, mixed $from, @zpp-not-null ?string $to = null): string", strtr)
         .function_static("strrev(string $string): string", strrev)
         .function_static("similar_text(string $string1, string $string2, &$percent = null): int", similar_text)
         .function_static("addcslashes(string $string, string $characters): string", addcslashes)

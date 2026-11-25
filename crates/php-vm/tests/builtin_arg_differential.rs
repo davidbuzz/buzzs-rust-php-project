@@ -74,3 +74,35 @@ u(): Argument #1 ($a) must be of type object|array, int given
 "
     );
 }
+
+/// A parameter whose C function parses another type than its arginfo
+/// declares: `number_format()`'s `$num` is `float` in arginfo and
+/// `Z_PARAM_NUMBER` in zpp, `strtr()`'s `$to` is `?string` in arginfo
+/// and `Z_PARAM_STRING` in zpp. The null deprecation names the arginfo
+/// type, the `TypeError` the parsed one.
+#[test]
+fn parse_type_apart_from_the_arginfo_type() {
+    let out = run(r#"<?php
+set_error_handler(function ($n, $m) { echo "$n: $m\n"; return true; });
+var_dump(number_format(null));
+var_dump(number_format(5));
+var_dump(number_format(" 2"));
+try { number_format("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(strtr("abc", "b", null));
+try { strtr("abc", "b", []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(strtr("abc", ["b" => "x"]));
+"#);
+    assert_eq!(
+        out,
+        r#"8192: number_format(): Passing null to parameter #1 ($num) of type float is deprecated
+string(1) "0"
+string(1) "5"
+string(1) "2"
+number_format(): Argument #1 ($num) must be of type int|float, string given
+8192: strtr(): Passing null to parameter #3 ($to) of type ?string is deprecated
+string(3) "abc"
+strtr(): Argument #3 ($to) must be of type string, array given
+string(3) "axc"
+"#
+    );
+}
