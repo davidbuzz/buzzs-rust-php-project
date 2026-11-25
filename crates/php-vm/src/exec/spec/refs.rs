@@ -513,27 +513,17 @@ fn concat_values(x: &Value, y: &Value) -> Option<ZStr> {
             }
         }
         (Value::Str(s), Value::Int(n)) => s.clone().concat_owned_long(*n),
-        (Value::Int(_), Value::Str(_) | Value::Int(_)) => {
-            let Value::Str(mut s) = int_string(x)? else {
-                return None;
-            };
+        (Value::Int(n), Value::Str(_) | Value::Int(_)) => {
+            let mut s = ZStr::from(n.to_string().as_str());
             match y {
                 Value::Str(t) => s.append_str(t),
-                Value::Int(n) => s.append_long(*n),
-                _ => return None,
+                Value::Int(m) => s.append_long(*m),
+                _ => {}
             }
             s
         }
         _ => return None,
     })
-}
-
-/// The decimal string of an int.
-fn int_string(v: &Value) -> Option<Value> {
-    let Value::Int(n) = *v else {
-        return None;
-    };
-    Some(Value::Str(ZStr::from(n.to_string().as_str())))
 }
 
 /// `==`, `!=`, `===`, `!==` of two plain values without conversions
@@ -589,13 +579,13 @@ fn bin_ref(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
     let Some(y) = plain_operand(f, lits, b) else {
         return false;
     };
-    let r = if let (Some(p), Some(q)) = (num(&x), num(&y)) {
+    let r = if op == BinKind::Arith(BinaryOp::Concat) {
+        concat_values(&x, &y).map(Value::Str)
+    } else if let (Some(p), Some(q)) = (num(&x), num(&y)) {
         match op {
             BinKind::Arith(o) => compound_num(o, p, q),
             _ => num_bin(op, p, q),
         }
-    } else if op == BinKind::Arith(BinaryOp::Concat) {
-        concat_values(&x, &y).map(Value::Str)
     } else {
         equal_values(op, &x, &y).map(Value::Bool)
     };
