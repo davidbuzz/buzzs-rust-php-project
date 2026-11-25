@@ -245,13 +245,6 @@ jobs:
     name: OPCACHE_VARIATION
     runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
     timeout-minutes: 240
-    # Until phpt-runner has run-tests.php's --file-cache-prime and --file-cache-use
-    # (CI_PLAN.md), these are their settings spelled out: the cache directory
-    # run-tests.php uses, opcache.record_warnings=1, opcache.jit=0, and when using,
-    # opcache.validate_timestamps=0; ext/opcache's own tests are left out, as
-    # run-tests.php leaves them out in this mode.
-    env:
-      FILE_CACHE: /tmp/php-run-tests-file-cache
     steps:
       - name: git checkout
         uses: actions/checkout@v4
@@ -275,64 +268,39 @@ jobs:
         uses: ./.github/actions/setup-caddy
       - name: Setup
         uses: ./.github/actions/setup-x64
-      - name: The tests without ext/opcache
-        run: |
-          paths=$(ls -d modules/php-src/Zend modules/php-src/tests modules/php-src/sapi modules/php-src/ext/*/ | grep -v '/ext/opcache/$' | tr '\n' ' ')
-          echo "TEST_PATHS=$paths" >> "$GITHUB_ENV"
-      # run-tests.php --file-cache-prime starts from an empty cache directory (opcache
-      # refuses a file_cache directory that does not exist).
-      - name: Empty the file cache
-        run: rm -rf "$FILE_CACHE" && mkdir -p "$FILE_CACHE"
       - name: Test File Cache (prime shm)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-prime-shm
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
+            --file-cache-prime
       - name: Test File Cache (prime shm, use shm)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-use-shm
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
       - name: Test File Cache (prime shm, use file)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-use-file
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
             -d opcache.file_cache_only=1
-      # run-tests.php --file-cache-prime starts from an empty cache directory.
-      - name: Empty the file cache
-        run: rm -rf "$FILE_CACHE" && mkdir -p "$FILE_CACHE"
       - name: Test File Cache Only (prime)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-only-prime
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
+            --file-cache-prime
             -d opcache.file_cache_only=1
       - name: Test File Cache Only (use)
         continue-on-error: true
@@ -340,12 +308,8 @@ jobs:
         with:
           name: file-cache-only-use
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
             -d opcache.file_cache_only=1
       - name: Keep the reports
         if: ${{ always() }}
