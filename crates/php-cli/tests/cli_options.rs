@@ -171,3 +171,25 @@ fn ini_set_report_memleaks_off_is_deprecated() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn rejected_startup_session_values_keep_the_default() {
+    let d = temp_dir("session-startup");
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "session.gc_divisor=-1",
+            "-r",
+            "$a = ini_get_all('session')['session.gc_divisor']; \
+             var_dump(ini_get('session.gc_divisor'), $a['global_value'], $a['local_value']);",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nWarning: PHP Startup: session.gc_divisor must be greater than 0 in Unknown on line 0\n\
+         string(3) \"100\"\nstring(3) \"100\"\nstring(3) \"100\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}

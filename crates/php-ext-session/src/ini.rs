@@ -153,6 +153,12 @@ pub(crate) fn sync(h: &mut VmHost<'_>) {
     for (d, e) in DIRECTIVES.iter().zip(state.ini.entries()) {
         if !e.modified && vm.ini.is_modified(d.name) {
             vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
+        } else if !e.modified && vm.ini.raw(d.name) != Some(e.value.as_slice()) {
+            // A configured value the session's handler rejected at startup
+            // ("session.gc_divisor must be greater than 0"): C's
+            // zend_register_ini_entries() keeps the default, unmodified,
+            // so ini_get_all() reports it as the global value too.
+            vm.ini.reset_to_default(d.name);
         }
         if vm.ini.raw(d.name) != Some(e.value.as_slice()) {
             vm.ini.alter(
