@@ -168,6 +168,37 @@ fn repeat_starts_from_the_startup_environment_and_no_stored_stream_errors() {
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
 
+/// php-src starts its modules before `do_cli()` reads its arguments: what
+/// a module reports at startup comes first, once, whatever the run then
+/// does. Output of php8.5 for each command line (its version banner aside).
+#[test]
+fn module_startup_warnings_come_before_everything_a_run_prints() {
+    let warning = "\nWarning: PHP Startup: session.gc_probability must be greater than or equal \
+                   to 0 in Unknown on line 0\n";
+    let bad = ["-d", "session.gc_probability=-1"];
+    // A script that cannot be opened.
+    let out = php(&[bad[0], bad[1], "/nonexistent/php-cli-release.php"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), warning);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "Could not open input file: /nonexistent/php-cli-release.php\n"
+    );
+    assert_eq!(out.status.code(), Some(1));
+    // `-v`.
+    let out = php(&[bad[0], bad[1], "-v"]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.starts_with(&format!("{warning}PHP ")), "{text}");
+    // `--repeat`: ahead of the first line, and not again for the second run.
+    let out = php(&[bad[0], bad[1], "--repeat", "2", "-r", "echo \"run\\n\";"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "{warning}Executing for the first time...\nrun\nFinished execution, repeating...\nrun\n"
+        )
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
 #[test]
 fn lint_checks_every_file_given() {
     let good = temp("good.php");

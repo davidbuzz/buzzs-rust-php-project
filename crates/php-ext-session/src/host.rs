@@ -47,6 +47,23 @@ thread_local! {
     static PARKED: RefCell<Option<Box<SessionState>>> = const { RefCell::new(None) };
     /// The current lifecycle phase.
     static PHASE: Cell<Phase> = const { Cell::new(Phase::Startup) };
+    /// How many times the module started on this thread: once per VM
+    /// ([`note_module_startup`]).
+    static STARTUPS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Counts a `MINIT` run. php-src starts the module once per process, so
+/// its startup diagnostics show once; here every VM starts it, and a host
+/// that makes a VM per request (`php --repeat`, `php-cgi -T`) would show
+/// them again each time ([`startup_repeated`]).
+pub(crate) fn note_module_startup() {
+    STARTUPS.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Whether this is a later module startup on the thread, whose
+/// diagnostics the first one already showed.
+fn startup_repeated() -> bool {
+    phase() == Phase::Startup && STARTUPS.with(Cell::get) > 1
 }
 
 /// Sets the lifecycle phase.
@@ -144,6 +161,9 @@ pub(crate) fn docref(vm: &mut Vm, level: i64, message: &[u8]) -> Result<(), Thro
     if vm.is_executing() {
         return vm.php_error_bytes(level, message);
     }
+    if startup_repeated() {
+        return Ok(());
+    }
     let prefix = active_builtin(vm).map_or_else(
         || {
             match phase() {
@@ -180,6 +200,9 @@ pub(crate) fn docref(vm: &mut Vm, level: i64, message: &[u8]) -> Result<(), Thro
 fn plain_error(vm: &mut Vm, level: i64, message: &str) -> Result<(), Throw> {
     if vm.is_executing() {
         return vm.raise(level, message);
+    }
+    if startup_repeated() {
+        return Ok(());
     }
     if phase() != Phase::Startup {
         return vm.error_at(level, message, &ZStr::from("Unknown"), 0);

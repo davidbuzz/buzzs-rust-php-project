@@ -624,9 +624,42 @@ fn parse_request(argv: &[Vec<u8>]) -> (Request, usize, Option<&'static str>) {
     (r, g.optind, param_error)
 }
 
+thread_local! {
+    /// The VM [`start_modules`] made, until the first request takes it
+    /// ([`new_request_vm`]).
+    static FIRST_VM: std::cell::RefCell<Option<Vm>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The modules' part of `php_module_startup()`: php-src starts its
+/// modules once, before `do_cli()` looks at its arguments, so what they
+/// report at startup (an INI value a module refuses, ...) comes ahead of
+/// everything a run prints: `-v`'s banner, "Could not open input file",
+/// `--repeat`'s "Executing for the first time...". Here the modules start
+/// with a VM, so the first request's VM is made now and kept for it.
+fn start_modules(cfg: &Config) {
+    let mut vm = new_vm(cfg);
+    // What a module reported while starting sits in the VM's output buffer:
+    // it goes out now, ahead of whatever the CLI itself prints next.
+    vm.flush_stdout();
+    FIRST_VM.with(|v| *v.borrow_mut() = Some(vm));
+}
+
+/// `do_cli()`, after the modules' startup; the VM made for that is let go
+/// here when no request took it (`-v`, a script that cannot be opened).
+fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
+    start_modules(cfg);
+    let status = do_cli_requests(argv, cfg);
+    if let Some(vm) = FIRST_VM.with(|v| v.borrow_mut().take()) {
+        // No request ran on it: nothing to shut down, and the process
+        // exits next.
+        vm.discard();
+    }
+    status
+}
+
 /// `do_cli()`.
 #[allow(clippy::too_many_lines)]
-fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
+fn do_cli_requests(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     // First pass: -i, -v and -m end processing right away.
     let mut g = GetOpt::new(argv, OPTIONS, false);
     while let Some((c, _)) = g.next_opt() {
@@ -736,7 +769,11 @@ fn new_vm(cfg: &Config) -> Vm {
 }
 
 fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
-    let mut vm = new_vm(cfg);
+    // The first request runs on the VM the modules started with.
+    let mut vm = match FIRST_VM.with(|v| v.borrow_mut().take()) {
+        Some(vm) => vm,
+        None => new_vm(cfg),
+    };
     if let Err(error) = preload::install(&mut vm) {
         let status = vm.shutdown(Err(error)).max(1);
         release(vm, Release::Discard);
