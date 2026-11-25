@@ -36,7 +36,7 @@ the same ground is not covered twice, and add a row when a change lands.
 | | start of PR #17 | now | C 8.5 | C 8.4 |
 |---|---|---|---|---|
 | route:list | 4.796G | 4.292G (−10.5%) | 1.621G (we are 2.65×) | 1.786G |
-| unit tests | 208.45G | 181.56G (−12.9%) | 49.86G (we are 3.64×) | 51.75G |
+| unit tests | 208.45G | 180.93G (−13.2%) | 49.86G (we are 3.63×) | 51.75G |
 
 Our front end (lex/parse/compile, ≈1.2G of route:list) is close to C's.
 The gap is execution.
@@ -65,6 +65,7 @@ functions.
 | `RECV_VARIADIC` on the tape (untyped/`mixed`); value-less returns in `return_simple` | 98a9e086 | variadic call 1,328 → 1,017; Doctrine `triggerIfCalledFromOutside` 3,022 → 2,766 | | ut −0.4% |
 | Static property elements (`isset(self::$a[$k])`, `static::$a[k]`) and `self/static/parent::class` without the generic ops | 4c61cbd9 | 2,035 → 1,393; `isset(static::$b[static::class])` 1,927 → 1,342 | 473 | ut −0.2% |
 | `$a instanceof $b` of two variables without the generic op | eeb13391 | `instanceof $name` 749 → 447; `instanceof $obj` 617 → 308 | 8.5: 181 / 115 | ut −0.3%, rl −0.1% |
+| `$this` as a call's argument goes to prepared calls | 6b2bdd15 | `method_exists($this, …)` 5,431 → 4,342; `get_class($this)` 3,513 → 2,429 | 8.5: 1,217 / 585 | ut −0.35% |
 
 ## Ops, compiler, tape
 
