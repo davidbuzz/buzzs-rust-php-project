@@ -809,3 +809,96 @@ for ($i = 0; $i < 3; $i++) {
 "#;
     assert_eq!(run(src), "1[1] 2[1,1] 3[1,\"B\",5]\n[1,\"t\"] 1[1,[],[1]] 3[1,[2,3],[1,2,3]]\n1 cl1qU 1:1y 3\n~th1 1~th1 x1 {\"a\":1,\"b\":\"v\",\"c\":\"1v\"} {\"a\":\"w\",\"b\":1,\"c\":\"w1\"}\n1[2] 2[2,2] 3[2,\"B\",5]\n[2,\"t\"] 1[2,[],[2]] 3[2,[2,3],[2,2,3]]\n2 cl2qU 1:2y 4\n~th2 2~th2 x2 {\"a\":2,\"b\":\"v\",\"c\":\"2v\"} {\"a\":\"w\",\"b\":2,\"c\":\"w2\"}\n1[3] 2[3,3] 3[3,\"B\",5]\n[3,\"t\"] 1[3,[],[3]] 3[3,[2,3],[3,2,3]]\n3 cl3qU 1:3y 5\n~th3 3~th3 x3 {\"a\":3,\"b\":\"v\",\"c\":\"3v\"} {\"a\":\"w\",\"b\":3,\"c\":\"w3\"}\n");
 }
+
+/// Arrays, objects and variables bound by reference returned from a
+/// variable, a temporary or a literal (`Vm::return_simple`'s direct
+/// return): the value returned, the order the frame's objects are
+/// destructed in (a returned local survives, the others go at the
+/// return, in variable order; an unused result goes first), the roots
+/// the release buffers (`gc_status()`), static variables, extra
+/// arguments and a return type the value fails.
+#[test]
+fn counted_values_return_directly() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "destruct {$this->n}\n"; } }
+function ra($a, $b) { return $a; }
+function rl() { $x = new D('local'); $y = new D('other'); echo "in rl\n"; return $x; }
+function rt(): array { $t = [1, 2]; return $t; }
+function rtmp() { return [new D('tmp')][0]; }
+function rref() { $v = [1]; $r = &$v; $r[] = 2; return $r; }
+function robj(D $d): D { return $d; }
+function rbad(): int { $a = [1]; return $a; }
+$arr = [1, 2, 3];
+for ($i = 0; $i < 3; $i++) { $r = ra($arr, 'x'); }
+var_dump($r === $arr);
+$o = rl();
+echo "got {$o->n}\n";
+var_dump(rt(), rref());
+$t = rtmp();
+echo "tmp {$t->n}\n";
+rl();
+echo "discarded\n";
+$d = new D('arg');
+var_dump(robj($d) === $d);
+unset($o, $t);
+echo "unset\n";
+gc_collect_cycles();
+$s0 = gc_status()['roots'];
+for ($i = 0; $i < 5; $i++) { $a2 = [$i]; $x = ra($a2, $i); }
+var_dump(gc_status()['roots'] - $s0);
+function cyc() { $c = new stdClass; $c->self = $c; return $c; }
+$c = cyc();
+var_dump(gc_status()['roots'] - $s0);
+function stat_arr() { static $st = [1]; $st[] = 2; return $st; }
+stat_arr(); var_dump(count(stat_arr()));
+function args() { $a = func_get_args(); return $a; }
+var_dump(args(1, [2], 'three'));
+try { rbad(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+"#),
+        r#"bool(true)
+in rl
+destruct other
+got local
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+tmp tmp
+in rl
+destruct local
+destruct other
+discarded
+bool(true)
+destruct local
+destruct tmp
+unset
+int(1)
+int(2)
+int(3)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+  [2]=>
+  string(5) "three"
+}
+rbad(): Return value must be of type int, array returned
+end
+destruct arg
+"#
+    );
+}

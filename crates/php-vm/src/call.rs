@@ -2382,8 +2382,8 @@ impl Vm {
     /// attached and does not return by reference, with no observer, when
     /// the operand is a defined compiled variable, a temporary not holding
     /// a reference, a literal, or none (`return;`, the implicit return of
-    /// a body, without a return type or with `void`), and the value is accepted by the return
-    /// type as it is (`verify_return`'s fast path). The result is then the
+    /// a body, without a return type or with `void`), and the value is
+    /// accepted by the return type as it is (`verify_return`'s fast path). The result is then the
     /// one `op_return` gives: the same checks, the same release order
     /// ([`Frame::release_returning`]: the possible roots, then the release) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
@@ -2394,12 +2394,13 @@ impl Vm {
     /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
-    /// Only the shape the call workloads return through — an untyped
-    /// user function returning a scalar, null, a string or such a literal
-    /// into a caller temporary holding a scalar — runs here, small and without spilled registers;
-    /// anything else goes to [`Vm::return_generic`], which repeats the
-    /// tests for it (the operand shape is dispatched before this
-    /// function's prologue, so the common fallbacks do not pay it twice).
+    /// Every value a user function returns into a caller temporary
+    /// holding a scalar (or discards) runs here, arrays, objects and
+    /// referenced variables included: they went to [`Vm::return_generic`],
+    /// which repeated every test (~300 instructions a return of an
+    /// array). What is left to it is a caller's result slot holding a
+    /// counted value, a value the return type must coerce, and the
+    /// operand shapes dispatched before this function's prologue.
     #[inline(never)]
     pub(crate) fn return_simple(
         &mut self,
@@ -2439,9 +2440,10 @@ impl Vm {
             // A value its declared return type does not take as it is
             // (`return_accepts`) is left to `return_generic`: coercion
             // rules may rewrite it (int 3 returned from a `: string`
-            // function gives "3"), or it fails. So are references, arrays and objects (copied, not moved,
-            // for `gc::frame_released`), and a caller's result slot that
-            // holds anything but a scalar (released after the frame).
+            // function gives "3"), or it fails. So is a caller's result
+            // slot that holds anything but a scalar (released after the
+            // frame), a temporary holding a reference, and an unused
+            // result whose release may run a destructor.
             // Every test comes before the value moves out of its slot:
             // `return_generic` reads it there again.
             let dst = match frame.ret {
@@ -2451,26 +2453,59 @@ impl Vm {
                 },
                 RetTarget::Discard => None,
             };
-            // A scalar, null or a string: none is a possible cycle root,
-            // so it moves out (a literal is copied) without changing what
-            // `gc::frame_released` records. With a declared return type,
-            // only a value the type takes as it is (`return_accepts`).
             // The returned value: in place in the frame's variable or
-            // temporary (`Ok`, moved), or a literal's copy (`Err`).
+            // temporary (`Ok`, moved), or a copy (`Err`). With a declared
+            // return type, only a value the type takes as it is
+            // (`return_accepts`).
+            //
+            // A scalar, null or a string in a compiled variable is no
+            // possible cycle root, so it moves out without changing what
+            // the release records. An array or an object there is copied
+            // (one count increment): the variable keeps its handle, whose
+            // release below buffers the value as a possible root, as
+            // `zend_leave_helper`'s `i_free_compiled_variables` does after
+            // `ZEND_RETURN`'s `ZVAL_COPY_DEREF`. A variable bound by
+            // reference returns a copy of the referenced value
+            // (`ZVAL_COPY_DEREF`) and releases the reference with the
+            // frame. A temporary moves out (it is no variable: nothing is
+            // buffered for it), except a reference, and except a value
+            // whose release may run a destructor when the result is
+            // unused (`Vm::op_return_raw` runs it in this frame). A
+            // literal is copied (a shared, immutable value). These were
+            // `return_generic`'s cases: a second run of every test above.
             let src: Result<&mut Value, Value> = match val {
-                Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
-                    Some(slot)
-                        if slot.get().is_some_and(|v| {
-                            returns_directly(v) && (rt.is_none() || return_accepts(rt, v))
-                        }) =>
-                    {
-                        Ok(slot.as_mut().as_mut()?)
+                Operand::Cv(cv) => {
+                    let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+                        return self.return_generic::<false>(val, base, ip);
+                    };
+                    match slot.get() {
+                        Some(v) if returns_directly(v) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Ok(slot.as_mut().as_mut()?)
+                        }
+                        Some(v @ (Value::Array(_) | Value::Object(_))) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(v.clone())
+                        }
+                        Some(Value::Reference(r)) => {
+                            let v = r.get();
+                            if rt.is_some() && !return_accepts(rt, &v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(v)
+                        }
+                        _ => return self.return_generic::<false>(val, base, ip),
                     }
-                    _ => return self.return_generic::<false>(val, base, ip),
-                },
+                }
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
                     Some(slot)
-                        if returns_directly(slot) && (rt.is_none() || return_accepts(rt, slot)) =>
+                        if !matches!(slot, Value::Reference(_))
+                            && (dst.is_some() || !may_destruct(slot))
+                            && (rt.is_none() || return_accepts(rt, slot)) =>
                     {
                         Ok(slot)
                     }
@@ -2478,7 +2513,8 @@ impl Vm {
                 },
                 Operand::Lit(l) => match frame.code.literals.get(l as usize) {
                     Some(lit)
-                        if returns_directly(lit) && (rt.is_none() || return_accepts(rt, lit)) =>
+                        if !matches!(lit, Value::Reference(_))
+                            && (rt.is_none() || return_accepts(rt, lit)) =>
                     {
                         Err(clone_value(lit))
                     }
@@ -2507,15 +2543,19 @@ impl Vm {
             match (dst, src) {
                 (Some(slot), Ok(v)) => std::mem::swap(slot, v),
                 (Some(slot), Err(v)) => std::mem::forget(std::mem::replace(slot, v)),
+                // `ZEND_RETURN` releases an unused result before the frame
+                // is left. A scalar owns nothing; anything else loses one
+                // count (a value whose release may run a destructor stayed
+                // with `return_generic` above).
                 (None, src) => {
                     let v = match src {
                         Ok(v) => std::mem::take(v),
                         Err(v) => v,
                     };
-                    if matches!(v, Value::Str(_)) {
-                        drop(v);
-                    } else {
+                    if is_scalar(&v) {
                         std::mem::forget(v);
+                    } else {
+                        drop(v);
                     }
                 }
             }
