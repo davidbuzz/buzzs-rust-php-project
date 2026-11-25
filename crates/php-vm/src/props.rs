@@ -2321,24 +2321,29 @@ impl Vm {
         }
         if self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
-            let r = self.with_guard(o, name, G_ISSET, |vm| {
-                vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
-            })?;
-            let set = self.to_bool(&r)?;
-            if !empty {
-                return Ok(set);
-            }
-            if !set {
-                return Ok(true);
-            }
-            if let Some(v) = self.materialised_prop(o, name) {
-                return Ok(!self.to_bool(&v)?);
-            }
-            if self.has_magic(o, name, G_GET) {
-                let v = self.call_magic_get(o, name)?;
-                return Ok(!self.to_bool(&v.deref())?);
-            }
-            return Ok(true);
+            // `zend_std_has_property` keeps `IN_ISSET` set until it is done,
+            // so for `empty()` the `__get()` it calls after a true
+            // `__isset()` runs inside the isset guard: a `??` or `isset()`
+            // of the same property in that `__get()` does not call
+            // `__isset()` again.
+            return self.with_guard(o, name, G_ISSET, |vm| {
+                let r = vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])?;
+                let set = vm.to_bool(&r)?;
+                if !empty {
+                    return Ok(set);
+                }
+                if !set {
+                    return Ok(true);
+                }
+                if let Some(v) = vm.materialised_prop(o, name) {
+                    return Ok(!vm.to_bool(&v)?);
+                }
+                if vm.has_magic(o, name, G_GET) {
+                    let v = vm.call_magic_get(o, name)?;
+                    return Ok(!vm.to_bool(&v.deref())?);
+                }
+                Ok(true)
+            });
         }
         Ok(empty)
     }
