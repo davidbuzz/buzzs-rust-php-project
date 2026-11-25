@@ -315,3 +315,58 @@ end
 "##
     );
 }
+
+/// Calls whose function is known while compiling (`zend_compile_args` with an `fbc`): the
+/// by-value arguments compiled as reads, next to prefer-ref parameters (`current()`, `key()`,
+/// `array_multisort()`), a namespaced call that falls back to the global function, an extra
+/// argument (its warning before the `ArgumentCountError`), `?->` chains, named arguments, and
+/// a type error on the read value.
+#[test]
+fn known_function_reads() {
+    assert_eq!(
+        run(r##"<?php
+namespace N {
+class K { public $arr = ['a' => 1, 'b' => 2]; public $nul = null; public $o;
+  function run() {
+    $a = ['k' => [5, 6], 's' => 'str'];
+    for ($t = 0; $t < 2; $t++) {
+      echo current($this->arr), key($this->arr), current($a['k']), key($a['k']), "\n";
+      next($this->arr); echo current($this->arr), "\n"; reset($this->arr);
+      echo strlen($a['s']), \strlen($a['s']), count($this->arr), "\n";
+      try { echo strlen($a['s'], $a['missing']); } catch (\ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+      echo var_export(strlen($this->nul?->x ?? 'dflt'), true), ' ', var_export($this->o?->p['x'], true), "\n";
+      echo str_pad(string: $a['s'], length: 5, pad_string: $a['k'][0]), "\n";
+      try { echo strlen($this->arr); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+      echo implode(',', array_map(null, $a['k'])), ' ', \in_array(6, $a['k']) ? 'in' : 'out', "\n";
+      $m = [[3, 1], [2, 4]]; array_multisort($m[0], $m[1]); echo json_encode($m), "\n";
+    }
+  }
+}
+(new K)->run();
+}
+"##),
+        r##"1a50
+2
+332
+
+Warning: Undefined array key "missing" in t.php on line 10
+strlen() expects exactly 1 argument, 2 given
+4 NULL
+str55
+strlen(): Argument #1 ($string) must be of type string, array given
+5,6 in
+[[1,3],[4,2]]
+1a50
+2
+332
+
+Warning: Undefined array key "missing" in t.php on line 10
+strlen() expects exactly 1 argument, 2 given
+4 NULL
+str55
+strlen(): Argument #1 ($string) must be of type string, array given
+5,6 in
+[[1,3],[4,2]]
+"##
+    );
+}

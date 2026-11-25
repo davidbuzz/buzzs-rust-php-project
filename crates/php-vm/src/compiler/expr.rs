@@ -2625,7 +2625,17 @@ impl Compiler<'_> {
                     if fbc.is_some_and(|f| !f.sends_by_ref(i)) && reads_append(ex) {
                         return self.err("Cannot use [] for reading", ex.span.line);
                     }
-                    let src = self.arg_src_for(ex)?;
+                    let src =
+                        if fbc.is_some_and(|f| f.internal && !f.sends_by_ref(i)) && read_arg(ex) {
+                            // `zend_compile_args` with a known `fbc` and a
+                            // by-value parameter (not prefer-ref):
+                            // `zend_compile_var(..., BP_VAR_R)`, the ordinary
+                            // FETCH_DIM_R / FETCH_OBJ_R into a temporary, sent
+                            // as a value.
+                            ArgSrc::Val(self.compile_expr(ex)?)
+                        } else {
+                            self.arg_src_for(ex)?
+                        };
                     self.emit(Op::Send { src });
                 }
                 ArgKind::Unpack(ex) => {
@@ -3919,6 +3929,18 @@ fn member_name_line(name: &MemberName) -> u32 {
         MemberName::Ident(i) => i.span.line,
         MemberName::Expr(e) => e.span.line,
     }
+}
+
+/// Whether argument `e` of a call to a known internal function is compiled
+/// as an ordinary read when its parameter is by value (see
+/// `compile_args`): an element or a property (`$a['k']`, `$this->p`,
+/// `$this->p[$k]`, `f()['k']`), not a short-circuited `?->` chain (whose
+/// jumps `arg_src_for` ends at the argument) nor a `[]` fetch (the compile
+/// error). A plain variable stays the plain-variable send.
+fn read_arg(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Dim { .. } | ExprKind::Prop { .. })
+        && !contains_nullsafe(e)
+        && !reads_append(e)
 }
 
 /// Whether compiling `e` for reading (`BP_VAR_R`) reaches a `[]` fetch:
