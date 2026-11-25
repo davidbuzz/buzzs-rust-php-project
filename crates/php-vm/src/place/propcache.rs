@@ -75,6 +75,14 @@ pub(crate) const PC_UNSET: u8 = 1 << 4;
 /// The class has no `__set()`: a write to an undefined declared slot is
 /// stored directly (`write_std_property` in `zend_std_write_property`).
 pub(crate) const PC_NO_SET: u8 = 1 << 5;
+/// An uninitialized declared slot (a typed property without a default, or
+/// one `unset()` left) may be initialized directly with a value in
+/// `accept`: the class has no `__set()` (so no magic applies to it), no
+/// native write handler, no hooks or set visibility; for a readonly
+/// property, the lookup's scope is its declaring class (where its one
+/// initialization is allowed). Set without [`PC_WRITE`] for a readonly
+/// property, whose initialized slot no fast path may write.
+pub(crate) const PC_INIT: u8 = 1 << 6;
 
 /// The result of probing a place's cache entry.
 enum Probe<T> {
@@ -882,8 +890,23 @@ impl Vm {
                             entry.flags |= PC_UNSET;
                         }
                         if cls.magic.set.is_none() {
-                            entry.flags |= PC_NO_SET;
+                            entry.flags |= PC_NO_SET | PC_INIT;
                         }
+                        entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
+                        entry.class_lc = info.ty.as_ref().and_then(single_class_name);
+                    } else if write_ok
+                        && info.flags & flags::SET_MASK == 0
+                        && info.flags & flags::READONLY != 0
+                        && cls.magic.set.is_none()
+                        && scope.is_some_and(|sc| {
+                            sc.lc_name
+                                .as_bytes()
+                                .eq_ignore_ascii_case(info.class.as_bytes())
+                        })
+                    {
+                        // A readonly property's initialization from its
+                        // declaring class (a constructor's `$this->p = $p`).
+                        entry.flags |= PC_INIT | PC_NO_SET;
                         entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
                         entry.class_lc = info.ty.as_ref().and_then(single_class_name);
                     }

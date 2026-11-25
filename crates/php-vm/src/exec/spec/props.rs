@@ -34,7 +34,7 @@ use crate::opcode::{
     ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
 };
 use crate::place::propcache::{
-    accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
+    accepts, scope_addr, PC_DYN, PC_INIT, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZArray, ZStr};
@@ -919,6 +919,26 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
     Some(out)
 }
 
+/// [`plain_key`] of a write: the entry allows a plain write ([`PC_WRITE`])
+/// or the initialization of an uninitialized slot ([`PC_INIT`]); its flags
+/// come with it.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the key of every plain property write
+fn plain_write_key(f: &Frame, pid: PlaceId) -> Option<(usize, usize, u32, u32, u8)> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.flags & (PC_WRITE | PC_INIT) == 0 || e.flags & PC_DYN != 0 || e.scope_addr != scope_addr(f)
+    {
+        return None;
+    }
+    let key = (e.class_addr, e.slot as usize, e.base, e.accept, e.flags);
+    drop(cache);
+    Some(key)
+}
+
 /// The cache entry of place `pid` in frame `f` when it is filled in `f`'s
 /// class scope for a declared property and allows every access in `want`:
 /// the object's class address, the slot, the place's base and the
@@ -988,7 +1008,7 @@ fn read_plain(f: &Frame, pid: PlaceId) -> Option<Value> {
 /// which [`assign_hit`] then tries.
 #[inline(always)]
 fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
-    let Some((class, slot, base, accept)) = plain_key(f, pid, PC_WRITE) else {
+    let Some((class, slot, base, accept, flags)) = plain_write_key(f, pid) else {
         return false;
     };
     let src = match val {
@@ -1009,19 +1029,37 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
     let Ok(mut slots) = od.slots.try_borrow_mut() else {
         return false;
     };
-    let Some(Some(cur)) = slots.get_mut(slot) else {
+    let Some(cell) = slots.get_mut(slot) else {
         return false;
     };
-    if matches!(cur, Value::Reference(_)) {
-        return false;
-    }
-    let new_val = copy_value(src);
-    let result = dst.map(|_| copy_value(&new_val));
-    let old = std::mem::replace(cur, new_val);
+    let old = match cell {
+        // An initialized slot: a plain write.
+        Some(cur) if flags & PC_WRITE != 0 && !matches!(cur, Value::Reference(_)) => {
+            let new_val = copy_value(src);
+            let result = dst.map(|_| copy_value(&new_val));
+            let old = std::mem::replace(cur, new_val);
+            (Some(old), result)
+        }
+        // An uninitialized one: its initialization (`PC_INIT`: no magic
+        // applies, and a readonly property is written from its class). A
+        // readonly property (`PC_INIT` without `PC_WRITE`) of an object
+        // being cloned is the generic op's: `__clone()` and clone-with
+        // reinitialize such a property once, which its markers count.
+        None if flags & PC_INIT != 0
+            && (flags & PC_WRITE != 0 || od.flags.get() & crate::object::oflags::CLONING == 0) =>
+        {
+            let new_val = copy_value(src);
+            let result = dst.map(|_| copy_value(&new_val));
+            *cell = Some(new_val);
+            (None, result)
+        }
+        _ => return false,
+    };
+    let (old, result) = old;
     drop(slots);
     // The old value is released once nothing is borrowed (a destructor
     // may touch the object).
-    discard_unrooted(Some(old));
+    discard_unrooted(old);
     if let Operand::Tmp(t) = val {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
             put_tmp(slot, Value::Null);

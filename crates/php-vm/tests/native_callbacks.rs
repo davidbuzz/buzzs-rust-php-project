@@ -893,3 +893,46 @@ run();
 "#
     );
 }
+
+/// Writes that initialize an uninitialized property on the cache hit
+/// (`PC_INIT`): readonly properties from their declaring class (promoted
+/// constructor parameters), the second write's error, a child class's and
+/// the global scope's (the generic op's errors), typed properties without
+/// a default with coercion and its `TypeError`, a class with `__set()`
+/// before and after `unset()`, `__clone()` reinitializing a readonly
+/// property. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn uninitialized_property_initialization() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+final class Id { public function __construct(private readonly string $value, private readonly bool $quoted) {}
+  public function v() { return $this->value . ($this->quoted ? 'q' : 'u'); }
+  public function again() { $this->value = 'x'; } }
+class P { public readonly int $n; public function init($v) { $this->n = $v; return $this->n; } }
+class Ch extends P { public function initChild($v) { $this->n = $v; } }
+class T { public int $i; public ?string $s; private array $a; public function set($i, $s) { $this->i = $i; $this->s = $s; $this->a = [$i]; return $this->i . $this->s . count($this->a); } }
+class M { public int $x; public function __set($n, $v) { echo "__set($n) "; } public function w($v) { $this->x = $v; return $this->x; } public function u() { unset($this->x); } }
+class Cl { public function __construct(public readonly array $items) {} public function __clone() { $this->items = [...$this->items, 'c']; } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $id = new Id("v$i", (bool)($i % 2)); echo $id->v(), ' ';
+    try { $id->again(); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), ' '; }
+    $p = new P; echo $p->init($i), ' ';
+    try { $p->init(9); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { (new Ch)->initChild(1); echo 'child-ok '; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { $q = new P; $q->n = 3; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $t = new T; echo $t->set($i, "s$i"), ' ', $t->set('7', null), ' ';
+    try { $t->set('nope', 's'); } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $m = new M; echo $m->w(5), ' '; $m->u(); try { $m->w(6); } catch (\Error $e) { echo $e->getMessage(), " "; } echo isset($m->x) ? 'set' : 'unset', ' ';
+    $c = new Cl([1]); $d = clone $c; echo count($d->items), count($c->items), "\n";
+  }
+}
+run();
+"#),
+        r#"v0u Error: Cannot modify readonly property App\Id::$value 0 Cannot modify readonly property App\P::$n child-ok Cannot modify protected(set) readonly property App\P::$n from global scope 0s01 71 Cannot assign string to property App\T::$i of type int 5 __set(x) Typed property App\M::$x must not be accessed before initialization unset 21
+v1q Error: Cannot modify readonly property App\Id::$value 1 Cannot modify readonly property App\P::$n child-ok Cannot modify protected(set) readonly property App\P::$n from global scope 1s11 71 Cannot assign string to property App\T::$i of type int 5 __set(x) Typed property App\M::$x must not be accessed before initialization unset 21
+v2u Error: Cannot modify readonly property App\Id::$value 2 Cannot modify readonly property App\P::$n child-ok Cannot modify protected(set) readonly property App\P::$n from global scope 2s21 71 Cannot assign string to property App\T::$i of type int 5 __set(x) Typed property App\M::$x must not be accessed before initialization unset 21
+"#
+    );
+}
