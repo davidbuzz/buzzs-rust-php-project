@@ -1043,8 +1043,8 @@ fn assign_hit_slow(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) 
     assign_hit(f, pid, val, dst)
 }
 
-/// [`incdec_hit`] and the result into `dst`, out of line from the tape's
-/// handler.
+/// [`incdec_hit`] and the result into `dst`: [`prop_op_in`]'s
+/// `IncDecObjProp` arm.
 #[inline(always)]
 fn incdec_op(f: &mut Frame, pid: PlaceId, kind: IncDecKind, dst: Option<u32>) -> bool {
     let Some(res) = incdec_hit(f, pid, kind) else {
