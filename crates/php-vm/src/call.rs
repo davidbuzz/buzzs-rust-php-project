@@ -3849,11 +3849,32 @@ impl Vm {
 
     /// The default of native parameter `i`: a parsed literal, or a
     /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
+    ///
+    /// The literal (what nearly every omitted parameter has) is read in
+    /// line; only a default given by name goes out of line.
+    #[inline]
     pub(crate) fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
         if let Some(Some(v)) = b.defaults.get(i) {
-            return Some(v.clone());
+            return Some(clone_value(v));
         }
+        self.builtin_default_named(b, i)
+    }
+
+    /// [`Vm::builtin_default`] of a parameter whose default is not a
+    /// literal: a constant's value, or `None`.
+    ///
+    /// `UNKNOWN` is no constant: it is gen_stub's marker of a parameter
+    /// whose default the function works out itself (`array_keys()`'s
+    /// `$filter_value`, `mt_rand()`'s bounds), which php-src never looks
+    /// up. It is answered before anything else: looking it up as a
+    /// constant on every call of such a function cost ~250 instructions
+    /// a call, and a script's own `UNKNOWN` constant is not the default.
+    #[inline(never)]
+    fn builtin_default_named(&mut self, b: &Builtin, i: usize) -> Option<Value> {
         let text = b.params.get(i)?.default_text.as_deref()?.trim();
+        if text == "UNKNOWN" {
+            return None;
+        }
         let text = text.strip_prefix('\\').unwrap_or(text);
         if text.is_empty()
             || !text
@@ -6277,6 +6298,29 @@ fn prefers_ref(func: &Func, i: usize) -> bool {
 mod buffer_tests {
     use super::*;
     use crate::VmOptions;
+
+    /// A literal default is the stub's value; `UNKNOWN` (gen_stub's "the
+    /// function works it out") is no default, also when a script defined
+    /// a constant of that name (php-src never looks it up).
+    #[test]
+    fn builtin_defaults_literal_and_unknown() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        assert_eq!(
+            vm.run_script(b"<?php define('UNKNOWN', 7);", "unknown.php"),
+            0
+        );
+        let builtin = |vm: &Vm, name: &str| match vm.functions.get(&ZStr::from(name)) {
+            Some(Func::Builtin(b)) => b.clone(),
+            _ => panic!("{name} is a core builtin"),
+        };
+        let mt_rand = builtin(&vm, "mt_rand");
+        assert!(vm.builtin_default(&mt_rand, 0).is_none());
+        assert!(vm.builtin_default(&mt_rand, 1).is_none());
+        let round = builtin(&vm, "round");
+        assert!(matches!(vm.builtin_default(&round, 1), Some(Value::Int(0))));
+        assert!(vm.builtin_default(&round, 0).is_none(), "required");
+        assert!(vm.builtin_default(&round, 9).is_none(), "no such parameter");
+    }
 
     fn capacities(vm: &Vm) -> Vec<usize> {
         let mut capacities: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();
