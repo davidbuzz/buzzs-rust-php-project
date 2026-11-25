@@ -390,8 +390,9 @@ pub(crate) fn literal_return_value(
         // accepts: any other return type (`mixed` and `?T` included) throws
         // "Return value must be of type T, none returned", and `never`
         // throws "never-returning function must not implicitly return"
-        // (php-src never inlines a function with a return type at all,
-        // `ZEND_ACC_HAS_TYPE_HINTS` in `zend_try_inline_call`).
+        // (`zend_emit_final_return` puts a `ZEND_VERIFY_RETURN_TYPE` before
+        // that `RETURN null`, so `zend_try_inline_call`, which wants the
+        // `RETURN` right after the arguments, leaves the call).
         Op::Return {
             val: Operand::Unused,
         } if f
