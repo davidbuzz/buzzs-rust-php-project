@@ -1698,13 +1698,13 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     let named = std::mem::take(&mut a.named);
-    cuf_call(vm, &cb, args, named, "call_user_func")
+    cuf_call(vm, &cb, args, named)
 }
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let (args, named) = cufa_args(vm, &arr(a, 1))?;
-    cuf_call(vm, &cb, args, named, "call_user_func_array")
+    cuf_call(vm, &cb, args, named)
 }
 
 /// Splits a `call_user_func_array()` argument array into positional and
@@ -1806,24 +1806,17 @@ fn fsc_forward_called_scope(vm: &Vm, mut call: PendingCall) -> PendingCall {
     call
 }
 
-/// Calls the callback of `call_user_func[_array]()`. A direct call compiles
-/// to `ZEND_INIT_USER_CALL` (`zend_compile_func_cuf`, `Zend/zend_compile.c`):
-/// when an error handler throws on the "Use of "self" in callables"
-/// deprecation, `zend_is_callable_check_class` (`Zend/zend_API.c`) fails
-/// with "cannot use "self"/"parent"/"static" in callables" and the opcode
-/// throws that `TypeError` chained to the pending exception. Through zpp
-/// (a dynamic call) the pending exception propagates alone.
+/// Calls the callback of `call_user_func[_array]()` through the builtin:
+/// a call the compiler did not lower to `ZEND_INIT_USER_CALL` (named
+/// arguments, unpacking, a namespaced unqualified name, or a variable
+/// function name; see `Op::InitUserCall`), made as `zend_call_function`
+/// makes it, from the builtin's frame.
 fn cuf_call(
     vm: &mut Vm,
     cb: &Value,
     args: Vec<Value>,
     named: Vec<(ZStr, Value)>,
-    fname: &str,
 ) -> VmResult<Value> {
-    // A direct call compiles to `ZEND_INIT_USER_CALL` + `ZEND_DO_FCALL`
-    // (frameless here), whose unused result triggers `#[\NoDiscard]`.
-    let discarded =
-        vm.pending_call_dst.is_none() && vm.frames.last().is_some_and(|f| f.builtin_name.is_none());
     // The resolution the callable argument's check made (see
     // `coerce_builtin_arg`), when it was this callable's.
     let checked = vm
@@ -1834,52 +1827,9 @@ fn cuf_call(
     let call = match checked.map_or_else(|| vm.zend_is_callable(cb, false), |c| Ok(Ok(c))) {
         Ok(Ok(call)) => call,
         Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
-        Err(Throw::Exception(prev))
-            if vm.frames.last().is_some_and(|f| f.builtin_name.is_none())
-                && names_callable_keyword(cb) =>
-        {
-            return Err(cuf_keyword_error(vm, fname, &prev));
-        }
         Err(t) => return Err(t),
     };
-    if discarded && call.func.flags() & flags::NODISCARD != 0 {
-        vm.check_nodiscard_call(&call)?;
-    }
     vm.call_resolved_named(call, args, named)
-}
-
-/// Whether the callable's class part is `self`, `parent` or `static`.
-fn names_callable_keyword(cb: &Value) -> bool {
-    let class = match cb.deref() {
-        Value::Str(s) => {
-            let b = s.as_bytes();
-            match b.windows(2).rposition(|w| w == b"::") {
-                Some(p) => b[..p].to_ascii_lowercase(),
-                None => return false,
-            }
-        }
-        Value::Array(a) => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
-            Some(Value::Str(c)) => c.as_bytes().to_ascii_lowercase(),
-            _ => return false,
-        },
-        _ => return false,
-    };
-    matches!(class.as_slice(), b"self" | b"parent" | b"static")
-}
-
-#[cold]
-fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &php_runtime::Obj) -> Throw {
-    let e = vm.make_throw(
-        "TypeError",
-        &format!(
-            "{fname}(): Argument #1 ($callback) must be a valid callback, \
-             cannot use \"self\"/\"parent\"/\"static\" in callables"
-        ),
-    );
-    if let Throw::Exception(o) = &e {
-        crate::exceptions::chain_previous(o, prev);
-    }
-    e
 }
 
 fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

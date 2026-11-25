@@ -1957,6 +1957,22 @@ impl Vm {
                             Flow::Next
                         }
                     }
+                    // `call_user_func[_array]()` written by name
+                    // (`ZEND_INIT_USER_CALL`, `ZEND_SEND_USER`,
+                    // `ZEND_SEND_ARRAY`): the callback is called by the
+                    // `DoCall` after them, in this loop.
+                    Op::InitUserCall { callee, array } => {
+                        self.op_init_user_call(*callee, *array)?;
+                        Flow::Next
+                    }
+                    Op::SendUser { src, n } => {
+                        self.op_send_user(*src, *n)?;
+                        Flow::Next
+                    }
+                    Op::SendArray { src, len, skip } => {
+                        self.op_send_array(*src, *len, *skip)?;
+                        Flow::Next
+                    }
                     Op::SendPlaceholder { name } => {
                         let n = name.map(|n| self.lit_str(n));
                         self.op_send_placeholder(n)?;
@@ -3545,8 +3561,11 @@ fn defers_oom(op: &Op) -> bool {
             | Op::InitDynCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
+            | Op::InitUserCall { .. }
             | Op::Send { .. }
             | Op::SendNamed { .. }
+            | Op::SendUser { .. }
+            | Op::SendArray { .. }
     )
 }
 

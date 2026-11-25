@@ -567,6 +567,29 @@ pub enum Op {
     SendNamed { name: u32, src: ArgSrc },
     /// Performs the pending call.
     DoCall { dst: Option<u32> },
+    /// `ZEND_INIT_USER_CALL` (`zend_compile_func_cuf` /
+    /// `zend_compile_func_cufa`, `Zend/zend_compile.c`): starts a call of
+    /// the callable `callee` for a `call_user_func()` (`array: false`) or
+    /// `call_user_func_array()` written by name, resolved like the
+    /// builtin's `Z_PARAM_FUNC` (`zend_is_callable`), whose `TypeError`
+    /// names the builtin. The call is dynamic (`ZEND_CALL_DYNAMIC`); its
+    /// arguments follow as [`Op::SendUser`]s or one [`Op::SendArray`],
+    /// then a [`Op::DoCall`].
+    InitUserCall { callee: Operand, array: bool },
+    /// `ZEND_SEND_USER`: argument `n` (1-based) of a `call_user_func()`
+    /// by value; a by-reference parameter gets it with the "must be passed
+    /// by reference, value given" warning.
+    SendUser { src: Operand, n: u32 },
+    /// `ZEND_SEND_ARRAY`: the elements of the array `src` as the
+    /// arguments of a `call_user_func_array()`, string keys as named
+    /// arguments, references kept for by-reference parameters. With `len`
+    /// not [`Operand::Unused`] (the argument was `array_slice($a, skip,
+    /// len)`), only that slice of the elements, all positional.
+    SendArray {
+        src: Operand,
+        len: Operand,
+        skip: u32,
+    },
     /// Turns the pending call into a closure (`f(...)`).
     CallableConvert {
         dst: u32,

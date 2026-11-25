@@ -120,9 +120,20 @@ fn extract_and_compact_use_the_callers_scope() {
         run("$arr = ['v' => 1]; extract($arr, EXTR_REFS); $v = 5; echo $arr['v'];"),
         "5"
     );
+    // A callback named by a variable is a dynamic call (php8.5 throws for
+    // each form); a literal name is bound at compile time
+    // (`zend_compile_func_cuf`), so that call is extract()'s own.
     assert_eq!(
-        run("try { call_user_func('extract', ['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
+        run("try { $f = 'extract'; call_user_func($f, ['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
         "Cannot call extract() dynamically"
+    );
+    assert_eq!(
+        run("try { $f = 'extract'; $f(['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
+        "Cannot call extract() dynamically"
+    );
+    assert_eq!(
+        run("function h() { call_user_func('extract', ['a' => 1]); return isset($a) ? 'set' : 'unset'; } echo h();"),
+        "set"
     );
 }
 

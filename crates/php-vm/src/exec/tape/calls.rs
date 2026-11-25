@@ -1154,6 +1154,9 @@ fn quick_call(code: &OpArray, i: usize) -> Option<(u8, u32)> {
             | Op::FramelessICall(_)
             | Op::InitFCall { .. }
             | Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
+            | Op::SendUser { .. }
+            | Op::SendArray { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -1204,6 +1207,7 @@ fn call_start_at(code: &OpArray, i: usize) -> Option<usize> {
             }
             Op::InitFCall { .. }
             | Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }

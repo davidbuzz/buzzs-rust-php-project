@@ -3396,11 +3396,11 @@ impl Vm {
     /// named arguments that php-src compiles to dedicated opcodes, so no
     /// internal call exists for observers to see. Inside a function body,
     /// `func_num_args()` / `func_get_args()` become `ZEND_FUNC_NUM_ARGS` /
-    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`; and
-    /// `call_user_func()` / `call_user_func_array()` become
-    /// `ZEND_INIT_USER_CALL` + `ZEND_SEND_USER`/`ZEND_SEND_ARRAY`
-    /// (`zend_compile_func_cuf()` / `zend_compile_func_cufa()`), calling
-    /// the callback directly. (Only consulted while observers are enabled.)
+    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`. (A
+    /// `call_user_func()` / `call_user_func_array()` php-src compiles to
+    /// `ZEND_INIT_USER_CALL` compiles to `Op::InitUserCall` here too, so
+    /// no builtin call is made for it.) (Only consulted while observers
+    /// are enabled.)
     fn compiles_to_opcode(&self, b: &Builtin, call: &PendingCall) -> bool {
         if !call.direct || call.has_named {
             return false;
@@ -3414,8 +3414,6 @@ impl Vm {
                         .is_some_and(|caller| caller.kind == FrameKind::Function)
             }
             b"strlen" => call.args.len() == 1,
-            b"call_user_func" => !call.args.is_empty(),
-            b"call_user_func_array" => call.args.len() == 2,
             _ => false,
         }
     }
@@ -3466,13 +3464,9 @@ impl Vm {
         // pushed before zpp so arity and argument errors show it. It is
         // pushed first and filled in place: a `Frame` is a few hundred
         // bytes, and every move of one is a `memcpy`.
-        // Direct call_user_func calls compile to frameless call forwarding in Zend.
-        let builtin_name = (!call.direct
-            || !matches!(
-                b.name.as_bytes(),
-                b"call_user_func" | b"call_user_func_array"
-            ))
-        .then(|| b.name.clone());
+        // (`call_user_func[_array]()` written by name never gets here: it
+        // compiles to `Op::InitUserCall`, as php-src's does.)
+        let builtin_name = Some(b.name.clone());
         // Computed before the push: `compiles_to_opcode` inspects the caller.
         let observer_hidden = self.observer.enabled
             && (quiet
@@ -5813,6 +5807,455 @@ fn scrub_trace_args(o: &Obj) {
             }
         }
     }
+}
+
+// ----------------------------------------------------------------------
+// `call_user_func()` / `call_user_func_array()` written by name
+// ----------------------------------------------------------------------
+
+impl Vm {
+    /// `ZEND_INIT_USER_CALL` (`Zend/zend_vm_def.h`): resolves the callable
+    /// `callee` like the builtin's `Z_PARAM_FUNC` (`zend_is_callable`, in
+    /// the calling frame's scope, with the callable deprecations) and
+    /// starts a dynamic call of it (`ZEND_CALL_DYNAMIC`). A value that is
+    /// not callable is the builtin's `TypeError` for argument 1, named
+    /// after `call_user_func` or (`array`) `call_user_func_array`.
+    ///
+    /// The call site remembers a function named by a string and a method
+    /// of an `[$object, "name"]` array (by the object's class and the
+    /// calling scope), so a site called again with the same kind of
+    /// callable skips the resolution.
+    pub(crate) fn op_init_user_call(&mut self, callee: Operand, array: bool) -> VmResult<()> {
+        let cb = self.read(callee)?;
+        if let Some(call) = self.user_call_cached(&cb) {
+            self.push_pending(call);
+            return Ok(());
+        }
+        let mut call = self.user_call_resolve(&cb, array)?;
+        call.dynamic = true;
+        self.push_pending(call);
+        Ok(())
+    }
+
+    /// The call site's remembered resolution of `cb` ([`Vm::op_init_user_call`]),
+    /// as the pending call `zend_is_callable` would make of it: a plain
+    /// function named by a string (any case, one leading `\`), or the
+    /// method an `[$object, "name"]` array named for the same class and
+    /// calling scope. `None` on a miss.
+    #[inline]
+    fn user_call_cached(&self, cb: &Value) -> Option<PendingCall> {
+        let f = self.frame();
+        match cb {
+            Value::Str(s) => {
+                let slot = f.code.literals.len() + f.ip;
+                let cache = f.code.fcall_cache.borrow();
+                let func = cache.get(slot)?.as_ref()?.get()?;
+                let name = s.as_bytes();
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                if !func.name().as_bytes().eq_ignore_ascii_case(name) {
+                    return None;
+                }
+                let mut call = PendingCall::new(func);
+                call.dynamic = true;
+                Some(call)
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                    a.get(&ArrayKey::Int(0)).map(Value::deref),
+                    a.get(&ArrayKey::Int(1)).map(Value::deref),
+                ) else {
+                    return None;
+                };
+                let cls = object::class_of(&o);
+                let slot = f.ip.checked_sub(1)?;
+                let cache = f.code.method_cache.borrow();
+                let e = cache.get(slot)?.as_ref()?;
+                let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+                if e.class_addr != Rc::as_ptr(cls) as usize
+                    || e.scope_addr != scope_addr
+                    || !e.name.eq_ignore_ascii_case(m.as_bytes())
+                {
+                    return None;
+                }
+                let func = e.func.get()?;
+                let scope = match &e.method_scope {
+                    Some(w) => Some(w.upgrade()?),
+                    None => None,
+                };
+                let mut call = PendingCall {
+                    this: (!e.is_static).then(|| o.clone()),
+                    scope,
+                    called: Some(cls.clone()),
+                    ..PendingCall::new(func)
+                };
+                call.dynamic = true;
+                Some(call)
+            }
+            _ => None,
+        }
+    }
+
+    /// [`Vm::op_init_user_call`] on a cache miss: `zend_is_callable`, its
+    /// failure as the builtin's `TypeError`, and a resolution worth
+    /// remembering stored in the call site's cache.
+    #[inline(never)]
+    fn user_call_resolve(&mut self, cb: &Value, array: bool) -> VmResult<PendingCall> {
+        let fname = if array {
+            "call_user_func_array"
+        } else {
+            "call_user_func"
+        };
+        let call = match self.zend_is_callable(cb, false) {
+            Ok(Ok(call)) => call,
+            Ok(Err(reason)) => {
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "{fname}(): Argument #1 ($callback) must be a valid callback, {reason}"
+                    ),
+                ))
+            }
+            // An error handler threw on the "Use of "self" in callables"
+            // deprecation: `zend_is_callable_check_class` fails, and the
+            // opcode's `TypeError` gets the exception as its previous one.
+            Err(Throw::Exception(prev)) if names_callable_keyword(cb) => {
+                return Err(cuf_keyword_error(self, fname, &prev));
+            }
+            Err(t) => return Err(t),
+        };
+        self.remember_user_call(cb, &call);
+        Ok(call)
+    }
+
+    /// Stores the resolution `call` of `cb` in the running
+    /// `ZEND_INIT_USER_CALL`'s cache slots when [`Vm::user_call_cached`]
+    /// can rebuild it: a function found by its name (no class, no `$this`,
+    /// no trampoline), or a method an `[$object, "name"]` array found
+    /// directly (bound to that object, or static, its called class the
+    /// object's).
+    fn remember_user_call(&self, cb: &Value, call: &PendingCall) {
+        if call.magic_name.is_some() || call.closure.is_some() || call.pfa.is_some() {
+            return;
+        }
+        let f = self.frame();
+        match cb {
+            Value::Str(s) => {
+                let name = s.as_bytes();
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                if call.this.is_some()
+                    || call.scope.is_some()
+                    || call.called.is_some()
+                    || !call.func.name().as_bytes().eq_ignore_ascii_case(name)
+                {
+                    return;
+                }
+                let code = &f.code;
+                let slot = code.literals.len() + f.ip;
+                let mut cache = code.fcall_cache.borrow_mut();
+                if cache.len() <= slot {
+                    let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+                    crate::rtcache::grow_slots(&mut cache, size, || None);
+                }
+                cache[slot] = Some(crate::opcode::CachedFunc::new(&call.func));
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                    a.get(&ArrayKey::Int(0)).map(Value::deref),
+                    a.get(&ArrayKey::Int(1)).map(Value::deref),
+                ) else {
+                    return;
+                };
+                let cls = object::class_of(&o);
+                if find_double_colon(m.as_bytes()).is_some()
+                    || cls.hooks.as_ref().and_then(|h| h.get_method).is_some()
+                    || !call
+                        .func
+                        .name()
+                        .as_bytes()
+                        .eq_ignore_ascii_case(m.as_bytes())
+                    || !call.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, cls))
+                    || call.this.as_ref().is_some_and(|t| !Obj::ptr_eq(t, &o))
+                {
+                    return;
+                }
+                let Some(slot) = f.ip.checked_sub(1) else {
+                    return;
+                };
+                let entry = MethodCallCacheEntry {
+                    class_addr: Rc::as_ptr(cls) as usize,
+                    scope_addr: f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize),
+                    class: Rc::downgrade(cls),
+                    method_scope: call.scope.as_ref().map(Rc::downgrade),
+                    func: crate::opcode::CachedFunc::new(&call.func),
+                    is_static: call.this.is_none(),
+                    name_lit: None,
+                    name: m.clone(),
+                };
+                let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
+                    return;
+                };
+                if cache.len() <= slot {
+                    let size = f.code.ops.len().max(slot + 1);
+                    crate::rtcache::grow_slots(&mut cache, size, || None);
+                }
+                cache[slot] = Some(entry);
+            }
+            _ => {}
+        }
+    }
+
+    /// `ZEND_SEND_USER`: argument `n` (1-based) of the pending
+    /// `call_user_func()` call, by value (`GET_OP1_ZVAL_PTR_DEREF`). A
+    /// parameter that must be passed by reference gets a reference to a
+    /// copy, after the "must be passed by reference, value given" warning
+    /// (`zend_param_must_be_ref`); one that prefers a reference gets the
+    /// value.
+    pub(crate) fn op_send_user(&mut self, src: Operand, n: u32) -> VmResult<()> {
+        let v = self.read(src)?;
+        let i = (n as usize).saturating_sub(1);
+        let (by_ref, must) = {
+            let call = self.frame().calls.last().expect("pending call");
+            let by_ref = !call.is_magic_trampoline() && call.func.arg_by_ref(i);
+            (by_ref, by_ref && !prefers_ref(&call.func, i))
+        };
+        if !by_ref {
+            return self.op_send_val(v);
+        }
+        let v = if must {
+            self.param_must_be_ref(i)?;
+            Value::Reference(PhpRef::new(v))
+        } else {
+            v
+        };
+        self.push_arg(Some(i), None, v)
+    }
+
+    /// `ZEND_SEND_ARRAY`: the elements of the array `src` as the arguments
+    /// of the pending `call_user_func_array()` call: string keys are
+    /// named arguments (`zend_handle_named_arg`), a reference in the array
+    /// is passed as it is to a by-reference parameter and dereferenced for
+    /// a by-value one (kept for a `__call` trampoline), and a value for a
+    /// parameter that must be passed by reference is passed in a new
+    /// reference after the "must be passed by reference, value given"
+    /// warning. With `len` not [`Operand::Unused`], the elements are
+    /// those `array_slice($args, skip, len)` would give, all positional.
+    pub(crate) fn op_send_array(&mut self, src: Operand, len: Operand, skip: u32) -> VmResult<()> {
+        let ht = match self.read(src)? {
+            Value::Array(ht) => ht,
+            other => {
+                // `FREE_OP2`: a temporary length is released unread.
+                if let Operand::Tmp(t) = len {
+                    drop(std::mem::take(&mut self.frame_mut().tmps[t as usize]));
+                }
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
+                        given_type(&other)
+                    ),
+                ));
+            }
+        };
+        if len != Operand::Unused {
+            return self.send_array_slice(&ht, len, skip);
+        }
+        let mut have_named = false;
+        for (k, arg) in ht.iter() {
+            let (pos, name) = match k {
+                ArrayKey::Str(name) => {
+                    have_named = true;
+                    (self.arg_position(name)?, Some(name.clone()))
+                }
+                ArrayKey::Int(_) => {
+                    if have_named {
+                        return Err(self.make_throw(
+                            "Error",
+                            "Cannot use positional argument after named argument",
+                        ));
+                    }
+                    let call = self.frame().calls.last().expect("pending call");
+                    (Some(call.arg_count()), None)
+                }
+            };
+            let i = pos.unwrap_or_else(|| {
+                let call = self.frame().calls.last().expect("pending call");
+                call.func.params().len().saturating_sub(1)
+            });
+            let (v, by_ref) = self.send_array_value(arg, i)?;
+            if name.is_none() && !by_ref {
+                self.op_send_val(v)?;
+            } else {
+                self.push_arg(pos, name, v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The `array_slice($args, skip, len)` form of [`Vm::op_send_array`]
+    /// (`zend_compile_func_cufa` with a literal offset): `len` an int, or
+    /// `null` for the rest; anything else is converted as `array_slice()`'s
+    /// `?int $length` would be, its `TypeError` named after it.
+    fn send_array_slice(&mut self, ht: &ZArray, len: Operand, skip: u32) -> VmResult<()> {
+        let lv = self.read(len)?;
+        let count = ht.len();
+        let skip = skip as usize;
+        let mut len = match lv {
+            Value::Int(l) => l,
+            Value::Null => i64::try_from(count.wrapping_sub(skip)).unwrap_or(i64::MAX),
+            other => {
+                let parsed = if self.frame().code.strict_types {
+                    None
+                } else {
+                    self.parse_arg_long_weak(&other)?
+                };
+                match parsed {
+                    Some(l) => l,
+                    None => {
+                        return Err(self.make_throw(
+                            "TypeError",
+                            &format!(
+                            "array_slice(): Argument #3 ($length) must be of type ?int, {} given",
+                            given_type(&other)
+                        ),
+                        ))
+                    }
+                }
+            }
+        };
+        if skip >= count {
+            return Ok(());
+        }
+        let rest = i64::try_from(count - skip).unwrap_or(i64::MAX);
+        if len < 0 {
+            len += rest;
+        }
+        if len <= 0 {
+            return Ok(());
+        }
+        let len = usize::try_from(len.min(rest)).unwrap_or(usize::MAX);
+        for (i, (_, arg)) in ht.iter().skip(skip).take(len).enumerate() {
+            let (v, by_ref) = self.send_array_value(arg, i)?;
+            if by_ref {
+                self.push_arg(Some(i), None, v)?;
+            } else {
+                self.op_send_val(v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The value `ZEND_SEND_ARRAY` passes for array element `arg` as
+    /// argument `i` (0-based; the variadic parameter past the declared
+    /// ones) of the pending call, and whether the parameter is
+    /// by-reference (`ARG_SHOULD_BE_SENT_BY_REF`; never for a `__call`
+    /// trampoline).
+    fn send_array_value(&mut self, arg: &Value, i: usize) -> VmResult<(Value, bool)> {
+        let (trampoline, by_ref, prefer) = {
+            let call = self.frame().calls.last().expect("pending call");
+            (
+                call.is_magic_trampoline(),
+                call.func.arg_by_ref(i),
+                prefers_ref(&call.func, i),
+            )
+        };
+        if trampoline {
+            // "don't separate references for __call"
+            return Ok((arg.clone(), false));
+        }
+        if !by_ref {
+            return Ok((arg.deref(), false));
+        }
+        if arg.is_reference() || prefer {
+            return Ok((arg.clone(), true));
+        }
+        // By-value send is not allowed: a warning, but the call is made.
+        self.param_must_be_ref(i)?;
+        Ok((Value::Reference(PhpRef::new(arg.clone())), true))
+    }
+
+    /// `zend_param_must_be_ref` for argument `i` (0-based) of the pending
+    /// call: "f(): Argument #1 ($x) must be passed by reference, value
+    /// given".
+    #[cold]
+    fn param_must_be_ref(&mut self, i: usize) -> VmResult<()> {
+        let msg = {
+            let call = self.frame().calls.last().expect("pending call");
+            self.must_be_ref_message(call, i)
+        };
+        self.warning(&msg)
+    }
+
+    /// The text of `zend_param_must_be_ref` for argument `i` (0-based) of
+    /// `call`: the function as `get_function_or_method_name` names it
+    /// (`Closure::__invoke` for a closure called through `__invoke`), and
+    /// the parameter's name unless it is the variadic one.
+    fn must_be_ref_message(&self, call: &PendingCall, i: usize) -> String {
+        let params = call.func.params();
+        let pname = match params.get(i) {
+            Some(p) if !p.variadic => format!(" (${})", p.name),
+            _ => String::new(),
+        };
+        let fname = if call
+            .magic_name
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+            && call.func.is_closure()
+        {
+            "Closure::__invoke".to_string()
+        } else {
+            self.func_display(&call.func, call.scope.as_ref())
+        };
+        format!(
+            "{fname}(): Argument #{}{pname} must be passed by reference, value given",
+            i + 1
+        )
+    }
+}
+
+/// Whether the callable's class part (of `"C::m"` or `["C", "m"]`) is `self`, `parent` or `static`.
+fn names_callable_keyword(cb: &Value) -> bool {
+    let class = match cb.deref() {
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            match b.windows(2).rposition(|w| w == b"::") {
+                Some(p) => b[..p].to_ascii_lowercase(),
+                None => return false,
+            }
+        }
+        Value::Array(a) => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
+            Some(Value::Str(c)) => c.as_bytes().to_ascii_lowercase(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    matches!(class.as_slice(), b"self" | b"parent" | b"static")
+}
+
+/// The `TypeError` of `ZEND_INIT_USER_CALL` when the "Use of \"self\" in
+/// callables" deprecation threw `prev`.
+#[cold]
+fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &Obj) -> Throw {
+    let e = vm.make_throw(
+        "TypeError",
+        &format!(
+            "{fname}(): Argument #1 ($callback) must be a valid callback, \
+             cannot use \"self\"/\"parent\"/\"static\" in callables"
+        ),
+    );
+    if let Throw::Exception(o) = &e {
+        crate::exceptions::chain_previous(o, prev);
+    }
+    e
+}
+
+/// Whether argument `i` (0-based) of `func` is sent by reference only when
+/// it can be (`ZEND_SEND_PREFER_REF`, `ARG_MAY_BE_SENT_BY_REF`).
+fn prefers_ref(func: &Func, i: usize) -> bool {
+    let params = func.params();
+    params
+        .get(i)
+        .or_else(|| params.last().filter(|p| p.variadic))
+        .is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0)
 }
 
 #[cfg(test)]
