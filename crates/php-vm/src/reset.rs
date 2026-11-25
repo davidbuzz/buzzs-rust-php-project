@@ -7,8 +7,15 @@ use crate::class::cflags;
 use crate::func::Func;
 use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+thread_local! {
+    /// The function table the last [`Vm::request_reset`] on this thread
+    /// left: the VM's address, the function-table version and the table's
+    /// length. Equal at the next reset, the table holds no user function.
+    static CLEAN_FUNCTIONS: Cell<Option<(usize, u64, usize)>> = const { Cell::new(None) };
+}
 
 /// The objects store and the collector as the next request's VM must find
 /// them, once a request's VM was dropped on this thread and another request
@@ -134,15 +141,30 @@ impl Vm {
         // 1. User functions: their static variables are cleared and they
         // leave the table, internal functions stay; one pass over the
         // table. Nothing a drop runs here can reach the table: destructors
-        // are off since the request's shutdown.
-        self.functions.retain(|_, f| match f {
-            Func::User(u) => {
-                u.statics.borrow_mut().clear();
-                false
-            }
-            Func::Builtin(_) => true,
-        });
-        crate::func::bump_func_table_version();
+        // are off since the request's shutdown. php-src stops at the first
+        // persistent function (`zend_hash_discard()` past
+        // `EG(persistent_functions_count)`); here the pass over the
+        // thousands of internal functions is skipped when the table is the
+        // one the previous reset left: a user function enters the table
+        // only with a new function-table version.
+        let stamp = |vm: &Vm| {
+            (
+                std::ptr::from_ref(vm) as usize,
+                crate::func::FUNC_TABLE_VERSION.load(std::sync::atomic::Ordering::Relaxed),
+                vm.functions.len(),
+            )
+        };
+        if CLEAN_FUNCTIONS.with(Cell::get) != Some(stamp(self)) {
+            self.functions.retain(|_, f| match f {
+                Func::User(u) => {
+                    u.statics.borrow_mut().clear();
+                    false
+                }
+                Func::Builtin(_) => true,
+            });
+            crate::func::bump_func_table_version();
+            CLEAN_FUNCTIONS.with(|c| c.set(Some(stamp(self))));
+        }
         crate::builtins::info::forget_user_functions();
 
         // 2. Classes: a user class's static properties, constants,
@@ -155,7 +177,10 @@ impl Vm {
         let mut dropped = false;
         self.classes.retain(|key, c| {
             if c.flags & cflags::INTERNAL != 0 {
-                if key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes()) {
+                // The lowercase name is usually the very key (one pointer
+                // compare); the case-insensitive compare is left for the
+                // rest.
+                if *key == c.lc_name || key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes()) {
                     return true;
                 }
             } else {
@@ -446,6 +471,37 @@ mod tests {
         let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
         // Hoisted declarations come first: the script sees its own.
         assert_eq!(out, "stale stale 21 B,c\n".repeat(2));
+    }
+
+    /// A reset after a request that declared no function skips its pass
+    /// over the function table; a request declaring one after such
+    /// requests still loses it (and its static variables) at the next
+    /// reset, and the internal functions stay throughout.
+    #[test]
+    fn request_reset_drops_functions_declared_after_requests_without_any() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        let plain: &[u8] =
+            b"<?php echo function_exists('fb') ? 'stale' : 'none', ' ', strlen('abc'), \"\n\";";
+        let declaring: &[u8] = b"<?php
+            echo function_exists('fb') ? 'stale ' : '';
+            function fb() { static $n = 0; return ++$n; }
+            fb(); echo fb(), \"\n\";";
+        vm.run_script(plain, "r1.php");
+        vm.request_reset();
+        let builtins = vm.functions.len();
+        vm.run_script(plain, "r2.php");
+        vm.request_reset();
+        assert_eq!(vm.functions.len(), builtins);
+        vm.run_script(declaring, "r3.php");
+        vm.request_reset();
+        assert!(vm.functions.get(&ZStr::from("fb")).is_none());
+        assert_eq!(vm.functions.len(), builtins);
+        vm.run_script(plain, "r4.php");
+        vm.request_reset();
+        vm.run_script(declaring, "r5.php");
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(out, "none 3\nnone 3\nstale 2\nnone 3\nstale 2\n");
     }
 
     #[test]
