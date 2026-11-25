@@ -1332,6 +1332,30 @@ fn clear_arg_buffer(buffer: &mut Vec<Option<Value>>) {
     unsafe { buffer.set_len(0) };
 }
 
+/// [`clear_arg_buffer`] of a returning builtin's frame
+/// ([`Frame::release_native`]): every entry holds a sent argument, which
+/// the caller's variable usually still holds too, so each is released as
+/// [`release_cv`] releases a compiled variable (a handle that is not the
+/// last decremented inline, without `Value`'s out-of-line drop glue: ~30
+/// instructions an argument), front to back.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per tape builtin call
+fn clear_native_args(buffer: &mut Vec<Option<Value>>) {
+    if buffer.capacity() > 256 {
+        *buffer = Vec::new();
+        return;
+    }
+    for arg in &mut *buffer {
+        if let Some(v) = arg.take() {
+            release_cv(v);
+        }
+    }
+    // SAFETY: every element is `None` now, which owns nothing, so cutting
+    // the length to zero forgets no value (the elements are initialised
+    // and `0 <= capacity`).
+    unsafe { buffer.set_len(0) };
+}
+
 /// Empties an `Option` field of a frame being recycled. Only a set field is
 /// written: storing `None` over an unknown value calls the payload's
 /// out-of-line `drop_in_place` (an object handle's) even when it was
@@ -2008,7 +2032,7 @@ impl Frame {
         {
             return false;
         }
-        clear_arg_buffer(&mut self.args);
+        clear_native_args(&mut self.args);
         clear_opt(&mut self.func);
         clear_opt(&mut self.builtin_name);
         self.ip = 0;
@@ -3594,6 +3618,28 @@ mod tests {
         flags.extend([true, false]);
         bufs.put_passed(flags);
         assert!(bufs.take_passed().is_empty());
+    }
+
+    #[test]
+    fn clear_native_args_releases_every_argument_front_to_back() {
+        let s = ZStr::from("a sent string");
+        let a = php_runtime::ZArray::new();
+        let held = a.clone();
+        let mut args = Vec::with_capacity(8);
+        args.push(Some(Value::Str(s.clone())));
+        args.push(Some(Value::Array(held)));
+        args.push(Some(Value::Int(4)));
+        args.push(None);
+        assert_eq!(a.refcount(), 2);
+        super::clear_native_args(&mut args);
+        assert!(args.is_empty());
+        assert_eq!(args.capacity(), 8);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(a.refcount(), 1);
+        // The last handle of an array is released too.
+        args.push(Some(Value::Array(php_runtime::ZArray::new())));
+        super::clear_native_args(&mut args);
+        assert!(args.is_empty());
     }
 
     #[test]

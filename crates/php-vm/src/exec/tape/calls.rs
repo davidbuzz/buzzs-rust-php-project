@@ -2730,7 +2730,7 @@ pub(super) fn call_native(
     let b = Rc::clone(b);
     let kind = *kind;
     // A by-reference argument was sent ([`send_ref`]).
-    let sent_ref = b.plain_call_upto().1 < n;
+    let sent_ref = b.sends_ref_within(n);
     // The handler's copies of the arguments (php-src's handler reads them
     // in the frame), then the declared defaults of the omitted trailing
     // parameters, not marked as passed.
@@ -2744,7 +2744,7 @@ pub(super) fn call_native(
     // once (a `push` per argument tested the capacity and stored the
     // length every time).
     values.extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
-        Some(v) => clone_value(v),
+        Some(v) => copy_arg(v),
         None => Value::Null,
     }));
     passed.resize(values.len(), true);
@@ -2918,6 +2918,21 @@ fn release_native_args(vm: &mut Vm, args: Args) {
     drop(func);
 }
 
+/// The handler's copy of a sent argument (`call_native`): a handle's
+/// count incremented inline, where `Value::clone` is an out-of-line call
+/// dispatching on the tag (~23 instructions an argument).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument of a tape builtin call
+fn copy_arg(v: &Value) -> Value {
+    match v {
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        Value::Object(o) => Value::Object(o.clone()),
+        Value::Reference(r) => Value::Reference(r.clone()),
+        _ => clone_value(v),
+    }
+}
+
 /// Empties a handler's argument copies front to back, as `Vec::clear`
 /// releases them, without a `Drain` (whose out-of-line drop cost ~22
 /// instructions a call) and without the out-of-line drop of a scalar:
@@ -2927,11 +2942,23 @@ fn release_native_args(vm: &mut Vm, args: Args) {
 #[allow(clippy::inline_always)] // once per tape builtin call
 fn release_values(values: &mut Vec<Value>) {
     for slot in values.iter_mut() {
-        if !matches!(
+        if matches!(
             slot,
             Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
         ) {
-            drop(std::mem::take(slot));
+            continue;
+        }
+        // A copy whose original the frame still holds is not the last
+        // handle: its count is decremented inline (`GC_DELREF`), without
+        // the out-of-line drop glue of a `Value` and its dispatch on the
+        // tag again (~30 instructions an argument). A last handle (the
+        // handler replaced the copy) is left to the glue.
+        match std::mem::take(slot) {
+            Value::Str(s) => drop(s),
+            Value::Array(a) if a.refcount() > 1 => drop(a),
+            Value::Object(o) if o.refcount() > 1 => drop(o),
+            Value::Reference(r) if r.refcount() > 1 => drop(r),
+            other => drop(other),
         }
     }
     // Every element is a scalar now, which `clear`'s drop loop passes

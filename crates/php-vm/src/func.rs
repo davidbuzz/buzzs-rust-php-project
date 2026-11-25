@@ -733,6 +733,19 @@ impl Builtin {
         }
     }
 
+    /// Whether a plain call with `n` arguments sent one by reference
+    /// ([`Builtin::plain_call_upto`]'s position is below `n`), from the
+    /// two cells directly once the answer is worked out: the call into
+    /// `plain_call_upto` cost a tape builtin call ~33 instructions.
+    #[inline]
+    pub(crate) fn sends_ref_within(&self, n: usize) -> bool {
+        match self.plain.get() {
+            PLAIN_NAMED_REF => usize::from(self.first_ref.get()) < n,
+            PLAIN_UNKNOWN => self.plain_call_upto().1 < n,
+            _ => false,
+        }
+    }
+
     /// Whether the parameter at `pos` is by reference (a position past the
     /// declared ones: the variadic one's), and whether it is
     /// `ZEND_ARG_SEND_PREFER_REF` (by reference when the argument is a
