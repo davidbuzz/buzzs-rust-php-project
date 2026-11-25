@@ -83,6 +83,29 @@ fn repeat_runs_the_request_again_in_a_fresh_vm() {
     );
 }
 
+/// Each repeat is a request of its own, whose objects are numbered from 1
+/// as in php-src (`php8.5 --repeat 3` prints 2 every time): the objects the
+/// previous run's function and method statics held are freed with its VM,
+/// not handed out again to the next run's `new` in the order the drop freed
+/// them (2, then 1, then 3 before this was fixed).
+#[test]
+fn repeat_numbers_each_requests_objects_from_one() {
+    let out = php(&[
+        "--repeat",
+        "3",
+        "-r",
+        "function f($v = null) { static $x = null; if ($v !== null) { $x = $v; } return $x; } \
+         class K { function m($v = null) { static $y = null; if ($v !== null) { $y = $v; } return $y; } } \
+         f(new stdClass); (new K)->m(new stdClass); echo spl_object_id(new stdClass), \"\\n\";",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Executing for the first time...\n2\nFinished execution, repeating...\n2\n\
+         Finished execution, repeating...\n2\n"
+    );
+}
+
 #[test]
 fn lint_checks_every_file_given() {
     let good = temp("good.php");

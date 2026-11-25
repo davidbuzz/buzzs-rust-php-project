@@ -274,12 +274,15 @@ thread_local! {
 /// when it was made from the same INI settings (module startup runs once
 /// per process, as in php-src), else a new one, set up by `setup`.
 fn worker_vm(cfg: &Config, ini: &[(String, String)], setup: Option<fn(&mut Vm)>) -> PreparedVm {
-    let kept = WORKER_VM
-        .with(|w| w.borrow_mut().take())
-        .filter(|(made_from, _)| made_from.as_slice() == ini)
-        .map(|(_, p)| p);
-    if let Some(p) = kept {
-        return p;
+    match WORKER_VM.with(|w| w.borrow_mut().take()) {
+        Some((made_from, p)) if made_from.as_slice() == ini => return p,
+        Some(old) => {
+            // Made from other INI settings: dropped, and the new VM's
+            // request starts with a fresh objects store and collector.
+            drop(old);
+            php_vm::reset::release_dropped_vm_objects();
+        }
+        None => {}
     }
     let mut p = new_prepared_vm(cfg, ini.to_vec());
     if let Some(f) = setup {

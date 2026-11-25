@@ -760,7 +760,12 @@ enum Release {
 /// Releases `vm` after its request.
 fn release(vm: Vm, how: Release) {
     match how {
-        Release::Drop => drop(vm),
+        Release::Drop => {
+            drop(vm);
+            // The next request on this thread starts with a fresh objects
+            // store and collector, as php-src's `init_executor()` gives it.
+            php_vm::reset::release_dropped_vm_objects();
+        }
         Release::Discard => {
             // Clean and fast process exit: ensure all output buffers and streams
             // are flushed, then perform bulk VM teardown via fast discard

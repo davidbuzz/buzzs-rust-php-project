@@ -546,11 +546,15 @@ fn run(argv: &[Vec<u8>]) -> i32 {
                     start = std::time::Instant::now();
                 }
                 drop(vm);
+                // Each `-T` run is a request of its own, with a fresh
+                // objects store and collector.
+                php_vm::reset::release_dropped_vm_objects();
                 continue;
             }
             repeats -= 1;
             if repeats > 0 {
                 drop(vm);
+                php_vm::reset::release_dropped_vm_objects();
                 continue;
             }
         }

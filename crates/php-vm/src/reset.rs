@@ -10,6 +10,21 @@ use php_runtime::{Value, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The objects store and the collector as the next request's VM must find
+/// them, once a request's VM was dropped on this thread and another request
+/// follows on it (`php --repeat`, `php -l` with more files): what the
+/// dropped VM's request leaked to cycles is freed, and the next request's
+/// objects are numbered from 1 again. php-src gives each request a fresh
+/// objects store (`zend_objects_store_init()` from `init_executor()`) and
+/// collector (`gc_reset()`); here both are per thread and outlive a VM, so
+/// without this the next request reuses the handles the drop freed, in the
+/// order it freed them (`var_dump()`'s `#n`, `spl_object_id()`).
+pub fn release_dropped_vm_objects() {
+    crate::object::free_object_storage();
+    crate::gc::request_startup(crate::gc::enabled());
+    crate::object::reset_store();
+}
+
 impl Vm {
     /// `zend_deactivate()` after `shutdown_executor()`, for a SAPI that
     /// drops the VM once the request is over (CGI, FPM):
