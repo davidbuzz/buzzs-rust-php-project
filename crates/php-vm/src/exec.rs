@@ -791,8 +791,20 @@ impl Vm {
     }
 
     fn execute_inner(&mut self, base: usize) -> VmResult<Value> {
+        // The first run of the base frame may go straight to the tape; a
+        // run after an exception was caught resumes in `Vm::run`.
+        let mut first = true;
         loop {
-            match self.run(base) {
+            let direct = if std::mem::take(&mut first) {
+                self.run_base_on_tape(base)
+            } else {
+                None
+            };
+            let r = match direct {
+                Some(r) => r,
+                None => self.run(base),
+            };
+            match r {
                 Ok(v) => return Ok(v),
                 Err(Throw::Exception(e)) => {
                     if let Err(t) = self.handle_exception(e, base) {
@@ -813,6 +825,95 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// The start of a nested execution (`zend_call_function` calling
+    /// `execute_ex` for a callback, a magic method, ...) whose base frame
+    /// starts at an op the tape enters: the tape runs the body here, and
+    /// the base frame's `ZEND_RETURN`, which the tape leaves to `Vm::run`
+    /// (`Vm::return_simple` declines the frame an execution started with),
+    /// returns directly through [`Vm::return_at_base`]. The whole call then
+    /// never enters `Vm::run`, whose entry and exit (a large stack frame,
+    /// `LOAD_OPLINE`, the hot-op pre-check, the dispatch of `Return` in its
+    /// big match) were about 300 instructions of a 2,000-instruction
+    /// callback.
+    ///
+    /// `None` when `Vm::run` is to go on: the current frame's `ip` is then
+    /// stored where `Vm::run` would have gone on itself (it reloads it):
+    /// after a call or return the tape made (`hot::LEFT`, `hot::SWITCHED`:
+    /// the new current frame's `ip`), after the safe point the tape asked
+    /// for (run here, as `Vm::run` runs it), or at the op the tape stopped
+    /// at (an op it does not run, or whose fast path declined having
+    /// changed nothing: `Vm::run` offers it to the tape once more, which
+    /// declines it again, and then runs it as its generic op).
+    #[inline(never)]
+    fn run_base_on_tape(&mut self, base: usize) -> Option<VmResult<Value>> {
+        if self.frames.len() != base + 1 {
+            return None;
+        }
+        let top = self.frames.last()?;
+        let ip = top.ip;
+        // SAFETY: as in `Vm::run`'s `LOAD_OPLINE`: the op array is owned by
+        // `Rc`s, one held by the base frame, which stays on the stack until
+        // the base frame returns (below, after the last use of `code`) or
+        // the execution throws (`Vm::run_tape` does not pop it: it never
+        // returns from the frame `base`).
+        let code: &crate::opcode::OpArray = unsafe { &*Rc::as_ptr(&top.code) };
+        if !tape::worth_entering(code, ip) {
+            return None;
+        }
+        let (next, last) = tape::run_tape(self, base, code, ip);
+        if last == hot::LEFT {
+            // As `Vm::run` after a call or return on the tape whose safe
+            // point is due: the frame's `ip` is stored in it.
+            if let Err(t) = self.safe_point_after_leave() {
+                return Some(Err(t));
+            }
+            return None;
+        }
+        if last == hot::THREW {
+            return Some(Err(self.tape_throw.take().unwrap_or(Throw::Fatal)));
+        }
+        let switched = next & hot::SWITCHED != 0;
+        let next = next & !hot::SWITCHED;
+        // SAFETY: the current frame's op array, held by that frame, which
+        // stays current until `Vm::run` takes over (the safe point below
+        // runs nested executions above it only).
+        let code: &crate::opcode::OpArray = if switched {
+            unsafe { &*Rc::as_ptr(&self.frame().code) }
+        } else {
+            code
+        };
+        if last != hot::NO_SAFE_POINT {
+            // The safe point after the op at `last`, as `Vm::run` runs it.
+            let op = code.ops.get(last)?;
+            return match self.safe_point(next, op) {
+                Ok(ip) => {
+                    self.frame_mut().ip = ip;
+                    None
+                }
+                Err(t) => Some(Err(t)),
+            };
+        }
+        if !switched {
+            if let Some(Op::Return { val }) = code.ops.get(next) {
+                // `Vm::run`'s `Return` arm after the tape declined it.
+                if let Some(flow) = self.return_at_base(*val, base, next + 1) {
+                    let Flow::Done(v) = flow else {
+                        // `return_at_base` only ends the execution.
+                        return Some(Err(Throw::Fatal));
+                    };
+                    if Self::safe_point_due() {
+                        if let Err(t) = self.safe_point_after_leave() {
+                            return Some(Err(t));
+                        }
+                    }
+                    return Some(Ok(v));
+                }
+            }
+        }
+        self.frame_mut().ip = next;
+        None
     }
 
     /// Finds a handler for `exc` in the frames above `base`. Returns
