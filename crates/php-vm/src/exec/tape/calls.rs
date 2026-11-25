@@ -2200,19 +2200,22 @@ fn ref_limit(uf: &UserFunction, from: usize) -> usize {
 /// `ZEND_SEND_REF` (`ZEND_SEND_VAR_EX` of a by-reference parameter) into a
 /// prepared builtin call, for the argument [`send`] stopped at: the
 /// parameter at its position is by reference (`ZEND_ARG_SEND_PREFER_REF`
-/// ones too) and the argument is a bare compiled variable of a frame
-/// whose symbol table is not attached. The variable becomes a reference
-/// if it is not one (an undefined one a reference to null, without a
-/// notice: `Vm::cv_make_ref_fast`, what the generic send's
-/// `Vm::place_make_ref` does for it) and the reference is the argument.
-/// The send limit then moves to the next by-reference parameter.
+/// ones too) and the argument is a variable of a frame whose symbol table
+/// is not attached. A bare compiled variable becomes a reference if it is
+/// not one (an undefined one a reference to null, without a notice:
+/// `Vm::cv_make_ref_fast`, what the generic send's `Vm::place_make_ref`
+/// does for it); a property or an element (`next($this->list[$k])`,
+/// `array_pop($this->stack)`) when making its reference can report
+/// nothing and run no user code (`Vm::place_make_ref_quiet`). The
+/// reference is the argument, and the send limit moves to the next
+/// by-reference parameter.
 ///
 /// `false`, having changed nothing, for anything else: a value or a
 /// call's result (the generic send raises the error or the notice, or
-/// passes a prefer-ref argument by value), a property or an element (its
-/// walk may report or run user code, which would take the pooled frame),
-/// a by-value parameter past the limit, or a call that is not the
-/// caller's newest. The call then becomes the generic one.
+/// passes a prefer-ref argument by value), a walk that may report or run
+/// user code (which would take the pooled frame), a by-value parameter
+/// past the limit, or a call that is not the caller's newest. The call
+/// then becomes the generic one.
 #[inline(never)]
 fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let ArgSrc::Place(pid) = src else {
@@ -2237,7 +2240,10 @@ fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
         _ => return false,
     }
     // The current frame is the caller (the prepared one is above it).
-    let Some(r) = vm.cv_make_ref_fast(*pid) else {
+    let Some(r) = vm
+        .cv_make_ref_fast(*pid)
+        .or_else(|| vm.place_make_ref_quiet(*pid))
+    else {
         return false;
     };
     let Some(frame) = vm.frames.vec.get_mut(live) else {

@@ -2049,6 +2049,74 @@ impl Vm {
         Some(slot.get_or_insert(Value::Null).make_ref())
     }
 
+    /// The reference a by-reference argument of a prepared native call
+    /// (`calls::send_ref`) gets for place `pid` of the current frame, when
+    /// making it can neither report anything nor run user code, so that no
+    /// frame is pushed over the prepared one: `$this->p` or `$o->p` on a
+    /// property cache hit ([`Vm::prop_cache_make_ref`], as
+    /// [`Vm::place_make_ref`] starts), or `$a[$k]` / `$this->p[$k]` of an
+    /// array held by a compiled variable (directly or through a reference)
+    /// or by a cached declared property ([`Vm::prop_cache_container`]),
+    /// `$k` an int or string literal or compiled variable: the element
+    /// becomes a reference, created as null when missing
+    /// (`ZEND_FETCH_DIM_W`, no notice) and the array separated first when
+    /// shared (`SEPARATE_ARRAY`). `None`, having changed nothing, for any
+    /// other place or frame state (the generic send then makes it).
+    pub(crate) fn place_make_ref_quiet(&mut self, pid: PlaceId) -> Option<PhpRef> {
+        /// What the place is, read before anything changes.
+        enum Shape {
+            Prop,
+            CvDim(u32, ArrayKey),
+            PropDim(ArrayKey),
+        }
+        let shape = {
+            let f = self.frames.last()?;
+            if f.symtab_attached
+                || !matches!(
+                    f.kind,
+                    crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+                )
+            {
+                return None;
+            }
+            let p = f.code.places.get(pid as usize)?;
+            match (&p.base, p.segs.as_slice()) {
+                (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_))]) => Shape::Prop,
+                (PlaceBase::Cv(cv), [Seg::Dim(k)]) => Shape::CvDim(*cv, quiet_key(f, *k)?),
+                (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_)), Seg::Dim(k)]) => {
+                    Shape::PropDim(quiet_key(f, *k)?)
+                }
+                _ => return None,
+            }
+        };
+        match shape {
+            Shape::Prop => self.prop_cache_make_ref(pid),
+            Shape::CvDim(cv, key) => {
+                let slot = self.frames.last_mut()?.cvs.get_mut(cv as usize)?;
+                match slot.as_mut().as_mut()? {
+                    Value::Array(a) => Some(element_make_ref(a, key)),
+                    Value::Reference(r) => {
+                        let mut held = r.try_borrow_mut()?;
+                        match &mut *held {
+                            Value::Array(a) => Some(element_make_ref(a, key)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            Shape::PropDim(key) => {
+                let (obj, idx) = self.prop_cache_container(pid)?;
+                let data = object::data(&obj);
+                let mut slots = data.slots.try_borrow_mut().ok()?;
+                match slots.get_mut(idx)?.as_mut()? {
+                    Value::Array(a) => Some(element_make_ref(a, key)),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// `unset(place)`.
     pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
         // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. on arrays: no
@@ -5446,6 +5514,35 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
 }
 
 pub(crate) mod propcache;
+
+/// The array key operand `k` of frame `f` stands for, when reading it can
+/// report nothing: an int or a string literal, or a compiled variable
+/// holding one (not through a reference). `None` otherwise.
+fn quiet_key(f: &crate::vm::Frame, k: Operand) -> Option<ArrayKey> {
+    let v = match k {
+        Operand::Lit(i) => f.code.literals.get(i as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+        _ => return None,
+    };
+    match v {
+        Value::Int(i) => Some(ArrayKey::Int(*i)),
+        Value::Str(s) => Some(ArrayKey::from_zstr(s)),
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_DIM_W` + make-ref of element `key` of array `a`: the array
+/// separated when shared, the element created as null when missing, and
+/// the element made a reference (or its reference returned).
+fn element_make_ref(a: &mut ZArray, key: ArrayKey) -> PhpRef {
+    let t = a.make_mut();
+    if let Some(v) = t.get_mut(&key) {
+        return v.make_ref();
+    }
+    let r = PhpRef::new(Value::Null);
+    t.insert(key, Value::Reference(r.clone()));
+    r
+}
 
 #[cfg(test)]
 mod tests;

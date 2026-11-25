@@ -409,3 +409,167 @@ f();
         "int(5)\nx\n"
     );
 }
+
+/// Properties and elements by reference: declared, typed, readonly and
+/// missing properties, `$o->p`, elements by literal, numeric-string and
+/// variable keys, missing elements (created as null), an array shared
+/// with a copy, an array behind a reference, string offsets, keys that
+/// report a deprecation or an undefined variable.
+#[test]
+fn properties_and_elements_by_reference() {
+    assert_eq!(run(PLACES), PLACES_EXPECTED);
+}
+
+const PLACES: &str = r#"<?php
+class T {
+    public array $t = [1, 2, 3];
+    public $p = ['a' => [1, 2], 3 => [4, 5], 'x' => 'str'];
+    public function __construct(public readonly array $ro = [7, 8]) {}
+    function m($k) {
+        $copy = $this->p;
+        array_pop($this->t);
+        array_pop($this->p[$k]);
+        array_pop($this->p["3"]);
+        array_unshift($this->p[3], 0);
+        try { array_pop($this->p['missing']); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { array_pop($this->p['x']); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { array_pop($this->ro); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+        try { array_pop($this->nope); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+        var_dump($this->t, $this->p, $copy['a'], $this->ro);
+    }
+}
+#[AllowDynamicProperties] class U extends T {}
+(new U)->m('a');
+function elems() {
+    $list = [[1, 2], "1" => [3], 'k' => [5, 6]];
+    $alias = &$list;
+    $shared = $list;
+    $i = 0; $key = 'k';
+    array_pop($list[$i]);
+    array_unshift($list["1"], 9);
+    array_pop($alias[$key]);
+    try { array_pop($list['none']); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    var_dump($list, $shared);
+    $o = new T;
+    array_pop($o->t);
+    echo count($o->t), "\n";
+    $s = "abc";
+    try { array_pop($s[0]); } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    $f = 1.5; $arr = [1 => [1, 2]];
+    array_pop($arr[$f]);
+    var_dump($arr);
+    try { array_pop($arr[$undef]); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    var_dump($arr);
+}
+elems();
+"#;
+
+const PLACES_EXPECTED: &str = r#"array_pop(): Argument #1 ($array) must be of type array, null given
+array_pop(): Argument #1 ($array) must be of type array, string given
+Cannot indirectly modify readonly property T::$ro
+array_pop(): Argument #1 ($array) must be of type array, null given
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(4) {
+  ["a"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    int(0)
+    [1]=>
+    int(4)
+  }
+  ["x"]=>
+  string(3) "str"
+  ["missing"]=>
+  NULL
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(7)
+  [1]=>
+  int(8)
+}
+array_pop(): Argument #1 ($array) must be of type array, null given
+array(4) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(9)
+    [1]=>
+    int(3)
+  }
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(5)
+  }
+  ["none"]=>
+  NULL
+}
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+  ["k"]=>
+  array(2) {
+    [0]=>
+    int(5)
+    [1]=>
+    int(6)
+  }
+}
+2
+Error: Cannot create references to/from string offsets
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 37
+array(1) {
+  [1]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+
+Warning: Undefined variable $undef in t.php on line 39
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 39
+array_pop(): Argument #1 ($array) must be of type array, null given
+array(2) {
+  [1]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  [""]=>
+  NULL
+}
+"#;
