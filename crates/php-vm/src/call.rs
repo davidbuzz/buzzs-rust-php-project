@@ -2485,11 +2485,20 @@ impl Vm {
                             }
                             Ok(slot.as_mut().as_mut()?)
                         }
-                        Some(v @ (Value::Array(_) | Value::Object(_))) => {
+                        // The copies are inline count increments (the
+                        // handles' own `clone`), where `Value::clone` is an
+                        // out-of-line call dispatching on the tag again.
+                        Some(v @ Value::Array(a)) => {
                             if rt.is_some() && !return_accepts(rt, v) {
                                 return self.return_generic::<false>(val, base, ip);
                             }
-                            Err(v.clone())
+                            Err(Value::Array(a.clone()))
+                        }
+                        Some(v @ Value::Object(o)) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(Value::Object(o.clone()))
                         }
                         Some(Value::Reference(r)) => {
                             let v = r.get();
