@@ -3459,6 +3459,49 @@ enum Mode {
     Next,
 }
 
+/// `zend_array_dup_value` for one slot of a table being copied: a hole or
+/// a scalar is copied as it stands (`ZVAL_COPY_VALUE`, nothing to count);
+/// anything else goes to [`dup_counted`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per element of a copied table
+fn dup_slot(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
+    match slot {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // SAFETY: a hole or a null, bool, int or float owns no
+            // allocation and has no drop glue, so its bits are a second,
+            // independent value (php-src copies such a zval with
+            // `ZVAL_COPY_VALUE`). `ptr::read` is a typed copy of a valid,
+            // initialised `Option<Value>` behind a shared reference. The
+            // safe version (`slot.clone()`, a match over every variant that
+            // rebuilds the enum) measured 27 instructions an element of a
+            // packed list of ints under callgrind; this is one tag test
+            // and one 16-byte copy.
+            unsafe { std::ptr::read(slot) }
+        }
+        Some(v) => Some(dup_counted(v, table)),
+    }
+}
+
+/// `zend_array_dup_value` for a refcounted element of the table at `table`:
+/// a reference held only by the source (refcount 1) is unwrapped into its
+/// value, unless it refers to that table itself; anything else is shared
+/// (`Z_ADDREF`). Out of line, so the loop over scalars stays tight.
+#[inline(never)]
+fn dup_counted(v: &Value, table: *const HashTable) -> Value {
+    if let Value::Reference(r) = v {
+        if r.refcount() == 1 {
+            if let Some(inner) = r.try_borrow() {
+                let is_self =
+                    matches!(&*inner, Value::Array(a) if std::ptr::eq(Rc::as_ptr(&a.0), table));
+                if !is_self {
+                    return inner.clone();
+                }
+            }
+        }
+    }
+    v.clone()
+}
+
 impl Clone for HashTable {
     /// `zend_array_dup`: copies the table; references with refcount 1 (other
     /// than a reference to this very array) are unwrapped; holes are removed
@@ -3466,19 +3509,6 @@ impl Clone for HashTable {
     /// that `foreach` by reference can find its position in the copy.
     fn clone(&self) -> Self {
         let self_ptr: *const HashTable = self;
-        let dup_val = |v: &Value| -> Value {
-            if let Value::Reference(r) = v {
-                if r.refcount() == 1 {
-                    if let Some(inner) = r.try_borrow() {
-                        let is_self = matches!(&*inner, Value::Array(a) if std::ptr::eq(Rc::as_ptr(&a.0), self_ptr));
-                        if !is_self {
-                            return inner.clone();
-                        }
-                    }
-                }
-            }
-            v.clone()
-        };
         let mut out = HashTable {
             store: Store::Uninit,
             num_elements: self.num_elements,
@@ -3504,7 +3534,7 @@ impl Clone for HashTable {
             Store::Uninit => {}
             Store::Packed(v) => {
                 let mut vals = Vec::with_capacity(cap.max(v.len()));
-                vals.extend(v.iter().map(|s| s.as_ref().map(&dup_val)));
+                vals.extend(v.iter().map(|s| dup_slot(s, self_ptr)));
                 out.store = Store::Packed(vals);
             }
             Store::Hash(d)
@@ -3522,7 +3552,7 @@ impl Clone for HashTable {
                 // a copy is re-linked below, so lookups in it work.
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| Bucket {
-                    val: b.val.as_ref().map(&dup_val),
+                    val: dup_slot(&b.val, self_ptr),
                     key: b.key.clone(),
                     next: b.next,
                 }));
@@ -3534,7 +3564,11 @@ impl Clone for HashTable {
             Store::Hash(d) => {
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
-                    Some(v) => Bucket::new(b.key.clone(), dup_val(v), INVALID),
+                    Some(_) => Bucket {
+                        val: dup_slot(&b.val, self_ptr),
+                        key: b.key.clone(),
+                        next: INVALID,
+                    },
                     None => Bucket {
                         val: None,
                         key: ArrayKey::Int(0),
@@ -5414,6 +5448,65 @@ mod tests {
         let mut copy = a.clone();
         copy.make_mut();
         assert!(!copy.get_int(0).is_some_and(Value::is_reference));
+    }
+
+    /// `zend_array_dup` of a packed table with holes and every kind of
+    /// element: scalars and holes are copied as they stand, a string and
+    /// a nested array gain a handle, a reference held only by the source
+    /// is unwrapped, a shared one stays shared; the count, the next free
+    /// index and the internal pointer carry over, and dropping the copy
+    /// gives the handles back.
+    #[test]
+    fn clone_of_a_packed_table_copies_each_kind() {
+        let s = ZStr::from(String::from("heap string"));
+        let inner = {
+            let mut a = ZArray::new();
+            a.make_mut().push(Value::Int(7)).unwrap();
+            a
+        };
+        let shared = crate::PhpRef::new(Value::Int(5));
+        let mut t = HashTable::new();
+        t.push(Value::Null).unwrap();
+        t.push(Value::Bool(true)).unwrap();
+        t.push(Value::Int(-3)).unwrap();
+        t.push(Value::Float(1.5)).unwrap();
+        t.push(Value::Str(s.clone())).unwrap();
+        t.push(Value::Array(inner.clone())).unwrap();
+        t.push(Value::Reference(crate::PhpRef::new(Value::Int(9))))
+            .unwrap();
+        t.push(Value::Reference(shared.clone())).unwrap();
+        t.push(Value::Int(100)).unwrap();
+        t.remove(&ArrayKey::Int(8));
+        t.remove(&ArrayKey::Int(1));
+        t.move_next();
+        t.move_next();
+        assert!(matches!(t.store, Store::Packed(_)));
+        let (s_rc, inner_rc, shared_rc) = (s.refcount(), inner.refcount(), shared.refcount());
+        let copy = t.clone();
+        assert!(matches!(copy.store, Store::Packed(_)));
+        assert_eq!(copy.len(), 7);
+        assert_eq!(copy.next_free, 9);
+        assert_eq!(copy.current_key(), t.current_key());
+        assert!(matches!(copy.get_int(0), Some(Value::Null)));
+        assert!(copy.get_int(1).is_none());
+        assert!(matches!(copy.get_int(2), Some(Value::Int(-3))));
+        assert!(
+            matches!(copy.get_int(3), Some(Value::Float(f)) if f.to_bits() == 1.5f64.to_bits())
+        );
+        assert!(matches!(copy.get_int(4), Some(Value::Str(c)) if ZStr::ptr_eq(c, &s)));
+        assert!(matches!(copy.get_int(5), Some(Value::Array(c)) if ZArray::ptr_eq(c, &inner)));
+        assert!(matches!(copy.get_int(6), Some(Value::Int(9))));
+        assert!(
+            matches!(copy.get_int(7), Some(Value::Reference(r)) if r.refcount() == shared_rc + 1)
+        );
+        assert!(copy.get_int(8).is_none());
+        assert_eq!(s.refcount(), s_rc + 1);
+        assert_eq!(inner.refcount(), inner_rc + 1);
+        assert!(t.get_int(6).is_some_and(Value::is_reference));
+        drop(copy);
+        assert_eq!(s.refcount(), s_rc);
+        assert_eq!(inner.refcount(), inner_rc);
+        assert_eq!(shared.refcount(), shared_rc);
     }
 
     #[test]
