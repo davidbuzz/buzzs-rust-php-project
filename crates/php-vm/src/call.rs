@@ -3297,8 +3297,9 @@ impl Vm {
         if self.checked_callable.is_some() {
             self.checked_callable = None;
         }
-        let mut values = self.call_bufs.values.pop().unwrap_or_default();
-        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        // Lent whole for the call (`CallBufs::take_values`).
+        let mut values = self.call_bufs.take_values();
+        let mut passed = self.call_bufs.take_passed();
         let live = self.frames.live;
         let spare = {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
@@ -3321,7 +3322,7 @@ impl Vm {
             // The handler's copies (php-src's handler reads them in the
             // frame).
             values.extend(frame.args.iter().map(|arg| match arg {
-                Some(v) => clone_value(v),
+                Some(v) => crate::func::copy_arg(v),
                 None => Value::Null,
             }));
             if !frame.named.is_empty() {
@@ -3375,11 +3376,9 @@ impl Vm {
                 r = Err(e);
             }
         }
-        {
-            let Args { values, passed, .. } = args;
-            self.put_val_vec(values);
-            self.put_bool_vec(passed);
-        }
+        args.release_into(&mut self.call_bufs);
+        // Emptied by `release_into`: no drop glue to run.
+        std::mem::forget(args);
         // Released by the handler, destructed while its frame is current.
         if object::has_pending_destructors() && self.frames.live == live + 1 {
             if let Err(e) = self.run_pending_destructors() {
@@ -3754,9 +3753,9 @@ impl Vm {
             (Vec::new(), Vec::new())
         } else {
             let cap = nparams.max(npassed);
-            let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            let mut values = self.call_bufs.take_values();
             values.reserve(cap);
-            let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            let mut passed = self.call_bufs.take_passed();
             passed.reserve(cap);
             (values, passed)
         };
@@ -4005,11 +4004,9 @@ impl Vm {
         // Objects released by the builtin (e.g. by-ref outputs overwriting
         // the last reference) are destructed while its frame is still
         // active, so traces show `[internal function]` + the builtin.
-        {
-            let Args { values, passed, .. } = args;
-            self.put_val_vec(values);
-            self.put_bool_vec(passed);
-        }
+        args.release_into(&mut self.call_bufs);
+        // Emptied by `release_into`: no drop glue to run.
+        std::mem::forget(args);
         if object::has_pending_destructors() && self.frames.len() == depth {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {

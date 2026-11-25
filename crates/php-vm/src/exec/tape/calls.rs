@@ -2815,7 +2815,7 @@ pub(super) fn call_native(
     // once (a `push` per argument tested the capacity and stored the
     // length every time).
     values.extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
-        Some(v) => copy_arg(v),
+        Some(v) => crate::func::copy_arg(v),
         None => Value::Null,
     }));
     passed.resize(values.len(), true);
@@ -2893,8 +2893,8 @@ pub(super) fn call_native(
             r = Err(e);
         }
     }
-    release_native_args(vm, &mut args);
-    // Its fields are all empty now (`release_native_args`): nothing left
+    args.release_into(&mut vm.call_bufs);
+    // Its fields are all empty now (`Args::release_into`): nothing left
     // for the drop glue, whose out-of-line call is skipped.
     std::mem::forget(args);
     // Released by the handler, destructed while its frame is current.
@@ -2948,87 +2948,6 @@ pub(super) fn call_native(
             }
         }
     }))
-}
-
-/// The handler's [`Args`] of [`call_native`] after the call: the copies
-/// of the arguments released front to back (as `Vec::clear` releases
-/// them; scalars without the out-of-line drop of a `Value`), the two
-/// buffers back home or to their pools (`CallBufs::put_values`), and the
-/// other fields emptied only when set, so that the caller can forget the
-/// husk rather than run it through its drop glue: `put_val_vec`'s call
-/// with a drop call per value and the drop of the empty named-argument
-/// vector cost ~130 instructions of a two-argument call.
-#[inline(always)]
-#[allow(clippy::inline_always)] // once per tape builtin call
-fn release_native_args(vm: &mut Vm, args: &mut Args) {
-    // In place, through the borrow: destructuring the `Args` by value
-    // moved its fifteen words to another stack slot first.
-    release_values(&mut args.values);
-    let values = std::mem::take(&mut args.values);
-    vm.call_bufs.put_values(values);
-    let passed = std::mem::take(&mut args.passed);
-    vm.call_bufs.put_passed(passed);
-    // An empty vector that never allocated owns nothing.
-    if args.named.capacity() != 0 {
-        drop(std::mem::take(&mut args.named));
-    }
-    if args.this.is_some() {
-        args.this = None;
-    }
-    if args.called.is_some() {
-        args.called = None;
-    }
-    if args.func.is_some() {
-        args.func = None;
-    }
-}
-
-/// The handler's copy of a sent argument (`call_native`): a handle's
-/// count incremented inline, where `Value::clone` is an out-of-line call
-/// dispatching on the tag (~23 instructions an argument).
-#[inline(always)]
-#[allow(clippy::inline_always)] // once per argument of a tape builtin call
-fn copy_arg(v: &Value) -> Value {
-    match v {
-        Value::Str(s) => Value::Str(s.clone()),
-        Value::Array(a) => Value::Array(a.clone()),
-        Value::Object(o) => Value::Object(o.clone()),
-        Value::Reference(r) => Value::Reference(r.clone()),
-        _ => clone_value(v),
-    }
-}
-
-/// Empties a handler's argument copies front to back, as `Vec::clear`
-/// releases them, without a `Drain` (whose out-of-line drop cost ~22
-/// instructions a call) and without the out-of-line drop of a scalar:
-/// each value is taken out (a `Null` left behind owns nothing), released,
-/// and the length cut to zero once.
-#[inline(always)]
-#[allow(clippy::inline_always)] // once per tape builtin call
-fn release_values(values: &mut Vec<Value>) {
-    for slot in values.iter_mut() {
-        if matches!(
-            slot,
-            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-        ) {
-            continue;
-        }
-        // A copy whose original the frame still holds is not the last
-        // handle: its count is decremented inline (`GC_DELREF`), without
-        // the out-of-line drop glue of a `Value` and its dispatch on the
-        // tag again (~30 instructions an argument). A last handle (the
-        // handler replaced the copy) is left to the glue.
-        match std::mem::take(slot) {
-            Value::Str(s) => drop(s),
-            Value::Array(a) if a.refcount() > 1 => drop(a),
-            Value::Object(o) if o.refcount() > 1 => drop(o),
-            Value::Reference(r) if r.refcount() > 1 => drop(r),
-            other => drop(other),
-        }
-    }
-    // Every element is a scalar now, which `clear`'s drop loop passes
-    // over with a tag test each.
-    values.clear();
 }
 
 /// After a builtin call [`send_ref`] sent a variable to by reference

@@ -1011,6 +1011,86 @@ pub struct Args {
     pub func: Option<Rc<Builtin>>,
 }
 
+/// The handler's copy of a sent argument (a builtin call's [`Args`],
+/// php-src's handler reading it in the frame): a handle's count
+/// incremented inline, where `Value::clone` is an out-of-line call
+/// dispatching on the tag (~23 instructions an argument).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument of a builtin call
+pub(crate) fn copy_arg(v: &Value) -> Value {
+    match v {
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        Value::Object(o) => Value::Object(o.clone()),
+        Value::Reference(r) => Value::Reference(r.clone()),
+        _ => crate::call::clone_value(v),
+    }
+}
+
+/// Empties a handler's argument copies front to back, as `Vec::clear`
+/// releases them, without a `Drain` (whose out-of-line drop cost ~22
+/// instructions a call) and without the out-of-line drop of a scalar.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per builtin call
+fn release_arg_copies(values: &mut Vec<Value>) {
+    for slot in values.iter_mut() {
+        if matches!(
+            slot,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            continue;
+        }
+        // A copy whose original the frame still holds is not the last
+        // handle: its count is decremented inline (`GC_DELREF`), without
+        // the out-of-line drop glue of a `Value` and its dispatch on the
+        // tag again (~30 instructions an argument). A last handle (the
+        // handler replaced the copy) is left to the glue.
+        match std::mem::take(slot) {
+            Value::Str(s) => drop(s),
+            Value::Array(a) if a.refcount() > 1 => drop(a),
+            Value::Object(o) if o.refcount() > 1 => drop(o),
+            Value::Reference(r) if r.refcount() > 1 => drop(r),
+            other => drop(other),
+        }
+    }
+    // Every element is a scalar now, which `clear`'s drop loop passes
+    // over with a tag test each.
+    values.clear();
+}
+
+impl Args {
+    /// Releases a builtin call's arguments once its handler returned: the
+    /// copies of the arguments front to back ([`release_arg_copies`]), the
+    /// two vectors back home or to their pools
+    /// ([`crate::vm::CallBufs::put_values`]), and the other fields emptied
+    /// only when set. Everything is then empty, so the caller forgets the
+    /// husk rather than run it through the drop glue: destructuring it by
+    /// value moved its fifteen words to another stack slot first, and
+    /// `put_val_vec`'s call with a drop call per value and the drop of the
+    /// empty named-argument vector cost ~130 instructions of a two-argument
+    /// call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per builtin call
+    pub(crate) fn release_into(&mut self, bufs: &mut crate::vm::CallBufs) {
+        release_arg_copies(&mut self.values);
+        bufs.put_values(std::mem::take(&mut self.values));
+        bufs.put_passed(std::mem::take(&mut self.passed));
+        // An empty vector that never allocated owns nothing.
+        if self.named.capacity() != 0 {
+            drop(std::mem::take(&mut self.named));
+        }
+        if self.this.is_some() {
+            self.this = None;
+        }
+        if self.called.is_some() {
+            self.called = None;
+        }
+        if self.func.is_some() {
+            self.func = None;
+        }
+    }
+}
+
 impl Args {
     /// Number of arguments.
     pub fn len(&self) -> usize {
