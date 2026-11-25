@@ -445,6 +445,61 @@ fn alloc_block(inline_cap: usize) -> NonNull<Header> {
     }
 }
 
+/// `ZEND_MM_MAX_SMALL_SIZE`: the largest block php-src's allocator serves
+/// from a size class (`Zend/zend_alloc_sizes.h`).
+const MM_MAX_SMALL_SIZE: usize = 3072;
+
+/// `bin_data_size[]` (`ZEND_MM_BINS_INFO` in `Zend/zend_alloc_sizes.h`):
+/// the size classes a small block is rounded up to.
+const MM_BIN_SIZE: [u16; 30] = [
+    8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640,
+    768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
+];
+
+/// For every multiple of 8 up to [`MM_MAX_SMALL_SIZE`], indexed by
+/// `size.div_ceil(8)`: the size class a block of that size falls in
+/// (`zend_mm_small_size_to_bin` then `bin_data_size[]`). All classes are
+/// multiples of 8, so a size and its next multiple of 8 share one.
+static MM_CLASS: [u16; MM_MAX_SMALL_SIZE / 8 + 1] = {
+    let mut t = [0u16; MM_MAX_SMALL_SIZE / 8 + 1];
+    let mut i = 0;
+    let mut bin = 0;
+    while i < t.len() {
+        // `as` in a constant: sizes are at most 3072.
+        #[allow(clippy::cast_possible_truncation)]
+        let size = (i * 8) as u16;
+        while MM_BIN_SIZE[bin] < size {
+            bin += 1;
+        }
+        t[i] = MM_BIN_SIZE[bin];
+        i += 1;
+    }
+    t
+};
+
+/// The bytes of a string block's header (what a block of `len` inline
+/// bytes holds besides them: `HEADER + len` is the size it asks the
+/// allocator for).
+pub const STRING_HEADER_SIZE: usize = HEADER;
+
+/// The inline capacity a block for `len` bytes gets when its size is
+/// rounded up to the size class php-src's allocator serves it from
+/// (`zend_mm_small_size_to_bin`): the bytes the allocator hands out, and
+/// charges `memory_get_usage()` for, whether or not they are asked for, so
+/// asking for them changes no count. A string with that room grows in
+/// place, as `zend_string_extend` does when `erealloc` stays in the size
+/// class (`zend_mm_realloc_heap`: "Since `size` fits into the same bin,
+/// return the same pointer"), with no call to the allocator. Blocks above
+/// `ZEND_MM_MAX_SMALL_SIZE` keep `len`.
+#[inline]
+#[must_use]
+pub fn class_capacity(len: usize) -> usize {
+    match HEADER.checked_add(len) {
+        Some(size) if size <= MM_MAX_SMALL_SIZE => usize::from(MM_CLASS[(size + 7) >> 3]) - HEADER,
+        _ => len,
+    }
+}
+
 /// Releases a block whose last handle is gone (`zend_string_free`). An
 /// interned string first leaves the intern table, which must never point
 /// at freed memory.
@@ -1660,6 +1715,172 @@ impl Clone for ZStr {
     }
 }
 
+/// Concatenation with room to grow: the results are sized to their size
+/// class ([`class_capacity`]), so that the next concatenation onto the
+/// same temporary or `.=` onto the same variable is a copy into the block
+/// the string already has, as php-src's `zend_string_extend` is when
+/// `erealloc` stays in the size class. New primitives beside
+/// [`ZStr::concat_str`], [`ZStr::concat_owned_str`] and
+/// [`ZStr::append_str`], whose callers keep their exact sizes.
+impl ZStr {
+    /// A string holding `a` followed by `b` (`zend_string_alloc(len1 +
+    /// len2)` and two copies) in a block of its size class, with the given
+    /// `meta` flags.
+    fn from_parts_spare(a: &[u8], b: &[u8], flags: usize) -> Self {
+        let len = a
+            .len()
+            .checked_add(b.len())
+            .filter(|&n| n <= CAP_MASK)
+            .unwrap_or_else(|| capacity_overflow());
+        let cap = class_capacity(len);
+        let block = alloc_block(cap);
+        // SAFETY: `block` is a fresh allocation of `HEADER + cap` bytes
+        // (`cap >= len`), aligned for `Header`; the inline area starts
+        // right after the header, and the sources are other allocations.
+        unsafe {
+            let data = block.as_ptr().cast::<u8>().add(HEADER);
+            ptr::copy_nonoverlapping(a.as_ptr(), data, a.len());
+            ptr::copy_nonoverlapping(b.as_ptr(), data.add(a.len()), b.len());
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len,
+                meta: Cell::new(cap | flags),
+            });
+        }
+        ZStr(block)
+    }
+
+    /// `ZEND_CONCAT` / `ZEND_FAST_CONCAT` of two strings that stay where
+    /// they are: [`ZStr::concat_str`] (one allocation, two copies,
+    /// `IS_STR_VALID_UTF8` when both have it) in a block of the result's
+    /// size class.
+    #[must_use]
+    pub fn concat_str_spare(a: &ZStr, b: &ZStr) -> Self {
+        Self::from_parts_spare(a.as_bytes(), b.as_bytes(), Self::concat_props_both(a, b))
+    }
+
+    /// [`ZStr::concat_long`] (this string, which stays, and the decimal
+    /// form of `n`) in a block of the result's size class.
+    #[must_use]
+    pub fn concat_long_spare(&self, n: i64) -> Self {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
+        let mut buf = [0u8; LONG_MAX_LEN];
+        Self::from_parts_spare(self.as_bytes(), format_long(n, &mut buf), props)
+    }
+
+    /// [`ZStr::concat_owned_str`] (`ZEND_CONCAT` with a temporary left
+    /// operand) that grows a unique string in place while its block has
+    /// room and otherwise to the size class of the result; a shared or
+    /// interned one is copied once into a block of that class. An empty
+    /// `other` returns this string itself.
+    #[must_use]
+    pub fn concat_owned_str_spare(mut self, other: &ZStr) -> Self {
+        if other.is_empty() {
+            return self;
+        }
+        let props = Self::concat_props_both(&self, other);
+        self.extend_spare(other.as_bytes(), props, false);
+        self
+    }
+
+    /// [`ZStr::concat_owned_long`] grown as
+    /// [`ZStr::concat_owned_str_spare`].
+    #[must_use]
+    pub fn concat_owned_long_spare(mut self, n: i64) -> Self {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
+        let mut buf = [0u8; LONG_MAX_LEN];
+        self.extend_spare(format_long(n, &mut buf), props, false);
+        self
+    }
+
+    /// `$s .= $t` (`concat_function` with `result == op1`) as
+    /// [`ZStr::append_str`] does it, except that a unique string grows to
+    /// its size class (no call to the allocator while the block has room)
+    /// up to `ZEND_MM_MAX_SMALL_SIZE` and by doubling above, and a shared
+    /// or interned one is copied once into a block of the result's class.
+    pub fn append_str_spare(&mut self, other: &ZStr) {
+        if other.is_empty() {
+            return;
+        }
+        let props = Self::concat_props_both(self, other);
+        self.extend_spare(other.as_bytes(), props, true);
+    }
+
+    /// [`ZStr::append_long`] grown as [`ZStr::append_str_spare`].
+    pub fn append_long_spare(&mut self, n: i64) {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
+        let mut buf = [0u8; LONG_MAX_LEN];
+        self.extend_spare(format_long(n, &mut buf), props, true);
+    }
+
+    /// Appends `bytes` and sets the copyable concat properties to `props`
+    /// (those of the result). A unique inline string is written in place,
+    /// its block grown first when short of room ([`ZStr::grow_class`]); a
+    /// unique external one appends to its vector; any other is replaced by
+    /// a new string ([`ZStr::from_parts_spare`]).
+    #[inline]
+    fn extend_spare(&mut self, bytes: &[u8], props: usize, double: bool) {
+        let h = self.header();
+        let (rc, len, meta) = (h.rc.get(), h.len, h.meta.get());
+        if rc != 1 || meta & INTERNED != 0 {
+            *self = Self::from_parts_spare(self.as_bytes(), bytes, props);
+            return;
+        }
+        if meta & EXTERNAL != 0 {
+            self.append(bytes);
+            self.add_props(props);
+            return;
+        }
+        let needed = len
+            .checked_add(bytes.len())
+            .filter(|&n| n <= CAP_MASK)
+            .unwrap_or_else(|| capacity_overflow());
+        let cap = meta & CAP_MASK;
+        if needed > cap {
+            self.grow_class(meta, cap, needed, double);
+        }
+        // SAFETY: unique, non-interned inline string (checked above), so
+        // no other reference to the header exists and `bytes` cannot point
+        // into this block (it would need a second handle); the inline area
+        // has room for `needed` bytes (`grow_class`).
+        unsafe {
+            let h = self.0.as_mut();
+            ptr::copy_nonoverlapping(bytes.as_ptr(), h.ptr.add(len), bytes.len());
+            h.len = needed;
+            *h.hash.get_mut() = 0;
+            let m = h.meta.get_mut();
+            *m = (*m & !VALID_UTF8) | props;
+        }
+    }
+
+    /// Reallocates a unique inline string's block (header `meta`, inline
+    /// capacity `cap`) to hold `needed` bytes: to the size class of the
+    /// result while that is a small block, and above to exactly `needed`
+    /// or, with `double` (repeated `.=`), with amortized doubling.
+    #[inline]
+    fn grow_class(&mut self, meta: usize, cap: usize, needed: usize, double: bool) {
+        if double && needed > MM_MAX_SMALL_SIZE - HEADER {
+            self.realloc_inline(meta, cap, needed, false);
+        } else {
+            self.realloc_inline(meta, cap, class_capacity(needed), true);
+        }
+    }
+}
+
 impl Drop for ZStr {
     #[inline]
     fn drop(&mut self) {
@@ -2815,5 +3036,165 @@ mod tests {
             assert!(s.is_permanent(), "byte {c}");
             assert_eq!(s.refcount(), 0, "byte {c}");
         }
+    }
+
+    /// The inline capacity of a string block (`CAP_MASK` of its meta).
+    fn cap_of(s: &ZStr) -> usize {
+        s.header().meta.get() & CAP_MASK
+    }
+
+    /// `HEADER + class_capacity(len)` is the smallest of php-src's size
+    /// classes that holds `HEADER + len` (`zend_mm_small_size_to_bin`),
+    /// up to `ZEND_MM_MAX_SMALL_SIZE`; above it the capacity is exact.
+    #[test]
+    fn class_capacity_is_the_size_class() {
+        assert_eq!(HEADER, 40);
+        assert_eq!(STRING_HEADER_SIZE, HEADER);
+        assert_eq!(class_capacity(0), 0);
+        assert_eq!(class_capacity(1), 8);
+        assert_eq!(class_capacity(8), 8);
+        assert_eq!(class_capacity(9), 16);
+        assert_eq!(class_capacity(24), 24);
+        assert_eq!(class_capacity(25), 40);
+        assert_eq!(class_capacity(41), 56);
+        assert_eq!(class_capacity(3032), 3032);
+        assert_eq!(class_capacity(3033), 3033);
+        assert_eq!(class_capacity(1 << 20), 1 << 20);
+        for len in 0..=MM_MAX_SMALL_SIZE + 16 {
+            let cap = class_capacity(len);
+            assert!(cap >= len, "{len}");
+            if HEADER + len <= MM_MAX_SMALL_SIZE {
+                let class = MM_BIN_SIZE
+                    .iter()
+                    .map(|&b| usize::from(b))
+                    .find(|&b| b >= HEADER + len);
+                assert_eq!(Some(HEADER + cap), class, "{len}");
+            } else {
+                assert_eq!(cap, len, "{len}");
+            }
+        }
+    }
+
+    /// Two strings that stay: one block of the result's size class, the
+    /// operands untouched, `IS_STR_VALID_UTF8` only when both have it.
+    #[test]
+    fn concat_str_spare_sizes_to_the_class() {
+        for (a, b) in [("", ""), ("", "x"), ("ab", ""), ("ab", "cd")] {
+            let (x, y) = (
+                ZStr::from_ascii(a.as_bytes()),
+                ZStr::from_ascii(b.as_bytes()),
+            );
+            let r = ZStr::concat_str_spare(&x, &y);
+            assert_eq!(r, format!("{a}{b}").as_str());
+            assert_eq!(cap_of(&r), class_capacity(r.len()));
+            assert!(r.is_valid_utf8());
+            assert_eq!((x.as_bytes(), y.as_bytes()), (a.as_bytes(), b.as_bytes()));
+        }
+        let raw = ZStr::from(&b"\xff"[..]);
+        assert!(!ZStr::concat_str_spare(&ZStr::from_ascii(b"a"), &raw).is_valid_utf8());
+        let big = ZStr::from(vec![b'q'; 3100]);
+        let r = ZStr::concat_str_spare(&big, &ZStr::from("!"));
+        assert_eq!(r.len(), 3101);
+        assert_eq!(cap_of(&r), 3101);
+        assert_eq!(ZStr::from_ascii(b"n=").concat_long_spare(-42), "n=-42");
+        assert_eq!(ZStr::empty().concat_long_spare(0), "0");
+        assert!(ZStr::empty().concat_long_spare(7).is_valid_utf8());
+    }
+
+    /// A unique temporary grows in place while its block has room (the
+    /// bytes stay where they are), then to the class of the result; the
+    /// hash is forgotten.
+    #[test]
+    fn concat_owned_spare_grows_in_place() {
+        let s = ZStr::concat_str_spare(&ZStr::from("a"), &ZStr::from("b"));
+        assert_eq!(cap_of(&s), 8);
+        let _ = s.hash_value();
+        let at = s.as_bytes().as_ptr();
+        let s = s.concat_owned_str_spare(&ZStr::from("cdef"));
+        assert_eq!(s, "abcdef");
+        assert_eq!(s.as_bytes().as_ptr(), at);
+        assert_eq!(s.hash_value(), zend_hash_bytes(b"abcdef"));
+        let s = s.concat_owned_long_spare(12);
+        assert_eq!(s, "abcdef12");
+        assert_eq!(s.as_bytes().as_ptr(), at);
+        let s = s.concat_owned_long_spare(-3);
+        assert_eq!(s, "abcdef12-3");
+        assert_eq!(cap_of(&s), class_capacity(10));
+        // An empty right operand: the string itself.
+        let at = s.as_bytes().as_ptr();
+        let s = s.concat_owned_str_spare(&ZStr::empty());
+        assert_eq!(s.as_bytes().as_ptr(), at);
+        // A chain of ten onto one temporary.
+        let mut t = ZStr::concat_str_spare(&ZStr::from("0"), &ZStr::from("1"));
+        for i in 2..10 {
+            t = t.concat_owned_long_spare(i);
+        }
+        assert_eq!(t, "0123456789");
+        assert_eq!(cap_of(&t), class_capacity(10));
+        // Across the end of the small classes: exact, as `zend_string_extend`.
+        let big = ZStr::concat_str_spare(&ZStr::from(vec![b'z'; 3030]), &ZStr::from("1"));
+        let big = big.concat_owned_str_spare(&ZStr::from("2345"));
+        assert_eq!(big.len(), 3035);
+        assert_eq!(cap_of(&big), 3035);
+        assert_eq!(&big.as_bytes()[3029..], b"z12345");
+    }
+
+    /// A shared, interned or external left operand is never written.
+    #[test]
+    fn concat_owned_spare_leaves_shared_strings() {
+        let s = ZStr::concat_str_spare(&ZStr::from("ab"), &ZStr::from("c"));
+        let keep = s.clone();
+        let r = s.concat_owned_str_spare(&ZStr::from("d"));
+        assert_eq!((r.as_bytes(), keep.as_bytes()), (&b"abcd"[..], &b"abc"[..]));
+        assert_eq!(cap_of(&r), class_capacity(4));
+        let r = ZStr::intern(b"spare-keep").concat_owned_long_spare(5);
+        assert_eq!(r, "spare-keep5");
+        assert!(!r.is_interned());
+        assert_eq!(ZStr::intern(b"spare-keep"), "spare-keep");
+        let ext = ZStr::new(vec![b'e'; ADOPT_MIN + 1]);
+        let r = ext.concat_owned_str_spare(&ZStr::from("!"));
+        assert_eq!(r.len(), ADOPT_MIN + 2);
+        assert_eq!(r.as_bytes().last(), Some(&b'!'));
+    }
+
+    /// `.=` in a loop: in place within a class, to the class of the result
+    /// up to the small sizes, doubling above; a shared string is copied.
+    #[test]
+    fn append_spare_loop_and_shared() {
+        let mut s = ZStr::empty();
+        let piece = ZStr::from_ascii(b"abcdefg");
+        let mut expected = Vec::new();
+        for i in 0..1000 {
+            s.append_str_spare(&piece);
+            s.append_long_spare(i % 10);
+            expected.extend_from_slice(b"abcdefg");
+            expected.push(b'0' + u8::try_from(i % 10).unwrap_or(0));
+            if HEADER + s.len() <= MM_MAX_SMALL_SIZE {
+                assert_eq!(cap_of(&s), class_capacity(s.len()), "{i}");
+            } else {
+                assert!(cap_of(&s) >= s.len());
+            }
+        }
+        assert_eq!(s.as_bytes(), &expected[..]);
+        assert!(s.is_valid_utf8());
+        assert_eq!(s.hash_value(), zend_hash_bytes(&expected));
+        // `$a = $b; $a .= 'x';`: `$b` keeps its bytes.
+        let mut a = ZStr::concat_str_spare(&ZStr::from("x"), &ZStr::from("y"));
+        let b = a.clone();
+        a.append_str_spare(&ZStr::from("z"));
+        assert_eq!((a.as_bytes(), b.as_bytes()), (&b"xyz"[..], &b"xy"[..]));
+        // Interned strings are never written.
+        let mut i = ZStr::intern(b"spare-int");
+        i.append_long_spare(-1);
+        assert_eq!(i, "spare-int-1");
+        assert_eq!(ZStr::intern(b"spare-int"), "spare-int");
+        // Empty right operand: nothing changes.
+        let mut e = ZStr::from("e");
+        e.append_str_spare(&ZStr::empty());
+        assert_eq!(e, "e");
+        // UTF-8 property: lost with raw bytes, kept otherwise.
+        let mut u = ZStr::from_ascii(b"ok");
+        u.append_str_spare(&ZStr::from(&b"\xfe"[..]));
+        assert!(!u.is_valid_utf8());
     }
 }
