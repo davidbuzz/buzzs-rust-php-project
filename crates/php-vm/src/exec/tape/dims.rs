@@ -2323,30 +2323,165 @@ pub(super) unsafe fn incdec_dim(frame: *mut Frame, inst: &Inst) -> bool {
 }
 
 /// `Op::Bin` of `.` into a temporary (`ZEND_CONCAT`), as `hot::step` runs
-/// it (`concat_in`: strings and ints; a left temporary holding a string
-/// nothing else holds is extended in place). The consumed temporaries are
-/// released and the result replaces what its temporary held, so it polls.
-/// Declines anything else, nothing changed: the generic op converts.
+/// it. The operand kinds, fixed at lowering, pick the path: a consumed
+/// temporary on the left ([`concat_onto_tmp`], grown in place), a left
+/// operand that stays ([`concat_new`], one new string), and anything the
+/// two do not take ([`concat_general`]: `concat_in`). The consumed
+/// temporaries are released and the result replaces what its temporary
+/// held, so it polls. Declines anything else, nothing changed: the generic
+/// op converts.
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn concat_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    if dim_kind(inst) == KIND_TMP {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { concat_onto_tmp(frame, inst) }
+    } else {
+        // SAFETY: the caller's contract, passed on.
+        unsafe { concat_new(frame, inst) }
+    }
+}
+
+/// The value operand `b` of a concatenation row when it is a string or an
+/// int that stays where it is (a variable, a temporary, a literal), read
+/// by the kind the row records; `None` for any other value or kind.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one kind test per operand in the lean paths
+fn concat_rhs<'a>(f: &'a Frame, lits: &'a [Value], inst: &Inst) -> Option<&'a Value> {
+    let v = match val_kind(inst) {
+        KIND_CV => f.cvs.get(inst.b as usize)?.get()?,
+        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize)?,
+        KIND_LIT => lits.get(inst.b as usize)?,
+        _ => return None,
+    };
+    matches!(v, Value::Str(_) | Value::Int(_)).then_some(v)
+}
+
+/// Releases a consumed value temporary `b` of a concatenation row once
+/// its string has been copied (an int needs nothing).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn concat_release_rhs(f: &mut Frame, inst: &Inst) {
+    if val_kind(inst) == KIND_TMP {
+        if let Some(slot) = f.tmps.get_mut(inst.b as usize) {
+            if !matches!(slot, Value::Int(_)) {
+                drop(std::mem::take(slot));
+            }
+        }
+    }
+}
+
+/// `T . b` with a consumed temporary `T` holding a string and `b` a
+/// string or an int: `ZEND_CONCAT`'s `zend_string_extend` of an operand
+/// nobody else holds, in place while its block has room
+/// (`ZStr::concat_owned_str_spare`), so a chain `a . b . c . d` grows one
+/// string; an empty `T` yields `b` itself. Anything else goes to
+/// [`concat_general`], nothing changed.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn concat_onto_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     let code = unsafe { &(*frame).code };
-    // SAFETY: the literal table belongs to the op array the frame runs,
-    // which stays alive and unchanged while the op does; it is no part of
-    // the frame's own memory.
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let ta = inst.a as usize;
+    let fits = f.tmps.len() > inst.p
+        && matches!(f.tmps.get(ta), Some(Value::Str(_)))
+        && !(matches!(val_kind(inst), KIND_TMP | KIND_TMPKEEP) && inst.b as usize == ta)
+        && concat_rhs(f, lits, inst).is_some();
+    if !fits {
+        // SAFETY: the caller's contract, passed on.
+        return unsafe { concat_general(frame, inst) };
+    }
+    let Some(Value::Str(s)) = f.tmps.get_mut(ta).map(std::mem::take) else {
+        return false;
+    };
+    let r = match concat_rhs(f, lits, inst) {
+        Some(Value::Str(t)) if s.is_empty() => t.clone(),
+        Some(Value::Str(t)) => s.concat_owned_str_spare(t),
+        Some(Value::Int(n)) => s.concat_owned_long_spare(*n),
+        // Checked above, and `b` is not the temporary just taken.
+        _ => s,
+    };
+    concat_release_rhs(f, inst);
+    if let Some(slot) = f.tmps.get_mut(inst.p) {
+        put_tmp(slot, Value::Str(r));
+    }
+    true
+}
+
+/// `a . b` with `a` a string that stays where it is (a variable, a kept
+/// temporary, a literal) and `b` a string or an int: `ZEND_CONCAT`'s new
+/// string, one allocation of the result's size class and two copies
+/// (`ZStr::concat_str_spare`, `ZStr::concat_long_spare`); an empty
+/// non-literal operand yields the other string itself. Anything else goes
+/// to [`concat_general`], nothing changed.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn concat_new(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
     let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
     if f.tmps.len() <= inst.p {
         return false;
     }
-    // A string that stays and an int: one allocation.
-    if let Some(s) = concat_str_int(f, lits, inst) {
-        put_tmp(&mut f.tmps[inst.p], Value::Str(s));
-        return true;
+    let ak = dim_kind(inst);
+    let left = match ak {
+        KIND_CV => f.cvs.get(inst.a as usize).and_then(CvSlot::get),
+        KIND_TMPKEEP => f.tmps.get(inst.a as usize),
+        KIND_LIT => lits.get(inst.a as usize),
+        _ => None,
+    };
+    let r = match (left, concat_rhs(f, lits, inst)) {
+        (Some(Value::Str(s)), Some(Value::Str(t))) => {
+            if s.is_empty() && ak != KIND_LIT {
+                t.clone()
+            } else if t.is_empty() && val_kind(inst) != KIND_LIT {
+                s.clone()
+            } else {
+                ZStr::concat_str_spare(s, t)
+            }
+        }
+        (Some(Value::Str(s)), Some(Value::Int(n))) => s.concat_long_spare(*n),
+        _ => {
+            // SAFETY: the caller's contract, passed on.
+            return unsafe { concat_general(frame, inst) };
+        }
+    };
+    concat_release_rhs(f, inst);
+    if let Some(slot) = f.tmps.get_mut(inst.p) {
+        put_tmp(slot, Value::Str(r));
+    }
+    true
+}
+
+/// The concatenations the lean paths do not take (an int on the left, a
+/// float, anything that converts): `concat_in`, which declines, nothing
+/// changed, for all but strings and ints.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn concat_general(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    if f.tmps.len() <= inst.p {
+        return false;
     }
     let (a, b) = (
         operand(dim_kind(inst), inst.a),
@@ -2357,35 +2492,6 @@ pub(super) unsafe fn concat_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     };
     put_tmp(&mut f.tmps[inst.p], Value::Str(s));
     true
-}
-
-/// `a . b` of a string that stays where it is (a literal, a variable, a
-/// kept temporary; a consumed temporary is the general path's, which
-/// extends it in place) and an int (which a temporary keeps, as
-/// `concat_in` leaves it): `ZStr::concat_long`. `None` for any other
-/// operands.
-#[inline(always)]
-#[allow(clippy::inline_always)] // the head of `concat_tmp`
-fn concat_str_int(f: &Frame, lits: &[Value], inst: &Inst) -> Option<ZStr> {
-    let left = match dim_kind(inst) {
-        KIND_CV => f.cvs.get(inst.a as usize)?.get()?,
-        KIND_TMPKEEP => f.tmps.get(inst.a as usize)?,
-        KIND_LIT => lits.get(inst.a as usize)?,
-        _ => return None,
-    };
-    let Value::Str(s) = left else {
-        return None;
-    };
-    let right = match val_kind(inst) {
-        KIND_CV => f.cvs.get(inst.b as usize)?.get()?,
-        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize)?,
-        KIND_LIT => lits.get(inst.b as usize)?,
-        _ => return None,
-    };
-    let Value::Int(n) = right else {
-        return None;
-    };
-    Some(s.concat_long(*n))
 }
 
 /// `Op::Rope` (`ZEND_ROPE_END`), as `hot::step_ext` runs it (`rope_in`:

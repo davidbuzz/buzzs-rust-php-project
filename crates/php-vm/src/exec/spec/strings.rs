@@ -25,7 +25,7 @@
 use crate::opcode::Operand;
 use crate::vm::{CvSlot, Frame};
 use php_runtime::convert::long_to_zstr;
-use php_runtime::string::{long_str_len, ZStrBuf};
+use php_runtime::string::{class_capacity, long_str_len, ZStrBuf};
 use php_runtime::{Value, ZStr};
 
 /// The value operand `op` of frame `f` holds when it is a string or an
@@ -128,12 +128,10 @@ pub(in crate::exec) fn concat_in(
                     t.clone()
                 } else if t.is_empty() && !matches!(b, Operand::Lit(_)) {
                     s
-                } else if t.is_empty() {
-                    ZStr::concat_str(&s, t)
                 } else {
-                    s.concat_owned_str(t)
+                    s.concat_owned_str_spare(t)
                 }),
-                Some(Value::Int(i)) => Ok(s.concat_owned_long(*i)),
+                Some(Value::Int(i)) => Ok(s.concat_owned_long_spare(*i)),
                 // Unreachable (checked above, and `b` cannot be the
                 // temporary just taken): the string goes back.
                 _ => Err(s),
@@ -160,11 +158,12 @@ pub(in crate::exec) fn concat_in(
             } else if t.is_empty() && !matches!(b, Operand::Lit(_)) {
                 s.clone()
             } else {
-                ZStr::concat_str(s, t)
+                ZStr::concat_str_spare(s, t)
             }
         }
         _ => {
-            let mut out = ZStrBuf::with_capacity(part_len(x).saturating_add(part_len(y)));
+            let len = part_len(x).saturating_add(part_len(y));
+            let mut out = ZStrBuf::with_capacity(class_capacity(len));
             push_part(&mut out, x);
             push_part(&mut out, y);
             out.finish()
