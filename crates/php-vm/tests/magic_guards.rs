@@ -114,6 +114,55 @@ Cannot modify readonly property R2::$x
     );
 }
 
+/// An undeclared property read reaching `__get` (and `__isset` first for
+/// `??`, `isset`, `empty`) by the short way, and every case that must
+/// not take it: a private property seen from inside and outside, a static
+/// property of the name, a dynamic property, a parent's private property
+/// read from the parent's scope, a mangled and a numeric name.
+#[test]
+fn undeclared_reads_reach_get_as_the_generic_lookup_does() {
+    assert_eq!(
+        run(r###"<?php
+#[AllowDynamicProperties]
+class G { public static $st = 'static'; private $priv = 'p';
+    function __get($n) { return "get($n)"; }
+    function readIn($n) { return $this->$n; } }
+class H extends G { function __isset($n) { echo "isset($n) "; return $n !== 'no'; } }
+class Base { private $bp = 'base-private'; function readBp($o) { return $o->bp; } }
+class Kid extends Base { function __get($n) { return "kid-get($n)"; } }
+function run() {
+    for ($i = 0; $i < 2; $i++) {
+        $g = new G;
+        echo $g->x, ' ', $g->priv, ' ', $g->readIn('priv'), ' ', $g->readIn('y'), "\n";
+        echo @$g->st, "\n";
+        $g->dyn = 'dynamic'; echo $g->dyn, ' '; unset($g->dyn); echo $g->dyn, "\n";
+        $h = new H;
+        echo $h->a ?? 'dflt', ' ', $h->no ?? 'dflt', ' ', var_export(isset($h->q), true), ' ', var_export(empty($h->q), true), "\n";
+        $k = new Kid; echo $k->bp, ' ', $k->readBp($k), ' ', (new Base)->readBp($k), "\n";
+        try { $n = "\0G\0priv"; echo bin2hex($g->$n), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        $n = '123'; echo $g->$n, "\n";
+    }
+}
+run();
+"###),
+        r###"get(x) get(priv) p get(y)
+get(st)
+dynamic get(dyn)
+isset(a) get(a) isset(no) dflt isset(q) true isset(q) false
+kid-get(bp) base-private base-private
+676574280047007072697629
+get(123)
+get(x) get(priv) p get(y)
+get(st)
+dynamic get(dyn)
+isset(a) get(a) isset(no) dflt isset(q) true isset(q) false
+kid-get(bp) base-private base-private
+676574280047007072697629
+get(123)
+"###
+    );
+}
+
 #[test]
 fn prop_guards_end_the_innermost_matching_guard() {
     use php_runtime::ZStr;

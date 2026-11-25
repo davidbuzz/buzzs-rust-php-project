@@ -623,6 +623,9 @@ impl Vm {
                 .clone()
                 .expect("initialized slot"));
         }
+        if self.reads_through_magic(o, name, mode) {
+            return self.magic_read(o, name, mode);
+        }
         if object::data(o).lazy.borrow().is_some()
             && !object::class_of(o).prop_map.contains_key(name)
             && !object::data(o)
@@ -742,6 +745,46 @@ impl Vm {
                 Ok(Value::Null)
             }
         }
+    }
+
+    /// Whether a read of `$o->name` is one the rest of [`Vm::read_property`]
+    /// would hand to [`Vm::magic_read`] without doing anything else first:
+    /// a class with `__get` and no native handlers, an object that is not
+    /// lazy, a name that is neither mangled nor empty, declared neither as
+    /// an instance nor as a static property of the class or the calling
+    /// scope (`lookup_prop` finds nothing, `undeclared_prop_check` raises
+    /// nothing), absent from the object's dynamic properties, with no guard
+    /// on it (`zend_std_read_property` reaching `zend_std_call_getter`).
+    /// The usual `__get` case gets there after a few lookups instead of
+    /// the property lookup's whole ladder.
+    fn reads_through_magic(&self, o: &Obj, name: &ZStr, mode: FetchMode) -> bool {
+        let data = object::data(o);
+        let cls = &data.class;
+        if cls.magic.get.is_none() || cls.hooks.is_some() || data.lazy.borrow().is_some() {
+            return false;
+        }
+        let b = name.as_bytes();
+        if b.first().is_none_or(|&c| c == 0)
+            || cls.prop_map.contains_key(name)
+            || cls.find_static(b).is_some()
+        {
+            return false;
+        }
+        if let Some(s) = self.scope() {
+            if !Rc::ptr_eq(&s, cls) && (s.prop_map.contains_key(name) || s.find_static(b).is_some())
+            {
+                return false;
+            }
+        }
+        if data
+            .dynamic
+            .borrow()
+            .as_ref()
+            .is_some_and(|table| table.contains_key(&ArrayKey::Str(name.clone())))
+        {
+            return false;
+        }
+        self.has_read_magic(o, name, mode)
     }
 
     /// Whether a read may go to `__get()` (or, for `isset`-style fetches,
