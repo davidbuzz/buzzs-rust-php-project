@@ -142,3 +142,28 @@ echo current(f()), key(f()), "\n";
         "305\nbool(true)\n3,2,1\nbool(true)\nbool(true)\n1,2,3\n30\n"
     );
 }
+
+/// A builtin method with a by-reference parameter (`SplFileObject::fscanf()`'s
+/// variadic `&...$vars`) called with variables fills them, a second call
+/// over variables that hold values again too.
+#[test]
+fn builtin_methods_fill_by_reference_arguments() {
+    let (status, out) = run(r#"<?php
+function t() {
+    $f = new SplTempFileObject();
+    $f->fwrite("12 ab\n34 cd\n");
+    $f->rewind();
+    $n = $f->fscanf("%d %s", $i, $s);
+    var_dump($n, $i, $s);
+    $i .= 'x';
+    $n = $f->fscanf("%d %s", $i, $s);
+    var_dump($n, $i, $s);
+}
+t();
+"#);
+    assert_eq!(status, 0, "{out}");
+    assert_eq!(
+        out,
+        "int(2)\nint(12)\nstring(2) \"ab\"\nint(2)\nint(34)\nstring(2) \"cd\"\n"
+    );
+}

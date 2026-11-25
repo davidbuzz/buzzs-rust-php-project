@@ -1791,7 +1791,12 @@ fn prepare_native_method(
     is_static: bool,
     called_class: Rc<crate::class::Class>,
 ) -> Option<Prepared> {
-    if b.plain_call() != PlainCall::Named || !frame.args.is_empty() {
+    // As a function's call (`prepare`'s builtin arm): plain up to its
+    // first by-reference parameter (`mysqli_stmt::bind_param()`,
+    // `NumberFormatter::parse()`, `SplFileObject::fscanf()`), which
+    // `send_ref` then takes.
+    let (kind, first_ref) = b.plain_call_upto();
+    if kind != PlainCall::Named || !frame.args.is_empty() {
         return None;
     }
     let (this, released) = match obj {
@@ -1808,12 +1813,9 @@ fn prepare_native_method(
         _ => return None,
     };
     // Past the declared parameters only into a variadic one (else the
-    // generic call reports the count).
-    let limit = if b.flags & flags::VARIADIC != 0 {
-        MAX_ARGS
-    } else {
-        b.signature().params.len().min(MAX_ARGS)
-    };
+    // generic call reports the count), and up to the first by-reference
+    // parameter.
+    let limit = native_limit(&b).min(first_ref);
     frame.this = this;
     frame.scope = scope;
     frame.called = Some(called_class);
