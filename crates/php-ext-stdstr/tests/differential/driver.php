@@ -38,7 +38,8 @@ if ($sigFile !== '' && is_readable($sigFile)) {
 }
 
 const DENY_RX = '/^(
-    f[a-z_]*|file.*|.*dir.*|glob|is_(dir|file|link|executable|readable|writ(e)?able|uploaded_file)|
+    f(open|close|read|write|puts|gets|getc|getcsv|putcsv|eof|flush|lock|passthru|scanf|seek|stat|tell|truncate|sockopen|datasync|sync|nmatch)|
+    file.*|filter_input.*|filter_has_var|.*dir.*|glob|is_(dir|file|link|executable|readable|writ(e)?able|uploaded_file)|
     (l)?stat|touch|unlink|rename|copy|tempnam|tmpfile|readfile|realpath.*|chmod|chown|chgrp|lch.*|
     link|linkinfo|readlink|symlink|umask|disk_.*|parse_ini_file|highlight_file|show_source|
     php_strip_whitespace|move_uploaded_file|clearstatcache|chroot|diskfreespace|get_meta_tags|metaphone|pfsockopen|.*socket.*|.*host.*|pclose|popen|proc_.*|exec|system|passthru|
