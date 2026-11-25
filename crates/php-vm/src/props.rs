@@ -451,10 +451,9 @@ impl Vm {
     pub(crate) fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
         let data = object::data(o);
         let cls = &data.class;
-        let pi = cls.prop_map.get(name)?;
-        if pi.flags != flags::PUBLIC || pi.hooks.is_some() || (write && pi.ty.is_some()) {
-            return None;
-        }
+        // The class and object tests first: they decide every object of
+        // a class with a parent, hooks or a magic property method (the
+        // `__get` path) without the hash lookup of the name.
         if cls.parent.is_some()
             || cls.hooks.is_some()
             || cls.magic.get.is_some()
@@ -464,6 +463,10 @@ impl Vm {
             || data.lazy.borrow().is_some()
             || data.dynamic.borrow().is_some()
         {
+            return None;
+        }
+        let pi = cls.prop_map.get(name)?;
+        if pi.flags != flags::PUBLIC || pi.hooks.is_some() || (write && pi.ty.is_some()) {
             return None;
         }
         let slot = pi.slot as usize;
