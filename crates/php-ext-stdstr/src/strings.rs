@@ -1055,6 +1055,9 @@ fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Results up to this many bytes are built on the stack by `str_repeat()`.
 const STR_REPEAT_STACK: usize = 256;
+/// Longer results are filled this many bytes at a time (a block of whole
+/// copies of the input).
+const STR_REPEAT_BLOCK: usize = 4096;
 
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
@@ -1081,14 +1084,38 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
             return Ok(Value::Str(out));
         }
+        // A longer one too is one exactly sized string, as php-src's is
+        // (`zend_string_safe_alloc(len, mult, 0, 0)`): a vector wrapped
+        // into a string costs a second, small allocation, which
+        // `memory_get_usage()` shows (ext/pcre/tests/bug81243.phpt compares
+        // the usage around `str_repeat($s, 1)`). It is filled a block of
+        // whole copies at a time (php-src: `memset` for one byte, else
+        // copies doubling in size).
+        let bytes = s.as_bytes();
+        let mut out = ZStrBuf::with_capacity(total);
+        if bytes.len() >= STR_REPEAT_BLOCK {
+            for _ in 0..total / bytes.len() {
+                out.push(bytes);
+            }
+        } else {
+            let block = bytes.repeat((STR_REPEAT_BLOCK / bytes.len()).min(total / bytes.len()));
+            let mut left = total;
+            while left >= block.len() {
+                out.push(&block);
+                left -= block.len();
+            }
+            out.push(&block[..left]);
+        }
+        let out = out.finish();
+        // `ZSTR_COPY_CONCAT_PROPERTIES(result, input_str)`.
+        if s.is_valid_utf8() {
+            out.mark_valid_utf8();
+        }
+        return Ok(Value::Str(out));
     }
+    // A negative count: the ValueError.
     let r = transform::str_repeat(s.as_bytes(), times);
-    let out = ZStr::from(check(vm, r)?);
-    // `ZSTR_COPY_CONCAT_PROPERTIES(result, input_str)`.
-    if s.is_valid_utf8() {
-        out.mark_valid_utf8();
-    }
-    Ok(Value::Str(out))
+    Ok(Value::Str(ZStr::from(check(vm, r)?)))
 }
 
 fn count_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

@@ -325,8 +325,14 @@ fn unchanged_htmlspecialchars_preserves_literal_and_dynamic_identity() {
     );
 }
 
+/// `str_repeat($s, 1)` is a string of its own, as in php-src, which always
+/// allocates the result (`zend_string_safe_alloc`): `debug_zval_dump()`
+/// shows refcount 1 where the argument itself would show `interned`, and
+/// the copy takes exactly the room of the original (ext/pcre/tests/
+/// bug81243.phpt compares `memory_get_usage()` around such a copy).
+/// Expected output from `/usr/bin/php8.5 -n`.
 #[test]
-fn str_repeat_one_preserves_string_storage() {
+fn str_repeat_one_is_a_new_string_of_the_same_size() {
     use php_runtime::{Value, ZStr};
 
     let ext = php_ext_stdstr::StdStr;
@@ -343,16 +349,20 @@ fn str_repeat_one_preserves_string_storage() {
         let Value::Str(repeated) = repeated else {
             panic!("string result");
         };
-        assert!(ZStr::ptr_eq(&input, &repeated));
-        assert_eq!(input.is_interned(), repeated.is_interned());
+        assert_eq!(input.as_bytes(), repeated.as_bytes());
+        assert!(!ZStr::ptr_eq(&input, &repeated));
+        assert!(!repeated.is_interned());
     }
     assert_eq!(
         run(r#"
             debug_zval_dump(str_repeat('abc', 1), str_repeat('abc', 0), str_repeat('', 2));
             try { str_repeat('', -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+            $s = str_repeat('x', 3000); $m = memory_get_usage(); $t = str_repeat($s, 1);
+            echo memory_get_usage() - $m, ' ', strlen(str_repeat('ab', 5000)), ' ', md5(str_repeat('abc', 3000)) === md5(implode('', array_fill(0, 3000, 'abc'))) ? 'same' : 'differs', "\n";
         "#),
-        "string(3) \"abc\" interned\nstring(0) \"\" interned\nstring(0) \"\" interned\n\
-         str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n"
+        "string(3) \"abc\" refcount(1)\nstring(0) \"\" interned\nstring(0) \"\" interned\n\
+         str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n\
+         3072 10000 same\n"
     );
 }
 
