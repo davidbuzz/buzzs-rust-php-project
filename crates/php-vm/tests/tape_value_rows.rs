@@ -89,3 +89,61 @@ f();
         "other1[0,2]{\"a\":1,\"b\":[2]} a ~0 ~10 b c ~20 d ~30 e via [3] z[]q\nother1[1,2]{\"a\":1,\"b\":[2]} a ~1 ~11 b c ~21 d ~31 e via [3] z[]q\nother1[2,2]{\"a\":1,\"b\":[2]} a ~2 ~12 b c ~22 d ~32 e via [3] z[]q\ngone\n"
     );
 }
+
+/// `===`, `!==`, `==`, `!=` of a variable, a consumed temporary (an
+/// element, a property) and a literal null, bool, string, empty array, as
+/// a branch, into a temporary and into a variable, for values of every
+/// type; the cases the rows leave to the generic comparison come out as in
+/// php-src: a numeric string literal (`'1e3' == 1000`), `INF == 'INF'`, a
+/// NaN, an object with `__toString`, an undefined variable (its warning),
+/// a reference, a switch on a string and on an int.
+#[test]
+fn equality_with_literals() {
+    assert_eq!(
+        run(r#"<?php
+class S { function __toString(): string { return "abc"; } }
+class P { public $p; function __construct($p) { $this->p = $p; } function t() { return $this->p === 'abc' ? 'P' : 'p'; } }
+function f() {
+  $vals = [null, true, false, 0, 1, 0.0, 1.5, NAN, INF, '', '0', 'a', 'abc', '1e3', '1000', [], [0], new S, 'x' => 'INF'];
+  for ($round = 0; $round < 2; $round++) {
+    foreach ($vals as $v) {
+      $o = '';
+      if ($v === null) $o .= 'A'; else $o .= 'a';
+      if ($v !== null) $o .= 'B'; else $o .= 'b';
+      if ($v == null) $o .= 'C'; else $o .= 'c';
+      if ($v != null) $o .= 'D'; else $o .= 'd';
+      if ($v === true) $o .= 'E'; else $o .= 'e';
+      if ($v == true) $o .= 'F'; else $o .= 'f';
+      if ($v === false) $o .= 'G'; else $o .= 'g';
+      if ($v == false) $o .= 'H'; else $o .= 'h';
+      if ($v === 'abc') $o .= 'I'; else $o .= 'i';
+      if ($v == 'abc') $o .= 'J'; else $o .= 'j';
+      if ($v !== '') $o .= 'K'; else $o .= 'k';
+      if ($v != '') $o .= 'L'; else $o .= 'l';
+      if ($v === []) $o .= 'M'; else $o .= 'm';
+      if ($v == []) $o .= 'N'; else $o .= 'n';
+      if ($v == '1e3') $o .= 'O'; else $o .= 'o';
+      if ('INF' == $v) $o .= 'Q'; else $o .= 'q';
+      $r1 = $v === 'abc'; $r2 = $v == null; $r3 = $v !== false; $r4 = $v != [];
+      $t = [$v === 'a', $v == 'a', null === $v, $v != true];
+      $o .= ' ' . (int)$r1 . (int)$r2 . (int)$r3 . (int)$r4 . ' ' . implode('', array_map('intval', $t));
+      $w = ['k' => $v];
+      $o .= ($w['k'] === 'abc' ? 'X' : 'x') . ($w['k'] == '' ? 'Y' : 'y') . ((new P($v))->t());
+      echo $o, "\n";
+    }
+  }
+  $s = 'ab'; $s .= 'c';
+  echo $s === 'abc' ? 'same' : 'diff', ' ', $s == 'abc' ? 'eq' : 'ne', "\n";
+  echo @$undef === null ? 'u' : 'U', "\n";
+  echo $undef2 == 'x' ? 'v' : 'V', "\n";
+  $ref = 'abc'; $rr = &$ref;
+  echo $rr === 'abc' ? 'r' : 'R', $rr == null ? 'n' : 'N', "\n";
+  $str = 'xyz';
+  switch ($str) { case 'abc': echo "1\n"; break; case 'xyz': echo "2\n"; break; default: echo "3\n"; }
+  switch (0) { case 'abc': echo "s1\n"; break; case '0': echo "s2\n"; break; }
+}
+f();
+"#),
+        "AbCdefgHijKlmNoq 0110 0011xYp\naBcDEFghiJKLmnOQ 0011 0100xyp\naBCdefGHijKlmNoq 0100 0001xYp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\naBCdefgHijklmnoq 0111 0001xYp\naBcDefgHijKLmnoq 0011 0001xyp\naBcDeFghijKLmnoq 0011 1100xyp\naBcDeFghIJKLmnoq 1011 0000XyP\naBcDeFghijKLmnOq 0011 0000xyp\naBcDeFghijKLmnOq 0011 0000xyp\naBCdefgHijKLMNoq 0110 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghiJKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\nAbCdefgHijKlmNoq 0110 0011xYp\naBcDEFghiJKLmnOQ 0011 0100xyp\naBCdefGHijKlmNoq 0100 0001xYp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\naBCdefgHijklmnoq 0111 0001xYp\naBcDefgHijKLmnoq 0011 0001xyp\naBcDeFghijKLmnoq 0011 1100xyp\naBcDeFghIJKLmnoq 1011 0000XyP\naBcDeFghijKLmnOq 0011 0000xyp\naBcDeFghijKLmnOq 0011 0000xyp\naBCdefgHijKLMNoq 0110 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghiJKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\nsame eq\nu\n\nWarning: Undefined variable $undef2 in t.php on line 36\nV\nrN\n2\ns2\n"
+    );
+}

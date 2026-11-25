@@ -1747,3 +1747,59 @@ fn string_and_array_literal_assignments() {
     assert_eq!(rows, 5, "{:?}", code.ops);
     assert_eq!(run(LITERAL_ASSIGNMENTS), "xlit130 1xlit131 1xlit132 1\n");
 }
+
+const EQUALITY_ROWS: &str = r#"<?php
+function f($a, $b) {
+  $n = 0;
+  for ($i = 0; $i < 3; $i++) {
+    if ($a === 'x') $n++;
+    if ($a !== null) $n++;
+    if ($b == false) $n++;
+    if ($a == '1e3') $n++;
+    $r = $a === 'x';
+    $q = $b != [];
+    echo $r ? 'r' : '-', $q ? 'q' : '-', ($a == '') ? 'e' : '-';
+  }
+  return $n;
+}
+echo f('x', 0), "\n";
+echo f('1000', []), "\n";
+"#;
+
+/// `===`, `!==`, `==`, `!=` of a variable and a literal null, bool,
+/// string or empty array are rows of their own as branches and into
+/// variables; `==` with a numeric string literal is not (the generic
+/// comparison converts).
+#[test]
+fn equality_with_literals_is_a_row() {
+    let arrays = op_arrays(EQUALITY_ROWS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "q");
+    let tape = check(code);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert!(count(TOp::EqLitJmpC) >= 3, "{:?}", code.ops);
+    assert_eq!(count(TOp::EqLitCvC), 2, "{:?}", code.ops);
+    let numeric = code
+        .ops
+        .iter()
+        .position(|op| match *op {
+            Op::CmpJmp { b, .. } => matches!(
+                b,
+                crate::opcode::Operand::Lit(l)
+                    if code.literals[l as usize].as_str().is_some_and(|s| s.as_bytes() == b"1e3")
+            ),
+            _ => false,
+        })
+        .expect("the comparison with '1e3'");
+    assert!(
+        !matches!(
+            tape[numeric].op,
+            TOp::EqLitJmpC | TOp::EqLitJmpT | TOp::EqLitJmpK
+        ),
+        "{:?}",
+        tape[numeric].op
+    );
+    assert_eq!(run(EQUALITY_ROWS), "rq-rq-rq-9\n---------9\n");
+}

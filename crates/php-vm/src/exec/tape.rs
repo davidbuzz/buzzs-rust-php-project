@@ -1320,6 +1320,15 @@ tape_ops! {
         FeFreeA = (scalar::fe_free, 1, poll_f),
         CastX = (scalar::cast, 1, poll_f),
         AssignLitC = (scalar::assign_lit_cv, 1, poll_f),
+        EqLitJmpC = (scalar::eq_lit_jmp::<0>, 2, branch_f),
+        EqLitJmpT = (scalar::eq_lit_jmp::<1>, 2, branch_f),
+        EqLitJmpK = (scalar::eq_lit_jmp::<2>, 2, branch_f),
+        EqLitTmpC = (scalar::eq_lit_tmp::<0>, 1, plain_f),
+        EqLitTmpT = (scalar::eq_lit_tmp::<1>, 1, plain_f),
+        EqLitTmpK = (scalar::eq_lit_tmp::<2>, 1, plain_f),
+        EqLitCvC = (scalar::eq_lit_cv::<0>, 2, plain_f),
+        EqLitCvT = (scalar::eq_lit_cv::<1>, 2, plain_f),
+        EqLitCvK = (scalar::eq_lit_cv::<2>, 2, plain_f),
 
         // ---- end of scalar ----
         //
