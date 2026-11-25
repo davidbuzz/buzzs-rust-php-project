@@ -5527,13 +5527,20 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
             return true;
         }
         ArgSrc::Val(Operand::Cv(cv)) => *cv,
-        ArgSrc::Place(pid) => match frame.code.places.get(*pid as usize) {
-            Some(p) if p.segs.is_empty() => match &p.base {
-                crate::opcode::PlaceBase::Cv(cv) => *cv,
-                _ => return false,
-            },
-            _ => return send_place_in(frame, *pid, idx),
-        },
+        ArgSrc::Place(pid) => {
+            let plain = frame.code.places.get(*pid as usize).and_then(|p| {
+                match (&p.base, p.segs.is_empty()) {
+                    (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+                    _ => None,
+                }
+            });
+            match plain {
+                Some(cv) => cv,
+                // (A place without segments that is not a variable is no
+                // shape `send_place_hit` reads.)
+                None => return send_place_in(frame, *pid, idx),
+            }
+        }
         ArgSrc::TempPlace(pid) => return send_place_in(frame, *pid, idx),
         _ => return false,
     };
