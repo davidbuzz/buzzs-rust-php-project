@@ -4684,9 +4684,109 @@ impl Vm {
         m: &Rc<Method>,
         args: &mut [Value],
     ) -> VmResult<Value> {
+        if let Some(r) = self.enter_method_direct(o, m, args) {
+            return r;
+        }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         self.fill_call_args_slice(&mut call, args);
         self.call_pending(call)
+    }
+
+    /// [`Vm::call_known_method`] of a plain user method, with the frame
+    /// readied in place: what `call_pending` and `push_user_call`'s plain
+    /// entry do for that call, without building, moving and taking apart a
+    /// `PendingCall` (`zend_call_known_function`: `zend_vm_stack_push_call_frame`,
+    /// the arguments copied into the frame's slots, `execute_ex`).
+    ///
+    /// A plain user method here: an instance method that is no generator,
+    /// has no static variables or `finally`, is not deprecated, takes every
+    /// parameter by value and none variadic, gets at least its required
+    /// argument count and at most its parameter count, each typed
+    /// parameter a value its type takes as it is (no coercion to report),
+    /// and no observer is active. `None` for any other call, which takes
+    /// the `PendingCall` path; the arguments may then have been
+    /// dereferenced already, as that path dereferences them for by-value
+    /// parameters (every parameter is one when the type test declines).
+    fn enter_method_direct(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        let Func::User(uf) = &m.func else {
+            return None;
+        };
+        let n = args.len();
+        if m.is_static()
+            || uf.is_generator()
+            || uf.code.num_statics != 0
+            || uf.code.num_finally != 0
+            || uf.flags & flags::DEPRECATED != 0
+            || self.has_observers()
+            || n < uf.required as usize
+            || n > uf.params.len()
+            || self.frames.len() > 50_000
+            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return None;
+        }
+        // By-value arguments are passed dereferenced (`call_pending`).
+        for a in args.iter_mut() {
+            if let Value::Reference(r) = a {
+                let v = r.get();
+                *a = v;
+            }
+        }
+        if !uf.params[..n]
+            .iter()
+            .zip(args.iter())
+            .all(|(p, v)| p.ty.as_ref().is_none_or(|ty| param_accepts(ty, v)))
+        {
+            return None;
+        }
+        // `zend_call_function` services pending interrupts before entering
+        // user code from internal code.
+        if let Err(t) = self.check_interrupt() {
+            return Some(Err(t));
+        }
+        let uf = uf.clone();
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+        let f = &mut self.frames[idx];
+        f.this = Some(o.clone());
+        f.scope = Some(m.scope());
+        f.called = Some(object::class_of(o).clone());
+        f.ret = RetTarget::Discard;
+        f.caller_strict = false;
+        f.called_from_internal = true;
+        f.is_ctor = false;
+        f.args.clear();
+        f.args.resize(n, None);
+        for (i, a) in args.iter_mut().enumerate() {
+            let v = std::mem::take(a);
+            if let Some(slot) = f.cvs.get_mut(i) {
+                slot.set(Some(v));
+            }
+        }
+        // The RECV ops of the passed arguments are skipped, as
+        // `push_user_call`'s plain entry skips them.
+        let mut first_op = 0;
+        for i in 0..n {
+            match uf.code.ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => break,
+            }
+        }
+        f.ip = first_op;
+        f.func = Some(m.func.clone());
+        f.ufunc = Some(uf);
+        let base = self.frames.len() - 1;
+        Some(match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
     }
 
     /// `zend_call_function` checks `EG(vm_interrupt)` once the callee has
@@ -4960,6 +5060,10 @@ impl Vm {
         m: &Rc<Method>,
         args: Vec<Value>,
     ) -> VmResult<Value> {
+        let mut args = args;
+        if let Some(r) = self.enter_method_direct(o, m, &mut args) {
+            return r;
+        }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         self.fill_call_args(&mut call, args);
         self.call_pending(call)
