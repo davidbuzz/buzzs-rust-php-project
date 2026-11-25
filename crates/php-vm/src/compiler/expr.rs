@@ -4415,3 +4415,205 @@ mod special_call_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod pipe_tests {
+    //! `zend_compile_pipe()` with `zend_partial_apply()`: which right-hand
+    //! sides of `|>` become the plain call with the piped operand in the
+    //! placeholder's place, and which are called as a Closure.
+    use crate::compiler::{compile, CompileOptions};
+    use crate::opcode::{Op, Operand};
+    use std::rc::Rc;
+
+    /// The ops of the first declared function, unoptimized, as names.
+    fn pipe_ops(src: &str) -> Vec<&'static str> {
+        let src = format!("<?php {src}");
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+        let opts = CompileOptions {
+            filename: "t.php".into(),
+            optimization_level: 0,
+            ..CompileOptions::default()
+        };
+        let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+        let ops = unit.decls.functions.borrow()[0].code.ops.clone();
+        ops.iter()
+            .filter_map(|op| match op {
+                Op::Move {
+                    src: Operand::Cv(_),
+                    ..
+                } => Some("MoveCv"),
+                Op::InitFCall { .. } => Some("InitFCall"),
+                Op::InitDynCall { .. } => Some("InitDynCall"),
+                Op::InitMethodCall { .. } => Some("InitMethodCall"),
+                Op::InitStaticCall { .. } => Some("InitStaticCall"),
+                Op::Send { .. } => Some("Send"),
+                Op::SendNamed { .. } => Some("SendNamed"),
+                Op::SendPlaceholder { .. } => Some("SendPlaceholder"),
+                Op::CallablePartial { .. } => Some("CallablePartial"),
+                Op::CallableConvert { .. } => Some("CallableConvert"),
+                Op::DoCall { .. } => Some("DoCall"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn partial_applications_with_one_placeholder_become_direct_calls() {
+        let direct: &[(&str, &[&str])] = &[
+            // A variable is copied first (QM_ASSIGN): pipe_optimization_011.
+            (
+                "function f($x) { return $x |> g(?); }",
+                &["MoveCv", "InitFCall", "Send", "DoCall"],
+            ),
+            // A literal or a temporary is sent as it is.
+            (
+                "function f() { return 2 |> g(1, ?); }",
+                &["InitFCall", "Send", "Send", "DoCall"],
+            ),
+            (
+                "function f() { return 2 |> g(?, 1); }",
+                &["InitFCall", "Send", "Send", "DoCall"],
+            ),
+            (
+                "function f() { return h() |> g(?); }",
+                &["InitFCall", "DoCall", "InitFCall", "Send", "DoCall"],
+            ),
+            // `...` is the one placeholder, so `g(...)` and `g(1, ...)` too.
+            (
+                "function f() { return 2 |> g(...); }",
+                &["InitFCall", "Send", "DoCall"],
+            ),
+            (
+                "function f() { return 2 |> g(1, ...); }",
+                &["InitFCall", "Send", "Send", "DoCall"],
+            ),
+            // A named placeholder becomes a named argument, and `?` before
+            // named arguments stays positional.
+            (
+                "function f() { return 2 |> g(1, c: ?); }",
+                &["InitFCall", "Send", "SendNamed", "DoCall"],
+            ),
+            (
+                "function f() { return 1 |> g(?, b: 2); }",
+                &["InitFCall", "Send", "SendNamed", "DoCall"],
+            ),
+            // Other arguments, call results among them, run after the
+            // operand, in their own places.
+            (
+                "function f() { return h() |> g(a(), ?, b()); }",
+                &[
+                    "InitFCall",
+                    "DoCall",
+                    "InitFCall",
+                    "InitFCall",
+                    "DoCall",
+                    "Send",
+                    "Send",
+                    "InitFCall",
+                    "DoCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+            // Methods, static methods and dynamic function names.
+            (
+                "function f($o) { return 1 |> $o->m(?); }",
+                &["InitMethodCall", "Send", "DoCall"],
+            ),
+            (
+                "function f($o) { return 1 |> $o->m(...); }",
+                &["InitMethodCall", "Send", "DoCall"],
+            ),
+            (
+                "function f() { return 1 |> C::m(2, ?); }",
+                &["InitStaticCall", "Send", "Send", "DoCall"],
+            ),
+            (
+                "function f($g) { return 1 |> $g(?); }",
+                &["InitDynCall", "Send", "DoCall"],
+            ),
+            // `\assert` is excluded only when written as a plain name.
+            (
+                "function f() { return 1 |> '\\assert'(?); }",
+                &["InitFCall", "Send", "DoCall"],
+            ),
+        ];
+        for (src, expected) in direct {
+            assert_eq!(pipe_ops(src), *expected, "{src}");
+        }
+    }
+
+    #[test]
+    fn other_right_hand_sides_are_called_as_closures() {
+        let closure: &[(&str, &[&str])] = &[
+            // Two placeholders: pipe_optimization_004 / 007.
+            (
+                "function f() { return 2 |> g(?, ?); }",
+                &[
+                    "InitFCall",
+                    "SendPlaceholder",
+                    "SendPlaceholder",
+                    "CallablePartial",
+                    "InitDynCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+            (
+                "function f() { return 2 |> g(a: ?, b: ?); }",
+                &[
+                    "InitFCall",
+                    "SendPlaceholder",
+                    "SendPlaceholder",
+                    "CallablePartial",
+                    "InitDynCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+            // `...` after a named argument: pipe_optimization_008 / 013.
+            (
+                "function f() { return 2 |> g(a: 1, ...); }",
+                &[
+                    "InitFCall",
+                    "SendNamed",
+                    "CallablePartial",
+                    "InitDynCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+            // `assert`, whose compilation adds the message argument.
+            (
+                "function f() { return 1 |> assert(...); }",
+                &[
+                    "InitFCall",
+                    "CallableConvert",
+                    "InitDynCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+            // Not a partial application: the value is called.
+            (
+                "function f($x, $g) { return $x |> $g; }",
+                &["MoveCv", "InitDynCall", "Send", "DoCall"],
+            ),
+            (
+                "function f() { return 1 |> g(2); }",
+                &[
+                    "InitFCall",
+                    "Send",
+                    "DoCall",
+                    "InitDynCall",
+                    "Send",
+                    "DoCall",
+                ],
+            ),
+        ];
+        for (src, expected) in closure {
+            assert_eq!(pipe_ops(src), *expected, "{src}");
+        }
+    }
+}
