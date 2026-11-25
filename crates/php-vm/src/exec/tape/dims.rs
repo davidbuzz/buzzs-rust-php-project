@@ -2255,7 +2255,9 @@ fn literal_first(f: &mut Frame, arr: u32) -> Option<bool> {
     }
 }
 
-/// A copy of `v`: a scalar's bits without a call into `Value::clone`.
+/// A copy of `v` without a call into `Value::clone` for the commonest
+/// elements: a scalar's bits, a string's or an array's handle (one count
+/// up); objects, resources and references take the general clone.
 #[inline(always)]
 #[allow(clippy::inline_always)] // a tag test in each element's handler
 fn copied(v: &Value) -> Value {
@@ -2264,6 +2266,8 @@ fn copied(v: &Value) -> Value {
         Value::Bool(b) => Value::Bool(*b),
         Value::Int(i) => Value::Int(*i),
         Value::Float(x) => Value::Float(*x),
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
         _ => v.clone(),
     }
 }
