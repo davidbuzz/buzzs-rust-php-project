@@ -1186,7 +1186,7 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
             return Ok(());
         }
         let Some(full) = resolve_path(vm, &name) else {
-            return Ok(());
+            return missing_required_file(vm, &name);
         };
         // Recorded like any `require`d file (`get_included_files()`,
         // `*_once`).
@@ -1204,6 +1204,35 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
         r = extra(vm, "auto_append_file");
     }
     vm.shutdown(r)
+}
+
+/// `zend_execute_script(ZEND_REQUIRE, ...)` of an `auto_prepend_file` or
+/// `auto_append_file` that cannot be opened: the plain wrapper's warning,
+/// then `ZMSG_FAILED_REQUIRE_FOPEN`, whose `zend_throw_error()` is a plain
+/// `E_ERROR` while no code is executing (Zend/zend.c), both reported at
+/// "Unknown" line 0 (php8.5: exit status 255).
+fn missing_required_file(vm: &mut Vm, name: &[u8]) -> Result<(), Throw> {
+    let errno = std::fs::File::open(std::ffi::OsStr::from_bytes(name))
+        .err()
+        .and_then(|e| e.raw_os_error())
+        .unwrap_or(libc::ENOENT);
+    vm.error(
+        2,
+        &format!(
+            "Unknown: Failed to open stream: {}",
+            php_streams::sys::strerror(errno)
+        ),
+    )?;
+    let include_path = vm.ini_string("include_path").unwrap_or_default();
+    vm.error(
+        1,
+        &format!(
+            "Failed opening required '{}' (include_path='{}')",
+            lossy(name),
+            lossy(&include_path)
+        ),
+    )?;
+    Err(Throw::Fatal)
 }
 
 /// `zend_eval_string_ex(code, NULL, name, 1)`.

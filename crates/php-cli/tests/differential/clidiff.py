@@ -75,6 +75,9 @@ def norm(data, binary, tmp):
     s = s.replace("Built by Ubuntu\n", "")
     s = s.replace("Copyright © The PHP Group and Contributors", "Copyright")
     s = re.sub(r"Zend Engine vX(-dev)?, Copyright[^\n]*(\n    )?", "Zend Engine vX, Copyright", s)
+    # Build-time paths: PHP_CONFIG_FILE_PATH and the extension API number.
+    s = s.replace('"/etc/php/8.5/cli"', '"/usr/local/lib"')
+    s = re.sub(r"/usr/lib/php/\d{8}", "/usr/lib/php/API", s)
     # The usage text names basename(argv[0]).
     s = re.sub(r"(?m)(^Usage: |^   )php8\.5 ", r"\1php ", s)
     # Usage lines master added after 8.5 (master is the specification).
