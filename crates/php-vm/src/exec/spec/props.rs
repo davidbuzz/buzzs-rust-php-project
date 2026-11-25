@@ -405,6 +405,57 @@ fn assign_dim_hit(
     true
 }
 
+/// `$this->name[dim]++` & co. (`ZEND_FETCH_OBJ_RW` + `ZEND_FETCH_DIM_RW`
+/// + `PRE/POST_INC/DEC`) on a property cache hit for writing in frame `f`
+/// alone, as [`assign_dim_hit`]: the declared slot holds an array (also
+/// through a reference) whose element at the int or string offset is an
+/// int that does not overflow, or a float. The array is separated when
+/// shared, the element updated in place, and the expression's value
+/// returned (a consumed string offset released). `None`, nothing changed,
+/// otherwise (a missing key warns on the generic path).
+#[inline(never)]
+fn incdec_dim_hit(f: &mut Frame, pid: PlaceId, dim: Operand, kind: IncDecKind) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = hit_data(f, &hit)?;
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let step = |arr: &mut ZArray| -> Option<(Value, Value)> {
+        let (old, new) = match super::table_dim(arr, key)? {
+            Value::Int(i) => {
+                let i = *i;
+                let n = if kind.is_inc() {
+                    i.checked_add(1)?
+                } else {
+                    i.checked_sub(1)?
+                };
+                (Value::Int(i), Value::Int(n))
+            }
+            Value::Float(x) => {
+                let x = *x;
+                let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
+                (Value::Float(x), Value::Float(n))
+            }
+            _ => return None,
+        };
+        let el = super::table_dim_mut(arr.make_mut(), key)?;
+        // A number replaces a number: no drop glue to run.
+        std::mem::forget(std::mem::replace(el, copy_value(&new)));
+        Some((old, new))
+    };
+    let r = match slots.get_mut(hit.slot)? {
+        Some(Value::Array(arr)) => step(arr),
+        Some(Value::Reference(r)) => match &mut *r.try_borrow_mut()? {
+            Value::Array(arr) => step(arr),
+            _ => None,
+        },
+        _ => None,
+    };
+    drop(slots);
+    let (old, new) = r?;
+    super::release_str_tmp_in(f, dim);
+    Some(if kind.is_post() { old } else { new })
+}
+
 /// `isset()`/`empty()` of the property `hit` describes in `od` when it is
 /// an initialized declared slot or the existing dynamic property
 /// `dyn_prop`.
@@ -1085,6 +1136,11 @@ impl Vm {
         dim: Operand,
         kind: IncDecKind,
     ) -> Option<Value> {
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(r) = incdec_dim_hit(f, pid, dim, kind) {
+                return Some(r);
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let r = self.prop_cache_incdec_elem(pid, &key, kind)?;
         self.release_tmp_str(dim);
@@ -1371,22 +1427,37 @@ impl Vm {
 
 /// The keys of the dimensions after the head `->name` of place `pid` of
 /// frame `f` (`$base->name[d1]...[dn]`, one to [`super::MAX_WRITE_DIMS`]
-/// of them), and how many: every offset peeks as an int or a string
-/// ([`super::dim_key_in`]). `None` for any other shape.
+/// of them, the last possibly `[]`), as [`dim_keys_in`]. `None` for any
+/// other shape.
 fn prop_dim_keys_in(
     f: &Frame,
     pid: PlaceId,
 ) -> Option<([Option<ArrayKey>; super::MAX_WRITE_DIMS], usize)> {
     let segs = f.code.places.get(pid as usize)?.segs.get(1..)?;
+    dim_keys_in(f, segs)
+}
+
+/// The keys of the dimension segments `segs` of frame `f` (at most
+/// [`super::MAX_WRITE_DIMS`]), and how many: every offset peeks as an int
+/// or a string ([`super::dim_key_in`]), the last segment may be `[]`
+/// (`None`, an append). All are computed before a write walk changes
+/// anything.
+pub(super) fn dim_keys_in(
+    f: &Frame,
+    segs: &[crate::opcode::Seg],
+) -> Option<([Option<ArrayKey>; super::MAX_WRITE_DIMS], usize)> {
+    use crate::opcode::Seg;
     if segs.is_empty() || segs.len() > super::MAX_WRITE_DIMS {
         return None;
     }
     let mut keys: [Option<ArrayKey>; super::MAX_WRITE_DIMS] = Default::default();
-    for (key, seg) in keys.iter_mut().zip(segs) {
-        let crate::opcode::Seg::Dim(dim) = seg else {
-            return None;
+    let last = segs.len() - 1;
+    for (i, (key, seg)) in keys.iter_mut().zip(segs).enumerate() {
+        *key = match seg {
+            Seg::Dim(dim) => Some(super::dim_key_in(f, *dim)?),
+            Seg::Append if i == last => None,
+            _ => return None,
         };
-        *key = Some(super::dim_key_in(f, *dim)?);
     }
     Some((keys, segs.len()))
 }
@@ -1514,31 +1585,44 @@ fn dims_isset(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg], empty: bool) 
     isset_deref(cur, empty)
 }
 
-/// `cur[k1]...[kn] = v` on the table `tbl` of an array property along
-/// `keys` (all `Some`): the `ZEND_FETCH_DIM_W` chain, separating each
-/// nested array (`SEPARATE_ARRAY`) and making a missing or null element
-/// on the way an empty array (silently, as the generic walk's `descend`
-/// does), then `ZEND_ASSIGN_DIM`'s store of `v` over the element, or
-/// added. `Some(old)` on success (the replaced element, null for an added
-/// one; `v` taken); `None`, `v` left and nothing created, when an element
-/// on the way is of another kind (a reference, an object, a string,
-/// `false`, ...) or the last one is a reference (the generic assignment
-/// writes through it). Arrays on the way may have been separated, which
-/// the generic walk repeats as no-ops.
-fn store_dims(
+/// `cur[k1]...[kn] = v` on the table `tbl` of an array along `keys` (all
+/// `Some` but possibly the last, `None` being `[]`): the
+/// `ZEND_FETCH_DIM_W` chain, separating each nested array
+/// (`SEPARATE_ARRAY`) and making a missing or null element on the way an
+/// empty array (silently, as the generic walk's `descend` does), then
+/// `ZEND_ASSIGN_DIM`'s store of `v` over the element, or added, or
+/// appended. `Some(old)` on success (the replaced element, null for an
+/// added one; `v` taken); `None`, `v` left and nothing created, when an
+/// element on the way is of another kind (a reference, an object, a
+/// string, `false`, ...), the last one is a reference (the generic
+/// assignment writes through it) or an append finds the next index taken
+/// (the generic assignment throws; an array created on the way is empty,
+/// so this only happens to one that existed). Arrays on the way may have
+/// been separated, which the generic walk repeats as no-ops.
+pub(super) fn store_dims(
     tbl: &mut php_runtime::HashTable,
     keys: &[Option<ArrayKey>],
     v: &mut Option<Value>,
 ) -> Option<Value> {
     let (first, rest) = keys.split_first()?;
-    let key = first.as_ref()?;
     if rest.is_empty() {
+        let Some(key) = first else {
+            let new = v.take()?;
+            return match tbl.push(new) {
+                Ok(_) => Some(Value::Null),
+                Err(back) => {
+                    *v = Some(back);
+                    None
+                }
+            };
+        };
         if matches!(tbl.get(key), Some(Value::Reference(_))) {
             return None;
         }
         let new = v.take()?;
         return Some(std::mem::replace(tbl.lookup_ex(key.clone()).0, new));
     }
+    let key = first.as_ref()?;
     let (elem, _) = tbl.lookup_ex(key.clone());
     if matches!(elem, Value::Null) {
         *elem = Value::Array(php_runtime::ZArray::new());
@@ -1882,7 +1966,17 @@ impl Vm {
             return Err(v);
         };
         if !is_prop_dims_place(f, pid) {
-            return Err(v);
+            // `$a[$k][] = v`, `$a[$k][$j] = [...]` & co. on a variable.
+            let ret = v.clone();
+            let mut slot = Some(v);
+            return match (super::dims::assign_cv_dims_in(f, pid, &mut slot), slot) {
+                (Some(old), None) => {
+                    super::super::release_rooted(Some(old));
+                    Ok(ret)
+                }
+                (_, Some(v)) => Err(v),
+                (None, None) => Ok(ret),
+            };
         }
         let ret = v.clone();
         let mut slot = Some(v);

@@ -939,6 +939,48 @@ pub(in crate::exec) fn unset_dims_cv_in(f: &mut Frame, cv: u32, place: PlaceId) 
     true
 }
 
+/// `$cv[d1]...[dn] = v` (one to four dimensions, the last possibly `[]`)
+/// of place `pid` of frame `f`, when `$cv` holds an array directly or
+/// through a reference not borrowed elsewhere and the frame's symbol table
+/// is not attached: the `FETCH_DIM_W` chain and `ZEND_ASSIGN_DIM` of
+/// [`super::props::store_dims`] for any value (an array or an object as
+/// well, which [`Op::AssignDimsCv`](crate::opcode::Op::AssignDimsCv)
+/// leaves to the generic walk). Consumed string offsets are released.
+/// Returns the replaced element, `v` taken; `None`, `v` left, for the
+/// generic assignment (an undefined or null variable, which the walk
+/// promotes, a string, an object, a reference element, ...).
+#[inline(never)]
+pub(super) fn assign_cv_dims_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    v: &mut Option<Value>,
+) -> Option<Value> {
+    if f.symtab_attached {
+        return None;
+    }
+    let p = f.code.places.get(pid as usize)?;
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    let (keys, n) = super::props::dim_keys_in(f, &p.segs)?;
+    let keys = keys.get(..n)?;
+    let old = match f.cvs.get_mut(cv as usize)?.as_mut() {
+        Some(Value::Array(arr)) => super::props::store_dims(arr.make_mut(), keys, v),
+        Some(Value::Reference(r)) => {
+            let mut guard = r.try_borrow_mut()?;
+            let old = match &mut *guard {
+                Value::Array(arr) => super::props::store_dims(arr.make_mut(), keys, v),
+                _ => None,
+            };
+            drop(guard);
+            old
+        }
+        _ => None,
+    }?;
+    release_place_str_tmps(f, pid);
+    Some(old)
+}
+
 impl Vm {
     /// `unset()` of an array element without the generic place walk:
     /// `unset($cv[...])` ([`unset_dims_cv_in`]) and `unset($this->name[...])`

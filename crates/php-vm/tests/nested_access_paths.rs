@@ -43,6 +43,211 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// Nested assignments and appends `$a[$k][] = v`, `$a[$k][$j] = [...]` on variables and properties.
+#[test]
+fn cv_dims() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+  $a = ['k' => [1]]; $k = 'k'; $j = 'j';
+  for ($i = 0; $i < 3; $i++) { $a[$k][] = $i; $a['n'][] = [$i]; $a[$k . 'x'][$j] = ['v' => $i]; }
+  var_dump($a);
+  $b = $a; $a[$k][] = 'after-copy'; var_dump(count($b['k']), count($a['k']));
+  $full = ['x' => [PHP_INT_MAX => 1]];
+  try { $full['x'][] = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $s = ['x' => 'str']; try { $s['x'][] = 'y'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $n = ['x' => 5]; try { $n['x'][] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $fa = ['x' => false]; $fa['x'][] = 1; var_dump($fa);
+  $nu = ['x' => null]; $nu['x'][] = 1; $nu['y']['z'][] = 2; var_dump($nu);
+  $u[$k][] = 1; var_dump($u);
+  $nl = null; $nl[$k][] = 1; var_dump($nl);
+  $r = &$a; $r[$k][] = 'viaref'; var_dump(end($a['k']));
+  $v = 1; $e = ['x' => [0 => 0]]; $e['x'][0] = &$v; $e['x'][0] = 7; var_dump($v);
+  $o = ['x' => new ArrayObject([])]; $o['x'][] = 'ao'; var_dump(count($o['x']));
+  $self = ['a' => [1]]; $self['a'][] = $self; var_dump($self);
+  $neg = ['x' => [-5 => 1]]; $neg['x'][] = 2; var_dump($neg);
+  $a[$undef][] = 1;
+}
+f();
+$g = ['x' => []];
+function gf() { global $g; $g['x'][] = 1; $g['y']['z'] = [1, 2]; }
+gf(); gf(); var_dump($g);
+$g['x'][] = 'top'; var_dump($GLOBALS['g']['x']);
+class C { public $cb = []; public ?array $na = null; public $s = 'str';
+  function add($p, $fn) { $this->cb[$p][] = $fn; $this->na['q'][] = $fn; } }
+$c = new C; $c->add(10, 'a'); $c->add(10, 'b'); $c->add(5, 'c'); var_dump($c->cb, $c->na);
+try { $c->s['x'][] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        r#"array(3) {
+  ["k"]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(0)
+    [2]=>
+    int(1)
+    [3]=>
+    int(2)
+  }
+  ["n"]=>
+  array(3) {
+    [0]=>
+    array(1) {
+      [0]=>
+      int(0)
+    }
+    [1]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    [2]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+  }
+  ["kx"]=>
+  array(1) {
+    ["j"]=>
+    array(1) {
+      ["v"]=>
+      int(2)
+    }
+  }
+}
+int(4)
+int(5)
+Cannot add element to the array as the next element is already occupied
+[] operator not supported for strings
+Cannot use a scalar value as an array
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 11
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(2) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["y"]=>
+  array(1) {
+    ["z"]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+string(6) "viaref"
+int(7)
+int(1)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    array(1) {
+      ["a"]=>
+      array(1) {
+        [0]=>
+        int(1)
+      }
+    }
+  }
+}
+array(1) {
+  ["x"]=>
+  array(2) {
+    [-5]=>
+    int(1)
+    [-4]=>
+    int(2)
+  }
+}
+
+Warning: Undefined variable $undef in t.php on line 20
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 20
+array(2) {
+  ["x"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(1)
+  }
+  ["y"]=>
+  array(1) {
+    ["z"]=>
+    array(2) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+    }
+  }
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+  [2]=>
+  string(3) "top"
+}
+array(2) {
+  [10]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [5]=>
+  array(1) {
+    [0]=>
+    string(1) "c"
+  }
+}
+array(1) {
+  ["q"]=>
+  array(3) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(1) "c"
+  }
+}
+Cannot access offset of type string on string
+"#
+    );
+}
+
 /// Reads of `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
 #[test]
 fn prop_chain() {
