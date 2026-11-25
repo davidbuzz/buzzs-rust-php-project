@@ -5063,9 +5063,8 @@ impl Vm {
         &mut self,
         o: &Obj,
         m: &Rc<Method>,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
     ) -> VmResult<Value> {
-        let mut args = args;
         if let Some(r) = self.enter_method_direct(o, m, &mut args) {
             return r;
         }
