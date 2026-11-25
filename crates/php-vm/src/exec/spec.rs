@@ -42,7 +42,7 @@ use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
 mod dims;
-mod props;
+pub(in crate::exec) mod props;
 mod statics;
 mod strings;
 

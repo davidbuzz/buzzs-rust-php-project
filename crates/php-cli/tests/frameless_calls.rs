@@ -396,3 +396,65 @@ int(4)
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `$this->name` as a call's argument, sent from the property cache's read
+/// hit when the call is prepared: declared public, protected and private
+/// properties (a parent's private one from the parent's method), a
+/// dynamic property, an undeclared one (`__get()`), an uninitialized typed
+/// one (its error), a reference, a by-reference parameter (the generic
+/// send), dimensions of a property, constructor arguments of `new`, and
+/// repeated calls once the cache is filled. Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // the script and its expected output
+fn this_property_arguments() {
+    let src = r#"<?php
+namespace App;
+#[\AllowDynamicProperties]
+class Base { private $secret = 'base-private'; protected $prot = 'prot'; public $pub = ['k' => 'v']; public int $typed; public $ref;
+  function __construct() { $x = 'refd'; $this->ref = &$x; }
+  function viaBase() { return [strlen($this->secret), self::id($this->secret)]; }
+  static function id($v) { return $v; } static function byRef(&$v) { $v = 'changed'; return 'r'; } }
+class Child extends Base {
+  private $secret = 'child-private';
+  function __get($n) { echo "[__get $n]"; return "magic-$n"; }
+  function run() {
+    $this->dyn = 'dynamic';
+    var_dump(strlen($this->pub['k']), self::id($this->prot), self::id($this->secret), self::id($this->dyn), self::id($this->missing), self::id($this->ref), in_array('v', $this->pub), count($this->pub));
+    try { var_dump(self::id($this->typed)); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    var_dump(self::byRef($this->prot), $this->prot, $this->viaBase());
+    $o = new \ArrayObject($this->pub); var_dump(count($o), new Pair($this->pub['k'], $this->prot));
+    for ($i = 0; $i < 3; $i++) { echo self::id($this->secret), strlen($this->dyn), ' '; } echo "\n";
+  }
+}
+class Pair { function __construct(public $a, public $b) {} }
+(new Child)->run();
+"#;
+    let expected = r#"[__get missing]int(1)
+string(4) "prot"
+string(13) "child-private"
+string(7) "dynamic"
+string(13) "magic-missing"
+string(4) "refd"
+bool(true)
+int(1)
+Error: Typed property App\Base::$typed must not be accessed before initialization
+string(1) "r"
+string(7) "changed"
+array(2) {
+  [0]=>
+  int(12)
+  [1]=>
+  string(12) "base-private"
+}
+int(1)
+object(App\Pair)#4 (2) {
+  ["a"]=>
+  string(1) "v"
+  ["b"]=>
+  string(7) "changed"
+}
+child-private7 child-private7 child-private7 
+"#;
+    assert_eq!(run(src), expected);
+}

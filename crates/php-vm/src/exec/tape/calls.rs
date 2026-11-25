@@ -1228,9 +1228,22 @@ fn direct_src(code: &OpArray, src: &ArgSrc) -> bool {
     match src {
         ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         | ArgSrc::CallResult(Operand::Tmp(_)) => true,
-        ArgSrc::Place(pid) => place_cv(code, *pid).is_some(),
+        ArgSrc::Place(pid) => place_cv(code, *pid).is_some() || this_prop_place(code, *pid),
         _ => false,
     }
+}
+
+/// Whether a place is `$this->name` (one property named by a literal):
+/// sent by value from the property cache's read hit ([`send`]), which a
+/// declared property of the class mostly is (a miss sends the generic
+/// way).
+fn this_prop_place(code: &OpArray, pid: u32) -> bool {
+    code.places.get(pid as usize).is_some_and(|p| {
+        matches!(
+            (&p.base, p.segs.as_slice()),
+            (PlaceBase::This, [crate::opcode::Seg::Prop(Operand::Lit(_))])
+        )
+    })
 }
 
 /// The compiled variable a place stands for when it is one without
@@ -2197,12 +2210,34 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
             Some(v) => v,
             None => return false,
         },
-        ArgSrc::Place(pid) => {
-            match place_cv(&caller.code, *pid).and_then(|cv| cv_value(caller, cv)) {
+        ArgSrc::Place(pid) => match place_cv(&caller.code, *pid) {
+            Some(cv) => match cv_value(caller, cv) {
                 Some(v) => v,
                 None => return false,
+            },
+            // `$obj->prop` to a by-value parameter (`ZEND_FETCH_OBJ_FUNC_ARG`
+            // read as `ZEND_FETCH_OBJ_R`): on the property cache hit of
+            // that read (an initialized declared or existing dynamic
+            // property, accessible from the caller, no magic: its value,
+            // dereferenced). By-reference parameters were turned away
+            // above (builtins) or are not prepared (user functions).
+            None => {
+                // (`read_hit` reads a place's cached head: only a place that
+                // is that head alone, `$this->name`.)
+                if !this_prop_place(&caller.code, *pid) {
+                    return false;
+                }
+                if let Callee::User(uf) = &prep.callee {
+                    if uf.params.get(n).is_some_and(|p| p.by_ref) {
+                        return false;
+                    }
+                }
+                match crate::exec::spec::props::read_hit(caller, *pid) {
+                    Some(v) => v,
+                    None => return false,
+                }
             }
-        }
+        },
         _ => return false,
     };
     match prep.callee {
