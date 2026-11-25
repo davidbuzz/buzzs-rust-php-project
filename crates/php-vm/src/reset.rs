@@ -143,6 +143,7 @@ impl Vm {
             Func::Builtin(_) => true,
         });
         crate::func::bump_func_table_version();
+        crate::builtins::info::forget_user_functions();
 
         // 2. Classes, in one pass: a user class's static properties,
         // constants, defaults and enum cases are cleared and it leaves the

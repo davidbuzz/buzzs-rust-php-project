@@ -590,6 +590,16 @@ pub(crate) fn note_user_function(lc_name: &ZStr) {
     DECLARED.with(|d| d.borrow_mut().push(lc_name));
 }
 
+/// Empties the declaration log once a request's user functions left the
+/// function table ([`Vm::request_reset`]): every entry is stale then, and a
+/// persistent VM would otherwise compact a log of the previous requests'
+/// names in every request that declares as many functions. The compaction
+/// length is kept, so a request declaring as many functions as the last
+/// one does not compact at all.
+pub(crate) fn forget_user_functions() {
+    DECLARED.with(|d| d.borrow_mut().names.clear());
+}
+
 /// The user functions in declaration order; any declared through a path
 /// that did not note it follow by name.
 pub(crate) fn user_functions(vm: &Vm) -> Vec<ZStr> {
@@ -874,6 +884,28 @@ echo $flat[0], ',', implode(',', array_slice($flat, -2)), "\n";
             .map(ZStr::to_string_lossy)
             .collect();
         assert_eq!(names, ["b", "a", "c", "x", "y"]);
+    }
+
+    /// After a request's reset the log starts empty, and a request that
+    /// declares as many names as the previous one does not compact it.
+    #[test]
+    fn the_declaration_log_is_emptied_between_requests() {
+        super::DECLARED.with(|d| *d.borrow_mut() = DeclarationLog::default());
+        for i in 0..3000 {
+            super::note_user_function(&ZStr::from(format!("f{i}").as_str()));
+        }
+        let compact_at = super::DECLARED.with(|d| d.borrow().compact_at);
+        assert!(compact_at >= 3000);
+        super::forget_user_functions();
+        assert!(super::DECLARED.with(|d| d.borrow().names.is_empty()));
+        for i in 0..3000 {
+            super::note_user_function(&ZStr::from(format!("f{i}").as_str()));
+        }
+        super::DECLARED.with(|d| {
+            let d = d.borrow();
+            assert_eq!(d.compact_at, compact_at, "compacted again");
+            assert_eq!(d.names.len(), 3000);
+        });
     }
 
     #[test]
