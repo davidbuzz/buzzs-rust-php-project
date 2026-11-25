@@ -2180,10 +2180,16 @@ pub(super) fn call_native(
     let mut values = vm.call_bufs.values.pop().unwrap_or_default();
     let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
     values.reserve(n);
+    passed.reserve(n);
+    // A `match`, not `map_or(Value::Null, ..)`: that builds the null
+    // first and drops it (an out-of-line drop call per argument).
     for arg in &vm.frames.vec[live].args {
-        values.push(arg.as_ref().map_or(Value::Null, clone_value));
+        values.push(match arg {
+            Some(v) => clone_value(v),
+            None => Value::Null,
+        });
+        passed.push(true);
     }
-    passed.resize(n, true);
     let sig = b.signature();
     let nparams = sig.params.len();
     let upto = if b.flags & flags::VARIADIC != 0 {
