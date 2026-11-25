@@ -495,16 +495,27 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
 }
 
 /// [`frameless_args`] of arguments read straight from their operands
-/// ([`Vm::frameless_icall_op`]).
+/// ([`Vm::frameless_icall_op`]). The borrows are built at fixed positions
+/// (a loop over a zipped iterator into a zeroed array cost ~48
+/// instructions a call).
+#[inline]
 fn frameless_values(class: u32, args: &[Value]) -> bool {
-    let mut refs: [Option<&Value>; 3] = [None; 3];
-    let Some(sent) = refs.get_mut(..args.len()) else {
-        return false;
-    };
-    for (r, a) in sent.iter_mut().zip(args) {
-        *r = Some(a);
+    let refs = [args.first(), args.get(1), args.get(2)];
+    match refs.get(..args.len()) {
+        Some(sent) => frameless_refs(class, sent),
+        None => false,
     }
-    frameless_refs(class, sent)
+}
+
+/// Marks the `n` arguments of a frameless call (at most three) as passed,
+/// in an emptied record's flag vector: a push each, where
+/// `Vec::resize` was an out-of-line call (~37 instructions a call).
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice, in the frameless calls
+fn push_passed(passed: &mut Vec<bool>, n: usize) {
+    for _ in 0..n {
+        passed.push(true);
+    }
 }
 
 /// [`frameless_args`] of borrowed arguments (`None`: a position not
@@ -1257,46 +1268,40 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        // The arguments move from the frame's buffer into the lent
-        // vector (`CallBufs::take_values`), the length stored once, and
-        // the emptied buffer is cut without a `Drain`.
-        let mut values = self.call_bufs.take_values();
-        values.reserve(nparams.max(n));
-        let mut passed = self.call_bufs.take_passed();
+        // The arguments move from the frame's buffer into a pooled
+        // record taken whole for the call (`CallBufs::take_args`), the
+        // length stored once, and the emptied buffer is cut without a
+        // `Drain`.
+        let mut args = self.call_bufs.take_args();
+        args.values.reserve(nparams.max(n));
         {
             let sent = &mut self.frames.vec[live].args;
-            values.extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
+            args.values
+                .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
             sent.clear();
         }
-        passed.resize(values.len(), true);
+        push_passed(&mut args.passed, args.values.len());
         self.pending_call_dst = dst;
         if self.magic_call_name.is_some() {
             self.magic_call_name = None;
         }
-        while values.len() < nparams {
-            let i = values.len();
+        while args.values.len() < nparams {
+            let i = args.values.len();
             if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
-                values.push(crate::call::clone_value(d));
-                passed.push(false);
+                args.values.push(crate::call::clone_value(d));
+                args.passed.push(false);
                 continue;
             }
             match self.builtin_default(b, i) {
                 Some(d) if i >= required => {
-                    values.push(d);
-                    passed.push(false);
+                    args.values.push(d);
+                    args.passed.push(false);
                 }
                 _ => break,
             }
         }
         let handler = b.handler;
-        let mut args = Args {
-            values,
-            passed,
-            named: Vec::new(),
-            this: None,
-            called: None,
-            func: Some(Rc::clone(b)),
-        };
+        args.func = Some(Rc::clone(b));
         let mut r = handler(self, &mut args);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
@@ -1304,18 +1309,46 @@ impl Vm {
                 r = Err(e);
             }
         }
-        args.release_into(&mut self.call_bufs);
-        // Emptied by `release_into`: no drop glue to run.
-        std::mem::forget(args);
-        Some(r.map(|v| self.put_call_result(dst, v)))
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
+        Some(match r {
+            Ok(v) => {
+                self.put_call_result(dst, v);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        })
     }
 
     /// Stores a call's result in its temporary, or releases it when the
     /// result is unused (a scalar without the out-of-line drop call).
-    #[inline]
+    ///
+    /// Always inline, and called directly, not from a closure given to
+    /// `Result::map` (which came out of line: ~33 instructions a call).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per frameless call site
     fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
         match dst {
-            Some(d) => self.set_tmp(d, v),
+            Some(d) => {
+                let Some(slot) = self
+                    .frames
+                    .last_mut()
+                    .and_then(|f| f.tmps.get_mut(d as usize))
+                else {
+                    drop(v);
+                    return;
+                };
+                let old = std::mem::replace(slot, v);
+                if matches!(
+                    old,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    std::mem::forget(old);
+                } else {
+                    drop(old);
+                }
+            }
             None => {
                 if matches!(
                     v,
@@ -1383,9 +1416,10 @@ impl Vm {
         let n = usize::from(fc.argc).min(3);
         // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
         // written once, where the handler reads it: a literal's copy, a
-        // variable's value (a reference's target). The vector is lent
-        // (`CallBufs::take_values`) and given back on a decline.
-        let mut values = self.call_bufs.take_values();
+        // variable's value (a reference's target). The record is a pooled
+        // one taken whole (`CallBufs::take_args`) and given back on a
+        // decline.
+        let mut args = self.call_bufs.take_args();
         let mut read = true;
         for operand in &fc.vals[..n] {
             let v = match *operand {
@@ -1415,11 +1449,11 @@ impl Vm {
                 read = false;
                 break;
             };
-            values.push(v);
+            args.values.push(v);
         }
-        if !read || !frameless_values(class, &values) {
-            values.clear();
-            self.call_bufs.put_values(values);
+        if !read || !frameless_values(class, &args.values) {
+            args.values.clear();
+            self.call_bufs.put_args(args);
             return None;
         }
         for operand in &fc.vals[..n] {
@@ -1431,14 +1465,14 @@ impl Vm {
         }
         frame.ip = ip;
         let quick = if n == 1 {
-            frameless_inline(b.name.as_bytes(), class, values.first())
+            frameless_inline(b.name.as_bytes(), class, args.values.first())
         } else {
             None
         };
         if let Some(v) = quick {
             drop(b);
-            values.clear();
-            self.call_bufs.put_values(values);
+            args.values.clear();
+            self.call_bufs.put_args(args);
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }
@@ -1455,32 +1489,24 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        let mut passed = self.call_bufs.take_passed();
-        passed.resize(n, true);
-        while values.len() < nparams {
-            let i = values.len();
+        push_passed(&mut args.passed, n);
+        while args.values.len() < nparams {
+            let i = args.values.len();
             if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
-                values.push(crate::call::clone_value(d));
-                passed.push(false);
+                args.values.push(crate::call::clone_value(d));
+                args.passed.push(false);
                 continue;
             }
             match self.builtin_default(&b, i) {
                 Some(d) if i >= required => {
-                    values.push(d);
-                    passed.push(false);
+                    args.values.push(d);
+                    args.passed.push(false);
                 }
                 _ => break,
             }
         }
         let handler = b.handler;
-        let mut args = Args {
-            values,
-            passed,
-            named: Vec::new(),
-            this: None,
-            called: None,
-            func: Some(b),
-        };
+        args.func = Some(b);
         let mut r = handler(self, &mut args);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
@@ -1488,14 +1514,16 @@ impl Vm {
                 r = Err(e);
             }
         }
-        args.release_into(&mut self.call_bufs);
-        // Emptied by `release_into`: no drop glue to run.
-        std::mem::forget(args);
-        Some(r.map(|v| {
-            if let Some(d) = fc.dst {
-                self.set_tmp(d, v);
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
+        Some(match r {
+            Ok(v) => {
+                self.put_call_result(fc.dst, v);
+                Ok(())
             }
-        }))
+            Err(e) => Err(e),
+        })
     }
 }
 
