@@ -1219,6 +1219,112 @@ impl Vm {
     }
 }
 
+/// The keys of the dimensions after the head `->name` of place `pid` of
+/// frame `f` (`$base->name[d1]...[dn]`, one to [`super::MAX_WRITE_DIMS`]
+/// of them), and how many: every offset peeks as an int or a string
+/// ([`super::dim_key_in`]). `None` for any other shape.
+fn prop_dim_keys_in(
+    f: &Frame,
+    pid: PlaceId,
+) -> Option<([Option<ArrayKey>; super::MAX_WRITE_DIMS], usize)> {
+    let segs = f.code.places.get(pid as usize)?.segs.get(1..)?;
+    if segs.is_empty() || segs.len() > super::MAX_WRITE_DIMS {
+        return None;
+    }
+    let mut keys: [Option<ArrayKey>; super::MAX_WRITE_DIMS] = Default::default();
+    for (key, seg) in keys.iter_mut().zip(segs) {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        *key = Some(super::dim_key_in(f, *dim)?);
+    }
+    Some((keys, segs.len()))
+}
+
+/// `unset($this->name[d1]...[dn])` / `unset($cv->name[...])` of place
+/// `pid` of frame `f` on a property cache hit for writing (a declared,
+/// initialized, accessible slot that is neither readonly nor
+/// set-restricted, holding an array directly or through a reference not
+/// borrowed elsewhere): `ZEND_FETCH_OBJ_UNSET`, which hands out the slot
+/// (`get_property_ptr_ptr` with `BP_VAR_UNSET`: no magic method is
+/// consulted for an initialized slot), then the dimension chain of
+/// [`super::dims::unset_dims`]. A consumed string offset is released and
+/// the removed element dropped. `false`, nothing changed but separations,
+/// for the generic walk.
+#[inline(never)]
+pub(super) fn unset_prop_dims_in(f: &mut Frame, pid: PlaceId) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_WRITE, PC_DYN) else {
+        return false;
+    };
+    let Some((keys, n)) = prop_dim_keys_in(f, pid) else {
+        return false;
+    };
+    let Some(keys) = keys.get(..n) else {
+        return false;
+    };
+    let slot = hit.slot;
+    let removed = with_hit_obj(f, &hit, |od| {
+        let mut slots = od.slots.try_borrow_mut().ok()?;
+        let res = match slots.get_mut(slot)? {
+            Some(Value::Array(arr)) => super::dims::unset_dims(arr, keys),
+            Some(Value::Reference(r)) => {
+                let mut guard = r.try_borrow_mut()?;
+                let res = match &mut *guard {
+                    Value::Array(arr) => super::dims::unset_dims(arr, keys),
+                    _ => None,
+                };
+                drop(guard);
+                res
+            }
+            _ => None,
+        };
+        drop(slots);
+        res
+    });
+    let Some(removed) = removed else {
+        return false;
+    };
+    super::release_place_str_tmps(f, pid);
+    drop(removed);
+    true
+}
+
+impl Vm {
+    /// [`unset_prop_dims_in`] after a cache miss: when the entry of place
+    /// `pid` is unfilled, or was filled for another class or scope than
+    /// the object's (php-src's `CACHE_POLYMORPHIC_PTR` is overwritten on
+    /// such a miss too), it is filled for this object and the unset tried
+    /// again. An entry that matches but declined the access stays as it is.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::exec) fn unset_prop_dims_refill(&mut self, pid: PlaceId) -> bool {
+        let stale = {
+            let f = self.frame();
+            let Ok(cache) = f.code.prop_cache.try_borrow() else {
+                return false;
+            };
+            match cache.get(pid as usize) {
+                None => true,
+                Some(e) => {
+                    e.class_addr == 0
+                        || e.scope_addr != scope_addr(f)
+                        || crate::place::propcache::with_base_obj(f, e.base, |o| {
+                            Rc::as_ptr(object::class_of(o)) as usize != e.class_addr
+                        })
+                        .unwrap_or(false)
+                }
+            }
+        };
+        if !stale || !self.prop_cache_fill(pid) {
+            return false;
+        }
+        match self.frames.last_mut() {
+            Some(f) => unset_prop_dims_in(f, pid),
+            None => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Vm, VmOptions};

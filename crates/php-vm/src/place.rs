@@ -2046,6 +2046,11 @@ impl Vm {
 
     /// `unset(place)`.
     pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
+        // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. on arrays: no
+        // walk, no symbol table.
+        if self.unset_dims_fast(pid) {
+            return Ok(());
+        }
         self.with_cv_symtab(pid, |vm| vm.place_unset_impl(pid))
     }
 
@@ -3376,7 +3381,13 @@ impl Vm {
                             self.flush_diags(diags)?;
                             self.finish_step(s, segs, w)
                         }
-                        _ => Ok(Value::Null),
+                        // `ZEND_FETCH_OBJ_UNSET` hands `ZEND_UNSET_DIM` &
+                        // co. the property's value: a string throws
+                        // "Cannot unset string offsets", another scalar
+                        // "Cannot unset offset in a non-array variable",
+                        // `false` deprecates, null unsets nothing.
+                        Some(other) => self.descend_temp(other, segs, i + 1, wop),
+                        None => Ok(Value::Null),
                     };
                 }
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;

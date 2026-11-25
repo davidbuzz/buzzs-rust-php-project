@@ -40,9 +40,9 @@ use super::{
     release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char, table_dim,
     table_dim_mut, write_keys_in, DimRef,
 };
-use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceId};
-use crate::vm::{CvSlot, ForeachIter, Frame, Vm};
-use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZStr};
+use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceBase, PlaceId, Seg};
+use crate::vm::{CvSlot, ForeachIter, Frame, FrameKind, Vm};
+use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
 /// [`Op::FetchDimCv`](crate::opcode::Op::FetchDimCv): `$cv[dim]` read when
 /// `$cv` holds an array (directly or through a reference) that has the
@@ -783,6 +783,108 @@ pub(in crate::exec) fn fe_assign_in(f: &mut Frame, ops: &[Op], ip: usize, t: u32
         ip + 1
     } else {
         ip
+    }
+}
+
+/// `unset($a[k1][k2]...)` on the array `arr` along `keys` (all `Some`):
+/// `ZEND_FETCH_DIM_UNSET` down the chain and `ZEND_UNSET_DIM` at its end,
+/// as the generic walk's `descend` does them. Each container is separated
+/// (`SEPARATE_ARRAY`) only when it has the key; a missing key, or a null
+/// element on the way, unsets nothing (no diagnostic). `Some(removed)`
+/// when the chain was done, the element taken out (released by the
+/// caller once nothing is borrowed); `None`, having changed nothing but
+/// separations the generic walk repeats as no-ops, when an element on the
+/// way is anything but an array or null (a reference, an object, a
+/// string, `false`, ...: the generic walk descends, throws or warns).
+pub(super) fn unset_dims(arr: &mut ZArray, keys: &[Option<ArrayKey>]) -> Option<Option<Value>> {
+    let (first, rest) = keys.split_first()?;
+    let key = first.as_ref()?;
+    if !arr.contains_key(key) {
+        return Some(None);
+    }
+    let tbl = arr.make_mut();
+    if rest.is_empty() {
+        return Some(tbl.remove(key));
+    }
+    match tbl.get_mut(key)? {
+        Value::Array(inner) => unset_dims(inner, rest),
+        Value::Null => Some(None),
+        _ => None,
+    }
+}
+
+/// `unset($cv[d1]...[dn])` (one to four dimensions, none `[]`) of frame
+/// `f` (place `place`) when `$cv` holds an array, directly or through a
+/// reference not borrowed elsewhere, every offset peeks as an int or a
+/// string ([`write_keys_in`]) and the frame's symbol table is not
+/// attached: `ZEND_UNSET_DIM_SPEC_CV_*` (after the `FETCH_DIM_UNSET`s) on
+/// arrays ([`unset_dims`]). A consumed string offset is released and the
+/// removed element dropped. `false`, nothing changed but separations,
+/// leaves the unset to the generic walk (an undefined variable warns
+/// there, a string throws, `false` raises its deprecation).
+#[inline(never)]
+pub(in crate::exec) fn unset_dims_cv_in(f: &mut Frame, cv: u32, place: PlaceId) -> bool {
+    if f.symtab_attached {
+        return false;
+    }
+    let Some((keys, n)) = write_keys_in(f, place) else {
+        return false;
+    };
+    let Some(keys) = keys.get(..n).filter(|k| !k.is_empty()) else {
+        return false;
+    };
+    let Some(slot) = f.cvs.get_mut(cv as usize) else {
+        return false;
+    };
+    let removed = match slot.as_mut() {
+        Some(Value::Array(arr)) => unset_dims(arr, keys),
+        Some(Value::Reference(r)) => {
+            let Some(mut guard) = r.try_borrow_mut() else {
+                return false;
+            };
+            match &mut *guard {
+                Value::Array(arr) => unset_dims(arr, keys),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some(removed) = removed else {
+        return false;
+    };
+    release_place_str_tmps(f, place);
+    drop(removed);
+    true
+}
+
+impl Vm {
+    /// `unset()` of an array element without the generic place walk:
+    /// `unset($cv[...])` ([`unset_dims_cv_in`]) and `unset($this->name[...])`
+    /// / `unset($cv->name[...])` on a property cache hit
+    /// ([`super::props::unset_prop_dims_in`]). `false`, nothing changed but
+    /// separations, for the generic `place_unset`.
+    #[inline]
+    pub(crate) fn unset_dims_fast(&mut self, pid: PlaceId) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        if f.kind == FrameKind::Builtin {
+            return false;
+        }
+        let Some(p) = f.code.places.get(pid as usize) else {
+            return false;
+        };
+        let head = match (&p.base, p.segs.as_slice()) {
+            (PlaceBase::Cv(cv), [Seg::Dim(_), ..]) => Some(*cv),
+            (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_)), Seg::Dim(_), ..]) => {
+                None
+            }
+            _ => return false,
+        };
+        match head {
+            Some(cv) => unset_dims_cv_in(f, cv, pid),
+            None => super::props::unset_prop_dims_in(f, pid) || self.unset_prop_dims_refill(pid),
+        }
     }
 }
 

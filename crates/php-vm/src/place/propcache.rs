@@ -907,7 +907,7 @@ impl Vm {
     /// `CACHE_POLYMORPHIC_PTR`). Returns whether an entry was stored.
     #[cold]
     #[inline(never)]
-    fn prop_cache_fill(&self, pid: PlaceId) -> bool {
+    pub(crate) fn prop_cache_fill(&self, pid: PlaceId) -> bool {
         let frame = self.frame();
         if frame.kind == FrameKind::Builtin {
             return false;
