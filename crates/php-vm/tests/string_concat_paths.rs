@@ -184,3 +184,22 @@ fn concatenation_paths_match_php_when_warm() {
     assert_ne!(warm, SCRIPT);
     assert_eq!(run(&warm), EXPECTED.concat().repeat(3));
 }
+
+/// A string block of `class_capacity(len)` inline bytes is charged what
+/// the exactly sized block is (`php_memlimit::zend_size`, php-src's size
+/// classes, what the accountant charges a block aligned to 8), so the
+/// room left for in-place growth changes no `memory_get_usage()` figure
+/// and no memory-limit decision.
+#[test]
+fn class_capacity_is_charged_as_the_exact_block() {
+    use php_memlimit::{zend_size, MAX_SMALL_SIZE};
+    use php_runtime::string::{class_capacity, STRING_HEADER_SIZE};
+    for len in 0..=MAX_SMALL_SIZE + 64 {
+        let exact = zend_size(STRING_HEADER_SIZE + len);
+        let spare = zend_size(STRING_HEADER_SIZE + class_capacity(len));
+        assert_eq!(exact, spare, "{len}");
+        if STRING_HEADER_SIZE + len <= MAX_SMALL_SIZE {
+            assert_eq!(STRING_HEADER_SIZE + class_capacity(len), exact, "{len}");
+        }
+    }
+}
