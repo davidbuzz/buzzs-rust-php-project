@@ -287,7 +287,7 @@ impl Vm {
     fn call_magic_get(&mut self, o: &Obj, name: &ZStr) -> VmResult<Value> {
         let m = object::class_of(o).magic.get.clone().expect("__get");
         self.with_guard(o, name, G_GET, |vm| {
-            vm.call_method(o, &m, vec![Value::Str(name.clone())])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
         })
     }
 
@@ -724,7 +724,7 @@ impl Vm {
         if mode == FetchMode::Is && self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
             let r = self.with_guard(o, name, G_ISSET, |vm| {
-                vm.call_method(o, &m, vec![Value::Str(name.clone())])
+                vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
             })?;
             if !self.to_bool(&r)? {
                 return Ok(Value::Null);
@@ -1403,7 +1403,7 @@ impl Vm {
     fn magic_write(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
         let m = object::class_of(o).magic.set.clone().expect("__set");
         self.with_guard(o, name, G_SET, |vm| {
-            vm.call_method(o, &m, vec![Value::Str(name.clone()), v.clone()])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone()), v.clone()])
         })?;
         Ok(v)
     }
@@ -1973,7 +1973,7 @@ impl Vm {
     fn magic_unset(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
         let m = object::class_of(o).magic.unset.clone().expect("__unset");
         self.with_guard(o, name, G_UNSET, |vm| {
-            vm.call_method(o, &m, vec![Value::Str(name.clone())])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
         })?;
         Ok(())
     }
@@ -2145,7 +2145,7 @@ impl Vm {
         if self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
             let r = self.with_guard(o, name, G_ISSET, |vm| {
-                vm.call_method(o, &m, vec![Value::Str(name.clone())])
+                vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
             })?;
             let set = self.to_bool(&r)?;
             if !empty {

@@ -4497,6 +4497,22 @@ impl Vm {
         // `zend_call_function` services pending interrupts (async signals)
         // before entering user code from internal code.
         self.check_interrupt()?;
+        if call.inline_count > 0 {
+            if call.args.is_empty() && takes_args_inline(&call) {
+                // Every parameter by value (`fill_call_args`): the arguments
+                // are dereferenced in the inline buffer, and the frame is
+                // readied from it by `push_user_call`'s plain entry.
+                let n = call.inline_count as usize;
+                for slot in &mut call.inline_args[..n] {
+                    let v = match slot {
+                        Some(Value::Reference(r)) => r.get(),
+                        _ => continue,
+                    };
+                    *slot = Some(v);
+                }
+                return self.call_user_inline(call, from_internal);
+            }
+        }
         if !call.is_magic_trampoline() {
             for (i, arg) in call.args.iter_mut().enumerate() {
                 let Some(value) = arg else { continue };
@@ -4576,6 +4592,103 @@ impl Vm {
         }
     }
 
+    /// [`Vm::call_pending_ex`] of a user function whose arguments are in
+    /// the inline buffer, dereferenced: `zend_call_function` /
+    /// `zend_call_known_function` pushing one frame, binding the arguments
+    /// and calling `execute_ex`. No argument vector is taken from the pool
+    /// or given back, the by-reference loop is skipped (no parameter is by
+    /// reference), and `push_user_call` takes its plain entry (the
+    /// arguments straight into the compiled variables, the `RECV` ops
+    /// skipped) instead of `init_cvs`.
+    fn call_user_inline(&mut self, call: PendingCall, from_internal: bool) -> VmResult<Value> {
+        self.check_deprecated_call(&call)?;
+        let strict = call.strict;
+        self.push_user_call(call, RetTarget::Discard, strict, from_internal)?;
+        let base = self.frames.len() - 1;
+        match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        }
+    }
+
+    /// Puts `args` into `call` for [`Vm::call_pending`]: in the call's
+    /// inline buffer when the callee is a user function that takes every
+    /// argument by value and there are at most six (no vector taken from
+    /// the pool, and the frame is set up by `push_user_call`'s plain
+    /// entry), otherwise in a pooled argument vector as before.
+    #[inline]
+    pub(crate) fn fill_call_args(&mut self, call: &mut PendingCall, args: Vec<Value>) {
+        let n = args.len();
+        if n == 0 {
+            return;
+        }
+        if n <= call.inline_args.len()
+            && call.inline_count == 0
+            && call.args.is_empty()
+            && takes_args_inline(call)
+        {
+            for (slot, a) in call.inline_args.iter_mut().zip(args) {
+                *slot = Some(a);
+            }
+            #[allow(clippy::cast_possible_truncation)] // n <= 6
+            let count = n as u8;
+            call.inline_count = count;
+            return;
+        }
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(n);
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
+    }
+
+    /// [`Vm::fill_call_args`] from a slice, whose values are moved out
+    /// (left `null`): the magic methods and interface methods the engine
+    /// calls with a fixed argument list (`__get($name)`, `__set($name,
+    /// $value)`, `offsetGet($offset)`, ...) build no vector at all for a
+    /// plain user method.
+    #[inline]
+    pub(crate) fn fill_call_args_slice(&mut self, call: &mut PendingCall, args: &mut [Value]) {
+        let n = args.len();
+        if n == 0 {
+            return;
+        }
+        if n <= call.inline_args.len()
+            && call.inline_count == 0
+            && call.args.is_empty()
+            && takes_args_inline(call)
+        {
+            for (slot, a) in call.inline_args.iter_mut().zip(args.iter_mut()) {
+                *slot = Some(std::mem::take(a));
+            }
+            #[allow(clippy::cast_possible_truncation)] // n <= 6
+            let count = n as u8;
+            call.inline_count = count;
+            return;
+        }
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(n);
+        call_args.extend(args.iter_mut().map(|a| Some(std::mem::take(a))));
+        call.args = call_args;
+    }
+
+    /// `zend_call_known_instance_method()`: calls method `m` (known per
+    /// class: a magic method from `Class::magic`, an interface method
+    /// looked up once) on `o` with a fixed argument list, moved out of
+    /// `args`. The same call as [`Vm::call_method`], without its argument
+    /// vector.
+    pub(crate) fn call_known_method(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        args: &mut [Value],
+    ) -> VmResult<Value> {
+        let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
+        self.fill_call_args_slice(&mut call, args);
+        self.call_pending(call)
+    }
+
     /// `zend_call_function` checks `EG(vm_interrupt)` once the callee has
     /// returned, in the caller's frame, also when the callee threw `old`
     /// (e.g. a tick function raising a signal and throwing): the interrupt
@@ -4613,7 +4726,7 @@ impl Vm {
     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
         if let Value::Object(o) = callable.deref() {
             if let Some(mut call) = self.closure_user_call(&o) {
-                call.args = args.into_iter().map(Some).collect();
+                self.fill_call_args(&mut call, args);
                 return self.call_pending(call);
             }
         }
@@ -4621,11 +4734,7 @@ impl Vm {
             Ok(call) => call,
             Err(_) => self.resolve_callable_for_call(callable)?,
         };
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4852,11 +4961,7 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4879,22 +4984,12 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            cls.methods.get(name.as_bytes()).cloned()
-        } else {
-            let lc = name.to_ascii_lowercase();
-            cls.methods.get(lc.as_bytes()).cloned()
-        };
-        let call = match m {
+        let m = class_method_lc(&cls, name);
+        let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
         };
-        let mut call = call;
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4909,12 +5004,7 @@ impl Vm {
         args: Vec<Option<Value>>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            cls.methods.get(name.as_bytes()).cloned()
-        } else {
-            let lc = name.to_ascii_lowercase();
-            cls.methods.get(lc.as_bytes()).cloned()
-        };
+        let m = class_method_lc(&cls, name);
         let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
@@ -4932,11 +5022,7 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.static_method_call(cls, &ZStr::from(name), false)?;
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4953,11 +5039,7 @@ impl Vm {
         };
         let quiet = matches!(&f, Func::Builtin(_)) && self.observer.enabled;
         let mut call = PendingCall::new(f);
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         if !self.observer.enabled {
             return self.call_pending(call);
         }
@@ -4967,6 +5049,44 @@ impl Vm {
         self.observer.quiet_builtin = saved;
         result
     }
+}
+
+/// Whether a call's arguments may go in its inline buffer
+/// ([`Vm::fill_call_args`]): a user function (not a `__call` trampoline,
+/// whose arguments are packed from `args`) without named arguments or
+/// placeholders that takes no parameter by reference, so the arguments
+/// only need dereferencing (`call_pending`'s loop does nothing else for
+/// such a callee).
+#[inline]
+fn takes_args_inline(call: &PendingCall) -> bool {
+    call.magic_name.is_none()
+        && call.named.is_empty()
+        && !call.has_named
+        && call.pfa.is_none()
+        && match &call.func {
+            Func::User(uf) => !uf.params.iter().any(|p| p.by_ref),
+            Func::Builtin(_) => false,
+        }
+}
+
+/// The method `name` of `cls`, looked up by its lower-case name: a name of
+/// up to 64 bytes is lowered on the stack (`offsetGet`, `getIterator`:
+/// the engine's own calls), a longer one in a heap buffer.
+fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
+    let b = name.as_bytes();
+    if !b.iter().any(u8::is_ascii_uppercase) {
+        return cls.methods.get(b).cloned();
+    }
+    let mut buf = [0u8; 64];
+    if let Some(dst) = buf.get_mut(..b.len()) {
+        for (d, s) in dst.iter_mut().zip(b) {
+            *d = s.to_ascii_lowercase();
+        }
+        return cls.methods.get(&*dst).cloned();
+    }
+    cls.methods
+        .get(name.to_ascii_lowercase().as_bytes())
+        .cloned()
 }
 
 /// The method name a `__call`/`__callStatic` trampoline carries:
