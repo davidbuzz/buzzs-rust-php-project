@@ -17,10 +17,12 @@ the same ground is not covered twice, and add a row when a change lands.
 - **Laravel:** a real app, measured with
   `artisan route:list` ("rl") and `vendor/bin/phpunit tests/Unit` ("ut",
   needs `-d memory_limit=1G`).
-- **C reference:** PHP **8.4** CLI from the ddev Docker image, with
-  opcache off. The 8.5 oracle named in `CLAUDE.md` is not installed on
-  this box. Where 8.4 and master differ, master is followed (e.g. 8.5/8.6
-  deprecations, `fatal_error_backtraces`).
+- **C reference:** PHP **8.5** (8.5.13), the official `php:8.5-cli`
+  Docker image (AArch64), with opcache off (its default for the CLI).
+  Up to 25 Nov 2026 the reference was PHP 8.4 (ddev image): C figures in
+  the tables below are 8.4's unless marked "8.5". 8.5 is somewhat faster
+  (route:list 1.62G vs 1.79G). Where 8.5 and master differ, master is
+  followed (e.g. 8.6 deprecations).
 - **Validation for every commit:**
   - PHPT on Zend/tests, tests, ext/opcache, ext/standard,
     ext/reflection, ext/spl, ext/pcre, ext/mbstring and ext/json
@@ -31,10 +33,10 @@ the same ground is not covered twice, and add a row when a change lands.
 
 ## Totals
 
-| | start of PR #17 | now | C 8.4 |
-|---|---|---|---|
-| route:list | 4.796G | 4.297G (−10.4%) | 1.79G (≈1.1G of it compiling) |
-| unit tests | 208.45G | 182.05G (−12.7%) | — |
+| | start of PR #17 | now | C 8.5 | C 8.4 |
+|---|---|---|---|---|
+| route:list | 4.796G | 4.292G (−10.5%) | 1.621G (we are 2.65×) | 1.786G |
+| unit tests | 208.45G | 181.56G (−12.9%) | 49.86G (we are 3.64×) | 51.75G |
 
 Our front end (lex/parse/compile, ≈1.2G of route:list) is close to C's.
 The gap is execution.
@@ -62,6 +64,7 @@ functions.
 | `$this->name` arguments sent from the property cache (calls with them are prepared) | 23adafca | `ObjectArray::has()` 3,130 → 2,788 | | rl −0.35% |
 | `RECV_VARIADIC` on the tape (untyped/`mixed`); value-less returns in `return_simple` | 98a9e086 | variadic call 1,328 → 1,017; Doctrine `triggerIfCalledFromOutside` 3,022 → 2,766 | | ut −0.4% |
 | Static property elements (`isset(self::$a[$k])`, `static::$a[k]`) and `self/static/parent::class` without the generic ops | 4c61cbd9 | 2,035 → 1,393; `isset(static::$b[static::class])` 1,927 → 1,342 | 473 | ut −0.2% |
+| `$a instanceof $b` of two variables without the generic op | eeb13391 | `instanceof $name` 749 → 447; `instanceof $obj` 617 → 308 | 8.5: 181 / 115 | ut −0.3%, rl −0.1% |
 
 ## Ops, compiler, tape
 
