@@ -687,11 +687,20 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `flush()`: `sapi_cli_server_flush` sends the headers; under `FastCGI`
-/// `sapi_fcgi_flush` also sends the buffered records.
+/// `sapi_fcgi_flush` also sends the buffered records. Plain CGI's
+/// `sapi_cgi_flush` only flushes standard output: what the output layer
+/// still buffers (`output_buffering`) stays there, and so do the headers,
+/// which a later `header()` may still change.
 #[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.flush_stdout();
     let ctx = CURRENT.with(|c| c.borrow().clone());
+    if let Some(ctx) = ctx.as_ref().filter(|c| c.cgi.is_some() && c.fcgi.is_none()) {
+        if std::io::Write::flush(&mut std::io::stdout()).is_err() {
+            ctx.aborted.set(true);
+        }
+        return Ok(Value::Null);
+    }
     if let Some(ctx) = ctx {
         call_header_callback(vm, &ctx);
         ctx.send_headers();
