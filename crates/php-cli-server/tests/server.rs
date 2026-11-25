@@ -456,3 +456,69 @@ fn request_changes_do_not_reach_the_next_request() {
         );
     }
 }
+
+/// The response headers of a header with the given name (case-insensitive).
+fn header_values<'a>(head: &'a str, name: &str) -> Vec<&'a str> {
+    head.split("\r\n")
+        .filter_map(|l| l.split_once(": "))
+        .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v)
+        .collect()
+}
+
+/// `sapi_send_headers()` builds the default `Content-Type` from
+/// `default_charset` and `default_mimetype` as the script left them, and
+/// runs the `header_register_callback()` callable when output first
+/// reaches the SAPI (its own output comes first); a later request starts
+/// from the startup values again. Expected values from php8.5's own
+/// built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn header_callback_and_runtime_default_charset() {
+    let srv = start(
+        "hdrcb",
+        &[(
+            "cb.php",
+            "<?php\nheader_register_callback(function () { header('X-Callback: ' . ini_get('default_charset')); echo '[cb]'; });\nini_set('default_charset', $_GET['cs'] ?? 'UTF-8');\nif (isset($_GET['ct'])) header('Content-Type: ' . $_GET['ct']);\nif (isset($_GET['mime'])) ini_set('default_mimetype', $_GET['mime']);\necho \"body\\n\";\n",
+        )],
+        None,
+    );
+    let get = |q: &str| {
+        request(
+            srv.port,
+            &format!("GET /cb.php{q} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"),
+        )
+    };
+    let r = get("");
+    let (head, body) = split(&r);
+    assert_eq!(
+        header_values(head, "Content-type"),
+        ["text/html; charset=UTF-8"]
+    );
+    assert_eq!(header_values(head, "X-Callback"), ["UTF-8"]);
+    assert_eq!(body, "[cb]body\n");
+    let r = get("?cs=ISO-8859-1");
+    let (head, _) = split(&r);
+    assert_eq!(
+        header_values(head, "Content-type"),
+        ["text/html; charset=ISO-8859-1"]
+    );
+    assert_eq!(header_values(head, "X-Callback"), ["ISO-8859-1"]);
+    let r = get("?cs=&ct=text/plain");
+    assert_eq!(header_values(split(&r).0, "Content-Type"), ["text/plain"]);
+    let r = get("?mime=text/plain");
+    assert_eq!(
+        header_values(split(&r).0, "Content-type"),
+        ["text/plain; charset=UTF-8"]
+    );
+    let r = get("?ct=application/xml&cs=KOI8-R");
+    assert_eq!(
+        header_values(split(&r).0, "Content-Type"),
+        ["application/xml"]
+    );
+    let r = get("");
+    assert_eq!(
+        header_values(split(&r).0, "Content-type"),
+        ["text/html; charset=UTF-8"]
+    );
+}

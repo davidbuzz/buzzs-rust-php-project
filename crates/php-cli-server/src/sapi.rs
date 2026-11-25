@@ -435,6 +435,26 @@ fn apply_fatal_status(vm: &Vm, ctx: &RequestCtx) {
 
 /// Invokes the `header_register_callback()` callable once, before the
 /// headers are sent.
+/// `php_header()` for this SAPI, installed as the VM's `send_headers_hook`
+/// (the output layer calls it when output first reaches the SAPI, and
+/// request shutdown calls it when there was none): `sapi_send_headers()`
+/// builds the default `Content-Type` from `default_mimetype` and
+/// `default_charset` as they are now (a script may have changed them with
+/// `ini_set()`), runs the `header_register_callback()` callable once — its
+/// own output comes back here and sends the headers from inside it — and
+/// sends the headers (`main/SAPI.c`, `main/output.c`).
+fn php_header(vm: &mut Vm) -> bool {
+    let Some(ctx) = current() else {
+        return true;
+    };
+    if !ctx.headers_sent() {
+        ctx.refresh_facts(vm);
+        call_header_callback(vm, &ctx);
+        ctx.send_headers();
+    }
+    true
+}
+
 fn call_header_callback(vm: &mut Vm, ctx: &RequestCtx) {
     if ctx.headers_sent() {
         return;
@@ -489,6 +509,8 @@ fn add_response_header(vm: &mut Vm, line: &[u8], replace: bool, code: i64) -> Vm
     } else {
         HeaderOp::Add(line, code)
     };
+    // `sapi_header_op()` applies `default_charset` as it is now.
+    with_ctx(|c| c.refresh_facts(vm));
     let r = ctx_or(Ok(false), |c| c.header_op(op));
     let accepted = header_result(vm, r)?;
     if accepted {
@@ -985,6 +1007,7 @@ impl Extension for CliServerModule {
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         use php_support::ini::{Access, IniDirective, ModifyHandler};
         m.vm().response_header_hook = Some(add_response_header);
+        m.vm().send_headers_hook = Some(php_header);
         m.vm().parse_body_hook = Some(crate::vars::parse_body);
         if self.cgi {
             let (table, module) = if self.fpm {
