@@ -78,20 +78,40 @@ fn consume_tmp(f: &mut Frame, op: Operand) {
     }
 }
 
+/// The parts of a rope whose values [`rope_in`] keeps between its passes;
+/// a longer rope reads them again.
+const ROPE_PARTS: usize = 8;
+
 /// [`Op::Rope`](crate::opcode::Op::Rope) when every part is a string or an
 /// integer ([`peek_str_int`]): the parts are measured, copied into one
 /// exactly sized string, and the temporaries among them released. `None`,
 /// nothing changed, otherwise.
 #[inline]
 pub(in crate::exec) fn rope_in(f: &mut Frame, lits: &[Value], parts: &[Operand]) -> Option<ZStr> {
+    // The parts as the first pass finds them (`ROPE_ADD` keeps them in
+    // the op line's temporaries), so that the copy does not classify the
+    // operands again.
+    let mut seen: [Option<&Value>; ROPE_PARTS] = [None; ROPE_PARTS];
     let mut len = 0usize;
-    for &p in parts {
-        len = len.saturating_add(part_len(peek_str_int(f, lits, p)?));
+    for (i, &p) in parts.iter().enumerate() {
+        let v = peek_str_int(f, lits, p)?;
+        len = len.saturating_add(part_len(v));
+        if let Some(slot) = seen.get_mut(i) {
+            *slot = Some(v);
+        }
     }
-    let mut out = ZStrBuf::with_capacity(len);
-    for &p in parts {
-        if let Some(v) = peek_str_int(f, lits, p) {
+    // One allocation, of the size class of the result (`ROPE_END`'s
+    // `zend_string_alloc`), so a concatenation onto it grows in place.
+    let mut out = ZStrBuf::with_capacity(class_capacity(len));
+    if parts.len() <= ROPE_PARTS {
+        for v in seen.iter().take(parts.len()).flatten() {
             push_part(&mut out, v);
+        }
+    } else {
+        for &p in parts {
+            if let Some(v) = peek_str_int(f, lits, p) {
+                push_part(&mut out, v);
+            }
         }
     }
     for &p in parts {
