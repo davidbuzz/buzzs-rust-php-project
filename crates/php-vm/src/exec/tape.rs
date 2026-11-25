@@ -2486,6 +2486,17 @@ fn run_call(
             flush(vm, prep);
             return DECLINED;
         }
+        // `call_user_func_array($f, array_slice($args, 0, $n))`, its length
+        // computed after the call started.
+        Some(&Op::SendArray { src, len, skip }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_array_slice(vm, call, src, len, skip) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
+        }
         Some(Op::Send { src }) => {
             if let Some(call) = prep.as_mut() {
                 if let Some(id) = call.quick_id() {
@@ -3004,6 +3015,9 @@ fn init_user_call(
                 len: Operand::Unused,
                 skip: 0,
             }) => calls::send_array(vm, &mut call, src),
+            Some(&Op::SendArray { src, len, skip }) => {
+                calls::send_array_slice(vm, &mut call, src, len, skip)
+            }
             _ => false,
         };
         if !sent {
@@ -3018,8 +3032,11 @@ fn init_user_call(
 /// generic op would push, prepared; `Err` with where the tape goes on
 /// when it is not (pushed as the pending call: the op after this one), or
 /// when the resolution threw (the op's index with [`CALL_THREW`], the
-/// throw in `Vm::tape_throw`). Cold: the cached path is the common one.
-#[cold]
+/// throw in `Vm::tape_throw`). Not cold: a hook list's call site sees
+/// another callback on nearly every call, so the callbacks such a list
+/// holds (a function's name, `[$object, 'method']`) are resolved by one
+/// table lookup ([`calls::user_call_quick`]) before the generic
+/// resolution ([`user_call_resolve`]).
 #[inline(never)]
 fn user_call_miss(
     vm: &mut Vm,
@@ -3027,12 +3044,9 @@ fn user_call_miss(
     array: bool,
     at: usize,
 ) -> Result<calls::Prepared, usize> {
-    let pending = match vm.user_call_pending(callee, array, at) {
-        Ok(pending) => pending,
-        Err(t) => {
-            vm.tape_throw = Some(t);
-            return Err(at | CALL_THREW);
-        }
+    let pending = match calls::user_call_quick(vm, callee, at) {
+        Some(pending) => pending,
+        None => user_call_resolve(vm, callee, array, at)?,
     };
     match calls::prepare_pending(vm, pending) {
         Ok(call) => Ok(call),
@@ -3043,6 +3057,23 @@ fn user_call_miss(
             Err(at + 1)
         }
     }
+}
+
+/// [`user_call_miss`]'s generic resolution (`Vm::user_call_pending`: the
+/// deprecations, the `TypeError`, the cache filled); `Err` with the op's
+/// index and [`CALL_THREW`] when it threw (the throw in `Vm::tape_throw`).
+#[cold]
+#[inline(never)]
+fn user_call_resolve(
+    vm: &mut Vm,
+    callee: Operand,
+    array: bool,
+    at: usize,
+) -> Result<crate::vm::PendingCall, usize> {
+    vm.user_call_pending(callee, array, at).map_err(|t| {
+        vm.tape_throw = Some(t);
+        at | CALL_THREW
+    })
 }
 
 // ---- statics: class constants and static properties ----

@@ -1374,9 +1374,9 @@ fn with_cv<'a>(arrays: &'a [Rc<OpArray>], name: &str) -> &'a OpArray {
 
 /// `call_user_func[_array]()` written by name starts as a call
 /// instruction, its arguments as call sends, when nothing between it and
-/// its `DoCall` starts another call (`calls::user_call_stays_prepared`);
-/// a callback call as an argument and the `array_slice()` form keep the
-/// generic ops. The prepared calls (functions by name, methods, static
+/// its `DoCall` starts another call (`calls::user_call_stays_prepared`),
+/// also the `array_slice()` form; a callback call as an argument keeps
+/// the generic ops. The prepared calls (functions by name, methods, static
 /// methods through an object, closures with bound variables, invokable
 /// objects, builtins by a variable name, arrays of arguments, an empty
 /// one) and the ones handed back (more arguments than parameters, named
@@ -1411,12 +1411,26 @@ fn user_calls() {
         .filter(|(name, op)| *name == "init" && *op == TOp::Exit)
         .count();
     assert_eq!(generic, 1, "{insts:?}");
-    // `w`: the `array_slice()` form.
+    // `w`: the `array_slice()` form is a call send exactly when its call
+    // starts as a call instruction (`calls::send_array_slice`), as the
+    // whole array's is.
     for code in &arrays {
+        let tape = check(code);
         for (i, op) in code.ops.iter().enumerate() {
             if let Op::SendArray { len, .. } = op {
                 if *len != crate::opcode::Operand::Unused {
-                    assert_eq!(check(code)[i].op, TOp::Exit, "op {i}: {op:?}");
+                    let start = (0..i)
+                        .rev()
+                        .find(|&s| {
+                            matches!(code.ops[s], Op::InitFCall { .. } | Op::InitUserCall { .. })
+                        })
+                        .expect("the call's start");
+                    let want = if tape[start].op == TOp::CallInit {
+                        TOp::CallSend
+                    } else {
+                        TOp::Exit
+                    };
+                    assert_eq!(tape[i].op, want, "op {i}: {op:?}");
                 }
             }
         }
@@ -1426,6 +1440,43 @@ fn user_calls() {
         "10|3|0|z|m0|s1|k0|i0|A0|B0|11|3|2|z|m1|s2|k1|i1|A1|B1|12|3|4|z|m2|s3|k2|i2|A2|B2\n\
          1|1|20|m0|2|2|21|m1|3|3|22|m2\n\
          113\n"
+    );
+}
+
+const HOOK_CALLS: &str = r#"<?php
+function one($x) { return "one$x"; }
+class O { function m($x, $y = '') { return "m$x$y"; } }
+function hooks($hl, $args) {
+    $r = [];
+    foreach ($hl as $h) {
+        $r[] = call_user_func_array($h['function'], array_slice($args, 0, (int) $h['accepted_args']));
+    }
+    return implode("|", $r);
+}
+$o = new O;
+$list = [['function' => 'one', 'accepted_args' => 1], ['function' => [$o, 'm'], 'accepted_args' => 2], ['function' => 'ONE', 'accepted_args' => 1]];
+for ($i = 0; $i < 3; $i++) echo hooks($list, [$i, 'b', 'c']), "\n";
+"#;
+
+/// A hook list's call, `call_user_func_array($h['function'],
+/// array_slice($args, 0, (int) $h['accepted_args']))`: the call starts as
+/// a call instruction and its sliced `SendArray` is a call send
+/// (`calls::send_array_slice`), and a callback that changes on every call
+/// is resolved by the quick miss (`calls::user_call_quick`) as php-src
+/// resolves it.
+#[test]
+fn hook_calls() {
+    let arrays = op_arrays(HOOK_CALLS);
+    let h = with_cv(&arrays, "hl");
+    let insts = user_call_insts(h, &check(h));
+    assert_eq!(
+        insts,
+        [("init", TOp::CallInit), ("array", TOp::CallSend)],
+        "{insts:?}"
+    );
+    assert_eq!(
+        run(HOOK_CALLS),
+        "one0|m0b|one0\none1|m1b|one1\none2|m2b|one2\n"
     );
 }
 

@@ -913,3 +913,119 @@ TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callb
     );
     assert_eq!(status, 0);
 }
+
+/// The callbacks a hook list holds, called through one call site with
+/// `call_user_func_array($cb, array_slice($args, 0, $n))` (the sliced
+/// `ZEND_SEND_ARRAY`): a function name in any case and with a leading
+/// `\`, `[$object, 'method']` in any case, static, protected (through
+/// `__call`), missing, a private method of the calling scope shadowing
+/// the object's, closures, builtins; the slice's length null, negative,
+/// zero, past the end, a numeric string, a string; references in the
+/// array and by-reference parameters; a value that is not an array. Each
+/// run three times, so the call site's cache misses and hits.
+#[test]
+fn hook_list_callbacks_with_sliced_arguments() {
+    let (status, out) = run(r#"<?php
+class P { private function m($x) { return "P::m$x"; } function run($o, $x) { return call_user_func_array([$o, 'm'], array_slice([$x, 9], 0, 1)); } }
+class C extends P { function m($x) { return "C::m$x"; } }
+class D { function m($x, $y = 'd') { return "D::m$x$y"; } static function s($x) { return "D::s$x"; } protected function pr($x) { return "pr$x"; } function __call($n, $a) { return "call:$n"; } }
+abstract class A { abstract function ab($x); }
+function f($x, $y = 'y', $z = 'z') { return "f$x$y$z"; }
+function F2($x) { return "F2$x"; }
+function hooks($list, $args) {
+    $out = [];
+    foreach ($list as $h) {
+        try {
+            $out[] = call_user_func_array($h['function'], array_slice($args, 0, (int) $h['accepted_args']));
+        } catch (Throwable $e) { $out[] = get_class($e) . ': ' . $e->getMessage(); }
+    }
+    return implode(' | ', $out);
+}
+$d = new D;
+$list = [
+    ['function' => 'f', 'accepted_args' => 1],
+    ['function' => 'F', 'accepted_args' => 2],
+    ['function' => '\f2', 'accepted_args' => 1],
+    ['function' => [$d, 'm'], 'accepted_args' => 2],
+    ['function' => [$d, 'M'], 'accepted_args' => 1],
+    ['function' => [$d, 's'], 'accepted_args' => 1],
+    ['function' => [$d, 'pr'], 'accepted_args' => 1],
+    ['function' => [$d, 'nope'], 'accepted_args' => 1],
+    ['function' => 'D::s', 'accepted_args' => 1],
+    ['function' => 'strtoupper', 'accepted_args' => 1],
+    ['function' => 'f', 'accepted_args' => 3],
+    ['function' => 'f', 'accepted_args' => 0],
+    ['function' => 'nofunc', 'accepted_args' => 1],
+    ['function' => fn($x) => "arrow$x", 'accepted_args' => 1],
+];
+for ($i = 0; $i < 3; $i++) echo hooks($list, ["a$i", 'b', 'c', 'd']), "\n";
+$p = new P;
+for ($i = 0; $i < 3; $i++) echo $p->run(new C, $i), ' ', $p->run($p, $i), "\n";
+function sl($a, $len) { return call_user_func_array('f', array_slice($a, 1, $len)); }
+function sl2($a, $len) { $cb = 'f'; return call_user_func_array($cb, array_slice($a, 1, $len)); }
+foreach ([null, -1, 1, 2, '2', 0, -5] as $len) {
+    for ($i = 0; $i < 3; $i++) {
+        try { echo sl(['k' => 0, 'x' => 1, 2, 3], $len), ' ', sl2([0, 1, 2], $len), "\n"; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    }
+}
+function sl3($a) { $cb = 'f'; return call_user_func_array($cb, array_slice($a, 5, 1)); }
+try { echo sl3([1, 2]), "\n"; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+function rf(&$x) { $x++; return $x; }
+function slr($a) { $cb = 'rf'; return call_user_func_array($cb, array_slice($a, 0, 1)); }
+$v = 1; $arr = [&$v];
+for ($i = 0; $i < 3; $i++) { echo slr($arr), ' ', $v, "\n"; }
+function slw($a) { $cb = 'rf'; return call_user_func_array($cb, array_slice($a, 0, 1)); }
+for ($i = 0; $i < 3; $i++) { echo slw([5]), "\n"; }
+function slt($a) { $cb = 'f'; return call_user_func_array($cb, array_slice($a, 0, 'x')); }
+try { echo slt([1]), "\n"; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+function sln($a) { $cb = 'f'; return call_user_func_array($cb, array_slice($a, 0, 1)); }
+try { echo sln('str'), "\n"; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"fa0yz | fa0bz | F2a0 | D::ma0b | D::ma0d | D::sa0 | call:pr | call:nope | D::sa0 | A0 | fa0bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa0
+fa1yz | fa1bz | F2a1 | D::ma1b | D::ma1d | D::sa1 | call:pr | call:nope | D::sa1 | A1 | fa1bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa1
+fa2yz | fa2bz | F2a2 | D::ma2b | D::ma2d | D::sa2 | call:pr | call:nope | D::sa2 | A2 | fa2bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa2
+P::m0 P::m0
+P::m1 P::m1
+P::m2 P::m2
+f123 f12z
+f123 f12z
+f123 f12z
+f12z f1yz
+f12z f1yz
+f12z f1yz
+f1yz f1yz
+f1yz f1yz
+f1yz f1yz
+f12z f12z
+f12z f12z
+f12z f12z
+f12z f12z
+f12z f12z
+f12z f12z
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 44 and at least 1 expected
+2 2
+3 3
+4 4
+
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+6
+
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+6
+
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+6
+TypeError: array_slice(): Argument #3 ($length) must be of type ?int, string given
+TypeError: call_user_func_array(): Argument #2 ($args) must be of type array, string given
+"#
+    );
+    assert_eq!(status, 0);
+}

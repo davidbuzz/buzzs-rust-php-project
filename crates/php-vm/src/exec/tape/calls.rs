@@ -221,8 +221,8 @@ fn stays_prepared(code: &OpArray, start: usize) -> bool {
 
 /// [`stays_prepared`] of the call `Op::InitUserCall` started at `start`:
 /// the ops up to its `DoCall` are hot ops and the arguments
-/// [`send_user`] / [`send_array`] may pass (a `SendArray` of the whole
-/// array, not the `array_slice()` form), and the elements of an array
+/// [`send_user`] / [`send_array`] / [`send_array_slice`] may pass (a
+/// `SendArray` of the whole array or of its `array_slice()`), and the elements of an array
 /// literal the tape builds (`call_user_func_array($f, [$a, $b])`); no
 /// other call starts in between.
 fn user_call_stays_prepared(code: &OpArray, start: usize) -> bool {
@@ -253,10 +253,13 @@ fn user_call_stays_prepared(code: &OpArray, start: usize) -> bool {
     false
 }
 
-/// The operand a `SendUser`, or a `SendArray` of a whole array, passes
-/// when [`send_user`] / [`send_array`] can read it: a literal, a
-/// temporary or a compiled variable.
+/// The operand a `SendUser`, or a `SendArray` of a whole array or of its
+/// `array_slice()` (the length a literal, a temporary or a compiled
+/// variable), passes when [`send_user`] / [`send_array`] /
+/// [`send_array_slice`] can read it: a literal, a temporary or a compiled
+/// variable.
 fn user_send_src(op: &Op) -> Option<Operand> {
+    let at_hand = |o: Operand| matches!(o, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_));
     let src = match *op {
         Op::SendUser { src, .. }
         | Op::SendArray {
@@ -264,9 +267,11 @@ fn user_send_src(op: &Op) -> Option<Operand> {
             len: Operand::Unused,
             skip: 0,
         } => src,
+        // `array_slice($args, skip, $len)` ([`send_array_slice`]).
+        Op::SendArray { src, len, .. } if at_hand(len) => src,
         _ => return None,
     };
-    matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)).then_some(src)
+    at_hand(src).then_some(src)
 }
 
 /// Whether `place` is a variable named by a literal starting with an
@@ -3218,6 +3223,130 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
     Some(prepared)
 }
 
+/// `zend_is_callable` of the callback `callee` of the `InitUserCall` at
+/// `at` (the current frame) when the call site's cache missed, for the
+/// two callbacks a hook list holds, without the generic resolution's
+/// scope context and name copies: a function named by a string (any
+/// case, one leading `\`), found by one lookup in the function table;
+/// an `[$object, "name"]` array naming a public, concrete user method the
+/// object's class declares or inherits, found by one lookup in its method
+/// table, when the calling scope has no private method of that name (which
+/// `zend_is_callable_check_func` would pick instead). The resolution is
+/// what the generic one gives (`PendingCall` with `this`, the declaring
+/// scope and the object's class as the called scope; a dynamic call), and
+/// is remembered in the site's cache as `Vm::remember_user_call` would
+/// remember it; the frame's resume point is stored first (`SAVE_OPLINE()`)
+/// and a temporary callback is released (`FREE_OP2`). `None`, having
+/// changed nothing, for anything else: names with `::`, references,
+/// `__call`, private and protected methods, a class whose objects add
+/// methods of their own (`get_method`), closures and invokable objects,
+/// a name not found (the generic op reports it).
+pub(super) fn user_call_quick(vm: &mut Vm, callee: Operand, at: usize) -> Option<PendingCall> {
+    let (cb, call) = {
+        let f = vm.frames.vec.get(vm.frames.live.checked_sub(1)?)?;
+        let cb = match callee {
+            Operand::Cv(cv) if !f.symtab_attached => {
+                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)?
+            }
+            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            Operand::Lit(l) => f.code.literals.get(l as usize)?,
+            _ => return None,
+        };
+        let call = match cb {
+            Value::Str(s) => quick_function(&vm.functions, s.as_bytes())?,
+            Value::Array(a) => quick_method(f, a)?,
+            _ => return None,
+        };
+        (cb.clone(), call)
+    };
+    vm.frame_mut().ip = at + 1;
+    vm.remember_user_call(&cb, &call);
+    // `FREE_OP2` of a temporary callback (the call holds what it needs:
+    // the function, or the method and its object).
+    if let Operand::Tmp(t) = callee {
+        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    Some(call)
+}
+
+/// The lowercase copy of `name` in `buf`, for a table lookup without an
+/// allocation; `None` for a name longer than the buffer (the generic
+/// resolution takes it).
+#[inline]
+fn lower_into<'b>(buf: &'b mut [u8; 64], name: &[u8]) -> Option<&'b [u8]> {
+    let lc = buf.get_mut(..name.len())?;
+    for (d, s) in lc.iter_mut().zip(name) {
+        *d = s.to_ascii_lowercase();
+    }
+    Some(lc)
+}
+
+/// [`user_call_quick`] of a function named by a string: the function the
+/// function table holds under its lowercase name, without a leading `\`
+/// (`zend_is_callable`'s first lookup).
+fn quick_function(functions: &crate::class::NameMap<Func>, name: &[u8]) -> Option<PendingCall> {
+    let name = name.strip_prefix(b"\\").unwrap_or(name);
+    if name.windows(2).any(|w| w == b"::") {
+        return None;
+    }
+    let mut buf = [0u8; 64];
+    let func = functions.get(lower_into(&mut buf, name)?)?.clone();
+    let mut call = PendingCall::new(func);
+    call.dynamic = true;
+    Some(call)
+}
+
+/// [`user_call_quick`] of an `[$object, "name"]` array, in the calling
+/// frame `f`.
+fn quick_method(f: &crate::vm::Frame, a: &php_runtime::ZArray) -> Option<PendingCall> {
+    use php_runtime::ArrayKey;
+    if a.len() != 2 {
+        return None;
+    }
+    let (Some(Value::Object(o)), Some(Value::Str(m))) =
+        (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+    else {
+        return None;
+    };
+    let name = m.as_bytes();
+    if name.windows(2).any(|w| w == b"::") {
+        return None;
+    }
+    let cls = crate::object::class_of(o);
+    if cls.hooks.as_ref().is_some_and(|h| h.get_method.is_some()) {
+        return None;
+    }
+    let mut buf = [0u8; 64];
+    let lc = lower_into(&mut buf, name)?;
+    let meth = cls.methods.get(lc)?;
+    if meth.visibility() != flags::PUBLIC
+        || meth.is_abstract()
+        || !matches!(meth.func, Func::User(_))
+    {
+        return None;
+    }
+    // `zend_is_callable_check_func`: a private method of the calling
+    // scope with that name is the one called when the method's class is
+    // related to it; any private one of that name goes the generic way.
+    if f.scope
+        .as_ref()
+        .and_then(|s| s.methods.get(lc))
+        .is_some_and(|pm| pm.visibility() == flags::PRIVATE)
+    {
+        return None;
+    }
+    let mut call = PendingCall {
+        this: (!meth.is_static()).then(|| o.clone()),
+        scope: Some(meth.scope()),
+        called: Some(Rc::clone(cls)),
+        ..PendingCall::new(meth.func.clone())
+    };
+    call.dynamic = true;
+    Some(call)
+}
+
 /// The call `Vm::user_call_pending` resolved for an `InitUserCall` the
 /// call site's cache did not hold, prepared as [`prepare_user_call`]
 /// prepares a hit: a user function, method or closure whose declaration
@@ -3657,4 +3786,115 @@ pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool
     }
     prep.n = n;
     true
+}
+
+/// `ZEND_SEND_ARRAY` of `array_slice($args, skip, $len)`
+/// (`zend_compile_func_cufa` with a literal offset; `Vm::op_send_array`'s
+/// sliced form): the elements `array_slice()` would give, by position
+/// whatever their keys, as the arguments of the prepared call, none sent
+/// before, when `src` is an array, `len` an int or `null` (the rest), no
+/// element passed is a reference and the count fits the callee as for
+/// [`send_array`]; each is copied in as [`send_array`] copies it, and a
+/// temporary array and length are released after (`FREE_OP1`,
+/// `FREE_OP2`). `false`, having changed nothing, otherwise: a length the
+/// generic op converts or rejects (`array_slice()`'s `?int $length`), an
+/// undefined variable (the warning), a value that is not an array (the
+/// `TypeError`), references, the counts the generic call reports.
+pub(super) fn send_array_slice(
+    vm: &mut Vm,
+    prep: &mut Prepared,
+    src: Operand,
+    len: Operand,
+    skip: u32,
+) -> bool {
+    if prep.n != 0 {
+        return false;
+    }
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len {
+        return false;
+    }
+    let n = {
+        let read = |o: Operand| match o {
+            Operand::Lit(l) => caller.code.literals.get(l as usize),
+            Operand::Tmp(t) => caller.tmps.get(t as usize),
+            Operand::Cv(cv) if !caller.symtab_attached => {
+                caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+            }
+            _ => None,
+        };
+        let Some(Value::Array(ht)) = read(src) else {
+            return false;
+        };
+        let (start, n) = match slice_range(ht.len(), read(len), skip) {
+            Some(r) => r,
+            None => return false,
+        };
+        let fits = match &prep.callee {
+            Callee::User(uf) => n >= uf.required as usize && n <= prep.limit,
+            Callee::Native(..) => n <= prep.limit,
+            Callee::Quick(..) => false,
+        };
+        if !fits || ht.iter().skip(start).take(n).any(|(_, v)| v.is_reference()) {
+            return false;
+        }
+        match &prep.callee {
+            Callee::User(_) => {
+                let Some(slots) = frame.cvs.get_mut(..n) else {
+                    return false;
+                };
+                for (slot, (_, v)) in slots.iter_mut().zip(ht.iter().skip(start)) {
+                    // A prepared frame's compiled variables are empty.
+                    if let Some(old) = slot.as_mut().replace(clone_value(v)) {
+                        drop(old);
+                    }
+                }
+            }
+            Callee::Native(..) => {
+                for (_, v) in ht.iter().skip(start).take(n) {
+                    frame.args.push(Some(clone_value(v)));
+                }
+            }
+            Callee::Quick(..) => return false,
+        }
+        n
+    };
+    // `FREE_OP1` of a temporary array, `FREE_OP2` of a temporary length
+    // (an int or null: its release runs nothing).
+    for o in [src, len] {
+        if let Operand::Tmp(t) = o {
+            if let Some(slot) = caller.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+    }
+    prep.n = n;
+    true
+}
+
+/// The first element and the count `array_slice()` of an array of
+/// `count` elements gives from `skip` (a non-negative literal) with the
+/// length `len` (`Vm::send_array_slice`'s arithmetic); `None` for a
+/// length that is not an int or `null` (converted or rejected by the
+/// generic op) or not at hand.
+fn slice_range(count: usize, len: Option<&Value>, skip: u32) -> Option<(usize, usize)> {
+    let skip = skip as usize;
+    let len = match len? {
+        Value::Int(l) => *l,
+        Value::Null => i64::try_from(count.wrapping_sub(skip)).unwrap_or(i64::MAX),
+        _ => return None,
+    };
+    if skip >= count {
+        return Some((skip, 0));
+    }
+    let rest = i64::try_from(count - skip).unwrap_or(i64::MAX);
+    let len = if len < 0 { len + rest } else { len };
+    if len <= 0 {
+        return Some((skip, 0));
+    }
+    Some((skip, usize::try_from(len.min(rest)).unwrap_or(usize::MAX)))
 }

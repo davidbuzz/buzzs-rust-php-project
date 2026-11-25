@@ -6667,7 +6667,7 @@ impl Vm {
     /// no trampoline), or a method an `[$object, "name"]` array found
     /// directly (bound to that object, or static, its called class the
     /// object's).
-    fn remember_user_call(&self, cb: &Value, call: &PendingCall) {
+    pub(crate) fn remember_user_call(&self, cb: &Value, call: &PendingCall) {
         if call.magic_name.is_some() || call.closure.is_some() || call.pfa.is_some() {
             return;
         }
