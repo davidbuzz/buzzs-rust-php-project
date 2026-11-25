@@ -859,7 +859,10 @@ mod marker_tests {
         let declared = num.arginfo_type().map(|t| t.to_php_string());
         assert_eq!(declared.as_deref(), Some("float"));
         assert_eq!(
-            num.ty.as_ref().map(|t| t.to_php_string()).as_deref(),
+            num.ty
+                .as_ref()
+                .map(crate::types::TypeDecl::to_php_string)
+                .as_deref(),
             Some("int|float")
         );
         assert_eq!(to.promote, ZPP_NOT_NULL);
