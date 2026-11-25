@@ -34,7 +34,9 @@ PHP_SRC_DESC='php-src master of 22 Nov 2026'
 # none missing and none extra. `**` is needed for `ext/intl/uchar/tests/`, which sits
 # two levels below `ext/`.
 # Plus php-src's two benchmark scripts, inputs of `perf/bench/timing.py` and
-# `scripts/acceptance.sh`.
+# `scripts/acceptance.sh`, and `run-tests.php`: phpt-runner finds the php-src root by it
+# (without it the runner fell back to the current directory, and the scope, baseline,
+# environment and conflict lists matched no test), and `tests/run-test/*.phpt` run it.
 SPARSE_PATHS=(
     '/tests/'
     '/Zend/tests/'
@@ -42,6 +44,7 @@ SPARSE_PATHS=(
     '/sapi/**/tests/'
     '/Zend/bench.php'
     '/Zend/micro_bench.php'
+    '/run-tests.php'
 )
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

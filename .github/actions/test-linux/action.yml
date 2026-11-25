@@ -46,6 +46,10 @@ runs:
         fi
         export PDO_MYSQL_TEST_USER=root
         export PDO_MYSQL_TEST_PASS=root
+        # Ours: ext/pdo_mysql's tests build DSNs from these too; their default host,
+        # localhost, is the unix socket, and the MySQL service here is reached over TCP.
+        export PDO_MYSQL_TEST_HOST=127.0.0.1
+        export PDO_MYSQL_TEST_DB=test
         export SKIP_IO_CAPTURE_TESTS=1
         export STACK_LIMIT_DEFAULTS_CHECK=1
         export RUN_RESOURCE_HEAVY_TESTS=1
@@ -71,6 +75,7 @@ runs:
           --baseline phpt-baseline.txt \
           --summary-depth 1 \
           --json "$report.json" \
+          --srcdir modules/php-src \
           ${{ inputs.testPaths }} 2>&1 | tee "$report.txt"
         rc=${PIPESTATUS[0]}
         {
