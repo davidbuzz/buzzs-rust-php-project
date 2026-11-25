@@ -333,6 +333,9 @@ class Normaliser:
                 self.ids[v] = b"SID%d(len%d)" % (len(self.ids) + 1, len(v))
             return m.group(1) + self.ids[v]
         resp = SESS_RE.sub(sid, resp)
+        # An id seen once (in a cookie) is the same id wherever it appears.
+        for raw, name in self.ids.items():
+            resp = resp.replace(raw, name)
 
         def tmp(m):
             v = m.group(0)
