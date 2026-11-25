@@ -938,6 +938,22 @@ impl FrameStack {
         }
     }
 
+    /// [`FrameStack::release_top`] of a returning frame, with what
+    /// [`crate::gc::frame_released`] records first, the calling frame's
+    /// `$this` taken from the frame below ([`Frame::release_returning`]).
+    #[inline]
+    #[allow(dead_code)] // until `Vm::return_generic`'s slow path calls it
+    pub(crate) fn release_top_returning(&mut self, empty_code: &Rc<OpArray>) {
+        if self.live > 0 {
+            let (callers, rest) = self.vec.split_at_mut(self.live - 1);
+            if let Some(frame) = rest.first_mut() {
+                let caller_this = callers.last().and_then(|c| c.this.as_ref());
+                frame.release_returning(caller_this, empty_code);
+            }
+            self.pop_cleared_top();
+        }
+    }
+
     /// The rest of [`FrameStack::release_top`] once the top frame has been
     /// released in place ([`Frame::clear_for_reuse`]) by a caller that
     /// already holds it (`Vm::return_simple`): the frame leaves the live
@@ -1743,6 +1759,38 @@ impl Frame {
         self.direct = false;
         self.direct_argc = 0;
         true
+    }
+
+    /// `zend_leave_helper` of a returning user frame in one step: what
+    /// [`crate::gc::frame_released`] records, then the release
+    /// ([`Frame::release_direct`], else [`Frame::clear_for_reuse`]).
+    /// `caller_this` is the calling frame's `$this`.
+    ///
+    /// The same roots, buffered in the same order and before anything is
+    /// released, as the two calls made one after the other: the variables
+    /// are walked inline (a tag test each; a count test for an object or
+    /// an array, which calls out only for a root to buffer or an array to
+    /// walk), so a frame holding an object or an array pays no call of
+    /// its own for the walk and no scan of its variables beforehand to
+    /// avoid one. A frame with a symbol table attached takes
+    /// `frame_released` itself (its table's values are walked too).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every return
+    #[allow(dead_code)] // until the return paths (call.rs, exec.rs) call it
+    pub(crate) fn release_returning(
+        &mut self,
+        caller_this: Option<&Obj>,
+        empty_code: &Rc<OpArray>,
+    ) {
+        if self.symtab_attached {
+            crate::gc::frame_released(self, caller_this);
+        } else {
+            crate::gc::cvs_released(&self.cvs);
+            crate::gc::call_handle_released(self, caller_this);
+        }
+        if !self.release_direct() {
+            self.clear_for_reuse(empty_code);
+        }
     }
 
     /// [`Frame::clear_builtin_for_reuse`] of the builtin frame the tape's
@@ -3019,6 +3067,48 @@ mod tests {
         f.clear_for_reuse(&empty);
         assert_eq!(f.cvs.len(), 2);
         assert!(Rc::ptr_eq(&f.code, &empty));
+    }
+
+    /// `release_returning` releases what `clear_for_reuse` does (it adds
+    /// only the possible-root walk, which records nothing while the root
+    /// buffer is protected, as in a fresh thread), and so does
+    /// `release_top_returning` for the top frame, leaving the one below.
+    #[test]
+    fn release_returning_releases_like_clear_for_reuse() {
+        let empty = Rc::new(OpArray::default());
+        let s = ZStr::from("a string held by the frame");
+        let arr = php_runtime::ZArray::from_values(vec![Value::Int(1), Value::Str(s.clone())]);
+        let mut f = frame_with(&["a", "b", "c"]);
+        f.cvs[0].set(Some(Value::Str(s.clone())));
+        f.cvs[1].set(Some(Value::Array(arr)));
+        f.cvs[2].set(Some(Value::Reference(PhpRef::new(Value::Int(2)))));
+        f.tmps = vec![Value::Str(s.clone())];
+        assert_eq!(s.refcount(), 4);
+        f.release_returning(None, &empty);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(f.cvs.len(), 3);
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert!(f.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert!(Rc::ptr_eq(&f.code, &empty));
+
+        let mut stack = super::FrameStack::new();
+        let mut below = frame_with(&["x"]);
+        below.cvs[0].set(Some(Value::Str(s.clone())));
+        stack.push(below);
+        let mut top = frame_with(&["y"]);
+        top.cvs[0].set(Some(Value::Str(s.clone())));
+        stack.push(top);
+        assert_eq!(s.refcount(), 3);
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(s.refcount(), 2);
+        assert!(stack.last().is_some_and(|f| f.cvs[0].get().is_some()));
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(s.refcount(), 1);
+        // Nothing live: nothing to release.
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 0);
     }
 
     fn user_function(code: Rc<OpArray>) -> Rc<crate::func::UserFunction> {

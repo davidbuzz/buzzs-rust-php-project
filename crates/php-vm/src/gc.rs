@@ -997,11 +997,7 @@ pub(crate) fn forget_root(addr: usize, handle: u32) {
 /// `$this` without a reference of their own, so releasing it is no
 /// possible root. Call it just before dropping a returning frame.
 pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
-    for slot in &f.cvs {
-        if let Some(v) = slot.get() {
-            possible_root(v);
-        }
-    }
+    cvs_released(&f.cvs);
     if f.symtab_attached && Rc::strong_count(&f.vars) == 1 {
         if let Ok(vars) = f.vars.try_borrow() {
             for v in vars.slots.iter().flatten() {
@@ -1009,6 +1005,29 @@ pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
             }
         }
     }
+    call_handle_released(f, caller_this);
+}
+
+/// The compiled variables' part of [`frame_released`]
+/// (`i_free_compiled_variables`'s `gc_check_possible_root`). Inline: a
+/// tag test per variable, a count test (and the last root's address) for
+/// an object, a count and size test for an array; only a root to buffer
+/// or an array to walk calls out.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the loop of every returning frame with roots
+pub(crate) fn cvs_released(cvs: &[crate::vm::CvSlot]) {
+    for slot in cvs {
+        if let Some(v) = slot.get() {
+            possible_root(v);
+        }
+    }
+}
+
+/// The call's own handle part of [`frame_released`]: a closure's object,
+/// or `$this` unless the caller passed it without a reference of its own.
+#[inline(always)]
+#[allow(clippy::inline_always)] // two tests on every returning frame
+pub(crate) fn call_handle_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
     if let Some(c) = &f.closure {
         root_obj(c);
     } else if let Some(this) = &f.this {
