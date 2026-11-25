@@ -6140,7 +6140,6 @@ impl Vm {
             return;
         };
         if call.this.is_some()
-            || call.func.flags() & flags::STATIC == 0
             || find_double_colon(method).is_some()
             || !cls.name.as_bytes().eq_ignore_ascii_case(class)
             || !call.func.name().as_bytes().eq_ignore_ascii_case(method)
@@ -6151,7 +6150,7 @@ impl Vm {
         let declared = cls
             .methods
             .get(&method.to_ascii_lowercase())
-            .is_some_and(|d| same_func(&d.func, &call.func));
+            .is_some_and(|d| d.flags & flags::STATIC != 0 && same_func(&d.func, &call.func));
         let f = self.frame();
         let Some(slot) = f.ip.checked_sub(1).filter(|_| declared) else {
             return;
