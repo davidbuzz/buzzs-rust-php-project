@@ -1473,14 +1473,19 @@ fn ref_cv_in(f: &mut Frame, place: PlaceId) -> Option<PhpRef> {
 }
 
 /// `$cv =& <reference>` (`ZEND_ASSIGN_REF`,
-/// `zend_assign_to_variable_reference`) where temporary `src` holds the
-/// reference: the variable's slot takes it and the old value is released
+/// `zend_assign_to_variable_reference`) in a function, where temporary
+/// `src` holds the reference: the variable's slot takes it and the old value is released
 /// (a possible cycle root; a destructor it queues runs at the safe point
 /// after the op, as `AssignCv`'s), as `Vm::place_assign_ref` does. The
 /// result goes to `dst`, or is dropped as the duplicate handle it is.
 /// `false`, having changed nothing, for any other place, frame or source
 /// (a value: "Only variables should be assigned by reference").
 fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -> bool {
+    // A function's frame only: the main script's global table may still
+    // hold its own handle of the old value (`Vm::bare_cv_slot`).
+    if f.kind != FrameKind::Function {
+        return false;
+    }
     let Some(cv) = bare_cv_in(f, place) else {
         return false;
     };

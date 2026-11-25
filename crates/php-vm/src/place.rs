@@ -2052,7 +2052,7 @@ impl Vm {
 
     /// `$cv =& <reference>` (`ZEND_ASSIGN_REF` with a CV result operand,
     /// `zend_assign_to_variable_reference`, `Zend/zend_execute.c`) in a
-    /// frame whose symbol table is not attached: the CV slot is the
+    /// function whose symbol table is not attached: the CV slot is the
     /// variable, so it is bound to the reference in place and its old value
     /// released (`zval_ptr_dtor`: a possible root, a destructor when it was
     /// the last handle), as [`Vm::write_var_root`] does on a table slot,
@@ -2070,12 +2070,9 @@ impl Vm {
         let Some(f) = self.frames.last_mut() else {
             return Err(Value::Reference(r));
         };
-        if f.symtab_attached
-            || !matches!(
-                f.kind,
-                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
-            )
-        {
+        // Not the main script's frame: the global table may still hold its
+        // own handle of the old value ([`Vm::bare_cv_slot`]).
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
             return Err(Value::Reference(r));
         }
         let cv = match f.code.places.get(pid as usize) {
