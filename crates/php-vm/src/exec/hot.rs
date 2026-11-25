@@ -157,6 +157,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::FeFree { .. }
             | Op::KeyExists { .. }
             | Op::InArray { .. }
+            | Op::FeFreeOnReturn { .. }
             | Op::RecvInit { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
@@ -978,6 +979,19 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             }
         }
+        // The `FE_FREE` before a `return` inside a `foreach` of an array
+        // by value. The generic op then runs the destructors the release
+        // queued, at once: when it queued any, it is declined with the
+        // iterator gone (the generic op's free finds nothing and runs
+        // them), and when some were pending already, nothing is done.
+        Op::FeFreeOnReturn { iter, .. } => {
+            if crate::object::has_pending_destructors() || !fe_free_array_in(f, iter) {
+                return DECLINED;
+            }
+            if crate::object::has_pending_destructors() {
+                return DECLINED;
+            }
+        }
         // `RECV_INIT` of a parameter the call did not pass, whose default
         // is a literal (the `RecvDefault` right after it).
         Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
@@ -1050,9 +1064,9 @@ pub(super) fn fe_reset_array_in(
 /// against the declared type): the variable gets a copy of the literal and
 /// the `ip` after the `RecvDefault` is returned. `None`, having changed
 /// nothing, when the argument was passed (or left a named-argument gap),
-/// the default is computed by code, the parameter is by reference, its
-/// type would coerce or reject the literal, or the variable is not the
-/// undefined slot of a frame without a symbol table.
+/// the default is computed by code, its type would coerce or reject the
+/// literal, or the variable is not the undefined slot of a frame without a
+/// symbol table.
 #[inline]
 fn recv_literal_default_in(
     f: &mut Frame,
@@ -1077,10 +1091,9 @@ fn recv_literal_default_in(
     if matches!(value, Value::Reference(_)) {
         return None;
     }
+    // A by-reference parameter the call did not reach gets a copy of the
+    // default as any other (`ZEND_RECV_INIT`'s `ZVAL_COPY`: no reference).
     let param = f.ufunc.as_ref()?.params.get(n as usize)?;
-    if param.by_ref {
-        return None;
-    }
     if let Some(ty) = &param.ty {
         if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
             return None;

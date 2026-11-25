@@ -361,3 +361,56 @@ NULL
 "##
     );
 }
+
+/// A `return` inside a `foreach` (the iterator's free before it, with the
+/// destructors that free queues run at once), and a by-reference
+/// parameter the call does not reach bound from its literal default.
+#[test]
+fn return_inside_foreach_and_reference_defaults() {
+    assert_eq!(
+        run(r##"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "destruct {$this->n}\n"; } }
+function find($a, $want) { foreach ($a as $k => $v) { if ($v === $want) return $k; } return -1; }
+function firstObj() { foreach ([new D('t1'), new D('t2')] as $o) { return $o->n; } }
+function nested($a) { foreach ($a as $x) { foreach ($a as $y) { if ($x + $y == 3) return "$x$y"; } } return ''; }
+function refdef($a, &$out = 'dflt', $z = [1]) { $r = $out . count($z); $out = 'w'; return $r; }
+class H { public $items = [1, 2, 3]; function has($v) { foreach ($this->items as $i) { if ($i == $v) return true; } return false; } }
+function main() {
+    $h = new H;
+    for ($i = 0; $i < 3; $i++) {
+        echo find([5, 6, 7], 6), find(['a' => 1], 1), find([], 1), "\n";
+        echo firstObj(), "\n";
+        echo nested([1, 2]), "\n";
+        echo refdef(1), refdef(1, $o), $o, "\n";
+        var_dump($h->has(2), $h->has(9));
+    }
+}
+main();
+"##),
+        r##"1a-1
+destruct t2
+destruct t1
+t1
+12
+dflt11w
+bool(true)
+bool(false)
+1a-1
+destruct t2
+destruct t1
+t1
+12
+dflt1w1w
+bool(true)
+bool(false)
+1a-1
+destruct t2
+destruct t1
+t1
+12
+dflt1w1w
+bool(true)
+bool(false)
+"##
+    );
+}
