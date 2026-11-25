@@ -1441,7 +1441,8 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
             // Plain up to the first by-reference parameter (`first_ref`):
             // `send` stops there, and an argument at it is sent by
             // reference (`send_ref`) or the call becomes the generic one.
-            let (kind, first_ref) = b.plain_call_upto();
+            // (Worked out by the test above: read from its two cells.)
+            let (kind, first_ref) = b.plain_call_known();
             // A pooled frame's argument buffer is empty.
             if kind == PlainCall::No || !frame.args.is_empty() {
                 return None;
@@ -1464,7 +1465,9 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
 
 /// How many arguments a prepared call of builtin `b` takes: past the
 /// declared parameters only into a variadic one (else the generic call
-/// reports the count), at most [`MAX_ARGS`].
+/// reports the count), at most [`MAX_ARGS`]. Inline: a call of its own
+/// (10 instructions) for a load and a compare.
+#[inline]
 fn native_limit(b: &Builtin) -> usize {
     if b.flags & flags::VARIADIC != 0 {
         MAX_ARGS

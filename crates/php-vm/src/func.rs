@@ -733,6 +733,20 @@ impl Builtin {
         }
     }
 
+    /// [`Builtin::plain_call_upto`] inline, for a caller that has just
+    /// called it (`calls::prepare`): the answer is worked out then, and
+    /// a second out-of-line call is not needed to read it again.
+    #[inline]
+    pub(crate) fn plain_call_known(&self) -> (PlainCall, usize) {
+        match self.plain.get() {
+            PLAIN_NAMED => (PlainCall::Named, usize::MAX),
+            PLAIN_UNNAMED => (PlainCall::Unnamed, usize::MAX),
+            PLAIN_NAMED_REF => (PlainCall::Named, usize::from(self.first_ref.get())),
+            PLAIN_UNKNOWN => self.plain_call_upto(),
+            _ => (PlainCall::No, usize::MAX),
+        }
+    }
+
     /// Whether a plain call with `n` arguments sent one by reference
     /// ([`Builtin::plain_call_upto`]'s position is below `n`), from the
     /// two cells directly once the answer is worked out: the call into
