@@ -16,7 +16,7 @@ case 'parse': include __DIR__ . '/bad.inc'; break;
 case 'mem': ini_set('memory_limit', '4M'); $a = str_repeat('x', 8 << 20); break;
 case 'trigger': trigger_error("user <warn>", E_USER_WARNING); trigger_error("user dep", E_USER_DEPRECATED); trigger_error("fatal user", E_USER_ERROR); break;
 case 'handler': set_error_handler(function ($no, $str) { echo "H($no): $str\n"; return true; }); echo $undef3; break;
-case 'docref': ini_set('docref_root', 'http://x/'); ini_set('docref_ext', '.html'); fopen('/nonexistent/x', 'r'); break;
+case 'docref': ini_set('docref_root', 'http://x/'); ini_set('docref_ext', '.html'); hex2bin('abc'); hex2bin('<z>'); break;
 case 'ob_fatal': ob_start(); echo "buffered"; undefined_fn2(); break;
 case 'ob_cb_fatal': ob_start(function ($b) { return strtoupper($b); }); echo "buffered "; throw new Exception('in ob'); break;
 case 'error_log': ini_set('log_errors', '1'); ini_set('error_log', ''); error_log("logged"); echo $u; break;
