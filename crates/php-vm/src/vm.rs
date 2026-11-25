@@ -1318,14 +1318,14 @@ pub struct Frame {
     /// Made current by the tape's call protocol (`exec::tape::calls`),
     /// which leaves every field but the slots, the passed arguments and the
     /// resume state as [`Frame::clear_for_reuse`] leaves them: released by
-    /// [`Frame::release_direct`].
+    /// [`Frame::release_returning`].
     pub(crate) direct: bool,
     /// The passed-argument count of a frame the tape's call protocol made
     /// current (`ZEND_CALL_NUM_ARGS`): its arguments are all in their
     /// compiled variables, so `args` stays empty instead of holding a
     /// `None` per argument. See [`Frame::num_args`].
     pub(crate) direct_argc: u32,
-    /// Released by [`Frame::release_direct`] and untouched since: every
+    /// Released by [`Frame::release_returning`] and untouched since: every
     /// field is in its released state, the slot vectors are sized for the
     /// code of `ufunc`, which the frame still holds (`keeps_function`),
     /// and the variable store is empty ([`Frame::is_released_for`]). A
@@ -1726,7 +1726,7 @@ impl Frame {
     /// compiled variables and the `$this`, scopes and closure readied
     /// with it): such a frame holds nothing, and when it still holds the
     /// function as a released frame keeps it (`keeps_function`), it is in
-    /// exactly the state [`Frame::release_direct`] leaves, so it is marked
+    /// exactly the state [`Frame::release_returning`] leaves, so it is marked
     /// so ([`Frame::released_direct`]) and the next call of that function
     /// in this slot readies nothing. The fields readying and sending could
     /// have set are tested; anything else (a frame that was entered, a
@@ -2004,8 +2004,10 @@ impl Frame {
     /// more behind (a symbol table attached or used, a caught exception
     /// held, an `@` still open, a pending call, a function nothing else
     /// holds): the full `clear_for_reuse` then runs.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // part of every direct return
+    ///
+    /// For the tests of the released mark: a return goes through
+    /// [`Frame::release_returning`], which also records the possible roots.
+    #[cfg(test)]
     pub(crate) fn release_direct(&mut self) -> bool {
         if !self.direct_releasable() {
             return false;
@@ -2023,7 +2025,7 @@ impl Frame {
         true
     }
 
-    /// The tests of [`Frame::release_direct`]: whether the frame is a
+    /// The tests of [`Frame::release_returning`]: whether the frame is a
     /// directly entered one whose code left nothing behind but its slots,
     /// passed arguments and call handles. Changes nothing.
     #[inline(always)]
@@ -2045,7 +2047,7 @@ impl Frame {
         vs.names.owned.is_empty() && vs.index.is_none() && !vs.slots.iter().any(Option::is_some)
     }
 
-    /// [`Frame::release_direct`]'s release of the temporaries.
+    /// [`Frame::release_returning`]'s release of the temporaries.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
     fn release_direct_tmps(&mut self) {
@@ -2054,7 +2056,7 @@ impl Frame {
         }
     }
 
-    /// [`Frame::release_direct`]'s release of the passed arguments.
+    /// [`Frame::release_returning`]'s release of the passed arguments.
     ///
     /// A direct frame's passed arguments are in its compiled variables
     /// and the buffer is empty (`calls::enter` keeps the count in
@@ -2074,7 +2076,7 @@ impl Frame {
         }
     }
 
-    /// The rest of [`Frame::release_direct`] once the slots and the passed
+    /// The rest of [`Frame::release_returning`] once the slots and the passed
     /// arguments are released: a method's `$this` and scopes, a closure,
     /// in `clear_rest_for_reuse`'s order, and the call's fields.
     #[inline(always)]
@@ -2098,7 +2100,7 @@ impl Frame {
 
     /// `zend_leave_helper` of a returning user frame in one step: what
     /// [`crate::gc::frame_released`] records, then the release
-    /// ([`Frame::release_direct`], else [`Frame::clear_for_reuse`]).
+    /// ([`Frame::release_returning`], else [`Frame::clear_for_reuse`]).
     /// `caller_this` is the calling frame's `$this`.
     ///
     /// A directly entered frame ([`Frame::direct_releasable`]) is released
@@ -2250,7 +2252,7 @@ impl Frame {
         self.args.len().max(self.direct_argc as usize)
     }
 
-    /// Whether the frame is in the state [`Frame::release_direct`] leaves
+    /// Whether the frame is in the state [`Frame::release_returning`] leaves
     /// for a later call of `uf` ([`Frame::released_direct`]): what
     /// `calls::ready_frame` would otherwise set up for that call
     /// (`reinit_same_call` of its code, the function handles) is already
@@ -2386,7 +2388,7 @@ impl Frame {
     /// Whether every slot of the frame is in its released state: the
     /// temporaries `null`, the compiled variables undefined, the foreach
     /// iterators and finally states empty. Every release leaves a frame
-    /// so ([`Frame::release_direct`], [`Frame::clear_for_reuse`],
+    /// so ([`Frame::release_returning`], [`Frame::clear_for_reuse`],
     /// [`Frame::clear_builtin_for_reuse`], [`Frame::clear_for_pool`] and a
     /// newly built frame); [`Frame::reinit_for_call`] relies on it. For
     /// debug assertions.

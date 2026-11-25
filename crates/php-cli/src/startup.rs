@@ -333,6 +333,7 @@ thread_local! {
 /// exits with 255). An explicit `exit(0)` in C would reset it; the
 /// status this sees cannot tell that apart from a normal end.
 #[must_use]
+#[allow(dead_code)] // the `php` binary's exit; php-cgi and php-fpm include this file too
 pub fn final_status(status: i32) -> i32 {
     if status == 0 && STARTUP_FATAL.with(std::cell::Cell::get) {
         255
