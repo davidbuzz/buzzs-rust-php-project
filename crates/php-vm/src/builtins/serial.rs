@@ -218,12 +218,64 @@ fn add_var_hash(d: &SerRc, var: &Value) -> i64 {
     0
 }
 
+/// Appends `prefix`, the decimal digits of `n` and `suffix`, without the
+/// `String` a `format!` makes.
+///
+/// The pieces (at most 2 + 20 + 2 bytes) are written into a fixed stack
+/// buffer that is appended whole and cut back to its length: a copy of a
+/// known size, made inline, where appending each piece called `memcpy`
+/// (a third of `serialize()` of a list of integers).
+// Inlined into each caller for its constant prefix and suffix lengths
+// (`serialize()` of a list of integers: 472k -> 439k instructions).
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn put_num(buf: &mut Vec<u8>, prefix: &[u8], n: i64, suffix: &[u8]) {
+    let mut tmp = [0u8; 32];
+    let mut at = 0;
+    for &b in prefix {
+        tmp[at] = b;
+        at += 1;
+    }
+    if n < 0 {
+        tmp[at] = b'-';
+        at += 1;
+    }
+    let mut u = n.unsigned_abs();
+    let end = at + u.checked_ilog10().map_or(1, |l| l as usize + 1);
+    let mut i = end;
+    loop {
+        i -= 1;
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = (u % 10) as u8;
+        tmp[i] = b'0' + digit;
+        u /= 10;
+        if u == 0 {
+            break;
+        }
+    }
+    at = end;
+    for &b in suffix {
+        tmp[at] = b;
+        at += 1;
+    }
+    let start = buf.len();
+    buf.extend_from_slice(&tmp);
+    buf.truncate(start + at);
+}
+
+/// [`put_num`] of a length.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn put_len(buf: &mut Vec<u8>, prefix: &[u8], n: usize, suffix: &[u8]) {
+    put_num(buf, prefix, i64::try_from(n).unwrap_or(i64::MAX), suffix);
+}
+
 fn put_long(buf: &mut Vec<u8>, n: i64) {
-    buf.extend_from_slice(format!("i:{n};").as_bytes());
+    put_num(buf, b"i:", n, b";");
 }
 
 fn put_string(buf: &mut Vec<u8>, s: &[u8]) {
-    buf.extend_from_slice(format!("s:{}:\"", s.len()).as_bytes());
+    put_len(buf, b"s:", s.len(), b":\"");
     buf.extend_from_slice(s);
     buf.extend_from_slice(b"\";");
 }
@@ -236,7 +288,7 @@ fn put_key(buf: &mut Vec<u8>, k: &ArrayKey) {
 }
 
 fn put_class_header(buf: &mut Vec<u8>, name: &[u8]) {
-    buf.extend_from_slice(format!("O:{}:\"", name.len()).as_bytes());
+    put_len(buf, b"O:", name.len(), b":\"");
     buf.extend_from_slice(name);
     buf.extend_from_slice(b"\":");
 }
@@ -283,7 +335,7 @@ impl Serializer<'_> {
         count: usize,
         mut skip_magic: bool,
     ) -> VmResult<()> {
-        self.buf.extend_from_slice(format!("{count}:{{").as_bytes());
+        put_len(&mut self.buf, b"", count, b":{");
         if count > 0 {
             for (k, v) in t.iter() {
                 if skip_magic
@@ -320,13 +372,11 @@ impl Serializer<'_> {
                 return Ok(());
             }
             if matches!(v, Value::Reference(_)) {
-                self.buf
-                    .extend_from_slice(format!("R:{already};").as_bytes());
+                put_num(&mut self.buf, b"R:", already, b";");
                 return Ok(());
             }
             if matches!(v, Value::Object(_)) {
-                self.buf
-                    .extend_from_slice(format!("r:{already};").as_bytes());
+                put_num(&mut self.buf, b"r:", already, b";");
                 return Ok(());
             }
         }
