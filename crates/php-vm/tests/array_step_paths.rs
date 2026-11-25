@@ -719,3 +719,100 @@ bool(false)
 bool(true)
 bool(false)
 "#;
+
+/// `$a[$key] ?? d` with literal, variable and built keys that are there,
+/// missing, null, strings, arrays, objects and references, integers in
+/// digits, lists, empty tables, null, undefined and string containers,
+/// `ArrayAccess`, an array behind a reference, nested offsets, results
+/// into temporaries that held strings, and a plain read's warning.
+#[test]
+fn coalesce_of_an_element() {
+    assert_eq!(run(COALESCE), COALESCE_OUT);
+}
+
+const COALESCE: &str = r#"<?php
+class AA implements ArrayAccess {
+    public function offsetExists($o): bool { echo "exists($o) "; return $o === 'key'; }
+    public function offsetGet($o): mixed { echo "get($o) "; return 'aa'; }
+    public function offsetSet($o, $v): void {}
+    public function offsetUnset($o): void {}
+}
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $a = ['key' => 1, 'nul' => null, 's' => "str$round", 'arr' => [1, 2], 'obj' => new stdClass, 5 => 'five'];
+        $t = 'through';
+        $a['ref'] = &$t;
+        $k = 'key';
+        $miss = 'nope';
+        echo json_encode([$a['key'] ?? 'd', $a['nope'] ?? 'd', $a['nul'] ?? 'd', $a['s'] ?? 'd', $a['arr'] ?? 'd', $a['ref'] ?? 'd', $a['5'] ?? 'd', $a['05'] ?? 'd']), "\n";
+        echo json_encode([$a[$k] ?? 'd', $a[$miss] ?? 'd', $a[$k . ''] ?? 'd', $a['n' . 'ope'] ?? 'd', $a[5] ?? 'd', $a[6] ?? 'd']), "\n";
+        echo get_class($a['obj'] ?? null), "\n";
+        $l = [1, 2];
+        echo json_encode([$l['key'] ?? 'd', $l['1'] ?? 'd', $l[1] ?? 'd']), "\n";
+        $e = [];
+        echo $e['key'] ?? 'd', "\n";
+        $n = null;
+        echo $n['key'] ?? 'd', ' ', $undef['key'] ?? 'd', "\n";
+        $s = 'abc';
+        echo $s['key'] ?? 'd', ' ', $s['1'] ?? 'd', ' ', $s[1] ?? 'd', "\n";
+        $o = new AA;
+        echo $o['key'] ?? 'd', ' ', $o['other'] ?? 'd', "\n";
+        $arr = ['key' => 'byref'];
+        $r = &$arr;
+        echo $arr['key'] ?? 'd', ' ', $arr['nope'] ?? 'd', "\n";
+        unset($r);
+        $nested = ['a' => ['b' => 1]];
+        echo $nested['a']['b'] ?? 'd', ' ', $nested['a']['x'] ?? 'd', ' ', $nested['x']['b'] ?? 'd', "\n";
+        // The result into a temporary that held a string.
+        $out = ($a['s'] ?? 'd') . ($a['nope'] ?? 'e') . ($a['s'] ?? 'f');
+        echo $out, "\n";
+        // A plain read that misses still warns.
+        echo $a['nope'], "|\n";
+    }
+}
+f();
+"#;
+
+const COALESCE_OUT: &str = r#"[1,"d","d","str0",[1,2],"through","five","d"]
+[1,"d",1,"d","five","d"]
+stdClass
+["d",2,2]
+d
+d d
+d b b
+exists(key) get(key) aa exists(other) d
+byref d
+1 d d
+str0estr0
+
+Warning: Undefined array key "nope" in t.php on line 38
+|
+[1,"d","d","str1",[1,2],"through","five","d"]
+[1,"d",1,"d","five","d"]
+stdClass
+["d",2,2]
+d
+d d
+d b b
+exists(key) get(key) aa exists(other) d
+byref d
+1 d d
+str1estr1
+
+Warning: Undefined array key "nope" in t.php on line 38
+|
+[1,"d","d","str2",[1,2],"through","five","d"]
+[1,"d",1,"d","five","d"]
+stdClass
+["d",2,2]
+d
+d d
+d b b
+exists(key) get(key) aa exists(other) d
+byref d
+1 d d
+str2estr2
+
+Warning: Undefined array key "nope" in t.php on line 38
+|
+"#;

@@ -808,12 +808,78 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 unsafe fn fetch_dim_key_any(frame: *mut Frame, inst: &Inst) -> Br {
+    // The operand of `??` into its temporary has a step of its own (the
+    // row's fields alone are looked at, before anything is touched).
+    if inst.e != 0 && inst.d == NO_TO {
+        // SAFETY: the caller's contract, passed on.
+        return unsafe { fetch_dim_is(frame, inst) };
+    }
+    // SAFETY: the caller's contract, passed on.
+    unsafe { fetch_dim_key_general(frame, inst) }
+}
+
+/// [`fetch_dim_key_any`]'s way on: a read with a string offset
+/// ([`fetch_key`]), else the general read ([`fetch_dim`]).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fetch_dim_key_general(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if let Some(br) = fetch_key(unsafe { &mut *frame }, inst) {
         return br;
     }
     // SAFETY: as above; the path's borrow of the frame has ended.
     unsafe { fetch_dim(frame, inst) }
+}
+
+/// `$cv[$key] ?? d`'s read ([`fetch_is_lean`]), else
+/// [`fetch_dim_key_general`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fetch_dim_is(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if let Some(br) = fetch_is_lean(unsafe { &mut *frame }, inst) {
+        return br;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { fetch_dim_key_general(frame, inst) }
+}
+
+/// `ZEND_FETCH_DIM_IS` of a `CV` array and a string offset (the operand
+/// of `??`) as php-src runs it: one lookup with the key's stored hash
+/// (`zend_hash_find_known_hash`), the element copied into the result
+/// temporary, or null when the key is not there (no diagnostic). Taken
+/// when the key is a string in a variable, a temporary or a literal that
+/// is surely no integer in digits, the array is the one the variable
+/// holds directly (a list or an empty table has no such key) and the
+/// element no reference; a consumed key temporary is released
+/// (`FREE_OP2`). The general path looked the key up for the read, again
+/// through the general read, and a third time for the miss
+/// (`fetch_dim_is_miss_in`). `None`, nothing changed, for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `fetch_dim_is`
+fn fetch_is_lean(f: &mut Frame, inst: &Inst) -> Option<Br> {
+    let kind = dim_kind(inst);
+    let v = {
+        let key = key_str(f, kind, inst.b)?;
+        if !ArrayKey::surely_str(key.as_bytes()) {
+            return None;
+        }
+        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+            return None;
+        };
+        match arr.lean_find(key, key.hash_now()) {
+            Some(el) => elem_copy(el)?,
+            None => Value::Null,
+        }
+    };
+    let br = store_into_tmp(f, inst.p, v)?;
+    release_key(f, kind, inst.b);
+    Some(br)
 }
 
 /// `$cv[$key]` read with a string offset, as `fetch_dim_cv_in` makes it,
