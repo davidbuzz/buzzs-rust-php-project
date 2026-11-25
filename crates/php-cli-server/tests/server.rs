@@ -555,3 +555,43 @@ fn head_request_to_a_script_has_no_body() {
         assert!(split(&r).1.starts_with("body\n"));
     }
 }
+
+/// `http_response_code()` after output names where output started, and
+/// truncates its argument to 32 bits as C's `(int)` cast does. Expected
+/// from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn http_response_code_after_output_and_truncation() {
+    let srv = start(
+        "rcode",
+        &[
+            (
+                "late.php",
+                "<?php\necho \"x\\n\";\nvar_dump(http_response_code(500));\n",
+            ),
+            (
+                "wide.php",
+                "<?php\nvar_dump(http_response_code(4294967496), http_response_code(-4294967000), http_response_code());\n",
+            ),
+        ],
+        None,
+    );
+    let r = request(
+        srv.port,
+        "GET /late.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    let path = srv.root.join("late.php");
+    let path = path.display();
+    assert_eq!(
+        split(&r).1,
+        format!(
+            "x\n<br />\n<b>Warning</b>:  http_response_code(): Cannot set response code - headers already sent (output started at {path}:2) in <b>{path}</b> on line <b>3</b><br />\nbool(false)\n"
+        )
+    );
+    let r = request(
+        srv.port,
+        "GET /wide.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert!(r.starts_with("HTTP/1.1 296 "), "{r}");
+    assert_eq!(split(&r).1, "int(200)\nint(200)\nint(296)\n");
+}

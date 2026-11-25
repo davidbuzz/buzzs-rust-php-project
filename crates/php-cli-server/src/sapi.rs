@@ -568,13 +568,23 @@ fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     if code != 0 {
         if sent {
-            vm.php_warning("Cannot set response code - headers already sent")?;
+            // ext/standard/head.c: where output started, when known.
+            let msg = match vm.output_started() {
+                Some((f, l)) => format!(
+                    "Cannot set response code - headers already sent (output started at {}:{l})",
+                    f.to_string_lossy()
+                ),
+                None => "Cannot set response code - headers already sent".to_string(),
+            };
+            vm.php_warning(&msg)?;
             return Ok(Value::Bool(false));
         }
         if has_line {
             vm.php_warning("Calling http_response_code() after header('HTTP/...') has no effect")?;
         }
-        let code = i32::try_from(code).unwrap_or(if code < 0 { i32::MIN } else { i32::MAX });
+        // `(int)response_code`: C truncates to the low 32 bits.
+        #[allow(clippy::cast_possible_truncation)]
+        let code = code as i32;
         with_ctx(|c| c.headers.borrow_mut().response_code = code);
         return Ok(if current != 0 {
             Value::Int(i64::from(current))
