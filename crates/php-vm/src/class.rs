@@ -25,6 +25,9 @@ pub use crate::builtins::fasthash::FxHasher;
 /// [`Class::props`], [`Class::static_props`] and [`Class::method_order`].
 pub type NameMap<V> = HashMap<ZStr, V, BuildHasherDefault<FxHasher>>;
 
+/// A set of names hashed as [`NameMap`] hashes them.
+pub type NameSet = std::collections::HashSet<ZStr, BuildHasherDefault<FxHasher>>;
+
 /// An empty [`NameMap`] that holds `capacity` entries without regrowing.
 #[must_use]
 pub fn name_map_with_capacity<V>(capacity: usize) -> NameMap<V> {
