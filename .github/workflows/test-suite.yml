@@ -362,8 +362,13 @@ jobs:
     # Upstream also sets ASAN_OPTIONS, UBSAN_OPTIONS, USE_ZEND_ALLOC=0 and
     # USE_TRACKED_ALLOC=1 for its sanitizer builds; we have none. Our `php` reads its
     # ini files from PHP_INI_SCAN_DIR (upstream: --with-config-file-scan-dir).
+    # Ours: each project's suite runs under `timeout -s KILL $PROJECT_TIMEOUT`, so a
+    # hang (amphp/dns's suite never finished, 24 and 25 Nov) is killed, exits 137 and
+    # counts as a crash by upstream's "exit status above 128" rule, instead of using up
+    # the job's 6 hours and leaving the other projects unrun.
     env:
       PHP_INI_SCAN_DIR: /etc/php.d
+      PROJECT_TIMEOUT: 45m
     steps:
       - name: git checkout
         uses: actions/checkout@v4
@@ -429,7 +434,7 @@ jobs:
             git rev-parse HEAD
             php /usr/bin/composer install --no-progress --ignore-platform-req=php+
             EXIT_CODE=0
-            vendor/bin/phpunit || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
               X=1;
@@ -447,7 +452,7 @@ jobs:
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
           # Hack to disable a test that hangs
           php -r '$c = file_get_contents("tests/Filesystem/FilesystemTest.php"); $c = str_replace("public function testSharedGet()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testSharedGet()", $c); file_put_contents("tests/Filesystem/FilesystemTest.php", $c);'
-          php vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -463,7 +468,7 @@ jobs:
             git rev-parse HEAD
             php /usr/bin/composer install --no-progress --ignore-platform-req=php+
             EXIT_CODE=0
-            vendor/bin/phpunit || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             # (Upstream has `$[EXIT_CODE:-0}` here, a typo for the expansion below.)
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
@@ -482,7 +487,7 @@ jobs:
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
           # Broken since https://github.com/php/php-src/pull/14452.
           php -r '$c = file_get_contents("test/Driver/StreamSelectDriverTest.php"); $c = str_replace("public function testTooLargeFileDescriptorSet(): void", "/** @group skip */\n    #[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testTooLargeFileDescriptorSet(): void", $c); file_put_contents("test/Driver/StreamSelectDriverTest.php", $c);'
-          vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -507,7 +512,7 @@ jobs:
           for component in $(find src/Symfony -mindepth 2 -type f -name phpunit.xml.dist -printf '%h\n'); do
             echo "::group::$component"
             EXIT_CODE=0
-            php ./phpunit $component --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group transient --exclude-group skip || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit $component --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group transient --exclude-group skip || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
               X=1;
@@ -522,7 +527,7 @@ jobs:
           cd phpunit
           git rev-parse HEAD
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
-          php ./phpunit || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -534,7 +539,7 @@ jobs:
           cd symfony_demo
           git rev-parse HEAD
           sed -i 's/PHP_SAPI/"cli-server"/g' var/cache/dev/App_KernelDevDebugContainer.preload.php
-          php -d opcache.preload=var/cache/dev/App_KernelDevDebugContainer.preload.php public/index.php
+          timeout -s KILL "$PROJECT_TIMEOUT" php -d opcache.preload=var/cache/dev/App_KernelDevDebugContainer.preload.php public/index.php
       - name: Test Wordpress
         if: ${{ !cancelled() }}
         run: |
@@ -546,7 +551,7 @@ jobs:
           sed -i 's/youremptytestdbnamehere/test/g' wp-tests-config.php
           sed -i 's/yourusernamehere/root/g' wp-tests-config.php
           sed -i 's/yourpasswordhere/root/g' wp-tests-config.php
-          php vendor/bin/phpunit || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
