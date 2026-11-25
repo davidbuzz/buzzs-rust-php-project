@@ -2174,7 +2174,60 @@ impl Vm {
         if self.unset_dims_fast(pid) {
             return Ok(());
         }
+        if self.cv_unset_fast(pid) {
+            return Ok(());
+        }
         self.with_cv_symtab(pid, |vm| vm.place_unset_impl(pid))
+    }
+
+    /// The bare compiled variable `place` names in the running frame, when
+    /// that frame is a function's or the main script's and its symbol
+    /// table is not attached: the CV slot is then the variable (php-src's
+    /// `EX_VAR`), and an access to it needs no table.
+    #[inline]
+    fn bare_cv_slot(&self, pid: PlaceId) -> Option<u32> {
+        let f = self.frames.last()?;
+        if f.symtab_attached
+            || !matches!(
+                f.kind,
+                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+            )
+        {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        match (&p.base, p.segs.is_empty()) {
+            (PlaceBase::Cv(cv), true) => Some(*cv),
+            _ => None,
+        }
+    }
+
+    /// `unset($cv)` (`ZEND_UNSET_CV`) in a frame whose symbol table is not
+    /// attached: the slot becomes undefined, then the old value is
+    /// released (a possible cycle root; its destructor, which already sees
+    /// the variable unset, when this was its last handle), as
+    /// [`Vm::write_var_root`] does on a table slot, without
+    /// [`Vm::with_cv_symtab`] copying all the frame's variables into the
+    /// table and back. `false`, having changed nothing, for any other
+    /// place or frame state.
+    #[inline]
+    fn cv_unset_fast(&mut self, pid: PlaceId) -> bool {
+        let Some(cv) = self.bare_cv_slot(pid) else {
+            return false;
+        };
+        let Some(slot) = self
+            .frames
+            .last_mut()
+            .and_then(|f| f.cvs.get_mut(cv as usize))
+        else {
+            return false;
+        };
+        let old = slot.set(None);
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        true
     }
 
     /// `place op= v`.
@@ -2187,7 +2240,93 @@ impl Vm {
         if let Some(r) = self.assign_op_cv_scalar(pid, op, &v) {
             return r;
         }
+        let v = match self.assign_op_cv_slot(pid, op, v) {
+            Ok(r) => return r,
+            Err(v) => v,
+        };
         self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v, None))
+    }
+
+    /// `$cv op= v` (`ZEND_ASSIGN_OP` on a CV) of a defined variable of a
+    /// function whose symbol table is not attached, for the operands
+    /// [`Vm::assign_op_cv_scalar`] leaves out: `$s .= $object` (a
+    /// `__toString()` call), an array, an operand whose conversion warns.
+    /// The generic path's steps on the slot itself: the current value
+    /// (through a reference, if the variable is one) is read, the
+    /// operation runs (its diagnostics and user code with it), and the
+    /// result is written as [`Vm::write_var_root`] writes it (through a
+    /// typed reference's checks; the old value released as a possible
+    /// root). Without [`Vm::with_cv_symtab`], no copy of all the frame's
+    /// variables into the table and back around the operation (about 2,600
+    /// of the 7,000 instructions of `$s .= $object`). `Err` hands `v` back,
+    /// having changed nothing, for an undefined variable (whose warning
+    /// and exception order the generic path keeps), `$array += $array`
+    /// (made in place there), any other place or frame state.
+    fn assign_op_cv_slot(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        v: Value,
+    ) -> Result<VmResult<Value>, Value> {
+        let Some(cv) = self.bare_cv_slot(pid) else {
+            return Err(v);
+        };
+        let Some(f) = self.frames.last() else {
+            return Err(v);
+        };
+        if f.kind != crate::vm::FrameKind::Function {
+            return Err(v);
+        }
+        let vars = Rc::as_ptr(&f.vars);
+        let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(cur) => cur.deref(),
+            None => return Err(v),
+        };
+        if op == BinaryOp::Add && matches!((&cur, &v), (Value::Array(_), Value::Array(_))) {
+            return Err(v);
+        }
+        let nv = match self.assign_op_value(op, &cur, &v) {
+            Ok(nv) => nv,
+            Err(t) => return Ok(Err(t)),
+        };
+        // The old value's handle is released before the write, so that
+        // the release below sees the count php-src's would.
+        drop(cur);
+        // The same frame: user code run by the operation (`__toString()`)
+        // returned to it, unless a fiber switched stacks meanwhile.
+        let Some(f) = self
+            .frames
+            .last_mut()
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+        else {
+            return Ok(Ok(nv));
+        };
+        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+            return Ok(Ok(nv));
+        };
+        let held = match slot.get() {
+            Some(Value::Reference(r)) => Some(r.clone()),
+            _ => None,
+        };
+        let old = match held {
+            Some(r) if crate::typed_refs::has_type_sources(&r) => {
+                return Ok(self.assign_ref(&r, nv));
+            }
+            // The table, if user code attached it meanwhile, holds the
+            // same reference.
+            Some(r) => Some(r.set(nv.clone())),
+            None => {
+                let old = slot.set(Some(nv.clone()));
+                // Attached by user code meanwhile: the table mirrors the slot.
+                f.sync_cv_to_symtab(cv, &nv);
+                old
+            }
+        };
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        Ok(Ok(nv))
     }
 
     /// `$cv op= v` (`ZEND_ASSIGN_OP` on a compiled variable) without the

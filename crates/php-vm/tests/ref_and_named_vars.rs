@@ -407,3 +407,115 @@ string(2) "T2"
 "#
     );
 }
+
+/// `$cv op= v` with operands that call `__toString()`, throw, warn or
+/// convert (through plain variables, references and typed property
+/// references), `$array += $array`, an undefined variable, and
+/// `unset($cv)` with the destructor of the released value.
+#[test]
+fn assign_op_and_unset_of_variables() {
+    assert_eq!(
+        run(r#"<?php
+class S { function __construct(public $v = 'x') {} function __toString(): string { return $this->v; } }
+class Bad { function __toString(): string { throw new Exception("no string"); } }
+class D { function __construct(public $n) {} function __destruct() { echo "~D{$this->n}\n"; } }
+class T { public string $s = 'a'; public int $i = 1; }
+function f() {
+  $o = new S('o'); $s = 'pre-'; $s .= $o; var_dump($s);
+  $n = 5; $n .= $o; var_dump($n);
+  $r = 'r'; $rr = &$r; $rr .= $o; var_dump($r);
+  $t = new T; $ts = &$t->s; $ts .= $o; var_dump($t->s);
+  $ti = &$t->i; try { $ti .= $o; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($t->i);
+  $b = 'keep'; try { $b .= new Bad; } catch (Exception $e) { echo $e->getMessage(), "\n"; } var_dump($b);
+  $a = [1]; $a += [5, 6]; var_dump($a);
+  $x = 'abc'; try { $x -= 1; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($x);
+  $y = '5 apples'; $y += 1; var_dump($y);
+  $z = [1]; try { $z .= 'x'; } catch (Error $e) { echo get_class($e), "\n"; } var_dump($z);
+  $d = new D(1); try { $d .= "tail"; } catch (Error $e) { echo $e->getMessage(), "\n"; } echo "after concat\n"; unset($d);
+  $u = new D(2); unset($u); echo "after unset\n";
+  $w = new D(3); $w2 = $w; unset($w); echo "still held\n"; unset($w2); echo "gone\n";
+  $g = 1; $gr = &$g; unset($g); var_dump($gr); unset($nothing);
+  $p = 2; $p **= 3; var_dump($p);
+  $q = 7; $q %= 0.5 + 2.5; var_dump($q);
+  $un .= 'u'; var_dump($un);
+  var_dump(array_keys(get_defined_vars()));
+}
+f();
+"#),
+        r#"string(5) "pre-o"
+string(2) "5o"
+string(2) "ro"
+string(2) "ao"
+Cannot assign string to reference held by property T::$i of type int
+int(1)
+no string
+string(4) "keep"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(6)
+}
+Unsupported operand types: string - int
+string(3) "abc"
+
+Warning: A non-numeric value encountered in t.php on line 15
+int(6)
+
+Warning: Array to string conversion in t.php on line 16
+string(6) "Arrayx"
+Object of class D could not be converted to string
+after concat
+~D1
+~D2
+after unset
+still held
+~D3
+gone
+int(1)
+int(8)
+int(1)
+
+Warning: Undefined variable $un in t.php on line 23
+string(1) "u"
+array(18) {
+  [0]=>
+  string(1) "o"
+  [1]=>
+  string(1) "s"
+  [2]=>
+  string(1) "n"
+  [3]=>
+  string(1) "r"
+  [4]=>
+  string(2) "rr"
+  [5]=>
+  string(1) "t"
+  [6]=>
+  string(2) "ts"
+  [7]=>
+  string(2) "ti"
+  [8]=>
+  string(1) "e"
+  [9]=>
+  string(1) "b"
+  [10]=>
+  string(1) "a"
+  [11]=>
+  string(1) "x"
+  [12]=>
+  string(1) "y"
+  [13]=>
+  string(1) "z"
+  [14]=>
+  string(2) "gr"
+  [15]=>
+  string(1) "p"
+  [16]=>
+  string(1) "q"
+  [17]=>
+  string(2) "un"
+}
+"#
+    );
+}
