@@ -113,6 +113,10 @@ pub enum ModifyHandler {
     /// `OnUpdateAutoDetectLineEndings`: `OnUpdateBool` plus an
     /// "`auto_detect_line_endings` is deprecated" `E_DEPRECATED` for true values.
     AutoDetectLineEndings,
+    /// `OnUpdateReportMemleaks` (main/main.c): `OnUpdateBool` plus a
+    /// "Directive 'report_memleaks' is deprecated" docref `E_DEPRECATED`
+    /// for false values.
+    ReportMemleaks,
 }
 
 /// How `phpinfo()`, `php -i` and `--ri` show a directive's value (the
@@ -142,7 +146,8 @@ impl IniDisplayer {
         match handler {
             ModifyHandler::Bool
             | ModifyHandler::GcEnabled
-            | ModifyHandler::AutoDetectLineEndings => IniDisplayer::Boolean,
+            | ModifyHandler::AutoDetectLineEndings
+            | ModifyHandler::ReportMemleaks => IniDisplayer::Boolean,
             ModifyHandler::DisplayErrors => IniDisplayer::DisplayErrors,
             _ if name.starts_with("highlight.") => IniDisplayer::Color,
             _ => IniDisplayer::Default,
@@ -815,6 +820,18 @@ impl IniRegistry {
                 }
                 (IniTyped::Bool(on), None)
             }
+            ModifyHandler::ReportMemleaks => {
+                let on = parse_bool(v);
+                // The CLI reports the startup value itself (php-cli's
+                // startup.rs); the request-end restore is not reported.
+                if !on && stage == Stage::Runtime {
+                    diag.report(Diagnostic::docref(
+                        ErrorLevel::DEPRECATED,
+                        "Directive 'report_memleaks' is deprecated",
+                    ));
+                }
+                (IniTyped::Bool(on), None)
+            }
             ModifyHandler::Long => (IniTyped::Long(quantity(diag, v)), None),
             ModifyHandler::LongGEZero => {
                 let t = quantity(diag, v);
@@ -1057,7 +1074,7 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("log_errors", Some("0"), A::ALL, H::Bool),
         c("ignore_repeated_errors", Some("0"), A::ALL, H::Bool),
         c("ignore_repeated_source", Some("0"), A::ALL, H::Bool),
-        c("report_memleaks", Some("1"), A::ALL, H::Bool),
+        c("report_memleaks", Some("1"), A::ALL, H::ReportMemleaks),
         c("report_zend_debug", Some("0"), A::ALL, H::Bool),
         c("output_buffering", Some("0"), pd_sys, H::Long),
         c("output_handler", None, pd_sys, H::StrNotEmpty),
@@ -1575,6 +1592,27 @@ mod tests {
         assert_eq!(r.get("SMTP"), Some(&b"localhost"[..]));
         assert_eq!(r.get("highlight.string"), Some(&b"#DD0000"[..]));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn report_memleaks_off_is_deprecated_at_runtime() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("report_memleaks", b"1", &mut d),
+            Some(b"1".to_vec())
+        );
+        assert!(d.is_empty());
+        assert_eq!(
+            r.ini_set("report_memleaks", b"0", &mut d),
+            Some(b"1".to_vec())
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0].render(Some("ini_set")),
+            "ini_set(): Directive 'report_memleaks' is deprecated"
+        );
+        assert!(!r.get_bool("report_memleaks"));
     }
 
     #[test]

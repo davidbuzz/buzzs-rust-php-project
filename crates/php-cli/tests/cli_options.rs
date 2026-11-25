@@ -152,3 +152,22 @@ fn ini_restore_keeps_entries_without_on_modify() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn ini_set_report_memleaks_off_is_deprecated() {
+    let d = temp_dir("memleaks");
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "ini_set('report_memleaks', '1'); var_dump(ini_set('report_memleaks', '0'));",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nDeprecated: ini_set(): Directive 'report_memleaks' is deprecated in Command line \
+         code on line 1\nstring(1) \"1\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
