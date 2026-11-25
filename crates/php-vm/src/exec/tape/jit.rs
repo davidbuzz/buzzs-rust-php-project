@@ -2804,8 +2804,9 @@ fn plan_this_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<J
     })
 }
 
-/// Plan one lowered `Ext` row: the tape keeps the raw op at its own
-/// index (`lower` emits one zeroed `Inst::plain(TOp::Ext)` per op), so
+/// Plan one lowered `Ext` row, or one of the tape's `ClassConst`,
+/// `ClassConstTo`, `StaticProp` and `StaticPropTo` rows: the tape keeps
+/// the raw op at its own index (`lower` emits one instruction per op), so
 /// the scan arm decodes `code.ops[i]` and dispatches. A tape-core `Ext`
 /// row always bails in `run_core`, so every `Ext` row a region scan
 /// reaches is one of these hot spec rows.
@@ -3738,11 +3739,16 @@ fn plan(
                 Some((c, m, step)) => (c, m, step, None),
                 None => rej!(format!("[{i}] array row not inlinable")),
             }
-        } else if tape[i].op == TOp::Ext {
-            // A hot spec row the tape left to the interpreter: the op
-            // itself is still at this index, so the planners decode it
-            // (static properties and constants inline; anything else
-            // stays the interpreted row).
+        } else if matches!(
+            tape[i].op,
+            TOp::Ext | TOp::ClassConst | TOp::ClassConstTo | TOp::StaticProp | TOp::StaticPropTo
+        ) {
+            // A hot spec row the tape left to the interpreter, or one of
+            // the tape's class-constant and static-property rows (the
+            // `statics` rows of `exec/tape.rs`, which run the same cache
+            // hits): the op itself is still at this index, so the planners
+            // decode it (static properties and constants inline; anything
+            // else stays the interpreted row).
             match plan_ext(st, code, i) {
                 Some((c, m)) => (c, m, 1, None),
                 None => rej!(format!("[{i}] spec row not inlinable")),
@@ -8984,7 +8990,16 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             // A row the tape has no instruction for: the op it stands for.
             let raw = match (inst.op, code.ops.get(d0 + i)) {
                 (
-                    TOp::Exit | TOp::Step | TOp::Ext | TOp::CallInit | TOp::CallSend | TOp::VmOp,
+                    TOp::Exit
+                    | TOp::Step
+                    | TOp::Ext
+                    | TOp::CallInit
+                    | TOp::CallSend
+                    | TOp::VmOp
+                    | TOp::ClassConst
+                    | TOp::ClassConstTo
+                    | TOp::StaticProp
+                    | TOp::StaticPropTo,
                     Some(op),
                 ) => {
                     format!(" = {op:?}")

@@ -1367,6 +1367,16 @@ tape_ops! {
         //
         //
         //
+        // ---- statics (this file: `lower_statics`) ----
+        ClassConst = (statics_class_const, 1, poll_f),
+        ClassConstTo = (statics_class_const_to, 1, branch_poll_f),
+        StaticProp = (statics_static_prop, 1, poll_f),
+        StaticPropTo = (statics_static_prop_to, 1, branch_poll_f),
+
+        // ---- end of statics ----
+        //
+        //
+        //
         // ---- strs (exec/tape/strs.rs) ----
         StrlenC = (strs::strlen_cv, 1, plain_f),
         CountC = (strs::count_cv, 1, plain_f),
@@ -1494,6 +1504,7 @@ fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
         .or_else(|| family("scalar", scalar::lower))
         .or_else(|| family("dims", dims::lower))
         .or_else(|| family("props", props::lower))
+        .or_else(|| family("statics", lower_statics))
         .or_else(|| family("strs", strs::lower))
         .or_else(|| family("calls", calls::lower))
         .or_else(|| family("places", lower_place))
@@ -2956,6 +2967,220 @@ fn user_call_miss(
             }
             Err(at + 1)
         }
+    }
+}
+
+// ---- statics: class constants and static properties ----
+//
+// `Name::C`, `self::C`, `parent::C`, `static::C` and `A::$x` reads on a
+// hit of the op's run-time cache (php-src's `ZEND_FETCH_CLASS_CONSTANT`
+// and `ZEND_FETCH_STATIC_PROP_R`/`_IS` with `CACHED_PTR`,
+// `Zend/zend_vm_def.h`): the hits `hot::step_ext` takes
+// (`spec::fetch_class_const_in`, `spec::fetch_static_prop_in`), as rows of
+// their own, so that a hit stays in the tape's loop instead of leaving it
+// for the second-level dispatch. A miss declines, having changed nothing,
+// and `hot::step_ext` (the row's `ext` flag), then the generic op, run it.
+
+/// The `e` field of a class-constant row: how the class is named.
+const SC_NAMED: u8 = 0;
+/// `self::`
+const SC_SELF: u8 = 1;
+/// `parent::`
+const SC_PARENT: u8 = 2;
+/// `static::`
+const SC_STATIC: u8 = 3;
+
+/// The `e` field of a static-property row: its fetch mode.
+const SP_READ: u8 = 0;
+/// `FetchMode::Is`
+const SP_IS: u8 = 1;
+/// `FetchMode::List`
+const SP_LIST: u8 = 2;
+
+/// The class operand of a class-constant row: `e` with, for a named
+/// class, its literal in `p`.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::cast_possible_truncation)] // one match in a thin handler
+fn statics_class(inst: &Inst) -> ClassSpec {
+    match inst.e {
+        SC_SELF => ClassSpec::SelfClass,
+        SC_PARENT => ClassSpec::Parent,
+        SC_STATIC => ClassSpec::Static,
+        // `p` came from a `u32` literal index (`lower_statics`).
+        _ => ClassSpec::Named(inst.p as u32),
+    }
+}
+
+/// The fetch mode of a static-property row (`e`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one match in a thin handler
+fn statics_mode(inst: &Inst) -> FetchMode {
+    match inst.e {
+        SP_IS => FetchMode::Is,
+        SP_LIST => FetchMode::List,
+        _ => FetchMode::Read,
+    }
+}
+
+/// The class-constant and static-property instruction of the op at `i`:
+/// a literal constant name and a class that is not dynamic (`$obj::C`
+/// stays `hot::step_ext`'s; `$this::C` is `props`' `ThisConst`), a static
+/// property read in any mode. Fields: `a` the name literal (constant) or
+/// the place (property), `b` the result temporary, `e` the class kind or
+/// the fetch mode, `p` a named class's literal; a `To` form jumps (`c`)
+/// past its folded `AssignCv` when the value went into that op's variable
+/// `d`.
+fn lower_statics(code: &OpArray, i: usize) -> Option<Inst> {
+    let plain = Inst::plain;
+    let to_row = |inst: Inst, cv: u32| -> Option<Inst> {
+        if (cv as usize) >= code.cv_names.len() {
+            return None;
+        }
+        Some(Inst {
+            c: rel(code, i, u32::try_from(i + 2).ok()?)?,
+            d: cv,
+            ..inst
+        })
+    };
+    let class_kind = |class: &ClassSpec| -> Option<(u8, usize)> {
+        Some(match *class {
+            ClassSpec::Named(l) if (l as usize) < code.literals.len() => (SC_NAMED, l as usize),
+            ClassSpec::SelfClass => (SC_SELF, 0),
+            ClassSpec::Parent => (SC_PARENT, 0),
+            ClassSpec::Static => (SC_STATIC, 0),
+            _ => return None,
+        })
+    };
+    match *code.ops.get(i)? {
+        Op::FetchClassConst {
+            ref class,
+            name: Operand::Lit(name),
+            dst,
+        } => {
+            let (e, p) = class_kind(class)?;
+            if dst >= code.num_tmps || (name as usize) >= code.literals.len() {
+                return None;
+            }
+            Some(Inst {
+                a: name,
+                b: dst,
+                e,
+                p,
+                ..plain(TOp::ClassConst)
+            })
+        }
+        Op::FetchClassConstTo {
+            ref class,
+            name,
+            dst,
+            to,
+        } => {
+            let (e, p) = class_kind(class)?;
+            if dst >= code.num_tmps || (name as usize) >= code.literals.len() {
+                return None;
+            }
+            to_row(
+                Inst {
+                    a: name,
+                    b: dst,
+                    e,
+                    p,
+                    ..plain(TOp::ClassConstTo)
+                },
+                to,
+            )
+        }
+        Op::FetchStaticProp {
+            place,
+            dst,
+            to,
+            mode,
+        } => {
+            if (place as usize) >= code.places.len() || dst >= code.num_tmps {
+                return None;
+            }
+            let e = match mode {
+                FetchMode::Read => SP_READ,
+                FetchMode::Is => SP_IS,
+                FetchMode::List => SP_LIST,
+            };
+            let inst = Inst {
+                a: place,
+                b: dst,
+                e,
+                ..plain(TOp::StaticProp)
+            };
+            match to {
+                None => Some(inst),
+                Some(cv) => to_row(
+                    Inst {
+                        op: TOp::StaticPropTo,
+                        ..inst
+                    },
+                    cv,
+                ),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`TOp::ClassConst`]: the cached value of the class constant into its
+/// temporary `b` (`spec::fetch_class_const_in`, the hit `hot::step_ext`
+/// takes).
+///
+/// # Safety
+/// `inst` is an instruction [`lower_statics`] built for `frame`, the
+/// current frame.
+#[inline(never)]
+unsafe fn statics_class_const(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    super::spec::fetch_class_const_in(f, &statics_class(inst), inst.a, inst.b, None).is_some()
+}
+
+/// [`TOp::ClassConstTo`]: as [`statics_class_const`], into the folded
+/// `AssignCv`'s variable `d` when that holds nothing to release (the jump
+/// past it), else into the temporary (falling through to the `AssignCv`).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_class_const_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match super::spec::fetch_class_const_in(f, &statics_class(inst), inst.a, inst.b, Some(inst.d)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
+}
+
+/// [`TOp::StaticProp`]: the static property's cached cell read into the
+/// temporary `b` (`spec::fetch_static_prop_in`).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_static_prop(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    super::spec::fetch_static_prop_in(f, inst.a, inst.b, None, statics_mode(inst)).is_some()
+}
+
+/// [`TOp::StaticPropTo`]: as [`statics_static_prop`], into the folded
+/// `AssignCv`'s variable `d` when it can (see [`statics_class_const_to`]).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_static_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match super::spec::fetch_static_prop_in(f, inst.a, inst.b, Some(inst.d), statics_mode(inst)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
     }
 }
 
