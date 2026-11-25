@@ -2879,10 +2879,7 @@ impl Prepared {
 #[allow(clippy::inline_always)] // once, in `call_native`
 fn args_accepted(args: &[Option<Value>], table: &[u32], last: u32) -> bool {
     for (i, arg) in args.iter().enumerate() {
-        let bits = match table.get(i) {
-            Some(&bits) => bits,
-            None => last,
-        };
+        let bits = table.get(i).copied().unwrap_or(last);
         match arg {
             Some(v) if crate::func::accept_bit(v) & bits != 0 => {}
             _ => return false,
@@ -3132,25 +3129,24 @@ pub(super) fn call_native(
         // Anything else as the generic call releases it.
         vm.pop_frames_to(live + 1);
     }
-    Ok(match r {
-        Ok(v) => {
-            match dst {
-                Some(d) => store_native_result(vm, d, v),
-                None => {
-                    if matches!(
-                        v,
-                        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-                    ) {
-                        std::mem::forget(v);
-                    } else {
-                        drop(v);
-                    }
-                }
+    let v = match r {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(e)),
+    };
+    match dst {
+        Some(d) => store_native_result(vm, d, v),
+        None => {
+            if matches!(
+                v,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+            ) {
+                std::mem::forget(v);
+            } else {
+                drop(v);
             }
-            Ok(())
         }
-        Err(e) => Err(e),
-    })
+    }
+    Ok(Ok(()))
 }
 
 /// The first half of [`Args::release_into`]'s release of a builtin call's

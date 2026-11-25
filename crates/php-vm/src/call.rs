@@ -4247,21 +4247,23 @@ impl Vm {
     /// looked up every time, as before.
     #[inline(never)]
     fn builtin_default_named(&mut self, b: &Builtin, i: usize) -> Option<Value> {
-        if let Some(known) = b.cached_default(i) {
-            return known;
+        match b.cached_default(i) {
+            crate::func::NamedDefault::Absent => return None,
+            crate::func::NamedDefault::Value(v) => return Some(v),
+            crate::func::NamedDefault::Unresolved => {}
         }
         match self.resolve_builtin_default(b, i) {
-            NamedDefault::Absent => {
+            DefaultResolution::Absent => {
                 if i < b.params.len() {
                     b.cache_default(i, None);
                 }
                 None
             }
-            NamedDefault::Fixed(v) => {
+            DefaultResolution::Fixed(v) => {
                 b.cache_default(i, Some(&v));
                 Some(v)
             }
-            NamedDefault::Varying(v) => v,
+            DefaultResolution::Varying(v) => v,
         }
     }
 
@@ -4274,13 +4276,13 @@ impl Vm {
     /// up. It is answered before anything else: looking it up as a
     /// constant on every call of such a function cost ~250 instructions
     /// a call, and a script's own `UNKNOWN` constant is not the default.
-    fn resolve_builtin_default(&mut self, b: &Builtin, i: usize) -> NamedDefault {
+    fn resolve_builtin_default(&mut self, b: &Builtin, i: usize) -> DefaultResolution {
         let Some(text) = b.params.get(i).and_then(|p| p.default_text.as_deref()) else {
-            return NamedDefault::Absent;
+            return DefaultResolution::Absent;
         };
         let text = text.trim();
         if text == "UNKNOWN" {
-            return NamedDefault::Absent;
+            return DefaultResolution::Absent;
         }
         let text = text.strip_prefix('\\').unwrap_or(text);
         if text.is_empty()
@@ -4288,19 +4290,19 @@ impl Vm {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c == b'\\')
         {
-            return NamedDefault::Absent;
+            return DefaultResolution::Absent;
         }
         if let Some(p) = find_double_colon(text.as_bytes()) {
             let Some(cls) = self.find_class(&text.as_bytes()[..p]) else {
-                return NamedDefault::Varying(None);
+                return DefaultResolution::Varying(None);
             };
             let v = self
                 .class_constant(&cls, &ZStr::from(&text.as_bytes()[p + 2..]))
                 .ok();
             return match v {
                 // An internal class's constant (no declaration).
-                Some(v) if cls.decl.is_none() => NamedDefault::Fixed(v),
-                v => NamedDefault::Varying(v),
+                Some(v) if cls.decl.is_none() => DefaultResolution::Fixed(v),
+                v => DefaultResolution::Varying(v),
             };
         }
         let v = self.constants.get(text.as_bytes()).cloned();
@@ -4311,9 +4313,9 @@ impl Vm {
                     .iter()
                     .any(|n| n.as_bytes().eq_ignore_ascii_case(text.as_bytes())) =>
             {
-                NamedDefault::Fixed(v)
+                DefaultResolution::Fixed(v)
             }
-            v => NamedDefault::Varying(v),
+            v => DefaultResolution::Varying(v),
         }
     }
 
@@ -6502,7 +6504,7 @@ fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> R
 
 /// What [`Vm::resolve_builtin_default`] made of a builtin parameter's
 /// named default.
-enum NamedDefault {
+enum DefaultResolution {
     /// The call supplies no default.
     Absent,
     /// A value that cannot change ([`Builtin::cache_default`] keeps it when
@@ -7239,37 +7241,64 @@ mod buffer_tests {
         assert!(vm.builtin_default(&round, 9).is_none(), "no such parameter");
     }
 
-    /// A default named by an engine constant (`array_unique()`'s
-    /// `$flags = SORT_STRING`, 2 under php8.5) is resolved once and kept
-    /// with the function, as is `UNKNOWN`'s "no default"; a parameter
-    /// past the declared ones keeps nothing.
+    /// A default named by an engine constant (`ob_start()`'s
+    /// `$flags = PHP_OUTPUT_HANDLER_STDFLAGS`, `str_pad()`'s
+    /// `$pad_type = STR_PAD_RIGHT`, `log()`'s `$base = M_E`: 112, 1 and
+    /// 2.718281828459045 under php8.5; the stub parser reads none of them
+    /// as a literal)
+    /// is resolved once and kept with the function, as is `UNKNOWN`'s "no
+    /// default"; a parameter past the declared ones keeps nothing.
     #[test]
     fn builtin_named_defaults_are_resolved_once() {
+        use crate::func::NamedDefault;
         let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
         let builtin = |vm: &Vm, name: &str| match vm.functions.get(&ZStr::from(name)) {
             Some(Func::Builtin(b)) => b.clone(),
             _ => panic!("{name} is a core builtin"),
         };
-        let unique = builtin(&vm, "array_unique");
-        assert!(unique.cached_default(1).is_none(), "not resolved yet");
+        let ob_start = builtin(&vm, "ob_start");
         assert!(matches!(
-            vm.builtin_default(&unique, 1),
-            Some(Value::Int(2))
+            ob_start.cached_default(2),
+            NamedDefault::Unresolved
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                vm.builtin_default(&ob_start, 2),
+                Some(Value::Int(112))
+            ));
+            assert!(matches!(
+                ob_start.cached_default(2),
+                NamedDefault::Value(Value::Int(112))
+            ));
+        }
+        let str_pad = builtin(&vm, "str_pad");
+        assert!(matches!(
+            vm.builtin_default(&str_pad, 3),
+            Some(Value::Int(1))
         ));
         assert!(matches!(
-            unique.cached_default(1),
-            Some(Some(Value::Int(2)))
+            str_pad.cached_default(3),
+            NamedDefault::Value(Value::Int(1))
+        ));
+        let log = builtin(&vm, "log");
+        assert!(matches!(
+            vm.builtin_default(&log, 1),
+            Some(Value::Float(e)) if e.to_bits() == std::f64::consts::E.to_bits()
         ));
         assert!(matches!(
-            vm.builtin_default(&unique, 1),
-            Some(Value::Int(2))
+            vm.builtin_default(&log, 1),
+            Some(Value::Float(e)) if e.to_bits() == std::f64::consts::E.to_bits()
         ));
-        let keys = builtin(&vm, "array_keys");
-        assert!(vm.builtin_default(&keys, 1).is_none());
-        assert!(matches!(keys.cached_default(1), Some(None)));
-        assert!(vm.builtin_default(&keys, 1).is_none());
-        assert!(vm.builtin_default(&keys, 7).is_none());
-        assert!(keys.cached_default(7).is_none(), "no such parameter");
+        let mt_rand = builtin(&vm, "mt_rand");
+        for _ in 0..2 {
+            assert!(vm.builtin_default(&mt_rand, 1).is_none());
+            assert!(matches!(mt_rand.cached_default(1), NamedDefault::Absent));
+        }
+        assert!(vm.builtin_default(&mt_rand, 7).is_none());
+        assert!(
+            matches!(mt_rand.cached_default(7), NamedDefault::Unresolved),
+            "no such parameter"
+        );
     }
 
     fn capacities(vm: &Vm) -> Vec<usize> {

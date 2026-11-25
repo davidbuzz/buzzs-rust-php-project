@@ -493,10 +493,7 @@ impl CallBufs {
     /// hold them all.
     #[inline]
     pub(crate) fn take_args(&mut self) -> Box<crate::func::Args> {
-        match self.args_pool.pop() {
-            Some(a) => a,
-            None => CallBufs::new_args(),
-        }
+        self.args_pool.pop().unwrap_or_else(CallBufs::new_args)
     }
 
     /// Gives back a record [`CallBufs::take_args`] lent, emptied by the

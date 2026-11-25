@@ -537,7 +537,7 @@ pub struct Builtin {
 
 /// One parameter's entry of [`Builtin::cached_default`].
 #[derive(Clone, Debug, Default)]
-enum NamedDefault {
+pub(crate) enum NamedDefault {
     /// Not looked up yet, or not kept (resolved again on every call).
     #[default]
     Unresolved,
@@ -702,16 +702,16 @@ impl Builtin {
     }
 
     /// The kept resolution of parameter `i`'s named default
-    /// (`Vm::builtin_default`): `Some(None)` when the call supplies no
-    /// default, `Some(Some(v))` a constant's scalar value, `None` when not
-    /// resolved yet or not kept.
+    /// (`Vm::builtin_default`): [`NamedDefault::Absent`] when the call
+    /// supplies no default, a constant's scalar value, or
+    /// [`NamedDefault::Unresolved`] when not resolved yet or not kept.
     #[inline]
-    pub(crate) fn cached_default(&self, i: usize) -> Option<Option<Value>> {
-        match self.named_defaults.borrow().get(i)? {
-            NamedDefault::Unresolved => None,
-            NamedDefault::Absent => Some(None),
-            NamedDefault::Value(v) => Some(Some(v.clone())),
-        }
+    pub(crate) fn cached_default(&self, i: usize) -> NamedDefault {
+        self.named_defaults
+            .borrow()
+            .get(i)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Keeps the resolution of parameter `i`'s named default for

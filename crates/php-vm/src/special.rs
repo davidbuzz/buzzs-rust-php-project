@@ -501,10 +501,8 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
 #[inline]
 fn frameless_values(class: u32, args: &[Value]) -> bool {
     let refs = [args.first(), args.get(1), args.get(2)];
-    match refs.get(..args.len()) {
-        Some(sent) => frameless_refs(class, sent),
-        None => false,
-    }
+    refs.get(..args.len())
+        .is_some_and(|sent| frameless_refs(class, sent))
 }
 
 /// Marks the `n` arguments of a frameless call (at most three) as passed,
@@ -1312,13 +1310,12 @@ impl Vm {
         // Emptied (`Args::release_in_place`), back to the pool.
         args.release_in_place();
         self.call_bufs.put_args(args);
-        Some(match r {
-            Ok(v) => {
-                self.put_call_result(dst, v);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        })
+        let v = match r {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        self.put_call_result(dst, v);
+        Some(Ok(()))
     }
 
     /// Stores a call's result in its temporary, or releases it when the
@@ -1517,13 +1514,12 @@ impl Vm {
         // Emptied (`Args::release_in_place`), back to the pool.
         args.release_in_place();
         self.call_bufs.put_args(args);
-        Some(match r {
-            Ok(v) => {
-                self.put_call_result(fc.dst, v);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        })
+        let v = match r {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        self.put_call_result(fc.dst, v);
+        Some(Ok(()))
     }
 }
 
