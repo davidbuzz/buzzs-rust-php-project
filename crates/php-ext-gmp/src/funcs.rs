@@ -405,143 +405,143 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_import),
     ),
     (
-        "gmp_export(mixed $num, int $word_size = 1, int $flags = GMP_MSW_FIRST | GMP_NATIVE_ENDIAN): string",
+        "gmp_export(@unchecked GMP|int|string $num, int $word_size = 1, int $flags = GMP_MSW_FIRST | GMP_NATIVE_ENDIAN): string",
         uncounted!(gmp_export),
     ),
     (
-        "gmp_intval(mixed $num): int",
+        "gmp_intval(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_intval),
     ),
     (
-        "gmp_strval(mixed $num, int $base = 10): string",
+        "gmp_strval(@unchecked GMP|int|string $num, int $base = 10): string",
         uncounted!(gmp_strval),
     ),
     (
-        "gmp_add(mixed $num1, mixed $num2): GMP",
+        "gmp_add(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_add),
     ),
     (
-        "gmp_sub(mixed $num1, mixed $num2): GMP",
+        "gmp_sub(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_sub),
     ),
     (
-        "gmp_mul(mixed $num1, mixed $num2): GMP",
+        "gmp_mul(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_mul),
     ),
     (
-        "gmp_div_qr(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): array",
+        "gmp_div_qr(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, int $rounding_mode = GMP_ROUND_ZERO): array",
         uncounted!(gmp_div_qr),
     ),
     (
-        "gmp_div_q(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div_q(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div_q),
     ),
     (
-        "gmp_div_r(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div_r(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div_r),
     ),
     (
-        "gmp_div(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div),
     ),
     (
-        "gmp_mod(mixed $num1, mixed $num2): GMP",
+        "gmp_mod(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_mod),
     ),
     (
-        "gmp_divexact(mixed $num1, mixed $num2): GMP",
+        "gmp_divexact(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_divexact),
     ),
     (
-        "gmp_neg(mixed $num): GMP",
+        "gmp_neg(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_neg),
     ),
     (
-        "gmp_abs(mixed $num): GMP",
+        "gmp_abs(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_abs),
     ),
     (
-        "gmp_fact(mixed $num): GMP",
+        "gmp_fact(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_fact),
     ),
     (
-        "gmp_sqrt(mixed $num): GMP",
+        "gmp_sqrt(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_sqrt),
     ),
     (
-        "gmp_sqrtrem(mixed $num): array",
+        "gmp_sqrtrem(@unchecked GMP|int|string $num): array",
         uncounted!(gmp_sqrtrem),
     ),
     (
-        "gmp_root(mixed $num, int $nth): GMP",
+        "gmp_root(@unchecked GMP|int|string $num, int $nth): GMP",
         uncounted!(gmp_root),
     ),
     (
-        "gmp_rootrem(mixed $num, int $nth): array",
+        "gmp_rootrem(@unchecked GMP|int|string $num, int $nth): array",
         uncounted!(gmp_rootrem),
     ),
     (
-        "gmp_pow(mixed $num, int $exponent): GMP",
+        "gmp_pow(@unchecked GMP|int|string $num, int $exponent): GMP",
         uncounted!(gmp_pow),
     ),
     (
-        "gmp_powm(mixed $num, mixed $exponent, mixed $modulus): GMP",
+        "gmp_powm(@unchecked GMP|int|string $num, @unchecked GMP|int|string $exponent, @unchecked GMP|int|string $modulus): GMP",
         uncounted!(gmp_powm),
     ),
     (
-        "gmp_powm_sec(mixed $num, mixed $exponent, mixed $modulus): GMP",
+        "gmp_powm_sec(@unchecked GMP|int|string $num, @unchecked GMP|int|string $exponent, @unchecked GMP|int|string $modulus): GMP",
         uncounted!(gmp_powm_sec),
     ),
     (
-        "gmp_perfect_square(mixed $num): bool",
+        "gmp_perfect_square(@unchecked GMP|int|string $num): bool",
         uncounted!(gmp_perfect_square),
     ),
     (
-        "gmp_perfect_power(mixed $num): bool",
+        "gmp_perfect_power(@unchecked GMP|int|string $num): bool",
         uncounted!(gmp_perfect_power),
     ),
     (
-        "gmp_prob_prime(mixed $num, int $repetitions = 10): int",
+        "gmp_prob_prime(@unchecked GMP|int|string $num, int $repetitions = 10): int",
         uncounted!(gmp_prob_prime),
     ),
     (
-        "gmp_gcd(mixed $num1, mixed $num2): GMP",
+        "gmp_gcd(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_gcd),
     ),
     (
-        "gmp_gcdext(mixed $num1, mixed $num2): array",
+        "gmp_gcdext(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): array",
         uncounted!(gmp_gcdext),
     ),
     (
-        "gmp_lcm(mixed $num1, mixed $num2): GMP",
+        "gmp_lcm(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_lcm),
     ),
     (
-        "gmp_invert(mixed $num1, mixed $num2): GMP|false",
+        "gmp_invert(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP|false",
         uncounted!(gmp_invert),
     ),
     (
-        "gmp_jacobi(mixed $num1, mixed $num2): int",
+        "gmp_jacobi(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_jacobi),
     ),
     (
-        "gmp_legendre(mixed $num1, mixed $num2): int",
+        "gmp_legendre(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_legendre),
     ),
     (
-        "gmp_kronecker(mixed $num1, mixed $num2): int",
+        "gmp_kronecker(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_kronecker),
     ),
     (
-        "gmp_cmp(mixed $num1, mixed $num2): int",
+        "gmp_cmp(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_cmp),
     ),
     (
-        "gmp_sign(mixed $num): int",
+        "gmp_sign(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_sign),
     ),
     (
-        "gmp_random_seed(mixed $seed): void",
+        "gmp_random_seed(@unchecked GMP|int|string $seed): void",
         uncounted!(gmp_random_seed),
     ),
     (
@@ -549,23 +549,23 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_random_bits),
     ),
     (
-        "gmp_random_range(mixed $min, mixed $max): GMP",
+        "gmp_random_range(@unchecked GMP|int|string $min, @unchecked GMP|int|string $max): GMP",
         uncounted!(gmp_random_range),
     ),
     (
-        "gmp_and(mixed $num1, mixed $num2): GMP",
+        "gmp_and(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_and),
     ),
     (
-        "gmp_or(mixed $num1, mixed $num2): GMP",
+        "gmp_or(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_or),
     ),
     (
-        "gmp_com(mixed $num): GMP",
+        "gmp_com(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_com),
     ),
     (
-        "gmp_xor(mixed $num1, mixed $num2): GMP",
+        "gmp_xor(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_xor),
     ),
     (
@@ -577,35 +577,35 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_clrbit),
     ),
     (
-        "gmp_testbit(mixed $num, int $index): bool",
+        "gmp_testbit(@unchecked GMP|int|string $num, int $index): bool",
         uncounted!(gmp_testbit),
     ),
     (
-        "gmp_scan0(mixed $num1, int $start): int",
+        "gmp_scan0(@unchecked GMP|int|string $num1, int $start): int",
         uncounted!(gmp_scan0),
     ),
     (
-        "gmp_scan1(mixed $num1, int $start): int",
+        "gmp_scan1(@unchecked GMP|int|string $num1, int $start): int",
         uncounted!(gmp_scan1),
     ),
     (
-        "gmp_popcount(mixed $num): int",
+        "gmp_popcount(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_popcount),
     ),
     (
-        "gmp_hamdist(mixed $num1, mixed $num2): int",
+        "gmp_hamdist(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_hamdist),
     ),
     (
-        "gmp_nextprime(mixed $num): GMP",
+        "gmp_nextprime(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_nextprime),
     ),
     (
-        "gmp_prevprime(mixed $num, &$definitely_prime = null): GMP",
+        "gmp_prevprime(@unchecked GMP|int|string $num, &$definitely_prime = null): GMP",
         uncounted!(gmp_prevprime),
     ),
     (
-        "gmp_binomial(mixed $n, int $k): GMP",
+        "gmp_binomial(@unchecked GMP|int|string $n, int $k): GMP",
         uncounted!(gmp_binomial),
     ),
 ];

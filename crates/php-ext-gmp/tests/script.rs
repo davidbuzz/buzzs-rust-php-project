@@ -94,3 +94,20 @@ fn legacy_unserializer_pushes_no_frame() {
         "Could not unserialize number 1 unserialize"
     );
 }
+
+#[test]
+fn number_parameters_reflect_their_stub_type() {
+    // gmp.stub.php types every number GMP|int|string; Reflection prints the
+    // class first (php8.5), and the handler, not the generic check, rejects
+    // other types.
+    assert_eq!(
+        run(
+            r#"foreach (["gmp_add", "gmp_powm", "gmp_export", "gmp_testbit"] as $f) { $r = new ReflectionFunction($f); echo $f, "(", implode(", ", array_map(fn($p) => $p->getType() . " $" . $p->getName(), $r->getParameters())), ")\n"; } try { gmp_add([], 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }"#
+        ),
+        "gmp_add(GMP|string|int $num1, GMP|string|int $num2)\n\
+         gmp_powm(GMP|string|int $num, GMP|string|int $exponent, GMP|string|int $modulus)\n\
+         gmp_export(GMP|string|int $num, int $word_size, int $flags)\n\
+         gmp_testbit(GMP|string|int $num, int $index)\n\
+         gmp_add(): Argument #1 ($num1) must be of type GMP|string|int, array given\n"
+    );
+}
