@@ -12,47 +12,16 @@
 use crate::reference::{PhpRef, WeakRef};
 use crate::Value;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
-/// Hashes a buffered reference's address (the [`Index`] key) with one
-/// multiply instead of SipHash: every release of a handle of a reference
-/// to an array or object looks the reference up. The product's high bits,
-/// rotated down, pick the bucket (an aligned address's low bits are zero).
-#[derive(Default)]
-struct AddrHasher(u64);
-
-impl AddrHasher {
-    const K: u64 = 0x9E37_79B9_7F4A_7C15;
-}
-
-impl Hasher for AddrHasher {
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.0 = (self.0 ^ n as u64).wrapping_mul(Self::K);
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        // Not used by the `usize` keys; kept total.
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::K);
-        }
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0.rotate_left(26)
-    }
-}
-
-/// Buffer position by reference address. Only looked up, never iterated,
-/// so the hasher changes nothing observable.
-type Index = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
-
+/// The buffered references, oldest first, held weakly. Each one has its
+/// buffered bit set ([`PhpRef::is_buffered`], php-src's `GC_INFO`) for as
+/// long as its entry is here, so "is it buffered already" is one load and
+/// test in the reference's own header, never a lookup. The entry's weak
+/// handle keeps the allocation (and so the bit and the address) until the
+/// buffer lets go of it, which clears the bit first.
 #[derive(Default)]
 struct Buf {
     entries: Vec<WeakRef>,
-    index: Index,
     /// Dead entries are dropped when `entries` grows past this (keeps the
     /// buffer bounded while the collector does not run).
     compact_at: usize,
@@ -60,12 +29,23 @@ struct Buf {
 
 impl Buf {
     fn compact(&mut self) {
-        self.entries.retain(|w| w.strong_count() > 0);
-        self.index.clear();
-        for (i, w) in self.entries.iter().enumerate() {
-            self.index.insert(w.addr(), i);
-        }
+        self.entries.retain(|w| {
+            let alive = w.strong_count() > 0;
+            if !alive {
+                w.set_buffered(false);
+            }
+            alive
+        });
         self.compact_at = self.entries.len() * 2;
+    }
+
+    /// Empties the buffer, clearing every entry's buffered bit.
+    fn drain(&mut self) -> Vec<WeakRef> {
+        let entries = std::mem::take(&mut self.entries);
+        for w in &entries {
+            w.set_buffered(false);
+        }
+        entries
     }
 }
 
@@ -76,32 +56,24 @@ thread_local! {
 }
 
 /// Called by `PhpRef::drop` when a handle is released and others remain.
-/// Costs one thread-local load while recording is off.
+/// Costs one thread-local load while recording is off, and one more load
+/// of the reference's header while it is buffered already.
+#[inline]
 pub(crate) fn released(r: &PhpRef) {
-    if !RECORDING.try_with(Cell::get).unwrap_or(false) {
+    if r.is_buffered() || !RECORDING.try_with(Cell::get).unwrap_or(false) {
         return;
     }
-    // Only a reference to an array or object can close a cycle
-    // (`Z_COLLECTABLE`).
+    buffer(r);
+}
+
+/// [`released`] for a reference not buffered yet: buffers it if it holds
+/// an array or object (only those can close a cycle, `Z_COLLECTABLE`).
+#[inline(never)]
+fn buffer(r: &PhpRef) {
     if !r
         .try_borrow()
         .is_some_and(|v| matches!(*v, Value::Array(_) | Value::Object(_)))
     {
-        return;
-    }
-    let addr = r.addr();
-    let present = BUF
-        .try_with(|b| {
-            b.try_borrow().map_or(true, |b| {
-                b.index.get(&addr).is_some_and(|&i| {
-                    b.entries
-                        .get(i)
-                        .is_some_and(|w| w.strong_count() > 0 && w.addr() == addr)
-                })
-            })
-        })
-        .unwrap_or(true);
-    if present {
         return;
     }
     // The collector may run (and empty the buffer) before the new root is
@@ -109,15 +81,17 @@ pub(crate) fn released(r: &PhpRef) {
     if let Some(f) = NOTIFY.try_with(Cell::get).ok().flatten() {
         f();
     }
+    if r.is_buffered() {
+        return;
+    }
     let w = r.downgrade();
     let _ = BUF.try_with(|b| {
         if let Ok(mut b) = b.try_borrow_mut() {
             if b.entries.len() >= b.compact_at.max(4096) {
                 b.compact();
             }
-            let i = b.entries.len();
+            w.set_buffered(true);
             b.entries.push(w);
-            b.index.insert(addr, i);
         }
     });
 }
@@ -136,10 +110,7 @@ pub fn take() -> Vec<Value> {
     let entries = BUF
         .try_with(|b| {
             b.try_borrow_mut()
-                .map(|mut b| {
-                    b.index.clear();
-                    std::mem::take(&mut b.entries)
-                })
+                .map(|mut b| b.drain())
                 .unwrap_or_default()
         })
         .unwrap_or_default();
@@ -193,10 +164,7 @@ pub fn stash() -> Stash {
     let entries = BUF
         .try_with(|b| {
             b.try_borrow_mut()
-                .map(|mut b| {
-                    b.index.clear();
-                    std::mem::take(&mut b.entries)
-                })
+                .map(|mut b| b.drain())
                 .unwrap_or_default()
         })
         .unwrap_or_default();
@@ -217,25 +185,18 @@ pub fn unstash(s: Stash) {
     }
     let _ = BUF.try_with(|b| {
         if let Ok(mut b) = b.try_borrow_mut() {
-            let newer = std::mem::take(&mut b.entries);
+            // Cleared here and set again as each reference is kept: the bit
+            // tells a reference kept already from one seen the first time.
+            let newer = b.drain();
             let mut entries = Vec::with_capacity(s.0.len() + newer.len());
-            let mut index = Index::with_capacity_and_hasher(
-                s.0.len() + newer.len(),
-                BuildHasherDefault::default(),
-            );
             for w in s.0.into_iter().chain(newer) {
-                if w.strong_count() == 0 {
+                if w.strong_count() == 0 || w.is_buffered() {
                     continue;
                 }
-                let addr = w.addr();
-                if index.contains_key(&addr) {
-                    continue;
-                }
-                index.insert(addr, entries.len());
+                w.set_buffered(true);
                 entries.push(w);
             }
             b.entries = entries;
-            b.index = index;
             b.compact_at = b.compact_at.max(b.entries.len() * 2);
         }
     });
@@ -318,12 +279,118 @@ mod tests {
         set_recording(false);
     }
 
+    /// The buffered bit follows the entry: set while buffered, cleared by
+    /// `take`, so the next release buffers the reference again.
+    #[test]
+    fn take_clears_the_buffered_bit() {
+        set_recording(true);
+        drop(take());
+        let r = PhpRef::new(Value::empty_array());
+        assert!(!r.is_buffered());
+        drop(r.clone());
+        assert!(r.is_buffered());
+        let roots = take();
+        assert_eq!(roots.len(), 1);
+        assert!(!r.is_buffered());
+        drop(roots);
+        // Dropping the taken root (a handle while `r` remains) buffers again.
+        assert!(r.is_buffered());
+        assert_eq!(len(), 1);
+        drop(take());
+        assert!(!r.is_buffered());
+        set_recording(false);
+    }
+
+    /// A reference freed while buffered leaves a dead entry: not counted,
+    /// not taken, and its allocation goes with the entry.
+    #[test]
+    fn reference_freed_while_buffered() {
+        set_recording(true);
+        drop(take());
+        let a = PhpRef::new(Value::empty_array());
+        let b = PhpRef::new(Value::empty_array());
+        drop(a.clone());
+        drop(b.clone());
+        assert_eq!(len(), 2);
+        drop(a);
+        assert_eq!(len(), 1);
+        let s = stash();
+        assert_eq!((s.len(), len()), (1, 0));
+        assert!(!b.is_buffered());
+        unstash(s);
+        assert!(b.is_buffered());
+        let roots = take();
+        assert_eq!(roots.len(), 1);
+        assert!(matches!(&roots[0], Value::Reference(r) if PhpRef::ptr_eq(r, &b)));
+        drop(roots);
+        drop(take());
+        drop(b);
+        set_recording(false);
+    }
+
+    /// A set-aside reference buffered again meanwhile is kept once, in its
+    /// first place, by `unstash`.
+    #[test]
+    fn unstash_keeps_a_rebuffered_reference_once() {
+        set_recording(true);
+        drop(take());
+        let a = PhpRef::new(Value::empty_array());
+        let b = PhpRef::new(Value::empty_array());
+        drop(a.clone());
+        let s = stash();
+        drop(b.clone());
+        drop(a.clone());
+        drop(a.clone());
+        assert_eq!(len(), 2);
+        unstash(s);
+        assert_eq!(len(), 2);
+        assert!(a.is_buffered() && b.is_buffered());
+        let roots = take();
+        assert_eq!(roots.len(), 2);
+        assert!(matches!(&roots[0], Value::Reference(r) if PhpRef::ptr_eq(r, &a)));
+        assert!(matches!(&roots[1], Value::Reference(r) if PhpRef::ptr_eq(r, &b)));
+        drop(roots);
+        drop(take());
+        set_recording(false);
+    }
+
+    /// Compaction drops the dead entries (clearing their bits) and keeps
+    /// the live ones buffered, in order.
+    #[test]
+    fn compaction_keeps_live_entries_buffered() {
+        set_recording(true);
+        drop(take());
+        let keep: Vec<PhpRef> = (0..10).map(|_| PhpRef::new(Value::empty_array())).collect();
+        for r in &keep {
+            drop(r.clone());
+        }
+        for _ in 0..5000 {
+            let r = PhpRef::new(Value::empty_array());
+            drop(r.clone());
+        }
+        assert_eq!(len(), keep.len());
+        assert!(keep.iter().all(PhpRef::is_buffered));
+        for r in &keep {
+            drop(r.clone());
+        }
+        let roots = take();
+        assert_eq!(roots.len(), keep.len());
+        assert!(roots
+            .iter()
+            .zip(&keep)
+            .all(|(v, r)| matches!(v, Value::Reference(x) if PhpRef::ptr_eq(x, r))));
+        drop(roots);
+        drop(take());
+        set_recording(false);
+    }
+
     #[test]
     fn scalars_are_not_collectable() {
         set_recording(true);
         let r = PhpRef::new(Value::Int(1));
         drop(r.clone());
         assert_eq!(len(), 0);
+        assert!(!r.is_buffered());
         set_recording(false);
     }
 
