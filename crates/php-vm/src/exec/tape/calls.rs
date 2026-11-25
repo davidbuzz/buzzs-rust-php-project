@@ -2893,10 +2893,13 @@ pub(super) fn call_native(
             r = Err(e);
         }
     }
-    args.release_into(&mut vm.call_bufs);
-    // Its fields are all empty now (`Args::release_into`): nothing left
-    // for the drop glue, whose out-of-line call is skipped.
-    std::mem::forget(args);
+    if sent_ref {
+        // The handler's handles of the sent references are kept until the
+        // variables are unwrapped below (`release_copies_but_refs`).
+        release_copies_but_refs(&mut args.values, &vm.frames.vec[live].args);
+    } else {
+        args.release_into(&mut vm.call_bufs);
+    }
     // Released by the handler, destructed while its frame is current.
     if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
         if let Err(e) = vm.run_pending_destructors() {
@@ -2910,9 +2913,15 @@ pub(super) fn call_native(
             };
         }
     }
-    if sent_ref && vm.frames.live == live + 1 {
-        unwrap_sent_refs(vm, live);
+    if sent_ref {
+        if vm.frames.live == live + 1 {
+            unwrap_sent_refs(vm, live, &args.values);
+        }
+        args.release_into(&mut vm.call_bufs);
     }
+    // Its fields are all empty now (`Args::release_into`): nothing left
+    // for the drop glue, whose out-of-line call is skipped.
+    std::mem::forget(args);
     // Popped off the VM stack, frames left above it (none, normally)
     // first. Released in place (`release_native`), its argument buffer
     // stays with the pooled frame for the next call at this depth.
@@ -2950,6 +2959,30 @@ pub(super) fn call_native(
     }))
 }
 
+/// The first half of [`Args::release_into`]'s release of a builtin call's
+/// argument copies when a reference was sent ([`call_native`]): every copy
+/// released front to back, as there, except the handler's untouched
+/// handles of the sent references (the same reference as the frame's
+/// argument at that position), which are left in place for
+/// [`unwrap_sent_refs`] and released by `release_into` after it. Those
+/// can never be a last handle (the frame holds one), so holding them a
+/// little longer frees and destructs nothing later than before.
+#[inline(never)]
+fn release_copies_but_refs(values: &mut [Value], sent: &[Option<Value>]) {
+    for (i, slot) in values.iter_mut().enumerate() {
+        let keep = match &*slot {
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => true,
+            Value::Reference(c) => {
+                matches!(sent.get(i), Some(Some(Value::Reference(r))) if php_runtime::PhpRef::ptr_eq(c, r))
+            }
+            _ => false,
+        };
+        if !keep {
+            drop(std::mem::take(slot));
+        }
+    }
+}
+
 /// After a builtin call [`send_ref`] sent a variable to by reference
 /// (`live` the index of the builtin's frame, still current): each such
 /// variable whose reference nobody else holds (two handles: the
@@ -2966,8 +2999,18 @@ pub(super) fn call_native(
 /// a reference: `$m[1]` after `preg_match($re, $s, $m)` cost ~95
 /// instructions more, `count($stack)` after `array_pop($stack)` ~440 and
 /// assigning the variable ~420.
+///
+/// `held` are the handler's copies of the arguments, released after this:
+/// a reference still among them has one handle more (three, then), and is
+/// unwrapped while that copy holds it, so that the copy's release later
+/// finds the reference holding nothing collectable. Released first (the
+/// variable's handle, then the copy's), each decrement left the reference
+/// holding the array the handler wrote (`$matches`) with handles to spare,
+/// a possible cycle root: `ref_roots::buffer` buffered it (~85
+/// instructions a `preg_match($re, $s, $m)`), which php-src's
+/// `zval_ptr_dtor_nogc` of the call's arguments never does.
 #[inline(never)]
-fn unwrap_sent_refs(vm: &mut Vm, live: usize) {
+fn unwrap_sent_refs(vm: &mut Vm, live: usize, held: &[Value]) {
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first()) else {
         return;
@@ -2977,11 +3020,15 @@ fn unwrap_sent_refs(vm: &mut Vm, live: usize) {
     if caller.symtab_attached {
         return;
     }
-    for arg in &frame.args {
+    for (i, arg) in frame.args.iter().enumerate() {
         let Some(Value::Reference(r)) = arg else {
             continue;
         };
-        if r.refcount() != 2 || r.meta().is_some() {
+        let copies = match held.get(i) {
+            Some(Value::Reference(c)) if php_runtime::PhpRef::ptr_eq(c, r) => 3,
+            _ => 2,
+        };
+        if r.refcount() != copies || r.meta().is_some() {
             continue;
         }
         let Some(slot) = caller.cvs.iter_mut().find(
