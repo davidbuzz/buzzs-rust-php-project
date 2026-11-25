@@ -339,6 +339,83 @@ string(2) "nn"
     );
 }
 
+/// Assignments to `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
+#[test]
+fn prop_chain_write() {
+    assert_eq!(
+        run(r#"<?php
+class Dt { public $id; function __construct($i) { $this->id = $i; } function __destruct() { echo "dtor {$this->id}\n"; } }
+class B { public $b = 1; public int $ti = 0; public ?B $self = null; public readonly int $ro; private $priv = 1; public $u; public $ref;
+  function __construct() { $this->ro = 1; unset($this->u); }
+  function __set($n, $v) { echo "__set $n\n"; } }
+class A { public $a; public $list; public $n = null; public $s = 'str';
+  function __construct() { $this->a = new B; $this->list = ['k' => new B]; }
+  function run() {
+    $k = 'k';
+    for ($i = 0; $i < 3; $i++) { $this->a->b = $i; $this->list[$k]->b = "s$i"; }
+    var_dump($this->a->b, $this->list['k']->b);
+    $this->a->ti = 5; var_dump($this->a->ti);
+    $this->a->ti = "7"; var_dump($this->a->ti);
+    try { $this->a->ti = "x"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    $this->a->self = new B; var_dump($this->a->self instanceof B);
+    try { $this->a->self = new A; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { $this->a->ro = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->a->priv = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $this->a->u = 3; $this->a->dyn = 4; $this->a->dyn = 5; var_dump($this->a->dyn);
+    try { $this->n->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->s->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->list['missing']->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $x = 1; $this->a->ref = &$x; $this->a->ref = 9; var_dump($x);
+    $this->a->b = new Dt(1); echo "replace\n"; $this->a->b = new Dt(2); echo "replaced\n"; $this->a->b = null; echo "end\n";
+    $r = $this->a->b = 'chained'; var_dump($r);
+    $copy = $this->list; $this->list['k']->b = 'shared'; var_dump($copy['k']->b);
+  }
+}
+(new A)->run();
+$reg = ['n' => new B]; $name = 'n';
+function useg() { global $reg, $name; $reg[$name]->b = 'g'; try { $reg[$name]->priv = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+useg(); var_dump($reg['n']->b);
+$o = new A; $o->a->b = 'out'; var_dump($o->a->b);
+class Sub extends B { public $b = 'sub'; }
+function wr($x, $v) { $x->a->b = $v; return $x->a->b; }
+$o2 = new A; $o2->a = new Sub; var_dump(wr($o, 1), wr($o2, 2), wr($o, 3));
+"#),
+        r#"int(2)
+string(2) "s2"
+int(5)
+int(7)
+Cannot assign string to property B::$ti of type int
+bool(true)
+Cannot assign A to property B::$self of type ?B
+Cannot modify readonly property B::$ro
+__set priv
+__set u
+__set dyn
+__set dyn
+
+Warning: Undefined property: B::$dyn in t.php on line 19
+NULL
+Attempt to assign property "x" on null
+Attempt to assign property "x" on string
+Attempt to assign property "x" on null
+int(9)
+replace
+dtor 1
+replaced
+dtor 2
+end
+string(7) "chained"
+string(6) "shared"
+__set priv
+string(1) "g"
+string(3) "out"
+int(1)
+int(2)
+int(3)
+"#
+    );
+}
+
 /// Reads, `isset()`/`empty()`, assignments and appends of `$this->p[$k]` (the frame-local hits of the `*ObjPropDim` ops).
 #[test]
 fn prop_dim1() {

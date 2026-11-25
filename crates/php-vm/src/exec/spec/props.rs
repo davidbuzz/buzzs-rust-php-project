@@ -1799,24 +1799,23 @@ fn read_tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj) -> Option<Value> {
     read_in(od, slot, dyn_prop)
 }
 
-/// A read (`Read` or `Is` mode: no diagnostic on a hit) of a place ending
-/// in `->name` whose containers are all reached without the walk:
-/// `$this->a->b` / `$cv->a[$k]->b` (the head from its cache entry, as
-/// [`read_hit`], then dimensions) or `$cv[$k]...->b` (the variable,
-/// possibly a reference, then dimensions), the last property read with
-/// its own cache entry ([`read_tail_hit`]). A consumed string offset is
-/// released. `None`, nothing consumed, for the generic fetch (which also
-/// fills the entries).
-#[inline(never)]
-pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+/// The object a place ending in `->name` (literal `lit`) holds that last
+/// property on, reached without the walk: `$this->a->b` / `$cv->a[$k]->b`
+/// (the head from its cache entry, as [`read_hit`], then dimensions) or
+/// `$cv[$k]...->b` (the variable, possibly a reference, then dimensions),
+/// with the index of the last segment's own cache entry and `lit`. The
+/// containers are only read: a write through the object needs no
+/// separation of the arrays on the way (`FETCH_DIM_W` would separate
+/// them, which no PHP code can observe: the copies share the object).
+/// `None` for any other shape or container.
+#[inline]
+fn chain_object(f: &Frame, pid: PlaceId) -> Option<(Obj, usize, u32)> {
     use crate::opcode::Seg;
     let p = f.code.places.get(pid as usize)?;
     let (Seg::Prop(Operand::Lit(lit)), mid) = p.segs.split_last()? else {
         return None;
     };
-    let lit = *lit;
-    let head = crate::place::propcache::cacheable_head(p);
-    let obj = if head {
+    if crate::place::propcache::cacheable_head(p) {
         // `[->head, [dims...], ->name]`: one property before the last at
         // least, read through the head's entry.
         let (_, dims) = mid.split_first()?;
@@ -1825,25 +1824,94 @@ pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
         let slots = od.slots.try_borrow().ok()?;
         let o = dims_to_object(f, slots.get(hit.slot)?.as_ref()?, dims);
         drop(slots);
-        o?
-    } else {
-        let PlaceBase::Cv(cv) = p.base else {
-            return None;
-        };
-        if mid.is_empty() {
-            return None;
-        }
-        dims_to_object(f, f.cvs.get(cv as usize)?.get()?, mid)?
+        return Some((o?, f.code.places.len() + pid as usize, *lit));
+    }
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
     };
-    let idx = if head {
-        f.code.places.len() + pid as usize
-    } else {
-        pid as usize
-    };
+    if mid.is_empty() {
+        return None;
+    }
+    let o = dims_to_object(f, f.cvs.get(cv as usize)?.get()?, mid)?;
+    Some((o, pid as usize, *lit))
+}
+
+/// A read (`Read` or `Is` mode: no diagnostic on a hit) of a place ending
+/// in `->name` whose object [`chain_object`] reaches, the last property
+/// read with its own cache entry ([`read_tail_hit`]). A consumed string
+/// offset is released. `None`, nothing consumed, for the generic fetch
+/// (which also fills the entries).
+#[inline(never)]
+pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
     let v = read_tail_hit(f, idx, lit, &obj)?;
     drop(obj);
     super::release_place_str_tmps(f, pid);
     Some(v)
+}
+
+/// The tail cache entry `idx` (literal `lit`) as a [`Hit`] for `obj` in
+/// frame `f`, when it was filled for the object's class and the frame's
+/// scope, allows every access in `want`, and the object is not lazy.
+#[inline]
+fn tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj, want: u8) -> Option<Hit> {
+    let od = object::data(obj);
+    let hit = {
+        let cache = f.code.prop_cache.try_borrow().ok()?;
+        let e = cache.get(idx)?;
+        if e.class_addr == 0
+            || e.lit != lit
+            || Rc::as_ptr(&od.class) as usize != e.class_addr
+            || e.scope_addr != scope_addr(f)
+            || e.flags & want != want
+        {
+            return None;
+        }
+        Hit {
+            class: e.class_addr,
+            slot: e.slot as usize,
+            ok_class: e.ok_class_addr,
+            base: e.base,
+            lit: e.lit,
+            accept: e.accept,
+            flags: e.flags,
+        }
+    };
+    if !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return None;
+    }
+    Some(hit)
+}
+
+/// `ZEND_ASSIGN_OBJ` of `v` to the last `->name` of a place whose object
+/// [`chain_object`] reaches (`$this->a->b = v`, `$list[$k]->name = v`),
+/// on that segment's cache entry for writing: the value (not a reference,
+/// of a type the property takes as-is) replaces an initialized slot's
+/// value (not a reference), or fills an undefined slot `__set()` cannot
+/// claim, or replaces the value of an existing dynamic property, as
+/// [`assign_hit`] does ([`store_in`]). Consumed string offsets are
+/// released. The replaced value on success (released by the caller);
+/// `None` for the generic assignment, `v` dropped (the caller keeps a
+/// copy).
+#[inline(never)]
+fn assign_chain_in(f: &mut Frame, pid: PlaceId, v: Value) -> Option<Option<Value>> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
+    let hit = tail_hit(f, idx, lit, &obj, PC_WRITE)?;
+    if matches!(v, Value::Reference(_)) || !hit_accepts(&hit, &v) {
+        return None;
+    }
+    let dyn_key = if hit.flags & PC_DYN == 0 {
+        None
+    } else {
+        match f.code.literals.get(lit as usize) {
+            Some(Value::Str(name)) => Some(ArrayKey::Str(name.clone())),
+            _ => return None,
+        }
+    };
+    let old = store_in(object::data(&obj), &hit, dyn_key, v)?;
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(old)
 }
 
 /// Whether place `pid` of the current frame is `$this->name[d1]...[dn]`
@@ -1966,6 +2034,20 @@ impl Vm {
             return Err(v);
         };
         if !is_prop_dims_place(f, pid) {
+            // `$this->a->b = v`, `$list[$k]->name = v`.
+            if matches!(
+                f.code.places.get(pid as usize).and_then(|p| p.segs.last()),
+                Some(crate::opcode::Seg::Prop(_))
+            ) {
+                let ret = v.clone();
+                return match assign_chain_in(f, pid, v) {
+                    Some(old) => {
+                        super::super::release_rooted(old);
+                        Ok(ret)
+                    }
+                    None => Err(ret),
+                };
+            }
             // `$a[$k][] = v`, `$a[$k][$j] = [...]` & co. on a variable.
             let ret = v.clone();
             let mut slot = Some(v);
