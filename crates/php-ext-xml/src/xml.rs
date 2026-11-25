@@ -977,7 +977,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         })
         .method("__construct()", acc::PUBLIC, xml_parser_construct)
         .register(m.vm());
-    let handler_sig = |name: &str| format!("{name}(XMLParser $parser, $handler): true");
     m.function_static(
         "xml_parser_create(?string $encoding = null): XMLParser",
         xml_parser_create,
@@ -994,10 +993,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "8.4",
         "provide a proper method callable to xml_set_*_handler() functions",
     )
-    .function_static(
-        "xml_set_element_handler(XMLParser $parser, $start_handler, $end_handler): true",
-        xml_set_element_handler,
-    );
+    .function_static(ELEMENT_HANDLER_SIG, xml_set_element_handler);
     let singles: [(&str, php_vm::ext::NativeFn); 8] = [
         (
             "xml_set_character_data_handler",
@@ -1066,9 +1062,38 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     );
 }
 
+/// The stub of `xml_set_element_handler()`. xml.stub.php types the
+/// handlers `callable|string|null`; the functions check them themselves (a
+/// string may name a method of the parser's object), so the type is
+/// reflected but not checked.
+const ELEMENT_HANDLER_SIG: &str = "xml_set_element_handler(XMLParser $parser, @unchecked callable|string|null $start_handler, @unchecked callable|string|null $end_handler): true";
+
+/// The stub of a single-handler `xml_set_*_handler()` (see
+/// [`ELEMENT_HANDLER_SIG`]).
+fn handler_sig(name: &str) -> String {
+    format!("{name}(XMLParser $parser, @unchecked callable|string|null $handler): true")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handler_parameters_reflect_the_stub_type() {
+        for sig in [
+            handler_sig("xml_set_default_handler"),
+            ELEMENT_HANDLER_SIG.to_string(),
+        ] {
+            let s = php_vm::ext::parse_signature(&sig);
+            for p in &s.params[1..] {
+                assert_eq!(
+                    p.ty.as_ref().map(|t| t.to_php_string()).as_deref(),
+                    Some("callable|string|null"),
+                    "{sig}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn budget_trips_once_over_limit() {
