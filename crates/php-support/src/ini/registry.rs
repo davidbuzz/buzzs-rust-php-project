@@ -1090,7 +1090,11 @@ mod tests {
         assert!(!r.is_modified("no.such.directive"));
         let g = r.generation();
         assert!(r.restore("precision", Stage::Deactivate, &mut d));
-        assert_eq!(r.generation(), g, "restoring an unmodified entry changes nothing");
+        assert_eq!(
+            r.generation(),
+            g,
+            "restoring an unmodified entry changes nothing"
+        );
         r.ini_set("precision", b"6", &mut d);
         assert!(r.is_modified("precision"));
         r.ini_restore("precision", &mut d);
