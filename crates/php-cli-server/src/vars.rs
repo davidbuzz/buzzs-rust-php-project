@@ -165,6 +165,21 @@ fn set_global(vm: &mut Vm, name: &str, arr: ZArray) {
 
 fn register(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray, cookie: bool) {
     let settings = input_settings(vm);
+    register_with(vm, &settings, name, value, track, cookie);
+}
+
+/// [`register`] with the request's input settings read once by the
+/// caller: `populate()` registers every header and environment variable,
+/// and reading the settings again for each cost four INI lookups and two
+/// allocations per variable.
+fn register_with(
+    vm: &mut Vm,
+    settings: &InputSettings,
+    name: &[u8],
+    value: Value,
+    track: &mut ZArray,
+    cookie: bool,
+) {
     let opts = RegisterOptions {
         max_nesting_level: settings.max_input_nesting_level,
         display_errors: settings.display_errors,
@@ -678,13 +693,14 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         use std::os::unix::ffi::OsStrExt;
         for (k, v) in std::env::vars_os() {
             let v = Value::Str(ZStr::from(v.as_bytes()));
-            register(vm, k.as_bytes(), v, &mut server, false);
+            register_with(vm, &settings, k.as_bytes(), v, &mut server, false);
         }
         // cgi_php_import_environment_variables(): then a FastCGI
         // request's environment, newest name first (`fcgi_loadenv()`).
         for (k, v) in cgi.fcgi_env.iter().flatten().rev() {
-            register(
+            register_with(
                 vm,
+                &settings,
                 k,
                 Value::Str(ZStr::from(v.as_slice())),
                 &mut server,
@@ -692,7 +708,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             );
         }
         let self_ = Value::Str(ZStr::from(cgi.php_self.as_slice()));
-        register(vm, b"PHP_SELF", self_, &mut server, false);
+        register_with(vm, &settings, b"PHP_SELF", self_, &mut server, false);
     }
     if has(b'S') {
         let entries = if ctx.cgi.is_some() {
@@ -706,7 +722,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                 VarKind::Known => {
                     server.make_mut().insert(ArrayKey::from_bytes(&k), v);
                 }
-                VarKind::Filtered => register(vm, &k, v, &mut server, false),
+                VarKind::Filtered => register_with(vm, &settings, &k, v, &mut server, false),
             }
         }
         let t = server.make_mut();
@@ -764,7 +780,14 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         // `$_SERVER`: the request's environment follows.
         let fcgi_env = ctx.cgi.as_ref().and_then(|c| c.fcgi_env.as_ref());
         for (k, v) in fcgi_env.into_iter().flatten().rev() {
-            register(vm, k, Value::Str(ZStr::from(v.as_slice())), &mut env, false);
+            register_with(
+                vm,
+                &settings,
+                k,
+                Value::Str(ZStr::from(v.as_slice())),
+                &mut env,
+                false,
+            );
         }
     }
 
