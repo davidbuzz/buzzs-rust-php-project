@@ -98,3 +98,19 @@ var_dump(stream_socket_sendto($c, 'ok'));
          int(2)\n"
     );
 }
+
+/// Writing to a socket pair whose other end is closed: EPIPE, reported by
+/// `fwrite()`'s warning (php8.5's output).
+#[test]
+fn write_to_closed_pair_warns() {
+    let out = run(r#"
+[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+stream_set_blocking($a, false);
+fclose($b);
+var_dump(@fwrite($a, "foo"), error_get_last()['message'] ?? null);
+"#);
+    assert_eq!(
+        out,
+        "bool(false)\nstring(58) \"fwrite(): Send of 3 bytes failed with errno=32 Broken pipe\"\n"
+    );
+}
