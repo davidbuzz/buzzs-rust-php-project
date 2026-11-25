@@ -59,26 +59,28 @@ fn accounting_math() {
     assert!(!a.is_active());
     assert_eq!(a.usage(), PHP_BASELINE);
     {
+        // Charged their size classes: the 1024-byte bin, the 24-byte bin.
         let _b1 = alloc(&a, 1000);
         let _b2 = alloc(&a, 24);
-        assert_eq!(a.stats().current, 1024);
-        assert_eq!(a.usage(), PHP_BASELINE + 1024);
+        assert_eq!(a.stats().current, 1048);
+        assert_eq!(a.usage(), PHP_BASELINE + 1048);
         assert!(a.is_active());
     }
     let s = a.stats();
-    assert_eq!((s.current, s.peak, s.allocs, s.frees), (0, 1024, 2, 2));
-    assert_eq!(a.peak(), PHP_BASELINE + 1024);
+    assert_eq!((s.current, s.peak, s.allocs, s.frees), (0, 1048, 2, 2));
+    assert_eq!(a.peak(), PHP_BASELINE + 1048);
 }
 
 #[test]
 fn realloc_accounting() {
     let a = CountingAlloc::new(System);
     let mut b = alloc(&a, 100);
+    assert_eq!(a.stats().current, 112, "the 112-byte bin");
     grow(&mut b, 5000);
-    assert_eq!(a.stats().current, 5000);
+    assert_eq!(a.stats().current, 8192, "two pages");
     grow(&mut b, 10);
-    assert_eq!(a.stats().current, 10);
-    assert_eq!(a.stats().peak, 5000);
+    assert_eq!(a.stats().current, 16, "the 16-byte bin");
+    assert_eq!(a.stats().peak, 8192);
     assert_eq!(a.stats().reallocs, 2);
     drop(b);
     assert_eq!(a.stats().current, 0);
@@ -176,9 +178,9 @@ fn peak_reset_semantics() {
     let big = alloc(&a, 3 * M);
     let p1 = a.peak();
     let small = alloc(&a, 1000);
-    assert_eq!(a.peak(), p1 + 1000);
+    assert_eq!(a.peak(), p1 + 1024);
     drop(big);
-    assert_eq!(a.peak(), p1 + 1000, "peak survives frees");
+    assert_eq!(a.peak(), p1 + 1024, "peak survives frees");
     a.reset_peak();
     assert_eq!(a.peak(), a.usage());
     assert!(a.peak() < p1);
@@ -270,13 +272,19 @@ fn soft_limit_is_flagged_not_failed() {
 fn small_blocks_fail_only_when_a_new_chunk_passes_the_limit() {
     let a = CountingAlloc::new(System);
     a.request_start(Some(4 * M)).expect("limit");
-    // Fill up to 64 bytes short of 4M with blocks of half a megabyte (two
-    // 1M blocks never share a chunk: see `big_large_blocks_take_a_chunk_each`).
+    // Fill up to 4 KiB short of 4M with blocks of half a megabyte (two
+    // 1M blocks never share a chunk: see `big_large_blocks_take_a_chunk_each`)
+    // and whole pages, then up to 64 bytes short with small blocks charged
+    // their bins (3072 + 896 + 64 = 4096 - 64).
     let mut fill = Vec::new();
-    while 4 * M - a.usage() > M / 2 + 64 {
+    while 4 * M - a.usage() > M / 2 + PAGE_SIZE {
         fill.push(alloc(&a, M / 2));
     }
-    fill.push(alloc(&a, 4 * M - a.usage() - 64));
+    fill.push(alloc(&a, 4 * M - a.usage() - PAGE_SIZE));
+    for size in [3072, 896, 64] {
+        fill.push(alloc(&a, size));
+    }
+    assert_eq!(a.usage(), 4 * M - 64);
     assert_eq!(a.check(), None);
     let _tiny = alloc(&a, 64);
     assert_eq!(a.check(), None, "still inside the second chunk");
@@ -285,9 +293,9 @@ fn small_blocks_fail_only_when_a_new_chunk_passes_the_limit() {
         a.check(),
         Some(OverLimit {
             limit: 4 * M,
-            tried: 1
+            tried: CHUNK_SIZE
         }),
-        "a third chunk would pass 4M"
+        "a third chunk would pass 4M: php-src reports the chunk"
     );
     drop(fill);
 }
@@ -307,7 +315,7 @@ fn big_large_blocks_take_a_chunk_each() {
         a.check(),
         Some(OverLimit {
             limit: 8 * M,
-            tried: size
+            tried: CHUNK_SIZE
         }),
         "a fifth chunk would pass 8M"
     );
@@ -561,7 +569,7 @@ fn cross_thread_accounting_is_exact() {
             })
             .collect()
     });
-    assert_eq!(a.raw_usage(), 1000 + 4 * 500);
+    assert_eq!(a.raw_usage(), 1024 + 4 * 512, "bins of 1024 and 512 bytes");
     drop(handed_over);
     drop(mine);
     assert_eq!(a.raw_usage(), 0);
@@ -573,20 +581,20 @@ fn uncounted_scope_hides_huge_blocks() {
     a.request_start(Some(4 * M)).expect("limit");
     let base = a.usage();
     let small = uncounted(|| alloc(&a, 1000));
-    assert_eq!(a.usage(), base + 1000, "small blocks stay counted");
+    assert_eq!(a.usage(), base + 1024, "small blocks stay counted");
     let mut big = uncounted(|| alloc(&a, 16 * M));
     assert!(
         !big.p.is_null(),
         "neither limit applies to uncounted blocks"
     );
-    assert_eq!(a.usage(), base + 1000);
+    assert_eq!(a.usage(), base + 1024);
     assert_eq!(a.uncounted_bytes(), 16 * M);
     assert_eq!(a.check(), None, "no soft-limit violation is recorded");
     // Growing it outside the scope keeps it uncounted, past the hard
     // ceiling (2 x 4 MiB) too.
     grow(&mut big, 32 * M);
     assert_eq!(big.layout.size(), 32 * M);
-    assert_eq!(a.usage(), base + 1000);
+    assert_eq!(a.usage(), base + 1024);
     assert_eq!(a.uncounted_bytes(), 32 * M);
     assert_eq!(a.check(), None);
     assert!(a.peak() < base + M, "uncounted blocks never reach the peak");
@@ -594,7 +602,7 @@ fn uncounted_scope_hides_huge_blocks() {
     grow(&mut big, 1024);
     assert_eq!(big.layout.size(), 1024);
     assert_eq!(a.uncounted_bytes(), 0);
-    assert_eq!(a.usage(), base + 1000 + 1024);
+    assert_eq!(a.usage(), base + 1024 + 1024);
     drop(big);
     drop(small);
     assert_eq!(a.usage(), base);
@@ -776,10 +784,11 @@ fn owner_small_blocks_come_from_the_heap() {
     assert!(!is_heap_block(wide), "over-aligned: the inner allocator");
     // SAFETY: allocated just above with this layout.
     unsafe { a.dealloc(wide, Layout::from_size_align(64, 64).expect("layout")) };
-    assert_eq!(a.stats().current, 24 + 20 + MAX_SMALL_SIZE + 1);
+    // Charged by size class: 20 bytes take the 24-byte bin, 3073 a page.
+    assert_eq!(a.stats().current, 24 + 24 + PAGE_SIZE);
     // A block allocated before binding goes back to the inner allocator.
     drop(before);
-    assert_eq!(a.stats().current, 20 + MAX_SMALL_SIZE + 1);
+    assert_eq!(a.stats().current, 24 + PAGE_SIZE);
 }
 
 #[test]
@@ -848,7 +857,7 @@ fn realloc_keeps_contents_across_bins_and_allocators() {
     grow(&mut b, 30);
     assert!(!is_heap_block(b.p), "an inner block stays there");
     check(&b);
-    assert_eq!(a.stats().current, 30);
+    assert_eq!(a.stats().current, 32, "the 32-byte bin");
     assert_eq!(a.stats().reallocs, 4);
     // The block left in the 16-byte bin is handed out again.
     let again = alloc(&a, 12);
@@ -1157,11 +1166,11 @@ fn shrinking_realloc_moves_to_the_smaller_bin() {
     // SAFETY: `b.p` holds 10 bytes, copied from the old block.
     let bytes = unsafe { std::slice::from_raw_parts(b.p, 10) };
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    assert_eq!(a.stats().current, 10);
+    assert_eq!(a.stats().current, 16);
     // The 112-byte block is free again: its bin hands it out next.
     let again = alloc(&a, 112);
     assert_eq!(again.p, big);
-    assert_eq!(a.stats().current, 122);
+    assert_eq!(a.stats().current, 128);
 }
 
 #[test]
@@ -1174,23 +1183,24 @@ fn owner_fast_path_accounts_like_the_general_one() {
     let y = alloc(&a, 1000);
     assert!(is_heap_block(x.p) && is_heap_block(y.p));
     let s = a.stats();
-    assert_eq!((s.current, s.peak, s.allocs, s.frees), (1024, 1024, 2, 0));
+    // 24 bytes and the 1024-byte bin.
+    assert_eq!((s.current, s.peak, s.allocs, s.frees), (1048, 1048, 2, 0));
     let y_addr = y.p.addr();
     drop(y);
     let s = a.stats();
-    assert_eq!((s.current, s.peak, s.frees), (24, 1024, 1));
+    assert_eq!((s.current, s.peak, s.frees), (24, 1048, 1));
     let z = alloc(&a, 500);
-    assert_eq!(a.stats().peak, 1024, "below the peak: unchanged");
+    assert_eq!(a.stats().peak, 1048, "below the peak: unchanged");
     let w = alloc(&a, 1000);
     assert_eq!(w.p.addr(), y_addr, "the freed block is reused");
-    assert_eq!(a.stats().current, 1524);
-    assert_eq!(a.stats().peak, 1524, "a new high-water mark");
+    assert_eq!(a.stats().current, 24 + 512 + 1024);
+    assert_eq!(a.stats().peak, 1560, "a new high-water mark");
     // A large block (the inner allocator, through the general path) joins
     // the same counters.
     let big = alloc(&a, MAX_SMALL_SIZE + 1);
     assert!(!is_heap_block(big.p));
-    assert_eq!(a.stats().current, 1524 + MAX_SMALL_SIZE + 1);
-    assert_eq!(a.stats().peak, 1524 + MAX_SMALL_SIZE + 1);
+    assert_eq!(a.stats().current, 1560 + PAGE_SIZE);
+    assert_eq!(a.stats().peak, 1560 + PAGE_SIZE);
     drop(big);
     drop(w);
     drop(z);
@@ -1208,17 +1218,19 @@ fn fast_path_defers_to_the_limit_check() {
     let a = CountingAlloc::new(System);
     a.request_start(Some(4 * M)).expect("limit");
     assert!(a.is_bound_to_current_thread());
-    // Exact bytes (tracked mode), so the threshold is the limit itself.
+    // Tracked mode checks every request, so the threshold is the limit
+    // itself. Blocks of 3072 bytes leave 2048 bytes (a bin size) of room:
+    // 4M - PHP_BASELINE = 1234 * 3072 + 2048.
     a.set_tracked(true);
     let mut fill = Vec::new();
-    while a.usage() + 3000 <= 4 * M {
-        fill.push(alloc(&a, 3000));
+    while a.usage() + 3072 <= 4 * M {
+        fill.push(alloc(&a, 3072));
     }
     assert!(fill.iter().all(|b| is_heap_block(b.p)));
     assert_eq!(a.check(), None);
     let room = 4 * M - a.usage();
-    assert!(room < 3000);
-    let exact = (room > 0).then(|| alloc(&a, room));
+    assert_eq!(room, 2048);
+    let exact = Some(alloc(&a, room));
     assert_eq!(a.usage(), 4 * M);
     assert_eq!(a.check(), None, "exactly at the limit is fine");
     let over = alloc(&a, 8);
@@ -1518,7 +1530,7 @@ fn persistent_growth_and_release_leave_usage_and_peak_alone() {
     assert_eq!(a.peak(), peak);
     // Ordinary blocks still count.
     let c = alloc(&a, 100);
-    assert_eq!(a.usage(), start + 100);
+    assert_eq!(a.usage(), start + 112);
     drop(c);
     assert_eq!(a.usage(), start);
 }
@@ -1531,7 +1543,7 @@ fn persistent_block_freed_outside_the_scope_shows_as_a_release() {
     let b = a.persistent(|| alloc(&a, 1000));
     assert_eq!(a.usage(), start);
     drop(b);
-    assert_eq!(a.usage(), start - 1000);
+    assert_eq!(a.usage(), start - 1024);
 }
 
 #[test]
@@ -1541,7 +1553,149 @@ fn persistent_scope_moves_the_limit_threshold_with_the_baseline() {
     a.set_tracked(true);
     a.set_limit(Some(PHP_BASELINE + 10_000)).expect("limit");
     let _p = a.persistent(|| alloc(&a, 8_000));
-    // 8,000 persistent bytes do not count: 9,000 more still fit.
-    let _b = alloc(&a, 9_000);
+    // 8,000 persistent bytes (charged 8,192) do not count: 8,000 more
+    // still fit.
+    let _b = alloc(&a, 8_000);
     assert!(a.check().is_none());
+}
+
+// ---- php-src's size classes ---------------------------------------------
+
+/// The element sizes of `ZEND_MM_BINS_INFO` (`Zend/zend_alloc_sizes.h`),
+/// copied from the C macro.
+const C_BINS: [usize; 30] = [
+    8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640,
+    768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
+];
+
+#[test]
+fn zend_size_matches_the_c_size_classes() {
+    use crate::limit::MAX_LARGE_SIZE;
+    // Small: the first bin that holds the request (`zend_mm_small_size_to_bin`
+    // picks the smallest), for every size.
+    for size in 1..=MAX_SMALL_SIZE {
+        let want = C_BINS
+            .iter()
+            .copied()
+            .find(|&b| b >= size)
+            .expect("a bin holds every small size");
+        assert_eq!(zend_size(size), want, "{size}");
+        assert_eq!(
+            usize::from(BIN_SIZE[small_size_to_bin(size)]),
+            want,
+            "{size}"
+        );
+    }
+    // Every boundary: a bin's size stays in it, one byte more is the next.
+    for w in C_BINS.windows(2) {
+        assert_eq!(zend_size(w[0]), w[0]);
+        assert_eq!(zend_size(w[0] + 1), w[1]);
+    }
+    assert_eq!(zend_size(0), 8, "size 0 takes the first bin");
+    // Large: whole pages (`ZEND_MM_SIZE_TO_NUM(size, ZEND_MM_PAGE_SIZE)`);
+    // huge: `ZEND_MM_ALIGNED_SIZE_EX(size, REAL_PAGE_SIZE)`.
+    for (size, want) in [
+        (MAX_SMALL_SIZE + 1, PAGE_SIZE),
+        (PAGE_SIZE, PAGE_SIZE),
+        (PAGE_SIZE + 1, 2 * PAGE_SIZE),
+        (255 * PAGE_SIZE, 255 * PAGE_SIZE),
+        (255 * PAGE_SIZE + 1, 256 * PAGE_SIZE),
+        (MAX_LARGE_SIZE - 1, MAX_LARGE_SIZE),
+        (MAX_LARGE_SIZE, MAX_LARGE_SIZE),
+        (MAX_LARGE_SIZE + 1, CHUNK_SIZE),
+        (CHUNK_SIZE, CHUNK_SIZE),
+        (CHUNK_SIZE + 1, CHUNK_SIZE + PAGE_SIZE),
+        // str_repeat('a', 5 MiB): a 24-byte zend_string header + 5 MiB + 1.
+        (5 * M + 25, 5_246_976),
+    ] {
+        assert_eq!(zend_size(size), want, "{size}");
+    }
+    // The thresholds the accounting tests sizes against are fixed points,
+    // so a size and its class fall on the same side of each.
+    for t in [MAX_SMALL_SIZE, MAX_LARGE_SIZE, 255 * PAGE_SIZE] {
+        assert_eq!(zend_size(t), t);
+    }
+}
+
+#[test]
+fn usage_moves_only_when_a_block_changes_size_class() {
+    // memory_get_usage() with a string of n bytes alive (header + n + 1
+    // bytes): php8.5 steps 256 256 ... 256 264 at n = 8 -> 9 for a block
+    // crossing from the 32-byte into the 40-byte bin, never by one byte.
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    a.set_baseline();
+    let base = a.usage();
+    let seen: Vec<usize> = (1..=40)
+        .map(|n| {
+            let _live = alloc(&a, 24 + n + 1);
+            a.usage() - base
+        })
+        .collect();
+    let mut want = vec![32; 7];
+    want.extend([40; 8]);
+    want.extend([48; 8]);
+    want.extend([56; 8]);
+    want.extend([64; 8]);
+    want.extend([80; 1]);
+    assert_eq!(seen, want);
+    // A realloc within a class moves nothing, across classes the difference.
+    let mut b = alloc(&a, 25);
+    let in_class = a.usage();
+    grow(&mut b, 32);
+    assert_eq!(a.usage(), in_class);
+    grow(&mut b, 33);
+    assert_eq!(a.usage(), in_class + 8);
+    grow(&mut b, 3000);
+    assert_eq!(a.usage(), in_class - 32 + 3072);
+    grow(&mut b, 3100);
+    assert_eq!(a.usage(), in_class - 32 + PAGE_SIZE);
+    grow(&mut b, 4000);
+    assert_eq!(a.usage(), in_class - 32 + PAGE_SIZE, "the same page");
+    drop(b);
+    assert_eq!(a.usage(), base);
+    assert_eq!(a.peak(), base + 4096);
+    a.unbind_current_thread();
+}
+
+#[test]
+fn limit_errors_report_what_php_src_tried_to_allocate() {
+    // `php -d memory_limit=4M -r '$s = str_repeat("a", 5 * 1024 * 1024);'`:
+    // "Allowed memory size of 4194304 bytes exhausted (tried to allocate
+    // 5246976 bytes)", the huge block rounded to pages.
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    let over = alloc(&a, 5 * M + 25);
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: 5_246_976
+        })
+    );
+    assert_eq!(
+        a.check().expect("pending").to_string(),
+        "Allowed memory size of 4194304 bytes exhausted (tried to allocate 5246976 bytes)"
+    );
+    a.clear();
+    drop(over);
+    a.request_end();
+    // A loop filling an array with small strings: "(tried to allocate
+    // 2097152 bytes)", the chunk the next small block would need.
+    let b = CountingAlloc::new(System);
+    b.request_start(Some(4 * M)).expect("limit");
+    let mut fill = Vec::new();
+    while b.check().is_none() {
+        fill.push(alloc(&b, 24 + 100 + 1));
+    }
+    assert_eq!(
+        b.check(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: CHUNK_SIZE
+        })
+    );
+    b.clear();
+    drop(fill);
+    b.request_end();
 }

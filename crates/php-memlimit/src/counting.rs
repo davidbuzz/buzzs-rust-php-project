@@ -91,10 +91,12 @@ fn is_big(size: usize) -> bool {
 /// block growing in place, the growth: `zend_mm_realloc_huge`) and, for
 /// every small or large request, the new chunk it would need
 /// (`zend_mm_alloc_pages`: `ZEND_MM_CHUNK_SIZE`); a request served from a
-/// chunk the heap already has never checks the limit.
+/// chunk the heap already has never checks the limit. In
+/// [tracked mode](CountingAlloc::set_tracked) `tracked_malloc` checks each
+/// request itself: the figure is the (charged) request.
 #[inline]
-fn zend_tried(size: usize, huge: bool) -> usize {
-    if huge {
+fn zend_tried(size: usize, huge: bool, tracked: bool) -> usize {
+    if huge || tracked {
         size
     } else {
         crate::limit::CHUNK_SIZE
@@ -1151,7 +1153,7 @@ impl<A> CountingAlloc<A> {
                     let hard_limit = self.hard_limit().unwrap_or(LIMIT_MAX);
                     handler(HardLimitExceeded {
                         hard_limit,
-                        tried: zend_tried(size, huge),
+                        tried: zend_tried(size, huge, self.is_tracked()),
                     });
                 }
             }
@@ -1170,7 +1172,7 @@ impl<A> CountingAlloc<A> {
         }
         let recorded = self.record(OverLimit {
             limit,
-            tried: zend_tried(size, huge),
+            tried: zend_tried(size, huge, self.is_tracked()),
         });
         let granted = !in_fallible_scope();
         if recorded && granted {
