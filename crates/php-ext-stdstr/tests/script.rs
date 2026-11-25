@@ -542,3 +542,28 @@ fn htmlspecialchars_verbatim_prefix() {
          &amp; &lt; &amp;bogus;|616263efbfbdefbfbd|e974e9|8140266c743b|it&apos;s"
     );
 }
+
+/// `strtr()` returns its subject itself when nothing is replaced (no pair
+/// matches, no pairs, no `$from` byte occurs, an identity translation of
+/// several bytes) and a new string when a replacement is made, even an
+/// identical one; the array form looks keys up in the pairs array:
+/// longest match first, integer keys as their digits, empty keys warned
+/// about, keys longer than the subject, replacements converted
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn strtr_shares_unchanged_subjects() {
+    let out = run(r#"$a = ''; for ($i = 0; $i < 2; $i++) { $a .= 'Hello'; }
+        foreach ([['x' => 'y', 'zz' => 'w'], ['x' => 'y'], [], ['l' => 'l'], ['l' => 'l', 'q' => 'r']] as $p) { $r = strtr($a, $p); debug_zval_dump($r); }
+        foreach ([['xy', 'ab'], ['l', 'l'], ['lo', 'lo'], ['lo', 'ol'], ['', 'x']] as [$f, $t]) { $r = strtr($a, $f, $t); debug_zval_dump($r); }
+        echo strtr("  Hello World  ", ["Hello" => "Bye", "World" => "All"]), '|', strtr("a1b22c-3", [1 => 'one', 22 => 'X', 2 => 'two', -3 => 'm3']), '|', strtr("abc", ['' => 'x', 'b' => 'B']), '|', strtr("abc", ['' => 'x']), '|', strtr("hi all", ["hi" => 1, "all" => 2.5, "h" => true]), '|', strtr("aaa", ["a" => "b", "aa" => "c"]), '|', strtr("ab", ["abc" => "x", "b" => "y"]), '|', strtr("05", ["05" => "five", 5 => "x"]), '|', strtr("abcabc", ["bc" => ""]), '|', strtr("xyz", "xz", "ZXq");"#);
+    let unchanged = "string(10) \"HelloHello\" refcount(3)\n";
+    let new = "string(10) \"HelloHello\" refcount(2)\n";
+    let warning = "\nWarning: strtr(): Ignoring replacement of empty string in t.php on line 4\n";
+    assert_eq!(
+        out,
+        format!(
+            "{unchanged}{unchanged}{unchanged}{new}{new}{unchanged}{new}{unchanged}\
+             string(10) \"HeoolHeool\" refcount(2)\n{unchanged}  Bye All  |aonebXcm3|{warning}aBc|{warning}abc|1 2.5|cb|ay|five|aa|ZyX"
+        )
+    );
+}

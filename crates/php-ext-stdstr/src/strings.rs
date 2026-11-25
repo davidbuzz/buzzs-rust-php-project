@@ -646,11 +646,7 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         if s.is_empty() {
             return Ok(bytes(ZStr::empty()));
         }
-        return Ok(bytes(transform::strtr(
-            s.as_bytes(),
-            from.as_bytes(),
-            to.as_bytes(),
-        )));
+        return Ok(Value::Str(strtr_chars(s, from.as_bytes(), to.as_bytes())));
     }
     let Value::Array(pairs) = from else {
         let msg = format!("must be of type array, {} given", crate::type_name(&from));
@@ -659,38 +655,109 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if s.is_empty() {
         return Ok(bytes(ZStr::empty()));
     }
-    let mut ps: Vec<(Vec<u8>, Value)> = Vec::with_capacity(pairs.len());
-    for (k, v) in pairs.iter() {
-        let key = match k {
-            ArrayKey::Int(i) => i.to_string().into_bytes(),
-            ArrayKey::Str(s) => s.as_bytes().to_vec(),
+    // `php_strtr_array()`: the subject itself for no pairs.
+    if pairs.is_empty() {
+        return Ok(Value::Str(s));
+    }
+    if pairs.len() == 1 {
+        return strtr_one_pair(vm, s, &pairs);
+    }
+    Ok(Value::Str(strtr_table(vm, s, &pairs)?))
+}
+
+/// `php_strtr_ex()`: the subject itself (`zend_string_copy`) when no byte
+/// changes (no `$from` byte, for one byte; no byte that translates to
+/// another, for more), else the translated copy.
+fn strtr_chars(s: ZStr, from: &[u8], to: &[u8]) -> ZStr {
+    let n = from.len().min(to.len());
+    let unchanged = match n {
+        0 => true,
+        1 => !s.as_bytes().contains(&from[0]),
+        _ => false,
+    };
+    if unchanged {
+        return s;
+    }
+    let r = transform::strtr(s.as_bytes(), from, to);
+    if n > 1 && r == s.as_bytes() {
+        return s;
+    }
+    ZStr::from(r)
+}
+
+/// `php_strtr_array()` of one pair: the replacement converted first, an
+/// empty key warned about, and the subject itself when the key does not
+/// occur (`php_char_to_str_ex()` / `php_str_to_str_ex()` return
+/// `zend_string_copy(str)` then).
+fn strtr_one_pair(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<Value> {
+    let Some((k, v)) = pairs.iter().next() else {
+        return Ok(Value::Str(s));
+    };
+    let key: Cow<'_, [u8]> = match k {
+        ArrayKey::Int(i) => Cow::Owned(i.to_string().into_bytes()),
+        ArrayKey::Str(k) => Cow::Borrowed(k.as_bytes()),
+    };
+    let val = to_str(vm, v)?;
+    if key.is_empty() {
+        vm.php_warning("Ignoring replacement of empty string")?;
+        return Ok(Value::Str(s));
+    }
+    let count = mem::occurrences(s.as_bytes(), &key, false);
+    if count == 0 {
+        return Ok(Value::Str(s));
+    }
+    let hay = s.as_bytes();
+    let grown = hay
+        .len()
+        .saturating_add(count.saturating_mul(val.len().saturating_sub(key.len())));
+    mem::check(vm, mem::zstr(grown))?;
+    let mut out = Vec::with_capacity(
+        grown.saturating_sub(count.saturating_mul(key.len().saturating_sub(val.len()))),
+    );
+    let mut p = 0;
+    while let Some(r) = search::memnstr(&hay[p..], &key) {
+        out.extend_from_slice(&hay[p..p + r]);
+        out.extend_from_slice(val.as_bytes());
+        p += r + key.len();
+    }
+    out.extend_from_slice(&hay[p..]);
+    Ok(bytes(out))
+}
+
+/// `php_strtr_array_ex()`: the keys summed up (an empty one warned about),
+/// then the subject scanned with each candidate looked up in the pairs
+/// array itself by its own hash (`zend_hash_str_find`; a numeric-looking
+/// candidate finds an integer key, as php-src's table of the integer keys
+/// as strings does), each replacement converted when it is used. The
+/// subject itself when nothing is replaced (`RETURN_STR_COPY`). Copying
+/// every key and value into a vector and a SipHash map first cost ~1,000
+/// instructions a call.
+fn strtr_table(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<ZStr> {
+    let mut keys = transform::StrtrKeys::new();
+    for (k, _) in pairs.iter() {
+        let taken = match k {
+            ArrayKey::Int(i) => keys.add(i.to_string().as_bytes(), s.len()),
+            ArrayKey::Str(k) => keys.add(k.as_bytes(), s.len()),
         };
-        ps.push((key, v.clone()));
+        if !taken && matches!(k, ArrayKey::Str(k) if k.is_empty()) {
+            vm.php_warning("Ignoring replacement of empty string")?;
+        }
     }
     let mut alloc = s.len();
-    let mut n = Notices::new();
-    let r = transform::strtr_pairs_with(
+    let r = transform::strtr_scan_with(
         s.as_bytes(),
-        &ps,
-        &mut n,
-        |key, v, notices, capacity| -> VmResult<ZStr> {
-            emit(vm, std::mem::take(notices))?;
+        &keys,
+        |key| pairs.get_sym(key),
+        |key, v, capacity| -> VmResult<ZStr> {
             let val = to_str(vm, v)?;
-            if ps.len() == 1 {
-                let count = mem::occurrences(s.as_bytes(), key, false);
-                alloc =
-                    alloc.saturating_add(count.saturating_mul(val.len().saturating_sub(key.len())));
-            } else {
-                alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
-            }
+            alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
             if alloc > capacity {
                 mem::check(vm, mem::zstr(alloc - capacity))?;
             }
             Ok(val)
         },
-    );
-    emit(vm, n)?;
-    Ok(bytes(r?))
+    )?;
+    Ok(r.map_or(s, ZStr::from))
 }
 
 fn strrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
