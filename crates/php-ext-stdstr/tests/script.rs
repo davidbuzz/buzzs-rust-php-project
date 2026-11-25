@@ -567,3 +567,34 @@ fn strtr_shares_unchanged_subjects() {
         )
     );
 }
+
+/// str_getcsv()'s `$enclosure` and `$escape` reflect their stub defaults
+/// (`"\""` and `"\\"`), while the handler still tells an omitted
+/// `$escape` (deprecated) from a passed one, as zpp's NULL does in C.
+#[test]
+fn str_getcsv_defaults_reflect_and_omitted_escape_is_deprecated() {
+    let out = run(r#"
+        set_error_handler(function ($n, $m) { echo "$n: $m\n"; return true; });
+        echo implode("|", str_getcsv("a,'b c',d\\\"e")), "\n";
+        echo implode("|", str_getcsv("a,'b c'", ",", "'")), "\n";
+        echo implode("|", str_getcsv("a;'b c'", ";", escape: "\\")), "\n";
+        echo implode("|", str_getcsv("a,'b c'", enclosure: "'", escape: "")), "\n";
+        $p = (new ReflectionFunction("str_getcsv"))->getParameters();
+        var_dump($p[2]->getDefaultValue(), $p[3]->getDefaultValue());
+        echo $p[2], "\n", $p[3], "\n";
+    "#);
+    assert_eq!(
+        out,
+        r#"8192: str_getcsv(): the $escape parameter must be provided as its default value will change
+a|'b c'|d\"e
+8192: str_getcsv(): the $escape parameter must be provided as its default value will change
+a|b c
+a|'b c'
+a|b c
+string(1) """
+string(1) "\"
+Parameter #2 [ <optional> string $enclosure = "\"" ]
+Parameter #3 [ <optional> string $escape = "\\" ]
+"#
+    );
+}

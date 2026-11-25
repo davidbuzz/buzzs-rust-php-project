@@ -1274,6 +1274,9 @@ fn utf8_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     use php_stdstr::csv;
+    // `has()`, not the value: an omitted argument holds its stub default,
+    // but zpp leaves C's `zend_string *` NULL then, which is what tells
+    // csv_options() to deprecate an omitted `$escape`.
     let sep = a.has(1).then(|| a.str(1));
     let enc = a.has(2).then(|| a.str(2));
     let esc = a.has(3).then(|| a.str(3));
@@ -1362,7 +1365,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("hebrev(string $string, int $max_chars_per_line = 0): string", hebrev)
         .function_static("nl2br(string $string, bool $use_xhtml = true): string", nl2br)
         .function_static("strip_tags(string $string, array|string|null $allowed_tags = null): string", strip_tags_fn)
-        .function_static("str_getcsv(string $string, string $separator = \",\", string $enclosure = UNKNOWN, string $escape = UNKNOWN): array", str_getcsv)
+        .function_static("str_getcsv(string $string, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array", str_getcsv)
         .function_static("str_repeat(string $string, int $times): string", str_repeat)
         .function_static("count_chars(string $string, int $mode = 0): array|string", count_chars)
         .function_static("strnatcmp(string $string1, string $string2): int", strnatcmp)
