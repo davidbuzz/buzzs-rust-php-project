@@ -1198,3 +1198,62 @@ fn type_checks_narrow_on_their_edges() {
     );
     assert!(!s.contains("method_exists"), "{s}");
 }
+
+/// `zend_compile_args_ex` (php-src master): a call passed to a parameter
+/// of an unknown function is compiled for `BP_VAR_FUNC_ARG`, its result
+/// a VAR sent with `SEND_VAR_NO_REF_EX`, in a plain call and in the call
+/// a pipe becomes alike, where the piped operand stays a value
+/// (Zend/tests/partial_application/pipe_optimization_009.phpt).
+#[test]
+fn call_results_sent_to_unknown_functions_are_vars() {
+    let out = dump(
+        "<?php\n\
+         function t() { foo(a1(), 2, a1()); }\n\
+         function u() { lhs() |> foo(arg1(), ?, arg2()); }\n",
+    );
+    let s = section(&out, "t:");
+    assert!(
+        s.contains(
+            "0001 INIT_FCALL_BY_NAME 0 string(\"a1\")\n\
+             0002 V0 = DO_FCALL_BY_NAME\n\
+             0003 SEND_VAR_NO_REF_EX V0 1\n\
+             0004 SEND_VAL_EX int(2) 2\n"
+        ) && s.contains("0006 V0 = DO_FCALL_BY_NAME\n0007 SEND_VAR_NO_REF_EX V0 3\n"),
+        "{s}"
+    );
+    let s = section(&out, "u:");
+    assert!(
+        s.contains("T0 = DO_FCALL_BY_NAME\n")
+            && s.contains("V1 = DO_FCALL_BY_NAME\n")
+            && s.contains("SEND_VAR_NO_REF_EX V1 1\n")
+            && s.contains("SEND_VAL_EX T0 2\n")
+            && s.contains("SEND_VAR_NO_REF_EX V0 3\n"),
+        "{s}"
+    );
+}
+
+/// `zend_compile_call_partial`: `CALLABLE_CONVERT_PARTIAL`'s `op2` is the
+/// `named_positions` literal when a named placeholder was sent (printed
+/// `array(...)`), unused otherwise
+/// (Zend/tests/partial_application/pipe_optimization_007.phpt).
+#[test]
+fn partial_application_with_named_placeholders_dumps_their_positions() {
+    let out = dump(
+        "<?php\n\
+         function v() { return 2 |> foo(a: ?, b: ?); }\n\
+         function w() { return foo(1, ?); }\n",
+    );
+    let s = section(&out, "v:");
+    assert!(
+        s.contains("SEND_PLACEHOLDER string(\"a\")\n")
+            && s.contains("SEND_PLACEHOLDER string(\"b\")\n")
+            && s.contains("= CALLABLE_CONVERT_PARTIAL 0 string(\"{closure:")
+            && s.contains("}\") array(...)\n"),
+        "{s}"
+    );
+    let s = section(&out, "w:");
+    assert!(
+        s.contains("= CALLABLE_CONVERT_PARTIAL 0 string(\"{closure:") && !s.contains("array(...)"),
+        "{s}"
+    );
+}

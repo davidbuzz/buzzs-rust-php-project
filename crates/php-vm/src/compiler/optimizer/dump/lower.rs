@@ -21,7 +21,7 @@ use crate::opcode::{
     MatchKey, NullChain, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use crate::types::TypeDecl;
-use php_runtime::{BinaryOp, Value, ZStr};
+use php_runtime::{BinaryOp, Value, ZArray, ZStr};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -473,6 +473,10 @@ struct Call {
     /// A named argument out of order, or an unpacking: some parameter
     /// may be missing (`may_have_undef`, `ZEND_CHECK_UNDEF_ARGS`).
     undef: bool,
+    /// A named placeholder was sent (`foo(a: ?)`): php-src's
+    /// `zend_compile_args` built `named_positions`, which
+    /// `CALLABLE_CONVERT_PARTIAL` carries as its `op2` literal.
+    named_placeholder: bool,
 }
 
 /// A call whose arguments `ZEND_SEND_USER` / `ZEND_SEND_ARRAY` send
@@ -1173,6 +1177,7 @@ impl<'a> Lower<'a> {
                     names: None,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitMethodCall { obj, name } => {
@@ -1216,6 +1221,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitStaticCall { class, name } => {
@@ -1269,6 +1275,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitParentHook { prop, set } => {
@@ -1290,6 +1297,7 @@ impl<'a> Lower<'a> {
                     names: None,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::New { class, dst, .. } => {
@@ -1343,6 +1351,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::Send { src } => self.lower_send(src, None),
@@ -1386,6 +1395,7 @@ impl<'a> Lower<'a> {
                     names: None,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::SendUser { src, n } => {
@@ -1411,6 +1421,7 @@ impl<'a> Lower<'a> {
                 let (num, name) = match self.calls.last_mut() {
                     Some(c) => {
                         c.sent += 1;
+                        c.named_placeholder |= name.is_some();
                         resolve_arg(c, name)
                     }
                     None => (Some(1), name),
@@ -1427,9 +1438,16 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("CALLABLE_CONVERT").t(*dst).x(" 0"));
             }
             Op::CallablePartial { dst, name, .. } => {
-                self.calls.pop();
+                // `zend_compile_call_partial`: `op1` is the closure's name,
+                // `op2` the `named_positions` array of named placeholders
+                // (printed `array(...)`), unused without them.
+                let named = self.calls.pop().is_some_and(|c| c.named_placeholder);
                 let n = Z::Const(self.lit(*name));
-                self.push(ZLine::new("CALLABLE_CONVERT_PARTIAL").t(*dst).x(" 0").b(n));
+                let mut line = ZLine::new("CALLABLE_CONVERT_PARTIAL").t(*dst).x(" 0").a(n);
+                if named {
+                    line = line.b(Z::Const(Value::Array(ZArray::new())));
+                }
+                self.push(line);
             }
             Op::Recv { n, cv } => {
                 self.push(ZLine::new("RECV").r(Z::Cv(*cv)).a(Z::Num(n + 1)));
@@ -2554,6 +2572,7 @@ impl Lower<'_> {
                 names,
                 count: 0,
                 undef: false,
+                named_placeholder: false,
             });
             return;
         }
@@ -2593,6 +2612,7 @@ impl Lower<'_> {
             names,
             count: 0,
             undef: false,
+            named_placeholder: false,
         });
     }
 
@@ -2639,10 +2659,29 @@ impl Lower<'_> {
             }
             ArgSrc::CallResult(o) => {
                 let v = self.z(o);
-                let op = match by_ref {
-                    Some(true) => "SEND_VAR_NO_REF",
-                    Some(false) => "SEND_VAL",
-                    None => "SEND_VAL_EX",
+                // `zend_compile_args_ex`: a call sent to a by-reference or
+                // unknown parameter is compiled for `BP_VAR_FUNC_ARG`, its
+                // result an `IS_VAR` sent with `SEND_VAR_NO_REF(_EX)`; to a
+                // by-value parameter, for `BP_VAR_R` (a TMP, `SEND_VAL`). A
+                // call that became a builtin instruction or a literal
+                // (no `DO_*CALL` line producing the operand) is sent as a
+                // value.
+                let var = by_ref != Some(false)
+                    && v.tmp().is_some()
+                    && self
+                        .lines
+                        .last()
+                        .is_some_and(|l| super::passes::is_do_call(l.op) && l.res.tmp() == v.tmp());
+                if var {
+                    if let Some(l) = self.lines.last_mut() {
+                        l.res_var = true;
+                    }
+                }
+                let op = match (by_ref, var) {
+                    (Some(true), _) => "SEND_VAR_NO_REF",
+                    (Some(false), _) => "SEND_VAL",
+                    (None, true) => "SEND_VAR_NO_REF_EX",
+                    (None, false) => "SEND_VAL_EX",
                 };
                 self.push(ZLine::new(op).a(v).b(pos));
             }
