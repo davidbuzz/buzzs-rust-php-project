@@ -2,9 +2,10 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/standard/string.c` functions.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 
-use php_runtime::string::{format_long, ZStrBuf, LONG_MAX_LEN};
+use php_runtime::string::ZStrBuf;
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdstr::analysis::{self, CharCounts, WordCount};
 use php_stdstr::error::Notices;
@@ -152,46 +153,81 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ))))
 }
 
+/// `ZVAL_DEREF`: the value itself, or the one a reference points at
+/// (a copy only then).
+#[inline]
+fn deref_cow(v: &Value) -> Cow<'_, Value> {
+    match v {
+        Value::Reference(r) => Cow::Owned(r.get()),
+        v => Cow::Borrowed(v),
+    }
+}
+
+/// Whether piece `v` keeps `php_implode`'s result `IS_STR_VALID_UTF8`
+/// (see [`implode_valid_utf8`]).
+#[inline]
+fn piece_valid_utf8(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => s.is_valid_utf8(),
+        Value::Object(_) | Value::Resource(_) => false,
+        _ => true,
+    }
+}
+
 /// `php_implode()`: the pieces joined straight into the result string
 /// (one exactly sized allocation for string and integer pieces), with its
 /// single-element case: the element's own string (`zval_get_string`, no
-/// copy for a string).
-fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
+/// copy for a string). The result is flagged `IS_STR_VALID_UTF8` as
+/// [`implode_valid_utf8`] says, worked out in the same pass.
+///
+/// The pieces are read where they lie (`ZEND_HASH_FOREACH_VAL` +
+/// `ZVAL_DEREF`): a copy of each, made twice and dropped twice, plus a
+/// third pass for the flag, cost about two thirds of a three-piece call.
+fn implode_zstr(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> VmResult<ZStr> {
     if pieces.is_empty() {
         return Ok(ZStr::empty());
     }
     if pieces.len() == 1 {
         if let Some((_, v)) = pieces.iter().next() {
-            if let Value::Str(s) = v.deref() {
-                return Ok(s);
+            if let Value::Str(s) = &*deref_cow(v) {
+                return Ok(s.clone());
             }
         }
     }
-    let known: usize = pieces
-        .iter()
-        .map(|(_, v)| match v.deref() {
+    let mut known = 0usize;
+    let mut valid = pieces.len() == 1 || glue.is_valid_utf8();
+    for (_, v) in pieces.iter() {
+        let v = deref_cow(v);
+        known = known.saturating_add(match &*v {
             Value::Str(s) => s.len(),
-            Value::Int(n) => php_runtime::string::long_str_len(n),
+            Value::Int(n) => php_runtime::string::long_str_len(*n),
             _ => 0,
-        })
-        .sum();
-    let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
+        });
+        valid &= piece_valid_utf8(&v);
+    }
+    let glue_bytes = glue.as_bytes();
+    let total = known.saturating_add(
+        glue_bytes
+            .len()
+            .saturating_mul(pieces.len().saturating_sub(1)),
+    );
     mem::check(vm, mem::zstr(total))?;
     let mut out = ZStrBuf::with_capacity(total);
     for (i, (_, v)) in pieces.iter().enumerate() {
         if i > 0 {
-            out.push(glue);
+            out.push_str(glue);
         }
-        match v.deref() {
-            Value::Str(s) => out.push(s.as_bytes()),
-            Value::Int(n) => {
-                let mut buf = [0u8; LONG_MAX_LEN];
-                out.push(format_long(n, &mut buf));
-            }
-            other => out.push(to_str(vm, &other)?.as_bytes()),
+        match &*deref_cow(v) {
+            Value::Str(s) => out.push_str(s),
+            Value::Int(n) => out.push_long(*n),
+            other => out.push(to_str(vm, other)?.as_bytes()),
         }
     }
-    Ok(out.finish())
+    let out = out.finish();
+    if valid && !out.is_valid_utf8() {
+        out.mark_valid_utf8();
+    }
+    Ok(out)
 }
 
 fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -223,11 +259,7 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    let out = implode_zstr(vm, glue.as_bytes(), pieces)?;
-    if !out.is_valid_utf8() && implode_valid_utf8(&glue, pieces) {
-        out.mark_valid_utf8();
-    }
-    Ok(Value::Str(out))
+    Ok(Value::Str(implode_zstr(vm, &glue, pieces)?))
 }
 
 /// Whether `php_implode` flags its result `IS_STR_VALID_UTF8`: an empty
@@ -236,12 +268,9 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// floats, bools, null and arrays (`"Array"`, a known string) convert to
 /// ASCII; an object's or resource's string is not known here, so it
 /// counts as unflagged.
+#[cfg(test)]
 fn implode_valid_utf8(glue: &ZStr, pieces: &ZArray) -> bool {
-    let piece = |v: &Value| match v.deref() {
-        Value::Str(s) => s.is_valid_utf8(),
-        Value::Object(_) | Value::Resource(_) => false,
-        _ => true,
-    };
+    let piece = |v: &Value| piece_valid_utf8(&v.deref());
     match pieces.len() {
         0 => true,
         1 => pieces.iter().all(|(_, v)| piece(v)),
@@ -1199,8 +1228,59 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use super::implode_valid_utf8;
-    use php_runtime::{Value, ZArray, ZStr};
+    use super::{implode_valid_utf8, implode_zstr};
+    use php_runtime::{PhpRef, Value, ZArray, ZStr};
+
+    /// `implode_zstr` joins as `php_implode` does (strings, ints, a float,
+    /// a reference's target) and flags the result exactly as
+    /// [`implode_valid_utf8`] says.
+    #[test]
+    fn implode_joins_and_flags_in_one_pass() {
+        let mut vm = php_vm::Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()));
+        let valid = |s: &str| {
+            let z = ZStr::from(s);
+            z.mark_valid_utf8();
+            Value::Str(z)
+        };
+        let raw = |b: &[u8]| Value::Str(ZStr::from(b));
+        let by_ref = Value::Reference(PhpRef::new(valid("rr")));
+        let cases: Vec<(ZStr, Vec<Value>, &[u8])> = vec![
+            (
+                ZStr::from(","),
+                vec![valid("ab"), valid("cd"), Value::Int(-12)],
+                &b"ab,cd,-12"[..],
+            ),
+            (
+                ZStr::from(", "),
+                vec![valid("ab"), raw(b"\xff\xfe")],
+                &b"ab, \xff\xfe"[..],
+            ),
+            (
+                ZStr::from("\u{e9}"),
+                vec![valid("x"), by_ref, Value::Float(1.5)],
+                "x\u{e9}rr\u{e9}1.5".as_bytes(),
+            ),
+            (ZStr::from("-"), vec![Value::Int(7)], &b"7"[..]),
+            (ZStr::from("-"), vec![valid("only")], &b"only"[..]),
+            (ZStr::from("-"), vec![], &b""[..]),
+            (
+                ZStr::from("-"),
+                vec![Value::Null, Value::Bool(true), valid("z")],
+                &b"-1-z"[..],
+            ),
+        ];
+        for (glue, pieces, joined) in cases {
+            let arr = ZArray::from_values(pieces);
+            let out = implode_zstr(&mut vm, &glue, &arr).unwrap();
+            assert_eq!(out.as_bytes(), joined);
+            let want = implode_valid_utf8(&glue, &arr);
+            assert!(
+                out.is_valid_utf8() == want || out.is_interned(),
+                "{joined:?}: flag {} want {want}",
+                out.is_valid_utf8()
+            );
+        }
+    }
 
     fn list(items: Vec<Value>) -> ZArray {
         ZArray::from_values(items)
