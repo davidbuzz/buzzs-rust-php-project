@@ -2724,6 +2724,15 @@ pub(super) fn call_native(
         func: Some(b),
     };
     let mut r = handler(vm, &mut args);
+    // `zend_try_assign_typed_ref`: what the handler wrote to a typed
+    // by-reference argument (a typed property sent by reference, a
+    // variable bound to one) is checked and stored when it returns, and a
+    // refused value's `TypeError` is this call's, as on the general path
+    // (`Vm::call_builtin_impl`). Only a call that was sent a reference
+    // can have queued such a write.
+    if sent_ref {
+        r = vm.flush_typed_arg_writes(r);
+    }
     if r.is_ok() {
         if let Err(e) = vm.check_interrupt() {
             r = Err(e);
