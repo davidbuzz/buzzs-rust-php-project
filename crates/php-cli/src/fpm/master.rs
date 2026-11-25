@@ -53,6 +53,30 @@ impl Child {
     }
 }
 
+/// `last_idle_child` of `fpm_pctl_perform_idle_server_maintenance()`
+/// (fpm_process_ctl.c): of the idle children (`fpm_request_is_idle()`),
+/// the one started first, whether or not it was already asked to quit.
+fn oldest_idle_child(p: &PoolRt) -> Option<usize> {
+    p.children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| p.scoreboard.proc(c.slot).stage == Some(Stage::Accepting))
+        .min_by_key(|(_, c)| c.started)
+        .map(|(ci, _)| ci)
+}
+
+/// `fpm_pctl_kill_idle_child()`: an idle child is asked to quit
+/// (`SIGQUIT`); one asked before, still idle because it blocks the signal
+/// (bug #77023), is killed (`SIGKILL`).
+fn kill_idle_child(c: &mut Child) {
+    if c.idle_kill {
+        os::kill(c.pid, libc::SIGKILL);
+    } else {
+        c.idle_kill = true;
+        os::kill(c.pid, libc::SIGQUIT);
+    }
+}
+
 /// A pool at run time (`struct fpm_worker_pool_s`).
 pub struct PoolRt {
     pub conf: Pool,
@@ -918,26 +942,17 @@ impl Master {
                     u64::try_from(p.conf.pm_process_idle_timeout).unwrap_or(10) * 1_000_000;
                 let (secs, usec) = os::now();
                 let now = u64::try_from(secs).unwrap_or(0) * 1_000_000 + u64::from(usec);
-                let mut oldest: Option<(usize, u64)> = None;
-                for (ci, c) in p.children.iter().enumerate() {
-                    let pr = p.scoreboard.proc(c.slot);
-                    if pr.stage != Some(Stage::Accepting) {
-                        continue;
-                    }
+                // `last_idle_child`: the idle child started first, whose
+                // last activity is then compared with the timeout.
+                if let Some(ci) = oldest_idle_child(p) {
+                    let pr = p.scoreboard.proc(p.children[ci].slot);
                     let since = if pr.accepted_us == 0 {
                         u64::try_from(pr.start_epoch).unwrap_or(0) * 1_000_000
                     } else {
                         pr.accepted_us + pr.duration_us
                     };
-                    if oldest.is_none_or(|(_, s)| since < s) {
-                        oldest = Some((ci, since));
-                    }
-                }
-                if let Some((ci, since)) = oldest {
                     if now.saturating_sub(since) > timeout {
-                        let c = &mut p.children[ci];
-                        c.idle_kill = true;
-                        os::kill(c.pid, libc::SIGQUIT);
+                        kill_idle_child(&mut p.children[ci]);
                     }
                 }
                 None
@@ -954,11 +969,8 @@ impl Master {
                     ),
                 );
                 if idle > max_spare {
-                    if let Some(c) = p.children.iter_mut().rev().find(|c| {
-                        p.scoreboard.proc(c.slot).stage == Some(Stage::Accepting) && !c.idle_kill
-                    }) {
-                        c.idle_kill = true;
-                        os::kill(c.pid, libc::SIGQUIT);
+                    if let Some(ci) = oldest_idle_child(p) {
+                        kill_idle_child(&mut p.children[ci]);
                     }
                     p.idle_spawn_rate = 1;
                     return None;
@@ -1020,5 +1032,47 @@ impl Master {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// bug77023-pm-dynamic-blocking-sigquit.phpt: a child that blocks
+    /// `SIGQUIT` is asked to quit once, then killed: "child N exited on
+    /// signal 9 (SIGKILL)".
+    #[test]
+    fn an_idle_child_ignoring_sigquit_is_killed_next_time() {
+        use std::io::BufRead;
+        let Ok(mut proc) = std::process::Command::new("sh")
+            .args(["-c", "trap '' QUIT; echo ready; exec sleep 30"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            panic!("sh must start");
+        };
+        // The signal is ignored once the shell says so.
+        let mut line = String::new();
+        if let Some(out) = proc.stdout.take() {
+            let _ = std::io::BufReader::new(out).read_line(&mut line);
+        }
+        assert_eq!(line, "ready\n");
+        let mut c = Child {
+            pid: i32::try_from(proc.id()).unwrap_or(0),
+            slot: 0,
+            started: Instant::now(),
+            idle_kill: false,
+            fd_stdout: None,
+            fd_stderr: None,
+            log_stream: None,
+            slow_logged: 0,
+        };
+        kill_idle_child(&mut c);
+        assert!(c.idle_kill);
+        kill_idle_child(&mut c);
+        let status = proc.wait().ok().and_then(|s| s.signal());
+        assert_eq!(status, Some(libc::SIGKILL));
     }
 }
