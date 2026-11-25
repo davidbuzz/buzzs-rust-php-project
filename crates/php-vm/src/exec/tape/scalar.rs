@@ -443,6 +443,61 @@ pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
+    // The commonest subject, an array in a plain variable of a frame
+    // without a symbol table, without the handle of the op array the
+    // general path takes and without its call. The operands are copied
+    // out of the op, so its borrow ends here.
+    let Some(&Op::FeReset {
+        subject: Operand::Cv(cv),
+        kind: ForeachKind::Value,
+        iter,
+        ..
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        // SAFETY: the caller's contract, passed on; the borrow has ended.
+        return unsafe { fe_reset_any(frame, inst) };
+    };
+    if f.symtab_attached {
+        // SAFETY: as above.
+        return unsafe { fe_reset_any(frame, inst) };
+    }
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return Br::Decline;
+    };
+    if slot.is_some() {
+        // An occupied iterator: the generic op.
+        return Br::Decline;
+    }
+    let Some(Value::Array(a)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+        // SAFETY: as above.
+        return unsafe { fe_reset_any(frame, inst) };
+    };
+    if a.is_empty() {
+        // `ZEND_FE_RESET_R` of an empty array: straight past the loop,
+        // nothing kept.
+        return Br::Jump;
+    }
+    let old = slot.replace(crate::vm::ForeachIter::Array {
+        arr: a.clone(),
+        pos: 0,
+    });
+    // The slot held nothing (matched above, and nothing has touched it
+    // since): there is nothing to release.
+    debug_assert!(old.is_none());
+    std::mem::forget(old);
+    Br::Fall
+}
+
+/// [`fe_reset`] of the other subjects: a variable behind a reference, a
+/// literal, a temporary, a frame with a symbol table
+/// (`hot::fe_reset_array_in`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+unsafe fn fe_reset_any(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
     let code = Rc::clone(&f.code);
     let Some(&Op::FeReset {
         subject,
@@ -498,7 +553,22 @@ pub(super) unsafe fn fe_free(frame: *mut Frame, inst: &Inst) -> bool {
     let Some(&Op::FeFree { iter }) = f.code.ops.get(inst.d as usize) else {
         return false;
     };
-    hot::fe_free_array_in(f, iter)
+    // `hot::fe_free_array_in` with the array's handle released by itself:
+    // the iterator moved out whole went through the general drop of every
+    // kind of iterator, a call and a jump table (29 instructions).
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            if let Some(crate::vm::ForeachIter::Array { arr, .. }) = slot.take() {
+                drop(arr);
+            }
+            true
+        }
+        None => true,
+        Some(_) => false,
+    }
 }
 
 /// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.

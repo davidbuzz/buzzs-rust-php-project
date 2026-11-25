@@ -2492,7 +2492,11 @@ pub(super) unsafe fn fe_fetch_v(frame: *mut Frame, inst: &Inst) -> Br {
 #[inline(never)]
 unsafe fn fe_fetch_v_any(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: as in `fetch_dim`.
-    fe_fetch_into(unsafe { &mut *frame }, inst, false)
+    let f = unsafe { &mut *frame };
+    if fe_at_end(f, inst.a) {
+        return Br::Jump;
+    }
+    fe_fetch_into(f, inst, false)
 }
 
 /// `TOp::FeFetchKV`: the same with the key's assignment.
@@ -2517,7 +2521,26 @@ pub(super) unsafe fn fe_fetch_kv(frame: *mut Frame, inst: &Inst) -> Br {
 #[inline(never)]
 unsafe fn fe_fetch_kv_any(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: as in `fetch_dim`.
-    fe_fetch_into(unsafe { &mut *frame }, inst, true)
+    let f = unsafe { &mut *frame };
+    if fe_at_end(f, inst.a) {
+        return Br::Jump;
+    }
+    fe_fetch_into(f, inst, true)
+}
+
+/// Whether by-value array iterator `iter` stands past its table's last
+/// used slot: the step every loop ends with, which the lean path declines
+/// (no element at the position). The loop jumps out with nothing changed,
+/// as [`fe_fetch_into`] and the generic op do there (`ZEND_FE_FETCH_R`'s
+/// `fe_fetch_r_exit`: no variable written, the position kept), whatever
+/// the loop variables hold, so no other test comes first.
+#[inline(always)]
+#[allow(clippy::inline_always)] // two loads and a compare in the miss handlers
+fn fe_at_end(f: &Frame, iter: u32) -> bool {
+    matches!(
+        f.iters.get(iter as usize),
+        Some(Some(ForeachIter::Array { arr, pos })) if *pos >= arr.used()
+    )
 }
 
 /// The commonest step of a `foreach` over an array, as [`fe_fetch_into`]
