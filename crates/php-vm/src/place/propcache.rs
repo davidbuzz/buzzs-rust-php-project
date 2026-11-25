@@ -1466,7 +1466,19 @@ impl Vm {
         let Some((obj, cur, key)) = hit else {
             return Ok(None);
         };
-        let new = ops::binary_op(op, &cur, rhs, self).map_err(|e| self.rt_throw(e))?;
+        let new = match ops::binary_op(op, &cur, rhs, self) {
+            Ok(new) => new,
+            Err(e) => {
+                let t = self.rt_throw(e);
+                if key.accept == u32::MAX {
+                    return Err(t);
+                }
+                // A typed property keeps the checked UNDEF result
+                // (`zend_binary_assign_op_typed_prop`).
+                let name = self.prop_cache_name(pid);
+                return Err(self.failed_assign_op_prop(&obj, &name, t));
+            }
+        };
         // A diagnostic of the operation (a float-to-int deprecation) may
         // have run an error handler that changed the object: the direct
         // store needs the property as it was, anything else goes through

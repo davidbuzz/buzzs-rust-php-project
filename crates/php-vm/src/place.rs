@@ -1500,6 +1500,14 @@ pub(crate) fn flush_deferred_ref_assigns() {
     }
 }
 
+/// Whether `op` on `cur` is the `.=` php-src's typed paths make on the
+/// string in place (`zend_binary_assign_op_typed_prop()` /
+/// `_typed_ref()`: `concat_function(zptr, zptr, value)`), which a failure
+/// leaves as it was, rather than into a temporary that is checked.
+fn concats_in_place(op: BinaryOp, cur: &Value) -> bool {
+    op == BinaryOp::Concat && matches!(cur, Value::Str(_))
+}
+
 pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
     match wop {
         WOp::Assign(val) => {
@@ -2307,7 +2315,11 @@ impl Vm {
         }
         let nv = match self.assign_op_value(op, &cur, &v) {
             Ok(nv) => nv,
-            Err(t) => return Ok(Err(t)),
+            Err(t) if concats_in_place(op, &cur) => return Ok(Err(t)),
+            Err(t) => {
+                drop(cur);
+                return Ok(Err(self.failed_assign_op_cv(cv, vars, t)));
+            }
         };
         // The old value's handle is released before the write, so that
         // the release below sees the count php-src's would.
@@ -3012,6 +3024,58 @@ impl Vm {
         Ok(())
     }
 
+    /// A compound assignment to the variable or static property `base`
+    /// whose operation threw `err`: a typed reference or a typed static
+    /// property takes the checked UNDEF result
+    /// (`zend_binary_assign_op_typed_ref()`,
+    /// `zend_binary_assign_op_typed_prop()`, Zend/zend_execute.c); any
+    /// other variable stays as it was (`zend_binary_op(var_ptr, var_ptr,
+    /// value)` leaves `op1`). Returns the exception to throw.
+    #[cold]
+    #[inline(never)]
+    fn failed_assign_op_root(&mut self, base: &RBase, err: Throw) -> Throw {
+        match base {
+            RBase::Cell(cell) => self.failed_assign_op_static(cell, err),
+            RBase::Var(store, idx) => {
+                let held = match store.borrow().slots.get(*idx) {
+                    Some(Some(Value::Reference(r))) => Some(r.clone()),
+                    _ => None,
+                };
+                match held {
+                    Some(r) => self.failed_assign_op_ref(&r, err),
+                    None => err,
+                }
+            }
+            _ => err,
+        }
+    }
+
+    /// [`Vm::failed_assign_op_root`] for compiled variable `cv` of the
+    /// frame whose variables are `vars`, when that frame is still the
+    /// current one.
+    #[cold]
+    #[inline(never)]
+    fn failed_assign_op_cv(
+        &mut self,
+        cv: u32,
+        vars: *const RefCell<VarStore>,
+        err: Throw,
+    ) -> Throw {
+        let held = self
+            .frames
+            .last()
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            .and_then(|f| f.cvs.get(cv as usize))
+            .and_then(|slot| match slot.get() {
+                Some(Value::Reference(r)) => Some(r.clone()),
+                _ => None,
+            });
+        match held {
+            Some(r) => self.failed_assign_op_ref(&r, err),
+            None => err,
+        }
+    }
+
     /// The binary operation of a compound assignment.
     fn assign_op_value(&mut self, op: BinaryOp, cur: &Value, rhs: &Value) -> VmResult<Value> {
         ops::binary_op(op, cur, rhs, self).map_err(|e| self.rt_throw(e))
@@ -3417,7 +3481,15 @@ impl Vm {
         };
         let nv = match self.assign_op_value(op, &cur, rhs) {
             Ok(nv) => nv,
-            Err(e) => return Err(held.unwrap_or(e)),
+            Err(e) => {
+                let in_place = concats_in_place(op, &cur);
+                drop(cur);
+                return Err(match held {
+                    Some(t) => t,
+                    None if in_place => e,
+                    None => self.failed_assign_op_root(&RBase::Var(store.clone(), idx), e),
+                });
+            }
         };
         let r = self.write_var_root(store, idx, WOp::Assign(nv))?;
         match held {
@@ -3598,17 +3670,28 @@ impl Vm {
                             // `zend_assign_op_overloaded_property` and the
                             // `get_property_ptr_ptr` path alike: read, operate,
                             // write back through the property handlers.
-                            let cur = match self.native_read_property(
+                            let (cur, native) = match self.native_read_property(
                                 &obj,
                                 name,
                                 crate::ext::PropCtx::ReadWrite,
                             )? {
-                                Some(v) => v.deref(),
-                                None => {
-                                    self.fetch_property_rw(&obj, name, RwThrow::Op(op, &rhs))?
+                                Some(v) => (v.deref(), true),
+                                None => (
+                                    self.fetch_property_rw(&obj, name, RwThrow::Op(op, &rhs))?,
+                                    false,
+                                ),
+                            };
+                            let nv = match self.assign_op_value(op, &cur, &rhs) {
+                                Ok(nv) => nv,
+                                // `zend_binary_assign_op_typed_prop` keeps
+                                // the checked UNDEF result; the handlers'
+                                // path writes only on success.
+                                Err(t) if native || concats_in_place(op, &cur) => return Err(t),
+                                Err(t) => {
+                                    drop(cur);
+                                    return Err(self.failed_assign_op_prop(&obj, name, t));
                                 }
                             };
-                            let nv = self.assign_op_value(op, &cur, &rhs)?;
                             drop(cur);
                             self.write_property(&obj, name, nv)
                         }
@@ -4473,7 +4556,13 @@ impl Vm {
             Ok(nv) => nv,
             Err(e) => {
                 let err = self.rt_throw(e);
-                return Err(pending.unwrap_or(err));
+                let in_place = concats_in_place(op, &cur);
+                drop(cur);
+                return Err(match pending {
+                    Some(t) => t,
+                    None if in_place => err,
+                    None => self.failed_assign_op_root(&base2, err),
+                });
             }
         };
         drop(cur);
