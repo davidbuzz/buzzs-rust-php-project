@@ -215,3 +215,35 @@ get_resource_type(): Argument #1 ($resource) must be of type resource, false giv
 "
     );
 }
+
+/// The callback variants of array_diff() and array_intersect() parse an
+/// array and one callback (`"+f"`) or two (`"+ff"`): their minimum is 2
+/// or 3, not the stub's one required parameter.
+#[test]
+fn array_udiff_family_minimum_argument_counts() {
+    let out = run(r#"<?php
+foreach (['array_udiff', 'array_udiff_uassoc', 'array_uintersect_assoc', 'array_uintersect_uassoc', 'array_diff_ukey', 'array_intersect_uassoc', 'array_diff'] as $f) {
+    try { $f(); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    try { $f([]); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+try { array_udiff(); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "ArgumentCountError: array_udiff() expects at least 2 arguments, 0 given
+ArgumentCountError: array_udiff() expects at least 2 arguments, 1 given
+ArgumentCountError: array_udiff_uassoc() expects at least 3 arguments, 0 given
+ArgumentCountError: array_udiff_uassoc() expects at least 3 arguments, 1 given
+ArgumentCountError: array_uintersect_assoc() expects at least 2 arguments, 0 given
+ArgumentCountError: array_uintersect_assoc() expects at least 2 arguments, 1 given
+ArgumentCountError: array_uintersect_uassoc() expects at least 3 arguments, 0 given
+ArgumentCountError: array_uintersect_uassoc() expects at least 3 arguments, 1 given
+ArgumentCountError: array_diff_ukey() expects at least 2 arguments, 0 given
+ArgumentCountError: array_diff_ukey() expects at least 2 arguments, 1 given
+ArgumentCountError: array_intersect_uassoc() expects at least 2 arguments, 0 given
+ArgumentCountError: array_intersect_uassoc() expects at least 2 arguments, 1 given
+ArgumentCountError: array_diff() expects at least 1 argument, 0 given
+ArgumentCountError: array_udiff() expects at least 2 arguments, 0 given
+"
+    );
+}

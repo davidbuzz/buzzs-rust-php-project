@@ -4381,7 +4381,9 @@ impl Vm {
         let nparams = b.params.len();
         let required = b.required as usize;
         let (kind, n) = if given < required {
-            if required == nparams && !variadic {
+            if let Some(min) = zpp_min_args(b.name.as_bytes()) {
+                ("at least", min)
+            } else if required == nparams && !variadic {
                 ("exactly", required)
             } else {
                 ("at least", required)
@@ -7205,6 +7207,28 @@ fn same_func(a: &Func, b: &Func) -> bool {
 
 /// Whether argument `i` (0-based) of `func` is sent by reference only when
 /// it can be (`ZEND_SEND_PREFER_REF`, `ARG_MAY_BE_SENT_BY_REF`).
+/// The minimum argument count a builtin's zpp asks for, where it is more
+/// than its stub's required parameters: the callback variants of
+/// array_diff() and array_intersect() take `array $array, ...$rest` in
+/// their stubs and parse with `"+f"` (an array and a callback) or `"+ff"`
+/// (an array and two callbacks), so `array_udiff()` "expects at least 2
+/// arguments" (ref: ext/standard/array.c `php_array_diff`,
+/// `php_array_intersect`, `php_array_diff_key`, `php_array_intersect_key`).
+fn zpp_min_args(name: &[u8]) -> Option<usize> {
+    match name {
+        b"array_udiff"
+        | b"array_udiff_assoc"
+        | b"array_uintersect"
+        | b"array_uintersect_assoc"
+        | b"array_diff_ukey"
+        | b"array_diff_uassoc"
+        | b"array_intersect_ukey"
+        | b"array_intersect_uassoc" => Some(2),
+        b"array_udiff_uassoc" | b"array_uintersect_uassoc" => Some(3),
+        _ => None,
+    }
+}
+
 /// The type a builtin's argument `TypeError` names. That is the type the
 /// function parses with, which for an `array|object` parameter is not the
 /// stub's: `Z_PARAM_ARRAY_OR_OBJECT` and the `A`/`H` specifiers report
