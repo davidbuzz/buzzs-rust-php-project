@@ -78,8 +78,9 @@ fn preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// copied, so an oversized result raises PHP's "Allowed memory size"
 /// fatal instead of being built.
 fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
-    let pattern = a.str(0);
-    let subject = a.str(1);
+    // Read in place (`Z_PARAM_STR`): no copy of either string handle.
+    let pattern = a.zstr(0);
+    let subject = a.zstr(1);
     let capture = a.has(2);
     let flags = a.int(3);
     let offset = a.int(4);

@@ -286,3 +286,17 @@ fn replace_result_from_parts() {
         "  Hell0 W0rld  2|abc0|abXY|XYbc|>||2100aca|aQcQ|abcb|NULL\nNULL\n"
     );
 }
+
+/// `preg_match()`/`preg_match_all()` read the pattern and the subject in
+/// place: a reference subject and integer subjects converted to strings
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn match_reads_arguments_in_place() {
+    let out = run(
+        r#"$s = "abc"; $r = &$s; var_dump(preg_match("/b/", $r, $m), $m[0], preg_match("/2/", 123), preg_match_all("/\d/", 1203, $mm), implode(",", $mm[0]));"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nstring(1) \"b\"\nint(1)\nint(4)\nstring(7) \"1,2,0,3\"\n"
+    );
+}
