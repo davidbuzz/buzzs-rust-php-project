@@ -2160,7 +2160,12 @@ impl Frame {
     /// tested. `false`, having released nothing, when the handler left
     /// more behind (a pending call, a symbol table, an `@`, named
     /// arguments, a store of its own): the full release then runs.
-    #[inline]
+    ///
+    /// Always inline (its two callers, the tape's call and
+    /// `Vm::call_builtin_pooled`, run it once a call): out of line its
+    /// call, register saves and restores cost ~17 instructions a call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     pub(crate) fn release_native(&mut self, empty_vars: &Rc<RefCell<VarStore>>) -> bool {
         if self.kind != FrameKind::Builtin
             || self.symtab_attached
@@ -2182,7 +2187,14 @@ impl Frame {
             return false;
         }
         clear_native_args(&mut self.args);
-        clear_opt(&mut self.func);
+        // The builtin's handle released in line (the function table holds
+        // the function too), where `Option<Func>`'s drop glue is an
+        // out-of-line call dispatching on the kind again.
+        match self.func.take() {
+            Some(Func::Builtin(b)) => drop(b),
+            None => {}
+            other => drop(other),
+        }
         clear_opt(&mut self.builtin_name);
         self.ip = 0;
         self.ret = RetTarget::Discard;

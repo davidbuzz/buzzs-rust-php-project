@@ -2860,13 +2860,51 @@ impl Prepared {
 /// Whether every argument of a direct builtin call is a value its
 /// parameter takes as it is ([`crate::func::Builtin::accepts`]; `last`,
 /// the table's last entry, covers the variadic parameter's positions).
-#[inline]
+///
+/// Always inline, a plain loop: out of line, as an `all` over the
+/// enumerated iterator, it cost ~33 instructions a one-argument call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `call_native`
 fn args_accepted(args: &[Option<Value>], table: &[u32], last: u32) -> bool {
-    args.iter().enumerate().all(|(i, arg)| {
-        arg.as_ref().is_some_and(|v| {
-            crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
-        })
-    })
+    for (i, arg) in args.iter().enumerate() {
+        let bits = match table.get(i) {
+            Some(&bits) => bits,
+            None => last,
+        };
+        match arg {
+            Some(v) if crate::func::accept_bit(v) & bits != 0 => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// `ZEND_DO_ICALL`'s store of a builtin's result into the caller's
+/// temporary `dst` (`Vm::set_tmp` once the call frame is popped), the old
+/// value released only when it owns something. In line: the closure
+/// calling `set_tmp` came out of line, ~35 instructions a call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `call_native`
+fn store_native_result(vm: &mut Vm, dst: u32, v: Value) {
+    let top = vm.frames.live.wrapping_sub(1);
+    let Some(slot) = vm
+        .frames
+        .vec
+        .get_mut(top)
+        .and_then(|f| f.tmps.get_mut(dst as usize))
+    else {
+        drop(v);
+        return;
+    };
+    let old = std::mem::replace(slot, v);
+    if matches!(
+        old,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(old);
+    } else {
+        drop(old);
+    }
 }
 
 /// `ZEND_DO_ICALL` of the prepared builtin call (result to `dst`; the
@@ -3082,19 +3120,25 @@ pub(super) fn call_native(
         // Anything else as the generic call releases it.
         vm.pop_frames_to(live + 1);
     }
-    Ok(r.map(|v| match dst {
-        Some(d) => vm.set_tmp(d, v),
-        None => {
-            if matches!(
-                v,
-                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-            ) {
-                std::mem::forget(v);
-            } else {
-                drop(v);
+    Ok(match r {
+        Ok(v) => {
+            match dst {
+                Some(d) => store_native_result(vm, d, v),
+                None => {
+                    if matches!(
+                        v,
+                        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                    ) {
+                        std::mem::forget(v);
+                    } else {
+                        drop(v);
+                    }
+                }
             }
+            Ok(())
         }
-    }))
+        Err(e) => Err(e),
+    })
 }
 
 /// The first half of [`Args::release_into`]'s release of a builtin call's
