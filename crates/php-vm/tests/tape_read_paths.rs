@@ -230,7 +230,7 @@ function f() {
     echo json_encode($out), "\n";
     echo json_encode([in_array($ref, ['b']), in_array('a' . $t, ['a0', 'a2']), in_array(strtoupper('b'), ['B'], true)]), "\n";
     if (in_array($needles['x'], ['c', 'd'], true)) { echo "branch\n"; }
-    echo json_encode([@in_array($undef, ['', 'x']), in_array(new ArrayObject([]), ['a'])]), "\n";
+    echo json_encode([@in_array($undef, ['', 'x']), in_array(new stdClass, ["a"])]), "\n";
   }
 }
 f();
@@ -256,12 +256,13 @@ branch
 fn key_exists() {
     assert_eq!(
         run(r#"<?php
+class AO implements ArrayAccess { function offsetExists($o): bool { return true; } function offsetGet($o): mixed { return 1; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
 class C {
   public $map = ['a' => null, 7 => 1, '08' => 2];
   function has($k) { return array_key_exists($k, $this->map); }
 }
 function f() {
-  $a = ['x' => null, 3 => 'three', '' => 'empty']; $r = &$a; $c = new C; $o = new ArrayObject(['x' => 1]);
+  $a = ['x' => null, 3 => 'three', '' => 'empty']; $r = &$a; $c = new C; $o = new AO;
   for ($t = 0; $t < 3; $t++) {
     $out = [];
     foreach (['x', 3, '3', 'nope', '', '03', 4] as $k) {
@@ -285,39 +286,39 @@ f();
 [true,true]
 branch
 
-Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 18
 [true,false,true,true]
-array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, AO given
 array_key_exists(): Argument #2 ($array) must be of type array, string given
 Cannot access offset of type array on array
 
-Warning: Undefined variable $nope in t.php on line 21
+Warning: Undefined variable $nope in t.php on line 22
 array_key_exists(): Argument #2 ($array) must be of type array, null given
 [true,true,false,true,true,false,true,true,false,false,false,false,true,true,false,false,false,false,false,false,false]
 [true,true,true,true,false]
 [true,false]
 branch
 
-Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 18
 [true,false,true,true]
-array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, AO given
 array_key_exists(): Argument #2 ($array) must be of type array, string given
 Cannot access offset of type array on array
 
-Warning: Undefined variable $nope in t.php on line 21
+Warning: Undefined variable $nope in t.php on line 22
 array_key_exists(): Argument #2 ($array) must be of type array, null given
 [true,true,false,true,true,false,true,true,false,false,false,false,true,true,false,false,false,false,false,false,false]
 [true,true,true,true,false]
 [true,true]
 branch
 
-Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 18
 [true,false,true,true]
-array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+array_key_exists(): Argument #2 ($array) must be of type array, AO given
 array_key_exists(): Argument #2 ($array) must be of type array, string given
 Cannot access offset of type array on array
 
-Warning: Undefined variable $nope in t.php on line 21
+Warning: Undefined variable $nope in t.php on line 22
 array_key_exists(): Argument #2 ($array) must be of type array, null given
 "#
     );
@@ -330,10 +331,11 @@ fn nested_isset_paths() {
         run(r#"<?php
 class Inner { public $b = 'B'; public $n = null; public ?int $typed; public $z = 0; }
 class M { private $d = ['q' => 1]; function __get($n) { echo "__get($n) "; return $this->d; } function __isset($n) { echo "__isset($n) "; return $n === 'magic'; } }
+class AK implements ArrayAccess { function offsetExists($o): bool { echo "exists($o) "; return true; } function offsetGet($o): mixed { echo "get($o) "; return ['j' => 1]; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
 class O {
   public $p = ['a' => ['b' => [1 => 'one', 'n' => null]], 'z' => 0];
   public $a; public $m; public $nul = null; public $ao;
-  function __construct() { $this->a = new Inner; $this->m = new M; $this->ao = new ArrayObject(['k' => ['j' => 1]]); }
+  function __construct() { $this->a = new Inner; $this->m = new M; $this->ao = new AK; }
   function t($k, $j) {
     return json_encode([
       isset($this->p[$k][$j]), empty($this->p[$k][$j]), $this->p[$k][$j] ?? 'd', $this->p[$k][$j][1] ?? 'd',
@@ -360,36 +362,36 @@ f();
         r#"[true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
 [true,false,true,true,false,false,false,true,false]
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 26
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 26
 [false,false]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
 [true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
 [true,false,true,true,false,false,false,true,false]
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 26
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 26
 [false,false]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
 [true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
 [true,false,true,true,false,false,false,true,false]
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 26
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 26
 [false,false]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
-__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) exists(k) get(k) exists(k) get(k) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
 "#
     );
 }
@@ -568,10 +570,11 @@ fn type_checks_and_foreach() {
     assert_eq!(
         run(r#"<?php
 interface I {} class A implements I {} class B extends A {}
+class Cnt implements Countable { public $p = 5; public $q = 6; function count(): int { return 2; } }
 function gen() { yield 1; yield 2; }
 function vals() { return [1, 'one', 1.5, null, true, [1], new B]; }
 function f($m) {
-  $objs = [new A, new B, 'A', null, new ArrayObject([])];
+  $objs = [new A, new B, 'A', null, new Cnt];
   for ($t = 0; $t < 3; $t++) {
     $row = [];
     foreach (vals() as $i => $v) {
@@ -587,13 +590,13 @@ function f($m) {
     echo json_encode($io), "\n";
     echo count($m), count($m['k']), count([1, 2, 3]), count([]), count(vals(), COUNT_RECURSIVE), "\n";
     try { echo count($m['s']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-    echo count(new ArrayObject([1, 2])), "\n";
+    echo count(new Cnt), "\n";
     $s = 0;
     foreach ([] as $v) { $s += 100; }
     foreach ($m['k'] as $v) { foreach ($m['k'] as $w) { $s += $v * $w; } }
     foreach ($m['k'] as $k => $v) { if ($k == 1) break; $s += $v; }
     foreach (gen() as $v) { $s += $v; }
-    foreach (new ArrayObject([5, 6]) as $v) { $s += $v; }
+    foreach (new Cnt as $v) { $s += $v; }
     $arr = [1, 2]; foreach ($arr as $v) { $arr[] = $v; } $s += count($arr);
     echo $s, "\n";
     foreach ($m['nope'] ?? [] as $v) { echo "never\n"; }
@@ -610,7 +613,7 @@ count(): Argument #1 ($value) must be of type Countable|array, string given
 2
 55
 
-Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+Warning: foreach() argument must be of type array|object, string given in t.php on line 33
 iS,sS,fS,n,bS,aIC,o
 [true,true,true]
 [[true,false,true,false,false],[true,true,true,false,false],[false,false,false,false,false],[false,false,false,false,false],[false,false,false,true,false]]
@@ -619,7 +622,7 @@ count(): Argument #1 ($value) must be of type Countable|array, string given
 2
 55
 
-Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+Warning: foreach() argument must be of type array|object, string given in t.php on line 33
 iS,sS,fS,n,bS,aIC,o
 [true,true,true]
 [[true,false,true,false,false],[true,true,true,false,false],[false,false,false,false,false],[false,false,false,false,false],[false,false,false,true,false]]
@@ -628,7 +631,7 @@ count(): Argument #1 ($value) must be of type Countable|array, string given
 2
 55
 
-Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+Warning: foreach() argument must be of type array|object, string given in t.php on line 33
 "#
     );
 }
