@@ -902,3 +902,71 @@ destruct arg
 "#
     );
 }
+
+/// The release of a returning frame's variables, one pass over them
+/// (`Frame::release_returning` of a directly entered frame): scalars,
+/// strings, a shared array, a reference to a global, objects destructed
+/// at the return in variable order, the roots buffered (`gc_status()`),
+/// garbage cycles left by returning frames, a by-reference parameter,
+/// a variadic call's extra arguments and a method's `$this`.
+#[test]
+fn returning_frames_release_their_variables_in_order() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; public $peer; function __construct($n) { $this->n = $n; } function __destruct() { echo "destruct {$this->n}\n"; } }
+function mix($keep) {
+    $i = 1; $f = 1.5; $s = str_repeat('s', 3); $a = [1, 2]; $shared = $keep;
+    $ref = &$GLOBALS['g']; $o = new D('o'); $p = new D('p'); $o->peer = $p;
+    $q = new D('q');
+    return $s . $i;
+}
+$g = [1];
+$keep = [new D('kept')];
+gc_collect_cycles();
+$r0 = gc_status()['roots'];
+for ($k = 0; $k < 4; $k++) { $x = mix($keep); echo "returned $x\n"; }
+var_dump(gc_status()['roots'] - $r0);
+function cyc($n) { $a = new stdClass; $b = new stdClass; $a->b = $b; $b->a = $a; $t = $n; return $t; }
+for ($k = 0; $k < 3; $k++) cyc($k);
+var_dump(gc_status()['roots'] - $r0);
+var_dump(gc_collect_cycles());
+function byref(&$v) { $v[] = 1; $w = $v; return $w; }
+$z = [];
+var_dump(count(byref($z)), count($z));
+function variadic($a, ...$rest) { $c = count($rest); return $c; }
+var_dump(variadic(1, 2, [3], new D('extra')));
+class M { function m($a, $b) { $t = $this; return $a; } }
+$m = new M; $r0 = gc_status()['roots'];
+for ($k = 0; $k < 3; $k++) { $y = $m->m([$k], 's'); }
+var_dump(gc_status()['roots'] - $r0);
+echo "end\n";
+"#),
+        r#"destruct o
+destruct p
+destruct q
+returned sss1
+destruct o
+destruct p
+destruct q
+returned sss1
+destruct o
+destruct p
+destruct q
+returned sss1
+destruct o
+destruct p
+destruct q
+returned sss1
+int(3)
+int(9)
+int(6)
+int(1)
+int(1)
+destruct extra
+int(3)
+int(2)
+end
+destruct kept
+"#
+    );
+}

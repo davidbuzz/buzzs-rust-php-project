@@ -1431,6 +1431,44 @@ fn release_slot(v: Value) {
     }
 }
 
+/// Releases a compiled variable of a returning frame in place
+/// (`i_free_compiled_variables`, with its `gc_check_possible_root`): the
+/// tag is tested where the value is, so a scalar costs the store of the
+/// undefined state and nothing else (no move of the value to the stack,
+/// no dispatch on its tag again, as [`release_cv`] after `take` did), a
+/// string an inline count decrement, and an array, an object or a
+/// reference one call ([`release_rooted_cv`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per compiled variable of a return
+fn release_cv_in_place(slot: &mut Option<Value>) {
+    match slot {
+        None => {}
+        Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // Owns nothing: the value is forgotten, not dropped.
+            std::mem::forget(slot.take());
+        }
+        Some(Value::Str(_)) => match slot.take() {
+            Some(Value::Str(s)) => drop(s),
+            // Not reached: the slot held a string just above.
+            other => drop(other),
+        },
+        Some(_) => release_rooted_cv(slot),
+    }
+}
+
+/// [`release_cv_in_place`] of an array, an object or a reference: what
+/// `crate::gc::cvs_released` records for it ([`crate::gc::possible_root`]:
+/// a handle released to a non-zero count, or the elements of an array
+/// whose last handle goes), then its release. Out of line: the call is
+/// that of `possible_root` it replaces.
+#[inline(never)]
+fn release_rooted_cv(slot: &mut Option<Value>) {
+    if let Some(v) = slot.take() {
+        crate::gc::possible_root(&v);
+        release_cv(v);
+    }
+}
+
 /// Empties `v` and fills it with `n` values made by `make` (the
 /// temporaries, iterators, finally slots and compiled variables of one
 /// function, in a pooled frame buffer that usually has the capacity
@@ -1913,6 +1951,28 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
     pub(crate) fn release_direct(&mut self) -> bool {
+        if !self.direct_releasable() {
+            return false;
+        }
+        // In `clear_for_reuse`'s order: the temporaries, the compiled
+        // variables, the passed arguments.
+        self.release_direct_tmps();
+        for slot in &mut self.cvs {
+            if let Some(old) = slot.as_mut().take() {
+                release_cv(old);
+            }
+        }
+        self.release_direct_args();
+        self.release_direct_rest();
+        true
+    }
+
+    /// The tests of [`Frame::release_direct`]: whether the frame is a
+    /// directly entered one whose code left nothing behind but its slots,
+    /// passed arguments and call handles. Changes nothing.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn direct_releasable(&mut self) -> bool {
         if !self.direct
             || self.symtab_attached
             || self.pending_exc.is_some()
@@ -1926,35 +1986,44 @@ impl Frame {
             return false;
         };
         let vs = rc_mut.get_mut();
-        if !vs.names.owned.is_empty() || vs.index.is_some() || vs.slots.iter().any(Option::is_some)
-        {
-            return false;
-        }
-        // In `clear_for_reuse`'s order: the temporaries, the compiled
-        // variables, the passed arguments.
+        vs.names.owned.is_empty() && vs.index.is_none() && !vs.slots.iter().any(Option::is_some)
+    }
+
+    /// [`Frame::release_direct`]'s release of the temporaries.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_tmps(&mut self) {
         for t in &mut self.tmps {
             release_slot(std::mem::take(t));
         }
-        for slot in &mut self.cvs {
-            if let Some(old) = slot.as_mut().take() {
-                release_cv(old);
-            }
-        }
-        // A direct frame's passed arguments are in its compiled variables
-        // and the buffer is empty (`calls::enter` keeps the count in
-        // `direct_argc`), except for a variadic call's extra arguments
-        // (`calls::variadic_extras`): it is emptied here, as
-        // `clear_arg_buffer` would, without the call (the drop of any value
-        // it held runs as there). Tested first: `clear` of the empty
-        // buffer still called the out-of-line slice drop glue (~12
-        // instructions a return).
+    }
+
+    /// [`Frame::release_direct`]'s release of the passed arguments.
+    ///
+    /// A direct frame's passed arguments are in its compiled variables
+    /// and the buffer is empty (`calls::enter` keeps the count in
+    /// `direct_argc`), except for a variadic call's extra arguments
+    /// (`calls::variadic_extras`): it is emptied here, as
+    /// `clear_arg_buffer` would, without the call (the drop of any value
+    /// it held runs as there). Tested first: `clear` of the empty buffer
+    /// still called the out-of-line slice drop glue (~12 instructions a
+    /// return).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_args(&mut self) {
         if self.args.capacity() > 256 {
             self.args = Vec::new();
         } else if !self.args.is_empty() {
             self.args.clear();
         }
-        // A method's `$this` and scopes, a closure, in
-        // `clear_rest_for_reuse`'s order.
+    }
+
+    /// The rest of [`Frame::release_direct`] once the slots and the passed
+    /// arguments are released: a method's `$this` and scopes, a closure,
+    /// in `clear_rest_for_reuse`'s order, and the call's fields.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_rest(&mut self) {
         release_obj_field(&mut self.this);
         release_obj_field(&mut self.closure);
         self.ip = 0;
@@ -1969,7 +2038,6 @@ impl Frame {
         // handles and slot sizes are kept: the next call of the same
         // function in this slot readies nothing (`calls::ready_frame`).
         self.released_direct = true;
-        true
     }
 
     /// `zend_leave_helper` of a returning user frame in one step: what
@@ -1977,14 +2045,28 @@ impl Frame {
     /// ([`Frame::release_direct`], else [`Frame::clear_for_reuse`]).
     /// `caller_this` is the calling frame's `$this`.
     ///
-    /// The same roots, buffered in the same order and before anything is
-    /// released, as the two calls made one after the other: the variables
-    /// are walked inline (a tag test each; a count test for an object or
-    /// an array, which calls out only for a root to buffer or an array to
-    /// walk), so a frame holding an object or an array pays no call of
-    /// its own for the walk and no scan of its variables beforehand to
-    /// avoid one. A frame with a symbol table attached takes
-    /// `frame_released` itself (its table's values are walked too).
+    /// A directly entered frame ([`Frame::direct_releasable`]) is released
+    /// in one pass over its compiled variables, as
+    /// `i_free_compiled_variables` releases them: a scalar is a tag test
+    /// and a store, a string an inline count decrement, and an array, an
+    /// object or a reference calls out once ([`release_rooted_cv`]: its
+    /// possible root, then its release), in variable order; then the
+    /// passed arguments, then the call's own handle (`$this`, a closure:
+    /// [`crate::gc::call_handle_released`], then its release), as
+    /// `zend_leave_helper` releases them after the variables. The roots
+    /// are buffered in php-src's order: variable order, then the call's
+    /// handle (a shared reference's root, which its release buffers, came
+    /// after the call's handle when every other root was buffered by a
+    /// walk before the release). That walk was a second pass over the
+    /// variables (~8 instructions a variable), and the
+    /// release moved each value to the stack and dispatched on its tag
+    /// again (~15). Destructors are queued by the release (no user code
+    /// runs in it), so nothing can observe the roots of the later
+    /// variables not being buffered yet.
+    ///
+    /// Any other frame takes the two steps: the roots of every variable
+    /// and of the call's handle (and of an attached symbol table's
+    /// values), then the release.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every return
     pub(crate) fn release_returning(
@@ -1992,15 +2074,23 @@ impl Frame {
         caller_this: Option<&Obj>,
         empty_code: &Rc<OpArray>,
     ) {
+        if self.direct_releasable() {
+            self.release_direct_tmps();
+            for slot in &mut self.cvs {
+                release_cv_in_place(slot.as_mut());
+            }
+            self.release_direct_args();
+            crate::gc::call_handle_released(self, caller_this);
+            self.release_direct_rest();
+            return;
+        }
         if self.symtab_attached {
             crate::gc::frame_released(self, caller_this);
         } else {
             crate::gc::cvs_released(&self.cvs);
             crate::gc::call_handle_released(self, caller_this);
         }
-        if !self.release_direct() {
-            self.clear_for_reuse(empty_code);
-        }
+        self.clear_for_reuse(empty_code);
     }
 
     /// [`Frame::clear_builtin_for_reuse`] of the builtin frame the tape's
@@ -3480,6 +3570,57 @@ mod tests {
         assert!(f.release_direct());
         f.reinit_for_builtin(&empty);
         assert!(!f.released_direct);
+    }
+
+    /// `release_returning` of a directly entered frame releases every
+    /// variable in one pass (scalars, a string, a shared array, a shared
+    /// reference, each released to its other holders' count), the
+    /// temporaries and the extra arguments, and leaves the frame in the
+    /// state `release_direct` leaves (`is_released_for`).
+    #[test]
+    fn release_returning_releases_a_direct_frame_in_one_pass() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: ["i", "f", "s", "a", "r", "u"]
+                .iter()
+                .map(|n| ZStr::from(*n))
+                .collect(),
+            num_tmps: 1,
+            ..OpArray::default()
+        });
+        let uf = user_function(code.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        f.direct = true;
+        f.direct_argc = 3;
+        f.ret = super::RetTarget::Tmp(0);
+        f.ip = 4;
+        let s = ZStr::from("a string held by the frame");
+        let arr = php_runtime::ZArray::from_values(vec![Value::Int(1), Value::Str(s.clone())]);
+        let held = Value::Array(arr);
+        let r = PhpRef::new(Value::Int(2));
+        f.cvs[0].set(Some(Value::Int(7)));
+        f.cvs[1].set(Some(Value::Float(1.5)));
+        f.cvs[2].set(Some(Value::Str(s.clone())));
+        f.cvs[3].set(Some(held.clone()));
+        f.cvs[4].set(Some(Value::Reference(r.clone())));
+        f.tmps[0] = Value::Str(s.clone());
+        f.args.push(Some(Value::Str(s.clone())));
+        assert_eq!(s.refcount(), 5);
+        assert_eq!(r.refcount(), 2);
+        f.release_returning(None, &empty);
+        assert_eq!(s.refcount(), 2, "the array keeps its element");
+        assert_eq!(r.refcount(), 1);
+        assert!(matches!(&held, Value::Array(a) if a.refcount() == 1));
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert!(f.tmps.iter().all(Value::is_null));
+        assert!(f.args.is_empty());
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        drop(held);
+        assert_eq!(s.refcount(), 1);
     }
 
     /// A frame a prepared call readied and never entered (the call turned
