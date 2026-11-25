@@ -138,6 +138,52 @@ The target is C's 142 and 178. With steps 1 to 3, around 400 is
 realistic; steps 4 and 5 are the ones that reach C's layout. After that,
 a whole-function JIT is the next lever, over a call protocol it can use.
 
+## Status, end of 25 Nov 2026
+
+Steps 1 and 2 turned out to be mostly there already: `UserFunction`
+carries a precomputed `CallShape`, and the tape's direct frames
+(`Frame::direct`, `release_direct`) skip most of the generic release.
+What is left on the plain path is spread thin: per call about 60 source
+lines at 2 to 8 instructions each, in eight layers of out-of-line
+functions (each saving and restoring registers, re-matching its op and
+re-deriving the caller's and the callee's frame). Measured attempts to
+trim it this week:
+
+- batching a call's `Send`s: slower (one argument per call, the common
+  case, has nothing to batch; the bigger loop cost more than it saved);
+- one method-cache lookup per user method call: −150 per call in a
+  micro-benchmark, nothing on Laravel;
+- the fast return of `: static` objects: −650 per such return in a
+  micro-benchmark, nothing on Laravel (committed: it is correct and
+  cheap);
+- earlier (Nov 2026, in `git stash`): a fused call/return, 712 → 602
+  per call; a plain-frame state word with fast call and return, calls
+  −20–30% but loops +4–11%, because the fast path needs code in
+  `run_tape`, which shares `run_core`'s registers.
+
+So the interpreter's structure is the limit, not any one function. The
+core loop is one function whose registers every op shares, and on
+stable Rust a handler cannot be its own function without paying for it
+on every helper call (`become` and a `preserve_none` ABI are unstable).
+Steps 3 to 5 still remove work, but each call would still run through
+the same layers. Getting to C's 142 needs one of two decisions, both the
+project's to make:
+
+1. **A nightly toolchain** for guaranteed tail calls (`become`), so each
+   tape op is its own function with its own register allocation and the
+   call and return become ops like any other. CPython 3.14's
+   tail-calling interpreter works this way; php-src's hybrid VM gets the
+   same effect from GCC's global register variables and computed gotos,
+   which Rust does not have. The workspace declares
+   `rust-version = "1.85"` and builds on stable today.
+2. **A baseline JIT**: each function compiled to machine code once it is
+   warm, by a fast template compiler (the trace JIT compiles at about 1M
+   instructions per loop, too slow for Laravel's thousands of
+   functions). Its call sequence is emitted per call site, with the
+   callee and frame size known, which is what removes the layers.
+
+Either way the frame work of steps 3 to 5 is needed underneath.
+
 ## How to measure
 
 - `perf stat -e instructions:u` at two loop counts, the difference
