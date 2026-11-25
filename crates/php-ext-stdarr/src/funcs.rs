@@ -674,7 +674,13 @@ macro_rules! ptr_fn {
     ($name:ident, $f:path, $op:ident) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let arr = by_ref(a, 0);
-            if let Value::Object(o) = arr.get() {
+            // The type is tested in place: copying the array out only to
+            // see it is no object cost a clone and a drop a call.
+            let obj = match &*arr.borrow() {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            };
+            if let Some(o) = obj {
                 return objptr::run(vm, &a.func_name(), &o, objptr::Op::$op);
             }
             let r = $f(vm, &arr);
@@ -688,9 +694,10 @@ ptr_fn!(next, sa::pointer::next, Next);
 ptr_fn!(reset, sa::pointer::reset, Reset);
 
 pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = a.at(0);
+    // Read in place (`Z_PARAM_ARRAY_OR_OBJECT_HT` takes no reference).
+    let v = a.at_ref(0);
     let f = a.func_name_str();
-    if let Value::Object(o) = &v {
+    if let Value::Object(o) = &*v {
         return objptr::run(vm, f, o, objptr::Op::Current);
     }
     let r = sa::pointer::current(vm, f, &v);
@@ -698,8 +705,8 @@ pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = a.at(0);
-    if let Value::Object(o) = &v {
+    let v = a.at_ref(0);
+    if let Value::Object(o) = &*v {
         return objptr::run(vm, "key", o, objptr::Op::Key);
     }
     let r = sa::pointer::key(vm, &v);

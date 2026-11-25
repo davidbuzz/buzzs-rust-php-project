@@ -544,3 +544,25 @@ fn array_keys_reads_table_and_filter_in_place() {
         assert_eq!(run(&format!("{pre} {code}")), want, "{code}");
     }
 }
+
+/// The internal-pointer functions move the array in place and copy out
+/// the element once: a reference element reads through, a copy of the
+/// array is separated and keeps its own pointer, an empty array gives
+/// `false`, an array holding a reference to itself, an object, and a
+/// TypeError (`/usr/bin/php8.5 -n`).
+#[test]
+fn pointer_functions_in_place() {
+    let out = run(r#"$x = 'X'; $a = [1, &$x, 'c'];
+        echo next($a), current($a), key($a), end($a), prev($a), reset($a), '|';
+        $b = $a; next($b); next($b); echo current($a), current($b), '|';
+        $e = []; var_dump(next($e), end($e), current($e), key($e));
+        $self = [1]; $self[1] = &$self; next($self); echo gettype(current($self)), '|';
+        $o = new stdClass; $o->p = 1; $o->q = 2;
+        echo @end($o), @current($o), '|';
+        try { next($y); } catch (TypeError $t) { echo $t->getMessage(), '|'; }
+        echo end($a);"#);
+    assert_eq!(
+        out,
+        "XX1cX1|1c|bool(false)\nbool(false)\nbool(false)\nNULL\narray|22|next(): Argument #1 ($array) must be of type array, null given|c"
+    );
+}

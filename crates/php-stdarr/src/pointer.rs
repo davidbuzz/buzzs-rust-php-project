@@ -50,25 +50,31 @@ fn move_pointer<C: ArrayContext + ?Sized>(
     array: &PhpRef,
     op: impl FnOnce(&mut HashTable),
 ) -> RtResult<Value> {
-    let v = array.get();
-    if let Value::Array(_) = v {
-        drop(v);
-        // Clone the raw element while the reference is borrowed; dereference
-        // it afterwards (it may be a reference to this very variable).
-        let raw = {
-            let mut slot = array.borrow_mut();
-            let Value::Array(a) = &mut *slot else {
-                return Ok(Value::Bool(false));
-            };
+    // The array is moved in place, under the reference's borrow
+    // (`Z_PARAM_ARRAY_OR_OBJECT_HT_EX(array, 0, 1)` separates it and
+    // `zend_hash_move_forward()` writes `nInternalPointer`): copying the
+    // value out first only to test its type cost a clone and a drop.
+    {
+        let mut slot = array.borrow_mut();
+        if let Value::Array(a) = &mut *slot {
             if a.is_empty() {
                 return Ok(Value::Bool(false));
             }
             let ht = a.make_mut();
             op(ht);
-            ht.current().cloned()
-        };
-        return Ok(raw.map_or(Value::Bool(false), |v| crate::util::deref(&v)));
+            // `php_array_iter_return_current()`'s `ZVAL_COPY_DEREF`: a
+            // plain element is copied once; a reference (it may be to this
+            // very variable) is read after the borrow ends.
+            let r = match ht.current() {
+                None => return Ok(Value::Bool(false)),
+                Some(Value::Reference(r)) => r.clone(),
+                Some(v) => return Ok(v.clone()),
+            };
+            drop(slot);
+            return Ok(r.get());
+        }
     }
+    let v = array.get();
     let Some(mut a) = object_table(ctx, func, &v)? else {
         return Ok(Value::Bool(false));
     };
