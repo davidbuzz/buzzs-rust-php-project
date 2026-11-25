@@ -80,3 +80,31 @@ fn flush_does_not_send_the_headers() {
         expected
     );
 }
+
+/// An `E_CORE_ERROR` has no location (`get_filename_lineno()`): the one
+/// `ini_set('zlib.output_compression', '1')` raises next to an
+/// `output_handler` is reported "in Unknown on line 0", with the stack
+/// trace still naming the script's line.
+#[test]
+fn core_error_from_ini_set_has_no_location() {
+    let out = cgi(
+        "coreerr",
+        "<?php\nini_set(\"zlib.output_compression\", \"1\");\necho \"x\";\n",
+        &["-d", "output_handler=ob_gzhandler", "-d", "html_errors=0"],
+        "GET",
+        b"",
+    );
+    let (head, body) = out.split_once("\r\n\r\n").unwrap();
+    assert_eq!(
+        head,
+        "Vary: Accept-Encoding\r\nContent-type: text/html; charset=UTF-8"
+    );
+    assert!(
+        body.starts_with("\nFatal error: ini_set(): Cannot use both zlib.output_compression and output_handler together!! in Unknown on line 0\nStack trace:\n#0 "),
+        "{body}"
+    );
+    assert!(
+        body.ends_with("s.php(2): ini_set('zlib.output_com...', '1')\n#1 {main}\n"),
+        "{body}"
+    );
+}

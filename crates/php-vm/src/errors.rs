@@ -297,8 +297,14 @@ impl Vm {
         self.error_at_bytes(level, msg.as_bytes(), file, line)
     }
 
-    /// Reports an error with a binary message at the current location.
+    /// Reports an error with a binary message at the current location; an
+    /// `E_CORE_ERROR` or `E_CORE_WARNING` has none (`get_filename_lineno()`
+    /// of `Zend/zend.c`): it is reported in "Unknown" on line 0, also when
+    /// a script's `ini_set()` raised it.
     pub fn error_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+        if level == level::CORE_ERROR || level == level::CORE_WARNING {
+            return self.error_at_bytes(level, msg, &ZStr::from("Unknown"), 0);
+        }
         let (file, line) = self.current_location();
         self.error_at_bytes(level, msg, &file, line)
     }
