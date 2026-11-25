@@ -1319,6 +1319,7 @@ tape_ops! {
         FeResetA = (scalar::fe_reset, 1, branch_poll_f),
         FeFreeA = (scalar::fe_free, 1, poll_f),
         CastX = (scalar::cast, 1, poll_f),
+        AssignLitC = (scalar::assign_lit_cv, 1, poll_f),
 
         // ---- end of scalar ----
         //

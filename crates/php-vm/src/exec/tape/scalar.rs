@@ -68,6 +68,26 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 plain(TOp::Nop)
             }
         }
+        // `$cv = <string or array literal>`, result unused
+        // (`ZEND_ASSIGN_SPEC_CV_CONST`): the numeric arms of
+        // `super::lower_numeric` take the scalar literals.
+        Op::AssignCv {
+            cv,
+            val: Operand::Lit(l),
+            dst: None,
+        } => {
+            if !matches!(
+                code.literals.get(l as usize)?,
+                Value::Str(_) | Value::Array(_)
+            ) {
+                return None;
+            }
+            Inst {
+                a: cv_off(code, cv)?,
+                b: lit_off(l)?,
+                ..plain(TOp::AssignLitC)
+            }
+        }
         // `$cv = val` whose value is used (`$j += ($i = $j)`, `$a = $b =
         // 0`): the source's kind in `k` (as `TOp::MoveT`'s), the result
         // temporary in `c`.
@@ -834,6 +854,59 @@ pub(super) unsafe extern "C" fn assign_cv_any(
     };
     // SAFETY: the caller's contract: `frame` is the current frame.
     crate::exec::hot::assign_cv_in(unsafe { &mut *frame }, inst.a >> SLOT_SHIFT, val, None)
+}
+
+/// `$cv = <string or array literal>` with the result unused
+/// (`ZEND_ASSIGN_SPEC_CV_CONST`, `TOp::AssignLitC`): the literal (`b`) is
+/// copied (a reference count raised) into the variable (`a`). What the
+/// variable held is released as `hot::assign_cv_in` releases it: nothing,
+/// a scalar or a string at once; an array through `exec::release_rooted`
+/// (a possible GC root while other handles remain, else freed: a
+/// destructor its objects queue runs at the poll after the row, as after
+/// the generic op). Declines a reference (the assignment writes through
+/// it) and an object or a resource (the generic op's), nothing changed.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn assign_lit_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `a` is a validated variable offset.
+    let dst = unsafe { st.cvs.add(inst.a as usize).cast::<Option<Value>>() };
+    // SAFETY: `dst` points at a live slot; the shared reference ends with
+    // the test.
+    if !matches!(
+        unsafe { &*dst },
+        None | Some(
+            Value::Null
+                | Value::Bool(_)
+                | Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::Array(_)
+        )
+    ) {
+        return false;
+    }
+    // SAFETY: `b` is a validated literal offset (a string or an array:
+    // `lower`); it is only read.
+    let v = match unsafe { &*st.lits.add(inst.b as usize).cast::<Value>() } {
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        // Not reached: `lower` saw a string or an array.
+        _ => return false,
+    };
+    // SAFETY: `dst` is valid for writes; the old value is released below,
+    // the slot already holding the new one (as `ZEND_ASSIGN` does).
+    match unsafe { std::ptr::replace(dst, Some(v)) } {
+        Some(Value::Str(s)) => drop(s),
+        old @ Some(Value::Array(_)) => crate::exec::release_rooted(old),
+        // Nothing or a scalar: nothing to drop.
+        old => std::mem::forget(old),
+    }
+    true
 }
 
 /// The number operand `x` of kind `kind` (the kinds of [`super::src`]);

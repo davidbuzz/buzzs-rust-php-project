@@ -1711,3 +1711,39 @@ fn new_with_arguments_at_hand_is_one_instruction() {
     assert_ne!(second.k, super::calls::CALL_NEW);
     assert_eq!(run(NEW_WITH_ARGUMENTS), "int(58)\n");
 }
+
+const LITERAL_ASSIGNMENTS: &str = r#"<?php
+function f() {
+  $out = '';
+  for ($i = 0; $i < 3; $i++) {
+    $s = 'lit';
+    $e = [];
+    $p = [1, 2];
+    $s = 'x' . $s;
+    $e[] = $i;
+    $p[] = $i;
+    $out .= $s . count($e) . count($p) . $p[2] . ' ';
+    $s = [3];
+    $out .= count($s);
+  }
+  return $out;
+}
+echo f(), "\n";
+"#;
+
+/// `$cv = <string literal>` and `$cv = <array literal>` with the result
+/// unused are [`TOp::AssignLitC`] rows (`ZEND_ASSIGN_SPEC_CV_CONST`); the
+/// arrays assigned are separated from their literals when written.
+#[test]
+fn string_and_array_literal_assignments() {
+    let arrays = op_arrays(LITERAL_ASSIGNMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "out");
+    let tape = check(code);
+    let rows = tape.iter().filter(|i| i.op == TOp::AssignLitC).count();
+    // `$out = ''`, `$s = 'lit'`, `$e = []`, `$p = [1, 2]`, `$s = [3]`.
+    assert_eq!(rows, 5, "{:?}", code.ops);
+    assert_eq!(run(LITERAL_ASSIGNMENTS), "xlit130 1xlit131 1xlit132 1\n");
+}
