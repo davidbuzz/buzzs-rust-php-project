@@ -703,6 +703,26 @@ fn do_cli_requests(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     }
     if req.hide_argv {
         proctitle::hide_args();
+        // php_cli.c zeroes argv[1..] in place once the options are parsed,
+        // and the code of -r/-B/-R/-E and the file of -F point into argv:
+        // they run as empty code, and -F names an empty file (php8.5 -H -r
+        // 'echo 1;' prints nothing; -H -F f.php fails to open "").
+        for code in [
+            &mut req.exec_direct,
+            &mut req.exec_begin,
+            &mut req.exec_run,
+            &mut req.exec_end,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            code.clear();
+        }
+        if req.mode() == Mode::ProcessStdin {
+            if let Some(f) = &mut req.script_file {
+                f.clear();
+            }
+        }
     }
     let mut repeats = req.repeats;
     if repeats > 1 {
@@ -974,11 +994,23 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
                 argv: request_argv.clone(),
                 ..php_sapi::RequestInfo::default()
             };
+            // Under -H the script names in $_SERVER point into the zeroed
+            // argv (php8.5: PHP_SELF, SCRIPT_NAME, SCRIPT_FILENAME and
+            // PATH_TRANSLATED are ""); $argv is a copy and keeps them.
+            let hidden = req.hide_argv && req.script_file.is_some();
             sapi::register_variables(
                 &mut vm,
                 &sapi::Request {
-                    php_self: &php_self,
-                    script_filename: &script_filename,
+                    php_self: if hidden {
+                        b"".as_slice()
+                    } else {
+                        php_self.as_slice()
+                    },
+                    script_filename: if hidden {
+                        b"".as_slice()
+                    } else {
+                        script_filename.as_slice()
+                    },
                     argv: &request_argv,
                 },
             );

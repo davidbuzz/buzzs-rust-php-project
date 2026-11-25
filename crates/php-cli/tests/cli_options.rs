@@ -308,3 +308,47 @@ fn zlib_ini_warnings_and_refused_restore() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+fn php_stdin(dir: &std::path::Path, args: &[&str], stdin: &[u8]) -> Output {
+    use std::io::Write as _;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_php"))
+        .current_dir(dir)
+        .args(["-n", "-d", "memory_limit=1G"])
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn php");
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().expect("wait php")
+}
+
+#[test]
+fn hide_args_empties_the_code_and_script_names() {
+    // php_cli.c zeroes argv after parsing the options (php8.5).
+    let d = temp_dir("hide-args");
+    std::fs::write(
+        d.join("h.php"),
+        "<?php foreach (['SCRIPT_NAME', 'PHP_SELF', 'SCRIPT_FILENAME', 'PATH_TRANSLATED'] as $k) \
+         { echo $k, '=', $_SERVER[$k], \"\\n\"; } echo implode(',', $argv), \"\\n\";",
+    )
+    .unwrap();
+    let out = php_in(&d, &["-H", "h.php", "a", "b"]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "SCRIPT_NAME=\nPHP_SELF=\nSCRIPT_FILENAME=\nPATH_TRANSLATED=\nh.php,a,b\n"
+    );
+    let out = php_in(&d, &["-H", "-r", "echo 1;"]);
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    let out = php_stdin(&d, &["-H", "-R", "echo 5;", "-E", "echo 6;"], b"x\n");
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    let out = php_stdin(&d, &["-H", "-F", "h.php"], b"x\n");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert_eq!(out.stderr, b"Could not open input file: \n");
+    let _ = std::fs::remove_dir_all(&d);
+}
