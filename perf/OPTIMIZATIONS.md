@@ -33,8 +33,8 @@ the same ground is not covered twice, and add a row when a change lands.
 
 | | start of PR #17 | now | C 8.4 |
 |---|---|---|---|
-| route:list | 4.796G | 4.300G (−10.3%) | 1.79G (≈1.1G of it compiling) |
-| unit tests | 208.45G | 182.46G (−12.5%) | — |
+| route:list | 4.796G | 4.297G (−10.4%) | 1.79G (≈1.1G of it compiling) |
+| unit tests | 208.45G | 182.05G (−12.7%) | — |
 
 Our front end (lex/parse/compile, ≈1.2G of route:list) is close to C's.
 The gap is execution.
@@ -61,6 +61,7 @@ functions.
 | 2-/3-argument frameless calls read their args in place | 082036fd | `substr` 1,198 → 836; `array_key_exists` 664 → 504 | 368 / 290 | −0.2% |
 | `$this->name` arguments sent from the property cache (calls with them are prepared) | 23adafca | `ObjectArray::has()` 3,130 → 2,788 | | rl −0.35% |
 | `RECV_VARIADIC` on the tape (untyped/`mixed`); value-less returns in `return_simple` | 98a9e086 | variadic call 1,328 → 1,017; Doctrine `triggerIfCalledFromOutside` 3,022 → 2,766 | | ut −0.4% |
+| Static property elements (`isset(self::$a[$k])`, `static::$a[k]`) and `self/static/parent::class` without the generic ops | 4c61cbd9 | 2,035 → 1,393; `isset(static::$b[static::class])` 1,927 → 1,342 | 473 | ut −0.2% |
 
 ## Ops, compiler, tape
 
