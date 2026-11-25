@@ -508,3 +508,15 @@ class B extends A {
          \nDeprecated: Callables of the form [\"B\", \"A::foo\"] are deprecated in test.php on line 8\nB4\n"
     );
 }
+
+/// `compact()` and `extract()` in a function read and write its variables
+/// in their slots; a name the function does not compile (`$made`) is
+/// created in its symbol table, and `get_defined_vars()` lists it after
+/// the compiled ones (`/usr/bin/php8.5 -n`: `31,2,m!,a,b,i,c,made,`).
+#[test]
+fn compact_and_extract_use_the_functions_slots() {
+    assert_eq!(
+        run("function f() { $a = 1; $b = 2; for ($i = 0; $i < 3; $i++) { $c = compact('a', 'b'); $c['a'] += 10; extract($c); } extract(['made' => 'm']); $made .= '!'; echo $a, ',', $b, ',', $made, ','; foreach (array_keys(get_defined_vars()) as $k) { echo $k, ','; } } f();"),
+        "31,2,m!,a,b,i,c,made,"
+    );
+}
