@@ -338,3 +338,34 @@ string(2) "s2"
 "#
     );
 }
+
+/// A function called from a top-level `eval()` reads the global scope as
+/// the `eval` left it (`$GLOBALS`, `global`), nested `eval`s included, and
+/// the main script sees the `eval`'s writes afterwards. The main script's
+/// own (older) values must not be copied back over them.
+#[test]
+fn globals_read_from_inside_a_top_level_eval() {
+    assert_eq!(
+        run(r#"<?php
+$x = 1; $s = 'a';
+function reader() { return $GLOBALS['x'] . $GLOBALS['s']; }
+function bound() { global $x; return $x; }
+eval('$x = 7; $s = "t"; echo reader(), "\n"; $x = 8.5; echo reader(), " ", bound(), "\n";');
+echo reader(), " ", bound(), "\n";
+eval('$x = 9; eval(\'$x = 10; $s = "inner"; echo reader(), " ", bound(), "\n";\'); echo reader(), "\n"; $x = 11; echo bound(), "\n";');
+echo $x, $s, " ", reader(), "\n";
+for ($i = 0; $i < 3; $i++) { eval('$x = $i * 2; echo bound(), reader(), "\n";'); }
+"#),
+        r#"7t
+8.5t 8.5
+8.5t 8.5
+10inner 10
+10inner
+11
+11inner 11inner
+00inner
+22inner
+44inner
+"#
+    );
+}

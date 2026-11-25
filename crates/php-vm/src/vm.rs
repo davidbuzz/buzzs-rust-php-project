@@ -2709,19 +2709,43 @@ impl Vm {
         }
     }
 
-    /// Attaches the symbol table of the main frame if it is unattached,
-    /// syncing its CV slots to `self.globals`.
+    /// The index of the newest frame of the global scope: the main
+    /// script's, or a top-level `include`/`eval` above it sharing the
+    /// global table. Those frames form the bottom of the stack (see
+    /// [`Vm::sync_global_frames`]). `None` when there is none.
+    #[inline]
+    fn global_scope_top(&self) -> Option<usize> {
+        let globals = Rc::as_ptr(&self.globals);
+        self.frames
+            .iter()
+            .take_while(|f| f.kind == FrameKind::Main || std::ptr::eq(Rc::as_ptr(&f.vars), globals))
+            .count()
+            .checked_sub(1)
+    }
+
+    /// Attaches the global symbol table to the newest frame of the global
+    /// scope ([`Vm::global_scope_top`]) if it is unattached, and syncs
+    /// that frame's CV slots into `self.globals`, before the table is read
+    /// or written by name.
+    ///
+    /// Only the newest one holds values the table may lack (a write of a
+    /// fast path that is not mirrored): each frame below it synchronised
+    /// its variables when it started the `include` or `eval` above it
+    /// (`Vm::op_include`) and has not run since, so its compiled variables
+    /// can only be older than the table. Copying the main frame's in here
+    /// while a top-level `eval()` ran above it put the main script's old
+    /// values back over the ones the `eval` had just written, which a
+    /// function called from it then read through `$GLOBALS`.
     #[inline]
     pub(crate) fn attach_globals_symbol_table(&mut self) {
-        if let Some(f) = self.frames.first_mut() {
-            if !f.symtab_attached
-                && (f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals))
-            {
+        let Some(top) = self.global_scope_top() else {
+            return;
+        };
+        if let Some(f) = self.frames.get_mut(top) {
+            if !f.symtab_attached {
                 f.attach_symbol_table();
             }
-            if f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals) {
-                f.sync_cvs_to_symtab();
-            }
+            f.sync_cvs_to_symtab();
         }
     }
 
@@ -2730,7 +2754,9 @@ impl Vm {
     /// when its run-time cache slot is warm: the global slot the literal
     /// found last time (`Vm::global_slot_cache`, filled by
     /// `Vm::global_ref_lit`) still has that name and already holds a
-    /// reference, and the main frame's table is attached. The reference
+    /// reference, and the global table is attached to the newest frame of
+    /// the global scope ([`Vm::global_scope_top`], "the main frame" below:
+    /// the main script's, or a top-level `include`/`eval`). The reference
     /// is bound as it is, as php-src binds `Z_REF_P` of the cached slot.
     ///
     /// The generic bind ([`Vm::attach_globals_symbol_table`]) first copies
@@ -2747,8 +2773,12 @@ impl Vm {
         if self.frames.len() < 2 {
             return false;
         }
+        let Some(top) = self.global_scope_top() else {
+            return false;
+        };
         let r = {
-            let (Some(main), Some(cur)) = (self.frames.first(), self.frames.last()) else {
+            // The frame the generic bind would synchronise.
+            let (Some(main), Some(cur)) = (self.frames.get(top), self.frames.last()) else {
                 return false;
             };
             if !main.symtab_attached
