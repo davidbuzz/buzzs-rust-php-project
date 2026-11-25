@@ -297,18 +297,44 @@ fn slot_array<R>(slot: Option<&Value>, read: impl FnOnce(&ZArray) -> Option<R>) 
 /// dereferenced and copied; `None` otherwise.
 #[inline(always)]
 fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
-    let hit = hit_key(f, pid, PC_READ, PC_DYN)?;
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ)?;
     let key = super::dim_ref_in(f, dim)?;
-    let od = hit_data(f, &hit)?;
+    let od = plain_obj(f, base, class)?;
     let slots = od.slots.try_borrow().ok()?;
-    let v = slot_array(slots.get(hit.slot)?.as_ref(), |a| {
-        Some(match super::table_dim(a, key)? {
-            Value::Reference(r) => copy_value(&*r.try_borrow()?),
-            v => copy_value(v),
-        })
-    });
+    let v = match slots.get(slot)? {
+        Some(Value::Array(a)) => elem_copy(a, key),
+        Some(Value::Reference(r)) => elem_copy_ref(r, key),
+        _ => None,
+    };
     drop(slots);
     v
+}
+
+/// The element of `a` at the int or string offset `key`, dereferenced and
+/// copied (`zend_fetch_dimension_address_inner` with `BP_VAR_R`, then
+/// `ZVAL_COPY_DEREF`). A string offset's probe is inlined
+/// (`HashTable::sym_zstr_probe`): it is the body of the element read.
+#[inline(always)]
+fn elem_copy(a: &ZArray, key: super::DimRef<'_>) -> Option<Value> {
+    let el = match key {
+        super::DimRef::Str(s) => a.sym_zstr_probe(s),
+        k => super::table_dim(a, k),
+    }?;
+    match el {
+        Value::Reference(r) => Some(copy_value(&*r.try_borrow()?)),
+        v => Some(copy_value(v)),
+    }
+}
+
+/// [`elem_copy`] of the array a slot holds through a reference (left by
+/// `&$this->a`, a by-reference argument or `foreach` by reference), out of
+/// line.
+#[inline(never)]
+fn elem_copy_ref(r: &php_runtime::PhpRef, key: super::DimRef<'_>) -> Option<Value> {
+    match &*r.try_borrow()? {
+        Value::Array(a) => elem_copy(a, key),
+        _ => None,
+    }
 }
 
 /// Whether `$this->name[dim]` / `$cv->name[dim]` read in `Is` mode (the
@@ -384,7 +410,7 @@ fn assign_dim_hit(
     dst: Option<u32>,
 ) -> bool {
     use super::dims::{assign_write_sep, WriteDim};
-    let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
+    let Some((class, slot, base, _)) = plain_key(f, pid, PC_READ | PC_WRITE) else {
         return false;
     };
     let Some(v) = super::dim_value_in(f, val) else {
@@ -399,14 +425,14 @@ fn assign_dim_hit(
             None => return false,
         }
     };
-    let Some(od) = hit_data(f, &hit) else {
+    let Some(od) = plain_obj(f, base, class) else {
         return false;
     };
     let ret = dst.map(|_| copy_value(&v));
     let Ok(mut slots) = od.slots.try_borrow_mut() else {
         return false;
     };
-    let ok = match slots.get_mut(hit.slot) {
+    let ok = match slots.get_mut(slot) {
         Some(Some(Value::Array(arr))) => assign_write_sep(arr, wd, v),
         Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
             Some(mut inner) => match &mut *inner {

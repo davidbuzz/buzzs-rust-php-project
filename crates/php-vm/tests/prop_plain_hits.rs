@@ -8,7 +8,9 @@
 //! uninitialized typed slot, a reference in the slot and in the base, a
 //! method writing `$this->p`, destructor timing of a replaced object,
 //! `++`/`--` of numbers, null, strings and a typed int at its maximum,
-//! lazy ghosts and dynamic properties. Each runs three times in a function
+//! lazy ghosts and dynamic properties; and `$o->arr[k]` read and written
+//! (`read_dim_hit`, `assign_dim_hit`) with every kind of offset, a missing
+//! key, a shared array, a referenced element and slot. Each runs three times in a function
 //! so that the cache fill, the hit and the declines after it all run.
 //! Expected output from `/usr/bin/php8.5 -n`.
 
@@ -175,10 +177,10 @@ float(9.223372036854776E+18)
 float(-9.223372036854776E+18)
 int(1)
 
-Warning: Decrement on type null has no effect, this will change in the next major version of PHP in /tmp/claude-1000/t62/t.php on line 64
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in t.php on line 64
 NULL
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /tmp/claude-1000/t62/t.php on line 65
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 65
 string(1) "b"
 int(10)
 Cannot increment property C::$i of type int past its maximal value
@@ -191,10 +193,10 @@ float(9.223372036854776E+18)
 float(-9.223372036854776E+18)
 int(1)
 
-Warning: Decrement on type null has no effect, this will change in the next major version of PHP in /tmp/claude-1000/t62/t.php on line 64
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in t.php on line 64
 NULL
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /tmp/claude-1000/t62/t.php on line 65
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 65
 string(1) "b"
 int(10)
 Cannot increment property C::$i of type int past its maximal value
@@ -207,10 +209,10 @@ float(9.223372036854776E+18)
 float(-9.223372036854776E+18)
 int(1)
 
-Warning: Decrement on type null has no effect, this will change in the next major version of PHP in /tmp/claude-1000/t62/t.php on line 64
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in t.php on line 64
 NULL
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /tmp/claude-1000/t62/t.php on line 65
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 65
 string(1) "b"
 int(10)
 Cannot increment property C::$i of type int past its maximal value
@@ -234,4 +236,90 @@ end
 #[test]
 fn plain_property_hits_match_php() {
     assert_eq!(run(SCRIPT), EXPECTED);
+}
+
+const ELEM_SCRIPT: &str = r##"<?php
+class C {
+    public $arr = ['k' => 1, 5 => 'five', '07' => 'seven'];
+    public $notarr = 'str';
+    public ?array $typed = null;
+    function m($k) { return $this->arr[$k] ?? 'none'; }
+}
+function elems($o, $round) {
+    $k = 'k';
+    $one = '5';
+    echo $o->arr['k'], $o->arr[5], $o->arr['5'], $o->arr[$one], $o->arr['07'], "\n";
+    $r = $o->arr[$k];
+    echo "r=$r\n";
+    echo $o->arr['missing'] ?? 'dflt', "\n";
+    echo $o->arr['missing'], "|\n";
+    echo $o->notarr[1], "\n";
+    $copy = $o->arr;
+    $o->arr['k'] = $round + 100;
+    $o->arr[$k . 'x'] = 'kx';
+    $o->arr[9] = [1];
+    $o->arr['9'] = 'nine';
+    $o->arr[] = 'app';
+    echo $copy['k'], " ", $o->arr['k'], " ", $o->arr['kx'], " ", $o->arr[9], " ", count($o->arr), "\n";
+    $el = &$o->arr['k'];
+    $o->arr['k'] = 'through-ref';
+    echo $el, "\n";
+    unset($el);
+    $ref = &$o->arr;
+    $o->arr['k'] = 'slot-ref';
+    echo $ref['k'], " ", $o->arr['k'], "\n";
+    unset($ref);
+    echo $o->m('k'), $o->m('zz'), "\n";
+    $o->typed = ['a' => 1];
+    $o->typed['a'] = 2;
+    echo $o->typed['a'], "\n";
+    $o->arr = ['k' => 1, 5 => 'five', '07' => 'seven'];
+}
+$o = new C;
+for ($i = 0; $i < 3; $i++) elems($o, $i);
+echo "end\n";
+"##;
+
+const ELEM_EXPECTED: &str = r##"1fivefivefiveseven
+r=1
+dflt
+
+Warning: Undefined array key "missing" in t.php on line 15
+|
+t
+1 100 kx nine 6
+through-ref
+slot-ref slot-ref
+slot-refnone
+2
+1fivefivefiveseven
+r=1
+dflt
+
+Warning: Undefined array key "missing" in t.php on line 15
+|
+t
+1 101 kx nine 6
+through-ref
+slot-ref slot-ref
+slot-refnone
+2
+1fivefivefiveseven
+r=1
+dflt
+
+Warning: Undefined array key "missing" in t.php on line 15
+|
+t
+1 102 kx nine 6
+through-ref
+slot-ref slot-ref
+slot-refnone
+2
+end
+"##;
+
+#[test]
+fn property_element_hits_match_php() {
+    assert_eq!(run(ELEM_SCRIPT), ELEM_EXPECTED);
 }
