@@ -5290,21 +5290,28 @@ impl Vm {
         if is_superglobal_name(&name_bytes) {
             self.is_auto_global(&name_bytes);
         }
-        if let Some(main_frame) = self.frames.first() {
-            if main_frame.kind == crate::vm::FrameKind::Main {
-                if let Some(cv) = main_frame
-                    .code
-                    .cv_names
-                    .iter()
-                    .position(|n| n.as_bytes() == &name_bytes[..])
-                {
-                    if let Some(slot) = main_frame.cvs.get(cv) {
-                        if let Some(v) = slot.get() {
-                            return Some(v.deref());
-                        }
+        // The main frame's own variable when that frame is the newest of
+        // the global scope; while a top-level include or `eval` runs above
+        // it (`Vm::main_is_global_top`), the table, which
+        // `attach_globals_symbol_table` just brought up to date from that
+        // frame, has the current value.
+        let main = self
+            .frames
+            .first()
+            .filter(|f| f.kind == crate::vm::FrameKind::Main && self.main_is_global_top());
+        if let Some(main_frame) = main {
+            if let Some(cv) = main_frame
+                .code
+                .cv_names
+                .iter()
+                .position(|n| n.as_bytes() == &name_bytes[..])
+            {
+                if let Some(slot) = main_frame.cvs.get(cv) {
+                    if let Some(v) = slot.get() {
+                        return Some(v.deref());
                     }
-                    return None;
                 }
+                return None;
             }
         }
         let idx = self.globals.borrow_mut().find(&name_bytes)?;

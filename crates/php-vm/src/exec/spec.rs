@@ -840,6 +840,11 @@ impl Vm {
         let undefined = || (mode == FetchMode::Is).then_some(Value::Null);
         match slot {
             GlobalSlot::GlobalCv(cv) => {
+                // The main frame's variable is the global's value only
+                // while no top-level include or `eval` runs above it.
+                if !self.main_is_global_top() {
+                    return None;
+                }
                 let main = self.frames.first()?;
                 let slot = main.cvs.get(cv as usize)?;
                 Some(slot.get().map_or_else(undefined, |v| Some(v.deref())))
@@ -899,6 +904,11 @@ impl Vm {
         };
         let v = match slot {
             GlobalSlot::GlobalCv(cv) => {
+                // As in `fetch_global_cached`: not while a top-level
+                // include or `eval` runs above the main frame.
+                if !self.main_is_global_top() {
+                    return None;
+                }
                 fetched(self.frames.vec.first()?.cvs.get(cv as usize)?.get())?
             }
             GlobalSlot::GlobalStore(idx) => {
@@ -953,8 +963,14 @@ impl Vm {
             None
         };
 
+        // The main frame's variables are the globals' values only while
+        // no top-level include or `eval` runs above it
+        // (`Vm::main_is_global_top`): else the caller reads the table.
+        let main_top = self.main_is_global_top();
         if let Some(slot) = cached {
             match slot {
+                // Resolved below, from the table.
+                GlobalSlot::GlobalCv(_) if !main_top => {}
                 GlobalSlot::GlobalCv(cv) => {
                     let main_frame = self.frames.first()?;
                     let slot = main_frame.cvs.get(cv as usize)?;
@@ -1005,14 +1021,20 @@ impl Vm {
         }
 
         // Try VM's global scope first:
+        let mut main_cv = false;
         if let Some(main_frame) = self.frames.first() {
             if main_frame.kind == FrameKind::Main {
-                if let Some(cv) = main_frame
+                let cv = main_frame
                     .code
                     .cv_names
                     .iter()
-                    .position(|n| n.as_bytes() == &name_bytes[..])
-                {
+                    .position(|n| n.as_bytes() == &name_bytes[..]);
+                // A variable of the main script read while an include or
+                // `eval` runs above it: from the table below, and not
+                // remembered as a table slot (the main frame's own writes
+                // do not reach the table once it runs again).
+                main_cv = cv.is_some();
+                if let Some(cv) = cv.filter(|_| main_top) {
                     let cv = cv as u32;
                     if cacheable {
                         let mut cache = code.rt_cache.globals.borrow_mut();
@@ -1042,7 +1064,7 @@ impl Vm {
         self.attach_globals_symbol_table();
         let idx = self.globals.borrow_mut().find(&name_bytes);
         if let Some(idx) = idx {
-            if cacheable {
+            if cacheable && !main_cv {
                 let mut cache = code.rt_cache.globals.borrow_mut();
                 if cache.len() <= pid as usize {
                     crate::rtcache::grow_slots(&mut cache, pid as usize + 1, || GlobalSlot::Empty);

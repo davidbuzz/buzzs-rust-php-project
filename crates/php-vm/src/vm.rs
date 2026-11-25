@@ -2709,6 +2709,26 @@ impl Vm {
         }
     }
 
+    /// Whether the main script's frame is the newest frame of the global
+    /// scope: no top-level `include` or `eval` runs above it (those frames
+    /// share the global table and sit right above it, see
+    /// [`Vm::sync_global_frames`]). Only then are the main frame's compiled
+    /// variables the global variables' current values. php-src's symbol
+    /// table points at the slots of the global-scope frame that is running
+    /// (`zend_attach_symbol_table()` on entering an included file or an
+    /// `eval`, `zend_detach_symbol_table()` on leaving it): while one runs,
+    /// its variables are the current ones, mirrored into the table, and the
+    /// main frame's are older until it resumes.
+    #[inline]
+    pub(crate) fn main_is_global_top(&self) -> bool {
+        match self.frames.vec.get(1) {
+            Some(f) if self.frames.live > 1 => {
+                !std::ptr::eq(Rc::as_ptr(&f.vars), Rc::as_ptr(&self.globals))
+            }
+            _ => true,
+        }
+    }
+
     /// The index of the newest frame of the global scope: the main
     /// script's, or a top-level `include`/`eval` above it sharing the
     /// global table. Those frames form the bottom of the stack (see
