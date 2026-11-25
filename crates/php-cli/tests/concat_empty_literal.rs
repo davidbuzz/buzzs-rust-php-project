@@ -87,3 +87,36 @@ array(1) refcount(2){
 }
 string(1) "g" refcount(2)
 "###;
+
+/// `str_repeat($s, 1)` takes exactly the room its argument does: php-src
+/// allocates the result once (`zend_string_safe_alloc`), and a result
+/// built as a vector and wrapped cost a second small allocation that
+/// `memory_get_usage()` showed (ext/pcre/tests/bug81243.phpt, whose shape
+/// this is; php8.5: 3072 and 28672 bytes for the two copies below, then
+/// no change when the copy replaces the original).
+#[test]
+fn str_repeat_once_takes_the_room_of_its_argument() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("str_repeat_room.php");
+    std::fs::write(
+        &path,
+        r"<?php
+$s = str_repeat('x', 3000); $m = memory_get_usage(); $t = str_repeat($s, 1);
+echo memory_get_usage() - $m, PHP_EOL;
+$long = str_repeat('Eins-zwei-drei', 2000); $m = memory_get_usage(); $copy = str_repeat($long, 1);
+echo memory_get_usage() - $m, PHP_EOL;
+$m = memory_get_usage(); $copy = str_repeat($copy, 1);
+var_dump(memory_get_usage() === $m);
+",
+    )
+    .expect("write script");
+    let out = Command::new(env!("CARGO_BIN_EXE_php"))
+        .arg("-n")
+        .arg(&path)
+        .output()
+        .expect("spawn php");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3072\n28672\nbool(true)\n"
+    );
+}
