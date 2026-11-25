@@ -961,6 +961,14 @@ pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
 /// value), which for these types is a comparison of the same type's values
 /// (`fast_is_identical_function`). `None` for any other needle and for a
 /// reference being written.
+///
+/// Out of line, with a loop of its own for a string needle: inlined into
+/// the tape's `frameless_quick_n`, whose other paths (the one-argument
+/// trim and case conversions among them) keep many values in registers,
+/// the loop saved and restored about a dozen of them around each
+/// element's `memcmp` call (in_array('d', $five, true): 467 instructions
+/// before those paths were added, 506 after).
+#[inline(never)]
 fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
     let same = |v: &Value| match (needle, v) {
         (Value::Null, Value::Null) => true,
@@ -968,19 +976,36 @@ fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
         (Value::Int(a), Value::Int(b)) => a == b,
         #[allow(clippy::float_cmp)] // `Z_DVAL_P(op1) == Z_DVAL_P(op2)`
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::Str(a), Value::Str(b)) => a.as_bytes() == b.as_bytes(),
         _ => false,
     };
-    if !matches!(
-        needle,
-        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
-    ) {
-        return None;
+    match needle {
+        Value::Str(n) => return in_array_str(n, haystack),
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {}
+        _ => return None,
     }
     for v in haystack.values() {
         let hit = match v {
             Value::Reference(r) => same(&*r.try_borrow()?),
             v => same(v),
+        };
+        if hit {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// [`in_array_identical`] of the string `needle`: `zend_string_equals`
+/// of each string element (the same string first, then the length, then
+/// the bytes).
+fn in_array_str(needle: &ZStr, haystack: &ZArray) -> Option<bool> {
+    let n = needle.as_bytes();
+    let eq = |s: &ZStr| ZStr::ptr_eq(s, needle) || s.as_bytes() == n;
+    for v in haystack.values() {
+        let hit = match v {
+            Value::Str(s) => eq(s),
+            Value::Reference(r) => matches!(&*r.try_borrow()?, Value::Str(s) if eq(s)),
+            _ => false,
         };
         if hit {
             return Some(true);
@@ -1787,6 +1812,17 @@ mod tests {
                 Value::Str(ZStr::from("2")),
             ]))
         };
+        // Strings, one behind a reference, and an int among them.
+        let letters = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Str(ZStr::from("a")),
+                Value::Str(ZStr::from("bc")),
+                Value::Int(1),
+                Value::Reference(php_runtime::PhpRef::new(Value::Str(ZStr::from("r")))),
+                Value::Str(ZStr::from("d")),
+                Value::Str(ZStr::from("")),
+            ]))
+        };
         let t = Value::Bool(true);
         // A string by its bytes (two handles of one content may differ in
         // what else they record).
@@ -1845,6 +1881,13 @@ mod tests {
             ("in_array", vec![Value::Float(1.5), mixed(), t.clone()]),
             ("in_array", vec![Value::Float(1.0), mixed(), t.clone()]),
             ("in_array", vec![Value::Int(1), mixed(), t.clone()]),
+            ("in_array", vec![s("d"), letters(), t.clone()]),
+            ("in_array", vec![s("x"), letters(), t.clone()]),
+            ("in_array", vec![s("bb"), letters(), t.clone()]),
+            ("in_array", vec![s(""), letters(), t.clone()]),
+            ("in_array", vec![s("r"), letters(), t.clone()]),
+            ("in_array", vec![s("1"), letters(), t.clone()]),
+            ("in_array", vec![s("d"), ints(), t.clone()]),
             ("str_contains", vec![s("hello"), s("ell")]),
             ("str_contains", vec![s("hello"), s("")]),
             ("str_contains", vec![s("hello"), s("elx")]),
