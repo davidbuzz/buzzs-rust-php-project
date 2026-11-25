@@ -130,6 +130,7 @@ functions.
 | `$a instanceof $b` of two variables without the generic op | eeb13391 | `instanceof $name` 749 → 447; `instanceof $obj` 617 → 308 | 8.5: 181 / 115 | ut −0.3%, rl −0.1% |
 | `$this` as a call's argument goes to prepared calls | 6b2bdd15 | `method_exists($this, …)` 5,431 → 4,342; `get_class($this)` 3,513 → 2,429 | 8.5: 1,217 / 585 | ut −0.35% |
 | `$cv += $array` merged in place (no symbol-table attach, no copy) | ba8c572b | 4,886 → 1,588 | 8.5: 581 | ut −0.8%, rl −0.3% |
+| Returns of objects as `: static`, `self`, `parent` checked against the frame's classes (were the generic `Return`) | 3f843d6d | 2,135 → 1,479 | 8.5: 285 | none measurable |
 
 ## Ops, compiler, tape
 
@@ -190,6 +191,15 @@ All of these are 1,000-element inputs unless noted.
 - **Caching `ArrayAccess` methods on `Class`.** No measurable change: the
   profiler's attribution on this box is skewed. Trust totals, not
   per-symbol percentages.
+- **Fast paths picked from micro-benchmarks alone** (25 Nov 2026). Four
+  in a row looked good in a micro-benchmark and did nothing for Laravel:
+  `InitArray`/`ArrayAdd` as `VmOp` rows (the generic ones run only in
+  frames with an attached symbol table), one method-cache lookup for user
+  methods (the pure-builtin path it skipped bails out early on most of
+  Laravel's calls), batching a call's `Send`s (one argument per call has
+  nothing to batch), and the `: static` return above. Measure the real
+  workload first, with a counter where the profile is unclear
+  (`perf/census/op-census.diff` has the hook), then pick the target.
 - **Fusing calls whose arity can never run in place** (e.g.
   `count($a, 1)`). Slower than the prepared generic call, so these are
   left unfused at compile time (`frameless_arity`).

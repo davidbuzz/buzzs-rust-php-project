@@ -2512,6 +2512,7 @@ impl Vm {
                 return None;
             }
             let rt = uf.return_type.as_ref();
+            let (scope, called) = (frame.scope.as_ref(), frame.called.as_ref());
             // `return_accepts` is inline: the closure it replaces was an
             // out-of-line call per return.
             let v = match val {
@@ -2520,13 +2521,13 @@ impl Vm {
                     match slot.as_ref()? {
                         Value::Reference(r) => {
                             let v = r.get();
-                            if !return_accepts(rt, &v) {
+                            if !return_accepts_in(rt, &v, scope, called) {
                                 return None;
                             }
                             v
                         }
                         v => {
-                            if !return_accepts(rt, v) {
+                            if !return_accepts_in(rt, v, scope, called) {
                                 return None;
                             }
                             // The frame is released below and nothing else
@@ -2549,14 +2550,18 @@ impl Vm {
                 }
                 Operand::Tmp(t) => {
                     let slot = frame.tmps.get_mut(t as usize)?;
-                    if matches!(slot, Value::Reference(_)) || !return_accepts(rt, slot) {
+                    if matches!(slot, Value::Reference(_))
+                        || !return_accepts_in(rt, slot, scope, called)
+                    {
                         return None;
                     }
                     std::mem::take(slot)
                 }
                 Operand::Lit(i) => {
                     let lit = frame.code.literals.get(i as usize)?;
-                    if matches!(lit, Value::Reference(_)) || !return_accepts(rt, lit) {
+                    if matches!(lit, Value::Reference(_))
+                        || !return_accepts_in(rt, lit, scope, called)
+                    {
                         return None;
                     }
                     clone_value(lit)
@@ -5397,23 +5402,66 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
 }
 
 /// Whether a value is returned as it is from a function with return type
-/// `rt` (`verify_return`'s fast path, [`Vm::return_simple`]).
+/// `rt` (`verify_return`'s fast path, [`Vm::return_simple`]): no class
+/// context, so an object is accepted only by a class the type names.
 #[inline(always)]
 #[allow(clippy::inline_always)] // once per return, in three places
 fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
+    return_accepts_in(rt, v, None, None)
+}
+
+/// [`return_accepts`] in the returning frame's class context: `scope` is
+/// its class (`self`, `parent`) and `called` its called class (`static`).
+/// An object is accepted, as `zend_check_type_slow` accepts it, when its
+/// class is `called` or extends or implements it (`: static`), or is an
+/// instance of a class the type names, `self` and `parent` included
+/// ([`object_accepts`]). Intersections, `iterable` and `callable` are left
+/// to the generic check.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per return
+fn return_accepts_in(
+    rt: Option<&crate::types::TypeDecl>,
+    v: &Value,
+    scope: Option<&Rc<Class>>,
+    called: Option<&Rc<Class>>,
+) -> bool {
     match rt {
         None => true,
-        // An object of a class the type names (`: Column`) is accepted by
-        // name as a parameter is ([`param_accepts`]); `self`, `static` and
-        // intersections are left to the generic check.
         Some(rt) => {
             !rt.is_void()
                 && !rt.is_never()
                 && (rt.is_mixed()
                     || accepts_without_coercion(rt.mask, v)
-                    || (matches!(v, Value::Object(_)) && param_accepts(rt, v)))
+                    || matches!(v, Value::Object(o) if object_accepts(rt, o, scope, called)))
         }
     }
+}
+
+/// The object part of `zend_check_type_slow` without its slow steps, for
+/// [`return_accepts_in`]: `static` against the called class, then each
+/// class the type names, `self` and `parent` resolved through `scope`.
+/// `false` (the generic check decides) for intersections and for anything
+/// not matched here.
+fn object_accepts(
+    rt: &crate::types::TypeDecl,
+    o: &php_runtime::value::Obj,
+    scope: Option<&Rc<Class>>,
+    called: Option<&Rc<Class>>,
+) -> bool {
+    let refs = rt.class_refs();
+    if !refs.intersections.is_empty() {
+        return false;
+    }
+    let cls = object::class_of(o);
+    if rt.mask & crate::types::mask::STATIC != 0 && called.is_some_and(|c| cls.is_subclass_of(c)) {
+        return true;
+    }
+    let named = |c: &Rc<Class>| Rc::ptr_eq(&cls, c) || cls.instance_of_name(c.lc_name.as_bytes());
+    refs.classes.iter().any(|c| match c {
+        crate::types::ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        crate::types::ClassRef::Scope => scope.is_some_and(named),
+        crate::types::ClassRef::Parent => scope.and_then(|s| s.parent.as_ref()).is_some_and(named),
+    })
 }
 
 /// A callable whose resolution raises no deprecation, with or without
