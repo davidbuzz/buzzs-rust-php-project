@@ -253,11 +253,11 @@ pub(crate) fn xport_create(
 ) -> VmResult<Result<Stream, XportError>> {
     let (r, hook) = xport_open(vm, address, timeout, server, flags, persistent_id, ctx)?;
     let Some(hook) = hook else {
-        return Ok(r);
+        return pending_or(r);
     };
     let mut s = match r {
         Ok(s) => s,
-        Err(e) => return Ok(Err(e)),
+        Err(e) => return pending_or(Err(e)),
     };
     let r = hook(vm, &mut s);
     if !matches!(r, Ok(Ok(()))) {
@@ -269,12 +269,45 @@ pub(crate) fn xport_create(
             thrown: Some(t), ..
         }) => {
             // C reports the connect failure before the exception surfaces.
-            vm.php_warning(&format!("Unable to connect to {address} (Unknown error)"))?;
+            warn_with_exception_pending(
+                vm,
+                &format!("Unable to connect to {address} (Unknown error)"),
+            );
             Err(t)
         }
         Err(e) => Ok(Err(e.error)),
     }
 }
+
+/// `r`, unless a user error handler threw for a warning of the failed
+/// creation: that exception is pending when php_stream_xport_create()
+/// returns.
+fn pending_or(r: Result<Stream, XportError>) -> VmResult<Result<Stream, XportError>> {
+    match bridge::take_pending() {
+        Some(t) => Err(t),
+        None => Ok(r),
+    }
+}
+
+/// `php_error_docref(E_WARNING)` while an exception is pending
+/// (`zend_error_impl()`, Zend/zend.c): a user error handler for warnings
+/// is not called (`zend_call_function()` does nothing with an exception
+/// pending), so the warning is neither shown nor recorded; without one the
+/// warning is reported as usual.
+pub(crate) fn warn_with_exception_pending(vm: &mut Vm, message: &str) {
+    let user_handler = vm
+        .error_handlers
+        .last()
+        .is_some_and(|h| !h.callback.is_null() && h.mask & E_WARNING != 0);
+    if !user_handler {
+        // Only an exception can come back, and one is pending already
+        // (the first one wins).
+        let _ = vm.php_warning(message);
+    }
+}
+
+/// `E_WARNING`.
+const E_WARNING: i64 = 2;
 
 /// A client connection from [`xport_connect`].
 pub(crate) enum Connected {
@@ -303,7 +336,9 @@ pub(crate) fn xport_connect(
     let (r, hook) = xport_open(vm, address, timeout, false, flags, persistent_id, ctx)?;
     let s = match r {
         Ok(s) => s,
-        Err(e) => return Ok(Connected::Failed(e, None)),
+        // An exception a user error handler threw for the transport's
+        // warnings stays pending while the caller reports the failure.
+        Err(e) => return Ok(Connected::Failed(e, bridge::take_pending())),
     };
     let v = res::new_persistent(s, pid);
     let Some(hook) = hook else {
@@ -419,9 +454,19 @@ fn xport_create_inner(
             context: ctx.clone(),
         };
         let r = (t.create)(vm, &req);
-        // Warnings the transport queued (php_network_getaddresses()).
+        // Warnings the transport queued (php_network_getaddresses(), a
+        // failed `bindto`).
         bridge::flush_diags(vm);
         let r = r?;
+        // A user error handler threw for one of them: in C the exception
+        // is pending when php_stream_xport_create() returns, so the
+        // created stream is never handed to PHP code. A failed connect
+        // keeps it pending for the caller (see `xport_connect`).
+        if r.is_ok() {
+            if let Some(t) = bridge::take_pending() {
+                return Err(t);
+            }
+        }
         if let Ok(s) = &r {
             if server {
                 xport::note_server(s.id(), &scheme);
@@ -529,18 +574,19 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
         Connected::Failed(e, thrown) => {
             // `%s` stops at an embedded NUL.
             let shown = host_s.split('\0').next().unwrap_or_default();
-            vm.php_warning(&format!(
-                "Unable to connect to {shown}:{port} ({})",
-                e.shown()
-            ))?;
-            if let Some(t) = thrown {
-                return Err(t);
+            let message = format!("Unable to connect to {shown}:{port} ({})", e.shown());
+            match &thrown {
+                Some(_) => warn_with_exception_pending(vm, &message),
+                None => vm.php_warning(&message)?,
             }
             set_ref(a, 2, Value::Int(i64::from(e.errno)));
             if !e.message.is_empty() {
                 set_ref(a, 3, bytes(e.message.as_bytes()));
             }
-            Ok(Value::Bool(false))
+            match thrown {
+                Some(t) => Err(t),
+                None => Ok(Value::Bool(false)),
+            }
         }
     }
 }
@@ -568,19 +614,21 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match xport_connect(vm, &addr, timeout, flags, pid, ctx)? {
         Connected::Stream(v) => Ok(v),
         Connected::Failed(e, thrown) => {
-            vm.php_warning(&format!(
-                "Unable to connect to {} ({})",
-                addslashes(&addr),
-                e.shown()
-            ))?;
-            if let Some(t) = thrown {
-                return Err(t);
+            let message = format!("Unable to connect to {} ({})", addslashes(&addr), e.shown());
+            match &thrown {
+                Some(_) => warn_with_exception_pending(vm, &message),
+                None => vm.php_warning(&message)?,
             }
+            // C fills `$error_code`/`$error_message` before returning,
+            // exception or not.
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
             if !e.message.is_empty() {
                 set_ref(a, 2, bytes(e.message.as_bytes()));
             }
-            Ok(Value::Bool(false))
+            match thrown {
+                Some(t) => Err(t),
+                None => Ok(Value::Bool(false)),
+            }
         }
     }
 }
