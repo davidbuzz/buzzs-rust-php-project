@@ -1567,6 +1567,36 @@ fn foreach_returns_and_constants() {
     );
 }
 
+const PROP_CONCAT: &str = r#"<?php
+class P { public $s = 'a'; }
+function app($o, $k) { $o->s .= $k; $o->s .= 'x'; return $o->s; }
+$p = new P;
+for ($i = 0; $i < 3; $i++) { echo app($p, $i), "\n"; }
+"#;
+
+/// `$o->p .= v` is a row of its own (`props::concat_prop`), not the
+/// number cases' `AssignOpObjProp` row.
+#[test]
+fn property_concat() {
+    let arrays = op_arrays(PROP_CONCAT);
+    let mut rows = 0;
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            if let Op::AssignOpObjProp {
+                op: php_runtime::BinaryOp::Concat,
+                ..
+            } = op
+            {
+                assert_eq!(tape[i].op, TOp::ConcatObjProp, "op {i}: {op:?}");
+                rows += 1;
+            }
+        }
+    }
+    assert_eq!(rows, 2);
+    assert_eq!(run(PROP_CONCAT), "a0x\na0x1x\na0x1x2x\n");
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];

@@ -1405,6 +1405,7 @@ tape_ops! {
         ThisConst = (props::this_const, 2, poll_f),
         ThisConstTo = (props::this_const_to, 2, branch_poll_f),
         FetchThisT = (props::fetch_this, 1, poll_f),
+        ConcatObjProp = (props::concat_prop, 1, poll_f),
 
         // ---- end of props ----
         //

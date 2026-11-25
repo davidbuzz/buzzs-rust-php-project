@@ -99,6 +99,26 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::AssignObjProp)
             }
         }
+        // `.=` (`spec::concat_prop_in`): the number cases' row cannot take
+        // it.
+        Op::AssignOpObjProp {
+            place,
+            op: php_runtime::BinaryOp::Concat,
+            val,
+            dst,
+        } => {
+            if !place_ok(code, place)
+                || !val_ok(code, val)
+                || dst.is_some_and(|d| d >= code.num_tmps)
+            {
+                return None;
+            }
+            Inst {
+                a: place,
+                d: i as u32,
+                ..plain(TOp::ConcatObjProp)
+            }
+        }
         Op::AssignOpObjProp { place, val, .. } => {
             if !place_ok(code, place) || !val_ok(code, val) {
                 return None;
@@ -202,6 +222,27 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         }
         _ => return None,
     })
+}
+
+/// `$o->p .= v` ([`TOp::ConcatObjProp`], the op at `inst.d`) on a property
+/// cache hit (`spec::concat_prop_in`). Declines anything else, having
+/// changed nothing: `hot::step_ext`, then the generic op.
+///
+/// # Safety
+/// As [`prop_in`].
+#[inline(never)]
+pub(super) unsafe fn concat_prop(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // A handle of its own on the op array, as in `prop_in`.
+    let code = Rc::clone(&f.code);
+    let Some(&Op::AssignOpObjProp {
+        place, val, dst, ..
+    }) = code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    crate::exec::spec::concat_prop_in(f, place, val, dst)
 }
 
 /// `ZEND_FETCH_THIS` ([`TOp::FetchThisT`]): the frame's `$this` into

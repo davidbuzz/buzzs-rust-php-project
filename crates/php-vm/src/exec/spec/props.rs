@@ -800,6 +800,88 @@ fn incdec_hit(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
     with_hit_obj(f, &hit, |od| incdec_in(od, hit.slot, kind))
 }
 
+/// `ZEND_ASSIGN_OBJ_OP` of `.=` (`$this->p .= 'x'`, `$cv->p .= $s`) on a
+/// property cache hit of place `pid` in frame `f`: a declared property
+/// holding a string, whose type (`accept`) takes a string, extended in
+/// place by a string or an int (`concat_function`: the string moved out of
+/// its slot, so that one nothing else holds grows without a copy), the
+/// value operand consumed (`FREE_OP_DATA`) and the result into `dst`.
+/// `false`, having changed nothing, for anything else (another value in
+/// the property or the operand, a reference, a typed property that does
+/// not take a string, a miss): the generic op, which also fills the cache.
+#[inline(never)]
+pub(in crate::exec) fn concat_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
+        return false;
+    };
+    if hit.accept != u32::MAX && hit.accept & crate::types::mask::STRING == 0 {
+        return false;
+    }
+    let res = {
+        let rhs = match val {
+            Operand::Lit(l) => f.code.literals.get(l as usize),
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+            _ => None,
+        };
+        let rhs = match rhs {
+            Some(v @ (Value::Str(_) | Value::Int(_))) => v,
+            _ => return false,
+        };
+        let apply = |od: &ObjectData| concat_slot_in(od, hit.slot, rhs, dst.is_some());
+        if let Some(od) = hit_data(f, &hit) {
+            apply(od)
+        } else if base_is_ref(f, &hit) {
+            with_hit_obj(f, &hit, apply)
+        } else {
+            None
+        }
+    };
+    let Some(res) = res else {
+        return false;
+    };
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let Some(v) = res {
+        put_dst(f, dst, v);
+    }
+    true
+}
+
+/// [`concat_prop_in`]'s `.=` of `rhs` (a string or an int) onto the string
+/// in the initialized declared slot `slot` of `od`: `Some` once done, with
+/// the new value when `want` (the op's result is used); `None`, nothing
+/// changed, when the slot holds anything else.
+#[inline(always)]
+fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Option<Option<Value>> {
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let Some(Some(cell)) = slots.get_mut(slot) else {
+        return None;
+    };
+    let Value::Str(s) = cell else {
+        return None;
+    };
+    let s = std::mem::take(s);
+    let new = match rhs {
+        Value::Str(t) if s.is_empty() => t.clone(),
+        Value::Str(t) => s.concat_owned_str_spare(t),
+        Value::Int(n) => s.concat_owned_long_spare(*n),
+        // Unreachable (the caller checked): the string goes back.
+        _ => s,
+    };
+    let out = want.then(|| Value::Str(new.clone()));
+    *cell = Value::Str(new);
+    Some(out)
+}
+
 /// The frame-local fast paths of the property ops (`exec/hot.rs`, which
 /// runs them in its own loop like the other run-time cache hits): `$o->p`
 /// read, `=`, `op=` of a number, `++`/`--` and `isset()`/`empty()` on a

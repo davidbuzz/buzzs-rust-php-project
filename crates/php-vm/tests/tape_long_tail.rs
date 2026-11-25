@@ -168,3 +168,68 @@ rt
 "#
     );
 }
+
+/// `.=` on a property (`$this->p .= v`, `$o->p .= v`): untyped and typed
+/// string properties, a nullable one holding null, an int property (the
+/// weak conversion), an array (the warning), a readonly one (the `Error`),
+/// a property bound by reference, the result used; a dynamic property and
+/// one through `__get`/`__set`.
+#[test]
+fn property_concat_assign() {
+    assert_eq!(
+        run(r#"<?php
+class P {
+    public $s = 'a';
+    public string $t = 't';
+    public ?string $n = null;
+    public int $i = 1;
+    public $arr = [];
+    public readonly string $ro;
+    function __construct() { $this->ro = 'r'; }
+    function run($k) {
+        $this->s .= 'x';
+        $this->s .= $k;
+        $this->t .= 5;
+        $r = ($this->t .= '-');
+        $this->s .= 1.5;
+        try { $this->i .= '2'; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { $this->ro .= 'z'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        $this->n .= 'n';
+        $this->arr .= 'q';
+        return $r;
+    }
+}
+function outer($o, $v) { $o->s .= $v; $o->t .= $v; return $o->s; }
+$p = new P;
+for ($i = 0; $i < 3; $i++) {
+    echo $p->run($i), ' ', $p->s, ' ', $p->t, ' ', var_export($p->n, true), ' ', var_export($p->i, true), ' ', var_export($p->arr, true), "\n";
+    echo outer($p, "o$i"), "\n";
+}
+$q = new P; $ref = &$q->s; $q->run('R'); echo $ref, "\n";
+$d = new stdClass; $d->x = 'd'; for ($i = 0; $i < 3; $i++) { $d->x .= $i; } echo $d->x, "\n";
+class M { private $data = []; function __get($n) { echo "get $n\n"; return 'g'; } function __set($n, $v) { echo "set $n=$v\n"; } }
+$m = new M; for ($i = 0; $i < 2; $i++) { $m->zz .= 'v'; }
+"#),
+        r#"Cannot modify readonly property P::$ro
+
+Warning: Array to string conversion in t.php on line 19
+t5- ax01.5 t5- 'n' 12 'Arrayq'
+ax01.5o0
+Cannot modify readonly property P::$ro
+t5-o05- ax01.5o0x11.5 t5-o05- 'nn' 122 'Arrayqq'
+ax01.5o0x11.5o1
+Cannot modify readonly property P::$ro
+t5-o05-o15- ax01.5o0x11.5o1x21.5 t5-o05-o15- 'nnn' 1222 'Arrayqqq'
+ax01.5o0x11.5o1x21.5o2
+Cannot modify readonly property P::$ro
+
+Warning: Array to string conversion in t.php on line 19
+axR1.5
+d012
+get zz
+set zz=gv
+get zz
+set zz=gv
+"#
+    );
+}
