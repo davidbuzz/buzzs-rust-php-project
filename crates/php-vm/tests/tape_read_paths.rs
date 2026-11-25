@@ -394,6 +394,60 @@ __isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",tr
     );
 }
 
+/// `self::$x[$k]`, `static::$x[$k][$j]` and `A::$x[...]`: reads, `??`, `isset`/`empty`, assignments with copy-on-write, references, typed and private properties.
+#[test]
+fn static_prop_dims() {
+    assert_eq!(
+        run(r#"<?php
+class A {
+  public static $cache = ['a' => ['b' => 1]];
+  protected static array $typed = [];
+  public static ?array $nul = null;
+  private static $priv = ['p' => 'P'];
+  public static $str = 'abc';
+  static function run($k, $t) {
+    self::$cache[$k] = $t; self::$cache['n'][$k][] = $t; static::$typed[$k]['x'] = [$t];
+    $copy = self::$cache;
+    self::$cache['a']['b'] = $t * 10;
+    echo json_encode([self::$cache[$k], self::$cache['a']['b'], $copy['a']['b'], self::$cache['nope'] ?? 'd', self::$cache['a']['zz'] ?? 'd',
+      isset(self::$cache[$k]), isset(self::$cache['nope']), empty(self::$cache['a']['b']), isset(static::$typed[$k]['x'][0]),
+      self::$nul['x'] ?? 'd', isset(self::$nul['x']), self::$priv['p'], isset(self::$str[1]), self::$str[1] ?? 'd']), "\n";
+    echo @self::$cache['missing'], "|", self::$cache['a']['b'], "\n";
+    try { self::$nul['x'] = 1; echo json_encode(self::$nul), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    self::$nul = null;
+  }
+}
+class B extends A { static function more() { return isset(parent::$cache['a']) && isset(static::$cache['a']['b']); } }
+function f() {
+  for ($t = 0; $t < 3; $t++) {
+    A::run('k' . ($t % 2), $t);
+    echo json_encode([B::more(), A::$cache['k0'] ?? 'd', isset(A::$cache['k1'])]), "\n";
+    $r = &A::$cache['a']; $r['b'] = 'ref'; echo A::$cache['a']['b'], "\n"; unset($r);
+  }
+  echo json_encode(A::$cache), "\n";
+}
+f();
+"#),
+        r#"[0,0,1,"d","d",true,false,true,true,"d",false,"P",true,"b"]
+|0
+{"x":1}
+[true,0,false]
+ref
+[1,10,"ref","d","d",true,false,false,true,"d",false,"P",true,"b"]
+|10
+{"x":1}
+[true,0,true]
+ref
+[2,20,"ref","d","d",true,false,false,true,"d",false,"P",true,"b"]
+|20
+{"x":1}
+[true,2,true]
+ref
+{"a":{"b":"ref"},"k0":2,"n":{"k0":[0,2],"k1":[1]},"k1":1}
+"#
+    );
+}
+
 /// `isset` / `empty` / reads of an element of a temporary (`self::MAP[$k]`, `f()[$k]`) and array destructuring, hits and misses.
 #[test]
 fn tmp_element_reads() {

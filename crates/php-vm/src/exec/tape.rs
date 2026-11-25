@@ -1534,6 +1534,24 @@ fn tmp_dims_place(p: &crate::opcode::Place) -> bool {
         && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
 }
 
+/// An element of a static property, `A::$name[d1]...[dn]` (a literal
+/// name, a class that is not dynamic): `spec::fetch_static_dims_in`,
+/// `spec::isset_static_dims_in`, `spec::assign_static_dims_in`.
+fn static_dims_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(
+        p.base,
+        PlaceBase::StaticProp {
+            class: ClassSpec::Named(_)
+                | ClassSpec::SelfClass
+                | ClassSpec::Parent
+                | ClassSpec::Static,
+            name: Operand::Lit(_),
+        }
+    ) && !p.segs.is_empty()
+        && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
+}
+
 /// The generic place ops whose nested shapes have a fast path that needs
 /// the VM ([`nested_place`]): run with it at hand ([`run_vm_op`], which
 /// declines to `Vm::run`'s generic op on a miss) instead of leaving the
@@ -1553,16 +1571,19 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
             dst < code.num_tmps
                 && ((mode != FetchMode::List && nested_place(p, false, true))
                     || (matches!(mode, FetchMode::Read | FetchMode::Is | FetchMode::List)
-                        && tmp_dims_place(p)))
+                        && tmp_dims_place(p))
+                    || (mode != FetchMode::List && static_dims_place(p)))
         }
         Op::Isset { place, dst } | Op::Empty { place, dst } => {
-            dst < code.num_tmps && nested_place(place_of(place)?, false, true)
+            let p = place_of(place)?;
+            dst < code.num_tmps && (nested_place(p, false, true) || static_dims_place(p))
         }
         Op::Unset { place } => nested_place(place_of(place)?, true, false),
         Op::Assign { place, val, dst } => {
+            let p = place_of(place)?;
             in_range(val)
                 && dst.is_none_or(|d| d < code.num_tmps)
-                && nested_place(place_of(place)?, true, true)
+                && (nested_place(p, true, true) || static_dims_place(p))
         }
         _ => false,
     };
@@ -2456,7 +2477,10 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
                 .or_else(|| vm.fetch_global_dims_fast(place, mode))
                 .or_else(|| match mode {
                     FetchMode::Read | FetchMode::Is => {
-                        super::spec::fetch_tmp_dims_in(vm.frame_mut(), place, mode == FetchMode::Is)
+                        let is = mode == FetchMode::Is;
+                        let f = vm.frame_mut();
+                        super::spec::fetch_tmp_dims_in(f, place, is)
+                            .or_else(|| super::spec::fetch_static_dims_in(f, place, is))
                     }
                     _ => None,
                 }) {
@@ -2468,14 +2492,20 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
         }
         // `isset()` / `empty()` of `$this->p[$k][$j]` & co. (`lower_place`).
-        Some(&Op::Isset { place, dst }) => match vm.isset_prop_dims_fast(place, false) {
+        Some(&Op::Isset { place, dst }) => match vm
+            .isset_prop_dims_fast(place, false)
+            .or_else(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, false))
+        {
             Some(r) => {
                 vm.set_tmp(dst, Value::Bool(r));
                 at + 1
             }
             None => DECLINED,
         },
-        Some(&Op::Empty { place, dst }) => match vm.isset_prop_dims_fast(place, true) {
+        Some(&Op::Empty { place, dst }) => match vm
+            .isset_prop_dims_fast(place, true)
+            .or_else(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, true))
+        {
             Some(r) => {
                 vm.set_tmp(dst, Value::Bool(r));
                 at + 1
@@ -2498,7 +2528,10 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             let Some(v) = super::spec::dim_value_in(vm.frame(), val) else {
                 return DECLINED;
             };
-            match vm.assign_prop_dims_fast(place, v) {
+            match vm
+                .assign_prop_dims_fast(place, v)
+                .or_else(|v| super::spec::assign_static_dims_in(vm.frame_mut(), place, v))
+            {
                 Ok(r) => {
                     if let Operand::Tmp(t) = val {
                         vm.set_tmp(t, Value::Null);
