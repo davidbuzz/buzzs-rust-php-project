@@ -9,7 +9,9 @@
 
 #![allow(clippy::needless_raw_string_hashes)]
 
-use php_vm::{Vm, VmOptions};
+mod common;
+
+use php_vm::VmOptions;
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
@@ -30,7 +32,7 @@ impl Write for Sink {
 
 fn run(source: &str) -> String {
     let sink = Sink::default();
-    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
     vm.run_script(source.as_bytes(), "t.php");
     drop(vm);
     let output = sink.0.borrow().clone();
@@ -108,6 +110,71 @@ staticstatic
 destruct g2
 end
 destruct static
+"#
+    );
+}
+
+/// `global $g` in a function while the main script's own `$g` is
+/// reassigned, unset, rebound by reference or written through `$GLOBALS`
+/// between the calls: each bind sees what the main script last stored.
+#[test]
+fn global_binds_follow_the_main_scripts_variable() {
+    assert_eq!(
+        run(r#"<?php
+function show() { global $g; var_dump($g); }
+function inc() { global $g; $g++; }
+$g = 1;
+show(); inc(); show();
+$g = 5; show();
+$g = 'str'; show();
+unset($g); show();
+$g = [1]; show();
+$other = 'other';
+$g = &$other; show();
+$other = 'changed'; show();
+inc(); var_dump($other);
+unset($g);
+$GLOBALS['g'] = 'via globals'; show();
+function only_in_func() { global $nomain; $nomain = ($nomain ?? 0) + 1; return $nomain; }
+echo only_in_func(), only_in_func(), "\n";
+echo $nomain, "\n";
+function nested() { global $g; $g = 'nested'; show(); }
+nested(); var_dump($g);
+for ($i = 0; $i < 5; $i++) { $g = $i; show(); inc(); }
+var_dump($g);
+function unset_inside() { global $g; unset($g); var_dump(isset($g)); global $g; var_dump($g); }
+unset_inside();
+function by_name() { $n = 'g'; global $$n; return $g; }
+var_dump(by_name());
+"#),
+        r#"int(1)
+int(2)
+int(5)
+string(3) "str"
+NULL
+array(1) {
+  [0]=>
+  int(1)
+}
+string(5) "other"
+string(7) "changed"
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 3
+string(7) "changee"
+string(11) "via globals"
+12
+2
+string(6) "nested"
+string(6) "nested"
+int(0)
+int(1)
+int(2)
+int(3)
+int(4)
+int(5)
+bool(false)
+int(5)
+int(5)
 "#
     );
 }

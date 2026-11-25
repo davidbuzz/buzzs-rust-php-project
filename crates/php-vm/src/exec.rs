@@ -1859,9 +1859,11 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Global { cv, name } => {
-                        let n = self.lit_str(*name);
-                        let r = self.global_ref_lit(&n);
-                        self.cv_bind(*cv, Value::Reference(r));
+                        if !self.bind_global_cached(*cv, *name) {
+                            let n = self.lit_str(*name);
+                            let r = self.global_ref_lit(&n);
+                            self.cv_bind(*cv, Value::Reference(r));
+                        }
                         Flow::Next
                     }
                     Op::BindStatic { cv, idx, skip } => {

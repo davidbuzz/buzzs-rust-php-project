@@ -2712,6 +2712,83 @@ impl Vm {
             }
         }
     }
+
+    /// `ZEND_BIND_GLOBAL` of `global $name` (`lit`, the name's literal in
+    /// the running code) into compiled variable `cv` of a function frame,
+    /// when its run-time cache slot is warm: the global slot the literal
+    /// found last time (`Vm::global_slot_cache`, filled by
+    /// `Vm::global_ref_lit`) still has that name and already holds a
+    /// reference, and the main frame's table is attached. The reference
+    /// is bound as it is, as php-src binds `Z_REF_P` of the cached slot.
+    ///
+    /// The generic bind ([`Vm::attach_globals_symbol_table`]) first copies
+    /// every compiled variable of the main frame into the global table,
+    /// one comparison and possibly one store per variable on each
+    /// `global` statement. Only this name's slot matters for the bind, and
+    /// it is up to date when the main frame's own variable of that name
+    /// is undefined (the copy skips it) or holds the same reference (the
+    /// copy would change nothing); the other names stay as stale as the
+    /// table is between any two generic accesses, each of which refreshes
+    /// it first. `false`, nothing changed, otherwise: the generic bind
+    /// runs.
+    pub(crate) fn bind_global_cached(&mut self, cv: u32, lit: u32) -> bool {
+        if self.frames.len() < 2 {
+            return false;
+        }
+        let r = {
+            let (Some(main), Some(cur)) = (self.frames.first(), self.frames.last()) else {
+                return false;
+            };
+            if !main.symtab_attached
+                || !Rc::ptr_eq(&main.vars, &self.globals)
+                || !std::ptr::eq(main.symtab_slots_of, Rc::as_ptr(&main.vars))
+            {
+                return false;
+            }
+            let Some(Value::Str(name)) = cur.code.literals.get(lit as usize) else {
+                return false;
+            };
+            let bytes = name.as_bytes();
+            let addr = bytes.as_ptr() as usize;
+            let (ca, ci) =
+                self.global_slot_cache[(addr >> 3) & (crate::place::GLOBAL_SLOT_CACHE - 1)];
+            if ca != addr {
+                return false;
+            }
+            let idx = ci as usize;
+            let Ok(st) = self.globals.try_borrow() else {
+                return false;
+            };
+            if st.names.get(idx).is_none_or(|n| n.as_bytes() != bytes) {
+                return false;
+            }
+            let Some(Some(Value::Reference(r))) = st.slots.get(idx) else {
+                return false;
+            };
+            // The main frame's variable of this name, if it has one: the
+            // one whose recorded slot is `idx` (none recorded: each
+            // variable has the slot of its own number).
+            let names = &main.code.cv_names;
+            let main_cv = if main.symtab_slots.is_empty() {
+                (idx < names.len()).then_some(idx)
+            } else {
+                main.symtab_slots.iter().position(|&s| s as usize == idx)
+            };
+            if let Some(i) = main_cv {
+                if names.get(i).is_none_or(|n| n.as_bytes() != bytes) {
+                    return false;
+                }
+                match main.cvs.get(i).and_then(CvSlot::get) {
+                    None => {}
+                    Some(Value::Reference(m)) if PhpRef::ptr_eq(m, r) => {}
+                    Some(_) => return false,
+                }
+            }
+            r.clone()
+        };
+        self.cv_bind(cv, Value::Reference(r));
+        true
+    }
 }
 
 #[cfg(test)]
