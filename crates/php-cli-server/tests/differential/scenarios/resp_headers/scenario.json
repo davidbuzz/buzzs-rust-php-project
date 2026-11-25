@@ -93,6 +93,13 @@
   {
    "path": "/forms.php",
    "protocol": "HTTP/1.0"
+  },
+  {
+   "path": "/forms.php?bad=1"
+  },
+  {
+   "path": "/forms.php?m=loc",
+   "protocol": "HTTP/1.0"
   }
  ]
 }

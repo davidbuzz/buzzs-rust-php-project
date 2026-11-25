@@ -14,9 +14,6 @@ header('X-Gone: 1');
 header_remove('X-Gone');
 header('X-Empty:');
 header('X-Spaces:    lead');
-header("X-Bad: a\r\nInjected: 1");
-header('NoColon');
-var_dump(headers_list());
 switch ($_GET['m'] ?? '') {
 case 'loc': header('Location: /elsewhere'); break;
 case 'loc301': header('Location: /elsewhere', true, 301); break;
@@ -36,4 +33,7 @@ case 'conn': header('Connection: keep-alive'); break;
 case 'xpb': header_remove('X-Powered-By'); break;
 case 'remall': header_remove(); break;
 }
+echo implode("\n", headers_list()), "\n";
+var_dump(http_response_code());
+if (isset($_GET['bad'])) { header("X-Bad: a\r\nInjected: 1"); header('NoColon'); header("X-Nul: a\0b"); }
 echo "done\n";

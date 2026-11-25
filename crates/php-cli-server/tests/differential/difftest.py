@@ -300,7 +300,7 @@ def fcgi_exchange(port: int, docroot: Path, req: dict, cookies: dict[str, str]) 
 # ---------------------------------------------------------------- normalising
 
 SESS_RE = re.compile(rb"(PHPSESSID[=\"]|\"sid\":\"|sid=|SID:)([A-Za-z0-9,-]{16,256})")
-TMP_RE = re.compile(rb"/tmp/php[A-Za-z0-9]{6}")
+TMP_RE = re.compile(rb"/tmp/php[A-Za-z0-9]{6,}")
 VER_RE = re.compile(rb"PHP/8\.\d+\.\d+(-dev)?")
 DATE_RE = re.compile(rb"^(Date|Last-Modified|Expires): .*$", re.M | re.I)
 
@@ -337,7 +337,7 @@ class Normaliser:
         def tmp(m):
             v = m.group(0)
             if v not in self.tmps:
-                self.tmps[v] = b"/tmp/phpTMP%d" % (len(self.tmps) + 1)
+                self.tmps[v] = b"/tmp/phpTMP%d(len%d)" % (len(self.tmps) + 1, len(v))
             return self.tmps[v]
         return TMP_RE.sub(tmp, resp)
 
