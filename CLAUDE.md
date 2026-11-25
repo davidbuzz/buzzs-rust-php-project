@@ -130,13 +130,14 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 Most files here are ports of php-src C code, and a port is a derivative work. The C authors' copyright carries over into it, and BSD-3-Clause requires keeping their notice. Issue #23 was a php-src author finding their name replaced by ours. So:
 - Every Rust file that ports or closely follows a C file starts with the upstream notice, then the port's notice:
   ```rust
-  // Derived from php-src ext/dom/html5_parser.c
+  // Derived from php-src ext/dom/html5_parser.c. Similarity metric to original: 35%
   //   Copyright © The PHP Group and Contributors. Authors: Nora Dossche <ndossche@php.net>
   // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
   // SPDX-License-Identifier: BSD-3-Clause
   ```
   Take the copyright and `Authors:` lines verbatim from the header of each C file the `ref:` comment cites, and list every file a port draws on. Never remove or replace an upstream notice. Use the plain `buzzs-rust-php-project - Copyright (c) ...` header only for files with no upstream source (tests written here, tooling, glue).
 - Code derived from a library php-src bundles keeps that library's notice and license, not BSD: libmbfl and libbcmath are LGPL-2.1, timelib is MIT, lexbor is Apache-2.0, and `THIRD_PARTY.md` lists the rest. Give its SPDX identifier in the header (`LGPL-2.1-only` for libmbfl, `LGPL-2.0-or-later` for libbcmath, as their headers say). Before porting a file under `ext/*/lib*`, `ext/*/<vendored lib>/` or anything listed in `modules/php-src/README.REDIST.BINS`, check its license. If the library is new to the repo, add a row to `THIRD_PARTY.md` and copy its license text unchanged into `LICENSES/`.
+- The similarity figure in the first line is what `scripts/similarity.py pair <rust file> <php-src file>` prints: the overlap of the two files in php-src's internal names (its docstring has the definition). `scripts/similarity.py label --min 30` is the rule that labels a file from the figure alone: its most similar php-src source file, at 30% or more, a threshold at which no file of known origin is mislabelled. A low figure is not evidence that a file is original: most ports rename what they take.
 - Port behaviour, not text. Function and variable names that mirror C are fine when they help cross-reference, but the notice must come with them.
 - Never copy code from `modules/php-rust` or any other project whose license we do not follow.
 
