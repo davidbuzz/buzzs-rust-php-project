@@ -130,7 +130,7 @@ functions.
 | `$a instanceof $b` of two variables without the generic op | eeb13391 | `instanceof $name` 749 → 447; `instanceof $obj` 617 → 308 | 8.5: 181 / 115 | ut −0.3%, rl −0.1% |
 | `$this` as a call's argument goes to prepared calls | 6b2bdd15 | `method_exists($this, …)` 5,431 → 4,342; `get_class($this)` 3,513 → 2,429 | 8.5: 1,217 / 585 | ut −0.35% |
 | `$cv += $array` merged in place (no symbol-table attach, no copy) | ba8c572b | 4,886 → 1,588 | 8.5: 581 | ut −0.8%, rl −0.3% |
-| Returns of objects as `: static`, `self`, `parent` checked against the frame's classes (were the generic `Return`) | 3f843d6d | 2,135 → 1,479 | 8.5: 285 | none measurable |
+| Returns of objects as `: static`, `self`, `parent` checked against the frame's classes (were the generic `Return`) | 8454da47 | 2,135 → 1,479 | 8.5: 285 | none measurable |
 
 ## Ops, compiler, tape
 
