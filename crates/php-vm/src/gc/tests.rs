@@ -748,3 +748,22 @@ fn freeing_another_root_keeps_the_last_root() {
     drop((a, b));
     drop(vm);
 }
+
+/// An object held by a returning frame's local arrays (unshared, one
+/// nested) and by a caller becomes a possible root as the arrays are
+/// released (`zend_array_destroy`), once; `gc_disable()` stops
+/// collections, not the recording. (php8.5: `1`, `1` both times.)
+#[test]
+fn object_in_released_local_arrays_is_buffered_once() {
+    let script = "<?php class C { public $self; }\n\
+         function f($o) { $a = [$o, [1, $o]]; return 1; }\n\
+         $o = new C; $o->self = $o;\n\
+         $s = gc_status()['roots'];\n\
+         f($o);\n\
+         var_dump(gc_status()['roots'] - $s);\n\
+         unset($o);\n\
+         var_dump(gc_collect_cycles());";
+    assert_eq!(run(script), "int(1)\nint(1)\n");
+    let disabled = script.replacen("<?php ", "<?php gc_disable(); ", 1);
+    assert_eq!(run(&disabled), "int(1)\nint(1)\n");
+}

@@ -581,6 +581,23 @@ thread_local! {
     /// Set when an automatic run is due; setting it also raises the
     /// executor's safe-point flag (`crate::interrupt::raise_safe_point`).
     static WANT_RUN: Cell<bool> = const { Cell::new(false) };
+    /// [`GcState::protected`], readable without borrowing the state: the
+    /// release of an unshared array tests it before walking its elements
+    /// (`zend_array_destroy` of every local array of a returning frame).
+    /// Written with the state's field, by [`mirror_protected`].
+    static PROTECTED: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Sets [`PROTECTED`] as [`GcState::protected`] is set.
+#[inline]
+fn mirror_protected(on: bool) {
+    let _ = PROTECTED.try_with(|p| p.set(on));
+}
+
+/// Whether the root buffer is protected (no roots recorded).
+#[inline]
+fn is_protected() -> bool {
+    PROTECTED.try_with(Cell::get).unwrap_or(true)
 }
 
 fn with_state<R>(f: impl FnOnce(&mut GcState) -> R) -> Option<R> {
@@ -610,6 +627,7 @@ pub fn set_enabled(on: bool) -> bool {
         if on && s.protected && !s.active {
             s.protected = false;
             s.full = false;
+            mirror_protected(false);
         }
         old
     });
@@ -626,7 +644,11 @@ pub fn enabled() -> bool {
 /// `gc_protect()`: stops (or resumes) recording roots, e.g. after a fatal
 /// error. Returns the old setting.
 pub fn set_protected(on: bool) -> bool {
-    let old = with_state(|s| std::mem::replace(&mut s.protected, on)).unwrap_or(true);
+    let old = with_state(|s| {
+        mirror_protected(on);
+        std::mem::replace(&mut s.protected, on)
+    })
+    .unwrap_or(true);
     sync_recording();
     old
 }
@@ -697,7 +719,8 @@ fn released_ref(r: &php_runtime::PhpRef) {
 /// possible roots; unshared nested arrays are released in turn.
 #[inline(never)]
 fn released_array(a: &php_runtime::ZArray) {
-    if !with_state(|s| !s.protected).unwrap_or(false) {
+    // One load: the state is borrowed only to buffer a root.
+    if is_protected() {
         return;
     }
     // The unshared arrays found inside that are still to walk: none in a
@@ -1187,6 +1210,7 @@ pub(crate) fn request_startup(enable: bool) {
         // The buffer and the base threshold outlive the request; the run
         // cost depends on the live graph of the request.
         let (base, buf_size) = (s.base_threshold, s.buf_size);
+        mirror_protected(true);
         *s = GcState {
             providers,
             threshold: base,
