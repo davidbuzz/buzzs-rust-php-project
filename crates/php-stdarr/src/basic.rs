@@ -704,7 +704,7 @@ pub fn array_reverse(array: &HashTable, preserve_keys: bool) -> ZArray {
     let packed = array.is_packed();
     // A list without its keys kept gives a list, filled to size.
     if packed && !preserve_keys {
-        return ZArray::from_list_sized(array.len(), array.iter().rev().map(|(_, v)| copy_elem(v)));
+        return ZArray::from_list_sized(array.len(), array.values().rev().map(copy_elem));
     }
     let mut out = HashTable::with_capacity(array.len());
     for (k, v) in array.iter().rev() {
@@ -756,14 +756,7 @@ pub fn array_slice(
     let list = packed && (!preserve_keys || (offset == 0 && array.is_without_holes()));
     // `ZEND_HASH_FILL_PACKED` of a packed source: the list built to size.
     if list {
-        return ZArray::from_list_sized(
-            take,
-            array
-                .iter()
-                .skip(skip)
-                .take(take)
-                .map(|(_, v)| copy_elem(v)),
-        );
+        return ZArray::from_list_sized(take, array.values().skip(skip).take(take).map(copy_elem));
     }
     let mut out = HashTable::with_capacity(take);
     for (k, v) in array.iter().skip(skip).take(take) {
