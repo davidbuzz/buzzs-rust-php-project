@@ -1372,6 +1372,7 @@ fn place_sends_may_bind(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
                 calls.push((callee, 0));
             }
             Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -2200,6 +2201,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     Op::DoCall { .. }
                         | Op::InitFCall { .. }
                         | Op::InitDynCall { .. }
+                        | Op::InitUserCall { .. }
                         | Op::InitMethodCall { .. }
                         | Op::InitStaticCall { .. }
                 );
@@ -2501,6 +2503,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     Op::DoCall { .. }
                         | Op::InitFCall { .. }
                         | Op::InitDynCall { .. }
+                        | Op::InitUserCall { .. }
                         | Op::InitMethodCall { .. }
                         | Op::InitStaticCall { .. }
                 );

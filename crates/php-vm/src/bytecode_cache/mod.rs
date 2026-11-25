@@ -21,7 +21,7 @@ use codec::{DResult, DecodeError, EResult, Reader, Writer};
 /// Version of the encoding. Bump it whenever the encoding of any type
 /// changes (a field, a variant, a tag), so stale cache files are
 /// rejected instead of misread.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Identifies this encoding for the cache's system id: the format
 /// version, the engine version and the build id (a hash of the engine's

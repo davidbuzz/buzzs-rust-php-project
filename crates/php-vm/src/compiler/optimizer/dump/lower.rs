@@ -462,6 +462,16 @@ struct Call {
     undef: bool,
 }
 
+/// A call whose arguments `ZEND_SEND_USER` / `ZEND_SEND_ARRAY` send
+/// (also one a literal function name started with `INIT_FCALL`): it ends
+/// in `DO_FCALL` with nothing known of the callee.
+fn user_call(call: &mut Call) {
+    call.kind = CallKind::Dynamic;
+    call.known = None;
+    call.inline = None;
+    call.frameless = None;
+}
+
 /// `zend_compile_args_ex` for one argument of `call`: a named argument
 /// passed in order is positional, one out of order stays named (and a
 /// parameter may go missing). The argument's number when the called
@@ -890,10 +900,14 @@ impl<'a> Lower<'a> {
             match generic(op) {
                 Op::InitFCall { .. }
                 | Op::InitDynCall { .. }
+                | Op::InitUserCall { .. }
                 | Op::InitMethodCall { .. }
                 | Op::InitStaticCall { .. }
                 | Op::InitParentHook { .. }
                 | Op::New { .. } => depth += 1,
+                // `zend_compile_func_cuf`: the `extended_value` of the
+                // call's `INIT_*` counts its `SEND_USER`s.
+                Op::SendUser { .. } if depth == 0 => n += 1,
                 Op::DoCall { .. } | Op::CallableConvert { .. } | Op::CallablePartial { .. } => {
                     if depth == 0 {
                         return (n, simple);
@@ -1331,6 +1345,53 @@ impl<'a> Lower<'a> {
                     c.undef = true;
                 }
                 self.push(ZLine::new("SEND_UNPACK").a(s));
+            }
+            // `zend_compile_func_cuf` / `zend_compile_func_cufa`: the call
+            // ends in a plain `DO_FCALL` (no `zend_get_call_op`, no
+            // inlining), after `CHECK_UNDEF_ARGS` for a whole array.
+            Op::InitUserCall { callee, array } => {
+                let c = self.copy_kept(callee);
+                let (n, _) = self.scan_call(i, None);
+                let name = if *array {
+                    "call_user_func_array"
+                } else {
+                    "call_user_func"
+                };
+                self.push(
+                    ZLine::new("INIT_USER_CALL")
+                        .x(format!(" {n}"))
+                        .a(Z::Const(Value::Str(ZStr::from(name))))
+                        .b(c),
+                );
+                self.calls.push(Call {
+                    kind: CallKind::Dynamic,
+                    known: None,
+                    frameless: None,
+                    args: Vec::new(),
+                    sent: 0,
+                    inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
+                });
+            }
+            Op::SendUser { src, n } => {
+                let s = self.z(src);
+                if let Some(c) = self.calls.last_mut() {
+                    c.sent += 1;
+                    user_call(c);
+                }
+                self.push(ZLine::new("SEND_USER").a(s).b(Z::Num(*n)));
+            }
+            Op::SendArray { src, len, skip } => {
+                let s = self.z(src);
+                let whole = *len == Operand::Unused;
+                let l = if whole { Z::Unused } else { self.z(len) };
+                if let Some(c) = self.calls.last_mut() {
+                    user_call(c);
+                    c.undef = whole;
+                }
+                self.push(ZLine::new("SEND_ARRAY").x(format!(" {skip}")).a(s).b(l));
             }
             Op::SendPlaceholder { name } => {
                 let name = (*name).map(|n| self.lit(n));
