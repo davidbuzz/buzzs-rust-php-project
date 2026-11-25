@@ -2137,6 +2137,14 @@ impl Vm {
                     }
                     return Ok(false);
                 }
+                if let Some(r) = self.call_builtin_pooled(&b, &mut call, dst) {
+                    let v = r?;
+                    release_spent_call(call);
+                    if let Some(d) = dst {
+                        self.set_tmp(d, v);
+                    }
+                    return Ok(false);
+                }
             }
             if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
                 self.pending_call_dst = dst;
@@ -3158,6 +3166,178 @@ impl Vm {
             }
         }
         self.call_builtin_framed(b, call, strict)
+    }
+
+    /// `ZEND_DO_ICALL` of a pending call of a builtin by name whose
+    /// arguments are all by value and of the declared types as they are:
+    /// the call the tape's prepared native call makes
+    /// (`exec::tape::calls::call_native`), from the pending call's inline
+    /// arguments. A call whose arguments include another call's result, an
+    /// array or closure literal, `$this` or a static property is not
+    /// prepared by the tape (`stays_prepared`) and comes here; the general
+    /// [`Vm::call_builtin_impl`] it took instead moves the call twice,
+    /// copies its function, scope and name handles into the frame, tests
+    /// each argument's parameter field by field and releases the frame
+    /// through `pop_frames_to` (about 900 instructions more than the
+    /// prepared call: `implode(',', array_keys($a))` 5,667 against 4,773
+    /// as two statements).
+    ///
+    /// The builtin frame is the pooled one above the caller
+    /// (`FrameStack::push_builtin`), its argument buffer takes the
+    /// arguments (`ZEND_CALL_NUM_ARGS`, what backtraces and
+    /// `func_get_args()` of callers read), the handler gets copies and the
+    /// declared defaults of the omitted parameters, and the frame is
+    /// released in place (`Frame::release_native`). It applies to a call
+    /// with no named arguments, `$this`, scope, closure, `__call` name or
+    /// partial application, not dynamic and not a constructor, with no
+    /// observer, of a function `Builtin::plain_call_upto` answers
+    /// [`PlainCall::Named`](crate::func::PlainCall) for up to the last
+    /// argument, given at least its required arguments, each accepted as it
+    /// is ([`Builtin::accepts`]); a function with a frameless class whose
+    /// arguments allow its frameless call keeps that one. Returns `None`,
+    /// having changed nothing, otherwise.
+    ///
+    /// Out of line, as [`Vm::push_simple_ucall`] is.
+    #[inline(never)]
+    fn call_builtin_pooled(
+        &mut self,
+        b: &Rc<Builtin>,
+        call: &mut PendingCall,
+        dst: Option<u32>,
+    ) -> Option<VmResult<Value>> {
+        if !call.args.is_empty()
+            || call.has_named
+            || call.dynamic
+            || call.is_ctor
+            || !call.named.is_empty()
+            || call.magic_name.is_some()
+            || call.this.is_some()
+            || call.scope.is_some()
+            || call.called.is_some()
+            || call.closure.is_some()
+            || call.pfa.is_some()
+        {
+            return None;
+        }
+        let n = usize::from(call.inline_count);
+        let (kind, upto) = b.plain_call_upto();
+        if kind != crate::func::PlainCall::Named || n > upto {
+            return None;
+        }
+        let sig = b.signature();
+        let nparams = sig.params.len();
+        let variadic = b.flags & flags::VARIADIC != 0;
+        if n < sig.required as usize || (!variadic && n > nparams) {
+            return None;
+        }
+        let sent = call.inline_args.get(..n)?;
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class != 0 && crate::special::frameless_args(class, sent) {
+            return None;
+        }
+        let table = b.accepts();
+        let last = table.last().copied().unwrap_or(u32::MAX);
+        let taken = sent.iter().enumerate().all(|(i, arg)| {
+            arg.as_ref().is_some_and(|v| {
+                crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
+            })
+        });
+        if !taken {
+            return None;
+        }
+        // A resolution left by an earlier builtin's callable argument is
+        // not this call's (`call_builtin_impl`).
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        let live = self.frames.live;
+        {
+            let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
+            if !frame.args.is_empty() {
+                frame.args.clear();
+            }
+            for arg in call.inline_args.iter_mut().take(n) {
+                frame.args.push(arg.take());
+            }
+            // The handler's copies (php-src's handler reads them in the
+            // frame).
+            values.extend(frame.args.iter().map(|arg| match arg {
+                Some(v) => clone_value(v),
+                None => Value::Null,
+            }));
+            if !frame.named.is_empty() {
+                frame.named.clear();
+            }
+            set_opt(&mut frame.this, None);
+            set_opt(&mut frame.closure, None);
+            set_opt(&mut frame.scope, None);
+            set_opt(&mut frame.called, None);
+            set_opt(&mut frame.magic_name, None);
+            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            set_opt(&mut frame.builtin_name, Some(b.name.clone()));
+            frame.observer_hidden = false;
+        }
+        call.inline_count = 0;
+        passed.resize(values.len(), true);
+        // The declared defaults of the omitted trailing parameters, not
+        // marked as passed.
+        let upto = if variadic {
+            nparams.saturating_sub(1)
+        } else {
+            nparams
+        };
+        while values.len() < upto {
+            let i = values.len();
+            match self.builtin_default(b, i) {
+                Some(d) if i >= b.signature().required as usize => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        self.pending_call_dst = dst;
+        self.magic_call_name = None;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(b)),
+        };
+        let mut r = (b.handler)(self, &mut args);
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        {
+            let Args { values, passed, .. } = args;
+            self.put_val_vec(values);
+            self.put_bool_vec(passed);
+        }
+        // Released by the handler, destructed while its frame is current.
+        if object::has_pending_destructors() && self.frames.live == live + 1 {
+            if let Err(e) = self.run_pending_destructors() {
+                r = match (r, e) {
+                    (Ok(_), e) => Err(e),
+                    (Err(Throw::Exception(old)), Throw::Exception(new)) => {
+                        crate::exceptions::chain_previous(&new, &old);
+                        Err(Throw::Exception(new))
+                    }
+                    (Err(old), _) => Err(old),
+                };
+            }
+        }
+        if self.frames.live == live + 1 && self.frames.vec[live].release_native(&self.empty_vars) {
+            self.frames.pop_cleared_top();
+        } else {
+            self.pop_frames_to(live + 1);
+        }
+        Some(r)
     }
 
     /// [`Vm::call_builtin`] after its [`Vm::fast_builtin_call`] attempt
@@ -5465,6 +5645,44 @@ fn is_scalar(v: &Value) -> bool {
         v,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
     )
+}
+
+/// Releases a pending call [`Vm::call_builtin_pooled`] has made: it owns
+/// nothing then but its function handle and possibly its two argument
+/// buffers (its inline arguments were moved out, and it has no `$this`,
+/// scope, closure, `__call` name or partial application, as that function
+/// checked), so the rest is forgotten rather than passed through the
+/// call's drop glue.
+#[inline]
+fn release_spent_call(call: PendingCall) {
+    let PendingCall {
+        func,
+        this,
+        scope,
+        called,
+        args,
+        inline_args,
+        named,
+        closure,
+        magic_name,
+        pfa,
+        ..
+    } = call;
+    drop(func);
+    debug_assert!(inline_args.iter().all(Option::is_none));
+    debug_assert!(this.is_none() && scope.is_none() && called.is_none());
+    debug_assert!(closure.is_none() && magic_name.is_none() && pfa.is_none());
+    std::mem::forget((this, scope, called, inline_args, closure, magic_name, pfa));
+    if args.capacity() == 0 {
+        std::mem::forget(args);
+    } else {
+        drop(args);
+    }
+    if named.capacity() == 0 {
+        std::mem::forget(named);
+    } else {
+        drop(named);
+    }
 }
 
 /// Stores `v` into an `Option` field of a frame being set up, releasing
