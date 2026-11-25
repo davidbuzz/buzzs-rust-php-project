@@ -16,5 +16,5 @@ S=$OUT/sigs/$ext
 [ -s $S ] || $C "$ext" '*' sigs > $S
 $R "$ext" "$let" "$ar" $S > $o.ours 2>&1
 $C "$ext" "$let" "$ar" $S > $o.c 2>&1
-diff $o.c $o.ours > $o.diff
+diff -a $o.c $o.ours > $o.diff
 echo "$tag: $(wc -l < $o.c) lines C, $(wc -l < $o.ours) ours, $(grep -c '^<' $o.diff) differ"

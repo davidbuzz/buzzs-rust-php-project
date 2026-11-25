@@ -70,7 +70,7 @@ const DENY_RX = '/^(
     unserialize|serialize|var_export|settype|
     mb_(http_.*|send_mail|parse_str|internal_encoding|regex_encoding|detect_order|substitute_character|language)|
     mb_ereg.*|iterator_.*|array_multisort|levenshtein|similar_text|str_repeat|str_pad|range|
-    array_fill|array_fill_keys|array_pad|chunk_split|wordwrap|money_format|
+    array_fill|array_fill_keys|array_pad|mb_str_pad|gmp_fact|gmp_pow|gmp_binomial|gmp_prob_prime|gmp_nextprime|chunk_split|wordwrap|money_format|
     json_last_error.*|preg_last_error.*|libxml_.*|hash_file|hash_hmac_file|md5_file|sha1_file|hash_update_file|hash_update_stream|crc32_file|
     password_hash|crypt|password_needs_rehash|hash_pbkdf2|
     pcre_.*|preg_replace_callback_array|is_callable|
@@ -223,7 +223,8 @@ function call_one(string $f, array $args, string $label): void
     if ($diags) {
         $line .= ' | ' . implode(' | ', $diags);
     }
-    echo str_replace("\n", '\n', $line), "\n";
+    // Messages may hold any byte (a NUL, a newline): print them escaped.
+    echo addcslashes($line, "\0..\37\177"), "\n";
 }
 
 $labels = array_keys($pool);
