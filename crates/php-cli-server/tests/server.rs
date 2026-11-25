@@ -414,3 +414,45 @@ fn cached_scripts_declare_fresh_classes_in_every_request() {
         assert_eq!(get(), "fresh 12 1011 k1+ base2 child 56 early 12 2 0 S\n");
     }
 }
+
+/// What a request changes is gone in the next one, with the opcache on
+/// and repeated: a session directive changed with `ini_set()` and
+/// `session_name()`, a core directive, a declared function with a static
+/// variable; and every request header is in `$_SERVER`, in order. The
+/// request-end shortcuts (the session's INI sync, the reset's pass over
+/// the function table, the heap collection) must not keep any of it.
+/// Expected output from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn request_changes_do_not_reach_the_next_request() {
+    let srv = start_with(
+        "nextreq",
+        &[
+            (
+                "a.php",
+                "<?php\nob_start();\nini_set('session.gc_maxlifetime', '77');\nsession_name('first');\nini_set('precision', '5');\nfunction only_in_a() { static $n = 0; return ++$n; }\necho only_in_a(), only_in_a(), ' ', ini_get('session.gc_maxlifetime'), ' ', session_name(), ' ', 1/3, \"\\n\";\n",
+            ),
+            (
+                "b.php",
+                "<?php\necho function_exists('only_in_a') ? 'stale' : 'none', ' ', ini_get('session.gc_maxlifetime'), ' ', session_name(), ' ', ini_get('session.name'), ' ', 1/3, \"\\n\";\n$h = array_filter(array_keys($_SERVER), fn($k) => str_starts_with($k, 'HTTP_'));\necho implode(',', $h), ' ', $_SERVER['HTTP_X_ONE'], $_SERVER['HTTP_X_TWO'], \"\\n\";\n",
+            ),
+        ],
+        None,
+        &["-d", "opcache.enable=1"],
+    );
+    for _ in 0..2 {
+        let a = request(
+            srv.port,
+            "GET /a.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(split(&a).1, "12 77 first 0.33333\n");
+        let b = request(
+            srv.port,
+            "GET /b.php HTTP/1.1\r\nHost: x\r\nX-One: 1\r\nX-Two: 2\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(
+            split(&b).1,
+            "none 1440 PHPSESSID PHPSESSID 0.33333333333333\nHTTP_HOST,HTTP_X_ONE,HTTP_X_TWO,HTTP_CONNECTION 12\n"
+        );
+    }
+}
