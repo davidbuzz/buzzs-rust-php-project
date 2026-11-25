@@ -1989,6 +1989,11 @@ impl Vm {
 
     /// `place = v`.
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        // `$this->p[$k][$j] = v` & co. into an array property: no walk.
+        let v = match self.assign_prop_dims_fast(pid, v) {
+            Ok(r) => return Ok(r),
+            Err(v) => v,
+        };
         self.with_cv_symtab(pid, |vm| vm.place_assign_impl(pid, v))
     }
 
@@ -4658,6 +4663,10 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
+        // `$this->p[$k][$j]` & co. on an array property: no walk.
+        if let Some(v) = self.fetch_prop_dims_fast(pid, mode) {
+            return Ok(v);
+        }
         if matches!(
             self.frame().code.places[pid as usize].base,
             PlaceBase::Global(_) | PlaceBase::GlobalsArray
@@ -5013,6 +5022,10 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
+        // `isset($this->p[$k][$j])` & co. on an array property: no walk.
+        if let Some(r) = self.isset_prop_dims_fast(pid, empty) {
+            return Ok(r);
+        }
         let (single, head) = {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))

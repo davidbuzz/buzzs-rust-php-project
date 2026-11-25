@@ -30,7 +30,9 @@
 use super::super::{discard_unrooted, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
-use crate::opcode::{ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceId, PROP_CACHE_THIS};
+use crate::opcode::{
+    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
+};
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
@@ -1289,15 +1291,238 @@ pub(super) fn unset_prop_dims_in(f: &mut Frame, pid: PlaceId) -> bool {
     true
 }
 
+/// The dimensions after the head `->name` of place `pid` of frame `f`
+/// when the place is `$base->name[d1]...[dn]` (one or more offsets, none
+/// `[]`).
+#[inline(always)]
+fn prop_dim_segs(f: &Frame, pid: PlaceId) -> Option<&[crate::opcode::Seg]> {
+    let segs = f.code.places.get(pid as usize)?.segs.get(1..)?;
+    (!segs.is_empty()).then_some(segs)
+}
+
+/// The value of `cur[d1]...[dn]` along the dimension segments `segs` of
+/// frame `f`, cloned and dereferenced, when every container is an array
+/// (`cur` itself possibly through a reference) holding the int or string
+/// offset its operand peeks as: the chain of `ZEND_FETCH_DIM_R`/`_IS`
+/// hits. `None` (a miss, which warns in `Read` mode, a string offset, an
+/// object, an element held by reference on the way) for the generic walk.
+#[inline]
+fn dims_read(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Value> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = super::table_dim(a, key)?;
+    }
+    Some(match cur {
+        Value::Reference(r) => copy_value(&*r.try_borrow()?),
+        v => copy_value(v),
+    })
+}
+
+/// `isset(cur[d1]...[dn])` (or, with `empty`, `empty(...)`) along `segs`
+/// of frame `f`: a missing key, or a null container on the way, answers
+/// at once (`ZEND_FETCH_DIM_IS` yields null, `ZEND_ISSET_ISEMPTY_DIM_OBJ`
+/// on null is false); the last element is tested without conversions.
+/// `None` for a string offset, an object (`offsetExists()`), an element
+/// held by reference on the way, an offset that needs converting, or a
+/// value whose truth needs a cast handler.
+#[inline]
+fn dims_isset(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg], empty: bool) -> Option<bool> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        cur = match cur {
+            Value::Array(a) => match super::table_dim(a, key) {
+                Some(v) => v,
+                None => return Some(empty),
+            },
+            Value::Null => return Some(empty),
+            _ => return None,
+        };
+    }
+    isset_deref(cur, empty)
+}
+
+/// `cur[k1]...[kn] = v` on the table `tbl` of an array property along
+/// `keys` (all `Some`): the `ZEND_FETCH_DIM_W` chain, separating each
+/// nested array (`SEPARATE_ARRAY`) and making a missing or null element
+/// on the way an empty array (silently, as the generic walk's `descend`
+/// does), then `ZEND_ASSIGN_DIM`'s store of `v` over the element, or
+/// added. `Some(old)` on success (the replaced element, null for an added
+/// one; `v` taken); `None`, `v` left and nothing created, when an element
+/// on the way is of another kind (a reference, an object, a string,
+/// `false`, ...) or the last one is a reference (the generic assignment
+/// writes through it). Arrays on the way may have been separated, which
+/// the generic walk repeats as no-ops.
+fn store_dims(
+    tbl: &mut php_runtime::HashTable,
+    keys: &[Option<ArrayKey>],
+    v: &mut Option<Value>,
+) -> Option<Value> {
+    let (first, rest) = keys.split_first()?;
+    let key = first.as_ref()?;
+    if rest.is_empty() {
+        if matches!(tbl.get(key), Some(Value::Reference(_))) {
+            return None;
+        }
+        let new = v.take()?;
+        return Some(std::mem::replace(tbl.lookup_ex(key.clone()).0, new));
+    }
+    let (elem, _) = tbl.lookup_ex(key.clone());
+    if matches!(elem, Value::Null) {
+        *elem = Value::Array(php_runtime::ZArray::new());
+    }
+    let Value::Array(inner) = elem else {
+        return None;
+    };
+    store_dims(inner.make_mut(), rest, v)
+}
+
+/// `$this->name[d1]...[dn]` / `$cv->name[...]` read (`Read` or `Is`
+/// mode: no diagnostic on a hit) of place `pid` of frame `f` on a
+/// property cache hit for reading: `ZEND_FETCH_OBJ_R`/`_IS` of an
+/// initialized declared slot or an existing dynamic property, then
+/// [`dims_read`]. A consumed string offset is released. `None`, nothing
+/// consumed, for the generic fetch.
+#[inline(never)]
+pub(super) fn read_prop_dims_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let v = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = dims_read(f, table.as_deref()?.get_zstr(name)?, segs);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = dims_read(f, slots.get(slot)?.as_ref()?, segs);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
+/// `isset($this->name[d1]...[dn])` / `empty(...)` (and on `$cv->name`) of
+/// place `pid` of frame `f` on a property cache hit for `isset()`:
+/// `ZEND_FETCH_OBJ_IS` of an initialized declared slot or an existing
+/// dynamic property, then [`dims_isset`]. A consumed string offset is
+/// released. `None`, nothing consumed, for the generic `place_isset`.
+#[inline(never)]
+pub(super) fn isset_prop_dims_in(f: &mut Frame, pid: PlaceId, empty: bool) -> Option<bool> {
+    let hit = hit_key(f, pid, PC_ISSET, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let r = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = dims_isset(f, table.as_deref()?.get_zstr(name)?, segs, empty);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = dims_isset(f, slots.get(slot)?.as_ref()?, segs, empty);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(r)
+}
+
+/// `$this->name[d1]...[dn] = v` / `$cv->name[...] = v` (one to four
+/// offsets, none `[]`) of place `pid` of frame `f` on a property cache hit
+/// for writing, when the declared, initialized slot holds an array
+/// directly: `ZEND_FETCH_OBJ_W` (which hands out the slot: no magic
+/// method, no type check for a nested write into an array) and the chain
+/// of [`store_dims`]. Returns the replaced element (to be released once
+/// nothing is borrowed), `v` taken; `None`, `v` left, for the generic
+/// assignment (a null or `false` property, whose promotion a type may
+/// forbid, a reference, a dynamic property, ...).
+#[inline(never)]
+pub(super) fn assign_prop_dims_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    v: &mut Option<Value>,
+) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_WRITE, PC_DYN)?;
+    let (keys, n) = prop_dim_keys_in(f, pid)?;
+    let keys = keys.get(..n)?;
+    let slot = hit.slot;
+    let old = with_hit_obj(f, &hit, |od| {
+        let mut slots = od.slots.try_borrow_mut().ok()?;
+        let r = match slots.get_mut(slot)? {
+            Some(Value::Array(arr)) => store_dims(arr.make_mut(), keys, v),
+            _ => None,
+        };
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(old)
+}
+
+/// Whether place `pid` of the current frame is `$this->name[d1]...[dn]`
+/// or `$cv->name[...]`: a literal property name and only dimensions
+/// after it.
+#[inline]
+fn is_prop_dims_place(f: &Frame, pid: PlaceId) -> bool {
+    f.code.places.get(pid as usize).is_some_and(|p| {
+        matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+            && matches!(
+                p.segs.as_slice(),
+                [
+                    crate::opcode::Seg::Prop(Operand::Lit(_)),
+                    crate::opcode::Seg::Dim(_),
+                    ..
+                ]
+            )
+    })
+}
+
 impl Vm {
-    /// [`unset_prop_dims_in`] after a cache miss: when the entry of place
-    /// `pid` is unfilled, or was filled for another class or scope than
-    /// the object's (php-src's `CACHE_POLYMORPHIC_PTR` is overwritten on
-    /// such a miss too), it is filled for this object and the unset tried
-    /// again. An entry that matches but declined the access stays as it is.
+    /// Fills the property cache entry of place `pid`'s head after a miss of
+    /// one of the `*_prop_dims_in` fast paths, when the entry is unfilled
+    /// or was filled for another class or scope than the object's
+    /// (php-src's `CACHE_POLYMORPHIC_PTR` is overwritten on such a miss
+    /// too). Returns whether it was filled, so that the caller tries its
+    /// fast path once more; an entry that matches but declined the access
+    /// stays as it is (`false`).
     #[cold]
     #[inline(never)]
-    pub(in crate::exec) fn unset_prop_dims_refill(&mut self, pid: PlaceId) -> bool {
+    fn prop_head_refill(&self, pid: PlaceId) -> bool {
         let stale = {
             let f = self.frame();
             let Ok(cache) = f.code.prop_cache.try_borrow() else {
@@ -1315,12 +1540,95 @@ impl Vm {
                 }
             }
         };
-        if !stale || !self.prop_cache_fill(pid) {
+        stale && self.prop_cache_fill(pid)
+    }
+
+    /// [`unset_prop_dims_in`] after a cache miss ([`Vm::prop_head_refill`]).
+    #[cold]
+    #[inline(never)]
+    pub(in crate::exec) fn unset_prop_dims_refill(&mut self, pid: PlaceId) -> bool {
+        if !self.prop_head_refill(pid) {
             return false;
         }
         match self.frames.last_mut() {
             Some(f) => unset_prop_dims_in(f, pid),
             None => false,
+        }
+    }
+
+    /// The current frame, when it runs user code (a builtin's frame has no
+    /// places of its own).
+    #[inline(always)]
+    fn user_frame_mut(&mut self) -> Option<&mut Frame> {
+        self.frames
+            .last_mut()
+            .filter(|f| f.kind != FrameKind::Builtin)
+    }
+
+    /// `Fetch` (`Read` or `Is` mode) of `$this->name[d1]...[dn]` /
+    /// `$cv->name[...]` without the place walk ([`read_prop_dims_in`]),
+    /// filling the head's cache entry on a miss. `None` for the generic
+    /// fetch.
+    pub(crate) fn fetch_prop_dims_fast(&mut self, pid: PlaceId, mode: FetchMode) -> Option<Value> {
+        if mode == FetchMode::List {
+            return None;
+        }
+        let f = self.user_frame_mut()?;
+        if !is_prop_dims_place(f, pid) {
+            return None;
+        }
+        if let Some(v) = read_prop_dims_in(f, pid) {
+            return Some(v);
+        }
+        if !self.prop_head_refill(pid) {
+            return None;
+        }
+        read_prop_dims_in(self.user_frame_mut()?, pid)
+    }
+
+    /// `isset()` / `empty()` of `$this->name[d1]...[dn]` / `$cv->name[...]`
+    /// without the place walk ([`isset_prop_dims_in`]), filling the
+    /// head's cache entry on a miss. `None` for the generic `place_isset`.
+    pub(crate) fn isset_prop_dims_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
+        let f = self.user_frame_mut()?;
+        if !is_prop_dims_place(f, pid) {
+            return None;
+        }
+        if let Some(r) = isset_prop_dims_in(f, pid, empty) {
+            return Some(r);
+        }
+        if !self.prop_head_refill(pid) {
+            return None;
+        }
+        isset_prop_dims_in(self.user_frame_mut()?, pid, empty)
+    }
+
+    /// `$this->name[d1]...[dn] = v` / `$cv->name[...] = v` without the
+    /// place walk ([`assign_prop_dims_in`]), filling the head's cache
+    /// entry on a miss: the assignment's value on success, `v` back
+    /// otherwise for the generic assignment.
+    pub(crate) fn assign_prop_dims_fast(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+        let Some(f) = self.user_frame_mut() else {
+            return Err(v);
+        };
+        if !is_prop_dims_place(f, pid) {
+            return Err(v);
+        }
+        let ret = v.clone();
+        let mut slot = Some(v);
+        let mut old = assign_prop_dims_in(f, pid, &mut slot);
+        if old.is_none() && slot.is_some() && self.prop_head_refill(pid) {
+            if let Some(f) = self.user_frame_mut() {
+                old = assign_prop_dims_in(f, pid, &mut slot);
+            }
+        }
+        match (old, slot) {
+            (Some(old), None) => {
+                super::super::release_rooted(Some(old));
+                Ok(ret)
+            }
+            (_, Some(v)) => Err(v),
+            (None, None) => Ok(ret),
         }
     }
 }
