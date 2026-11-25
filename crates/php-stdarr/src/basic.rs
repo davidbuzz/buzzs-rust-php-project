@@ -909,14 +909,17 @@ impl ColumnKey {
 }
 
 /// `array_column_fetch_prop`.
+///
+/// `ak` is `key`'s array key, made once for all rows.
 fn column_fetch<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     data: &Value,
     key: &ColumnKey,
+    ak: &ArrayKey,
 ) -> RtResult<Option<Value>> {
     match data {
         Value::Object(o) => Ok(ctx.column_property(o, &key.prop_name())?.map(|v| deref(&v))),
-        Value::Array(a) => Ok(a.get(&key.array_key()).map(deref)),
+        Value::Array(a) => Ok(a.get(ak).map(deref)),
         _ => Ok(None),
     }
 }
@@ -932,18 +935,29 @@ pub fn array_column<C: ArrayContext + ?Sized>(
         return Ok(ZArray::new());
     }
     let mut out = HashTable::with_capacity(input.len());
+    // The keys are made once, and each row is read in place (a reference
+    // to it is dereferenced): no copy of either per row.
+    let column = column.map(|c| (c, c.array_key()));
+    let index = index.map(|i| (i, i.array_key()));
     for data in input.values() {
-        let data = deref(data);
-        let colval = match column {
+        let held;
+        let data = match data {
+            Value::Reference(r) => {
+                held = r.get();
+                &held
+            }
+            other => other,
+        };
+        let colval = match &column {
             None => data.clone(),
-            Some(c) => match column_fetch(ctx, &data, c)? {
+            Some((c, ak)) => match column_fetch(ctx, data, c, ak)? {
                 Some(v) => v,
                 None => continue,
             },
         };
-        let keyval = match index {
+        let keyval = match &index {
             None => None,
-            Some(i) => column_fetch(ctx, &data, i)?,
+            Some((i, ak)) => column_fetch(ctx, data, i, ak)?,
         };
         match keyval {
             Some(k) => {

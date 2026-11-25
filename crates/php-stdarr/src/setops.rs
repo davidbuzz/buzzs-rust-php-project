@@ -31,14 +31,18 @@ pub fn array_unique<C: ArrayContext + ?Sized>(
         return Ok(array.clone());
     }
     if flags == SORT_STRING {
-        let mut seen: HashSet<Vec<u8>> = HashSet::with_capacity(array.len());
+        // `php_array_unique`'s `seen` table: the strings themselves as
+        // keys (their hashes cached in them), not copies of their bytes
+        // hashed with SipHash. Every key is a string key, numeric strings
+        // too: only the table's own lookups ever see them.
+        let mut seen = HashTable::with_capacity_mixed(array.len());
         let mut out = HashTable::new();
         for (k, v) in array.iter() {
             let s = match v {
                 Value::Str(s) => s.clone(),
                 other => other.to_zstr(ctx)?,
             };
-            if seen.insert(s.as_bytes().to_vec()) {
+            if seen.add(ArrayKey::Str(s), Value::Null).is_ok() {
                 let _ = out.add(k.clone(), copy_elem(v));
             }
         }

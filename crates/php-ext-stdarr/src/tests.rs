@@ -876,3 +876,166 @@ int(4)
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `array_unique()` keeps a table of the strings themselves; numeric,
+/// empty and case-differing strings, numbers, booleans, null and a
+/// reference among them, and the other flags. `array_column()` makes its
+/// keys once and reads rows in place: arrays, a reference to one, an
+/// object (public, private and magic properties), rows missing the
+/// column, float, bool and numeric-string index keys and an array one.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn unique_strings_and_columns() {
+    let src = r#"$x = 'b'; $u = ['1', '01', '1.0', 1, 1.0, true, null, '', false, 'a', 'A', 'a', &$x, 'b', 0, '0', ' 1', 9 => 'z', 'k' => 'z'];
+var_dump(array_unique($u), array_unique($u, SORT_REGULAR), array_unique([3, '3', 3.0]), array_unique(['x' => [1], 'y' => 'Array'], SORT_STRING));
+class R { public $id = 7; public $n = 'pub'; private $p = 'priv'; function __get($k) { return "magic $k"; } function __isset($k) { return $k === 'm'; } }
+$row = ['id' => 2, 'n' => 'two', 1 => 'one-int', '5' => 'five'];
+$rows = [['id' => 1, 'n' => 'one'], &$row, ['n' => 'no-id'], ['id' => 1.9, 'n' => 'float id'], ['id' => true, 'n' => 'bool id'], ['id' => '07', 'n' => 'str id'], new R, 'scalar', ['id' => 3]];
+var_dump(array_column($rows, 'n'), array_column($rows, 'n', 'id'), array_column($rows, null, 'id'), array_column($rows, 1), array_column($rows, '5'), array_column($rows, 'p'), array_column($rows, 'm'));
+try { array_column([['id' => [1], 'n' => 'x']], 'n', 'id'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    let expected = r#"
+Warning: Array to string conversion in test.php on line 3
+array(10) {
+  [0]=>
+  string(1) "1"
+  [1]=>
+  string(2) "01"
+  [2]=>
+  string(3) "1.0"
+  [6]=>
+  NULL
+  [9]=>
+  string(1) "z"
+  [10]=>
+  string(1) "A"
+  [11]=>
+  string(1) "a"
+  [12]=>
+  &string(1) "b"
+  [14]=>
+  int(0)
+  [16]=>
+  string(2) " 1"
+}
+array(7) {
+  [0]=>
+  string(1) "1"
+  [5]=>
+  bool(true)
+  [6]=>
+  NULL
+  [8]=>
+  bool(false)
+  [10]=>
+  string(1) "A"
+  [11]=>
+  string(1) "a"
+  [12]=>
+  &string(1) "b"
+}
+array(1) {
+  [0]=>
+  int(3)
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+
+Deprecated: Implicit conversion from float 1.9 to int loses precision in test.php on line 7
+
+Deprecated: Implicit conversion from float 1.9 to int loses precision in test.php on line 7
+array(7) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(3) "two"
+  [2]=>
+  string(5) "no-id"
+  [3]=>
+  string(8) "float id"
+  [4]=>
+  string(7) "bool id"
+  [5]=>
+  string(6) "str id"
+  [6]=>
+  string(3) "pub"
+}
+array(5) {
+  [1]=>
+  string(7) "bool id"
+  [2]=>
+  string(3) "two"
+  [3]=>
+  string(5) "no-id"
+  ["07"]=>
+  string(6) "str id"
+  [7]=>
+  string(3) "pub"
+}
+array(6) {
+  [1]=>
+  array(2) {
+    ["id"]=>
+    bool(true)
+    ["n"]=>
+    string(7) "bool id"
+  }
+  [2]=>
+  array(4) {
+    ["id"]=>
+    int(2)
+    ["n"]=>
+    string(3) "two"
+    [1]=>
+    string(7) "one-int"
+    [5]=>
+    string(4) "five"
+  }
+  [3]=>
+  array(1) {
+    ["id"]=>
+    int(3)
+  }
+  ["07"]=>
+  array(2) {
+    ["id"]=>
+    string(2) "07"
+    ["n"]=>
+    string(6) "str id"
+  }
+  [7]=>
+  object(R)#1 (3) {
+    ["id"]=>
+    int(7)
+    ["n"]=>
+    string(3) "pub"
+    ["p":"R":private]=>
+    string(4) "priv"
+  }
+  [8]=>
+  string(6) "scalar"
+}
+array(1) {
+  [0]=>
+  string(7) "one-int"
+}
+array(1) {
+  [0]=>
+  string(4) "five"
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  string(7) "magic m"
+}
+Cannot access offset of type array on array
+"#;
+    assert_eq!(run(src), expected);
+}
