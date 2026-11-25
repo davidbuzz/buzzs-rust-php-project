@@ -778,6 +778,19 @@ pub fn array_slice(
     let list = packed && (!preserve_keys || (offset == 0 && array.is_without_holes()));
     // `ZEND_HASH_FILL_PACKED` of a packed source: the list built to size.
     if list {
+        // A list without holes: element `n` is at position `n`, so the
+        // slice is read from position `offset` on (`ZEND_HASH_PACKED_FOREACH`
+        // from `pos`), not reached by walking the elements before it.
+        if array.is_without_holes() {
+            let end = skip.saturating_add(take).min(array.len());
+            return ZArray::from_list_sized(
+                take,
+                (skip..end).filter_map(|p| {
+                    let (v, _) = array.entry_at(u32::try_from(p).ok()?)?;
+                    Some(copy_elem(v))
+                }),
+            );
+        }
         return ZArray::from_list_sized(take, array.values().skip(skip).take(take).map(copy_elem));
     }
     let mut out = HashTable::with_capacity(take);

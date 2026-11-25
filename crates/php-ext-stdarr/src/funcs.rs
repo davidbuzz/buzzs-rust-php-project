@@ -188,9 +188,11 @@ pub fn array_reverse(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_slice(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let len = a.opt(2).map(|_| a.int(2));
+    // Read in place (`Z_PARAM_ARRAY`, `Z_PARAM_LONG_OR_NULL`): no copy of
+    // the array or of the length.
+    let len = a.opt_int(2);
     Ok(Value::Array(sa::basic::array_slice(
-        &a.array(0),
+        &a.array_ref(0),
         a.int(1),
         len,
         a.bool(3),

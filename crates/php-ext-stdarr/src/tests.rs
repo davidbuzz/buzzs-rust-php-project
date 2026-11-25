@@ -683,3 +683,22 @@ fn array_filter_truthiness_and_keys() {
         "0='a',2='b',4='c',6=1,9=true,11=A,'x'='X',13=-1,14='00',15=' ',|2='a',3='b',|||0=1,2=3,|0=1,2=3,3=9,|0=1,|5=1,2=2,0=3,|0=1,2=3,|'b'=2,|0=NAN,2=1.5,|"
     );
 }
+
+/// `array_slice()` of a list without holes reads from the offset's
+/// position: every offset/length form, `preserve_keys`, a list with a
+/// hole, a reference element and hashes (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_slice_positions() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . var_export($v, true) . ','; } return $s . '|'; }
+        $small = ['a', 'b', 'c', 'd', 'e'];
+        echo show(array_slice($small, 0, 2)), show(array_slice($small, 3)), show(array_slice($small, -2, 1)), show(array_slice($small, 1, -1)), show(array_slice($small, 9)), show(array_slice($small, 2, 10, true)), show(array_slice($small, 0, null, true)), show(array_slice($small, -10, 2)), show(array_slice($small, 4, 5));
+        $h = [1, 2, 3, 4]; unset($h[1]); echo show(array_slice($h, 1, 2)), show(array_slice($h, 1, 2, true));
+        $x = 1; echo show(array_slice([&$x, 2], 0, 1));
+        echo show(array_slice(['a' => 1, 5 => 2, 'b' => 3], 1)), show(array_slice(['a' => 1, 5 => 2], 1, 1, true));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',1='b',|0='d',1='e',|0='d',|0='b',1='c',2='d',||2='c',3='d',4='e',|0='a',1='b',2='c',3='d',4='e',|0='a',1='b',|0='e',|0=3,1=4,|2=3,3=4,|0=1,|0=2,'b'=3,|5=2,|"
+    );
+}
