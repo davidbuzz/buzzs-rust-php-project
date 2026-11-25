@@ -59,7 +59,7 @@ functions.
 | Namespaced `is_*()`, `strlen()`, `count()` frameless | ae8734e2 | `is_string` 649 → 408; `count` 657 → 407 | 178 / 221 | rl −0.7%, ut −0.6% |
 | `array_key_exists()`, `strtolower/upper()` frameless | 1d6dad71 | `array_key_exists` 1,743 → 663; `strtolower` 999 → 689 | 290 / 412 | rl −0.3%, ut −0.7% |
 | 2-/3-argument frameless calls read their args in place | 082036fd | `substr` 1,198 → 836; `array_key_exists` 664 → 504 | 368 / 290 | −0.2% |
-| `$this->name` arguments sent from the property cache (calls with them are prepared) | see git log | `ObjectArray::has()` 3,130 → 2,788 | | rl −0.35% |
+| `$this->name` arguments sent from the property cache (calls with them are prepared) | 23adafca | `ObjectArray::has()` 3,130 → 2,788 | | rl −0.35% |
 
 ## Ops, compiler, tape
 
