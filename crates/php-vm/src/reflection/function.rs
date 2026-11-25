@@ -486,15 +486,20 @@ fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|c| vm.closure_data(c))
         .filter(|d| d.magic_name.is_some())
         .map(|d| d.func);
-    let attrs = match trampoline_target.as_ref().unwrap_or(&f.func) {
-        Func::User(u) => u.attributes.clone(),
-        Func::Builtin(_) => builtin_key(&f)
-            .and_then(|k| vm.builtin_attributes.get(&k))
-            .map(|v| (**v).clone())
-            .unwrap_or_default(),
+    // A user function's list read in place (`f` and the trampoline's
+    // function are this call's own handles); a builtin's shared list by
+    // its handle. Copying the list deep was most of a `getAttributes()`.
+    let builtin;
+    let attrs: &[crate::class::AttributeInfo] = match trampoline_target.as_ref().unwrap_or(&f.func)
+    {
+        Func::User(u) => &u.attributes,
+        Func::Builtin(_) => {
+            builtin = builtin_key(&f).and_then(|k| vm.builtin_attributes.get(&k).cloned());
+            builtin.as_deref().map_or(&[], |v| v.as_slice())
+        }
     };
     let hook = matches!(&f.func, Func::User(u) if u.name.as_bytes().starts_with(b"$"));
-    super::attribute::attributes_array_decl(vm, &attrs, t, scope.as_ref(), fn_file(&f), hook, a)
+    super::attribute::attributes_array_decl(vm, attrs, t, scope.as_ref(), fn_file(&f), hook, a)
 }
 
 fn rf_get_static_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

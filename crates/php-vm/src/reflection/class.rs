@@ -27,8 +27,23 @@ pub(crate) fn this_class_obj(vm: &mut Vm, a: &Args) -> VmResult<(Rc<Class>, Opti
     }
 }
 
+/// The class a `ReflectionClass` reflects, read in place: only its handle
+/// is copied (`this_refl` copied the whole state, the object handle too, on
+/// every getter's call).
 fn this_class(vm: &mut Vm, a: &Args) -> VmResult<Rc<Class>> {
-    Ok(this_class_obj(vm, a)?.0)
+    let got = a.this.as_ref().and_then(|o| {
+        crate::object::internal::<Refl, _>(o, |r| match r {
+            Refl::Class { cls, .. } => Some(Rc::clone(cls)),
+            _ => None,
+        })
+        .flatten()
+    });
+    got.ok_or_else(|| {
+        vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )
+    })
 }
 
 /// `ce->interfaces` in php-src order.
@@ -882,11 +897,14 @@ fn rc_new_instance_without_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_class(vm, a)?;
-    let mut attrs = c.attributes.clone();
+    // The class's own list, read in place (a user class's is all there
+    // is); only an internal attribute class's synthesized `#[Attribute]`
+    // makes a list of its own.
+    let mut attrs = std::borrow::Cow::Borrowed(c.attributes.as_slice());
     if c.flags & cflags::INTERNAL != 0 && attrs.is_empty() {
         // Internal attribute classes carry `#[Attribute(flags)]`.
         if let Some(fl) = super::attribute::attribute_flags(vm, &c)? {
-            attrs.push(crate::class::AttributeInfo {
+            attrs.to_mut().push(crate::class::AttributeInfo {
                 name: ZStr::from("Attribute"),
                 args: vec![(None, crate::class::ConstExpr::Value(Value::Int(fl)))],
                 line: 0,
