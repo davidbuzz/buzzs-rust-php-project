@@ -1256,3 +1256,72 @@ over dl1-2 dl2-2 done
 
 {"x":{"y":[2]}}
 "#;
+
+/// `$this->name['k'] ?? d` on property cache hits: keys there, missing,
+/// null and behind a reference, properties that hold null, false, true,
+/// an int, a float, a string, an `ArrayAccess` object, an uninitialized
+/// typed property, undeclared, dynamic and magic properties, a read from
+/// outside the class, and a plain read's warning.
+#[test]
+fn coalesce_of_a_property_element() {
+    assert_eq!(run(PROP_COALESCE), PROP_COALESCE_OUT);
+}
+
+const PROP_COALESCE: &str = r#"<?php
+class P { public $a = ['k' => 1, 'n' => null, 'r' => null]; public $n = null; public $f = false; public $t = true; public $i = 5; public $fl = 1.5; public $s = 'abc'; public ?array $typed; public $o;
+  function go() {
+    $this->o = new ArrayObject(['k' => 'ao']);
+    $x = 'zz';
+    $this->a['r'] = &$x;
+    echo json_encode([$this->a['k'] ?? 'd', $this->a['nope'] ?? 'd', $this->a['n'] ?? 'd', $this->a['r'] ?? 'd', $this->a[0] ?? 'd', $this->a['5'] ?? 'd']), "\n";
+    echo json_encode([$this->n['k'] ?? 'd', $this->f['k'] ?? 'd', $this->t['k'] ?? 'd', $this->i['k'] ?? 'd', $this->fl['k'] ?? 'd', $this->s['k'] ?? 'd', $this->s['1'] ?? 'd', $this->s[5] ?? 'd']), "\n";
+    echo json_encode([$this->o['k'] ?? 'd', $this->o['x'] ?? 'd']), "\n";
+    try { echo $this->typed['k'] ?? 'd', "\n"; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    echo $this->undeclared['k'] ?? 'd', "\n";
+    $key = 'k';
+    echo $this->a[$key] ?? 'd', $this->a[$key . 'x'] ?? 'd', "\n";
+    echo $this->a['nope'], "|\n";
+  }
+}
+#[AllowDynamicProperties] class Q { function go() { $this->dyn = ['k' => 1]; echo $this->dyn['k'] ?? 'd', $this->dyn['z'] ?? 'd', "\n"; } }
+class M { function __get($n) { echo "get($n) "; return ['k' => 'm']; } function go() { echo $this->magic['k'] ?? 'd', $this->magic['z'] ?? 'd', "\n"; } }
+for ($i = 0; $i < 3; $i++) { (new P)->go(); (new Q)->go(); (new M)->go(); $p = new P; echo $p->a['nope'] ?? 'outside', $p->n['x'] ?? 'nul', "\n"; }
+"#;
+
+const PROP_COALESCE_OUT: &str = r#"[1,"d","d","zz","d","d"]
+["d","d","d","d","d","d","b","d"]
+["ao","d"]
+d
+d
+1d
+
+Warning: Undefined array key "nope" in t.php on line 14
+|
+1d
+get(magic) mget(magic) d
+outsidenul
+[1,"d","d","zz","d","d"]
+["d","d","d","d","d","d","b","d"]
+["ao","d"]
+d
+d
+1d
+
+Warning: Undefined array key "nope" in t.php on line 14
+|
+1d
+get(magic) mget(magic) d
+outsidenul
+[1,"d","d","zz","d","d"]
+["d","d","d","d","d","d","b","d"]
+["ao","d"]
+d
+d
+1d
+
+Warning: Undefined array key "nope" in t.php on line 14
+|
+1d
+get(magic) mget(magic) d
+outsidenul
+"#;

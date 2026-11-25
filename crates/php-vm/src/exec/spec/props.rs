@@ -311,6 +311,38 @@ fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
     v
 }
 
+/// Whether `$this->name[dim]` / `$cv->name[dim]` read in `Is` mode (the
+/// operand of `??`: `ZEND_FETCH_OBJ_IS`, then `ZEND_FETCH_DIM_IS`) is
+/// null without a diagnostic, on the property cache hit [`read_dim_hit`]
+/// takes: the declared slot holds an array without the int or string
+/// offset `dim` peeks as, or null, a bool, an int or a float (a scalar
+/// container reads as null in that mode). `false` for anything else (a
+/// string or an object container, a reference, an uninitialized slot, a
+/// miss of the cache), which the generic walk reads. The walk ran for
+/// every such miss before (`place_fetch`).
+#[inline(never)]
+fn is_dim_miss_hit(f: &Frame, pid: PlaceId, dim: Operand) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ, PC_DYN) else {
+        return false;
+    };
+    let Some(key) = super::dim_ref_in(f, dim) else {
+        return false;
+    };
+    let Some(od) = hit_data(f, &hit) else {
+        return false;
+    };
+    let Ok(slots) = od.slots.try_borrow() else {
+        return false;
+    };
+    let miss = match slots.get(hit.slot) {
+        Some(Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => true,
+        Some(Some(Value::Array(a))) => super::table_dim(a, key).is_none(),
+        _ => false,
+    };
+    drop(slots);
+    miss
+}
+
 /// `isset($this->name[dim])` / `empty(...)` (`ZEND_FETCH_OBJ_IS`, then
 /// `ZEND_ISSET_ISEMPTY_DIM_OBJ`) on a property cache hit in frame `f`
 /// alone, as [`read_dim_hit`]: a missing key or a null property answers
@@ -946,6 +978,11 @@ impl Vm {
             if let Some(v) = read_dim_hit(f, pid, dim) {
                 super::release_str_tmp_in(f, dim);
                 return Some(store_fetched_in(f, dst, to, v));
+            }
+            // `$this->name['k'] ?? d` with nothing there: null, silently.
+            if mode == FetchMode::Is && is_dim_miss_hit(f, pid, dim) {
+                super::release_str_tmp_in(f, dim);
+                return Some(store_fetched_in(f, dst, to, Value::Null));
             }
         }
         let key = self.peek_dim_key(dim)?;
