@@ -238,15 +238,6 @@ fn num(v: &Value) -> Option<Num> {
     }
 }
 
-/// The value of number `n`.
-#[inline]
-fn num_value(n: Num) -> Value {
-    match n {
-        Num::Int(i) => Value::Int(i),
-        Num::Float(x) => Value::Float(x),
-    }
-}
-
 /// `++`/`--` of a number or null held by reference, in place
 /// (`increment_function` / `decrement_function`): an int that overflows
 /// becomes the float one past it (`ZEND_LONG_MAX + 1.0`), null incremented
