@@ -11,8 +11,11 @@ use php_runtime::{
 /// functions): references held only by the source array are unwrapped,
 /// shared references stay shared.
 #[must_use]
+#[inline]
 pub fn copy_elem(v: &Value) -> Value {
     match v {
+        // A number is copied without the out-of-line `Value::clone`.
+        Value::Int(i) => Value::Int(*i),
         Value::Reference(r) if r.refcount() == 1 => r.get(),
         other => other.clone(),
     }

@@ -5,7 +5,9 @@
 
 use crate::util::{cannot_add_element, copy_elem, deref, not_array_error, Guard};
 use crate::HT_MAX_SIZE;
-use php_runtime::{ArrayKey, HashTable, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
+use php_runtime::{
+    ArrayKey, HashTable, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
 
 /// Checks that every argument is an array; `first_name` is the declared
 /// name of the first parameter (`None` when it is variadic).
@@ -39,15 +41,40 @@ fn too_many() -> RuntimeError {
 pub fn php_array_merge(dest: &mut HashTable, src: &HashTable) -> RtResult<()> {
     for (k, v) in src {
         match k {
-            ArrayKey::Str(s) => {
-                dest.insert(ArrayKey::Str(s.clone()), copy_elem(v));
-            }
+            ArrayKey::Str(s) => update_str(dest, s, copy_elem(v)),
             ArrayKey::Int(_) => {
                 dest.push(copy_elem(v)).map_err(|_| cannot_add_element())?;
             }
         }
     }
     Ok(())
+}
+
+/// `zend_hash_update(dest, s, v)` for the string key `s` of another
+/// table (no integer in digits, its hash stored): found and appended by
+/// that hash, without a call when the table is a hash with room; the
+/// general insert otherwise. The replaced value is released as
+/// `zend_hash_update` releases it, before the call returns.
+#[inline]
+fn update_str(dest: &mut HashTable, s: &ZStr, v: Value) {
+    let h = s.hash_value();
+    if let Some(slot) = dest.lean_find_mut(s, h) {
+        *slot = v;
+        return;
+    }
+    if let Err((k, v)) = dest.lean_append(s.clone(), h, v) {
+        dest.insert(ArrayKey::Str(k), v);
+    }
+}
+
+/// `_zend_hash_append(dest, s, v)`: the string key `s` of another table,
+/// which `dest` does not hold, appended by its stored hash without a
+/// probe for it; the general add when the table is no hash with room.
+#[inline]
+fn append_str(dest: &mut HashTable, s: &ZStr, v: Value) {
+    if let Err((k, v)) = dest.lean_append(s.clone(), s.hash_value(), v) {
+        let _ = dest.add(ArrayKey::Str(k), v);
+    }
 }
 
 /// `php_array_merge_recursive`.
@@ -163,12 +190,17 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
     let Some(src) = rest.next() else {
         return Ok(ZArray::new());
     };
-    let mut dest = HashTable::with_capacity(size);
+    // `array_init_size(return_value, count)`, then
+    // `zend_hash_real_init_mixed(dest)` for a first array that is a hash:
+    // its keys are appended (`_zend_hash_append`), being distinct.
+    let mut dest = if src.is_packed() {
+        HashTable::with_capacity(size)
+    } else {
+        HashTable::with_capacity_mixed(size)
+    };
     for (k, v) in src.iter() {
         match k {
-            ArrayKey::Str(s) => {
-                let _ = dest.add(ArrayKey::Str(s.clone()), copy_elem(v));
-            }
+            ArrayKey::Str(s) => append_str(&mut dest, s, copy_elem(v)),
             ArrayKey::Int(_) => {
                 let _ = dest.push(copy_elem(v));
             }

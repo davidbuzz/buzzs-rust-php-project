@@ -566,3 +566,28 @@ fn pointer_functions_in_place() {
         "XX1cX1|1c|bool(false)\nbool(false)\nbool(false)\nNULL\narray|22|next(): Argument #1 ($array) must be of type array, null given|c"
     );
 }
+
+/// `array_merge()` of hashes: string keys appended by their stored hash
+/// and updated in place, integer keys renumbered, a list first or a hash
+/// first, an emptied hash first, a shared reference kept and a table that
+/// grows past its first size (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_merge_hashes() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        $x = 1; $r = ['a' => &$x, 'b' => 2];
+        echo show(array_merge(['key' => 1, 'b' => 2, 'c' => 3], ['a' => 1, 'b' => 20, 'c' => 30, 5 => 'five', 'd' => 4]));
+        echo show(array_merge([1, 2], ['a' => 1, '7' => 'x'], ['a' => 'A', 3]));
+        echo show(array_merge(['a' => 1, 9 => 'n'], [10, 11], ['b' => 2]));
+        $m = array_merge($r, ['c' => 3]); $x = 99; echo show($m);
+        $t = ['a' => 1]; unset($t['a']); echo show(array_merge($t, [1, 2], ['z' => 0]));
+        echo show(array_merge(['a' => 1], [])), show(array_merge([], ['b' => 2, 3]));
+        $big = []; for ($i = 0; $i < 20; $i++) { $big["k$i"] = $i; }
+        echo count(array_merge($big, ['k3' => 'x', 'new' => 1])), array_merge($big, ['k3' => 'x'])['k3'], '|';
+        $o = ['o' => new stdClass]; echo get_class(array_merge($o, ['p' => 1])['o']);"#,
+    );
+    assert_eq!(
+        out,
+        "'key'=1,'b'=20,'c'=30,'a'=1,0='five','d'=4,|0=1,1=2,'a'='A',2='x',3=3,|'a'=1,0='n',1=10,2=11,'b'=2,|'a'=99,'b'=2,'c'=3,|0=1,1=2,'z'=0,|'a'=1,|'b'=2,0=3,|21x|stdClass"
+    );
+}
