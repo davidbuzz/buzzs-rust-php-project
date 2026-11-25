@@ -1,0 +1,508 @@
+
+Deprecated: Using ${var} in strings is deprecated, use {$var} instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php on line 33
+-- hello
+E[2] Uninitialized string offset 10 @6
+E[2] Uninitialized string offset -10 @6
+E[2] String offset cast occurred @6
+E[8192] Implicit conversion from float 1.5 to int loses precision @7
+E[2] String offset cast occurred @6
+E[2] String offset cast occurred @6
+E[2] Only the first byte will be assigned to the string offset @11
+E[2] Illegal string offset -20 @11
+array (
+  0 => 'h',
+  1 => 'h',
+  2 => true,
+  3 => 'o',
+  4 => 'o',
+  5 => true,
+  6 => 'l',
+  7 => 'l',
+  8 => true,
+  9 => '',
+  10 => 'dflt',
+  11 => false,
+  12 => '',
+  13 => 'dflt',
+  14 => false,
+  15 => 'e',
+  16 => 'e',
+  17 => true,
+  18 => 'TypeError: Cannot access offset of type string on string',
+  19 => 'dflt',
+  20 => false,
+  21 => 'TypeError: Cannot access offset of type string on string',
+  22 => 'dflt',
+  23 => false,
+  24 => 'e',
+  25 => 'e',
+  26 => true,
+  27 => 'e',
+  28 => 'e',
+  29 => true,
+  30 => 'h',
+  31 => 'h',
+  32 => true,
+  33 => 'xello',
+  34 => 'xellZ',
+  35 => 'xellZ !',
+  36 => 'xellZ !',
+  37 => 'Error: Cannot assign an empty string to a string offset',
+  38 => 'TypeError: Cannot access offset of type string on string',
+)
+-- 
+E[2] Uninitialized string offset 0 @6
+E[2] Uninitialized string offset -1 @6
+E[2] Uninitialized string offset 2 @6
+E[2] Uninitialized string offset 10 @6
+E[2] Uninitialized string offset -10 @6
+E[2] Uninitialized string offset 1 @6
+E[2] String offset cast occurred @6
+E[2] Uninitialized string offset 1 @6
+E[8192] Implicit conversion from float 1.5 to int loses precision @7
+E[2] String offset cast occurred @6
+E[2] Uninitialized string offset 1 @6
+E[2] String offset cast occurred @6
+E[2] Uninitialized string offset 0 @6
+E[2] Only the first byte will be assigned to the string offset @11
+E[2] Illegal string offset -20 @11
+array (
+  0 => '',
+  1 => 'dflt',
+  2 => false,
+  3 => '',
+  4 => 'dflt',
+  5 => false,
+  6 => '',
+  7 => 'dflt',
+  8 => false,
+  9 => '',
+  10 => 'dflt',
+  11 => false,
+  12 => '',
+  13 => 'dflt',
+  14 => false,
+  15 => '',
+  16 => 'dflt',
+  17 => false,
+  18 => 'TypeError: Cannot access offset of type string on string',
+  19 => 'dflt',
+  20 => false,
+  21 => 'TypeError: Cannot access offset of type string on string',
+  22 => 'dflt',
+  23 => false,
+  24 => '',
+  25 => 'dflt',
+  26 => false,
+  27 => '',
+  28 => 'dflt',
+  29 => false,
+  30 => '',
+  31 => 'dflt',
+  32 => false,
+  33 => 'x',
+  34 => 'Z',
+  35 => 'Z     !',
+  36 => 'Z     !',
+  37 => 'Error: Cannot assign an empty string to a string offset',
+  38 => 'TypeError: Cannot access offset of type string on string',
+)
+-- Ã©
+E[2] Uninitialized string offset 2 @6
+E[2] Uninitialized string offset 10 @6
+E[2] Uninitialized string offset -10 @6
+E[2] String offset cast occurred @6
+E[8192] Implicit conversion from float 1.5 to int loses precision @7
+E[2] String offset cast occurred @6
+E[2] String offset cast occurred @6
+E[2] Only the first byte will be assigned to the string offset @11
+E[2] Illegal string offset -20 @11
+array (
+  0 => 'Ã',
+  1 => 'Ã',
+  2 => true,
+  3 => '©',
+  4 => '©',
+  5 => true,
+  6 => '',
+  7 => 'dflt',
+  8 => false,
+  9 => '',
+  10 => 'dflt',
+  11 => false,
+  12 => '',
+  13 => 'dflt',
+  14 => false,
+  15 => '©',
+  16 => '©',
+  17 => true,
+  18 => 'TypeError: Cannot access offset of type string on string',
+  19 => 'dflt',
+  20 => false,
+  21 => 'TypeError: Cannot access offset of type string on string',
+  22 => 'dflt',
+  23 => false,
+  24 => '©',
+  25 => '©',
+  26 => true,
+  27 => '©',
+  28 => '©',
+  29 => true,
+  30 => 'Ã',
+  31 => 'Ã',
+  32 => true,
+  33 => 'x©',
+  34 => 'xZ',
+  35 => 'xZ    !',
+  36 => 'xZ    !',
+  37 => 'Error: Cannot assign an empty string to a string offset',
+  38 => 'TypeError: Cannot access offset of type string on string',
+)
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Decrement on non-numeric string has no effect and is deprecated @18
+E[8192] Decrement on empty string is deprecated as non-numeric @18
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @19
+E[2] Decrement on type null has no effect, this will change in the next major version of PHP @19
+array (
+  0 => 'b',
+  1 => 'Ba',
+  2 => 'aaa',
+  3 => 'b0',
+  4 => 'AAa',
+  5 => 10,
+  6 => 10.5,
+  7 => 2,
+  8 => 2,
+  9 => '-',
+  10 => 101.0,
+  11 => 'aa',
+  12 => 'a',
+  13 => 4,
+  14 => -1,
+  15 => 0.5,
+  16 => '1',
+  17 => 1,
+  18 => NULL,
+)
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Decrement on non-numeric string has no effect and is deprecated @18
+E[8192] Decrement on empty string is deprecated as non-numeric @18
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @19
+E[2] Decrement on type null has no effect, this will change in the next major version of PHP @19
+array (
+  0 => 'b',
+  1 => 'Ba',
+  2 => 'aaa',
+  3 => 'b0',
+  4 => 'AAa',
+  5 => 10,
+  6 => 10.5,
+  7 => 2,
+  8 => 2,
+  9 => '-',
+  10 => 101.0,
+  11 => 'aa',
+  12 => 'a',
+  13 => 4,
+  14 => -1,
+  15 => 0.5,
+  16 => '1',
+  17 => 1,
+  18 => NULL,
+)
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @17
+E[8192] Decrement on non-numeric string has no effect and is deprecated @18
+E[8192] Decrement on empty string is deprecated as non-numeric @18
+E[8192] Increment on non-numeric string is deprecated, use str_increment() instead @19
+E[2] Decrement on type null has no effect, this will change in the next major version of PHP @19
+array (
+  0 => 'b',
+  1 => 'Ba',
+  2 => 'aaa',
+  3 => 'b0',
+  4 => 'AAa',
+  5 => 10,
+  6 => 10.5,
+  7 => 2,
+  8 => 2,
+  9 => '-',
+  10 => 101.0,
+  11 => 'aa',
+  12 => 'a',
+  13 => 4,
+  14 => -1,
+  15 => 0.5,
+  16 => '1',
+  17 => 1,
+  18 => NULL,
+)
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+array (
+  0 => 2,
+  1 => 1,
+  2 => true,
+  3 => 0,
+  4 => true,
+  5 => 2,
+  6 => 1,
+  7 => true,
+  8 => 0,
+  9 => true,
+  10 => 2,
+  11 => 1,
+  12 => true,
+  13 => 0,
+  14 => true,
+  15 => 2,
+  16 => 1,
+  17 => false,
+  18 => 1,
+  19 => false,
+  20 => 1001.0,
+  21 => 1000.0,
+  22 => false,
+  23 => 1,
+  24 => false,
+  25 => 1,
+  26 => 0,
+  27 => false,
+  28 => -1,
+  29 => false,
+  30 => 1.5,
+  31 => 0.5,
+  32 => false,
+  33 => -1,
+  34 => false,
+  35 => 6.0,
+  36 => 5.0,
+  37 => false,
+  38 => 1,
+  39 => false,
+  40 => 2,
+  41 => 1,
+  42 => true,
+  43 => 0,
+  44 => true,
+  45 => 'Unsupported operand types: string + int',
+  46 => 'Unsupported operand types: int * string',
+  47 => false,
+  48 => -1,
+  49 => false,
+  50 => 'Unsupported operand types: string + int',
+  51 => 'Unsupported operand types: int * string',
+  52 => false,
+  53 => 1,
+  54 => false,
+)
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+array (
+  0 => 2.5,
+  1 => 1.5,
+  2 => false,
+  3 => -1,
+  4 => true,
+  5 => 2.5,
+  6 => 1.5,
+  7 => false,
+  8 => -1,
+  9 => true,
+  10 => 2.5,
+  11 => 1.5,
+  12 => false,
+  13 => -1,
+  14 => true,
+  15 => 2.5,
+  16 => 1.5,
+  17 => false,
+  18 => 1,
+  19 => false,
+  20 => 1001.5,
+  21 => 1500.0,
+  22 => false,
+  23 => 1,
+  24 => false,
+  25 => 1.5,
+  26 => 0.0,
+  27 => false,
+  28 => -1,
+  29 => false,
+  30 => 2.0,
+  31 => 0.75,
+  32 => false,
+  33 => -1,
+  34 => false,
+  35 => 6.5,
+  36 => 7.5,
+  37 => false,
+  38 => 1,
+  39 => false,
+  40 => 2.5,
+  41 => 1.5,
+  42 => false,
+  43 => -1,
+  44 => true,
+  45 => 'Unsupported operand types: string + float',
+  46 => 'Unsupported operand types: float * string',
+  47 => false,
+  48 => -1,
+  49 => false,
+  50 => 'Unsupported operand types: string + float',
+  51 => 'Unsupported operand types: float * string',
+  52 => false,
+  53 => 1,
+  54 => false,
+)
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+array (
+  0 => 2,
+  1 => 1,
+  2 => true,
+  3 => 0,
+  4 => true,
+  5 => 2,
+  6 => 1,
+  7 => true,
+  8 => 0,
+  9 => true,
+  10 => 2,
+  11 => 1,
+  12 => true,
+  13 => 0,
+  14 => true,
+  15 => 2,
+  16 => 1,
+  17 => false,
+  18 => 1,
+  19 => false,
+  20 => 1001.0,
+  21 => 1000.0,
+  22 => false,
+  23 => 1,
+  24 => false,
+  25 => 1,
+  26 => 0,
+  27 => false,
+  28 => -1,
+  29 => false,
+  30 => 1.5,
+  31 => 0.5,
+  32 => false,
+  33 => -1,
+  34 => false,
+  35 => 6.0,
+  36 => 5.0,
+  37 => false,
+  38 => 1,
+  39 => false,
+  40 => 2,
+  41 => 1,
+  42 => true,
+  43 => 0,
+  44 => true,
+  45 => 'Unsupported operand types: string + string',
+  46 => 'Unsupported operand types: string * string',
+  47 => false,
+  48 => -1,
+  49 => false,
+  50 => 'Unsupported operand types: string + string',
+  51 => 'Unsupported operand types: string * string',
+  52 => false,
+  53 => 1,
+  54 => false,
+)
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+E[2] A non-numeric value encountered @25
+E[2] A non-numeric value encountered @26
+array (
+  0 => 1,
+  1 => 0,
+  2 => false,
+  3 => 1,
+  4 => true,
+  5 => 1,
+  6 => 0,
+  7 => false,
+  8 => 1,
+  9 => true,
+  10 => 1,
+  11 => 0,
+  12 => false,
+  13 => 1,
+  14 => true,
+  15 => 1,
+  16 => 0,
+  17 => false,
+  18 => 1,
+  19 => false,
+  20 => 1000.0,
+  21 => 0.0,
+  22 => false,
+  23 => 1,
+  24 => false,
+  25 => 0,
+  26 => 0,
+  27 => false,
+  28 => 1,
+  29 => false,
+  30 => 0.5,
+  31 => 0.0,
+  32 => false,
+  33 => 1,
+  34 => false,
+  35 => 5.0,
+  36 => 0.0,
+  37 => false,
+  38 => 1,
+  39 => false,
+  40 => 1,
+  41 => 0,
+  42 => false,
+  43 => 1,
+  44 => true,
+  45 => 'Unsupported operand types: string + int',
+  46 => 'Unsupported operand types: int * string',
+  47 => false,
+  48 => -1,
+  49 => false,
+  50 => 'Unsupported operand types: string + int',
+  51 => 'Unsupported operand types: int * string',
+  52 => false,
+  53 => 1,
+  54 => false,
+)
+E[2] Array to string conversion @33
+E[2] Array to string conversion @33
+
+Fatal error: Uncaught Error: Object of class stdClass could not be converted to string in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php:33
+Stack trace:
+#0 /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php(38): concat(0.1)
+#1 {main}
+  thrown in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php on line 33

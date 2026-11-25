@@ -1,0 +1,399 @@
+-- h_return 0
+R[2] Undefined variable $undef @8
+R[2] Undefined array key 7 @10
+R[2] Undefined array key 9 @10
+R[2] Uninitialized string offset 10 @11
+R[2] A non-numeric value encountered @12
+R[2] Undefined property: stdClass::$missing @14
+R[8192] Implicit conversion from float 1.5 to int loses precision @16
+R[8192] Implicit conversion from float 1.7 to int loses precision @17
+R[8192] Automatic conversion of false to array is deprecated @18
+R[2] Array to string conversion @19
+R[2] Array to string conversion @20
+array (
+  0 => 0,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 16,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_return 1
+R[2] Undefined variable $undef @8
+R[2] Undefined array key 7 @10
+R[2] Undefined array key 9 @10
+R[2] Uninitialized string offset 10 @11
+R[2] A non-numeric value encountered @12
+R[2] Undefined property: stdClass::$missing @14
+R[8192] Implicit conversion from float 1.5 to int loses precision @16
+R[8192] Implicit conversion from float 1.7 to int loses precision @17
+R[8192] Automatic conversion of false to array is deprecated @18
+R[2] Array to string conversion @19
+R[2] Array to string conversion @20
+array (
+  0 => 1,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 17,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_return 2
+R[2] Undefined variable $undef @8
+R[2] Undefined array key 7 @10
+R[2] Undefined array key 9 @10
+R[2] Uninitialized string offset 10 @11
+R[2] A non-numeric value encountered @12
+R[2] Undefined property: stdClass::$missing @14
+R[8192] Implicit conversion from float 1.5 to int loses precision @16
+R[8192] Implicit conversion from float 1.7 to int loses precision @17
+R[8192] Automatic conversion of false to array is deprecated @18
+R[2] Array to string conversion @19
+R[2] Array to string conversion @20
+array (
+  0 => 2,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 18,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_false 0
+F[2] Undefined variable $undef @8
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+F[2] Undefined array key 7 @10
+
+Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Undefined array key 9 @10
+
+Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Uninitialized string offset 10 @11
+
+Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+F[2] A non-numeric value encountered @12
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+F[2] Undefined property: stdClass::$missing @14
+
+Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+F[8192] Implicit conversion from float 1.5 to int loses precision @16
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+F[8192] Implicit conversion from float 1.7 to int loses precision @17
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+F[8192] Automatic conversion of false to array is deprecated @18
+
+Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+F[2] Array to string conversion @19
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+F[2] Array to string conversion @20
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+array (
+  0 => 0,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 16,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_false 1
+F[2] Undefined variable $undef @8
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+F[2] Undefined array key 7 @10
+
+Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Undefined array key 9 @10
+
+Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Uninitialized string offset 10 @11
+
+Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+F[2] A non-numeric value encountered @12
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+F[2] Undefined property: stdClass::$missing @14
+
+Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+F[8192] Implicit conversion from float 1.5 to int loses precision @16
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+F[8192] Implicit conversion from float 1.7 to int loses precision @17
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+F[8192] Automatic conversion of false to array is deprecated @18
+
+Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+F[2] Array to string conversion @19
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+F[2] Array to string conversion @20
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+array (
+  0 => 1,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 17,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_false 2
+F[2] Undefined variable $undef @8
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+F[2] Undefined array key 7 @10
+
+Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Undefined array key 9 @10
+
+Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+F[2] Uninitialized string offset 10 @11
+
+Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+F[2] A non-numeric value encountered @12
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+F[2] Undefined property: stdClass::$missing @14
+
+Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+F[8192] Implicit conversion from float 1.5 to int loses precision @16
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+F[8192] Implicit conversion from float 1.7 to int loses precision @17
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+F[8192] Automatic conversion of false to array is deprecated @18
+
+Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+F[2] Array to string conversion @19
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+F[2] Array to string conversion @20
+
+Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+array (
+  0 => 2,
+  1 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+  ),
+  2 => '',
+  3 => 18,
+  4 => NULL,
+  5 => 'TypeError Cannot access offset of type string on string',
+  6 => 2,
+  7 => 
+  array (
+    1 => 'f',
+  ),
+  8 => 
+  array (
+    0 => 
+    array (
+      0 => 1,
+    ),
+    1 => 
+    array (
+      0 => 2,
+    ),
+  ),
+  9 => 'Array',
+  10 => '1,Array',
+  11 => 'inner',
+)
+-- h_throw 0
+array (
+  0 => 'T: Undefined variable $undef @8',
+  1 => false,
+  2 => 'T: Undefined array key 7 @10',
+  3 => 'T: Uninitialized string offset 10 @11',
+  4 => false,
+  5 => 'T: array_sum(): Addition is not supported on type string @12',
+  6 => 'T: Undefined property: stdClass::$missing @14',
+  7 => 'TypeError Cannot access offset of type string on string',
+  8 => 'T: Implicit conversion from float 1.5 to int loses precision @16',
+  9 => 'T: Implicit conversion from float 1.7 to int loses precision @17',
+  10 => 
+  array (
+  ),
+  11 => 'T: Automatic conversion of false to array is deprecated @18',
+  12 => 
+  array (
+    0 => 2,
+  ),
+  13 => 'T: Array to string conversion @19',
+  14 => false,
+  15 => 'T: Array to string conversion @20',
+  16 => 'inner',
+)
+-- h_throw 1
+array (
+  0 => 'T: Undefined variable $undef @8',
+  1 => false,
+  2 => 'T: Undefined array key 7 @10',
+  3 => 'T: Uninitialized string offset 10 @11',
+  4 => false,
+  5 => 'T: array_sum(): Addition is not supported on type string @12',
+  6 => 'T: Undefined property: stdClass::$missing @14',
+  7 => 'TypeError Cannot access offset of type string on string',
+  8 => 'T: Implicit conversion from float 1.5 to int loses precision @16',
+  9 => 'T: Implicit conversion from float 1.7 to int loses precision @17',
+  10 => 
+  array (
+  ),
+  11 => 'T: Automatic conversion of false to array is deprecated @18',
+  12 => 
+  array (
+    0 => 2,
+  ),
+  13 => 'T: Array to string conversion @19',
+  14 => false,
+  15 => 'T: Array to string conversion @20',
+  16 => 'inner',
+)
+-- h_throw 2
+array (
+  0 => 'T: Undefined variable $undef @8',
+  1 => false,
+  2 => 'T: Undefined array key 7 @10',
+  3 => 'T: Uninitialized string offset 10 @11',
+  4 => false,
+  5 => 'T: array_sum(): Addition is not supported on type string @12',
+  6 => 'T: Undefined property: stdClass::$missing @14',
+  7 => 'TypeError Cannot access offset of type string on string',
+  8 => 'T: Implicit conversion from float 1.5 to int loses precision @16',
+  9 => 'T: Implicit conversion from float 1.7 to int loses precision @17',
+  10 => 
+  array (
+  ),
+  11 => 'T: Automatic conversion of false to array is deprecated @18',
+  12 => 
+  array (
+    0 => 2,
+  ),
+  13 => 'T: Array to string conversion @19',
+  14 => false,
+  15 => 'T: Array to string conversion @20',
+  16 => 'inner',
+)
