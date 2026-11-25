@@ -976,3 +976,139 @@ Deprecated: Using null as an array offset is deprecated, use an empty string ins
 false
 [false,true,false]
 "#;
+
+/// `$v = $a[$k]` with keys in variables and temporaries: strings,
+/// integers in digits and not, elements of every kind (a reference, an
+/// array, an object), missing keys and their warnings, destinations that
+/// held an array, an object with a destructor, a reference, the key's or
+/// the array's own variable, a list, an array behind a reference and a
+/// string container.
+#[test]
+fn element_read_into_a_variable() {
+    assert_eq!(run(FOLDED_READ), FOLDED_READ_OUT);
+}
+
+const FOLDED_READ: &str = r#"<?php
+class D { public function __construct(public $n) {} public function __destruct() { echo "d{$this->n} "; } }
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $a = ['key' => 1, 's' => "str$round", 'arr' => [1, 2], 'nul' => null, 7 => 'seven', '07' => 'oh-seven', 'obj' => new stdClass];
+        $t = 'through';
+        $a['ref'] = &$t;
+        $out = [];
+        foreach (['key', 's', 'arr', 'nul', '7', '07', 'ref', 'obj'] as $k) {
+            $v = $a[$k];
+            $out[] = is_object($v) ? 'object' : $v;
+        }
+        echo json_encode($out), "\n";
+        $p = 'ke';
+        $v = $a[$p . 'y'];
+        echo $v, "\n";
+        // Missing keys warn.
+        $k = 'nope';
+        $v = $a[$k];
+        var_dump($v);
+        $k = '8';
+        $v = $a[$k];
+        var_dump($v);
+        // The destination held an array, an object, a reference.
+        $dst = [1];
+        $k = 's';
+        $dst = $a[$k];
+        echo $dst, "\n";
+        $dst = new D($round);
+        $dst = $a[$k];
+        echo " ", $dst, "\n";
+        $x = 1;
+        $refd = &$x;
+        $refd = $a[$k];
+        echo $x, "\n";
+        unset($refd);
+        // The key's own variable as the destination.
+        $k = 'key';
+        $k = $a[$k];
+        var_dump($k);
+        // The array's own variable as the destination.
+        $b = ['inner' => ['x' => 1]];
+        $k = 'inner';
+        $b = $b[$k];
+        echo json_encode($b), "\n";
+        // A list, a reference to the array, a string container.
+        $l = [5, 6];
+        $k = '1';
+        $v = $l[$k];
+        echo $v, "\n";
+        $arr = ['key' => 'r'];
+        $ra = &$arr;
+        $k = 'key';
+        $v = $arr[$k];
+        echo $v, "\n";
+        unset($ra);
+        $s = 'abc';
+        $k = '1';
+        $v = $s[$k];
+        echo $v, "\n";
+        $k = 'x';
+        try { $v = $s[$k]; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        $v = $a[$k] ?? 'dflt';
+        echo $v, "\n";
+    }
+}
+f();
+"#;
+
+const FOLDED_READ_OUT: &str = r#"[1,"str0",[1,2],null,"seven","oh-seven","through","object"]
+1
+
+Warning: Undefined array key "nope" in t.php on line 19
+NULL
+
+Warning: Undefined array key 8 in t.php on line 22
+NULL
+str0
+d0  str0
+str0
+int(1)
+{"x":1}
+6
+r
+b
+TypeError: Cannot access offset of type string on string
+dflt
+[1,"str1",[1,2],null,"seven","oh-seven","through","object"]
+1
+
+Warning: Undefined array key "nope" in t.php on line 19
+NULL
+
+Warning: Undefined array key 8 in t.php on line 22
+NULL
+str1
+d1  str1
+str1
+int(1)
+{"x":1}
+6
+r
+b
+TypeError: Cannot access offset of type string on string
+dflt
+[1,"str2",[1,2],null,"seven","oh-seven","through","object"]
+1
+
+Warning: Undefined array key "nope" in t.php on line 19
+NULL
+
+Warning: Undefined array key 8 in t.php on line 22
+NULL
+str2
+d2  str2
+str2
+int(1)
+{"x":1}
+6
+r
+b
+TypeError: Cannot access offset of type string on string
+dflt
+"#;

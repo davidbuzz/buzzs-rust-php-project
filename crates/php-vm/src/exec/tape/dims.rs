@@ -813,14 +813,70 @@ fn fetch_str_lean(f: &mut Frame, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 unsafe fn fetch_dim_key_any(frame: *mut Frame, inst: &Inst) -> Br {
-    // The operand of `??` into its temporary has a step of its own (the
-    // row's fields alone are looked at, before anything is touched).
-    if inst.e != 0 && inst.d == NO_TO {
+    // The operand of `??` into its temporary and the read into a folded
+    // variable have steps of their own (the row's fields alone are looked
+    // at, before anything is touched).
+    if inst.d != NO_TO {
+        // SAFETY: the caller's contract, passed on.
+        return unsafe { fetch_dim_to(frame, inst) };
+    }
+    if inst.e != 0 {
         // SAFETY: the caller's contract, passed on.
         return unsafe { fetch_dim_is(frame, inst) };
     }
     // SAFETY: the caller's contract, passed on.
     unsafe { fetch_dim_key_general(frame, inst) }
+}
+
+/// `$v = $cv[$key]` ([`fetch_to_lean`]), else [`fetch_dim_key_general`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn fetch_dim_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if let Some(br) = fetch_to_lean(unsafe { &mut *frame }, inst) {
+        return br;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { fetch_dim_key_general(frame, inst) }
+}
+
+/// `ZEND_FETCH_DIM_R` of a `CV` array with a string offset and the
+/// `ZEND_ASSIGN` to a variable folded behind it (`$v = $a[$k]`): one
+/// lookup with the key's stored hash (`zend_hash_find_known_hash`), or
+/// the int key a string of digits is (`ZEND_HANDLE_NUMERIC_STR`), and the
+/// element's copy into the variable. Taken when the key is a string in a
+/// variable, a temporary or a literal, the array the one the variable
+/// holds directly and has the key, the element no reference, and the
+/// variable holds nothing a release could make a root of
+/// ([`store_plain_into`]); a consumed key temporary is released
+/// (`FREE_OP2`). The general path ([`fetch_key`]) looked the key's bytes
+/// up for an integer and probed through a call. `None`, nothing changed,
+/// for anything else (a missing key warns there).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `fetch_dim_to`
+fn fetch_to_lean(f: &mut Frame, inst: &Inst) -> Option<Br> {
+    if f.symtab_attached {
+        return None;
+    }
+    let kind = dim_kind(inst);
+    let v = {
+        let key = key_str(f, kind, inst.b)?;
+        let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+            return None;
+        };
+        let el = if ArrayKey::surely_str(key.as_bytes()) {
+            arr.lean_find(key, key.hash_now())
+        } else {
+            arr.lean_get_int(ArrayKey::small_int(key.as_bytes())?)
+        };
+        elem_copy(el?)?
+    };
+    let br = store_plain_into(f, inst.d, v)?;
+    release_key(f, kind, inst.b);
+    Some(br)
 }
 
 /// [`fetch_dim_key_any`]'s way on: a read with a string offset
