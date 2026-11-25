@@ -4961,6 +4961,22 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
+        // Positional arguments only, to a resolution that carries nothing
+        // else (`call_user_func("f", $x)`): [`Vm::call_prepared`]'s direct
+        // frame for a plain user callee.
+        let mut args = args;
+        if named.is_empty()
+            && call.args.is_empty()
+            && call.inline_count == 0
+            && call.named.is_empty()
+            && !call.has_named
+            && call.pfa.is_none()
+            && call.magic_name.is_none()
+        {
+            if let Some(r) = self.call_prepared_direct(&call, &mut args) {
+                return r;
+            }
+        }
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
         call_args.reserve(args.len());
