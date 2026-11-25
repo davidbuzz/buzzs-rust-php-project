@@ -505,6 +505,32 @@ fn plain_call(call: &PendingCall) -> bool {
 /// coercion, deprecation or `TypeError`), and none of the class's error
 /// conditions holds.
 pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
+    let mut refs: [Option<&Value>; 3] = [None; 3];
+    let Some(sent) = refs.get_mut(..args.len()) else {
+        return false;
+    };
+    for (r, a) in sent.iter_mut().zip(args) {
+        *r = a.as_ref();
+    }
+    frameless_refs(class, sent)
+}
+
+/// [`frameless_args`] of arguments read straight from their operands
+/// ([`Vm::frameless_icall_op`]).
+fn frameless_values(class: u32, args: &[Value]) -> bool {
+    let mut refs: [Option<&Value>; 3] = [None; 3];
+    let Some(sent) = refs.get_mut(..args.len()) else {
+        return false;
+    };
+    for (r, a) in sent.iter_mut().zip(args) {
+        *r = Some(a);
+    }
+    frameless_refs(class, sent)
+}
+
+/// [`frameless_args`] of borrowed arguments (`None`: a position not
+/// sent, which no class takes).
+fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
     use Value::{Array, Bool, Float, Int, Null, Str};
     match (class, args) {
         (fl::ABS | fl::FLOAT | fl::LOG | fl::ROUND, [Some(Int(_) | Float(_))])
@@ -1252,14 +1278,18 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        // The arguments move from the frame's buffer into the lent
+        // vector (`CallBufs::take_values`), the length stored once, and
+        // the emptied buffer is cut without a `Drain`.
+        let mut values = self.call_bufs.take_values();
         values.reserve(nparams.max(n));
-        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
-        passed.reserve(nparams.max(n));
-        for arg in self.frames.vec[live].args.drain(..) {
-            values.push(arg.unwrap_or_default());
-            passed.push(true);
+        let mut passed = self.call_bufs.take_passed();
+        {
+            let sent = &mut self.frames.vec[live].args;
+            values.extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
+            sent.clear();
         }
+        passed.resize(values.len(), true);
         self.pending_call_dst = dst;
         if self.magic_call_name.is_some() {
             self.magic_call_name = None;
@@ -1295,15 +1325,9 @@ impl Vm {
                 r = Err(e);
             }
         }
-        let Args {
-            values,
-            passed,
-            named,
-            ..
-        } = args;
-        forget_unallocated(named);
-        self.put_val_vec(values);
-        self.put_bool_vec(passed);
+        args.release_into(&mut self.call_bufs);
+        // Emptied by `release_into`: no drop glue to run.
+        std::mem::forget(args);
         Some(r.map(|v| self.put_call_result(dst, v)))
     }
 
@@ -1359,45 +1383,64 @@ impl Vm {
         if frame.symtab_attached {
             return None;
         }
-        let cached = frame
-            .code
-            .fcall_cache
-            .borrow()
-            .get(fc.name as usize)
-            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
-        let Some(Func::Builtin(b)) = cached else {
-            return None;
+        // The builtin's handle straight from its cache entry, tested
+        // before it is copied (`CachedFunc::get` built a `Func` first).
+        let b = {
+            let cache = frame.code.fcall_cache.borrow();
+            let Some(Some(entry)) = cache.get(fc.name as usize) else {
+                return None;
+            };
+            let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+                return None;
+            };
+            if b.flags & flags::FRAMELESS == 0
+                || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            {
+                return None;
+            }
+            Rc::clone(b)
         };
         let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
-        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
-            return None;
-        }
         let n = usize::from(fc.argc).min(3);
-        // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`):
-        // a literal's copy, a variable's value (a reference's target).
-        let mut sent: [Option<Value>; 3] = [None, None, None];
-        for (slot, operand) in sent.iter_mut().zip(&fc.vals[..n]) {
-            *slot = Some(match *operand {
-                Operand::Lit(l) => crate::call::clone_value(frame.code.literals.get(l as usize)?),
-                Operand::Cv(cv) => match frame
+        // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
+        // written once, where the handler reads it: a literal's copy, a
+        // variable's value (a reference's target). The vector is lent
+        // (`CallBufs::take_values`) and given back on a decline.
+        let mut values = self.call_bufs.take_values();
+        let mut read = true;
+        for operand in &fc.vals[..n] {
+            let v = match *operand {
+                Operand::Lit(l) => frame
+                    .code
+                    .literals
+                    .get(l as usize)
+                    .map(crate::func::copy_arg),
+                Operand::Cv(cv) => frame
                     .cvs
                     .get(cv as usize)
-                    .and_then(crate::vm::CvSlot::get)?
-                {
-                    Value::Reference(r) => r.get(),
-                    v => crate::call::clone_value(v),
-                },
+                    .and_then(crate::vm::CvSlot::get)
+                    .map(|v| match v {
+                        Value::Reference(r) => r.get(),
+                        v => crate::func::copy_arg(v),
+                    }),
                 // An argument computed before the op: a copy for now; the
                 // temporary is released below, once the call is known to
                 // run here (its `Send` would have moved it).
-                Operand::Tmp(t) => match frame.tmps.get(t as usize)? {
+                Operand::Tmp(t) => frame.tmps.get(t as usize).map(|v| match v {
                     Value::Reference(r) => r.get(),
-                    v => crate::call::clone_value(v),
-                },
-                _ => return None,
-            });
+                    v => crate::func::copy_arg(v),
+                }),
+                _ => None,
+            };
+            let Some(v) = v else {
+                read = false;
+                break;
+            };
+            values.push(v);
         }
-        if !frameless_args(class, &sent[..n]) {
+        if !read || !frameless_values(class, &values) {
+            values.clear();
+            self.call_bufs.put_values(values);
             return None;
         }
         for operand in &fc.vals[..n] {
@@ -1409,13 +1452,14 @@ impl Vm {
         }
         frame.ip = ip;
         let quick = if n == 1 {
-            frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
+            frameless_inline(b.name.as_bytes(), class, values.first())
         } else {
             None
         };
         if let Some(v) = quick {
             drop(b);
-            drop(sent);
+            values.clear();
+            self.call_bufs.put_values(values);
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }
@@ -1432,14 +1476,8 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        let mut values = self.call_bufs.values.pop().unwrap_or_default();
-        values.reserve(nparams.max(n));
-        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
-        passed.reserve(nparams.max(n));
-        for arg in sent.iter_mut().take(n) {
-            values.push(arg.take().unwrap_or_default());
-            passed.push(true);
-        }
+        let mut passed = self.call_bufs.take_passed();
+        passed.resize(n, true);
         while values.len() < nparams {
             let i = values.len();
             if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
@@ -1471,15 +1509,9 @@ impl Vm {
                 r = Err(e);
             }
         }
-        let Args {
-            values,
-            passed,
-            named,
-            ..
-        } = args;
-        forget_unallocated(named);
-        self.put_val_vec(values);
-        self.put_bool_vec(passed);
+        args.release_into(&mut self.call_bufs);
+        // Emptied by `release_into`: no drop glue to run.
+        std::mem::forget(args);
         Some(r.map(|v| {
             if let Some(d) = fc.dst {
                 self.set_tmp(d, v);
