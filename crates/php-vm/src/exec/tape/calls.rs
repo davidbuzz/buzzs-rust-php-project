@@ -2351,10 +2351,14 @@ pub(super) fn send_native_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], star
                 if prep.n >= prep.limit {
                     break;
                 }
-                let Some(v) = native_arg(caller, src) else {
+                // Pushed as it is read: unwrapping the value and wrapping
+                // it again moved it through the stack byte by byte (~25
+                // instructions an argument).
+                let arg = native_arg(caller, src);
+                if arg.is_none() {
                     break;
-                };
-                frame.args.push(Some(v));
+                }
+                frame.args.push(arg);
                 prep.n += 1;
                 next += 1;
             }
@@ -2639,11 +2643,17 @@ fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {
     })
 }
 
-/// [`cv_value`] of a value that is not a scalar, out of line.
+/// [`cv_value`] of a value that is not a scalar, out of line: a string's,
+/// an array's or an object's handle counted in line (`Z_TRY_ADDREF`),
+/// where `Value::clone` was a further out-of-line call dispatching on the
+/// tag again (~36 instructions an argument).
 #[inline(never)]
 fn cv_value_counted(v: &Value) -> Value {
     match v {
         Value::Reference(r) => r.get(),
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        Value::Object(o) => Value::Object(o.clone()),
         v => clone_value(v),
     }
 }
