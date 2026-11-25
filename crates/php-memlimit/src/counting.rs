@@ -862,12 +862,29 @@ impl<A> CountingAlloc<A> {
             Some(limit) if !self.would_fit(bytes) => {
                 let over = OverLimit {
                     limit,
-                    tried: bytes,
+                    tried: self.reserve_tried(bytes),
                 };
                 self.record(over);
                 Err(over)
             }
             _ => Ok(()),
+        }
+    }
+
+    /// The "tried to allocate" figure for a reservation of `bytes` that
+    /// fails the limit: what php-src's `emalloc(bytes)` would have asked
+    /// `zend_mm_check_limit` for ([`zend_tried`] of the charged size). A
+    /// size so large that its page rounding overflows (an overflowing
+    /// [`try_reserve_n`](Self::try_reserve_n)) is reported as it is.
+    fn reserve_tried(&self, bytes: usize) -> usize {
+        if self.is_tracked() {
+            bytes
+        } else if bytes > MAX_LARGE_SIZE {
+            bytes
+                .checked_next_multiple_of(crate::limit::PAGE_SIZE)
+                .unwrap_or(bytes)
+        } else {
+            crate::limit::CHUNK_SIZE
         }
     }
 

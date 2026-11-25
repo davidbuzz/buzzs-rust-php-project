@@ -411,7 +411,7 @@ fn memory_limit_is_enforced_for_large_results() {
     );
     assert_eq!(
         out,
-        "2000\nPHP Fatal error:  Allowed memory size of 8388608 bytes exhausted (tried to allocate 100000032 bytes) in t.php on line 1\n"
+        "2000\nPHP Fatal error:  Allowed memory size of 8388608 bytes exhausted (tried to allocate 100003840 bytes) in t.php on line 1\n"
             .replace("PHP Fatal error:  ", "\nFatal error: ")
     );
 }

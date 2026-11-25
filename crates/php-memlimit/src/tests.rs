@@ -425,7 +425,7 @@ fn try_reserve_semantics() {
         err,
         OverLimit {
             limit: 100 * M,
-            tried: room + 1
+            tried: room + PAGE_SIZE
         }
     );
     assert_eq!(a.check(), Some(err), "reservation failures are recorded");
@@ -438,6 +438,18 @@ fn try_reserve_semantics() {
         })
     );
     a.clear();
+    // fread($fp, 100 << 20) under memory_limit=8M: php8.5 reports
+    // "(tried to allocate 104861696 bytes)", the zend_string of
+    // 24 + 100 MiB + 1 bytes rounded to pages; a small reservation
+    // reports the chunk it would need.
+    let b = CountingAlloc::new(System);
+    b.request_start(Some(8 * M)).expect("limit");
+    assert_eq!(
+        b.try_reserve(24 + (100 << 20) + 1).map_err(|e| e.tried),
+        Err(104_861_696)
+    );
+    b.clear();
+    b.request_end();
     assert_eq!(a.try_reserve_n(1024, 1024, 24), Ok(()));
     assert_eq!(a.stats().current, 0, "reservations allocate nothing");
 }
