@@ -2523,6 +2523,18 @@ impl Prepared {
     }
 }
 
+/// Whether every argument of a direct builtin call is a value its
+/// parameter takes as it is ([`crate::func::Builtin::accepts`]; `last`,
+/// the table's last entry, covers the variadic parameter's positions).
+#[inline]
+fn args_accepted(args: &[Option<Value>], table: &[u32], last: u32) -> bool {
+    args.iter().enumerate().all(|(i, arg)| {
+        arg.as_ref().is_some_and(|v| {
+            crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
+        })
+    })
+}
+
 /// `ZEND_DO_ICALL` of the prepared builtin call (result to `dst`; the
 /// caller resumes at `caller_ip`), as `Vm::call_builtin_impl` makes a
 /// plain call: the pooled frame the arguments were sent into becomes the
@@ -2573,23 +2585,15 @@ pub(super) fn call_native(
             return Err(prep);
         }
         // The types zpp accepts as they are (`call_builtin_impl`'s
-        // positional fast path); anything else is coerced or rejected
-        // there.
-        for (i, arg) in frame.args.iter().enumerate() {
-            let (Some(v), Some(p)) = (arg, sig.params.get(i).or(sig.params.last())) else {
+        // positional fast path; anything else is coerced or rejected
+        // there), precomputed per parameter (`Builtin::accepts`): a load
+        // and a test per argument, nothing for a function whose
+        // parameters take anything. A native callee's sent arguments are
+        // all `Some` (`send`, `send_ref`).
+        let table = b.accepts();
+        if let Some(&last) = table.last() {
+            if !args_accepted(&frame.args, table, last) {
                 return Err(prep);
-            };
-            // A by-reference parameter's type is the handler's to check
-            // (`Z_PARAM_ARRAY_EX(.., 0, 1)` of `array_pop()`), as in
-            // `call_builtin_impl`.
-            if let Some(ty) = &p.ty {
-                if !p.by_ref
-                    && p.promote & crate::opcode::UNCHECKED_TYPE == 0
-                    && !ty.is_mixed()
-                    && !accepts_without_coercion(ty.mask, v)
-                {
-                    return Err(prep);
-                }
             }
         }
     }

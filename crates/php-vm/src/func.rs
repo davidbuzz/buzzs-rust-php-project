@@ -525,6 +525,8 @@ pub struct Builtin {
     /// ([`Builtin::plain_call_upto`]), [`NO_REF_PARAM`] when there is none;
     /// worked out with `plain`.
     first_ref: Cell<u8>,
+    /// [`Builtin::accepts`], once worked out.
+    accepts: OnceCell<Box<[u32]>>,
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -545,6 +547,64 @@ const PLAIN_UNNAMED: u8 = 3;
 const PLAIN_NAMED_REF: u8 = 4;
 /// [`Builtin::first_ref`] of a function without by-reference parameters.
 const NO_REF_PARAM: u8 = u8::MAX;
+
+/// The bit of [`Builtin::accepts`] a value has: its `types::mask` type
+/// bit (`null`, `false`, `true`, `int`, `float`, `string`, `array`,
+/// `object`, `resource` are bits 0 to 8 there), [`ACCEPT_REF`] for a
+/// reference. A parameter's entry has the bit when zpp takes the value as
+/// it is, the test `call::accepts_without_coercion` makes.
+#[inline]
+pub(crate) fn accept_bit(v: &Value) -> u32 {
+    use crate::types::mask;
+    match v {
+        Value::Null => mask::NULL,
+        Value::Bool(false) => mask::FALSE,
+        Value::Bool(true) => mask::TRUE,
+        Value::Int(_) => mask::LONG,
+        Value::Float(_) => mask::DOUBLE,
+        Value::Str(_) => mask::STRING,
+        Value::Array(_) => mask::ARRAY,
+        Value::Object(_) => mask::OBJECT,
+        Value::Resource(_) => mask::RESOURCE,
+        Value::Reference(_) => ACCEPT_REF,
+    }
+}
+
+/// [`accept_bit`] of a reference: only a parameter that takes anything
+/// (untyped, `mixed`, by reference, unchecked) has it.
+const ACCEPT_REF: u32 = 1 << 31;
+
+/// The [`Builtin::accepts`] entry of parameter `p`: every bit when its
+/// type is not checked against the argument before the handler runs (no
+/// type, `mixed`, a by-reference parameter, whose type the handler checks
+/// as `Z_PARAM_ARRAY_EX(.., 0, 1)` of `array_pop()` does, or one marked
+/// unchecked), else the value tags its type takes without coercion
+/// (`iterable` takes an array; an object only for `object`, a class type
+/// is checked by the generic call).
+fn param_accepts(p: &ParamInfo) -> u32 {
+    use crate::types::mask;
+    match &p.ty {
+        Some(ty)
+            if !p.by_ref && p.promote & crate::opcode::UNCHECKED_TYPE == 0 && !ty.is_mixed() =>
+        {
+            let scalar = mask::NULL
+                | mask::BOOL
+                | mask::LONG
+                | mask::DOUBLE
+                | mask::STRING
+                | mask::ARRAY
+                | mask::OBJECT
+                | mask::RESOURCE;
+            let iterable = if ty.mask & mask::ITERABLE != 0 {
+                mask::ARRAY
+            } else {
+                0
+            };
+            (ty.mask & scalar) | iterable
+        }
+        _ => u32::MAX,
+    }
+}
 
 /// How a call by name of a builtin can run on the tape ([`Builtin::plain_call`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -568,6 +628,7 @@ impl Builtin {
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
         }
     }
 
@@ -587,6 +648,7 @@ impl Builtin {
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
         }
     }
 
@@ -600,6 +662,7 @@ impl Builtin {
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
         }
     }
 
@@ -676,6 +739,29 @@ impl Builtin {
         }
     }
 
+    /// Per parameter, the [`accept_bit`]s of the values zpp takes as they
+    /// are (`call_builtin_impl`'s positional fast path; anything else is
+    /// coerced or rejected there): argument `i` of a direct call is taken
+    /// when `accept_bit(arg) & accepts[min(i, len - 1)] != 0`, a position
+    /// past the declared ones being the variadic parameter's. Empty when
+    /// every parameter takes anything, so a call of such a function tests
+    /// nothing. Worked out once.
+    #[inline]
+    pub(crate) fn accepts(&self) -> &[u32] {
+        self.accepts.get_or_init(|| self.accepts_slow())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn accepts_slow(&self) -> Box<[u32]> {
+        let table: Vec<u32> = self.signature().params.iter().map(param_accepts).collect();
+        if table.iter().all(|&m| m == u32::MAX) {
+            Box::default()
+        } else {
+            table.into_boxed_slice()
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn plain_call_slow(&self) {
@@ -737,6 +823,7 @@ impl std::ops::DerefMut for Builtin {
         self.signature();
         // Worked out again from the edited signature.
         self.plain.set(PLAIN_UNKNOWN);
+        self.accepts = OnceCell::new();
         self.sig.get_mut().expect("signature initialised above")
     }
 }
@@ -1058,6 +1145,49 @@ mod plain_call_tests {
         assert_eq!(b.plain_call_upto(), (PlainCall::Named, 2));
         assert_eq!(b.param_ref_at(2), (true, false));
         assert_eq!(b.param_ref_at(5), (true, false));
+    }
+
+    #[test]
+    fn accepts_is_empty_when_every_parameter_takes_anything() {
+        let b = builtin(
+            "var_dump(mixed $value, mixed ...$values): void",
+            flags::VARIADIC,
+        );
+        assert!(b.accepts().is_empty());
+        let b = builtin("array_pop(array &$array): mixed", 0);
+        assert!(b.accepts().is_empty());
+        let b = builtin("f($x): mixed", 0);
+        assert!(b.accepts().is_empty());
+    }
+
+    #[test]
+    fn accepts_has_the_tags_each_type_takes_as_it_is() {
+        use super::accept_bit;
+        use php_runtime::ZArray;
+        let b = builtin(
+            "implode(array|string $separator, ?array $array = null): string",
+            0,
+        );
+        let t = b.accepts();
+        assert_eq!(t.len(), 2);
+        let s = Value::Str(ZStr::from("x"));
+        let a = Value::Array(ZArray::new());
+        assert_ne!(accept_bit(&s) & t[0], 0);
+        assert_ne!(accept_bit(&a) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Int(1)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Null) & t[0], 0);
+        assert_ne!(accept_bit(&Value::Null) & t[1], 0);
+        assert_eq!(accept_bit(&Value::Bool(true)) & t[1], 0);
+        let b = builtin("g(int|false $a, iterable $i, mixed $m): bool", 0);
+        let t = b.accepts();
+        assert_ne!(accept_bit(&Value::Bool(false)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Bool(true)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Float(1.0)) & t[0], 0);
+        assert_ne!(accept_bit(&a) & t[1], 0);
+        assert_eq!(t[2], u32::MAX);
+        let r = Value::Reference(php_runtime::PhpRef::new(Value::Int(1)));
+        assert_eq!(accept_bit(&r) & t[0], 0);
+        assert_ne!(accept_bit(&r) & t[2], 0);
     }
 
     #[test]
