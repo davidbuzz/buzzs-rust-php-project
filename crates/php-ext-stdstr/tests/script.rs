@@ -470,3 +470,40 @@ array(3) {
 "#
     );
 }
+
+/// Byte searches (`memchr` a word at a time) behind `strpos()`,
+/// `strrpos()`, `substr_count()`, `str_contains()`, `strstr()`,
+/// `str_replace()` and `explode()`: empty, short and long subjects,
+/// matches at and around each eight-byte step, bytes 0x00, 0x01, 0x7f,
+/// 0x80 and 0xff, missing needles, offsets. Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn byte_searches() {
+    let out = run(
+        r#"$hs = ['', 'a', 'abcdefgh', 'abcdefghi', str_repeat('x', 17) . 'y', "\x00\x80\xff\x7f\x01" . str_repeat("\x80", 20) . "\x00", str_repeat('ab', 40) . 'needle' . str_repeat('cd', 9)];
+$ns = ['a', 'y', "\x00", "\x80", "\xff", "\x7f", "\x01", 'needle', 'cd', 'zz', 'ab'];
+foreach ($hs as $h) { $line = []; foreach ($ns as $n) { $line[] = var_export(strpos($h, $n), true) . '/' . var_export(strrpos($h, $n), true) . '/' . substr_count($h, $n) . '/' . (str_contains($h, $n) ? 1 : 0) . '/' . strlen((string) strstr($h, $n)) . '/' . strlen(str_replace($n, '<>', $h)); } echo implode(' ', $line), "\n"; }
+foreach (['a,b,,c,', ',', ',,', 'abc', str_repeat('a,', 20)] as $s) { foreach ([PHP_INT_MAX, 3, 1, 0, -1, -3] as $l) { $p = explode(',', $s, $l); $c = 0; foreach ($p as $_) { $c++; } echo $c, '[', implode('|', $p), '] '; } echo "\n"; }
+var_dump(strpos('abc', 'c', 1), stripos('ABCdef', 'd'), strpos(str_repeat('z', 30) . 'q', 'q', 5));
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0
+0/0/1/1/1/2 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1
+0/0/1/1/8/9 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 2/2/1/1/6/8 false/false/0/0/0/8 0/0/1/1/8/8
+0/0/1/1/9/10 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 2/2/1/1/7/9 false/false/0/0/0/9 0/0/1/1/9/9
+false/false/0/0/0/18 17/17/1/1/1/19 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18
+false/false/0/0/0/26 false/false/0/0/0/26 0/25/2/1/26/28 1/24/21/1/25/47 2/2/1/1/24/27 3/3/1/1/23/27 4/4/1/1/22/27 false/false/0/0/0/26 false/false/0/0/0/26 false/false/0/0/0/26 false/false/0/0/0/26
+0/78/40/1/104/144 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 80/80/1/1/24/100 86/102/9/1/18/104 false/false/0/0/0/104 0/78/40/1/104/104
+5[a|b||c|] 3[a|b|,c,] 1[a,b,,c,] 1[a,b,,c,] 4[a|b||c] 2[a|b] 
+2[|] 2[|] 1[,] 1[,] 1[] 0[] 
+3[||] 3[||] 1[,,] 1[,,] 2[|] 0[] 
+1[abc] 1[abc] 1[abc] 1[abc] 0[] 0[] 
+21[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|] 3[a|a|a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 1[a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 1[a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 20[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a] 18[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a] 
+int(2)
+int(3)
+int(30)
+"#
+    );
+}
