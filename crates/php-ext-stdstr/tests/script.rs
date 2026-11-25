@@ -443,3 +443,15 @@ fn memory_limit_is_enforced_for_large_results() {
             .replace("PHP Fatal error:  ", "\nFatal error: ")
     );
 }
+
+/// `strspn()`/`strcspn()` read `$length` in place: `null`, a negative and
+/// a positive length, none, and a TypeError (`/usr/bin/php8.5 -n`).
+#[test]
+fn spn_length_argument() {
+    assert_eq!(
+        run(
+            r#"echo strcspn("abcdef", "e", 1, null), strspn("aab", "a", 0, 1), strcspn("abcdef", "f", 0, -2), strspn("aab", "ab", 1), "|"; try { strspn("a", "a", 0, "x"); } catch (TypeError $e) { echo $e->getMessage(); }"#
+        ),
+        "3142|strspn(): Argument #4 ($length) must be of type ?int, string given"
+    );
+}

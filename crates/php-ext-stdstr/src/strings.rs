@@ -29,7 +29,9 @@ fn pos_result(r: Option<i64>) -> Value {
 
 /// An optional `?int` argument.
 fn opt_int(a: &Args, n: usize) -> Option<i64> {
-    a.opt(n).map(|_| a.int(n))
+    // `Z_PARAM_LONG_OR_NULL` read in place: `Args::opt` copied the value
+    // out first only to test it for `null`.
+    a.opt_int(n)
 }
 
 fn bin2hex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

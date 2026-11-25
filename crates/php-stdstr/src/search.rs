@@ -347,7 +347,30 @@ pub fn str_ends_with(haystack: &[u8], needle: &[u8]) -> bool {
 /// `php_strcspn()`: length of the prefix of `s` made of bytes *not* in
 /// `chars`.
 fn strcspn_raw(s: &[u8], chars: &[u8]) -> usize {
-    s.iter().position(|c| chars.contains(c)).unwrap_or(s.len())
+    span(s, chars, false)
+}
+
+/// `php_strspn_strcspn_common()`: the length of the prefix of `s` whose
+/// bytes are all in `chars` (`must_match`, `strspn`) or all not in it
+/// (`strcspn`). One character is compared directly; more are looked up in
+/// a table of the 256 byte values set from `chars` first, as php-src does.
+/// Testing each byte with `chars.contains()` called `memchr` once per byte
+/// of `s`.
+#[inline]
+fn span(s: &[u8], chars: &[u8], must_match: bool) -> usize {
+    if let [c] = *chars {
+        return s
+            .iter()
+            .position(|&b| (b == c) != must_match)
+            .unwrap_or(s.len());
+    }
+    let mut table = [0u64; 4];
+    for &c in chars {
+        table[usize::from(c >> 6)] |= 1 << (c & 63);
+    }
+    s.iter()
+        .position(|&b| ((table[usize::from(b >> 6)] >> (b & 63)) & 1 != 0) != must_match)
+        .unwrap_or(s.len())
 }
 
 /// Backs `strpbrk(string $string, string $characters): string|false`.
@@ -383,8 +406,7 @@ fn spn_window(s: &[u8], offset: i64, length: Option<i64>) -> &[u8] {
 /// Backs `strspn(string $string, string $characters, int $offset = 0,
 /// ?int $length = null): int`.
 pub fn strspn(s: &[u8], chars: &[u8], offset: i64, length: Option<i64>) -> i64 {
-    let w = spn_window(s, offset, length);
-    len_i64(w.iter().position(|c| !chars.contains(c)).unwrap_or(w.len()))
+    len_i64(span(spn_window(s, offset, length), chars, true))
 }
 
 /// Backs `strcspn(string $string, string $characters, int $offset = 0,
@@ -656,6 +678,36 @@ mod tests {
         // A piece that is the whole input is the input itself.
         let s: &[u8] = b"abc";
         assert!(std::ptr::eq(e(b",", s, i64::MAX)[0], s));
+    }
+
+    /// `strspn()`/`strcspn()` over one character, several, none, NUL and
+    /// high bytes, and the offset/length window (`/usr/bin/php8.5 -n`).
+    #[test]
+    fn spans_by_table_and_single_byte() {
+        let cases: [(&[u8], &[u8], i64, i64); 12] = [
+            (b"  Hello World  ", b"W", 0, 8),
+            (b"  Hello World  ", b" ", 2, 0),
+            (b"abc", b"", 0, 3),
+            (b"a\0b", b"\0", 0, 1),
+            (b"a\0b", b"", 0, 3),
+            (b"\xff\xfeab", b"\xfe\xff", 2, 0),
+            (b"aaaaaaaaaaaaaaaaaaaab", b"a", 20, 0),
+            (b"xyz", b"zyx", 3, 0),
+            (b"hello", b"lo?", 0, 2),
+            (b"", b"a", 0, 0),
+            (b"abc", b"abc", 3, 0),
+            (b"?#/", b"/?#", 3, 0),
+        ];
+        for (s, c, spn, cspn) in cases {
+            assert_eq!(strspn(s, c, 0, None), spn, "strspn {s:?} {c:?}");
+            assert_eq!(strcspn(s, c, 0, None), cspn, "strcspn {s:?} {c:?}");
+        }
+        assert_eq!(strcspn(b"abcd", b"cd", -3, Some(-1)), 1);
+        assert_eq!(strspn(b"42 is", b"1234567890", 1, None), 1);
+        assert_eq!(strcspn(b"abcd", b"x", 10, None), 0);
+        assert_eq!(strspn(b"aaa", b"a", -10, Some(2)), 2);
+        assert_eq!(strcspn(b"aaaa", b"b", 1, Some(-10)), 0);
+        assert_eq!(strpbrk(b"This is", b"st").unwrap(), Some(b"s is".to_vec()));
     }
 
     #[test]
