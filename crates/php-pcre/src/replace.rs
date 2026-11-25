@@ -636,7 +636,8 @@ mod tests {
         let rep = Replacement::parse(b"0");
         let out = replace_split(&re, &cfg, b"  Hello World  ", &rep, usize::MAX);
         assert_eq!(out.count, 2);
-        assert_eq!(out.result, Ok(Some((b"  Hell0 W0".to_vec(), 9))));
+        // (The tail starts after the second `o`, at offset 10.)
+        assert_eq!(out.result, Ok(Some((b"  Hell0 W0".to_vec(), 10))));
         assert_eq!(out.result_len(b"  Hello World  "), Some(15));
         assert_eq!(
             out.into_outcome(b"  Hello World  ").result.unwrap(),

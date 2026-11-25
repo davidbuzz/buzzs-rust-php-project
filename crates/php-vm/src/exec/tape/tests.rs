@@ -1078,9 +1078,15 @@ fn dims_in_every_specialised_form() {
     assert!(tape
         .iter()
         .any(|i| matches!(i.op, TOp::AssignDimC | TOp::AssignDimIC)));
+    // `isset($a[$k])` with a literal key takes the leaner row since it
+    // exists; either is the specialised form.
+    assert!(
+        has(TOp::IssetDimC) || has(TOp::IssetDimL),
+        "no isset row in {:?}",
+        tape.iter().map(|i| i.op).collect::<Vec<_>>()
+    );
     for op in [
         TOp::AssignOpDimC,
-        TOp::IssetDimC,
         TOp::FetchDimsC,
         TOp::AssignDimsC,
         TOp::AssignOpDimsC,

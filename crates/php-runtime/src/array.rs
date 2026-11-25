@@ -5993,10 +5993,13 @@ mod tests {
                     _ => Value::Array(ZArray::from_values([Value::Int(k)])),
                 };
                 let _ = general.push(v.clone());
+                // The lean push takes the value while the list has room,
+                // also the room a general push made by growing it.
+                let room = lean.len() < lean.table_size() as usize;
                 match lean.lean_push(v) {
-                    Ok(()) => assert!(i < ts, "{n}: {i}"),
+                    Ok(()) => assert!(room, "{n}: {i}"),
                     Err(v) => {
-                        assert!(i >= ts, "{n}: {i}");
+                        assert!(!room, "{n}: {i}");
                         let _ = lean.push(v);
                     }
                 }

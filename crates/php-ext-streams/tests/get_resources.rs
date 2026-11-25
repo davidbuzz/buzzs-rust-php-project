@@ -48,18 +48,20 @@ fn run(code: &str) -> String {
 /// The expected output is php8.5's for the same script.
 #[test]
 fn stream_filters_are_listed_while_attached() {
+    // (No count() here: this VM has only the extension under test.)
     let out = run(r"
+function n($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 $f = fopen('php://memory', 'w+');
 stream_filter_append($f, 'string.rot13');
 $x = stream_filter_append($f, 'string.toupper');
 $last = null;
 foreach (get_resources() as $id => $r) { $last = $id; }
 var_dump($last === (int) $x);
-echo count(get_resources('stream filter')), PHP_EOL;
+echo n(get_resources('stream filter')), PHP_EOL;
 stream_filter_remove($x);
-echo count(get_resources('stream filter')), PHP_EOL;
+echo n(get_resources('stream filter')), PHP_EOL;
 fclose($f);
-echo count(get_resources('stream filter')), PHP_EOL;
+echo n(get_resources('stream filter')), PHP_EOL;
 ");
     assert_eq!(out, "bool(true)\n2\n1\n0\n");
 }

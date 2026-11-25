@@ -99,10 +99,10 @@ fn legacy_unserializer_pushes_no_frame() {
 fn number_parameters_reflect_their_stub_type() {
     // gmp.stub.php types every number GMP|int|string; Reflection prints the
     // class first (php8.5), and the handler, not the generic check, rejects
-    // other types.
+    // other types. (No array_map()/implode() here: this VM has only gmp.)
     assert_eq!(
         run(
-            r#"foreach (["gmp_add", "gmp_powm", "gmp_export", "gmp_testbit"] as $f) { $r = new ReflectionFunction($f); echo $f, "(", implode(", ", array_map(fn($p) => $p->getType() . " $" . $p->getName(), $r->getParameters())), ")\n"; } try { gmp_add([], 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }"#
+            r#"foreach (["gmp_add", "gmp_powm", "gmp_export", "gmp_testbit"] as $f) { $r = new ReflectionFunction($f); echo $f, "("; $sep = ""; foreach ($r->getParameters() as $p) { echo $sep, $p->getType(), " $", $p->getName(); $sep = ", "; } echo ")\n"; } try { gmp_add([], 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }"#
         ),
         "gmp_add(GMP|string|int $num1, GMP|string|int $num2)\n\
          gmp_powm(GMP|string|int $num, GMP|string|int $exponent, GMP|string|int $modulus)\n\

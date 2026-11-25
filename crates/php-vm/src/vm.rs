@@ -3867,7 +3867,9 @@ mod tests {
     #[test]
     fn clear_native_args_releases_every_argument_front_to_back() {
         let s = ZStr::from("a sent string");
-        let a = php_runtime::ZArray::new();
+        // (Not `ZArray::new()`: the empty array is one shared table, which
+        // has a holder of its own.)
+        let a = php_runtime::ZArray::from_values([Value::Int(1)]);
         let held = a.clone();
         let mut args = Vec::with_capacity(8);
         args.push(Some(Value::Str(s.clone())));

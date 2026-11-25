@@ -983,9 +983,9 @@ try { echo sln('str'), "\n"; } catch (Throwable $e) { echo get_class($e), ': ', 
 "#);
     assert_eq!(
         out,
-        r#"fa0yz | fa0bz | F2a0 | D::ma0b | D::ma0d | D::sa0 | call:pr | call:nope | D::sa0 | A0 | fa0bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa0
-fa1yz | fa1bz | F2a1 | D::ma1b | D::ma1d | D::sa1 | call:pr | call:nope | D::sa1 | A1 | fa1bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa1
-fa2yz | fa2bz | F2a2 | D::ma2b | D::ma2d | D::sa2 | call:pr | call:nope | D::sa2 | A2 | fa2bc | ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa2
+        r#"fa0yz | fa0bz | F2a0 | D::ma0b | D::ma0d | D::sa0 | call:pr | call:nope | D::sa0 | A0 | fa0bc | ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa0
+fa1yz | fa1bz | F2a1 | D::ma1b | D::ma1d | D::sa1 | call:pr | call:nope | D::sa1 | A1 | fa1bc | ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa1
+fa2yz | fa2bz | F2a2 | D::ma2b | D::ma2d | D::sa2 | call:pr | call:nope | D::sa2 | A2 | fa2bc | ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 12 and at least 1 expected | TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunc" not found or invalid function name | arrowa2
 P::m0 P::m0
 P::m1 P::m1
 P::m2 P::m2
@@ -1004,24 +1004,24 @@ f12z f12z
 f12z f12z
 f12z f12z
 f12z f12z
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 37 and at least 1 expected
-ArgumentCountError: Too few arguments to function f(), 0 passed in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 44 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 37 and at least 1 expected
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 44 and at least 1 expected
 2 2
 3 3
 4 4
 
-Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in t.php on line 50
 6
 
-Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in t.php on line 50
 6
 
-Warning: rf(): Argument #1 ($x) must be passed by reference, value given in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t38/t.php on line 50
+Warning: rf(): Argument #1 ($x) must be passed by reference, value given in t.php on line 50
 6
 TypeError: array_slice(): Argument #3 ($length) must be of type ?int, string given
 TypeError: call_user_func_array(): Argument #2 ($args) must be of type array, string given
