@@ -438,6 +438,133 @@ fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
     })
 }
 
+/// The value of `cur[d1]...[dn]` along the dimension segments `segs` of
+/// frame `f` (`segs` not empty) when every container is an array holding
+/// the int or string offset its operand peeks as, the last element
+/// dereferenced and copied: [`dims_value_in`] from a value instead of a
+/// variable. `None` for anything else (`cur` itself is not looked
+/// through a reference).
+#[inline]
+fn dims_value_of(f: &Frame, cur: &Value, segs: &[Seg]) -> Option<Value> {
+    let mut cur = cur;
+    for seg in segs {
+        let Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = dim_ref_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = table_dim(a, key)?;
+    }
+    Some(match cur {
+        Value::Reference(r) => copy_value(&*r.try_borrow()?),
+        v => copy_value(v),
+    })
+}
+
+/// The shapes of an argument place [`Frame::send_place_hit`] reads.
+#[derive(Clone, Copy)]
+enum ArgPlace {
+    /// `$cv[d1]...[dn]`: only dimensions.
+    CvDims(u32),
+    /// `$this->name` / `$cv->name`, a literal name.
+    Prop,
+    /// `$this->name[d1]...[dn]` / `$cv->name[...]`.
+    PropDims,
+    /// A place ending in `->name` after other segments (`$this->a->b`,
+    /// `$list[$k]->name`).
+    Chain,
+    /// `tmp[d1]...[dn]` (`f()['k']`).
+    TmpDims(u32),
+}
+
+impl ArgPlace {
+    /// The shape of place `pid` of frame `f`, `None` for one no hit path
+    /// reads (a plain variable is the caller's).
+    #[inline]
+    fn of(f: &Frame, pid: PlaceId) -> Option<Self> {
+        let p = f.code.places.get(pid as usize)?;
+        let all_dims = |segs: &[Seg]| segs.iter().all(|s| matches!(s, Seg::Dim(_)));
+        let cv_base = matches!(p.base, PlaceBase::Cv(_));
+        // A variable of a frame with an attached symbol table is left to
+        // the walk, as the plain variable sends leave it (`send_in`).
+        if cv_base && f.symtab_attached {
+            return None;
+        }
+        Some(match (&p.base, p.segs.as_slice()) {
+            (PlaceBase::Cv(cv), segs) if !segs.is_empty() && all_dims(segs) => {
+                ArgPlace::CvDims(*cv)
+            }
+            (PlaceBase::Value(Operand::Tmp(t)), segs) if !segs.is_empty() && all_dims(segs) => {
+                ArgPlace::TmpDims(*t)
+            }
+            (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_))]) => ArgPlace::Prop,
+            (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_)), rest @ ..])
+                if all_dims(rest) =>
+            {
+                ArgPlace::PropDims
+            }
+            (PlaceBase::Cv(_) | PlaceBase::This, [_, .., Seg::Prop(Operand::Lit(_))]) => {
+                ArgPlace::Chain
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl Frame {
+    /// The value of place `pid` of this (user) frame sent by value as an
+    /// argument (`ZEND_SEND_VAR` of what `ZEND_FETCH_DIM_R` /
+    /// `ZEND_FETCH_OBJ_R`, or their `_FUNC_ARG` forms for a by-value
+    /// parameter, fetched: `zend_compile_args` in `Zend/zend_compile.c`),
+    /// on the hits the specialised fetch ops take: `$cv[d1]...[dn]` with
+    /// every key present ([`dims_value_in`]), `$this->name` / `$cv->name`
+    /// on a property cache hit (`props::read_hit`), `$this->name[...]`
+    /// (`props::read_prop_dims_in`), `$this->a->b` / `$list[$k]->name`
+    /// with their cache entries filled (`props::read_chain_in`), and
+    /// `f()[d1]...` on a temporary array another handle shares (so that
+    /// releasing the temporary, as `FREE_OP1` does, frees nothing).
+    /// Consumed string offsets and the temporary base are released. `None`,
+    /// having changed nothing, for anything else (an undefined variable,
+    /// property or key and its diagnostic, `__get`, `ArrayAccess`, a
+    /// string offset, a hooked or lazy property, a cache not filled yet):
+    /// the generic place walk (`Vm::place_fetch`) then reads it.
+    #[inline(never)]
+    pub(crate) fn send_place_hit(&mut self, pid: PlaceId) -> Option<Value> {
+        if self.kind == FrameKind::Builtin {
+            return None;
+        }
+        match ArgPlace::of(self, pid)? {
+            ArgPlace::CvDims(cv) => {
+                let v = dims_value_in(self, cv, pid)?;
+                release_place_str_tmps(self, pid);
+                Some(v)
+            }
+            ArgPlace::Prop => props::read_hit(self, pid),
+            ArgPlace::PropDims => props::read_prop_dims_in(self, pid),
+            ArgPlace::Chain => props::read_chain_in(self, pid),
+            ArgPlace::TmpDims(t) => {
+                let v = {
+                    let Value::Array(a) = self.tmps.get(t as usize)? else {
+                        return None;
+                    };
+                    if a.refcount() < 2 {
+                        return None;
+                    }
+                    let segs = &self.code.places.get(pid as usize)?.segs;
+                    dims_value_of(self, &self.tmps[t as usize], segs)?
+                };
+                release_place_str_tmps(self, pid);
+                // Another handle holds the array: this release only
+                // drops a count.
+                drop(std::mem::take(&mut self.tmps[t as usize]));
+                Some(v)
+            }
+        }
+    }
+}
+
 /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand of frame
 /// `f` holds, cloned, without consuming it: a literal, a defined
 /// non-reference variable or a temporary.

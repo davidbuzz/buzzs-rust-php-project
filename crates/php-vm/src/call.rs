@@ -1723,9 +1723,9 @@ impl Vm {
                     // read here, without entering the place walk.
                     ArgSrc::Place(pid) => match self.plain_cv_place(*pid) {
                         Some(cv) => self.read_cv(cv)?,
-                        None => self.place_fetch(*pid, FetchMode::Read)?,
+                        None => self.send_place_read(*pid)?,
                     },
-                    ArgSrc::TempPlace(pid) => self.place_fetch(*pid, FetchMode::Read)?,
+                    ArgSrc::TempPlace(pid) => self.send_place_read(*pid)?,
                 };
                 let frame = self.frames.last_mut().expect("active frame");
                 let call = frame.calls.last_mut().expect("pending call");
@@ -1771,6 +1771,18 @@ impl Vm {
         };
         let value = self.send_value(src, pos, by_ref, prefer_ref)?;
         self.push_arg(pos, name, value)
+    }
+
+    /// A by-value argument place of the current frame (`ZEND_FETCH_*_R`
+    /// or `_FUNC_ARG` for a by-value parameter, then `ZEND_SEND_VAR`): the
+    /// specialised fetch ops' hit ([`Frame::send_place_hit`]), else the
+    /// place walk with its diagnostics.
+    #[inline]
+    fn send_place_read(&mut self, pid: crate::opcode::PlaceId) -> VmResult<Value> {
+        if let Some(v) = self.frames.last_mut().and_then(|f| f.send_place_hit(pid)) {
+            return Ok(v);
+        }
+        self.place_fetch(pid, FetchMode::Read)
     }
 
     /// The compiled variable that place `pid` of the current frame names,
@@ -5520,8 +5532,9 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
                 crate::opcode::PlaceBase::Cv(cv) => *cv,
                 _ => return false,
             },
-            _ => return false,
+            _ => return send_place_in(frame, *pid, idx),
         },
+        ArgSrc::TempPlace(pid) => return send_place_in(frame, *pid, idx),
         _ => return false,
     };
     if frame.symtab_attached {
@@ -5531,6 +5544,27 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
         Some(Value::Reference(r)) => r.get(),
         Some(v) => clone_value(v),
         None => return false,
+    };
+    call.inline_args[idx] = Some(v);
+    call.inline_count += 1;
+    true
+}
+
+/// The by-value send of place `pid` of `frame` (a property, an array
+/// element, a chain of them, an element of a temporary) as inline
+/// argument `idx` of the newest pending call, which [`send_in`] found
+/// takes it by value: the specialised fetch ops' hit
+/// ([`Frame::send_place_hit`]) instead of the place walk. `false`, having
+/// changed nothing, otherwise.
+#[inline(never)]
+fn send_place_in(frame: &mut Frame, pid: crate::opcode::PlaceId, idx: usize) -> bool {
+    let Some(v) = frame.send_place_hit(pid) else {
+        return false;
+    };
+    // `send_in` checked the call and its slot; reading the place changes
+    // no pending call.
+    let Some(call) = frame.calls.last_mut() else {
+        return false;
     };
     call.inline_args[idx] = Some(v);
     call.inline_count += 1;

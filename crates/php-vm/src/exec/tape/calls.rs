@@ -1299,9 +1299,28 @@ fn direct_src(code: &OpArray, src: &ArgSrc) -> bool {
     match src {
         ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         | ArgSrc::CallResult(Operand::Tmp(_)) => true,
-        ArgSrc::Place(pid) => place_cv(code, *pid).is_some(),
+        ArgSrc::Place(pid) => place_cv(code, *pid).is_some() || read_place(code, *pid),
+        ArgSrc::TempPlace(pid) => read_place(code, *pid),
         _ => false,
     }
+}
+
+/// Whether place `pid` is of a shape [`send`] reads by value on a hit
+/// ([`crate::vm::Frame::send_place_hit`]): a variable, `$this` or a
+/// temporary followed by dimensions and literally named properties
+/// (`$a['k']`, `$this->p`, `$this->p[$k]`, `$list[$i]->name`,
+/// `f()['k']`), no `[]`.
+fn read_place(code: &OpArray, pid: u32) -> bool {
+    use crate::opcode::Seg;
+    code.places.get(pid as usize).is_some_and(|p| {
+        matches!(
+            p.base,
+            PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::Value(Operand::Tmp(_))
+        ) && !p.segs.is_empty()
+            && p.segs
+                .iter()
+                .all(|s| matches!(s, Seg::Dim(_) | Seg::Prop(Operand::Lit(_))))
+    })
 }
 
 /// The compiled variable a place stands for when it is one without
@@ -1989,12 +2008,20 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
             Some(v) => v,
             None => return false,
         },
-        ArgSrc::Place(pid) => {
-            match place_cv(&caller.code, *pid).and_then(|cv| cv_value(caller, cv)) {
+        ArgSrc::Place(pid) => match place_cv(&caller.code, *pid) {
+            Some(cv) => match cv_value(caller, cv) {
                 Some(v) => v,
                 None => return false,
-            }
-        }
+            },
+            None => match place_arg(caller, frame, &prep.callee, n, *pid) {
+                Some(v) => v,
+                None => return false,
+            },
+        },
+        ArgSrc::TempPlace(pid) => match place_arg(caller, frame, &prep.callee, n, *pid) {
+            Some(v) => v,
+            None => return false,
+        },
         _ => return false,
     };
     match prep.callee {
@@ -2015,6 +2042,35 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     }
     prep.n = n + 1;
     true
+}
+
+/// The value of place `pid` of `caller` (a property, an array element, a
+/// chain of them, or an element of a temporary) sent by value as argument
+/// `n` of the prepared call to `callee`, whose readied frame is `frame`:
+/// the specialised fetch ops' hit ([`crate::vm::Frame::send_place_hit`]),
+/// read only once the argument is known to be taken (a by-value
+/// parameter: a prepared user function has no by-reference parameter,
+/// `CallShape::NOT_PLAIN`, nor a plain builtin call,
+/// `Builtin::plain_call`; a slot for it), so that `None` has changed
+/// nothing and the generic `Send` reads it with the place walk.
+#[inline(never)]
+fn place_arg(
+    caller: &mut crate::vm::Frame,
+    frame: &crate::vm::Frame,
+    callee: &Callee,
+    n: usize,
+    pid: u32,
+) -> Option<Value> {
+    match callee {
+        Callee::User(uf) => {
+            if frame.cvs.len() <= n || uf.params.get(n).is_none_or(|p| p.by_ref) {
+                return None;
+            }
+        }
+        Callee::Native(..) => {}
+        Callee::Quick(..) => return None,
+    }
+    caller.send_place_hit(pid)
 }
 
 /// The value of compiled variable `cv` of `frame` as an argument: a copy,
