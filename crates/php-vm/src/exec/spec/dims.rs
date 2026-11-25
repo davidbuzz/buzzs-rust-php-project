@@ -878,6 +878,7 @@ pub(in crate::exec) fn fe_assign_in(f: &mut Frame, ops: &[Op], ip: usize, t: u32
 /// separations the generic walk repeats as no-ops, when an element on the
 /// way is anything but an array or null (a reference, an object, a
 /// string, `false`, ...: the generic walk descends, throws or warns).
+#[allow(clippy::option_option)] // "done, removed this" or "for the walk"
 pub(super) fn unset_dims(arr: &mut ZArray, keys: &[Option<ArrayKey>]) -> Option<Option<Value>> {
     let (first, rest) = keys.split_first()?;
     let key = first.as_ref()?;

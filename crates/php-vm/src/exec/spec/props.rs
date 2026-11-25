@@ -1894,6 +1894,7 @@ fn tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj, want: u8) -> Option<Hit>
 /// `None` for the generic assignment, `v` dropped (the caller keeps a
 /// copy).
 #[inline(never)]
+#[allow(clippy::option_option)] // "stored, replacing this" or "for the walk"
 fn assign_chain_in(f: &mut Frame, pid: PlaceId, v: Value) -> Option<Option<Value>> {
     let (obj, idx, lit) = chain_object(f, pid)?;
     let hit = tail_hit(f, idx, lit, &obj, PC_WRITE)?;
