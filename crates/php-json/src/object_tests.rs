@@ -384,6 +384,57 @@ fn pending_oom_stops_decoding() {
     assert_eq!(handles(&dump(&mut h, &v)), ["#1"]);
 }
 
+/// A large string value is reserved with php-src's `zend_string` size
+/// before it is built (`zend_string_falloc(len, 0, true)` in the scanner);
+/// a refused reservation stops the decode, and the host raises its fatal.
+/// The 10 MiB of `\x80` with `JSON_INVALID_UTF8_SUBSTITUTE` of
+/// `json_decode_oom_utf8_substitute.phpt` become 30 MiB.
+#[test]
+fn large_strings_are_reserved_first() {
+    use crate::flags::INVALID_UTF8_SUBSTITUTE;
+    let n = 10 * 1024 * 1024;
+    let mut json = vec![0x80u8; n];
+    json[0] = b'"';
+    json[n - 1] = b'"';
+    let len = 3 * (n - 2);
+    let mut h = TestHost::new();
+    h.reserve_limit = Some(16 << 20);
+    let r = decode(&json, Some(false), 512, INVALID_UTF8_SUBSTITUTE, &mut h);
+    assert!(r.is_err(), "decoded despite the limit");
+    assert!(h.oom_pending);
+    assert_eq!(h.reserved, [(24 + len + 1 + 7) & !7]);
+
+    // Under the limit the same string decodes, after one reservation.
+    let mut h = TestHost::new();
+    let small = br#"["\u00e9", "x", "\ud83d\ude00"]"#;
+    let long = format!("[\"{}\", \"{}\\n\"]", "a".repeat(5000), "b".repeat(4095));
+    h.reserve_limit = Some(1 << 20);
+    decode(small, Some(true), 512, 0, &mut h).expect("decode");
+    // Short strings are not reserved (the allocator itself records them).
+    assert!(h.reserved.is_empty());
+    let v = decode(long.as_bytes(), Some(true), 512, 0, &mut h).expect("decode");
+    assert_eq!(h.reserved, [5032, 4128]);
+    assert!(!h.oom_pending);
+    let Value::Array(a) = v else {
+        panic!("not an array: {v:?}");
+    };
+    let lens: Vec<usize> = a
+        .values()
+        .map(|v| match v {
+            Value::Str(s) => s.len(),
+            _ => 0,
+        })
+        .collect();
+    assert_eq!(lens, [5000, 4096]);
+
+    // An object key is a string too.
+    let mut h = TestHost::new();
+    h.reserve_limit = Some(4000);
+    let key = format!("{{\"{}\": 1}}", "k".repeat(8000));
+    assert!(decode(key.as_bytes(), Some(true), 512, 0, &mut h).is_err());
+    assert_eq!(h.reserved, [8032]);
+}
+
 #[test]
 fn decoded_object_creation_order() {
     // Handle numbers from `php -r 'var_dump(json_decode(...));'`.

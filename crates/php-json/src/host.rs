@@ -94,6 +94,18 @@ pub trait JsonHost: RuntimeContext {
         Ok(())
     }
 
+    /// A fallible allocation of `bytes` (`zend_string_falloc(..., /*
+    /// fallible */ true)`): `false` when it would exceed `memory_limit`, in
+    /// which case the host records the out-of-memory fatal (so that
+    /// [`json_oom_pending`](Self::json_oom_pending) reports it and the VM
+    /// raises it once the call returns) and nothing is allocated. The
+    /// decoder asks before it builds a large string value, with php-src's
+    /// size for it (header, bytes and NUL, 8-byte aligned).
+    fn json_try_reserve(&mut self, bytes: usize) -> bool {
+        let _ = bytes;
+        true
+    }
+
     /// Whether the object's class implements `JsonSerializable`.
     fn is_json_serializable(&mut self, obj: &Obj) -> bool {
         let _ = obj;
