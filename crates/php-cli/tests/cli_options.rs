@@ -247,3 +247,35 @@ fn invalid_startup_mail_cr_lf_mode_is_fatal_but_runs() {
     assert_eq!(out.stdout, b"1");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn unknown_openssl_libctx_is_fatal_at_startup() {
+    let d = temp_dir("libctx");
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "openssl.libctx=abc",
+            "-r",
+            "var_dump(ini_get('openssl.libctx'));",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(255));
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nFatal error: PHP Startup: OpenSSL libctx \"abc\" cannot be found in Unknown on line 0\n\
+         Stack trace:\n#0 {main}\nstring(6) \"custom\"\n"
+    );
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "openssl.libctx=default",
+            "-r",
+            "echo ini_get('openssl.libctx');",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"default");
+    let _ = std::fs::remove_dir_all(&d);
+}

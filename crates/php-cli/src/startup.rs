@@ -115,6 +115,25 @@ impl Reporter {
         let _ = out.flush();
     }
 
+    /// The `{main}` backtrace `fatal_error_backtraces` adds after a fatal
+    /// error raised once the engine is up (a module's `MINIT`; php8.5 -d
+    /// openssl.libctx=x prints it).
+    fn startup_backtrace(&self, cfg: &Config) {
+        let on = cfg
+            .get("fatal_error_backtraces")
+            .is_none_or(|v| parse_bool(v.as_bytes()));
+        if !on || self.display == Display::Off || !self.display_startup || self.html {
+            return;
+        }
+        if self.display == Display::Stderr {
+            let _ = write!(std::io::stderr(), "Stack trace:\n#0 {{main}}\n");
+        } else {
+            let mut out = std::io::stdout();
+            let _ = write!(out, "Stack trace:\n#0 {{main}}\n");
+            let _ = out.flush();
+        }
+    }
+
     fn diagnostic(&self, d: &Diagnostic) {
         let msg = d.message.trim_end();
         if d.docref {
@@ -295,6 +314,10 @@ pub fn report_module_diagnostics(cfg: &Config, diagnostics: &[Diagnostic]) {
     let r = Reporter::new(cfg);
     for d in diagnostics {
         r.diagnostic(d);
+        if d.level.is_fatal() {
+            r.startup_backtrace(cfg);
+            STARTUP_FATAL.with(|f| f.set(true));
+        }
     }
 }
 

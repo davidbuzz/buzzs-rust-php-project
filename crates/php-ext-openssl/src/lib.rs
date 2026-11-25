@@ -59,6 +59,27 @@ use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Extension, ModuleBuilder};
 
+/// `OnUpdateLibCtx` (ext/openssl/openssl.c) on the configured value at
+/// startup: an NTS build knows "default" and "custom"; any other name is
+/// an `E_ERROR` ("OpenSSL libctx "x" cannot be found") and the directive
+/// keeps "custom".
+fn check_startup_libctx(vm: &mut php_vm::Vm) {
+    let Some(v) = vm.ini.get("openssl.libctx").map(<[u8]>::to_vec) else {
+        return;
+    };
+    if v == b"default" || v == b"custom" {
+        return;
+    }
+    vm.module_diagnostics.push(php_support::Diagnostic::docref(
+        php_support::ErrorLevel::ERROR,
+        format!(
+            "OpenSSL libctx \"{}\" cannot be found",
+            String::from_utf8_lossy(&v)
+        ),
+    ));
+    vm.ini.reset_to_default("openssl.libctx");
+}
+
 /// The `openssl` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenSsl;
@@ -85,6 +106,7 @@ impl Extension for OpenSsl {
             ModifyHandler::None,
             "openssl",
         ));
+        check_startup_libctx(m.vm());
         for name in ["openssl.cafile", "openssl.capath"] {
             m.ini(IniDirective::new(
                 name,
