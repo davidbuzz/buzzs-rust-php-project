@@ -232,7 +232,7 @@ impl Vm {
             error_handlers: Vec::new(),
             exception_handlers: Vec::new(),
             included: Vec::new(),
-            included_set: HashSet::new(),
+            included_set: HashSet::default(),
             autoloaders: Vec::new(),
             autoloading: HashSet::new(),
             attribute_call_sites: Vec::new(),

@@ -2692,8 +2692,13 @@ pub struct Vm {
     pub exception_handlers: Vec<Value>,
     /// Included files (resolved paths), in order.
     pub included: Vec<ZStr>,
-    /// Set of included files.
-    pub included_set: HashSet<ZStr>,
+    /// Set of included files (`EG(included_files)`), probed by every
+    /// `include_once`/`require_once`: hashed with [`FxHasher`], as the
+    /// VM's name tables are, not SipHash (paths are the request's own,
+    /// not chosen keys an attacker can collide).
+    ///
+    /// [`FxHasher`]: crate::class::FxHasher
+    pub included_set: HashSet<ZStr, std::hash::BuildHasherDefault<crate::class::FxHasher>>,
     /// Registered class loaders, in call order
     /// (`zend_class_autoload_functions`).
     pub autoloaders: Vec<ClassLoader>,
