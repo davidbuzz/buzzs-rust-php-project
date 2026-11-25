@@ -731,6 +731,58 @@ string(1) "v"
     );
 }
 
+/// `++`/`--` of `$this->p[$k]`.
+#[test]
+fn prop_incdec() {
+    assert_eq!(
+        run(r#"<?php
+class C { public $counts = ['a' => 0, 'f' => 0.5, 's' => 'x', 'max' => PHP_INT_MAX, 'n' => null, 'min' => PHP_INT_MIN]; public $n = null;
+  public readonly array $ro; function __construct() { $this->ro = ['a' => 1]; }
+  function run() {
+    $k = 'a';
+    for ($i = 0; $i < 3; $i++) { $this->counts[$k]++; ++$this->counts['f']; }
+    var_dump($this->counts[$k]--, --$this->counts[$k], $this->counts[$k]++, ++$this->counts['f']);
+    $this->counts['s']++; var_dump($this->counts['s']);
+    $this->counts['max']++; $this->counts['min']--; var_dump($this->counts['max'], $this->counts['min']);
+    $this->counts['zz']++; var_dump($this->counts['zz']);
+    $this->counts['n']++; var_dump($this->counts['n']);
+    $this->n['x']++; var_dump($this->n);
+    try { $this->ro['a']++; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $copy = $this->counts; $this->counts[$k]++; var_dump($copy[$k], $this->counts[$k]);
+    $r = &$this->counts; $this->counts[$k]++; var_dump($r[$k]); unset($r);
+    $v = 10; $this->counts['ref'] = &$v; $this->counts['ref']++; var_dump($v);
+  }
+}
+(new C)->run();
+"#),
+        r#"int(3)
+int(1)
+int(1)
+float(4.5)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 8
+string(1) "y"
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+
+Warning: Undefined array key "zz" in t.php on line 10
+int(1)
+int(1)
+
+Warning: Undefined array key "x" in t.php on line 12
+array(1) {
+  ["x"]=>
+  int(1)
+}
+Cannot indirectly modify readonly property C::$ro
+int(2)
+int(3)
+int(4)
+int(11)
+"#
+    );
+}
+
 /// `++`/`--` and compound assignments of elements of arrays held by reference (`global`, `static`, `use (&$x)`, by-reference parameters).
 #[test]
 fn ref_dims() {
