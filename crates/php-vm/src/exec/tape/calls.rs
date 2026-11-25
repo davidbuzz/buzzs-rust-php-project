@@ -407,6 +407,10 @@ pub(super) struct NewSite {
     /// The defaults of the parameters the `new` leaves out
     /// ([`Src::ParamDefault`]): scalars, which own nothing.
     dflt: [Value; MAX_ARGS],
+    /// [`new_checked`] refused the class for what depends on it and on the
+    /// instruction alone ([`refuse_site`]): later `new`s there leave at
+    /// once.
+    refused: bool,
 }
 
 /// Where an argument of a `new` comes from: what the `Send`s after the
@@ -938,28 +942,36 @@ fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) 
     let defaults = cls.defaults.try_borrow().ok()?;
     let defaults = defaults.as_deref()?;
     // The site's entry when it is for this class (what depends on the class
-    // and on the instruction was found out when it was filled), else the
-    // full checks.
-    site_made(f, inst, cls, defaults).or_else(|| new_checked(f, inst, cls, defaults))
+    // and on the instruction was found out when it was filled): its object,
+    // or its refusal. Else the full checks.
+    if let Ok(sites) = f.code.tape.new_sites.try_borrow() {
+        if let Some(site) = sites
+            .get(site_no(inst))
+            .filter(|site| std::rc::Weak::as_ptr(&site.class) == Rc::as_ptr(cls))
+        {
+            if site.refused {
+                return None;
+            }
+            if let Some(made) = site_made(f, site, cls, defaults) {
+                return Some(made);
+            }
+        }
+    }
+    new_checked(f, inst, cls, defaults)
 }
 
-/// The object of a `new` whose site entry ([`NewSite`]) is for `cls`, when
-/// the arguments are where the entry says and have types the parameters
-/// and the properties take as they are. `None`, nothing done, otherwise
-/// ([`new_checked`] then decides).
+/// The object of a `new` whose site entry `site` ([`NewSite`]) is for
+/// `cls` (and not a refusal), when the arguments are where the entry says
+/// and have types the parameters and the properties take as they are.
+/// `None`, nothing done, otherwise ([`new_checked`] then decides).
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `new_stored`
-fn site_made(
-    f: &crate::vm::Frame,
-    inst: &Inst,
+fn site_made<'a>(
+    f: &'a crate::vm::Frame,
+    site: &'a NewSite,
     cls: &Rc<crate::class::Class>,
     defaults: &[Option<Value>],
 ) -> Option<Obj> {
-    let sites = f.code.tape.new_sites.try_borrow().ok()?;
-    let site = sites.get(site_no(inst))?;
-    if std::rc::Weak::as_ptr(&site.class) != Rc::as_ptr(cls) {
-        return None;
-    }
     let mut args = [Arg::Int(0); MAX_ARGS];
     let n = usize::from(site.n);
     for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
@@ -992,24 +1004,32 @@ fn new_checked(
 ) -> Option<Obj> {
     // The constructor first: one with a body of its own is the commonest
     // reason to leave, and its answer is kept (`ctor_fold`).
-    let (func, scope) = crate::props::ctor_ref(cls)?;
-    let Func::User(uf) = func else {
-        return None;
+    // What is refused here depends on the class and on the instruction
+    // alone: the site keeps the answer (`refuse_site`).
+    let Some((func, scope)) = crate::props::ctor_ref(cls) else {
+        return refuse_site(f, inst, cls);
     };
-    let fold = uf.ctor_fold()?;
+    let Func::User(uf) = func else {
+        return refuse_site(f, inst, cls);
+    };
+    let Some(fold) = uf.ctor_fold() else {
+        return refuse_site(f, inst, cls);
+    };
     let mut args = NewArgs::new();
     if inst.e != 0 {
+        // (An undefined variable, a sum that overflows: this `new`'s.)
         sent_args(f, inst, &mut args)?;
     }
     // The parameters left out get their literal defaults, as their
-    // `RECV_INIT`s would bind them.
+    // `RECV_INIT`s would bind them. (How many are passed is the
+    // instruction's: its sends.)
     let given = args.given().len();
-    if given < uf.params.len() {
-        literal_defaults(uf, given, &mut args)?;
+    if given < uf.params.len() && literal_defaults(uf, given, &mut args).is_none() {
+        return refuse_site(f, inst, cls);
     }
     let args = args.given();
     if args.len() != uf.params.len() {
-        return None;
+        return refuse_site(f, inst, cls);
     }
     let mut site = NewSite {
         over: u32::MAX,
@@ -1127,6 +1147,32 @@ fn new_checked(
         }
     }
     Some(made)
+}
+
+/// [`new_checked`]'s answer for a refusal that depends on the class `cls`
+/// and on the instruction `inst` alone (the class's constructor, its
+/// fold, the parameters the instruction's sends leave out): kept in the
+/// site's entry ([`NewSite::refused`]) so that the next `new` there leaves
+/// at once. Always `None`.
+#[cold]
+#[inline(never)]
+fn refuse_site(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
+    let no = site_no(inst);
+    if no < NEW_SITES {
+        if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
+            crate::rtcache::grow_slots(&mut sites, no + 1, NewSite::default);
+            if let Some(slot) = sites.get_mut(no) {
+                *slot = NewSite {
+                    class: Rc::downgrade(cls),
+                    refused: true,
+                    // (`site_over` takes no entry for another variable.)
+                    over: u32::MAX,
+                    ..NewSite::default()
+                };
+            }
+        }
+    }
+    None
 }
 
 /// The arguments the `Send`s after the `new` instruction `inst` of frame

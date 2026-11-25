@@ -283,3 +283,45 @@ n
 "#
     );
 }
+
+/// `new` sites the constructor fold refuses for what depends on the class
+/// and the instruction alone (a constructor with a body, one inherited,
+/// arguments to a class without one, a string default, more arguments
+/// than parameters): the site keeps the refusal, and every `new` there
+/// still runs the constructor, evaluates its arguments and makes the
+/// object.
+#[test]
+fn refused_constructor_folds_match_php() {
+    let out = run(r#"<?php
+class Body { public $a; function __construct($a) { $this->a = $a; echo "B$a "; } }
+class NoCtor { public $p = 1; }
+class Str { public $s; function __construct($s = "dflt") { $this->s = $s; } }
+class Two { public $a; function __construct($a) { $this->a = $a; } }
+class Sub extends Body {}
+function side() { echo "side "; return 7; }
+function run($k) {
+    $out = [];
+    $o = new Body($k); $out[] = $o->a;
+    $o = new Sub($k + 1); $out[] = $o->a;
+    $n = new NoCtor($k, side()); $out[] = $n->p;
+    $s = new Str; $out[] = $s->s;
+    $s = new Str($k); $out[] = $s->s;
+    $t = new Two($k, $k + 1); $out[] = $t->a;
+    echo "\n";
+    return implode(",", $out);
+}
+for ($k = 0; $k < 4; $k++) { echo run($k), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"B0 B1 side 
+0,1,1,dflt,0,0
+B1 B2 side 
+1,2,1,dflt,1,1
+B2 B3 side 
+2,3,1,dflt,2,2
+B3 B4 side 
+3,4,1,dflt,3,3
+"#
+    );
+}
