@@ -2171,10 +2171,10 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 };
                 let next = if next == DECLINED {
                     // A dimension of an `ArrayAccess` object (`$obj[$k] = $v`,
-                    // `$obj[$k]`): its user method called here, with the VM at
-                    // hand, rather than leaving the tape for one op of
-                    // `Vm::run` (`array_access_step`).
-                    let alt = array_access_step(vm, &mut prep, ops, at);
+                    // `$obj[$k]`), `$a += $b` of arrays: run here, with the VM
+                    // at hand, rather than leaving the tape for one op of
+                    // `Vm::run` (`declined_vm_step`).
+                    let alt = declined_vm_step(vm, &mut prep, ops, at);
                     if alt == DECLINED {
                         break at;
                     }
@@ -2469,7 +2469,7 @@ fn run_call(
             return if super::spec::init_dyn_method_call_in(f, obj, name, at) {
                 at + 1
             } else {
-                DECLINED
+                init_dyn_method_call_vm(vm, obj, name, at)
             };
         }
         Some(&Op::New {
@@ -2589,7 +2589,52 @@ fn run_call(
     hot::step_ext(f, ops, lits, at)
 }
 
-/// A declined `Op::AssignDimCv` / `Op::FetchDimCv` whose variable holds an
+/// `$obj->$name()` (`Op::InitMethodCall` with a variable or temporary
+/// name) whose call site's method cache missed: a site whose name changes
+/// from call to call (`$this->$method($value)` over a list of options)
+/// misses every time it changes. The generic op's body
+/// (`Vm::op_init_method_call_op`, which looks the method up in the VM's
+/// method cache and refills the site's) runs here, after `SAVE_OPLINE()`,
+/// so the call's `Send`s and `DoCall` stay on the tape. Only an object and
+/// a string name are taken; anything else (its errors) is `Vm::run`'s
+/// (`DECLINED`). `at | CALL_THREW` with `tape_throw` set when the lookup
+/// threw (an undefined or inaccessible method).
+#[cold]
+#[inline(never)]
+fn init_dyn_method_call_vm(vm: &mut Vm, obj: Operand, name: Operand, at: usize) -> usize {
+    let Some(f) = vm.frames.last() else {
+        return DECLINED;
+    };
+    if f.symtab_attached {
+        return DECLINED;
+    }
+    let peek = |o: Operand| match o {
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.tmps.get(t as usize),
+        _ => None,
+    };
+    let obj_ok = match obj {
+        Operand::Unused => f.this.is_some(),
+        o => matches!(peek(o), Some(Value::Object(_))),
+    };
+    if !obj_ok || !matches!(peek(name), Some(Value::Str(_))) {
+        return DECLINED;
+    }
+    vm.frame_mut().ip = at + 1;
+    let r = vm
+        .method_object(obj)
+        .and_then(|o| vm.op_init_method_call_op(o, name));
+    match r {
+        Ok(()) => at + 1,
+        Err(t) => {
+            vm.tape_throw = Some(t);
+            at | CALL_THREW
+        }
+    }
+}
+
+/// A declined `Op::AssignOpCv` `+=` of two arrays (`Vm::array_union_cv`), or
+/// a declined `Op::AssignDimCv` / `Op::FetchDimCv` whose variable holds an
 /// object with user `ArrayAccess` methods (`zend_std_write_dimension` /
 /// `zend_std_read_dimension`): the method called as `Vm::run`'s arm calls
 /// it (`Vm::assign_dim_array_access`, `Vm::fetch_dim_array_access`), after
@@ -2602,12 +2647,28 @@ fn run_call(
 /// carries only the call.
 #[cold]
 #[inline(never)]
-fn array_access_step(
+fn declined_vm_step(
     vm: &mut Vm,
     prep: &mut Option<calls::Prepared>,
     ops: &[Op],
     at: usize,
 ) -> usize {
+    // `$cv += $array` (`Vm::array_union_cv`, `Vm::run`'s arm's fast path):
+    // the frame's own data only, no user code.
+    if let Some(&Op::AssignOpCv {
+        cv,
+        op: php_runtime::BinaryOp::Add,
+        val,
+        dst,
+        ..
+    }) = ops.get(at)
+    {
+        return if vm.array_union_cv(cv, val, dst) {
+            at + 1
+        } else {
+            DECLINED
+        };
+    }
     let cv = match ops.get(at) {
         Some(&Op::AssignDimCv { cv, .. } | &Op::FetchDimCv { cv, .. }) => cv,
         _ => return DECLINED,

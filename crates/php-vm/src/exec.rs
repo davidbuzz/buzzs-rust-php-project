@@ -647,7 +647,7 @@ impl Vm {
     /// table, the operand a literal, a variable or a temporary (consumed)
     /// holding an array. The result, when used, is a copy in `dst`.
     /// `false`, nothing changed, otherwise (the generic op).
-    fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+    pub(crate) fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
         };

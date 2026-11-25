@@ -577,3 +577,73 @@ get:foo|get:bar|set:baz=0|set:obj=obj|unset:gone|get:yes|get:foo|get:bar|set:baz
 "#
     );
 }
+
+/// `$obj->$name()` with a name that changes from call to call (Doctrine's
+/// `Column::setOptions()`), whose site cache misses are looked up on the
+/// tape: public, private, protected, static, case-insensitive names,
+/// `__call()` for inaccessible and missing ones, undefined methods,
+/// non-objects, non-string names, `__invoke`; and `$a += $b` of arrays on
+/// the tape: shared and own arrays, a used result, `$a += $a`, lists,
+/// non-array operands, destructors, a reference, recursion. Expected
+/// output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn dynamic_method_names_and_array_union() {
+    assert_eq!(run(r#"<?php
+namespace App;
+class P { protected function prot($v) { return "prot$v"; } }
+class Col extends P {
+  private $log = [];
+  public function setA($v) { $this->log[] = "A$v"; return $this; }
+  public function setB($v, $w = 'd') { $this->log[] = "B$v$w"; return $this; }
+  private function priv($v) { return "priv$v"; }
+  public static function stat($v) { return "stat$v"; }
+  public function __call($n, $a) { return "__call($n," . implode(',', $a) . ")"; }
+  public function run($names) { $out = []; foreach ($names as $n) { $out[] = is_string($r = $this->$n(1)) ? $r : 'obj'; } return implode(' ', $out); }
+  public function log() { return implode(',', $this->log); }
+}
+class NoCall { public function m($x) { return "m$x"; } }
+function bench() {
+  $c = new Col; $n = new NoCall;
+  $names = ['setA', 'setB', 'SETA', 'priv', 'stat', 'prot', 'missing', 'setB'];
+  for ($i = 0; $i < 3; $i++) {
+    foreach ($names as $m) { $r = $c->$m($i); echo is_string($r) ? $r : 'obj', ' '; }
+    echo $c->run($names), ' ';
+    foreach (['m', 'M', 'nope'] as $m) { try { echo $n->$m($i), ' '; } catch (\Error $e) { echo $e->getMessage(), ' '; } }
+    $m = 'priv'; try { echo $n->$m(); } catch (\Error $e) { echo get_class($e), ' '; }
+    $o = null; try { $o->$m(); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $k = 5; try { $c->$k(); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $f = function ($x) { return "cl$x"; }; $inv = '__invoke'; echo $f->$inv($i), "\n";
+  }
+  echo $c->log(), "\n";
+}
+bench();
+"#), r#"obj obj obj __call(priv,0) stat0 __call(prot,0) __call(missing,0) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m0 m0 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl0
+obj obj obj __call(priv,1) stat1 __call(prot,1) __call(missing,1) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m1 m1 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl1
+obj obj obj __call(priv,2) stat2 __call(prot,2) __call(missing,2) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m2 m2 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl2
+A0,B0d,A0,B0d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A2,B2d,A2,B2d,A1,B1d,A1,B1d
+"#);
+    assert_eq!(run(r#"<?php
+namespace App;
+class D { function __destruct() { echo "D "; } }
+function tr($t) { $r = ['x' => $t]; if ($t < 3) { $r += tr($t + 1); } return $r; }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $a = ['a' => 1, 'b' => 2]; $b = ['b' => 9, 'c' => 3];
+    $a += $b; echo json_encode($a), ' ';
+    $c = $a; $c += ['z' => 0]; echo count($a), count($c), ' ';
+    $r = ($a += [5 => 5]); echo count($r), ' ';
+    $a += $a; echo count($a), ' ';
+    $l = [1, 2]; $l += [5, 6, 7]; echo json_encode($l), ' ';
+    $s = 'str'; try { $s += [1]; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $n = null; try { $n += [1]; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $o = ['d' => new D]; $o += ['e' => new D]; unset($o); echo '| ';
+    $ref = [1]; $rr = &$ref; $ref += [1 => 2]; echo count($rr), ' ';
+    echo json_encode(tr(0)), "\n";
+  }
+}
+run();
+"#), r#"{"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
+{"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
+{"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
+"#);
+}
