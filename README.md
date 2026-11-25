@@ -135,23 +135,34 @@ a newer php-src means editing the pin and re-baselining.
 
 ## License
 
-buzzs-rust-php-project is licensed under the BSD-3-Clause, the same license PHP master is
-distributed under, with the copyright held by David Buzz:
+buzzs-rust-php-project is a Rust port of [php-src](https://github.com/php/php-src), and most
+of its files are derivative works of php-src C files. The copyright is shared:
 
 ```
 Copyright © 2025–2026, David Buzz <davidbuzz@gmail.com>
+Copyright © 1999–2026, The PHP Group and Contributors.
+Copyright © 1999–2026, Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc.
 ```
 
-Third-party components keep their own licenses (the oracle tree under
-`modules/php-src` is PHP-3.01, © The PHP Group; `tools/lcov` is GPL-2.0-or-later;
-linked system libraries keep theirs). See [LICENSE](LICENSE).
+The individual authors named in each ported C file's header also hold copyright in the
+Rust port of that file. The repository is distributed under the BSD-3-Clause, the license
+php-src master uses. See [LICENSE](LICENSE).
 
-If you want to reuse files from this repository, the [LICENSE](LICENSE) file
-includes a plain-language addendum listing exactly what compliance requires:
-keep the per-file copyright header, ship the license text, don't use the
-project or author name for endorsement, and honor the original notices on
-the few ported PHP/Zend files. Attribution of the notices is the whole of
-the burden — no copyleft, no share-alike, no fee.
+Some crates are derived from libraries that php-src bundles under other licenses, and those
+parts stay under them. libmbfl (`php-mbstring`) and libbcmath (`php-bcmath`) are
+**LGPL-2.1**. timelib (`php-date`) is MIT, lexbor is Apache-2.0, and there are others.
+[THIRD_PARTY.md](THIRD_PARTY.md) lists every component, its copyright holders and the
+crates derived from it. The license texts are in [LICENSES/](LICENSES/). The test tree
+under `modules/php-src`, `tools/lcov` (GPL-2.0-or-later) and the linked system libraries
+keep their own licenses.
+
+If you want to reuse files from this repository, the [LICENSE](LICENSE) file has a
+plain-language addendum listing what compliance requires:
+
+- keep every copyright notice, the port's and the upstream ones;
+- ship LICENSE, THIRD_PARTY.md and LICENSES/;
+- don't use the project's or the authors' names to endorse your product;
+- follow the upstream license for any third-party portion.
 
 ## Related work
 
