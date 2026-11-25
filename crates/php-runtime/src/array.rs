@@ -949,6 +949,14 @@ impl HashTable {
     /// See [`HashTable::TABLE_SIZE_OFFSET`].
     pub const NEXT_FREE_OFFSET: usize = std::mem::offset_of!(HashTable, next_free);
 
+    /// The byte offset of the root buffer mark (a `u32`,
+    /// [`HashTable::gc_root_mark`]; `Cell` is `repr(transparent)`):
+    /// machine code that drops one handle of a shared array a variable
+    /// held without a call may do so only while the mark is not 0 (the
+    /// array is buffered already, or immutable); at 0 the release is a
+    /// possible root to buffer (php-vm's trace JIT).
+    pub const GC_ROOT_OFFSET: usize = std::mem::offset_of!(HashTable, gc_root);
+
     /// The room of a list's allocation, in elements; `None` for a table
     /// that is no list. (For the layout test of the code that appends to
     /// a list without a call.)
@@ -4620,6 +4628,9 @@ mod tests {
     fn table_header_stays_small() {
         // data, index, boxed iterator list, counters (zend_array: 56).
         assert!(std::mem::size_of::<HashTable>() <= 80);
+        // The root buffer mark lives in what was tail padding.
+        assert_eq!(std::mem::size_of::<HashTable>(), 72);
+        assert!(HashTable::GC_ROOT_OFFSET + 4 <= std::mem::size_of::<HashTable>());
         assert_eq!(std::mem::size_of::<IterList>(), 8);
         let mut t = HashTable::new();
         let _ = t.push(Value::Int(1));
