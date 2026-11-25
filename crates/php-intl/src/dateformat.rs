@@ -233,7 +233,9 @@ impl IntlDateFormatter {
             || (given.len() == 1 && given != "C")
             || (given.len() > 1 && crate::sys::loc::iso3_language(&final_locale).is_empty())
         {
-            return Err(Error::arg_value(1, format!("\"{locale_str}\" is invalid")));
+            // `"%s"` of the `char*` (dateformat_create.cpp): up to the first NUL.
+            let shown = locale_str.split('\0').next().unwrap_or_default();
+            return Err(Error::arg_value(1, format!("\"{shown}\" is invalid")));
         }
 
         let (mut cal, cal_type, owned) = process_calendar_arg(calendar, &final_locale)?;
@@ -843,6 +845,10 @@ mod tests {
         let e = IntlDateFormatter::new(Some("xx"), 0, 0, None, CalendarArg::Null, None, "UTC")
             .unwrap_err();
         assert_eq!(e, Error::arg_value(1, "\"xx\" is invalid"));
+        // ICU reads the locale's char* up to its first NUL (php8.5).
+        let e = IntlDateFormatter::new(Some("a\0b"), 0, 0, None, CalendarArg::Null, None, "UTC")
+            .unwrap_err();
+        assert_eq!(e, Error::arg_value(1, "\"a\" is invalid"));
         let e = IntlDateFormatter::new(
             Some("en"),
             0,

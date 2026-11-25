@@ -107,13 +107,42 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..plain(TOp::CallInit)
         }),
         op if preparable(op) && stays_prepared(code, i) => Some(plain(TOp::CallInit)),
+        // `$obj->$name()`: started on the site's method cache hit
+        // (`spec::init_dyn_method_call_in`, from `run_call`) as a pending
+        // call, not left to `Vm::run`.
+        Op::InitMethodCall {
+            name: Operand::Cv(_) | Operand::Tmp(_),
+            ..
+        } => Some(plain(TOp::CallInit)),
+        // `$c::name()`: a declared class's public static method
+        // (`init_dyn_static_call`, from `run_call`).
+        Op::InitStaticCall {
+            class: ClassSpec::Dyn(Operand::Cv(_) | Operand::Tmp(_)),
+            name: Operand::Lit(_),
+        } => Some(plain(TOp::CallInit)),
+        // `call_user_func[_array]()` written by name (`ZEND_INIT_USER_CALL`),
+        // and the arguments it passes (`ZEND_SEND_USER`, `ZEND_SEND_ARRAY`):
+        // prepared on the call site's cache hit ([`prepare_user_call`]).
+        Op::InitUserCall { .. } if user_call_stays_prepared(code, i) => Some(plain(TOp::CallInit)),
+        op @ (Op::SendUser { .. } | Op::SendArray { .. })
+            if user_send_src(op).is_some()
+                && call_start_at(code, i).is_some_and(|s| {
+                    let start = &code.ops[s];
+                    (matches!(start, Op::InitUserCall { .. }) && user_call_stays_prepared(code, s))
+                        || (matches!(start, Op::InitFCall { .. })
+                            && preparable(start)
+                            && stays_prepared(code, s))
+                }) =>
+        {
+            Some(plain(TOp::CallSend))
+        }
         // `new` is prepared as before whatever its arguments: its prepared
         // start also makes the object (`new_object`).
         op @ Op::New { .. } if preparable(op) => Some(plain(TOp::CallInit)),
         // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
         // the VM at hand (`run_vm_op`).
         Op::FramelessICall(_) => Some(plain(TOp::VmOp)),
-        // `ZEND_RECV_VARIADIC` (`Vm::recv_variadic_fast`, out of line in
+        // `ZEND_RECV_VARIADIC` (`Vm::recv_variadic_plain`, out of line in
         // `run_vm_op`: an arm in the tape's hot block cost every call).
         Op::RecvVariadic { .. } => Some(plain(TOp::VmOp)),
         // A read of a superglobal (`$_GET`) or of a global variable by
@@ -169,6 +198,27 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     }
 }
 
+/// The specialised instruction of a function-entry op that binds a
+/// variable with the VM at hand (`run_vm_op`): `global $name`
+/// (`ZEND_BIND_GLOBAL`), `static $x` (`ZEND_BIND_STATIC`) and a variadic
+/// parameter's `ZEND_RECV_VARIADIC`. Each left the tape for the generic
+/// loop and came back, once per name; a large framework application's
+/// page runs 51,000 `global` binds a request.
+pub(super) fn lower_entry(code: &OpArray, i: usize) -> Option<Inst> {
+    let ncv = code.cv_names.len();
+    match *code.ops.get(i)? {
+        Op::Global { cv, .. } | Op::RecvVariadic { cv, .. } if (cv as usize) < ncv => {
+            Some(Inst::plain(TOp::VmOp))
+        }
+        Op::BindStatic { cv, skip, .. }
+            if (cv as usize) < ncv && (skip as usize) < code.ops.len() =>
+        {
+            Some(Inst::plain(TOp::VmOp))
+        }
+        _ => None,
+    }
+}
+
 /// Whether the call started at `start` can be made from its preparation
 /// to its `DoCall` without the tape giving it up: the ops in between are
 /// argument sends it makes itself and hot ops, and none starts a call of
@@ -184,6 +234,10 @@ fn stays_prepared(code: &OpArray, start: usize) -> bool {
         match op {
             Op::DoCall { .. } => return true,
             Op::Send { src } if direct_src(code, src) => {}
+            // `call_user_func[_array]('known_function', ...)`: the compiler
+            // bound the name (a plain `InitFCall`), the arguments are still
+            // `SendUser`s or a `SendArray` ([`send_user`], [`send_array`]).
+            Op::SendUser { .. } | Op::SendArray { .. } if user_send_src(op).is_some() => {}
             Op::Send { .. }
             | Op::InitFCall { .. }
             | Op::InitDynCall { .. }
@@ -219,6 +273,61 @@ fn static_dim_place(code: &OpArray, place: u32) -> bool {
             )
         )
     })
+}
+
+/// [`stays_prepared`] of the call `Op::InitUserCall` started at `start`:
+/// the ops up to its `DoCall` are hot ops and the arguments
+/// [`send_user`] / [`send_array`] / [`send_array_slice`] may pass (a
+/// `SendArray` of the whole array or of its `array_slice()`), and the elements of an array
+/// literal the tape builds (`call_user_func_array($f, [$a, $b])`); no
+/// other call starts in between.
+fn user_call_stays_prepared(code: &OpArray, start: usize) -> bool {
+    /// Ops scanned at most, as [`stays_prepared`]'s.
+    const SCAN: usize = 24;
+    for (j, op) in code.ops.iter().enumerate().skip(start + 1).take(SCAN) {
+        match op {
+            Op::DoCall { .. } => return true,
+            Op::SendUser { .. } | Op::SendArray { .. } if user_send_src(op).is_some() => {}
+            Op::Send { .. }
+            | Op::SendUser { .. }
+            | Op::SendArray { .. }
+            | Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. }
+            | Op::CallableConvert { .. }
+            | Op::CallablePartial { .. } => return false,
+            Op::InitArray { .. } | Op::ArrayAdd { .. } if super::dims::lower(code, j).is_some() => {
+            }
+            op if crate::exec::hot::is_hot(op) => {}
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The operand a `SendUser`, or a `SendArray` of a whole array or of its
+/// `array_slice()` (the length a literal, a temporary or a compiled
+/// variable), passes when [`send_user`] / [`send_array`] /
+/// [`send_array_slice`] can read it: a literal, a temporary or a compiled
+/// variable.
+fn user_send_src(op: &Op) -> Option<Operand> {
+    let at_hand = |o: Operand| matches!(o, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_));
+    let src = match *op {
+        Op::SendUser { src, .. }
+        | Op::SendArray {
+            src,
+            len: Operand::Unused,
+            skip: 0,
+        } => src,
+        // `array_slice($args, skip, $len)` ([`send_array_slice`]).
+        Op::SendArray { src, len, .. } if at_hand(len) => src,
+        _ => return None,
+    };
+    at_hand(src).then_some(src)
 }
 
 /// Whether `place` is a variable named by a literal starting with an
@@ -319,7 +428,8 @@ pub(super) struct NewSite {
     /// The class (none yet: `Weak::new()`). The handle pins the class's
     /// address, so an equal address is this class.
     class: std::rc::Weak<crate::class::Class>,
-    /// The arguments passed, which are the constructor's parameters.
+    /// The constructor's parameters: the arguments passed, then those
+    /// left to their literal defaults (`dflt`, [`literal_defaults`]).
     n: u8,
     /// The stores (`steps[..len]`).
     len: u8,
@@ -337,6 +447,13 @@ pub(super) struct NewSite {
     /// be the old object). `u32::MAX`: none.
     over: u32,
     steps: [SiteStep; FOLD_STEPS],
+    /// The defaults of the parameters the `new` leaves out
+    /// ([`Src::ParamDefault`]): scalars, which own nothing.
+    dflt: [Value; MAX_ARGS],
+    /// [`new_checked`] refused the class for what depends on it and on the
+    /// instruction alone ([`refuse_site`]): later `new`s there leave at
+    /// once.
+    refused: bool,
 }
 
 /// Where an argument of a `new` comes from: what the `Send`s after the
@@ -351,6 +468,9 @@ enum Src {
     Cv(u32),
     /// `a + b`, `a - b` or `a * b` of literals and compiled variables.
     Sum(BinaryOp, Operand, Operand),
+    /// A parameter no argument is passed for: its literal default, kept in
+    /// the site ([`NewSite::dflt`], by parameter).
+    ParamDefault(u8),
 }
 
 /// An argument of a `new`, read where it is: a value the frame or the op
@@ -549,13 +669,13 @@ fn site_srcs(code: &OpArray, inst: &Inst) -> Option<([Src; MAX_ARGS], usize)> {
     sums.iter().all(|s| s.0 == u32::MAX).then_some((srcs, n))
 }
 
-/// The argument `src` names, read in frame `f`. `None` for what
-/// [`sent_args`] declines (an undefined variable, a sum of anything but
-/// ints, an overflow) and for a variable held by reference, whose value
-/// [`sent_args`] copies out.
+/// The argument `src` names, read in frame `f` (a parameter's default in
+/// `site`). `None` for what [`sent_args`] declines (an undefined variable,
+/// a sum of anything but ints, an overflow) and for a variable held by
+/// reference, whose value [`sent_args`] copies out.
 #[inline(always)]
 #[allow(clippy::inline_always)] // once per argument
-fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
+fn arg_view<'a>(f: &'a crate::vm::Frame, site: &'a NewSite, src: Src) -> Option<Arg<'a>> {
     // A compiled variable first: the commonest argument.
     if let Src::Cv(cv) = src {
         return match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
@@ -574,6 +694,7 @@ fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
                 _ => return None,
             })
         }
+        Src::ParamDefault(k) => Arg::Held(site.dflt.get(usize::from(k))?),
         Src::Cv(_) | Src::None => return None,
     })
 }
@@ -761,7 +882,7 @@ fn site_over(
     let mut args = [Arg::Int(0); MAX_ARGS];
     let n = usize::from(site.n);
     for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
-        let Some(view) = arg_view(f, *src) else {
+        let Some(view) = arg_view(f, site, *src) else {
             return false;
         };
         *arg = view;
@@ -833,8 +954,10 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 /// filled without the call, as the call would have left it.
 ///
 /// - The arguments are what the `Send`s after the op would pass
-///   ([`sent_args`]). Every declared parameter is passed, and no more; each
-///   has a type that takes its argument as it is (`enter`'s test).
+///   ([`sent_args`]), then the scalar literal defaults of the parameters
+///   left out ([`literal_defaults`]): every declared parameter has a
+///   value, and no more are passed; each has a type that takes its value
+///   as it is (`enter`'s test, `Vm::op_recv_default`'s for a default).
 /// - Every store is checked before the object exists, as
 ///   `spec::props::assign_hit` checks it: the constructor's own property
 ///   cache entry for the place is filled for this class and the
@@ -852,7 +975,8 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 ///
 /// `None`, nothing done, for anything else: an observer, another
 /// constructor (not public, static, with other statements, with a
-/// parameter left to its default), a class `props::ctor_ref` refuses.
+/// parameter left to a default that is not a scalar literal:
+/// [`literal_defaults`]), a class `props::ctor_ref` refuses.
 #[inline(never)]
 fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
     if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
@@ -861,32 +985,40 @@ fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) 
     let defaults = cls.defaults.try_borrow().ok()?;
     let defaults = defaults.as_deref()?;
     // The site's entry when it is for this class (what depends on the class
-    // and on the instruction was found out when it was filled), else the
-    // full checks.
-    site_made(f, inst, cls, defaults).or_else(|| new_checked(f, inst, cls, defaults))
+    // and on the instruction was found out when it was filled): its object,
+    // or its refusal. Else the full checks.
+    if let Ok(sites) = f.code.tape.new_sites.try_borrow() {
+        if let Some(site) = sites
+            .get(site_no(inst))
+            .filter(|site| std::rc::Weak::as_ptr(&site.class) == Rc::as_ptr(cls))
+        {
+            if site.refused {
+                return None;
+            }
+            if let Some(made) = site_made(f, site, cls, defaults) {
+                return Some(made);
+            }
+        }
+    }
+    new_checked(f, inst, cls, defaults)
 }
 
-/// The object of a `new` whose site entry ([`NewSite`]) is for `cls`, when
-/// the arguments are where the entry says and have types the parameters
-/// and the properties take as they are. `None`, nothing done, otherwise
-/// ([`new_checked`] then decides).
+/// The object of a `new` whose site entry `site` ([`NewSite`]) is for
+/// `cls` (and not a refusal), when the arguments are where the entry says
+/// and have types the parameters and the properties take as they are.
+/// `None`, nothing done, otherwise ([`new_checked`] then decides).
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `new_stored`
-fn site_made(
-    f: &crate::vm::Frame,
-    inst: &Inst,
+fn site_made<'a>(
+    f: &'a crate::vm::Frame,
+    site: &'a NewSite,
     cls: &Rc<crate::class::Class>,
     defaults: &[Option<Value>],
 ) -> Option<Obj> {
-    let sites = f.code.tape.new_sites.try_borrow().ok()?;
-    let site = sites.get(site_no(inst))?;
-    if std::rc::Weak::as_ptr(&site.class) != Rc::as_ptr(cls) {
-        return None;
-    }
     let mut args = [Arg::Int(0); MAX_ARGS];
     let n = usize::from(site.n);
     for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
-        *arg = arg_view(f, *src)?;
+        *arg = arg_view(f, site, *src)?;
     }
     let args = args.get(..n)?;
     if site.typed && !site.takes(args) {
@@ -915,18 +1047,32 @@ fn new_checked(
 ) -> Option<Obj> {
     // The constructor first: one with a body of its own is the commonest
     // reason to leave, and its answer is kept (`ctor_fold`).
-    let (func, scope) = crate::props::ctor_ref(cls)?;
-    let Func::User(uf) = func else {
-        return None;
+    // What is refused here depends on the class and on the instruction
+    // alone: the site keeps the answer (`refuse_site`).
+    let Some((func, scope)) = crate::props::ctor_ref(cls) else {
+        return refuse_site(f, inst, cls);
     };
-    let fold = uf.ctor_fold()?;
+    let Func::User(uf) = func else {
+        return refuse_site(f, inst, cls);
+    };
+    let Some(fold) = uf.ctor_fold() else {
+        return refuse_site(f, inst, cls);
+    };
     let mut args = NewArgs::new();
     if inst.e != 0 {
+        // (An undefined variable, a sum that overflows: this `new`'s.)
         sent_args(f, inst, &mut args)?;
+    }
+    // The parameters left out get their literal defaults, as their
+    // `RECV_INIT`s would bind them. (How many are passed is the
+    // instruction's: its sends.)
+    let given = args.given().len();
+    if given < uf.params.len() && literal_defaults(uf, given, &mut args).is_none() {
+        return refuse_site(f, inst, cls);
     }
     let args = args.given();
     if args.len() != uf.params.len() {
-        return None;
+        return refuse_site(f, inst, cls);
     }
     let mut site = NewSite {
         over: u32::MAX,
@@ -1009,8 +1155,19 @@ fn new_checked(
     if !by_class && site_no(inst) < NEW_SITES {
         if let Some((srcs, n)) = site_srcs(&f.code, inst) {
             if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
-                if n == args.len() {
+                if n == given {
                     site.srcs = srcs;
+                    // (The object is made: nothing here may decline. `k`
+                    // is below `MAX_ARGS`, the room `NewArgs` has.)
+                    for (k, v) in args.iter().enumerate().skip(given) {
+                        if let (Some(src), Some(dflt), Ok(no)) =
+                            (site.srcs.get_mut(k), site.dflt.get_mut(k), u8::try_from(k))
+                        {
+                            *src = Src::ParamDefault(no);
+                            // (A default is a scalar: `literal_defaults`.)
+                            *dflt = clone_value(v);
+                        }
+                    }
                     // (An argument read from the assigned variable would be
                     // the old object.)
                     site.over = new_target(inst)
@@ -1020,7 +1177,7 @@ fn new_checked(
                                 Src::Sum(_, a, b) => {
                                     *a == Operand::Cv(*cv) || *b == Operand::Cv(*cv)
                                 }
-                                Src::Lit(_) | Src::None => false,
+                                Src::Lit(_) | Src::ParamDefault(_) | Src::None => false,
                             })
                         })
                         .unwrap_or(u32::MAX);
@@ -1033,6 +1190,32 @@ fn new_checked(
         }
     }
     Some(made)
+}
+
+/// [`new_checked`]'s answer for a refusal that depends on the class `cls`
+/// and on the instruction `inst` alone (the class's constructor, its
+/// fold, the parameters the instruction's sends leave out): kept in the
+/// site's entry ([`NewSite::refused`]) so that the next `new` there leaves
+/// at once. Always `None`.
+#[cold]
+#[inline(never)]
+fn refuse_site(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
+    let no = site_no(inst);
+    if no < NEW_SITES {
+        if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
+            crate::rtcache::grow_slots(&mut sites, no + 1, NewSite::default);
+            if let Some(slot) = sites.get_mut(no) {
+                *slot = NewSite {
+                    class: Rc::downgrade(cls),
+                    refused: true,
+                    // (`site_over` takes no entry for another variable.)
+                    over: u32::MAX,
+                    ..NewSite::default()
+                };
+            }
+        }
+    }
+    None
 }
 
 /// The arguments the `Send`s after the `new` instruction `inst` of frame
@@ -1085,6 +1268,50 @@ fn sent_args(f: &crate::vm::Frame, inst: &Inst, args: &mut NewArgs) -> Option<()
         }
     }
     Some(())
+}
+
+/// The defaults of the parameters `given..` of `uf`, a constructor a
+/// `new` passes `given` arguments to, into `args`, when each is a scalar
+/// literal its `RECV_INIT` binds and nothing else runs before the body:
+/// from the op a call with `given` arguments starts at, every parameter
+/// left out has a `RecvInit` of its own variable followed by the
+/// `RecvDefault` of a literal (`Vm::op_recv_default` checks its type;
+/// [`new_checked`] checks it against the parameter's as for an argument)
+/// that the `RecvInit`'s `skip` jumps over, and the ops end where a call
+/// passing every parameter starts (where the fold's stores begin). A
+/// string or array default (it owns something, and the call's return
+/// would release it), a constant expression or a required parameter
+/// declines.
+fn literal_defaults(uf: &UserFunction, given: usize, args: &mut NewArgs) -> Option<()> {
+    let code = &uf.code;
+    let mut at = uf.plain_first_op(given);
+    for k in given..uf.params.len() {
+        let n = u32::try_from(k).ok()?;
+        let (
+            Some(&Op::RecvInit { n: rn, cv, skip }),
+            Some(&Op::RecvDefault {
+                n: dn,
+                cv: dcv,
+                val: Operand::Lit(lit),
+            }),
+        ) = (code.ops.get(at), code.ops.get(at + 1))
+        else {
+            return None;
+        };
+        if rn != n || dn != n || cv != n || dcv != n || skip as usize != at + 2 {
+            return None;
+        }
+        let v = code.literals.get(lit as usize)?;
+        if !matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            return None;
+        }
+        args.push(clone_value(v))?;
+        at += 2;
+    }
+    (at == uf.plain_first_op(uf.params.len())).then_some(())
 }
 
 /// The arguments [`new_stored`] collects: at most [`MAX_ARGS`] values, of
@@ -1197,6 +1424,9 @@ fn quick_call(code: &OpArray, i: usize) -> Option<(u8, u32)> {
             | Op::FramelessICall(_)
             | Op::InitFCall { .. }
             | Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
+            | Op::SendUser { .. }
+            | Op::SendArray { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -1247,6 +1477,7 @@ fn call_start_at(code: &OpArray, i: usize) -> Option<usize> {
             }
             Op::InitFCall { .. }
             | Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -1269,23 +1500,11 @@ fn direct_src(code: &OpArray, src: &ArgSrc) -> bool {
         ArgSrc::Val(Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         | ArgSrc::CallResult(Operand::Tmp(_)) => true,
         ArgSrc::Place(pid) => {
-            place_cv(code, *pid).is_some() || this_prop_place(code, *pid) || this_place(code, *pid)
+            place_cv(code, *pid).is_some() || read_place(code, *pid) || this_place(code, *pid)
         }
+        ArgSrc::TempPlace(pid) => read_place(code, *pid),
         _ => false,
     }
-}
-
-/// Whether a place is `$this->name` (one property named by a literal):
-/// sent by value from the property cache's read hit ([`send`]), which a
-/// declared property of the class mostly is (a miss sends the generic
-/// way).
-fn this_prop_place(code: &OpArray, pid: u32) -> bool {
-    code.places.get(pid as usize).is_some_and(|p| {
-        matches!(
-            (&p.base, p.segs.as_slice()),
-            (PlaceBase::This, [crate::opcode::Seg::Prop(Operand::Lit(_))])
-        )
-    })
 }
 
 /// Whether a place is `$this` itself (`method_exists($this, $m)`): sent by
@@ -1294,6 +1513,24 @@ fn this_place(code: &OpArray, pid: u32) -> bool {
     code.places
         .get(pid as usize)
         .is_some_and(|p| matches!(p.base, PlaceBase::This) && p.segs.is_empty())
+}
+
+/// Whether place `pid` is of a shape [`send`] reads by value on a hit
+/// ([`crate::vm::Frame::send_place_hit`]): a variable, `$this` or a
+/// temporary followed by dimensions and literally named properties
+/// (`$a['k']`, `$this->p`, `$this->p[$k]`, `$list[$i]->name`,
+/// `f()['k']`), no `[]`.
+fn read_place(code: &OpArray, pid: u32) -> bool {
+    use crate::opcode::Seg;
+    code.places.get(pid as usize).is_some_and(|p| {
+        matches!(
+            p.base,
+            PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::Value(Operand::Tmp(_))
+        ) && !p.segs.is_empty()
+            && p.segs
+                .iter()
+                .all(|s| matches!(s, Seg::Dim(_) | Seg::Prop(Operand::Lit(_))))
+    })
 }
 
 /// The compiled variable a place stands for when it is one without
@@ -1336,9 +1573,16 @@ pub(super) struct Prepared {
     /// method, static method or closure call, whose `$this`, scopes and
     /// closure are in the prepared frame.
     fcall: bool,
-    /// A closure call (`$f()`, the pending call's `dynamic`): its bound
-    /// variables are copied into the frame at `DoCall`.
+    /// A dynamic call (the pending call's `dynamic`): a closure's (`$f()`),
+    /// whose bound variables are copied into the frame at `DoCall`, or a
+    /// callback's (`call_user_func()`, [`prepare_user_call`]), which has
+    /// none unless it is a closure.
     closure: bool,
+    /// Whether the callee frame's closure may have bound variables
+    /// (`use`) for [`enter`] to copy in ([`bind_closure_vars`]): known
+    /// by [`prepare_closure`], which has the closure's data at hand;
+    /// assumed by the callback paths that set `closure`.
+    binds: bool,
     /// The constructor call of `new` (the pending call's `is_ctor`).
     ctor: bool,
 }
@@ -1370,7 +1614,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         // A builtin the tape does not call goes the generic way without
         // its handle being copied first.
         if let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func {
-            if b.plain_call() == PlainCall::No {
+            if b.plain_call_upto().0 == PlainCall::No {
                 return None;
             }
         }
@@ -1378,26 +1622,21 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     };
     let (target, limit) = match func {
         Func::User(uf) => {
-            if uf.call_shape() == CallShape::NOT_PLAIN {
-                return None;
-            }
+            let limit = prepares(&uf)?;
             ready_frame(frame, &uf);
-            let limit = user_limit(&uf);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
-            let kind = b.plain_call();
+            // Plain up to the first by-reference parameter (`first_ref`):
+            // `send` stops there, and an argument at it is sent by
+            // reference (`send_ref`) or the call becomes the generic one.
+            // (Worked out by the test above: read from its two cells.)
+            let (kind, first_ref) = b.plain_call_known();
             // A pooled frame's argument buffer is empty.
             if kind == PlainCall::No || !frame.args.is_empty() {
                 return None;
             }
-            // Past the declared parameters only into a variadic one (else
-            // the generic call reports the count).
-            let limit = if b.flags & flags::VARIADIC != 0 {
-                MAX_ARGS
-            } else {
-                b.signature().params.len().min(MAX_ARGS)
-            };
+            let limit = native_limit(&b).min(first_ref);
             (Callee::Native(b, kind), limit)
         }
     };
@@ -1408,6 +1647,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         calls_len: caller.calls.len(),
         fcall: true,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1444,7 +1684,7 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
             None => cache.get(name as usize)?.as_ref()?,
         };
         if let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func {
-            if b.plain_call() != PlainCall::Named {
+            if b.plain_call_upto().0 != PlainCall::Named {
                 return None;
             }
         }
@@ -1453,28 +1693,26 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
     let b = match func {
         Func::Builtin(b) => b,
         Func::User(uf) => {
-            if uf.call_shape() == CallShape::NOT_PLAIN {
-                return None;
-            }
+            let limit = prepares(&uf)?;
             ready_frame(frame, &uf);
             return Some(Prepared {
-                limit: user_limit(&uf),
+                limit,
                 callee: Callee::User(uf),
                 n: 0,
                 calls_len: caller.calls.len(),
                 fcall: false,
                 closure: false,
+                binds: false,
                 ctor: false,
             });
         }
     };
-    // Past the declared parameters only into a variadic one (else the
-    // generic call reports the count).
-    let limit = if b.flags & flags::VARIADIC != 0 {
-        MAX_ARGS
-    } else {
-        b.signature().params.len().min(MAX_ARGS)
-    };
+    // Plain up to the first by-reference parameter, as in [`prepare`].
+    let (kind, first_ref) = b.plain_call_known();
+    if kind != PlainCall::Named {
+        return None;
+    }
+    let limit = native_limit(&b).min(first_ref);
     Some(Prepared {
         callee: Callee::Native(b, PlainCall::Named),
         limit,
@@ -1482,8 +1720,24 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
+}
+
+/// How many arguments a prepared call of builtin `b` takes: past the
+/// declared parameters only into a variadic one (else the generic call
+/// reports the count), at most [`MAX_ARGS`]. Always inline: a call of its
+/// own (10 instructions, still one when merely `#[inline]`) for a load
+/// and a compare.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per prepared builtin call
+fn native_limit(b: &Builtin) -> usize {
+    if b.flags & flags::VARIADIC != 0 {
+        MAX_ARGS
+    } else {
+        b.signature().params.len().min(MAX_ARGS)
+    }
 }
 
 /// `ZEND_INIT_FCALL` of a call [`CALL_QUICK`] marks (`f(<expression>)` of
@@ -1520,6 +1774,7 @@ pub(super) fn prepare_quick(
         calls_len: caller.calls.len(),
         fcall: true,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1560,22 +1815,74 @@ pub(super) fn quick_send(
     Some(at + 2)
 }
 
-/// Readies the pooled frame `frame` for a call of `uf`, as
-/// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
-/// How many arguments a prepared call of `uf` (a plain declaration) takes:
-/// one per parameter it binds ([`UserFunction::plain_params`]), and for a
-/// function with a trailing variadic parameter up to [`MAX_ARGS`] in all,
-/// the extra ones going to the frame's argument buffer ([`send`]).
-#[inline]
-fn user_limit(uf: &UserFunction) -> usize {
-    if uf.flags & flags::VARIADIC != 0 {
-        MAX_ARGS
-    } else {
-        uf.plain_params().min(MAX_ARGS)
+/// Whether a call of `uf` by name or as a method may be prepared, and how
+/// many arguments [`send`] then takes: a declaration that makes a plain
+/// call ([`UserFunction::call_shape`]) takes its declared parameters; one
+/// whose only differences from that are its static variables, a trailing
+/// variadic parameter or by-reference parameters
+/// ([`UserFunction::near_plain_limit`]) takes as many as that allows (the
+/// arguments for a variadic parameter wait in the frame's compiled
+/// variables from the variadic one's on, so no more than it has: [`enter`]
+/// moves them to the argument buffer). One load and compare for every
+/// plain function.
+#[inline(always)]
+#[allow(clippy::inline_always)] // every prepared call
+fn prepares(uf: &UserFunction) -> Option<usize> {
+    if uf.call_shape() != CallShape::NOT_PLAIN {
+        return Some(uf.params.len().min(MAX_ARGS));
+    }
+    near_limit(uf)
+}
+
+/// [`prepares`] of a declaration of shape [`CallShape::NOT_PLAIN`].
+#[cold]
+#[inline(never)]
+fn near_limit(uf: &UserFunction) -> Option<usize> {
+    let most = uf.near_plain_limit()?;
+    Some(most.min(MAX_ARGS).min(uf.code.cv_names.len()))
+}
+
+/// Stores `v` into a handle field (`$this`, a scope, the closure) of the
+/// pooled frame a call is being readied in: the field is empty there
+/// (`Frame::clear_for_reuse`), so the old value is tested, not dropped
+/// blind. A plain assignment called `Option<Obj>`'s out-of-line drop glue
+/// on the `None` it overwrote (~8 instructions and the call, twice per
+/// closure call).
+#[inline(always)]
+#[allow(clippy::inline_always)] // up to four per prepared call
+fn fill<T>(slot: &mut Option<T>, v: Option<T>) {
+    debug_assert!(slot.is_none());
+    if let Some(old) = std::mem::replace(slot, v) {
+        drop(old);
     }
 }
 
+/// Readies the pooled frame `frame` for a call of `uf`, as
+/// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
+///
+/// A frame the last call of the same function left
+/// (`Frame::release_direct`, [`crate::vm::Frame::released_direct`]) is
+/// ready as it is: its slot vectors are sized for the code, the variable
+/// store, the pending calls and the `@` masks are empty, and it holds the
+/// function's handles; only the mark is cleared (`zend_vm_stack_push_call_frame`
+/// has nothing to set up either: `ZEND_DO_UCALL` initialises the rest).
+/// That test inline, the rest ([`ready_frame_slow`]) out of line: it
+/// spent ~55 instructions a call, most of them in its own prologue and
+/// in `reinit_same_call` storing what was already there.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per prepared call
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
+    if frame.released_direct && frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
+        debug_assert!(frame.is_released_for(uf));
+        frame.released_direct = false;
+        return;
+    }
+    ready_frame_slow(frame, uf);
+}
+
+/// [`ready_frame`] of a frame in any other released state.
+#[inline(never)]
+fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     debug_assert!(
         frame.this.is_none()
             && frame.scope.is_none()
@@ -1593,7 +1900,7 @@ fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     {
         frame.reinit_same_call(code, FrameKind::Function);
     } else {
-        frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
+        frame.reinit_for_call(code, FrameKind::Function);
     }
     if !frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
         // The frame keeps the function across calls in this slot
@@ -1657,9 +1964,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
             return prepare_native_method(caller, frame, obj, b, scope, is_static, called_class);
         }
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     let called_class = Rc::clone(cls);
     // The call's `$this`, as `Vm::init_method_call_fast` takes it: the
     // temporary's handle moved out, or a copy of the variable's object;
@@ -1674,18 +1979,19 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
         _ => (Some(o.clone()), None),
     };
     ready_frame(frame, &uf);
-    frame.this = this;
-    frame.scope = scope;
-    frame.called = Some(called_class);
+    fill(&mut frame.this, this);
+    fill(&mut frame.scope, scope);
+    fill(&mut frame.called, Some(called_class));
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
-        limit: user_limit(&uf),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len,
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1889,19 +2195,18 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     let Func::User(uf) = func else {
         return None;
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     ready_frame(frame, &uf);
-    frame.scope = scope;
-    frame.called = called_class;
+    fill(&mut frame.scope, scope);
+    fill(&mut frame.called, called_class);
     Some(Prepared {
-        limit: user_limit(&uf),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1921,7 +2226,12 @@ fn prepare_native_method(
     is_static: bool,
     called_class: Rc<crate::class::Class>,
 ) -> Option<Prepared> {
-    if b.plain_call() != PlainCall::Named || !frame.args.is_empty() {
+    // As a function's call (`prepare`'s builtin arm): plain up to its
+    // first by-reference parameter (`mysqli_stmt::bind_param()`,
+    // `NumberFormatter::parse()`, `SplFileObject::fscanf()`), which
+    // `send_ref` then takes.
+    let (kind, first_ref) = b.plain_call_upto();
+    if kind != PlainCall::Named || !frame.args.is_empty() {
         return None;
     }
     let (this, released) = match obj {
@@ -1938,12 +2248,9 @@ fn prepare_native_method(
         _ => return None,
     };
     // Past the declared parameters only into a variadic one (else the
-    // generic call reports the count).
-    let limit = if b.flags & flags::VARIADIC != 0 {
-        MAX_ARGS
-    } else {
-        b.signature().params.len().min(MAX_ARGS)
-    };
+    // generic call reports the count), and up to the first by-reference
+    // parameter.
+    let limit = native_limit(&b).min(first_ref);
     frame.this = this;
     frame.scope = scope;
     frame.called = Some(called_class);
@@ -1956,6 +2263,7 @@ fn prepare_native_method(
         calls_len,
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -2014,9 +2322,7 @@ pub(super) fn prepare_relative_static(
             .and_then(std::rc::Weak::upgrade)?;
         (uf, scope, cached.is_static)
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
-        return None;
-    }
+    let limit = prepares(&uf)?;
     let (this, late_bound) = if is_static {
         let late_bound = match caller.called.as_ref() {
             Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
@@ -2032,16 +2338,17 @@ pub(super) fn prepare_relative_static(
         (Some(this.clone()), Rc::clone(late_bound))
     };
     ready_frame(frame, &uf);
-    frame.this = this;
-    frame.scope = Some(scope);
-    frame.called = Some(late_bound);
+    fill(&mut frame.this, this);
+    fill(&mut frame.scope, Some(scope));
+    fill(&mut frame.called, Some(late_bound));
     Some(Prepared {
-        limit: user_limit(&uf),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -2084,23 +2391,31 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     let Func::User(uf) = &d.func else {
         return None;
     };
-    if d.magic_name.is_some() || uf.call_shape() == CallShape::NOT_PLAIN {
+    if d.magic_name.is_some() {
         return None;
     }
+    let limit = prepares(uf)?;
     let uf = Rc::clone(uf);
     ready_frame(frame, &uf);
-    frame.this = d.this.clone();
-    frame.scope = d.scope.clone();
-    frame.called = d.called.clone();
-    frame.closure = if d.fake { None } else { Some(o.clone()) };
+    fill(&mut frame.this, d.this.clone());
+    fill(&mut frame.scope, d.scope.clone());
+    fill(&mut frame.called, d.called.clone());
+    fill(
+        &mut frame.closure,
+        if d.fake { None } else { Some(o.clone()) },
+    );
+    // A closure without `use`s (or a fake one, which `enter` would not
+    // bind from) spares `enter` the second look at its data.
+    let binds = !d.fake && !d.vars.is_empty();
     drop(internal);
     Some(Prepared {
-        limit: user_limit(&uf),
+        limit,
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds,
         ctor: false,
     })
 }
@@ -2169,17 +2484,18 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     };
     let o = crate::props::new_for_ctor(&cls)?;
     ready_frame(frame, &uf);
-    frame.this = Some(o.clone());
-    frame.scope = Some(scope);
-    frame.called = Some(cls);
+    fill(&mut frame.this, Some(o.clone()));
+    fill(&mut frame.scope, Some(scope));
+    fill(&mut frame.called, Some(cls));
     crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
-        limit: user_limit(&uf),
+        limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: true,
     }))
 }
@@ -2193,8 +2509,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
 /// undefined (the generic send warns): the caller then materializes the
 /// call and the generic `Send` runs.
 pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
-    let n = prep.n;
-    if n >= prep.limit {
+    if prep.n >= prep.limit {
         return false;
     }
     let live = vm.frames.live;
@@ -2205,43 +2520,57 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     if caller.calls.len() != prep.calls_len {
         return false;
     }
-    // `ZEND_SEND_REF` (`ZEND_SEND_VAR_EX` of a by-reference parameter) of a
-    // plain variable into a builtin's by-reference parameter (`$m` of
-    // `preg_match()`): the variable becomes a reference in place, as
-    // `Vm::place_make_ref` makes it, and the reference is passed. Anything
-    // else sent there (a value, a dimension) is the generic send's to
-    // report or resolve.
-    if let Callee::Native(b, _) = &prep.callee {
-        if !b.has_by_ref() {
-            // (Most builtins: nothing to look up per argument.)
-        } else {
-            let sig = b.signature();
-            let by_ref = sig
-                .params
-                .get(n)
-                .or_else(|| sig.params.last().filter(|p| p.variadic))
-                .is_some_and(|p| p.by_ref);
-            if by_ref {
-                let ArgSrc::Place(pid) = src else {
-                    return false;
-                };
-                if caller.symtab_attached
-                    || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
-                {
-                    return false;
+    send_in(caller, frame, prep, src)
+}
+
+/// The `Send`s from `at` on of the prepared call, passed at once
+/// (`exec::tape::send_following`): the frame stack is split and the
+/// pending-call count tested once for the whole run, which nothing in it
+/// can change (a send moves or copies a value, runs no user code and
+/// starts no call), instead of once a `Send` (~12 instructions an
+/// argument). A plain variable for a by-reference parameter goes to
+/// [`send_ref`], and the run goes on after it. Returns the op after the
+/// last one passed: the `DoCall`, or a `Send` neither takes, which then
+/// runs as before.
+#[inline(never)]
+pub(super) fn send_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], at: usize) -> usize {
+    let mut next = at;
+    loop {
+        {
+            let live = vm.frames.live;
+            let (callers, pool) = vm.frames.vec.split_at_mut(live);
+            let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+                return next;
+            };
+            if caller.calls.len() != prep.calls_len {
+                return next;
+            }
+            while let Some(Op::Send { src }) = ops.get(next) {
+                if prep.n >= prep.limit || !send_in(caller, frame, prep, src) {
+                    break;
                 }
-                let Some(slot) =
-                    place_cv(&caller.code, *pid).and_then(|cv| caller.cvs.get_mut(cv as usize))
-                else {
-                    return false;
-                };
-                let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
-                frame.args.push(Some(Value::Reference(r)));
-                prep.n = n + 1;
-                return true;
+                next += 1;
             }
         }
+        match ops.get(next) {
+            Some(Op::Send { src }) if send_ref(vm, prep, src) => next += 1,
+            _ => return next,
+        }
     }
+}
+
+/// [`send`] of one argument once the calling frame and the prepared one
+/// are in hand and the call is known to be the newest pending one, with
+/// room for the argument (`prep.n < prep.limit`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `send` and of `send_run`'s loop
+fn send_in(
+    caller: &mut crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    prep: &mut Prepared,
+    src: &ArgSrc,
+) -> bool {
+    let n = prep.n;
     let v = match src {
         ArgSrc::Val(Operand::Lit(i)) => match caller.code.literals.get(*i as usize) {
             Some(v) => clone_value(v),
@@ -2265,17 +2594,12 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
                 Some(v) => v,
                 None => return false,
             },
-            // `$obj->prop` to a by-value parameter (`ZEND_FETCH_OBJ_FUNC_ARG`
-            // read as `ZEND_FETCH_OBJ_R`): on the property cache hit of
-            // that read (an initialized declared or existing dynamic
-            // property, accessible from the caller, no magic: its value,
-            // dereferenced). By-reference parameters were turned away
-            // above (builtins) or are not prepared (user functions).
-            // `$this` to a by-value parameter: the frame's object (a frame
-            // without one is the generic send's error).
+            // `$this` to a by-value parameter (`method_exists($this, $m)`):
+            // the frame's object (a frame without one is the generic send's
+            // error).
             None if this_place(&caller.code, *pid) => {
                 if let Callee::User(uf) = &prep.callee {
-                    if uf.params.get(n).is_some_and(|p| p.by_ref) {
+                    if uf.params.get(n).is_none_or(|p| p.by_ref) {
                         return false;
                     }
                 }
@@ -2284,35 +2608,18 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
                     None => return false,
                 }
             }
-            None => {
-                // (`read_hit` reads a place's cached head: only a place that
-                // is that head alone, `$this->name`.)
-                if !this_prop_place(&caller.code, *pid) {
-                    return false;
-                }
-                if let Callee::User(uf) = &prep.callee {
-                    if uf.params.get(n).is_some_and(|p| p.by_ref) {
-                        return false;
-                    }
-                }
-                match crate::exec::spec::props::read_hit(caller, *pid) {
-                    Some(v) => v,
-                    None => return false,
-                }
-            }
+            None => match place_arg(caller, frame, &prep.callee, n, *pid) {
+                Some(v) => v,
+                None => return false,
+            },
+        },
+        ArgSrc::TempPlace(pid) => match place_arg(caller, frame, &prep.callee, n, *pid) {
+            Some(v) => v,
+            None => return false,
         },
         _ => return false,
     };
     match prep.callee {
-        Callee::User(ref uf) if n >= uf.plain_params() => {
-            // An argument past the bound parameters of a variadic function
-            // (`user_limit`): in the argument buffer at its position, as the
-            // generic call leaves it, for the callee's `RECV_VARIADIC` (and
-            // `func_get_args()`, traces) to find; the positions of the bound
-            // ones hold `None` (their values are in compiled variables).
-            frame.args.resize(n, None);
-            frame.args.push(Some(v));
-        }
         Callee::User(_) => {
             let Some(slot) = frame.cvs.get_mut(n) else {
                 return false;
@@ -2332,16 +2639,332 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     true
 }
 
+/// The run of `Send`s from `ops[start]` on, for a prepared builtin call
+/// (`ZEND_SEND_VAL` / `ZEND_SEND_VAR` into the call frame's argument
+/// slots): the caller and the call frame are looked up once and each
+/// argument is read as [`send`] reads it ([`native_arg`]) and pushed,
+/// where `send` per argument split the frame stack, tested the pending
+/// calls and dispatched on the callee again (~68 instructions an
+/// argument). Where the run meets a send it does not take (an argument
+/// past the declared ones, a by-reference one, an undefined variable, a
+/// place the specialised fetch does not read), the rest goes through
+/// `send` / [`send_ref`] one by one, as before. Returns the op after the
+/// last one passed.
+#[inline(never)]
+pub(super) fn send_native_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], start: usize) -> usize {
+    let mut next = start;
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    if let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) {
+        if matches!(prep.callee, Callee::Native(..)) && caller.calls.len() == prep.calls_len {
+            while let Some(Op::Send { src }) = ops.get(next) {
+                if prep.n >= prep.limit {
+                    break;
+                }
+                // Pushed as it is read: unwrapping the value and wrapping
+                // it again moved it through the stack byte by byte (~25
+                // instructions an argument).
+                let arg = native_arg(caller, src);
+                if arg.is_none() {
+                    break;
+                }
+                frame.args.push(arg);
+                prep.n += 1;
+                next += 1;
+            }
+        }
+    }
+    while let Some(Op::Send { src }) = ops.get(next) {
+        if !send(vm, prep, src) && !send_ref(vm, prep, src) {
+            break;
+        }
+        next += 1;
+    }
+    next
+}
+
+/// [`send`]'s read of argument `src` of a builtin call from `caller`: a
+/// literal copied, a temporary moved out (dereferenced), a variable or a
+/// place copied. `None`, having changed nothing, where `send` declines.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `send_native_run`'s loop
+fn native_arg(caller: &mut crate::vm::Frame, src: &ArgSrc) -> Option<Value> {
+    match src {
+        ArgSrc::Val(Operand::Lit(i)) => caller.code.literals.get(*i as usize).map(clone_value),
+        ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
+            let slot = caller.tmps.get_mut(*t as usize)?;
+            Some(match std::mem::take(slot) {
+                Value::Reference(r) => r.get(),
+                v => v,
+            })
+        }
+        ArgSrc::Val(Operand::Cv(cv)) => cv_value(caller, *cv),
+        ArgSrc::Place(pid) => match place_cv(&caller.code, *pid) {
+            Some(cv) => cv_value(caller, cv),
+            None => caller.send_place_hit(*pid),
+        },
+        ArgSrc::TempPlace(pid) => caller.send_place_hit(*pid),
+        _ => None,
+    }
+}
+
+/// The value of place `pid` of `caller` (a property, an array element, a
+/// chain of them, or an element of a temporary) sent by value as argument
+/// `n` of the prepared call to `callee`, whose readied frame is `frame`:
+/// the specialised fetch ops' hit ([`crate::vm::Frame::send_place_hit`]),
+/// read only once the argument is known to be taken (a by-value
+/// parameter: a prepared user function has no by-reference parameter,
+/// `CallShape::NOT_PLAIN`, nor a plain builtin call,
+/// `Builtin::plain_call`; a slot for it), so that `None` has changed
+/// nothing and the generic `Send` reads it with the place walk.
+#[inline(never)]
+fn place_arg(
+    caller: &mut crate::vm::Frame,
+    frame: &crate::vm::Frame,
+    callee: &Callee,
+    n: usize,
+    pid: u32,
+) -> Option<Value> {
+    match callee {
+        Callee::User(uf) => {
+            if frame.cvs.len() <= n || uf.params.get(n).is_none_or(|p| p.by_ref) {
+                return None;
+            }
+        }
+        Callee::Native(..) => {}
+        Callee::Quick(..) => return None,
+    }
+    caller.send_place_hit(pid)
+}
+/// `ZEND_SEND_REF` of `src` for the prepared call, where [`send`] stopped
+/// at a by-reference parameter: a user callee's ([`send_ref_user`]) or a
+/// builtin's ([`send_ref_native`]). `false`, having changed nothing, when
+/// neither takes it: the call is materialized and the generic send runs.
+#[inline(never)]
+pub(super) fn send_ref(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    match prep.callee {
+        Callee::User(_) => send_ref_user(vm, prep, src),
+        Callee::Native(..) => send_ref_native(vm, prep, src),
+        Callee::Quick(..) => false,
+    }
+}
+
+/// `ZEND_SEND_REF` of a plain variable (`f($x)` of a by-reference
+/// parameter) for the prepared call, which [`send`] declined because the
+/// argument reached the first by-reference parameter ([`prepares`]'s
+/// limit): the caller's variable becomes a reference if it is not one (an
+/// undefined one a reference to null, without a notice, as
+/// `Vm::place_make_ref` makes it) and the callee's compiled variable gets
+/// that reference. The limit then moves on to the next by-reference
+/// parameter. `false`, having changed nothing, for any other argument or
+/// parameter (a value, a dimension or property, a symbol table attached in
+/// the caller, a by-reference variadic): the call is materialized and the
+/// generic send, with its diagnostics ("Only variables should be passed by
+/// reference", "could not be passed by reference"), runs.
+#[inline(never)]
+fn send_ref_user(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let n = prep.n;
+    let Callee::User(uf) = &prep.callee else {
+        return false;
+    };
+    if n != prep.limit || n >= MAX_ARGS || n >= uf.code.cv_names.len() {
+        return false;
+    }
+    if !uf.params.get(n).is_some_and(|p| p.by_ref && !p.variadic) {
+        return false;
+    }
+    let ArgSrc::Place(pid) = src else {
+        return false;
+    };
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len
+        || caller.symtab_attached
+        || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
+    {
+        return false;
+    }
+    let Some(cv) = place_cv(&caller.code, *pid) else {
+        return false;
+    };
+    let Some(slot) = caller.cvs.get_mut(cv as usize) else {
+        return false;
+    };
+    let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
+    let Some(dst) = frame.cvs.get_mut(n) else {
+        return false;
+    };
+    // A prepared frame's compiled variables are empty.
+    if let Some(old) = dst.as_mut().replace(Value::Reference(r)) {
+        drop(old);
+    }
+    prep.n = n + 1;
+    prep.limit = ref_limit(uf, n + 1);
+    true
+}
+
+/// The send limit of a prepared call of `uf` once its arguments reached
+/// parameter `from`: up to its next by-reference parameter, any number into
+/// a variadic one (at most [`MAX_ARGS`] and its compiled variables, as
+/// [`prepares`]).
+#[cold]
+#[inline(never)]
+fn ref_limit(uf: &UserFunction, from: usize) -> usize {
+    let most = match uf.params.get(from..) {
+        Some(rest) => match rest.iter().position(|p| p.by_ref) {
+            Some(i) => from + i,
+            None if uf.params.last().is_some_and(|p| p.variadic) => usize::MAX,
+            None => uf.params.len(),
+        },
+        None => from,
+    };
+    most.min(MAX_ARGS).min(uf.code.cv_names.len())
+}
+
+/// `ZEND_SEND_REF` (`ZEND_SEND_VAR_EX` of a by-reference parameter) into a
+/// prepared builtin call, for the argument [`send`] stopped at: the
+/// parameter at its position is by reference (`ZEND_ARG_SEND_PREFER_REF`
+/// ones too) and the argument is a variable of a frame whose symbol table
+/// is not attached. A bare compiled variable becomes a reference if it is
+/// not one (an undefined one a reference to null, without a notice:
+/// `Vm::cv_make_ref_fast`, what the generic send's `Vm::place_make_ref`
+/// does for it); a property or an element (`next($this->list[$k])`,
+/// `array_pop($this->stack)`) when making its reference can report
+/// nothing and run no user code (`Vm::place_make_ref_quiet`). The
+/// reference is the argument, and the send limit moves to the next
+/// by-reference parameter.
+///
+/// `false`, having changed nothing, for anything else: a value or a
+/// call's result (the generic send raises the error or the notice, or
+/// passes a prefer-ref argument by value), a walk that may report or run
+/// user code (which would take the pooled frame), a by-value parameter
+/// past the limit, or a call that is not the caller's newest. The call
+/// then becomes the generic one.
+#[inline(never)]
+fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let ArgSrc::Place(pid) = src else {
+        return send_prefer_ref_value(vm, prep, src);
+    };
+    let Callee::Native(b, _) = &prep.callee else {
+        return false;
+    };
+    let n = prep.n;
+    let limit = native_limit(b);
+    if n >= limit || !b.param_ref_at(n).0 {
+        return false;
+    }
+    let next = (n + 1..limit)
+        .find(|&i| b.param_ref_at(i).0)
+        .unwrap_or(limit);
+    let live = vm.frames.live;
+    let caller = live.checked_sub(1).and_then(|i| vm.frames.vec.get(i));
+    match (caller, vm.frames.vec.get(live)) {
+        (Some(caller), Some(frame))
+            if caller.calls.len() == prep.calls_len && frame.args.len() == n => {}
+        _ => return false,
+    }
+    // The current frame is the caller (the prepared one is above it).
+    let Some(r) = vm
+        .cv_make_ref_fast(*pid)
+        .or_else(|| vm.place_make_ref_quiet(*pid))
+    else {
+        return false;
+    };
+    let Some(frame) = vm.frames.vec.get_mut(live) else {
+        return false;
+    };
+    frame.args.push(Some(Value::Reference(r)));
+    prep.n = n + 1;
+    prep.limit = next;
+    true
+}
+
+/// `ZEND_SEND_VAL_EX` / `ZEND_SEND_VAR_NO_REF_EX` of a value or a call's
+/// result into a prepared builtin call at a `ZEND_ARG_SEND_PREFER_REF`
+/// parameter (`current(f())`, `array_multisort($a, SORT_DESC)`): php-src
+/// passes it by value, with no notice and no error, so [`send`] takes it
+/// as it takes a by-value argument, and the send limit moves to the next
+/// by-reference parameter. A temporary holding a reference (a function
+/// returning by reference) is sent as that reference there
+/// (`ZVAL_COPY_VALUE` of the variable), which `send` would dereference: it
+/// is left to the generic send, as is every other argument and parameter.
+#[inline(never)]
+fn send_prefer_ref_value(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let (ArgSrc::Val(op) | ArgSrc::CallResult(op)) = src else {
+        return false;
+    };
+    let Callee::Native(b, _) = &prep.callee else {
+        return false;
+    };
+    let n = prep.n;
+    let limit = native_limit(b);
+    if n >= limit || b.param_ref_at(n) != (true, true) {
+        return false;
+    }
+    if let Operand::Tmp(t) = op {
+        let held = vm
+            .frames
+            .live
+            .checked_sub(1)
+            .and_then(|i| vm.frames.vec.get(i))
+            .and_then(|caller| caller.tmps.get(*t as usize));
+        if !matches!(held, Some(v) if !matches!(v, Value::Reference(_))) {
+            return false;
+        }
+    }
+    let next = (n + 1..limit)
+        .find(|&i| b.param_ref_at(i).0)
+        .unwrap_or(limit);
+    let saved = prep.limit;
+    prep.limit = n + 1;
+    if !send(vm, prep, src) {
+        prep.limit = saved;
+        return false;
+    }
+    prep.limit = next;
+    true
+}
+
 /// The value of compiled variable `cv` of `frame` as an argument: a copy,
-/// dereferenced; `None` when it is undefined.
+/// dereferenced; `None` when it is undefined (`ZEND_SEND_VAR`'s
+/// `ZVAL_COPY_DEREF`).
+///
+/// A scalar is copied inline; anything that owns a count (a string, an
+/// array, an object) or sits behind a reference is copied by
+/// [`cv_value_counted`]. Out of line as a whole, an int argument cost ~33
+/// instructions here: the call, the tag dispatch of the copy and the
+/// value returned through memory.
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice in `send`, once per argument
 fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {
-    match frame
+    let v = frame
         .cvs
         .get(cv as usize)
-        .and_then(crate::vm::CvSlot::get)?
-    {
-        Value::Reference(r) => Some(r.get()),
-        v => Some(clone_value(v)),
+        .and_then(crate::vm::CvSlot::get)?;
+    Some(match v {
+        Value::Null => Value::Null,
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(f) => Value::Float(*f),
+        _ => cv_value_counted(v),
+    })
+}
+
+/// [`cv_value`] of a value that is not a scalar, out of line: a string's,
+/// an array's or an object's handle counted in line (`Z_TRY_ADDREF`),
+/// where `Value::clone` was a further out-of-line call dispatching on the
+/// tag again (~36 instructions an argument).
+#[inline(never)]
+fn cv_value_counted(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) => r.get(),
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        Value::Object(o) => Value::Object(o.clone()),
+        v => clone_value(v),
     }
 }
 
@@ -2364,9 +2987,9 @@ pub(super) fn enter(
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
     };
-    let bound = uf.plain_params();
-    // (More arguments only for a variadic function: `user_limit`.)
-    if n < uf.required as usize {
+    // (`n <= prep.limit`, at most the declared parameters but into a
+    // variadic one: `prepares`.)
+    if n < uf.required as usize || n > prep.limit {
         return Err(prep);
     }
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
@@ -2377,7 +3000,7 @@ pub(super) fn enter(
         return Err(prep);
     }
     if uf.call_shape() == CallShape::TYPED {
-        for (p, slot) in uf.params.iter().zip(&frame.cvs[..n.min(bound)]) {
+        for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
             if let Some(ty) = &p.ty {
                 if !slot
                     .get()
@@ -2394,10 +3017,15 @@ pub(super) fn enter(
     frame.is_ctor = prep.ctor;
     // The passed-argument count (`ZEND_CALL_NUM_ARGS`): each argument is
     // already in its compiled variable, so the buffer stays empty and the
-    // count is kept instead (`Frame::num_args`); extra arguments of a
-    // variadic function are in the buffer, at their positions (`send`).
-    if n <= bound && !frame.args.is_empty() {
+    // count is kept instead (`Frame::num_args`).
+    if !frame.args.is_empty() {
         frame.args.clear();
+    }
+    // The arguments past a variadic function's declared parameters were
+    // sent into the compiled variables from the variadic one's on: they
+    // go to the argument buffer, where its `RECV_VARIADIC` collects them.
+    if uf.flags & flags::VARIADIC != 0 && n >= uf.params.len() {
+        variadic_extras(frame, uf.params.len() - 1, n);
     }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
     {
@@ -2408,7 +3036,9 @@ pub(super) fn enter(
     if n < uf.params.len() {
         bind_literal_defaults(frame, uf, n);
     }
-    if prep.closure {
+    // (Its own borrow of the closure's data and the downcast: ~30
+    // instructions a closure call, for nothing without `use`s.)
+    if prep.binds {
         bind_closure_vars(frame);
     }
     // Released by `Frame::release_direct` at its return.
@@ -2466,6 +3096,25 @@ fn bind_literal_defaults(frame: &mut crate::vm::Frame, uf: &UserFunction, n: usi
     frame.ip = ip;
 }
 
+/// The arguments `v..n` of a prepared call of a variadic function, sent
+/// into the compiled variables from the variadic parameter's (`v`) on,
+/// moved to the frame's argument buffer after a `None` for each declared
+/// parameter bound into its variable: `Vm::push_user_call`'s layout, which
+/// `RECV_VARIADIC` (`Vm::op_recv_variadic`), `func_get_args()` and
+/// backtraces read. The variables are left undefined, as a call leaves
+/// them.
+#[cold]
+#[inline(never)]
+fn variadic_extras(frame: &mut crate::vm::Frame, v: usize, n: usize) {
+    for _ in 0..v {
+        frame.args.push(None);
+    }
+    for i in v..n {
+        let arg = frame.cvs.get_mut(i).and_then(|slot| slot.as_mut().take());
+        frame.args.push(arg);
+    }
+}
+
 /// `ZEND_DO_UCALL` of the prepared call when the function's whole body
 /// runs as machine code ([`super::jit::native_call`]: a pure int function,
 /// its recursion included): a call that passes every declared parameter
@@ -2507,6 +3156,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
     };
     for (a, slot) in args.iter_mut().zip(slots) {
         let Some(Value::Int(v)) = slot.get() else {
+            not_int_argument(uf);
             return false;
         };
         *a = *v;
@@ -2532,6 +3182,37 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
     true
 }
 
+/// The plain calls of a function not compiled whole yet, counted by
+/// [`compiled`] as `jit::native_call` counts its own toward compiling the
+/// function (its `NATIVE_HOT_CALLS`).
+const NATIVE_TRY_CALLS: u32 = 100;
+
+/// [`compiled`] of a call that passed a parameter something other than an
+/// int, which native code cannot take: while the function is still being
+/// counted ([`crate::func::CallShape::native`] 0), the call counts toward
+/// it as `jit::native_call` counts an int call, and when this call reaches
+/// the count first, the function is given up ([`super::jit::NATIVE_REFUSED`]):
+/// its later calls are not looked at again. Before, such a call returned
+/// before `native_call` counted anything, so a function called with
+/// strings or arrays was never decided on and every call of it paid the
+/// frame lookup and the argument test (53 instructions instead of the 19
+/// of a refused function's call). Whether a function runs as native code
+/// is not observable.
+#[inline(never)]
+fn not_int_argument(uf: &UserFunction) {
+    let shape = &uf.call_shape;
+    if shape.native.get() != 0 {
+        return;
+    }
+    let n = shape.native_count.get() + 1;
+    if n >= NATIVE_TRY_CALLS {
+        shape.native_count.set(0);
+        shape.native.set(super::jit::NATIVE_REFUSED);
+    } else {
+        shape.native_count.set(n);
+    }
+}
+
 /// Whether the prepared call is a builtin's ([`call_native`]).
 impl Prepared {
     pub(super) fn is_native(&self) -> bool {
@@ -2544,6 +3225,53 @@ impl Prepared {
             Callee::Quick(id, _) => Some(id),
             _ => None,
         }
+    }
+}
+
+/// Whether every argument of a direct builtin call is a value its
+/// parameter takes as it is ([`crate::func::Builtin::accepts`]; `last`,
+/// the table's last entry, covers the variadic parameter's positions).
+///
+/// Always inline, a plain loop: out of line, as an `all` over the
+/// enumerated iterator, it cost ~33 instructions a one-argument call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `call_native`
+fn args_accepted(args: &[Option<Value>], table: &[u32], last: u32) -> bool {
+    for (i, arg) in args.iter().enumerate() {
+        let bits = table.get(i).copied().unwrap_or(last);
+        match arg {
+            Some(v) if crate::func::accept_bit(v) & bits != 0 => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// `ZEND_DO_ICALL`'s store of a builtin's result into the caller's
+/// temporary `dst` (`Vm::set_tmp` once the call frame is popped), the old
+/// value released only when it owns something. In line: the closure
+/// calling `set_tmp` came out of line, ~35 instructions a call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `call_native`
+fn store_native_result(vm: &mut Vm, dst: u32, v: Value) {
+    let top = vm.frames.live.wrapping_sub(1);
+    let Some(slot) = vm
+        .frames
+        .vec
+        .get_mut(top)
+        .and_then(|f| f.tmps.get_mut(dst as usize))
+    else {
+        drop(v);
+        return;
+    };
+    let old = std::mem::replace(slot, v);
+    if matches!(
+        old,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(old);
+    } else {
+        drop(old);
     }
 }
 
@@ -2611,37 +3339,47 @@ pub(super) fn call_native(
             return Err(prep);
         }
         // The types zpp accepts as they are (`call_builtin_impl`'s
-        // positional fast path); anything else is coerced or rejected
-        // there.
-        for (i, arg) in frame.args.iter().enumerate() {
-            let (Some(v), Some(p)) = (arg, sig.params.get(i).or(sig.params.last())) else {
+        // positional fast path; anything else is coerced or rejected
+        // there), precomputed per parameter (`Builtin::accepts`): a load
+        // and a test per argument, nothing for a function whose
+        // parameters take anything. A native callee's sent arguments are
+        // all `Some` (`send`, `send_ref`).
+        let table = b.accepts();
+        if let Some(&last) = table.last() {
+            if !args_accepted(&frame.args, table, last) {
                 return Err(prep);
-            };
-            if let Some(ty) = &p.ty {
-                // (A by-reference parameter's type is the handler's to
-                // check, as in `call_builtin_impl`.)
-                if !p.by_ref
-                    && p.promote & crate::opcode::UNCHECKED_TYPE == 0
-                    && !ty.is_mixed()
-                    && !accepts_without_coercion(ty.mask, v)
-                {
-                    return Err(prep);
-                }
             }
         }
     }
-    let b = Rc::clone(b);
     let kind = *kind;
+    // The call is made from here on: the handle moves out of the prepared
+    // call (a clone, and the drop of `Prepared` with its release, cost
+    // ~15 instructions).
+    let Callee::Native(b, _) = prep.callee else {
+        // (Matched above.)
+        return Ok(Ok(()));
+    };
+    // A by-reference argument was sent ([`send_ref`]).
+    let sent_ref = b.sends_ref_within(n);
     // The handler's copies of the arguments (php-src's handler reads them
     // in the frame), then the declared defaults of the omitted trailing
-    // parameters, not marked as passed.
-    let mut values = vm.call_bufs.values.pop().unwrap_or_default();
-    let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
-    values.reserve(n);
-    for arg in &vm.frames.vec[live].args {
-        values.push(arg.as_ref().map_or(Value::Null, clone_value));
-    }
-    passed.resize(n, true);
+    // parameters, not marked as passed, in a pooled record taken whole for
+    // the call (`CallBufs::take_args`; a nested builtin call meanwhile
+    // takes the next one).
+    //
+    // A `match`, not `map_or(Value::Null, ..)`: that builds the null
+    // first and drops it (an out-of-line drop call per argument). One
+    // `extend` of the frame's slice and one `resize` store each length
+    // once (a `push` per argument tested the capacity and stored the
+    // length every time).
+    let mut args = vm.call_bufs.take_args();
+    args.values
+        .extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
+            Some(v) => crate::func::copy_arg(v),
+            None => Value::Null,
+        }));
+    let given = args.values.len();
+    args.passed.resize(given, true);
     let sig = b.signature();
     let nparams = sig.params.len();
     let upto = if b.flags & flags::VARIADIC != 0 {
@@ -2649,54 +3387,78 @@ pub(super) fn call_native(
     } else {
         nparams
     };
-    while values.len() < upto {
-        let i = values.len();
+    while args.values.len() < upto {
+        let i = args.values.len();
         match vm.builtin_default(&b, i) {
             Some(d) if i >= sig.required as usize => {
-                values.push(d);
-                passed.push(false);
+                args.values.push(d);
+                args.passed.push(false);
             }
             _ => break,
         }
     }
     // `zend_vm_stack_push_call_frame` + `EG(current_execute_data) = call`:
     // the frame as `FrameStack::push_builtin` leaves it.
+    //
+    // A released frame's `func` and `builtin_name` are empty
+    // (`Frame::release_native`), as `magic_call_name` normally is: each
+    // is stored through `replace`, whose old value is dropped only when
+    // there is one (a plain assignment called the out-of-line drop of the
+    // old `Option` every time).
     {
         let frame = &mut vm.frames.vec[live];
         frame.reinit_for_builtin(&vm.empty_code);
-        frame.func = Some(Func::Builtin(Rc::clone(&b)));
-        frame.builtin_name = (kind == PlainCall::Named).then(|| b.name.clone());
+        if let Some(old) = frame.func.replace(Func::Builtin(Rc::clone(&b))) {
+            drop(old);
+        }
+        let name = (kind == PlainCall::Named).then(|| b.name.clone());
+        if let Some(old) = std::mem::replace(&mut frame.builtin_name, name) {
+            drop(old);
+        }
         frame.observer_hidden = false;
     }
     // `SAVE_OPLINE()`: the handler may report the caller's line.
     vm.frames.vec[live - 1].ip = caller_ip;
     vm.frames.live = live + 1;
     vm.pending_call_dst = dst;
-    vm.magic_call_name = None;
+    if vm.magic_call_name.is_some() {
+        vm.magic_call_name = None;
+    }
     let handler = b.handler;
     // A method's `$this` and called scope, readied on the frame by
     // `prepare_method` (a function's frame has none).
-    let (this, called) = {
+    {
         let frame = &vm.frames.vec[live];
-        (frame.this.clone(), frame.called.clone())
-    };
-    let mut args = Args {
-        values,
-        passed,
-        named: Vec::new(),
-        this,
-        called,
-        func: Some(b),
-    };
+        if let Some(this) = &frame.this {
+            args.this = Some(this.clone());
+        }
+        if let Some(called) = &frame.called {
+            args.called = Some(Rc::clone(called));
+        }
+    }
+    args.func = Some(b);
     let mut r = handler(vm, &mut args);
+    // `zend_try_assign_typed_ref`: what the handler wrote to a typed
+    // by-reference argument (a typed property sent by reference, a
+    // variable bound to one) is checked and stored when it returns, and a
+    // refused value's `TypeError` is this call's, as on the general path
+    // (`Vm::call_builtin_impl`). Only a call that was sent a reference
+    // can have queued such a write.
+    if sent_ref {
+        r = vm.flush_typed_arg_writes(r);
+    }
     if r.is_ok() {
         if let Err(e) = vm.check_interrupt() {
             r = Err(e);
         }
     }
-    let Args { values, passed, .. } = args;
-    vm.put_val_vec(values);
-    vm.put_bool_vec(passed);
+    if sent_ref {
+        // The handler's handles of the sent references are kept until the
+        // variables are unwrapped below (`release_copies_but_refs`).
+        release_copies_but_refs(&mut args.values, &vm.frames.vec[live].args);
+    } else {
+        args.release_in_place();
+    }
     // Released by the handler, destructed while its frame is current.
     if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
         if let Err(e) = vm.run_pending_destructors() {
@@ -2710,6 +3472,14 @@ pub(super) fn call_native(
             };
         }
     }
+    if sent_ref {
+        if vm.frames.live == live + 1 {
+            unwrap_sent_refs(vm, live, &args.values);
+        }
+        args.release_in_place();
+    }
+    // Emptied (`Args::release_in_place`), back to the pool.
+    vm.call_bufs.put_args(args);
     // Popped off the VM stack, frames left above it (none, normally)
     // first. Released in place (`release_native`), its argument buffer
     // stays with the pooled frame for the next call at this depth.
@@ -2732,8 +3502,12 @@ pub(super) fn call_native(
         // Anything else as the generic call releases it.
         vm.pop_frames_to(live + 1);
     }
-    Ok(r.map(|v| match dst {
-        Some(d) => vm.set_tmp(d, v),
+    let v = match r {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(e)),
+    };
+    match dst {
+        Some(d) => store_native_result(vm, d, v),
         None => {
             if matches!(
                 v,
@@ -2744,7 +3518,94 @@ pub(super) fn call_native(
                 drop(v);
             }
         }
-    }))
+    }
+    Ok(Ok(()))
+}
+
+/// The first half of [`Args::release_into`]'s release of a builtin call's
+/// argument copies when a reference was sent ([`call_native`]): every copy
+/// released front to back, as there, except the handler's untouched
+/// handles of the sent references (the same reference as the frame's
+/// argument at that position), which are left in place for
+/// [`unwrap_sent_refs`] and released by `release_into` after it. Those
+/// can never be a last handle (the frame holds one), so holding them a
+/// little longer frees and destructs nothing later than before.
+#[inline(never)]
+fn release_copies_but_refs(values: &mut [Value], sent: &[Option<Value>]) {
+    for (i, slot) in values.iter_mut().enumerate() {
+        let keep = match &*slot {
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => true,
+            Value::Reference(c) => {
+                matches!(sent.get(i), Some(Some(Value::Reference(r))) if php_runtime::PhpRef::ptr_eq(c, r))
+            }
+            _ => false,
+        };
+        if !keep {
+            drop(std::mem::take(slot));
+        }
+    }
+}
+
+/// After a builtin call [`send_ref`] sent a variable to by reference
+/// (`live` the index of the builtin's frame, still current): each such
+/// variable whose reference nobody else holds (two handles: the
+/// variable's and the call frame's argument, about to be released) gets
+/// the referenced value back as a plain value. php-src leaves it a
+/// reference counted once, which no program can tell from the value: a
+/// read, a write, `count()`, `foreach`, `get_defined_vars()` (whose copy
+/// of the table derefs it, `zend_array_dup_element`) and a later `&` all
+/// behave the same, and a variable bound by `global`, `static`, a
+/// by-reference closure `use`, another variable or an element, or kept by
+/// the handler (`mysqli_stmt_bind_param()`) has more handles and is left
+/// alone, as is a reference with type sources (a typed property's). Our
+/// fast paths for reads, writes and `count()` of a variable mostly decline
+/// a reference: `$m[1]` after `preg_match($re, $s, $m)` cost ~95
+/// instructions more, `count($stack)` after `array_pop($stack)` ~440 and
+/// assigning the variable ~420.
+///
+/// `held` are the handler's copies of the arguments, released after this:
+/// a reference still among them has one handle more (three, then), and is
+/// unwrapped while that copy holds it, so that the copy's release later
+/// finds the reference holding nothing collectable. Released first (the
+/// variable's handle, then the copy's), each decrement left the reference
+/// holding the array the handler wrote (`$matches`) with handles to spare,
+/// a possible cycle root: `ref_roots::buffer` buffered it (~85
+/// instructions a `preg_match($re, $s, $m)`), which php-src's
+/// `zval_ptr_dtor_nogc` of the call's arguments never does.
+#[inline(never)]
+fn unwrap_sent_refs(vm: &mut Vm, live: usize, held: &[Value]) {
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first()) else {
+        return;
+    };
+    // A handler that attached the caller's symbol table (`extract()`)
+    // leaves the variables to it.
+    if caller.symtab_attached {
+        return;
+    }
+    for (i, arg) in frame.args.iter().enumerate() {
+        let Some(Value::Reference(r)) = arg else {
+            continue;
+        };
+        let copies = match held.get(i) {
+            Some(Value::Reference(c)) if php_runtime::PhpRef::ptr_eq(c, r) => 3,
+            _ => 2,
+        };
+        if r.refcount() != copies || r.meta().is_some() {
+            continue;
+        }
+        let Some(slot) = caller.cvs.iter_mut().find(
+            |s| matches!(s.get(), Some(Value::Reference(c)) if php_runtime::PhpRef::ptr_eq(c, r)),
+        ) else {
+            continue;
+        };
+        let Some(v) = r.try_borrow_mut().map(|mut v| std::mem::take(&mut *v)) else {
+            continue;
+        };
+        // The variable's handle: the argument's still holds the
+        // reference, so nothing is released here.
+        drop(slot.set(Some(v)));
+    }
 }
 
 /// Whether a call of pure builtin `b` with `n` arguments is pure: always,
@@ -2930,6 +3791,7 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
             // readied.
             let mut call = PendingCall {
                 direct: prep.fcall,
+                dynamic: prep.closure,
                 this: frame.this.take(),
                 scope: frame.scope.take(),
                 called: frame.called.take(),
@@ -2947,9 +3809,6 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
             return;
         }
     };
-    // (A variadic function's extra arguments are in the frame's argument
-    // buffer, at their positions: `send`.)
-    let bound = uf.plain_params().min(prep.n);
     let mut call = PendingCall {
         direct: prep.fcall,
         dynamic: prep.closure,
@@ -2960,14 +3819,8 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
         closure: frame.closure.take(),
         ..PendingCall::new(Func::User(uf))
     };
-    for (arg, slot) in call.inline_args.iter_mut().zip(&mut frame.cvs[..bound]) {
+    for (arg, slot) in call.inline_args.iter_mut().zip(&mut frame.cvs[..prep.n]) {
         *arg = slot.as_mut().take();
-    }
-    for (arg, sent) in call.inline_args[bound..prep.n]
-        .iter_mut()
-        .zip(frame.args.iter_mut().skip(bound))
-    {
-        *arg = sent.take();
     }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
     {
@@ -2975,5 +3828,837 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
     }
     let at = prep.calls_len.min(caller.calls.len());
     caller.calls.insert(at, call);
-    frame.clear_for_reuse(&vm.empty_code);
+    frame.release_unentered(&vm.empty_code);
+}
+
+// ----------------------------------------------------------------------
+// `call_user_func()` / `call_user_func_array()` written by name
+// ----------------------------------------------------------------------
+
+/// `ZEND_INIT_USER_CALL` of `Op::InitUserCall { callee, .. }` at `at` in
+/// the current frame, on the call site's cache hit
+/// (`Vm::user_call_cached`, which `Vm::remember_user_call` filled): the
+/// callback, read from `callee` (a literal, a temporary, a compiled
+/// variable), is the function a string names as last time, the method an
+/// `[$object, "name"]` array names for the same class and calling scope,
+/// the static method a `"Class::name"` string or a `['Class', 'name']`
+/// array names likewise, a closure, or an invokable object. When the callee is a user function
+/// whose declaration makes a plain call (or a builtin whose call is
+/// plain), the pooled frame above the current one is readied for it as
+/// [`prepare`], [`prepare_method`] and [`prepare_closure`] ready it, and
+/// the call is prepared: a dynamic call (`ZEND_CALL_DYNAMIC`, the pending
+/// call's `dynamic`), not a direct one. A temporary callback is consumed,
+/// as the generic op reads it. `None`, having changed nothing, otherwise:
+/// the generic op resolves the callback (`zend_is_callable`) and reports
+/// what it must.
+pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Option<Prepared> {
+    if vm.observer.enabled {
+        return None;
+    }
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return None;
+    };
+    let prepared = {
+        let cb = match callee {
+            Operand::Cv(cv) if !caller.symtab_attached => caller
+                .cvs
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)?,
+            Operand::Tmp(t) => caller.tmps.get(t as usize)?,
+            Operand::Lit(l) => caller.code.literals.get(l as usize)?,
+            _ => return None,
+        };
+        match cb {
+            Value::Str(s) => user_call_named(caller, frame, s.as_bytes(), at)?,
+            Value::Array(a) => user_call_method(caller, frame, a, at)?,
+            Value::Object(o) => user_call_object(caller, frame, o)?,
+            _ => return None,
+        }
+    };
+    // `FREE_OP2` of a temporary callback (the call holds what it needs).
+    if let Operand::Tmp(t) = callee {
+        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    Some(prepared)
+}
+
+/// `zend_is_callable` of the callback `callee` of the `InitUserCall` at
+/// `at` (the current frame) when the call site's cache missed, for the
+/// two callbacks a hook list holds, without the generic resolution's
+/// scope context and name copies: a function named by a string (any
+/// case, one leading `\`), found by one lookup in the function table;
+/// an `[$object, "name"]` array naming a public, concrete user method the
+/// object's class declares or inherits, found by one lookup in its method
+/// table, when the calling scope has no private method of that name (which
+/// `zend_is_callable_check_func` would pick instead). The resolution is
+/// what the generic one gives (`PendingCall` with `this`, the declaring
+/// scope and the object's class as the called scope; a dynamic call), and
+/// is remembered in the site's cache as `Vm::remember_user_call` would
+/// remember it; the frame's resume point is stored first (`SAVE_OPLINE()`)
+/// and a temporary callback is released (`FREE_OP2`). `None`, having
+/// changed nothing, for anything else: names with `::`, references,
+/// `__call`, private and protected methods, a class whose objects add
+/// methods of their own (`get_method`), closures and invokable objects,
+/// a name not found (the generic op reports it).
+pub(super) fn user_call_quick(vm: &mut Vm, callee: Operand, at: usize) -> Option<PendingCall> {
+    let (cb, call) = {
+        let f = vm.frames.vec.get(vm.frames.live.checked_sub(1)?)?;
+        let cb = match callee {
+            Operand::Cv(cv) if !f.symtab_attached => {
+                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)?
+            }
+            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            Operand::Lit(l) => f.code.literals.get(l as usize)?,
+            _ => return None,
+        };
+        let call = match cb {
+            Value::Str(s) => quick_function(&vm.functions, s.as_bytes())?,
+            Value::Array(a) => quick_method(f, a)?,
+            _ => return None,
+        };
+        (cb.clone(), call)
+    };
+    vm.frame_mut().ip = at + 1;
+    vm.remember_user_call(&cb, &call);
+    // `FREE_OP2` of a temporary callback (the call holds what it needs:
+    // the function, or the method and its object).
+    if let Operand::Tmp(t) = callee {
+        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    Some(call)
+}
+
+/// The lowercase copy of `name` in `buf`, for a table lookup without an
+/// allocation; `None` for a name longer than the buffer (the generic
+/// resolution takes it).
+#[inline]
+fn lower_into<'b>(buf: &'b mut [u8; 64], name: &[u8]) -> Option<&'b [u8]> {
+    let lc = buf.get_mut(..name.len())?;
+    for (d, s) in lc.iter_mut().zip(name) {
+        *d = s.to_ascii_lowercase();
+    }
+    Some(lc)
+}
+
+/// [`user_call_quick`] of a function named by a string: the function the
+/// function table holds under its lowercase name, without a leading `\`
+/// (`zend_is_callable`'s first lookup).
+fn quick_function(functions: &crate::class::NameMap<Func>, name: &[u8]) -> Option<PendingCall> {
+    let name = name.strip_prefix(b"\\").unwrap_or(name);
+    if name.windows(2).any(|w| w == b"::") {
+        return None;
+    }
+    let mut buf = [0u8; 64];
+    let func = functions.get(lower_into(&mut buf, name)?)?.clone();
+    let mut call = PendingCall::new(func);
+    call.dynamic = true;
+    Some(call)
+}
+
+/// [`user_call_quick`] of an `[$object, "name"]` array, in the calling
+/// frame `f`.
+fn quick_method(f: &crate::vm::Frame, a: &php_runtime::ZArray) -> Option<PendingCall> {
+    use php_runtime::ArrayKey;
+    if a.len() != 2 {
+        return None;
+    }
+    let (Some(Value::Object(o)), Some(Value::Str(m))) =
+        (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+    else {
+        return None;
+    };
+    let name = m.as_bytes();
+    if name.windows(2).any(|w| w == b"::") {
+        return None;
+    }
+    let cls = crate::object::class_of(o);
+    if cls.hooks.as_ref().is_some_and(|h| h.get_method.is_some()) {
+        return None;
+    }
+    let mut buf = [0u8; 64];
+    let lc = lower_into(&mut buf, name)?;
+    let meth = cls.methods.get(lc)?;
+    if meth.visibility() != flags::PUBLIC
+        || meth.is_abstract()
+        || !matches!(meth.func, Func::User(_))
+    {
+        return None;
+    }
+    // `zend_is_callable_check_func`: a private method of the calling
+    // scope with that name is the one called when the method's class is
+    // related to it; any private one of that name goes the generic way.
+    if f.scope
+        .as_ref()
+        .and_then(|s| s.methods.get(lc))
+        .is_some_and(|pm| pm.visibility() == flags::PRIVATE)
+    {
+        return None;
+    }
+    let mut call = PendingCall {
+        this: (!meth.is_static()).then(|| o.clone()),
+        scope: Some(meth.scope()),
+        called: Some(Rc::clone(cls)),
+        ..PendingCall::new(meth.func.clone())
+    };
+    call.dynamic = true;
+    Some(call)
+}
+
+/// The call `Vm::user_call_pending` resolved for an `InitUserCall` the
+/// call site's cache did not hold, prepared as [`prepare_user_call`]
+/// prepares a hit: a user function, method or closure whose declaration
+/// makes a plain call, with the call's `$this`, scopes and closure on the
+/// readied frame, or a plain builtin function. `Err` gives the call back,
+/// nothing readied, for anything else (a `__call` trampoline, a callee
+/// that makes no plain call, an observer): the caller pushes it as the
+/// pending call, as the generic op would have.
+#[allow(clippy::result_large_err)] // the call given back is pushed as it is
+pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared, PendingCall> {
+    if vm.observer.enabled
+        || call.magic_name.is_some()
+        || call.pfa.is_some()
+        || call.is_ctor
+        || call.has_named
+        || call.inline_count != 0
+        || !call.args.is_empty()
+        || !call.named.is_empty()
+    {
+        return Err(call);
+    }
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return Err(call);
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return Err(call);
+    };
+    let (callee, limit) = match &call.func {
+        Func::User(uf) => {
+            // A closure's static variables are its own (as for `$f()`,
+            // [`prepare_closure`]).
+            let limit = if call.closure.is_some() {
+                (uf.call_shape() != CallShape::NOT_PLAIN).then(|| uf.params.len().min(MAX_ARGS))
+            } else {
+                prepares(uf)
+            };
+            let Some(limit) = limit else {
+                return Err(call);
+            };
+            (Callee::User(Rc::clone(uf)), limit)
+        }
+        Func::Builtin(b) => {
+            if call.this.is_some()
+                || call.scope.is_some()
+                || call.called.is_some()
+                || call.closure.is_some()
+                || b.plain_call() != PlainCall::Named
+                || forbids_dynamic_call(b)
+                || !frame.args.is_empty()
+            {
+                return Err(call);
+            }
+            let limit = if b.flags & flags::VARIADIC != 0 {
+                MAX_ARGS
+            } else {
+                b.signature().params.len().min(MAX_ARGS)
+            };
+            (Callee::Native(Rc::clone(b), PlainCall::Named), limit)
+        }
+    };
+    if let Callee::User(uf) = &callee {
+        ready_frame(frame, uf);
+        let PendingCall {
+            this,
+            scope,
+            called,
+            closure,
+            ..
+        } = call;
+        frame.this = this;
+        frame.scope = scope;
+        frame.called = called;
+        frame.closure = closure;
+    }
+    Ok(Prepared {
+        callee,
+        limit,
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        binds: true,
+        ctor: false,
+    })
+}
+
+/// The builtins `zend_forbid_dynamic_call()` refuses to run as a dynamic
+/// call (`Vm::forbidden_dynamic_call`): left to the generic call, which
+/// raises the error.
+fn forbids_dynamic_call(b: &Builtin) -> bool {
+    matches!(
+        b.name.as_bytes(),
+        b"extract"
+            | b"compact"
+            | b"get_defined_vars"
+            | b"func_get_args"
+            | b"func_get_arg"
+            | b"func_num_args"
+    )
+}
+
+/// [`prepare_user_call`] of a string: a function by its name
+/// ([`user_call_function`]), else a static method by `"Class::name"`
+/// ([`user_call_static`]).
+fn user_call_named(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    name: &[u8],
+    at: usize,
+) -> Option<Prepared> {
+    if let Some(p) = user_call_function(caller, frame, name, at) {
+        return Some(p);
+    }
+    let colons = crate::call::find_double_colon(name)?;
+    user_call_static(
+        caller,
+        frame,
+        name.get(..colons)?,
+        name.get(colons + 2..)?,
+        at,
+    )
+}
+
+/// [`prepare_user_call`] of a static method named by a `"Class::name"`
+/// string or a `['Class', 'name']` array (`class`, `method`): the method
+/// the op's slot of the method cache holds for that class, name and
+/// calling scope (`crate::call::user_call_static_hit`), a user method
+/// whose declaration makes a plain call, with its declaring scope and the
+/// class as the called scope (no `$this`).
+fn user_call_static(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    class: &[u8],
+    method: &[u8],
+    at: usize,
+) -> Option<Prepared> {
+    let (func, scope, called) = crate::call::user_call_static_hit(caller, at, class, method)?;
+    let Func::User(uf) = func else {
+        return None;
+    };
+    let limit = prepares(&uf)?;
+    ready_frame(frame, &uf);
+    frame.scope = scope;
+    frame.called = Some(called);
+    Some(Prepared {
+        limit,
+        callee: Callee::User(uf),
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        binds: true,
+        ctor: false,
+    })
+}
+
+/// [`prepare_user_call`] of a function named by the string `name` (any
+/// case, one leading `\`): the function the call site's slot past the
+/// literals holds (`Vm::user_call_cached`'s), when its name is that one.
+fn user_call_function(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    name: &[u8],
+    at: usize,
+) -> Option<Prepared> {
+    let name = name.strip_prefix(b"\\").unwrap_or(name);
+    let slot = caller.code.literals.len() + at + 1;
+    let func = {
+        let cache = caller.code.fcall_cache.try_borrow().ok()?;
+        let entry = cache.get(slot)?.as_ref()?;
+        // A builtin the tape does not call goes the generic way without
+        // its handle being copied first.
+        if let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func {
+            if b.plain_call() != PlainCall::Named || forbids_dynamic_call(b) {
+                return None;
+            }
+        }
+        entry.get()?
+    };
+    if !func.name().as_bytes().eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let (callee, limit) = match func {
+        Func::User(uf) => {
+            let limit = prepares(&uf)?;
+            ready_frame(frame, &uf);
+            (Callee::User(uf), limit)
+        }
+        Func::Builtin(b) => {
+            // A pooled frame's argument buffer is empty.
+            if !frame.args.is_empty() {
+                return None;
+            }
+            // Past the declared parameters only into a variadic one (else
+            // the generic call reports the count).
+            let limit = if b.flags & flags::VARIADIC != 0 {
+                MAX_ARGS
+            } else {
+                b.signature().params.len().min(MAX_ARGS)
+            };
+            (Callee::Native(b, PlainCall::Named), limit)
+        }
+    };
+    Some(Prepared {
+        callee,
+        limit,
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        binds: true,
+        ctor: false,
+    })
+}
+
+/// [`prepare_user_call`] of an `[$object, "name"]` array: the method the
+/// op's slot of the method cache holds for the object's class, the calling
+/// scope and that name (`Vm::user_call_cached`'s hit), a user method whose
+/// declaration makes a plain call, with `$this` (none for a static method),
+/// its declaring scope and the object's class as the called scope; of a
+/// `['Class', 'name']` array: [`user_call_static`].
+fn user_call_method(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    a: &php_runtime::ZArray,
+    at: usize,
+) -> Option<Prepared> {
+    use php_runtime::ArrayKey;
+    if a.len() != 2 {
+        return None;
+    }
+    let (o, m) = match (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) {
+        (Some(Value::Object(o)), Some(Value::Str(m))) => (o, m),
+        (Some(Value::Str(c)), Some(Value::Str(m))) => {
+            return user_call_static(caller, frame, c.as_bytes(), m.as_bytes(), at);
+        }
+        _ => return None,
+    };
+    let cls = crate::object::class_of(o);
+    let (uf, scope, is_static) = {
+        let cache = caller.code.method_cache.try_borrow().ok()?;
+        let e = cache.get(at)?.as_ref()?;
+        let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        if e.class_addr != Rc::as_ptr(cls) as usize
+            || e.scope_addr != scope_addr
+            || !e.name.as_bytes().eq_ignore_ascii_case(m.as_bytes())
+        {
+            return None;
+        }
+        let Some(Func::User(uf)) = e.func.get() else {
+            return None;
+        };
+        let scope = match &e.method_scope {
+            Some(w) => Some(w.upgrade()?),
+            None => None,
+        };
+        (uf, scope, e.is_static)
+    };
+    let limit = prepares(&uf)?;
+    ready_frame(frame, &uf);
+    frame.this = (!is_static).then(|| o.clone());
+    frame.scope = scope;
+    frame.called = Some(Rc::clone(cls));
+    Some(Prepared {
+        limit,
+        callee: Callee::User(uf),
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        binds: true,
+        ctor: false,
+    })
+}
+
+/// [`prepare_user_call`] of an object: a closure of a user function whose
+/// declaration makes a plain call, with the closure's `$this`, scopes and
+/// the closure itself (none for a fake one), as [`prepare_closure`]
+/// readies `$f()` (`zend_is_callable` resolves it as `Vm::closure_call`
+/// does); or an object of a class with an `__invoke` method that makes a
+/// plain call, the object its `$this` (`zend_is_callable`'s
+/// `get_closure` of an invokable object: no cache needed).
+fn user_call_object(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    o: &Obj,
+) -> Option<Prepared> {
+    let data = crate::object::data(o);
+    let calls_len = caller.calls.len();
+    if data.class.lc_name.as_bytes() == b"closure" {
+        let internal = data.internal.try_borrow().ok()?;
+        let d = internal
+            .as_ref()
+            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())?;
+        let Func::User(uf) = &d.func else {
+            return None;
+        };
+        if d.magic_name.is_some() || uf.call_shape() == CallShape::NOT_PLAIN {
+            return None;
+        }
+        let uf = Rc::clone(uf);
+        ready_frame(frame, &uf);
+        frame.this = d.this.clone();
+        frame.scope = d.scope.clone();
+        frame.called = d.called.clone();
+        frame.closure = if d.fake { None } else { Some(o.clone()) };
+        drop(internal);
+        return Some(Prepared {
+            limit: uf.params.len().min(MAX_ARGS),
+            callee: Callee::User(uf),
+            n: 0,
+            calls_len,
+            fcall: false,
+            closure: true,
+            binds: true,
+            ctor: false,
+        });
+    }
+    let cls = crate::object::class_of(o);
+    let m = cls.magic.invoke.as_ref()?;
+    let Func::User(uf) = &m.func else {
+        return None;
+    };
+    let limit = prepares(uf)?;
+    let scope = m.scope.upgrade()?;
+    let uf = Rc::clone(uf);
+    ready_frame(frame, &uf);
+    frame.this = Some(o.clone());
+    frame.scope = Some(scope);
+    frame.called = Some(Rc::clone(cls));
+    Some(Prepared {
+        limit,
+        callee: Callee::User(uf),
+        n: 0,
+        calls_len,
+        fcall: false,
+        closure: true,
+        binds: true,
+        ctor: false,
+    })
+}
+
+/// `ZEND_SEND_USER` of `src` as argument `n` (1-based) of the prepared
+/// call: [`send`] of the value. The prepared callee has no by-reference
+/// parameter (a plain call's declaration has none, a plain builtin call's
+/// signature neither), so the generic op's "must be passed by reference"
+/// case does not arise. `false`, having changed nothing, where [`send`]
+/// declines, and for an argument out of order.
+pub(super) fn send_user(vm: &mut Vm, prep: &mut Prepared, src: Operand, n: u32) -> bool {
+    if n as usize != prep.n + 1 {
+        return false;
+    }
+    send(vm, prep, &ArgSrc::Val(src))
+}
+
+/// `ZEND_SEND_ARRAY` of the whole array `src` (a literal, a temporary,
+/// a compiled variable) as the arguments of the prepared call, none sent
+/// before: when every key is an integer (positional arguments, in the
+/// array's order), no element is a reference, and the element count fits
+/// the callee (for a user function: its required parameters up to its
+/// declared ones, at most [`MAX_ARGS`]), each element is copied into the
+/// callee's compiled variable (a builtin's: its argument buffer) as the
+/// generic op's by-value sends copy it, and a temporary array is released
+/// after, as the generic op releases it. `false`, having changed nothing,
+/// otherwise: named arguments, references, by-reference parameters, the
+/// counts the generic call reports, a value that is not an array (the
+/// `TypeError`), an undefined variable (the warning).
+pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool {
+    use php_runtime::ArrayKey;
+    if prep.n != 0 {
+        return false;
+    }
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len {
+        return false;
+    }
+    let n = {
+        let v = match src {
+            Operand::Lit(l) => caller.code.literals.get(l as usize),
+            Operand::Tmp(t) => caller.tmps.get(t as usize),
+            Operand::Cv(cv) if !caller.symtab_attached => {
+                caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+            }
+            _ => None,
+        };
+        let Some(Value::Array(ht)) = v else {
+            return false;
+        };
+        let n = ht.len();
+        let fits = match &prep.callee {
+            Callee::User(uf) => n >= uf.required as usize && n <= prep.limit,
+            Callee::Native(..) => n <= prep.limit,
+            Callee::Quick(..) => false,
+        };
+        if !fits {
+            return false;
+        }
+        for (k, v) in ht.iter() {
+            if !matches!(k, ArrayKey::Int(_)) || v.is_reference() {
+                return false;
+            }
+        }
+        match &prep.callee {
+            Callee::User(_) => {
+                let Some(slots) = frame.cvs.get_mut(..n) else {
+                    return false;
+                };
+                for (slot, (_, v)) in slots.iter_mut().zip(ht.iter()) {
+                    // A prepared frame's compiled variables are empty.
+                    if let Some(old) = slot.as_mut().replace(clone_value(v)) {
+                        drop(old);
+                    }
+                }
+            }
+            // `ZEND_SEND_ARRAY` into the call frame's argument slots.
+            Callee::Native(..) => {
+                for (_, v) in ht.iter() {
+                    frame.args.push(Some(clone_value(v)));
+                }
+            }
+            Callee::Quick(..) => return false,
+        }
+        n
+    };
+    // `FREE_OP1` of a temporary array.
+    if let Operand::Tmp(t) = src {
+        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    prep.n = n;
+    true
+}
+
+/// `ZEND_SEND_ARRAY` of `array_slice($args, skip, $len)`
+/// (`zend_compile_func_cufa` with a literal offset; `Vm::op_send_array`'s
+/// sliced form): the elements `array_slice()` would give, by position
+/// whatever their keys, as the arguments of the prepared call, none sent
+/// before, when `src` is an array, `len` an int or `null` (the rest), no
+/// element passed is a reference and the count fits the callee as for
+/// [`send_array`]; each is copied in as [`send_array`] copies it, and a
+/// temporary array and length are released after (`FREE_OP1`,
+/// `FREE_OP2`). `false`, having changed nothing, otherwise: a length the
+/// generic op converts or rejects (`array_slice()`'s `?int $length`), an
+/// undefined variable (the warning), a value that is not an array (the
+/// `TypeError`), references, the counts the generic call reports.
+pub(super) fn send_array_slice(
+    vm: &mut Vm,
+    prep: &mut Prepared,
+    src: Operand,
+    len: Operand,
+    skip: u32,
+) -> bool {
+    if prep.n != 0 {
+        return false;
+    }
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len {
+        return false;
+    }
+    let n = {
+        let read = |o: Operand| match o {
+            Operand::Lit(l) => caller.code.literals.get(l as usize),
+            Operand::Tmp(t) => caller.tmps.get(t as usize),
+            Operand::Cv(cv) if !caller.symtab_attached => {
+                caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+            }
+            _ => None,
+        };
+        let Some(Value::Array(ht)) = read(src) else {
+            return false;
+        };
+        let (start, n) = match slice_range(ht.len(), read(len), skip) {
+            Some(r) => r,
+            None => return false,
+        };
+        let fits = match &prep.callee {
+            Callee::User(uf) => n >= uf.required as usize && n <= prep.limit,
+            Callee::Native(..) => n <= prep.limit,
+            Callee::Quick(..) => false,
+        };
+        if !fits || ht.iter().skip(start).take(n).any(|(_, v)| v.is_reference()) {
+            return false;
+        }
+        match &prep.callee {
+            Callee::User(_) => {
+                let Some(slots) = frame.cvs.get_mut(..n) else {
+                    return false;
+                };
+                for (slot, (_, v)) in slots.iter_mut().zip(ht.iter().skip(start)) {
+                    // A prepared frame's compiled variables are empty.
+                    if let Some(old) = slot.as_mut().replace(clone_value(v)) {
+                        drop(old);
+                    }
+                }
+            }
+            Callee::Native(..) => {
+                for (_, v) in ht.iter().skip(start).take(n) {
+                    frame.args.push(Some(clone_value(v)));
+                }
+            }
+            Callee::Quick(..) => return false,
+        }
+        n
+    };
+    // `FREE_OP1` of a temporary array, `FREE_OP2` of a temporary length
+    // (an int or null: its release runs nothing).
+    for o in [src, len] {
+        if let Operand::Tmp(t) = o {
+            if let Some(slot) = caller.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+    }
+    prep.n = n;
+    true
+}
+
+/// The first element and the count `array_slice()` of an array of
+/// `count` elements gives from `skip` (a non-negative literal) with the
+/// length `len` (`Vm::send_array_slice`'s arithmetic); `None` for a
+/// length that is not an int or `null` (converted or rejected by the
+/// generic op) or not at hand.
+fn slice_range(count: usize, len: Option<&Value>, skip: u32) -> Option<(usize, usize)> {
+    let skip = skip as usize;
+    let len = match len? {
+        Value::Int(l) => *l,
+        Value::Null => i64::try_from(count.wrapping_sub(skip)).unwrap_or(i64::MAX),
+        _ => return None,
+    };
+    if skip >= count {
+        return Some((skip, 0));
+    }
+    let rest = i64::try_from(count - skip).unwrap_or(i64::MAX);
+    let len = if len < 0 { len + rest } else { len };
+    if len <= 0 {
+        return Some((skip, 0));
+    }
+    Some((skip, usize::try_from(len.min(rest)).unwrap_or(usize::MAX)))
+}
+
+// ----------------------------------------------------------------------
+// Calls by a name known only at run time
+// ----------------------------------------------------------------------
+
+/// `ZEND_INIT_DYNAMIC_CALL` of `$f()` for a compiled variable holding a
+/// function's name (`zend_init_dynamic_call_string`): the function found
+/// by one lookup of its lowercase name (one leading `\` dropped), pushed
+/// as the pending call the generic op pushes (`ZEND_CALL_DYNAMIC`).
+/// `false`, having changed nothing, for anything else: a `Class::name`
+/// string, a name not found (the generic op's `Error`), another value, a
+/// reference, an undefined variable, a frame with an attached symbol
+/// table.
+pub(super) fn init_dyn_call_named(vm: &mut Vm, cv: u32) -> bool {
+    let call = {
+        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+            return false;
+        };
+        if f.symtab_attached {
+            return false;
+        }
+        let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+            return false;
+        };
+        match quick_function(&vm.functions, s.as_bytes()) {
+            Some(call) => call,
+            None => return false,
+        }
+    };
+    vm.frame_mut().calls.push(call);
+    true
+}
+
+/// `ZEND_INIT_STATIC_METHOD_CALL` of `$c::name()` (`class` the operand
+/// of a dynamic class: a compiled variable or a temporary holding a
+/// class's name, or a compiled variable holding an object; `lit` the
+/// method name literal) for a class already declared, found by one
+/// lookup of its name (`Vm::find_class`: no autoload), and a public,
+/// static, concrete method of it: pushed as the pending call with the
+/// method's declaring scope and the class as the called scope, no
+/// `$this` (php-src: `ce` the fetched class, `zend_std_get_static_method`
+/// finding a public method). A temporary name is released (`FREE_OP1`).
+/// `false`, having changed nothing, for anything else: an object in a
+/// temporary, a class not declared yet (the autoload, the `Error`), a
+/// method that is not public, not static (the `$this` rules), abstract,
+/// missing (`__callStatic`, the `Error`), a reference, an undefined
+/// variable, a frame with an attached symbol table.
+pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> bool {
+    let (cls, m) = {
+        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+            return false;
+        };
+        let v = match class {
+            Operand::Cv(cv) if !f.symtab_attached => {
+                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+            }
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            _ => None,
+        };
+        let cls = match v {
+            Some(Value::Str(name)) => match vm.find_class(name.as_bytes()) {
+                Some(c) => c,
+                None => return false,
+            },
+            Some(Value::Object(o)) if matches!(class, Operand::Cv(_)) => {
+                Rc::clone(crate::object::class_of(o))
+            }
+            _ => return false,
+        };
+        let Some(Value::Str(mname)) = f.code.literals.get(lit as usize) else {
+            return false;
+        };
+        let mut buf = [0u8; 64];
+        let Some(lc) = lower_into(&mut buf, mname.as_bytes()) else {
+            return false;
+        };
+        let Some(m) = cls.methods.get(lc) else {
+            return false;
+        };
+        if m.visibility() != flags::PUBLIC || !m.is_static() || m.is_abstract() {
+            return false;
+        }
+        let m = Rc::clone(m);
+        (cls, m)
+    };
+    if let Operand::Tmp(t) = class {
+        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    vm.frame_mut().calls.push(PendingCall {
+        scope: Some(m.scope()),
+        called: Some(cls),
+        ..PendingCall::new(m.func.clone())
+    });
+    true
 }

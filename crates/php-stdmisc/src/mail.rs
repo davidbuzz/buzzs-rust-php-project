@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/mail.c. Similarity metric to original: 36%
+//   Copyright © The PHP Group and Contributors. Author: Rasmus Lerdorf <rasmus@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `mail()` (`ext/standard/mail.c`): additional-header building and
 //! validation (array form), `To`/`Subject` sanitising, `mail.log`,
 //! `mail.add_x_header`, `mail.cr_lf_mode`, and the `sendmail_path`

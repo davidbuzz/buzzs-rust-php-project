@@ -27,6 +27,9 @@ thread_local! {
     /// The construct of the include being opened (`include`,
     /// `require_once`...), for warnings raised by the source filter.
     static KIND: Cell<&'static str> = const { Cell::new("include") };
+    /// [`include_path_wrapped`]'s answer and the INI generation it holds
+    /// for.
+    static WRAPPED_PATH: Cell<Option<(u64, bool)>> = const { Cell::new(None) };
 }
 
 fn kind_static(kind: &str) -> &'static str {
@@ -228,9 +231,16 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
     if has_scheme(name) {
         return chain(vm, name, kind);
     }
+    // The early test, for every include: a plain path is the phar
+    // opener's only while a phar runs or the include path names a wrapper.
+    // Neither needs a copy of the running file's name or of the include
+    // path.
+    let in_phar = vm.is_executing() && is_phar_url(vm.current_location().0.as_bytes());
+    if !in_phar && !include_path_wrapped(vm) {
+        return chain(vm, name, kind);
+    }
     let ex = executed(vm);
     let inc = vm.ini_string("include_path").unwrap_or_default();
-    let in_phar = ex.as_deref().is_some_and(is_phar_url);
     if in_phar {
         // phar_resolve_path(): relative to the running phar first.
         let resolved = bridge::enter(vm, || pinc::resolve_path(name, ex.as_deref(), &inc));
@@ -244,6 +254,23 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
         return open(vm, name, kind);
     }
     chain(vm, name, kind)
+}
+
+/// Whether `include_path` names a wrapper (holds `://`), remembered for
+/// the INI registry's generation, which changes with every value.
+fn include_path_wrapped(vm: &Vm) -> bool {
+    let generation = vm.ini.generation();
+    if let Some((g, wrapped)) = WRAPPED_PATH.with(Cell::get) {
+        if g == generation {
+            return wrapped;
+        }
+    }
+    let wrapped = vm
+        .ini
+        .get("include_path")
+        .is_some_and(|p| p.windows(3).any(|w| w == b"://"));
+    WRAPPED_PATH.with(|c| c.set(Some((generation, wrapped))));
+    wrapped
 }
 
 fn chain(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {

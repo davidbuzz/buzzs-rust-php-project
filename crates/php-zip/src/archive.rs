@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/zip/php_zip.c. Similarity metric to original: 20%
+//   Copyright © The PHP Group and Contributors. Author: Piere-Alain Joye <pierre@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `ZipArchive` object (`ze_zip_object` + `php_zip_archive`) and every
 //! method of the class (`PHP_METHOD(ZipArchive, …)` in `php_zip.c`).
 //!

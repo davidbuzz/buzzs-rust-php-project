@@ -14,8 +14,41 @@ use crate::compare::{
 use crate::util::{copy_elem, not_array_error, ErrSlot};
 use crate::{ArrayContext, Callback, HT_MAX_SIZE, SORT_STRING};
 use php_runtime::sort::zend_sort;
-use php_runtime::{ArrayKey, HashTable, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
-use std::collections::HashSet;
+use php_runtime::{
+    ArrayKey, HashTable, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
+
+/// A set of strings: php-src's `seen` / `exclude` tables
+/// (`zend_hash_init(&seen, n, ...)` + `zend_hash_add_empty_element`),
+/// a hash table keyed by each string verbatim and placed by the hash the
+/// string already carries. A `HashSet<Vec<u8>>` hashed every string
+/// again with `SipHash` and copied it into a new vector: ~250 instructions
+/// an element of an `array_unique()`.
+struct StrSet(HashTable);
+
+impl StrSet {
+    /// An empty set with room for `n` strings.
+    fn with_capacity(n: usize) -> Self {
+        Self(HashTable::with_capacity_mixed(n))
+    }
+
+    /// Whether `s` is in the set.
+    fn contains(&self, s: &ZStr) -> bool {
+        self.0.lean_find(s, s.hash_value()).is_some()
+    }
+
+    /// Adds `s`; `false` when it was there already.
+    fn insert(&mut self, s: ZStr) -> bool {
+        let h = s.hash_value();
+        if self.0.lean_find(&s, h).is_some() {
+            return false;
+        }
+        if let Err((k, v)) = self.0.lean_append(s, h, Value::Null) {
+            let _ = self.0.insert_str_raw(k, v);
+        }
+        true
+    }
+}
 
 // ---------------------------------------------------------------------------
 // array_unique
@@ -31,18 +64,14 @@ pub fn array_unique<C: ArrayContext + ?Sized>(
         return Ok(array.clone());
     }
     if flags == SORT_STRING {
-        // `php_array_unique`'s `seen` table: the strings themselves as
-        // keys (their hashes cached in them), not copies of their bytes
-        // hashed with SipHash. Every key is a string key, numeric strings
-        // too: only the table's own lookups ever see them.
-        let mut seen = HashTable::with_capacity_mixed(array.len());
+        let mut seen = StrSet::with_capacity(array.len());
         let mut out = HashTable::new();
         for (k, v) in array.iter() {
             let s = match v {
                 Value::Str(s) => s.clone(),
                 other => other.to_zstr(ctx)?,
             };
-            if seen.add(ArrayKey::Str(s), Value::Null).is_ok() {
+            if seen.insert(s) {
                 let _ = out.add(k.clone(), copy_elem(v));
             }
         }
@@ -688,18 +717,18 @@ pub fn array_diff<C: RuntimeContext + ?Sized>(ctx: &mut C, args: &[Value]) -> Rt
             "The total number of elements must be lower than {HT_MAX_SIZE}"
         )));
     }
-    let mut exclude: HashSet<Vec<u8>> = HashSet::new();
+    let mut exclude = StrSet::with_capacity(usize::try_from(num).unwrap_or(0));
     for a in &args[1..] {
         if let Value::Array(t) = a {
             for v in t.values() {
-                exclude.insert(v.to_zstr(ctx)?.as_bytes().to_vec());
+                exclude.insert(v.to_zstr(ctx)?);
             }
         }
     }
     let mut out = HashTable::with_capacity(first.len());
     for (k, v) in first.iter() {
         let s = v.to_zstr(ctx)?;
-        if !exclude.contains(s.as_bytes()) {
+        if !exclude.contains(&s) {
             let _ = out.add(k.clone(), copy_elem(v));
         }
     }

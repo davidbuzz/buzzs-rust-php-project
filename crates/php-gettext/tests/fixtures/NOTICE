@@ -1,0 +1,4 @@
+Files in this directory are copied unchanged from php-src ext/gettext/tests
+(the subdirectories 66265/ and locale/, at the same paths) (commit
+cb90f9a237757209ecd2e67a7e0c950f36ba6ea1). Copyright © The PHP Group and
+Contributors. BSD-3-Clause; see LICENSES/php-src-BSD-3-Clause.txt.

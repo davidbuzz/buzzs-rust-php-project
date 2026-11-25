@@ -139,20 +139,63 @@ pub const fn small_size_to_bin(size: usize) -> usize {
     }
 }
 
-/// [`small_size_to_bin`] for every multiple of 8 up to [`MAX_SMALL_SIZE`],
-/// indexed by `size.div_ceil(8)`: all bin sizes are multiples of 8, so a
-/// size and its next multiple of 8 share a bin.
-// Bins are below 30: the narrowing cannot truncate.
-#[allow(clippy::cast_possible_truncation)]
-static SIZE_TO_BIN: [u8; MAX_SMALL_SIZE / 8 + 1] = {
-    let mut t = [0u8; MAX_SMALL_SIZE / 8 + 1];
+/// For every multiple of 8 up to [`MAX_SMALL_SIZE`], indexed by
+/// `size.div_ceil(8)`: [`small_size_to_bin`] in the low 8 bits and that
+/// bin's element size (`bin_data_size[]`, `Zend/zend_alloc.c` lines
+/// 380-383) above them, so that one load gives a request both the bin
+/// that serves it and the bytes php-src charges for it. All bin sizes are
+/// multiples of 8, so a size and its next multiple of 8 share a bin.
+// Bins are below 30 and bin sizes below 2^16: the narrowing cannot
+// truncate (and `u32::from` is not usable in a constant).
+#[allow(clippy::cast_possible_truncation, clippy::cast_lossless)]
+static SIZE_INFO: [u32; MAX_SMALL_SIZE / 8 + 1] = {
+    let mut t = [0u32; MAX_SMALL_SIZE / 8 + 1];
     let mut i = 0;
     while i < t.len() {
-        t[i] = small_size_to_bin(i * 8) as u8;
+        let bin = small_size_to_bin(i * 8);
+        t[i] = bin as u32 | (BIN_SIZE[bin] as u32) << INFO_SIZE_SHIFT;
         i += 1;
     }
     t
 };
+
+/// Where the element size sits in a [`SIZE_INFO`] entry.
+const INFO_SIZE_SHIFT: u32 = 8;
+
+/// The [`SIZE_INFO`] entry of a request of `size` bytes aligned to
+/// `align` (a power of two), or `None` when the heap does not serve it
+/// (larger than [`MAX_SMALL_SIZE`] once rounded up to its alignment, or
+/// aligned to more than [`MAX_SMALL_ALIGN`]).
+#[inline]
+fn small_info(size: usize, align: usize) -> Option<u32> {
+    // A `Layout`'s size rounded up to its alignment does not overflow
+    // `isize`, so this cannot wrap.
+    let size = (size + (align - 1)) & !(align - 1);
+    if align <= MAX_SMALL_ALIGN && size <= MAX_SMALL_SIZE {
+        Some(SIZE_INFO[(size + 7) >> 3])
+    } else {
+        None
+    }
+}
+
+/// The bin of a [`SIZE_INFO`] entry.
+#[inline]
+pub fn size_info_bin(info: u32) -> usize {
+    (info & 0xff) as usize
+}
+
+/// The charged bytes ([`charge`]) of a [`SIZE_INFO`] entry.
+#[inline]
+pub fn size_info_charge(info: u32) -> usize {
+    (info >> INFO_SIZE_SHIFT) as usize
+}
+
+/// The [`SIZE_INFO`] entry of a layout the heap serves: its bin
+/// ([`size_info_bin`]) and charge ([`size_info_charge`]) in one load.
+#[inline]
+pub fn small_layout_info(layout: Layout) -> Option<u32> {
+    small_info(layout.size(), layout.align())
+}
 
 /// The bin serving `layout`, or `None` when the heap does not serve it
 /// (larger than [`MAX_SMALL_SIZE`] once rounded up to its alignment, or
@@ -162,14 +205,52 @@ static SIZE_TO_BIN: [u8; MAX_SMALL_SIZE / 8 + 1] = {
 /// or reallocated is the one it was allocated from.
 #[inline]
 pub fn small_bin(layout: Layout) -> Option<usize> {
-    let align = layout.align();
-    // `Layout` guarantees that its size rounded up to its alignment does
-    // not overflow `isize`, so this cannot wrap.
-    let size = (layout.size() + (align - 1)) & !(align - 1);
-    if align <= MAX_SMALL_ALIGN && size <= MAX_SMALL_SIZE {
-        Some(usize::from(SIZE_TO_BIN[(size + 7) >> 3]))
+    small_layout_info(layout).map(size_info_bin)
+}
+
+/// The bytes php-src's allocator charges to `heap->size` (what
+/// `memory_get_usage()` reports) for an `emalloc(size)`:
+///
+/// * up to `ZEND_MM_MAX_SMALL_SIZE` (3072), the element size of the
+///   request's bin (`zend_mm_alloc_small`: `heap->size +=
+///   bin_data_size[bin_num]`, the bin from `zend_mm_small_size_to_bin`,
+///   lines 1451-1480);
+/// * up to `ZEND_MM_MAX_LARGE_SIZE`, whole 4 KiB pages
+///   (`zend_mm_alloc_large_ex`: `pages_count * ZEND_MM_PAGE_SIZE`);
+/// * above, the request rounded up to `REAL_PAGE_SIZE`, also 4 KiB here
+///   (`zend_mm_alloc_huge`: `ZEND_MM_ALIGNED_SIZE_EX(size, REAL_PAGE_SIZE)`).
+///
+/// Large and huge blocks round the same way, so the function has one
+/// branch: a table load below 3072 bytes, an add and a mask above. Every
+/// threshold the accounting tests a size against (`MAX_SMALL_SIZE`,
+/// `MAX_LARGE_SIZE`, the big-block bound) is a fixed point of it, so a
+/// size and its class fall on the same side of each.
+///
+/// `size` is at most `isize::MAX` (a `Layout` size), so the rounding
+/// cannot overflow.
+#[inline]
+#[must_use]
+pub fn zend_size(size: usize) -> usize {
+    if size <= MAX_SMALL_SIZE {
+        size_info_charge(SIZE_INFO[(size + 7) >> 3])
     } else {
-        None
+        (size + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1)
+    }
+}
+
+/// The bytes a block of `size` bytes aligned to `align` (a `Layout`'s)
+/// is charged: [`zend_size`] of the size the heap serves it at (rounded
+/// up to its alignment) when the heap serves it, of `size` otherwise.
+/// The same for requests aligned to 8 bytes or less, which php-src's
+/// are; a pure function of the layout, so the bytes a block is charged
+/// when allocated are the bytes released when it is freed, and the fast
+/// paths read them from the entry that gives them the bin.
+#[inline]
+#[must_use]
+pub fn charge(size: usize, align: usize) -> usize {
+    match small_info(size, align) {
+        Some(info) => size_info_charge(info),
+        None => zend_size(size),
     }
 }
 
@@ -528,7 +609,16 @@ pub(crate) struct Heap {
     current: AtomicPtr<Chunk>,
     /// Chunks held.
     chunks: AtomicUsize,
+    /// Chunks held when the last [`gc`](Self::gc) finished. Owner only.
+    gc_chunks: AtomicUsize,
+    /// Pages in use when the last [`gc`](Self::gc) finished. Owner only.
+    gc_pages: AtomicUsize,
 }
+
+/// How many pages (beyond those in use after the last collection) the
+/// request-end collection lets the free lists hold before it runs
+/// ([`Heap::gc_at_request_end`]): 256 KiB.
+const GC_SLACK_PAGES: usize = 64;
 
 impl Heap {
     pub(crate) const fn new() -> Self {
@@ -539,6 +629,8 @@ impl Heap {
             last: AtomicPtr::new(ptr::null_mut()),
             current: AtomicPtr::new(ptr::null_mut()),
             chunks: AtomicUsize::new(0),
+            gc_chunks: AtomicUsize::new(0),
+            gc_pages: AtomicUsize::new(0),
         }
     }
 
@@ -820,11 +912,66 @@ impl Heap {
     /// The calling thread owns the heap; `inner` as in [`alloc`](Self::alloc).
     pub(crate) unsafe fn gc<A: GlobalAlloc>(&self, inner: &A) -> usize {
         // SAFETY: forwarded contract.
-        unsafe {
+        let freed = unsafe {
             self.gc_take_remote();
             self.gc_count_and_unlink();
             self.gc_release(inner)
+        };
+        self.gc_chunks.store(self.chunks(), Relaxed);
+        // SAFETY: forwarded contract.
+        self.gc_pages.store(unsafe { self.used_pages() }, Relaxed);
+        freed
+    }
+
+    /// The collection at the end of a request: [`gc`](Self::gc), unless
+    /// the heap holds no more chunks than the last collection left and at
+    /// most [`GC_SLACK_PAGES`] more pages in use. Then the blocks the
+    /// request freed stay on their free lists for the next request, which
+    /// takes them before it carves a run; collecting would walk every one
+    /// of them (thousands for a small page) to give back nothing that
+    /// matters. Usage figures count live bytes, so neither way changes
+    /// what `memory_get_usage()` reports. Returns the bytes released.
+    ///
+    /// php-src empties its heap at request end in a few hundred
+    /// instructions (`zend_mm_shutdown(heap, 0, 0)` keeps the cached
+    /// chunks and resets the free lists), as nothing in it outlives the
+    /// request; this heap also holds what the SAPI keeps across requests.
+    ///
+    /// # Safety
+    ///
+    /// As for [`gc`](Self::gc).
+    pub(crate) unsafe fn gc_at_request_end<A: GlobalAlloc>(&self, inner: &A) -> usize {
+        // SAFETY: forwarded contract. Blocks other threads freed are taken
+        // over either way.
+        unsafe { self.gc_take_remote() };
+        // SAFETY: forwarded contract.
+        let used = unsafe { self.used_pages() };
+        if self.chunks() <= self.gc_chunks.load(Relaxed)
+            && used <= self.gc_pages.load(Relaxed).saturating_add(GC_SLACK_PAGES)
+        {
+            return 0;
         }
+        // SAFETY: forwarded contract.
+        unsafe { self.gc(inner) }
+    }
+
+    /// Pages in use over all chunks, the header pages included.
+    ///
+    /// # Safety
+    ///
+    /// The calling thread owns the heap.
+    unsafe fn used_pages(&self) -> usize {
+        let mut used = 0;
+        let mut chunk = self.first.load(Relaxed);
+        while !chunk.is_null() {
+            // SAFETY: `chunk` is a live chunk of this heap's list, read
+            // through the raw pointer.
+            unsafe {
+                used += PAGES - (*chunk).free_pages as usize;
+                chunk = (*chunk).next;
+            }
+        }
+        used
     }
 
     /// The first step of [`gc`](Self::gc): splices each remote list onto
@@ -1460,6 +1607,60 @@ mod tests {
         assert_eq!(unsafe { heap.gc(&System) }, 4 * PAGE_SIZE);
         assert!(free_list(&heap, bin).is_empty());
         assert!(free_list(&heap, other).is_empty());
+    }
+
+    /// The request-end collection runs once the heap grew past what the
+    /// last collection left (by more than the slack), and otherwise leaves
+    /// the freed blocks on their lists, where the next allocations of
+    /// their bin find them.
+    #[test]
+    fn request_end_collects_only_after_growth() {
+        let heap = Heap::new();
+        let bin = small_size_to_bin(1024); // 8 elements per 2-page run
+        let per_run = usize::from(BIN_ELEMENTS[bin]);
+        let pages = usize::from(BIN_PAGES[bin]);
+        let alloc_runs = |runs: usize| -> Vec<*mut u8> {
+            // SAFETY: this thread owns `heap`; `bin < BINS`.
+            (0..runs * per_run)
+                .map(|_| unsafe { heap.alloc(&System, bin) })
+                .collect()
+        };
+        let free_all = |blocks: &[*mut u8]| {
+            for &p in blocks {
+                // SAFETY: allocated above, freed once, by the owner.
+                unsafe { heap.free(p, bin, true) };
+            }
+        };
+        // Nothing collected yet: the first request end collects.
+        let small = alloc_runs(2);
+        free_all(&small);
+        // SAFETY: this thread owns `heap`.
+        assert_eq!(
+            unsafe { heap.gc_at_request_end(&System) },
+            2 * pages * PAGE_SIZE
+        );
+        assert!(free_list(&heap, bin).is_empty());
+        // A request within the slack: its blocks stay listed.
+        let small = alloc_runs(2);
+        free_all(&small);
+        // SAFETY: as above.
+        assert_eq!(unsafe { heap.gc_at_request_end(&System) }, 0);
+        assert_eq!(free_list(&heap, bin).len(), 2 * per_run);
+        // The next request takes them before it carves a run.
+        let again = alloc_runs(2);
+        assert!(again.iter().all(|p| small.contains(p)));
+        assert!(free_list(&heap, bin).is_empty());
+        free_all(&again);
+        // A request past the slack is collected (its first runs are the
+        // listed blocks again).
+        let runs = GC_SLACK_PAGES / pages + 1;
+        let big = alloc_runs(runs);
+        free_all(&big);
+        // SAFETY: as above.
+        let freed = unsafe { heap.gc_at_request_end(&System) };
+        assert_eq!(freed, runs * pages * PAGE_SIZE);
+        assert!(free_list(&heap, bin).is_empty());
+        assert_eq!(heap.chunks(), 1);
     }
 
     #[test]

@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src Zend/zend_virtual_cwd.c. Similarity metric to original: 15%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andi Gutmans <andi@php.net>
+//            Sascha Schumann <sascha@schumann.cx>
+//            Pierre Joye <pierre@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `tsrm_realpath()` and the realpath cache of `Zend/zend_virtual_cwd.c`.
 //!
 //! Path resolution walks the path from its end (`tsrm_realpath_r`), looking

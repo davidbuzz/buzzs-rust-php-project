@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src Zend/zend_exceptions.c. Similarity metric to original: 14%
+//   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
+//   Authors: Andi Gutmans <andi@php.net>
+//            Marcus Boerger <helly@php.net>
+//            Sterling Hughes <sterling@php.net>
+//            Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `Throwable` hierarchy (`Zend/zend_exceptions.c`) and backtraces
 //! (`zend_fetch_debug_backtrace`).
 

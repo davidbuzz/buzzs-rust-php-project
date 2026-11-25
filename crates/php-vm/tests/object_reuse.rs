@@ -77,8 +77,9 @@ echo plain(8), "\n", ctor(8), "\n";
 
 /// What keeps the old object from being the new one's block: another
 /// handle, a weak reference, a destructor, a dynamic property, an unset
-/// slot, a slot holding something to release, an argument read from the
-/// variable itself, another class.
+/// slot, a slot holding something to release but a string (an array), an
+/// argument computed for the call or read from the variable itself,
+/// another class.
 #[test]
 fn objects_that_are_not_reused() {
     let (out, reused) = run(r#"<?php
@@ -94,6 +95,8 @@ function f($n) {
     for ($i = 0; $i < $n; $i++) { $y = new Dyn; $y->extra = 1; }
     for ($i = 0; $i < $n; $i++) { $u = new P; unset($u->a); }
     for ($i = 0; $i < $n; $i++) { $s = new Q("s$i"); }
+    $arr = [1];
+    for ($i = 0; $i < $n; $i++) { $t = new Q($arr); }
     $q = new Q(0);
     for ($i = 0; $i < $n; $i++) { $q = new Q($q); }
     for ($i = 0; $i < $n; $i++) { $m = ($i % 2) ? new Sub : new P; }
@@ -148,6 +151,38 @@ function f($n) {
 echo f(50);
 "#);
     assert_eq!(out, "0,0");
+    // `reuse_count()` counts in debug builds only (0 in release).
+    assert!(
+        !cfg!(debug_assertions) || reused >= 40,
+        "{reused} objects made in a block at hand"
+    );
+}
+
+/// A string in a slot of the old object does not keep it from being the
+/// new one's block: it is released then (nothing runs in between). The
+/// handles, the values and the memory use are php-src's.
+#[test]
+fn objects_holding_strings_are_reused() {
+    let (out, reused) = run(r#"<?php
+class Q { public $x; public $y = "dflt"; function __construct($x) { $this->x = $x; } }
+function ids($n) {
+    $ids = [];
+    for ($i = 0; $i < $n; $i++) { $s = "v" . $i; $o = new Q($s); $ids[] = spl_object_id($o) . ':' . $o->x . ':' . $o->y; }
+    return implode(',', $ids);
+}
+function mem($n) {
+    $s = "w" . $n;
+    $o = new Q($s); $o = new Q($s); $o = new Q($s);
+    $m = memory_get_usage(); $pk = memory_get_peak_usage();
+    for ($i = 0; $i < $n; $i++) { $o = new Q($s); }
+    return (memory_get_usage() - $m) . ',' . (memory_get_peak_usage() - $pk) . ',' . $o->x;
+}
+echo ids(8), "\n", mem(50), "\n";
+"#);
+    assert_eq!(
+        out,
+        "1:v0:dflt,2:v1:dflt,1:v2:dflt,2:v3:dflt,1:v4:dflt,2:v5:dflt,1:v6:dflt,2:v7:dflt\n0,0,w50\n"
+    );
     // `reuse_count()` counts in debug builds only (0 in release).
     assert!(
         !cfg!(debug_assertions) || reused >= 40,

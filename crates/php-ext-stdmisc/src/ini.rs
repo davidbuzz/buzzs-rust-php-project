@@ -44,7 +44,7 @@ fn ini_get_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     for n in names {
         vm.ini.register_module(&n);
     }
-    let rows = match vm.ini.ini_get_all(ext.as_deref()) {
+    let rows = match vm.ini.ini_get_all_function(ext.as_deref()) {
         Ok(r) => r,
         Err(d) => {
             emit(vm, &d)?;

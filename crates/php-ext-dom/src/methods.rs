@@ -61,6 +61,15 @@ const NEEDS_VM: &[&str] = &[
     "__construct",
 ];
 
+/// Empties [`method_meta`]'s cache for a new VM: the VM made for the next
+/// request on this thread (`php --repeat`, php-cgi, php-fpm) registers its
+/// native methods anew, and one of them may land at the address of a
+/// different method of the dropped VM, whose cached name the call would
+/// then be dispatched by.
+pub(crate) fn reset_meta_cache() {
+    METHODS.with(|m| m.borrow_mut().clear());
+}
+
 /// The cached metadata of the native method being called.
 fn method_meta(a: &Args, builtin: &'static str) -> MethodMeta {
     let key = a.func.as_ref().map_or(0, |f| Rc::as_ptr(f) as usize);
@@ -320,4 +329,25 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             display_name(&class_of(&this).name).to_string_lossy(),
         )
     })
+}
+
+#[cfg(test)]
+mod meta_cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_vm_starts_with_no_cached_method_meta() {
+        METHODS.with(|m| {
+            m.borrow_mut().insert(
+                1,
+                MethodMeta {
+                    name: Rc::from("loadXML"),
+                    decl: None,
+                    needs_vm: true,
+                },
+            );
+        });
+        reset_meta_cache();
+        assert!(METHODS.with(|m| m.borrow().is_empty()));
+    }
 }

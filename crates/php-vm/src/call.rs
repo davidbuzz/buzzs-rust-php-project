@@ -1723,9 +1723,9 @@ impl Vm {
                     // read here, without entering the place walk.
                     ArgSrc::Place(pid) => match self.plain_cv_place(*pid) {
                         Some(cv) => self.read_cv(cv)?,
-                        None => self.place_fetch(*pid, FetchMode::Read)?,
+                        None => self.send_place_read(*pid)?,
                     },
-                    ArgSrc::TempPlace(pid) => self.place_fetch(*pid, FetchMode::Read)?,
+                    ArgSrc::TempPlace(pid) => self.send_place_read(*pid)?,
                 };
                 let frame = self.frames.last_mut().expect("active frame");
                 let call = frame.calls.last_mut().expect("pending call");
@@ -1771,6 +1771,18 @@ impl Vm {
         };
         let value = self.send_value(src, pos, by_ref, prefer_ref)?;
         self.push_arg(pos, name, value)
+    }
+
+    /// A by-value argument place of the current frame (`ZEND_FETCH_*_R`
+    /// or `_FUNC_ARG` for a by-value parameter, then `ZEND_SEND_VAR`): the
+    /// specialised fetch ops' hit ([`Frame::send_place_hit`]), else the
+    /// place walk with its diagnostics.
+    #[inline]
+    fn send_place_read(&mut self, pid: crate::opcode::PlaceId) -> VmResult<Value> {
+        if let Some(v) = self.frames.last_mut().and_then(|f| f.send_place_hit(pid)) {
+            return Ok(v);
+        }
+        self.place_fetch(pid, FetchMode::Read)
     }
 
     /// The compiled variable that place `pid` of the current frame names,
@@ -2125,6 +2137,14 @@ impl Vm {
                     }
                     return Ok(false);
                 }
+                if let Some(r) = self.call_builtin_pooled(&b, &mut call, dst) {
+                    let v = r?;
+                    release_spent_call(call);
+                    if let Some(d) = dst {
+                        self.set_tmp(d, v);
+                    }
+                    return Ok(false);
+                }
             }
             if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
                 self.pending_call_dst = dst;
@@ -2210,15 +2230,20 @@ impl Vm {
             debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
             let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
-            // `FrameStack::push_in_place`.
-            if frame.cvs.len() == code.cv_names.len()
+            // `FrameStack::push_in_place`; nothing to ready in a frame the
+            // direct return of a call of this same function released
+            // (`calls::ready_frame`'s test).
+            if same_func && frame.released_direct {
+                debug_assert!(frame.is_released_for(uf));
+                frame.released_direct = false;
+            } else if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
                 && frame.iters.len() == code.num_iters as usize
                 && frame.fins.len() == code.num_finally as usize
             {
                 frame.reinit_same_call(code, FrameKind::Function);
             } else {
-                frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
+                frame.reinit_for_call(code, FrameKind::Function);
             }
             set_opt(&mut frame.this, call.this.take());
             set_opt(&mut frame.scope, call.scope.take());
@@ -2230,24 +2255,44 @@ impl Vm {
             // other): the frame only remembers it for unwinding
             // (`zend_object_store_ctor_failed`).
             frame.is_ctor = call.is_ctor;
-            // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
-            // entry per argument, each moved into its compiled variable.
-            // The recycled buffer is empty (`Frame::clear_for_reuse`).
+            // The passed-argument count (`ZEND_CALL_NUM_ARGS`): every
+            // argument moves into its compiled variable, and the count is
+            // kept in `direct_argc` with the buffer left empty, the layout
+            // of the tape's prepared call (`exec::tape::calls::enter`),
+            // whose readers (`Frame::num_args`) take both. The recycled
+            // buffer is empty (`Frame::clear_for_reuse`).
             if !frame.args.is_empty() {
                 frame.args.clear();
             }
-            // A `push` per argument (an inline capacity test and two
-            // stores; the buffer only grows on a first call this deep):
-            // `extend` of a mapped range compiled to an out-of-line
-            // `Vec::extend_trusted` call of ~30 instructions per call.
-            for _ in 0..n {
-                frame.args.push(None);
-            }
-            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..n]) {
+            // A variadic function's arguments past its declared parameters
+            // go to the buffer for its `RECV_VARIADIC`, after an empty
+            // entry for each declared parameter bound into its variable
+            // (`push_user_call`'s layout, as `calls::enter` leaves it);
+            // every other argument has its parameter (`simple_ucall`).
+            let bound = if uf.flags & flags::VARIADIC == 0 {
+                n
+            } else {
+                n.min(uf.params.len().saturating_sub(1))
+            };
+            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..bound]) {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
                     drop(old);
                 }
+            }
+            if bound < n {
+                // A `push` per entry (an inline capacity test and two
+                // stores): `extend` of a mapped range compiled to an
+                // out-of-line `Vec::extend_trusted` call of ~30
+                // instructions per call.
+                for _ in 0..bound {
+                    frame.args.push(None);
+                }
+                variadic_extras(&mut frame.args, &mut call.inline_args[bound..n]);
+            }
+            #[allow(clippy::cast_possible_truncation)] // at most the inline buffer's length
+            {
+                frame.direct_argc = n as u32;
             }
             // `RECV` of an argument that was passed and needs no coercion
             // has nothing left to do: start after it (after a `RECV_INIT`'s
@@ -2266,6 +2311,14 @@ impl Vm {
             }
             let closure = call.closure.take();
             caller.ip = caller_ip;
+            // Every field but the slots, the passed arguments, the handles
+            // set above and the resume state is as the release left it:
+            // the return releases the frame directly
+            // (`Frame::release_direct`) and leaves it ready for the next
+            // call of the same function at this depth
+            // (`Frame::released_direct`), as after a prepared call, instead
+            // of the full `Frame::clear_for_reuse` and a readying again.
+            frame.direct = true;
             // What is left of the call owns nothing but its function
             // handle: `this`, `scope`, `called`, `closure`, the argument
             // buffer and the named arguments were taken above, the inline
@@ -2328,10 +2381,12 @@ impl Vm {
     /// `run`, not the main script's, not a generator's, has no symbol table
     /// attached and does not return by reference, with no observer, when
     /// the operand is a defined compiled variable, a temporary not holding
-    /// a reference, or a literal, and the value is accepted by the return
-    /// type as it is (`verify_return`'s fast path). The result is then the
-    /// one `op_return` gives: the same checks, the same release order
-    /// (`gc::frame_released`, then [`FrameStack::release_top`]) and a
+    /// a reference, a literal, or none (`return;`, the implicit return of
+    /// a body, without a return type or with `void`), and the value is
+    /// accepted by the return type as it is (`verify_return`'s fast path).
+    /// The result is then the one `op_return` gives: the same checks, the
+    /// same release order ([`Frame::release_returning`]: each variable's
+    /// possible root and release, then the call's handle) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
     /// `ip` is the instruction after the `RETURN`, stored as the frame's
     /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
@@ -2340,12 +2395,14 @@ impl Vm {
     /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
-    /// Only the shape the call workloads return through — an untyped
-    /// user function returning a scalar, null, a string or such a literal
-    /// into a caller temporary holding a scalar — runs here, small and without spilled registers;
-    /// anything else goes to [`Vm::return_generic`], which repeats the
-    /// tests for it (the operand shape is dispatched before this
-    /// function's prologue, so the common fallbacks do not pay it twice).
+    /// Every value a user function returns runs here, arrays, objects
+    /// and referenced variables included, and into a caller's result slot
+    /// holding anything: they went to [`Vm::return_generic`], which
+    /// repeated every test (~300 instructions a return of an array). What
+    /// is left to it is a value the return type must coerce or refuses, a
+    /// temporary holding a reference, an unused result whose release may
+    /// run a destructor, and the operand shapes dispatched before this
+    /// function's prologue.
     #[inline(never)]
     pub(crate) fn return_simple(
         &mut self,
@@ -2366,7 +2423,7 @@ impl Vm {
         if fidx <= base {
             return None;
         }
-        {
+        let old = {
             let (callers, rest) = self.frames.vec.split_at_mut(fidx);
             let caller = callers.last_mut()?;
             let frame = rest.first_mut()?;
@@ -2385,76 +2442,165 @@ impl Vm {
             // A value its declared return type does not take as it is
             // (`return_accepts`) is left to `return_generic`: coercion
             // rules may rewrite it (int 3 returned from a `: string`
-            // function gives "3"), or it fails. So are references, arrays and objects (copied, not moved,
-            // for `gc::frame_released`), and a caller's result slot that
-            // holds anything but a scalar (released after the frame).
-            // Every test comes before the value moves out of its slot:
-            // `return_generic` reads it there again.
+            // function gives "3"), or it fails. So is a temporary holding
+            // a reference, and an unused result whose release may run a
+            // destructor. Every test comes before the value moves out of
+            // its slot: `return_generic` reads it there again.
             let dst = match frame.ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
-                    Some(slot) if is_scalar(slot) => Some(slot),
-                    _ => return self.return_generic::<false>(val, base, ip),
+                    Some(slot) => Some(slot),
+                    None => return self.return_generic::<false>(val, base, ip),
                 },
                 RetTarget::Discard => None,
             };
-            // A scalar, null or a string: none is a possible cycle root,
-            // so it moves out (a literal is copied) without changing what
-            // `gc::frame_released` records. With a declared return type,
-            // only a value the type takes as it is (`return_accepts`).
-            let v = match val {
-                Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
-                    Some(slot)
-                        if slot.get().is_some_and(|v| {
-                            returns_directly(v) && (rt.is_none() || return_accepts(rt, v))
-                        }) =>
-                    {
-                        slot.as_mut().take()?
+            // The returned value: in place in the frame's variable or
+            // temporary (`Ok`, moved), or a copy (`Err`). With a declared
+            // return type, only a value the type takes as it is
+            // (`return_accepts`).
+            //
+            // A scalar, null or a string in a compiled variable is no
+            // possible cycle root, so it moves out without changing what
+            // the release records. An array or an object there is copied
+            // (one count increment): the variable keeps its handle, whose
+            // release below buffers the value as a possible root, as
+            // `zend_leave_helper`'s `i_free_compiled_variables` does after
+            // `ZEND_RETURN`'s `ZVAL_COPY_DEREF`. A variable bound by
+            // reference returns a copy of the referenced value
+            // (`ZVAL_COPY_DEREF`) and releases the reference with the
+            // frame. A temporary moves out (it is no variable: nothing is
+            // buffered for it), except a reference, and except a value
+            // whose release may run a destructor when the result is
+            // unused (`Vm::op_return_raw` runs it in this frame). A
+            // literal is copied (a shared, immutable value). These were
+            // `return_generic`'s cases: a second run of every test above.
+            let src: Result<&mut Value, Value> = match val {
+                Operand::Cv(cv) => {
+                    let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+                        return self.return_generic::<false>(val, base, ip);
+                    };
+                    match slot.get() {
+                        Some(v) if returns_directly(v) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Ok(slot.as_mut().as_mut()?)
+                        }
+                        // The copies are inline count increments (the
+                        // handles' own `clone`), where `Value::clone` is an
+                        // out-of-line call dispatching on the tag again.
+                        Some(v @ Value::Array(a)) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(Value::Array(a.clone()))
+                        }
+                        Some(v @ Value::Object(o)) => {
+                            if rt.is_some() && !return_accepts(rt, v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(Value::Object(o.clone()))
+                        }
+                        Some(Value::Reference(r)) => {
+                            let v = r.get();
+                            if rt.is_some() && !return_accepts(rt, &v) {
+                                return self.return_generic::<false>(val, base, ip);
+                            }
+                            Err(v)
+                        }
+                        _ => return self.return_generic::<false>(val, base, ip),
                     }
-                    _ => return self.return_generic::<false>(val, base, ip),
-                },
+                }
                 Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
                     Some(slot)
-                        if returns_directly(slot) && (rt.is_none() || return_accepts(rt, slot)) =>
+                        if !matches!(slot, Value::Reference(_))
+                            && (dst.is_some() || !may_destruct(slot))
+                            && (rt.is_none() || return_accepts(rt, slot)) =>
                     {
-                        std::mem::take(slot)
+                        Ok(slot)
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
                 Operand::Lit(l) => match frame.code.literals.get(l as usize) {
                     Some(lit)
-                        if returns_directly(lit) && (rt.is_none() || return_accepts(rt, lit)) =>
+                        if !matches!(lit, Value::Reference(_))
+                            && (rt.is_none() || return_accepts(rt, lit)) =>
                     {
-                        clone_value(lit)
+                        Err(clone_value(lit))
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
-                // `return;` and the implicit return at the end of a body:
-                // null for no return type and for `void` (any other type
-                // has `verify_return`'s diagnostics, in `return_generic`).
-                Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => Value::Null,
+                // `return;` and the implicit return at the end of a body (a
+                // constructor's, a procedure's): null, for no return type
+                // or `void` (`verify_return(None)`; any other type goes on
+                // to its diagnostics in `return_generic`).
+                Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => {
+                    Err(Value::Null)
+                }
                 _ => return self.return_generic::<false>(val, base, ip),
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
-            // The store runs before the `gc` step: the value's register
-            // is then dead across the out-of-line `frame_released` call
-            // (it only reads the frame and the caller's `$this`, and the
-            // frame is released after both). The slot held a scalar:
-            // nothing to drop. A discarded string is released.
-            match dst {
-                Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
-                None if matches!(v, Value::Str(_)) => drop(v),
-                None => std::mem::forget(v),
+            // The store runs before the release: the value's register is
+            // then dead across it (the possible-root walk only reads the
+            // frame and the caller's `$this`). The caller's slot held a
+            // scalar, which owns nothing: a moved value trades places with
+            // it (one 16-byte swap, where the move out and the store in
+            // went through a stack temporary byte group by byte group),
+            // and the scalar left in the frame's slot is released with the
+            // frame (`release_cv` / `release_slot`: forgotten). A
+            // discarded string is released.
+            //
+            // A caller's slot holding anything else (a result its
+            // consumer copied instead of moving) gives its value up here
+            // and keeps it in `old`, released after the frame, as
+            // `set_tmp` released it after `return_generic`'s pop: the same
+            // order, and nothing reads the caller's temporaries meanwhile
+            // (the release queues destructors; no user code runs in it).
+            let mut old = None;
+            match (dst, src) {
+                (Some(slot), Ok(v)) => {
+                    if is_scalar(slot) {
+                        std::mem::swap(slot, v);
+                    } else {
+                        old = Some(std::mem::replace(slot, std::mem::take(v)));
+                    }
+                }
+                (Some(slot), Err(v)) => {
+                    let prev = std::mem::replace(slot, v);
+                    if is_scalar(&prev) {
+                        std::mem::forget(prev);
+                    } else {
+                        old = Some(prev);
+                    }
+                }
+                // `ZEND_RETURN` releases an unused result before the frame
+                // is left. A scalar owns nothing; anything else loses one
+                // count (a value whose release may run a destructor stayed
+                // with `return_generic` above).
+                (None, src) => {
+                    let v = match src {
+                        Ok(v) => std::mem::take(v),
+                        Err(v) => v,
+                    };
+                    if is_scalar(&v) {
+                        std::mem::forget(v);
+                    } else {
+                        drop(v);
+                    }
+                }
             }
-            gc_on_release(frame, caller);
-            // `FrameStack::release_top` of the frame at hand: released in
-            // place, without the out-of-line call and the second lookup
-            // of the top frame; the stack is popped just below.
-            if !frame.release_direct() {
-                frame.clear_for_reuse(&self.empty_code);
-            }
+            // `zend_leave_helper`: the possible roots of the frame's
+            // variables and call handle, then `FrameStack::release_top` of
+            // the frame at hand, in one step and in place (no out-of-line
+            // call, no second lookup of the top frame); the stack is
+            // popped just below.
+            frame.release_returning(caller.this.as_ref(), &self.empty_code);
+            old
         };
         self.frames.pop_cleared_top();
+        if let Some(v) = old {
+            release_result_slot(v);
+        }
         Some(crate::exec::Flow::Reload)
     }
 
@@ -2539,10 +2685,12 @@ impl Vm {
                             // that `gc::frame_released` still buffers them
                             // as possible roots, as `zend_leave_helper`'s
                             // release of the variables does.
-                            if matches!(v, Value::Array(_) | Value::Object(_)) {
-                                clone_value(v)
-                            } else {
-                                slot.take()?
+                            // (The copies are the handles' own inline
+                            // count increments, not `Value::clone`.)
+                            match v {
+                                Value::Array(a) => Value::Array(a.clone()),
+                                Value::Object(o) => Value::Object(o.clone()),
+                                _ => slot.take()?,
                             }
                         }
                     }
@@ -2552,8 +2700,17 @@ impl Vm {
                     if matches!(slot, Value::Reference(_)) || !return_accepts(rt, slot) {
                         return None;
                     }
+                    // An unused result whose release may run a destructor
+                    // is left to `Vm::op_return_raw`, which runs it in this
+                    // frame and rethrows what it throws in the caller
+                    // (`ZEND_RETURN`'s release of the temporary).
+                    if !at_base && frame.ret == RetTarget::Discard && may_destruct(slot) {
+                        return None;
+                    }
                     std::mem::take(slot)
                 }
+                // A literal is shared with the op array: its release here
+                // frees nothing.
                 Operand::Lit(i) => {
                     let lit = frame.code.literals.get(i as usize)?;
                     if matches!(lit, Value::Reference(_)) || !return_accepts(rt, lit) {
@@ -2574,33 +2731,50 @@ impl Vm {
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
-            gc_on_release(frame, caller);
             let ret = frame.ret;
+            // `ZEND_RETURN` releases an unused result before the frame is
+            // left (`EX(return_value)` is NULL). What arrives here cannot
+            // run a destructor (`may_destruct`; a compiled variable's value
+            // is a copy, released with the frame's variables); a scalar
+            // owns nothing, so the out-of-line drop glue is skipped.
+            let v = match ret {
+                RetTarget::Discard if !at_base => {
+                    if is_scalar(&v) {
+                        std::mem::forget(v);
+                    } else {
+                        drop(v);
+                    }
+                    None
+                }
+                _ => Some(v),
+            };
             // `ZEND_RETURN` copies the value into the caller's result slot
             // (`EX(return_value)`) before `zend_leave_helper` releases the
             // frame: done here, through the caller already at hand, when
             // the slot holds a scalar (its release has no effect). Another
             // value in the slot is released after the frame, by `set_tmp`
-            // below, as before.
-            let v = match ret {
+            // below, as before. The possible-root walk of the release
+            // reads only the frame and the caller's `$this`, so it may
+            // follow the store.
+            let v = match (ret, v) {
+                (_, None) => None,
                 // The execution's result: no caller slot.
-                _ if at_base => Some(v),
-                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                (_, v) if at_base => v,
+                (RetTarget::Tmp(t), Some(v)) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
                         None
                     }
                     _ => Some(v),
                 },
-                RetTarget::Discard => Some(v),
+                (RetTarget::Discard, v) => v,
             };
-            // `FrameStack::release_top` of the frame at hand: released in
-            // place, without the out-of-line call and the second lookup of
-            // the top frame; the stack is popped just below. Same release,
+            // `zend_leave_helper`: the possible roots, then
+            // `FrameStack::release_top` of the frame at hand, in one step
+            // and in place (no out-of-line call, no second lookup of the
+            // top frame); the stack is popped just below. Same release,
             // same order (the frame's values, then the result's slot).
-            if !frame.release_direct() {
-                frame.clear_for_reuse(&self.empty_code);
-            }
+            frame.release_returning(caller.this.as_ref(), &self.empty_code);
             (v, ret)
         };
         self.frames.pop_cleared_top();
@@ -2610,20 +2784,9 @@ impl Vm {
         if at_base {
             return Some(crate::exec::Flow::Done(v));
         }
-        match ret {
-            RetTarget::Tmp(t) => self.set_tmp(t, v),
-            // An unused result (`g();`): a scalar owns nothing, so the
-            // out-of-line drop glue is skipped.
-            RetTarget::Discard => {
-                if matches!(
-                    v,
-                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-                ) {
-                    std::mem::forget(v);
-                } else {
-                    drop(v);
-                }
-            }
+        // An unused result was released above, in the frame.
+        if let RetTarget::Tmp(t) = ret {
+            self.set_tmp(t, v);
         }
         Some(crate::exec::Flow::Reload)
     }
@@ -3102,6 +3265,211 @@ impl Vm {
         self.call_builtin_framed(b, call, strict)
     }
 
+    /// `ZEND_DO_ICALL` of a pending call of a builtin by name whose
+    /// arguments are all by value and of the declared types as they are:
+    /// the call the tape's prepared native call makes
+    /// (`exec::tape::calls::call_native`), from the pending call's inline
+    /// arguments or its argument vector (a spread list). A call whose arguments include another call's result, an
+    /// array or closure literal, `$this` or a static property is not
+    /// prepared by the tape (`stays_prepared`) and comes here; the general
+    /// [`Vm::call_builtin_impl`] it took instead moves the call twice,
+    /// copies its function, scope and name handles into the frame, tests
+    /// each argument's parameter field by field and releases the frame
+    /// through `pop_frames_to` (about 900 instructions more than the
+    /// prepared call: `implode(',', array_keys($a))` 5,667 against 4,773
+    /// as two statements).
+    ///
+    /// The builtin frame is the pooled one above the caller
+    /// (`FrameStack::push_builtin`), its argument buffer takes the
+    /// arguments (`ZEND_CALL_NUM_ARGS`, what backtraces and
+    /// `func_get_args()` of callers read), the handler gets copies and the
+    /// declared defaults of the omitted parameters, and the frame is
+    /// released in place (`Frame::release_native`). It applies to a call
+    /// with no named arguments, `$this`, scope, closure, `__call` name or
+    /// partial application, not dynamic and not a constructor, with no
+    /// observer, of a function `Builtin::plain_call_upto` answers
+    /// [`PlainCall::Named`](crate::func::PlainCall) for, given at least its
+    /// required arguments, each accepted as it is ([`Builtin::accepts`]),
+    /// by value (a value at a prefer-ref parameter too); a function with a frameless class whose
+    /// arguments allow its frameless call keeps that one. Returns `None`,
+    /// having changed nothing, otherwise.
+    ///
+    /// Out of line, as [`Vm::push_simple_ucall`] is.
+    #[inline(never)]
+    #[allow(clippy::too_many_lines)] // the builtin call protocol, as `call_builtin_impl`
+    fn call_builtin_pooled(
+        &mut self,
+        b: &Rc<Builtin>,
+        call: &mut PendingCall,
+        dst: Option<u32>,
+    ) -> Option<VmResult<Value>> {
+        if call.has_named
+            || call.dynamic
+            || call.is_ctor
+            || !call.named.is_empty()
+            || call.magic_name.is_some()
+            || call.this.is_some()
+            || call.scope.is_some()
+            || call.called.is_some()
+            || call.closure.is_some()
+            || call.pfa.is_some()
+        {
+            return None;
+        }
+        // The arguments are in the inline buffer, or all in the argument
+        // vector (`ZEND_SEND_UNPACK` of a list: `array_merge(...$lists)`).
+        let from_vec = call.inline_count == 0 && !call.args.is_empty();
+        if call.inline_count > 0 && !call.args.is_empty() {
+            return None;
+        }
+        let n = if from_vec {
+            call.args.len()
+        } else {
+            usize::from(call.inline_count)
+        };
+        let (kind, upto) = b.plain_call_upto();
+        if kind != crate::func::PlainCall::Named {
+            return None;
+        }
+        let sig = b.signature();
+        let nparams = sig.params.len();
+        let variadic = b.flags & flags::VARIADIC != 0;
+        if n < sig.required as usize || (!variadic && n > nparams) {
+            return None;
+        }
+        let sent: &[Option<Value>] = if from_vec {
+            &call.args
+        } else {
+            call.inline_args.get(..n)?
+        };
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class != 0 && crate::special::frameless_args(class, sent) {
+            return None;
+        }
+        let table = b.accepts();
+        let last = table.last().copied().unwrap_or(u32::MAX);
+        // From the first by-reference parameter on, a by-reference
+        // position takes only a value sent to a prefer-ref parameter
+        // (`current(f())`: `ZEND_SEND_VAR_NO_REF_EX` passes it by value); a
+        // reference sent by the generic `Send` is the general call's
+        // (typed-reference writes, `flush_typed_arg_writes`).
+        let taken = sent.iter().enumerate().all(|(i, arg)| {
+            let Some(v) = arg else {
+                return false;
+            };
+            if i >= upto {
+                let (by_ref, prefer) = b.param_ref_at(i);
+                if by_ref {
+                    return prefer && !matches!(v, Value::Reference(_));
+                }
+            }
+            crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
+        });
+        if !taken {
+            return None;
+        }
+        // A resolution left by an earlier builtin's callable argument is
+        // not this call's (`call_builtin_impl`).
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        // A pooled record, taken whole for the call
+        // (`CallBufs::take_args`).
+        let mut args = self.call_bufs.take_args();
+        let live = self.frames.live;
+        let spare = {
+            let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
+            if !frame.args.is_empty() {
+                frame.args.clear();
+            }
+            // The frame takes an argument vector as it is (as
+            // `call_builtin_impl` does), and the inline arguments one by one.
+            let spare = if from_vec {
+                Some(std::mem::replace(
+                    &mut frame.args,
+                    std::mem::take(&mut call.args),
+                ))
+            } else {
+                for arg in call.inline_args.iter_mut().take(n) {
+                    frame.args.push(arg.take());
+                }
+                None
+            };
+            // The handler's copies (php-src's handler reads them in the
+            // frame).
+            args.values.extend(frame.args.iter().map(|arg| match arg {
+                Some(v) => crate::func::copy_arg(v),
+                None => Value::Null,
+            }));
+            if !frame.named.is_empty() {
+                frame.named.clear();
+            }
+            set_opt(&mut frame.this, None);
+            set_opt(&mut frame.closure, None);
+            set_opt(&mut frame.scope, None);
+            set_opt(&mut frame.called, None);
+            set_opt(&mut frame.magic_name, None);
+            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            set_opt(&mut frame.builtin_name, Some(b.name.clone()));
+            frame.observer_hidden = false;
+            spare
+        };
+        call.inline_count = 0;
+        if let Some(buf) = spare.filter(|v| v.capacity() > 0) {
+            self.put_arg_vec(buf);
+        }
+        let given = args.values.len();
+        args.passed.resize(given, true);
+        // The declared defaults of the omitted trailing parameters, not
+        // marked as passed.
+        let upto = if variadic {
+            nparams.saturating_sub(1)
+        } else {
+            nparams
+        };
+        while args.values.len() < upto {
+            let i = args.values.len();
+            match self.builtin_default(b, i) {
+                Some(d) if i >= b.signature().required as usize => {
+                    args.values.push(d);
+                    args.passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        self.pending_call_dst = dst;
+        self.magic_call_name = None;
+        args.func = Some(Rc::clone(b));
+        let mut r = (b.handler)(self, &mut args);
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
+        // Released by the handler, destructed while its frame is current.
+        if object::has_pending_destructors() && self.frames.live == live + 1 {
+            if let Err(e) = self.run_pending_destructors() {
+                r = match (r, e) {
+                    (Ok(_), e) => Err(e),
+                    (Err(Throw::Exception(old)), Throw::Exception(new)) => {
+                        crate::exceptions::chain_previous(&new, &old);
+                        Err(Throw::Exception(new))
+                    }
+                    (Err(old), _) => Err(old),
+                };
+            }
+        }
+        if self.frames.live == live + 1 && self.frames.vec[live].release_native(&self.empty_vars) {
+            self.frames.pop_cleared_top();
+        } else {
+            self.pop_frames_to(live + 1);
+        }
+        Some(r)
+    }
+
     /// [`Vm::call_builtin`] after its [`Vm::fast_builtin_call`] attempt
     /// (which `op_do_call` has just made itself).
     #[inline]
@@ -3552,11 +3920,11 @@ impl Vm {
     /// named arguments that php-src compiles to dedicated opcodes, so no
     /// internal call exists for observers to see. Inside a function body,
     /// `func_num_args()` / `func_get_args()` become `ZEND_FUNC_NUM_ARGS` /
-    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`; and
-    /// `call_user_func()` / `call_user_func_array()` become
-    /// `ZEND_INIT_USER_CALL` + `ZEND_SEND_USER`/`ZEND_SEND_ARRAY`
-    /// (`zend_compile_func_cuf()` / `zend_compile_func_cufa()`), calling
-    /// the callback directly. (Only consulted while observers are enabled.)
+    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`. (A
+    /// `call_user_func()` / `call_user_func_array()` php-src compiles to
+    /// `ZEND_INIT_USER_CALL` compiles to `Op::InitUserCall` here too, so
+    /// no builtin call is made for it.) (Only consulted while observers
+    /// are enabled.)
     fn compiles_to_opcode(&self, b: &Builtin, call: &PendingCall) -> bool {
         if !call.direct || call.has_named {
             return false;
@@ -3570,8 +3938,6 @@ impl Vm {
                         .is_some_and(|caller| caller.kind == FrameKind::Function)
             }
             b"strlen" => call.args.len() == 1,
-            b"call_user_func" => !call.args.is_empty(),
-            b"call_user_func_array" => call.args.len() == 2,
             _ => false,
         }
     }
@@ -3606,9 +3972,9 @@ impl Vm {
             (Vec::new(), Vec::new())
         } else {
             let cap = nparams.max(npassed);
-            let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            let mut values = self.call_bufs.take_values();
             values.reserve(cap);
-            let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            let mut passed = self.call_bufs.take_passed();
             passed.reserve(cap);
             (values, passed)
         };
@@ -3622,13 +3988,9 @@ impl Vm {
         // pushed before zpp so arity and argument errors show it. It is
         // pushed first and filled in place: a `Frame` is a few hundred
         // bytes, and every move of one is a `memcpy`.
-        // Direct call_user_func calls compile to frameless call forwarding in Zend.
-        let builtin_name = (!call.direct
-            || !matches!(
-                b.name.as_bytes(),
-                b"call_user_func" | b"call_user_func_array"
-            ))
-        .then(|| b.name.clone());
+        // (`call_user_func[_array]()` written by name never gets here: it
+        // compiles to `Op::InitUserCall`, as php-src's does.)
+        let builtin_name = Some(b.name.clone());
         // Computed before the push: `compiles_to_opcode` inspects the caller.
         let observer_hidden = self.observer.enabled
             && (quiet
@@ -3861,11 +4223,9 @@ impl Vm {
         // Objects released by the builtin (e.g. by-ref outputs overwriting
         // the last reference) are destructed while its frame is still
         // active, so traces show `[internal function]` + the builtin.
-        {
-            let Args { values, passed, .. } = args;
-            self.put_val_vec(values);
-            self.put_bool_vec(passed);
-        }
+        args.release_into(&mut self.call_bufs);
+        // Emptied by `release_into`: no drop glue to run.
+        std::mem::forget(args);
         if object::has_pending_destructors() && self.frames.len() == depth {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {
@@ -3987,7 +4347,7 @@ impl Vm {
                 format!(
                     "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
                     i + 1,
-                    ty.to_php_string(),
+                    builtin_param_type_name(ty),
                     given_type(v)
                 )
             };
@@ -4011,26 +4371,101 @@ impl Vm {
 
     /// The default of native parameter `i`: a parsed literal, or a
     /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
+    ///
+    /// The literal (what nearly every omitted parameter has) is read in
+    /// line; only a default given by name goes out of line.
+    #[inline]
     pub(crate) fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
         if let Some(Some(v)) = b.defaults.get(i) {
-            return Some(v.clone());
+            return Some(clone_value(v));
         }
-        let text = b.params.get(i)?.default_text.as_deref()?.trim();
+        self.builtin_default_named(b, i)
+    }
+
+    /// [`Vm::builtin_default`] of a parameter whose default is not a
+    /// literal: a constant's value, or `None`.
+    ///
+    /// The resolution is kept with the function ([`Builtin::cached_default`])
+    /// when it cannot change: no default (`UNKNOWN`, text that names no
+    /// constant), or the scalar value of a constant of the engine or an
+    /// extension (`SORT_STRING`) or of an internal class: those are
+    /// registered at start-up and cannot be redefined. Resolved on every
+    /// call, the text's trim, its scan and the constant table's lookup cost
+    /// ~120 instructions per omitted parameter (~355 an `array_unique($a)`).
+    /// A constant a script defined, or a value that is not a scalar, is
+    /// looked up every time, as before.
+    #[inline(never)]
+    fn builtin_default_named(&mut self, b: &Builtin, i: usize) -> Option<Value> {
+        match b.cached_default(i) {
+            crate::func::NamedDefault::Absent => return None,
+            crate::func::NamedDefault::Value(v) => return Some(v),
+            crate::func::NamedDefault::Unresolved => {}
+        }
+        match self.resolve_builtin_default(b, i) {
+            DefaultResolution::Absent => {
+                if i < b.params.len() {
+                    b.cache_default(i, None);
+                }
+                None
+            }
+            DefaultResolution::Fixed(v) => {
+                b.cache_default(i, Some(&v));
+                Some(v)
+            }
+            DefaultResolution::Varying(v) => v,
+        }
+    }
+
+    /// The resolution of [`Vm::builtin_default_named`], and whether it can
+    /// be kept.
+    ///
+    /// `UNKNOWN` is no constant: it is `gen_stub`'s marker of a parameter
+    /// whose default the function works out itself (`array_keys()`'s
+    /// `$filter_value`, `mt_rand()`'s bounds), which php-src never looks
+    /// up. It is answered before anything else: looking it up as a
+    /// constant on every call of such a function cost ~250 instructions
+    /// a call, and a script's own `UNKNOWN` constant is not the default.
+    fn resolve_builtin_default(&mut self, b: &Builtin, i: usize) -> DefaultResolution {
+        let Some(text) = b.params.get(i).and_then(|p| p.default_text.as_deref()) else {
+            return DefaultResolution::Absent;
+        };
+        let text = text.trim();
+        if text == "UNKNOWN" {
+            return DefaultResolution::Absent;
+        }
         let text = text.strip_prefix('\\').unwrap_or(text);
         if text.is_empty()
             || !text
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c == b'\\')
         {
-            return None;
+            return DefaultResolution::Absent;
         }
         if let Some(p) = find_double_colon(text.as_bytes()) {
-            let cls = self.find_class(&text.as_bytes()[..p])?;
-            return self
+            let Some(cls) = self.find_class(&text.as_bytes()[..p]) else {
+                return DefaultResolution::Varying(None);
+            };
+            let v = self
                 .class_constant(&cls, &ZStr::from(&text.as_bytes()[p + 2..]))
                 .ok();
+            return match v {
+                // An internal class's constant (no declaration).
+                Some(v) if cls.decl.is_none() => DefaultResolution::Fixed(v),
+                v => DefaultResolution::Varying(v),
+            };
         }
-        self.constants.get(text.as_bytes()).cloned()
+        let v = self.constants.get(text.as_bytes()).cloned();
+        match v {
+            Some(v)
+                if !self
+                    .user_constants
+                    .iter()
+                    .any(|n| n.as_bytes().eq_ignore_ascii_case(text.as_bytes())) =>
+            {
+                DefaultResolution::Fixed(v)
+            }
+            v => DefaultResolution::Varying(v),
+        }
     }
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
@@ -4094,8 +4529,12 @@ impl Vm {
         let variadic = b.flags & flags::VARIADIC != 0;
         let nparams = b.params.len();
         let required = b.required as usize;
-        let (kind, n) = if given < required {
-            if required == nparams && !variadic {
+        let (kind, n) = if let Some(exact) = zpp_exact_count(b.name.as_bytes(), given) {
+            ("exactly", exact)
+        } else if given < required {
+            if let Some(min) = zpp_min_args(b.name.as_bytes()) {
+                ("at least", min)
+            } else if required == nparams && !variadic {
                 ("exactly", required)
             } else {
                 ("at least", required)
@@ -4355,7 +4794,10 @@ impl Vm {
                 &format!("{fname}(): Argument #{} (${}) not passed", n + 1, p.name),
             );
         }
-        let exact = uf.required as usize == uf.params.len() && uf.flags & flags::VARIADIC == 0;
+        // `required_num_args == num_args`, where `num_args` leaves the
+        // variadic parameter out (`f($a, $b, ...$c)` needs "exactly 2").
+        let declared = uf.params.len() - usize::from(uf.flags & flags::VARIADIC != 0);
+        let exact = uf.required as usize == declared;
         let mut msg = format!("Too few arguments to function {fname}(), {passed} passed");
         let caller = self
             .frames
@@ -4427,47 +4869,6 @@ impl Vm {
         Ok(())
     }
 
-    /// `ZEND_RECV_VARIADIC` without the generic op: the arguments past the
-    /// `n` declared ones collected into a list in variable `cv`, when the
-    /// variadic parameter takes them as they are (no type but `mixed`, by
-    /// value), there are no named arguments, the variable is empty and the
-    /// frame has no attached symbol table. `false`, nothing changed,
-    /// otherwise ([`Vm::op_recv_variadic`] checks the types and binds).
-    pub(crate) fn recv_variadic_fast(&mut self, n: u32, cv: u32) -> bool {
-        let Some(frame) = self.frames.last_mut() else {
-            return false;
-        };
-        if frame.symtab_attached || !frame.named.is_empty() {
-            return false;
-        }
-        let Some(uf) = frame.ufunc.as_ref() else {
-            return false;
-        };
-        let plain = uf.params.last().is_some_and(|p| {
-            p.variadic && !p.by_ref && p.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed)
-        });
-        if !plain
-            || !frame
-                .cvs
-                .get(cv as usize)
-                .is_some_and(|s| s.get().is_none())
-        {
-            return false;
-        }
-        let from = (n as usize).min(frame.args.len());
-        let list = if from == frame.args.len() {
-            ZArray::new()
-        } else {
-            let mut arr = HashTable::with_capacity_packed(frame.args.len() - from);
-            let _ = arr.push_all(frame.args[from..].iter().flatten().cloned());
-            ZArray::from_table(arr)
-        };
-        if let Some(slot) = frame.cvs.get_mut(cv as usize) {
-            slot.set(Some(Value::Array(list)));
-        }
-        true
-    }
-
     pub(crate) fn op_recv_variadic(&mut self, n: u32, cv: u32) -> VmResult<()> {
         let passed = self.frame().args.len();
         let mut arr = HashTable::new();
@@ -4487,6 +4888,37 @@ impl Vm {
         }
         self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
         Ok(())
+    }
+
+    /// [`Vm::op_recv_variadic`] of an untyped (or `mixed`) variadic
+    /// parameter `n` without named arguments (`ZEND_RECV_VARIADIC`, its
+    /// loop over the extra arguments without the type check): the
+    /// arguments past the declared parameters, as they are, into a list in
+    /// variable `cv` (an empty array when there are none). The tape runs
+    /// it in place (`exec/tape.rs`, `run_vm_op`). `false`, having changed
+    /// nothing, for any other parameter: the generic op runs.
+    #[inline(never)]
+    pub(crate) fn recv_variadic_plain(&mut self, n: u32, cv: u32) -> bool {
+        let Some(f) = self.frames.last() else {
+            return false;
+        };
+        let Some(uf) = f.ufunc.as_ref() else {
+            return false;
+        };
+        if !f.named.is_empty()
+            || uf
+                .params
+                .get(n as usize)
+                .is_none_or(|p| !p.variadic || p.ty.as_ref().is_some_and(|t| !t.is_mixed()))
+        {
+            return false;
+        }
+        let mut arr = HashTable::new();
+        for v in f.args.iter().skip(n as usize).flatten() {
+            let _ = arr.push(v.clone());
+        }
+        self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
+        true
     }
 
     /// Verifies the return value of the current frame.
@@ -4621,6 +5053,22 @@ impl Vm {
         // `zend_call_function` services pending interrupts (async signals)
         // before entering user code from internal code.
         self.check_interrupt()?;
+        if call.inline_count > 0 {
+            if call.args.is_empty() && takes_args_inline(&call) {
+                // Every parameter by value (`fill_call_args`): the arguments
+                // are dereferenced in the inline buffer, and the frame is
+                // readied from it by `push_user_call`'s plain entry.
+                let n = call.inline_count as usize;
+                for slot in &mut call.inline_args[..n] {
+                    let v = match slot {
+                        Some(Value::Reference(r)) => r.get(),
+                        _ => continue,
+                    };
+                    *slot = Some(v);
+                }
+                return self.call_user_inline(call, from_internal);
+            }
+        }
         if !call.is_magic_trampoline() {
             for (i, arg) in call.args.iter_mut().enumerate() {
                 let Some(value) = arg else { continue };
@@ -4700,6 +5148,203 @@ impl Vm {
         }
     }
 
+    /// [`Vm::call_pending_ex`] of a user function whose arguments are in
+    /// the inline buffer, dereferenced: `zend_call_function` /
+    /// `zend_call_known_function` pushing one frame, binding the arguments
+    /// and calling `execute_ex`. No argument vector is taken from the pool
+    /// or given back, the by-reference loop is skipped (no parameter is by
+    /// reference), and `push_user_call` takes its plain entry (the
+    /// arguments straight into the compiled variables, the `RECV` ops
+    /// skipped) instead of `init_cvs`.
+    fn call_user_inline(&mut self, call: PendingCall, from_internal: bool) -> VmResult<Value> {
+        self.check_deprecated_call(&call)?;
+        let strict = call.strict;
+        self.push_user_call(call, RetTarget::Discard, strict, from_internal)?;
+        let base = self.frames.len() - 1;
+        match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        }
+    }
+
+    /// Puts `args` into `call` for [`Vm::call_pending`]: in the call's
+    /// inline buffer when the callee is a user function that takes every
+    /// argument by value and there are at most six (no vector taken from
+    /// the pool, and the frame is set up by `push_user_call`'s plain
+    /// entry), otherwise in a pooled argument vector as before.
+    #[inline]
+    pub(crate) fn fill_call_args(&mut self, call: &mut PendingCall, args: Vec<Value>) {
+        let n = args.len();
+        if n == 0 {
+            return;
+        }
+        if n <= call.inline_args.len()
+            && call.inline_count == 0
+            && call.args.is_empty()
+            && takes_args_inline(call)
+        {
+            for (slot, a) in call.inline_args.iter_mut().zip(args) {
+                *slot = Some(a);
+            }
+            #[allow(clippy::cast_possible_truncation)] // n <= 6
+            let count = n as u8;
+            call.inline_count = count;
+            return;
+        }
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(n);
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
+    }
+
+    /// [`Vm::fill_call_args`] from a slice, whose values are moved out
+    /// (left `null`): the magic methods and interface methods the engine
+    /// calls with a fixed argument list (`__get($name)`, `__set($name,
+    /// $value)`, `offsetGet($offset)`, ...) build no vector at all for a
+    /// plain user method.
+    #[inline]
+    pub(crate) fn fill_call_args_slice(&mut self, call: &mut PendingCall, args: &mut [Value]) {
+        let n = args.len();
+        if n == 0 {
+            return;
+        }
+        if n <= call.inline_args.len()
+            && call.inline_count == 0
+            && call.args.is_empty()
+            && takes_args_inline(call)
+        {
+            for (slot, a) in call.inline_args.iter_mut().zip(args.iter_mut()) {
+                *slot = Some(std::mem::take(a));
+            }
+            #[allow(clippy::cast_possible_truncation)] // n <= 6
+            let count = n as u8;
+            call.inline_count = count;
+            return;
+        }
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(n);
+        call_args.extend(args.iter_mut().map(|a| Some(std::mem::take(a))));
+        call.args = call_args;
+    }
+
+    /// `zend_call_known_instance_method()`: calls method `m` (known per
+    /// class: a magic method from `Class::magic`, an interface method
+    /// looked up once) on `o` with a fixed argument list, moved out of
+    /// `args`. The same call as [`Vm::call_method`], without its argument
+    /// vector.
+    pub(crate) fn call_known_method(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        args: &mut [Value],
+    ) -> VmResult<Value> {
+        if let Some(r) = self.enter_method_direct(o, m, args) {
+            return r;
+        }
+        let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
+        self.fill_call_args_slice(&mut call, args);
+        self.call_pending(call)
+    }
+
+    /// [`Vm::call_known_method`] of a plain user method, with the frame
+    /// readied in place: what `call_pending` and `push_user_call`'s plain
+    /// entry do for that call, without building, moving and taking apart a
+    /// `PendingCall` (`zend_call_known_function`: `zend_vm_stack_push_call_frame`,
+    /// the arguments copied into the frame's slots, `execute_ex`).
+    ///
+    /// A plain user method here: an instance method that is no generator,
+    /// has no static variables or `finally`, is not deprecated, takes every
+    /// parameter by value and none variadic, gets at least its required
+    /// argument count and at most its parameter count, each typed
+    /// parameter a value its type takes as it is (no coercion to report),
+    /// and no observer is active. `None` for any other call, which takes
+    /// the `PendingCall` path; the arguments may then have been
+    /// dereferenced already, as that path dereferences them for by-value
+    /// parameters (every parameter is one when the type test declines).
+    fn enter_method_direct(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        let Func::User(uf) = &m.func else {
+            return None;
+        };
+        let n = args.len();
+        if m.is_static()
+            || uf.is_generator()
+            || uf.code.num_statics != 0
+            || uf.code.num_finally != 0
+            || uf.flags & flags::DEPRECATED != 0
+            || self.has_observers()
+            || n < uf.required as usize
+            || n > uf.params.len()
+            || self.frames.len() > 50_000
+            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return None;
+        }
+        // By-value arguments are passed dereferenced (`call_pending`).
+        for a in args.iter_mut() {
+            if let Value::Reference(r) = a {
+                let v = r.get();
+                *a = v;
+            }
+        }
+        if !uf.params[..n]
+            .iter()
+            .zip(args.iter())
+            .all(|(p, v)| p.ty.as_ref().is_none_or(|ty| param_accepts(ty, v)))
+        {
+            return None;
+        }
+        // `zend_call_function` services pending interrupts before entering
+        // user code from internal code.
+        if let Err(t) = self.check_interrupt() {
+            return Some(Err(t));
+        }
+        let uf = uf.clone();
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+        let f = &mut self.frames[idx];
+        f.this = Some(o.clone());
+        f.scope = Some(m.scope());
+        f.called = Some(object::class_of(o).clone());
+        f.ret = RetTarget::Discard;
+        f.caller_strict = false;
+        f.called_from_internal = true;
+        f.is_ctor = false;
+        f.args.clear();
+        f.args.resize(n, None);
+        for (i, a) in args.iter_mut().enumerate() {
+            let v = std::mem::take(a);
+            if let Some(slot) = f.cvs.get_mut(i) {
+                slot.set(Some(v));
+            }
+        }
+        // The RECV ops of the passed arguments are skipped, as
+        // `push_user_call`'s plain entry skips them.
+        let mut first_op = 0;
+        for i in 0..n {
+            match uf.code.ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => break,
+            }
+        }
+        f.ip = first_op;
+        f.func = Some(m.func.clone());
+        f.ufunc = Some(uf);
+        let base = self.frames.len() - 1;
+        Some(match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
+    }
+
     /// `zend_call_function` checks `EG(vm_interrupt)` once the callee has
     /// returned, in the caller's frame, also when the callee threw `old`
     /// (e.g. a tick function raising a signal and throwing): the interrupt
@@ -4737,7 +5382,7 @@ impl Vm {
     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
         if let Value::Object(o) = callable.deref() {
             if let Some(mut call) = self.closure_user_call(&o) {
-                call.args = args.into_iter().map(Some).collect();
+                self.fill_call_args(&mut call, args);
                 return self.call_pending(call);
             }
         }
@@ -4745,11 +5390,7 @@ impl Vm {
             Ok(call) => call,
             Err(_) => self.resolve_callable_for_call(callable)?,
         };
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -4865,7 +5506,7 @@ impl Vm {
     /// compiled variables, the `RECV`s of passed parameters skipped, a
     /// closure's bound variables after them), then the nested execution.
     /// `None`, having changed nothing, for anything that branch does not
-    /// take (see [`Vm::call_user_method_direct`]; also a constructor) or a
+    /// take (see [`Vm::enter_method_direct`]; also a constructor) or a
     /// reference argument: the pending call is then made.
     fn call_prepared_direct(
         &mut self,
@@ -5009,21 +5650,25 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
-        // Positional arguments only, to a resolution that carries nothing
-        // else (`call_user_func("f", $x)`): [`Vm::call_prepared`]'s direct
-        // frame for a plain user callee.
         let mut args = args;
-        if named.is_empty()
-            && call.args.is_empty()
-            && call.inline_count == 0
-            && call.named.is_empty()
-            && !call.has_named
-            && call.pfa.is_none()
-            && call.magic_name.is_none()
-        {
-            if let Some(r) = self.call_prepared_direct(&call, &mut args) {
-                return r;
+        if named.is_empty() {
+            // Positional arguments only, to a resolution that carries
+            // nothing else (`call_user_func("f", $x)`):
+            // [`Vm::call_prepared`]'s direct frame for a plain user callee.
+            if call.args.is_empty()
+                && call.inline_count == 0
+                && call.named.is_empty()
+                && !call.has_named
+                && call.pfa.is_none()
+                && call.magic_name.is_none()
+            {
+                if let Some(r) = self.call_prepared_direct(&call, &mut args) {
+                    return r;
+                }
             }
+            // `Vm::call_resolved`: positional arguments only.
+            self.fill_call_args(&mut call, args);
+            return self.call_pending(call);
         }
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
@@ -5076,7 +5721,7 @@ impl Vm {
         m: &Rc<Method>,
         mut args: Vec<Value>,
     ) -> VmResult<Value> {
-        if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
+        if let Some(r) = self.enter_method_direct(o, m, &mut args) {
             return r;
         }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
@@ -5095,7 +5740,7 @@ impl Vm {
         m: &Rc<Method>,
         mut args: [Value; N],
     ) -> VmResult<Value> {
-        if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
+        if let Some(r) = self.enter_method_direct(o, m, &mut args) {
             return r;
         }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
@@ -5105,87 +5750,6 @@ impl Vm {
             self.give_args(&mut call, Vec::from(args));
         }
         self.call_pending(call)
-    }
-
-    /// [`Vm::call_method_n`] of a plain user method, made as
-    /// [`Vm::call_pending`] makes it but without building the pending call:
-    /// the interrupt check, then the frame as `push_user_call`'s plain
-    /// branch sets it up (`$this`, the method's scope and the object's
-    /// class, the arguments in their compiled variables, the `RECV`s of
-    /// passed parameters skipped), then the nested execution. `None`,
-    /// having changed nothing, for anything that branch does not take (a
-    /// static, deprecated or generator method, static variables, `finally`
-    /// slots, an observer, by-reference or variadic parameters, an
-    /// argument count outside the parameters, a reference argument, an
-    /// argument its declared type does not take as it is) or a frame stack
-    /// past the depth backstop: the generic call then runs.
-    fn call_user_method_direct(
-        &mut self,
-        obj: &Obj,
-        method: &Rc<Method>,
-        args: &mut [Value],
-    ) -> Option<VmResult<Value>> {
-        let n = args.len();
-        let Func::User(uf) = &method.func else {
-            return None;
-        };
-        if method.is_static()
-            || uf.flags & flags::DEPRECATED != 0
-            || uf.is_generator()
-            || uf.code.num_statics != 0
-            || uf.code.num_finally != 0
-            || self.has_observers()
-            || n < uf.required as usize
-            || n > uf.params.len()
-            || self.frames.len() > 50_000
-            || uf.params.iter().any(|p| p.variadic || p.by_ref)
-        {
-            return None;
-        }
-        for (p, v) in uf.params.iter().zip(args.iter()) {
-            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
-                return None;
-            }
-        }
-        // `zend_call_function`: pending interrupts before the user code.
-        if let Err(e) = self.check_interrupt() {
-            return Some(Err(e));
-        }
-        let uf = Rc::clone(uf);
-        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
-        let frame = &mut self.frames[idx];
-        frame.this = Some(obj.clone());
-        frame.scope = Some(method.scope());
-        frame.called = Some(object::class_of(obj).clone());
-        frame.ret = RetTarget::Discard;
-        frame.caller_strict = false;
-        frame.called_from_internal = true;
-        frame.is_ctor = false;
-        frame.args.clear();
-        frame.args.resize(n, None);
-        for (i, v) in args.iter_mut().enumerate() {
-            if let Some(slot) = frame.cvs.get_mut(i) {
-                slot.set(Some(std::mem::take(v)));
-            }
-        }
-        let mut first_op = 0;
-        for i in 0..n {
-            match uf.code.ops.get(first_op) {
-                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
-                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
-                    first_op = *skip as usize;
-                }
-                _ => break,
-            }
-        }
-        frame.ip = first_op;
-        frame.func = Some(Func::User(Rc::clone(&uf)));
-        frame.ufunc = Some(uf);
-        let base = self.frames.len() - 1;
-        Some(match self.execute(base) {
-            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
-            r => r,
-        })
     }
 
     /// Puts the arguments of a call made from native code (`offsetGet()`,
@@ -5199,11 +5763,7 @@ impl Vm {
             fill_inline_args(call, args);
             return;
         }
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(call, args);
     }
 
     /// Calls a method by name (with `__call` fallback), dereferencing the
@@ -5222,20 +5782,16 @@ impl Vm {
         &mut self,
         o: &Obj,
         name: &str,
-        mut args: Vec<Value>,
+        args: Vec<Value>,
     ) -> VmResult<Value> {
-        let cls = object::class_of(o).clone();
-        let m = method_by_name(&cls, name);
-        if let Some(m) = &m {
-            if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
-                return r;
-            }
-        }
+        let m = class_method_lc(object::class_of(o), name);
         let mut call = match m {
-            Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
+            // `offsetGet()`, the Iterator methods, ...: the method found
+            // takes `call_method`'s entry (its frame readied in place).
+            Some(m) => return self.call_method(o, &m, args),
             None => self.method_call(o, &ZStr::from(name))?,
         };
-        self.give_args(&mut call, args);
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -5277,7 +5833,7 @@ impl Vm {
         args: Vec<Option<Value>>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let m = method_by_name(&cls, name);
+        let m = class_method_lc(&cls, name);
         let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
@@ -5295,11 +5851,7 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.static_method_call(cls, &ZStr::from(name), false)?;
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         self.call_pending(call)
     }
 
@@ -5316,11 +5868,7 @@ impl Vm {
         };
         let quiet = matches!(&f, Func::Builtin(_)) && self.observer.enabled;
         let mut call = PendingCall::new(f);
-        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
-        call_args.clear();
-        call_args.reserve(args.len());
-        call_args.extend(args.into_iter().map(Some));
-        call.args = call_args;
+        self.fill_call_args(&mut call, args);
         if !self.observer.enabled {
             return self.call_pending(call);
         }
@@ -5330,6 +5878,44 @@ impl Vm {
         self.observer.quiet_builtin = saved;
         result
     }
+}
+
+/// Whether a call's arguments may go in its inline buffer
+/// ([`Vm::fill_call_args`]): a user function (not a `__call` trampoline,
+/// whose arguments are packed from `args`) without named arguments or
+/// placeholders that takes no parameter by reference, so the arguments
+/// only need dereferencing (`call_pending`'s loop does nothing else for
+/// such a callee).
+#[inline]
+fn takes_args_inline(call: &PendingCall) -> bool {
+    call.magic_name.is_none()
+        && call.named.is_empty()
+        && !call.has_named
+        && call.pfa.is_none()
+        && match &call.func {
+            Func::User(uf) => !uf.params.iter().any(|p| p.by_ref),
+            Func::Builtin(_) => false,
+        }
+}
+
+/// The method `name` of `cls`, looked up by its lower-case name: a name of
+/// up to 64 bytes is lowered on the stack (`offsetGet`, `getIterator`:
+/// the engine's own calls), a longer one in a heap buffer.
+fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
+    let b = name.as_bytes();
+    if !b.iter().any(u8::is_ascii_uppercase) {
+        return cls.methods.get(b).cloned();
+    }
+    let mut buf = [0u8; 64];
+    if let Some(dst) = buf.get_mut(..b.len()) {
+        for (d, s) in dst.iter_mut().zip(b) {
+            *d = s.to_ascii_lowercase();
+        }
+        return cls.methods.get(&*dst).cloned();
+    }
+    cls.methods
+        .get(name.to_ascii_lowercase().as_bytes())
+        .cloned()
 }
 
 /// The method name a `__call`/`__callStatic` trampoline carries:
@@ -5368,18 +5954,24 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
     use crate::func::CallShape;
     let shape = uf.call_shape();
-    // `n <= plain_params() <= params.len() <= cv_names.len()` (the shape),
+    // `n <= params.len() <= cv_names.len()` (the shape),
     // so every argument has its compiled variable, and a trailing variadic
     // parameter gets none (its `RECV_VARIADIC` collects nothing).
-    if shape == CallShape::NOT_PLAIN
-        || !call.args.is_empty()
+    if !call.args.is_empty()
         || !call.named.is_empty()
         || call.magic_name.is_some()
         || call.pfa.is_some()
         || n < uf.required as usize
-        || n > uf.plain_params()
         || n > call.inline_args.len()
     {
+        return false;
+    }
+    if shape == CallShape::NOT_PLAIN {
+        // Static variables, a trailing variadic parameter, a by-reference
+        // parameter past the arguments passed (`near_plain`).
+        return near_plain(uf, n);
+    }
+    if n > uf.params.len() {
         return false;
     }
     if shape == CallShape::TYPED {
@@ -5394,6 +5986,46 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         }
     }
     true
+}
+
+/// A function or method that would make a plain call but for its `static`
+/// variables (`function f() { static $n = 0; return ++$n; }`), a trailing
+/// variadic parameter (`function f($name, ...$args)`) or a by-reference
+/// parameter the call does not reach (`function get($k, &$found = null)`
+/// called as `get($k)`), called with `n` arguments: such calls took the
+/// generic `InitFCall`/`Send`/`DoCall` (`Vm::push_user_call`), about a
+/// thousand instructions more per call. The tape's prepared call
+/// (`exec/tape/calls.rs`) and [`Vm::push_simple_ucall`] take them
+/// ([`UserFunction::near_plain_limit`] says which, and how many arguments).
+///
+/// Static variables: a frame of such a function never holds them
+/// (`Frame::statics` is only set for a closure, whose variables are its
+/// object's, and closures with statics are excluded); `Vm::static_slot`
+/// and `Vm::static_init` read the function's own store
+/// (`UserFunction::statics`) through `Frame::ufunc`, which the prepared
+/// frame holds as the generic call's does. At the return,
+/// `Frame::keeps_function` declines a function with statics, so the frame
+/// drops its handles as after a generic call.
+///
+/// A variadic parameter: the arguments past the declared ones go to the
+/// frame's argument buffer after a `None` for each declared parameter, as
+/// `push_user_call` leaves them, where `RecvVariadic`, `func_get_args()`
+/// and backtraces read them.
+#[cold]
+#[inline(never)]
+pub(crate) fn near_plain(uf: &UserFunction, n: usize) -> bool {
+    uf.near_plain_limit().is_some_and(|most| n <= most)
+}
+
+/// The arguments of a plain call of a variadic function past its declared
+/// parameters (`extra`, moved out), appended to the frame's argument
+/// buffer where its `RECV_VARIADIC` collects them (`Vm::op_recv_variadic`).
+#[cold]
+#[inline(never)]
+fn variadic_extras(args: &mut Vec<Option<Value>>, extra: &mut [Option<Value>]) {
+    for a in extra {
+        args.push(a.take());
+    }
 }
 
 /// Whether a value is returned as it is from a function with return type
@@ -5461,17 +6093,6 @@ pub(crate) fn clone_value(v: &Value) -> Value {
     }
 }
 
-/// The `gc::frame_released` step of a direct return: nothing to record
-/// for a frame without `$this`, a closure or a compiled variable holding
-/// an array, object or reference (no symbol table is attached).
-#[inline(always)]
-#[allow(clippy::inline_always)] // one test per return
-fn gc_on_release(frame: &crate::vm::Frame, caller: &crate::vm::Frame) {
-    if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
-        crate::gc::frame_released(frame, caller.this.as_ref());
-    }
-}
-
 /// The arguments of a returning native call, about to be dropped
 /// (`zend_vm_stack_free_args`, `zval_ptr_dtor_nogc`): an array or a
 /// reference whose last handle they hold releases its contents
@@ -5491,8 +6112,19 @@ fn root_released_args(args: &[Option<Value>]) {
     }
 }
 
-/// A value [`Vm::return_simple`] returns as it is: a scalar, null or a
-/// string (no possible cycle root, nothing for `gc::frame_released`).
+/// Releases the value a caller's result slot held before
+/// [`Vm::return_simple`] stored the returned value into it (`set_tmp`'s
+/// release of the old value, after the frame). Out of line: the slot
+/// almost always held a scalar, which needs no release.
+#[cold]
+#[inline(never)]
+fn release_result_slot(v: Value) {
+    drop(v);
+}
+
+/// A value [`Vm::return_simple`] moves out of a compiled variable: a
+/// scalar, null or a string (no possible cycle root, nothing for the
+/// release to record).
 #[inline(always)]
 #[allow(clippy::inline_always)] // one test per return
 fn returns_directly(v: &Value) -> bool {
@@ -5500,6 +6132,19 @@ fn returns_directly(v: &Value) -> bool {
         v,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
     )
+}
+
+/// Whether releasing `v`, one handle of a value, may run a destructor: an
+/// object or a non-empty array held nowhere else (an array's elements may
+/// be the last handles of objects). Anything else only loses a count.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per discarded return
+fn may_destruct(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => o.refcount() == 1,
+        Value::Array(a) => a.refcount() == 1 && !a.is_empty(),
+        _ => false,
+    }
 }
 
 /// Whether `v` is a scalar, whose release does nothing.
@@ -5512,20 +6157,42 @@ fn is_scalar(v: &Value) -> bool {
     )
 }
 
-/// Whether a compiled variable of a returning frame holds a value
-/// [`crate::gc::possible_root`] may record: an array, an object or a
-/// reference (it ignores everything else).
+/// Releases a pending call [`Vm::call_builtin_pooled`] has made: it owns
+/// nothing then but its function handle and possibly its two argument
+/// buffers (its inline arguments were moved out, and it has no `$this`,
+/// scope, closure, `__call` name or partial application, as that function
+/// checked), so the rest is forgotten rather than passed through the
+/// call's drop glue.
 #[inline]
-fn cvs_may_hold_roots(cvs: &[crate::vm::CvSlot]) -> bool {
-    for slot in cvs {
-        if matches!(
-            slot.get(),
-            Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))
-        ) {
-            return true;
-        }
+fn release_spent_call(call: PendingCall) {
+    let PendingCall {
+        func,
+        this,
+        scope,
+        called,
+        args,
+        inline_args,
+        named,
+        closure,
+        magic_name,
+        pfa,
+        ..
+    } = call;
+    drop(func);
+    debug_assert!(inline_args.iter().all(Option::is_none));
+    debug_assert!(this.is_none() && scope.is_none() && called.is_none());
+    debug_assert!(closure.is_none() && magic_name.is_none() && pfa.is_none());
+    std::mem::forget((this, scope, called, inline_args, closure, magic_name, pfa));
+    if args.capacity() == 0 {
+        std::mem::forget(args);
+    } else {
+        drop(args);
     }
-    false
+    if named.capacity() == 0 {
+        std::mem::forget(named);
+    } else {
+        drop(named);
+    }
 }
 
 /// Stores `v` into an `Option` field of a frame being set up, releasing
@@ -5898,13 +6565,21 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
             return true;
         }
         ArgSrc::Val(Operand::Cv(cv)) => *cv,
-        ArgSrc::Place(pid) => match frame.code.places.get(*pid as usize) {
-            Some(p) if p.segs.is_empty() => match &p.base {
-                crate::opcode::PlaceBase::Cv(cv) => *cv,
-                _ => return false,
-            },
-            _ => return false,
-        },
+        ArgSrc::Place(pid) => {
+            let plain = frame.code.places.get(*pid as usize).and_then(|p| {
+                match (&p.base, p.segs.is_empty()) {
+                    (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+                    _ => None,
+                }
+            });
+            match plain {
+                Some(cv) => cv,
+                // (A place without segments that is not a variable is no
+                // shape `send_place_hit` reads.)
+                None => return send_place_in(frame, *pid, idx),
+            }
+        }
+        ArgSrc::TempPlace(pid) => return send_place_in(frame, *pid, idx),
         _ => return false,
     };
     if frame.symtab_attached {
@@ -5914,6 +6589,27 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
         Some(Value::Reference(r)) => r.get(),
         Some(v) => clone_value(v),
         None => return false,
+    };
+    call.inline_args[idx] = Some(v);
+    call.inline_count += 1;
+    true
+}
+
+/// The by-value send of place `pid` of `frame` (a property, an array
+/// element, a chain of them, an element of a temporary) as inline
+/// argument `idx` of the newest pending call, which [`send_in`] found
+/// takes it by value: the specialised fetch ops' hit
+/// ([`Frame::send_place_hit`]) instead of the place walk. `false`, having
+/// changed nothing, otherwise.
+#[inline(never)]
+fn send_place_in(frame: &mut Frame, pid: crate::opcode::PlaceId, idx: usize) -> bool {
+    let Some(v) = frame.send_place_hit(pid) else {
+        return false;
+    };
+    // `send_in` checked the call and its slot; reading the place changes
+    // no pending call.
+    let Some(call) = frame.calls.last_mut() else {
+        return false;
     };
     call.inline_args[idx] = Some(v);
     call.inline_count += 1;
@@ -6123,6 +6819,19 @@ fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> R
     }
 }
 
+/// What [`Vm::resolve_builtin_default`] made of a builtin parameter's
+/// named default.
+enum DefaultResolution {
+    /// The call supplies no default.
+    Absent,
+    /// A value that cannot change ([`Builtin::cache_default`] keeps it when
+    /// it is a scalar).
+    Fixed(Value),
+    /// Resolved again on every call (a script's constant, a class not
+    /// found yet).
+    Varying(Option<Value>),
+}
+
 /// Finds `::` in a callable string.
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
@@ -6184,6 +6893,62 @@ fn frame_args(values: &[Value], out: &mut Vec<Option<Value>>) {
     }
 }
 
+/// The static method a `"Class::name"` string or a `['Class', 'name']`
+/// array (`class`, `method`) names at the `ZEND_INIT_USER_CALL` whose
+/// method cache slot is `slot` in the running frame `f`, as
+/// [`Vm::remember_user_call`] stored it (or as an `[$object, "name"]`
+/// array of an object of that class stored it for a static method, which
+/// resolves alike): the function, its declaring scope and the class, its
+/// called scope. `None` on a miss: another class name (an alias too),
+/// method or calling scope, and a calling frame whose `$this` makes the
+/// call late-bound (`zend_is_callable_check_class`: a `$this` of the
+/// calling scope's class, which is the named class or a subclass of it,
+/// is the call's object and called scope).
+pub(crate) fn user_call_static_hit(
+    f: &Frame,
+    slot: usize,
+    class: &[u8],
+    method: &[u8],
+) -> Option<(Func, Option<Rc<Class>>, Rc<Class>)> {
+    let class = class.strip_prefix(b"\\").unwrap_or(class);
+    let cache = f.code.method_cache.try_borrow().ok()?;
+    let e = cache.get(slot)?.as_ref()?;
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    if !e.is_static || e.scope_addr != scope_addr || !e.name.as_bytes().eq_ignore_ascii_case(method)
+    {
+        return None;
+    }
+    let cls = e.class.upgrade()?;
+    if Rc::as_ptr(&cls) as usize != e.class_addr || !cls.name.as_bytes().eq_ignore_ascii_case(class)
+    {
+        return None;
+    }
+    if let (Some(fs), Some(t)) = (&f.scope, &f.this) {
+        if object::class_of(t).is_subclass_of(fs) && fs.is_subclass_of(&cls) {
+            return None;
+        }
+    }
+    let func = e.func.get()?;
+    let scope = match &e.method_scope {
+        Some(w) => Some(w.upgrade()?),
+        None => None,
+    };
+    Some((func, scope, cls))
+}
+
+/// [`user_call_static_hit`] at the running `ZEND_INIT_USER_CALL` (its
+/// method cache slot the op's index: the frame's `ip` is past it) as the
+/// pending call [`Vm::user_call_cached`] returns.
+fn user_call_static_call(f: &Frame, class: &[u8], method: &[u8]) -> Option<PendingCall> {
+    let (func, scope, called) = user_call_static_hit(f, f.ip.checked_sub(1)?, class, method)?;
+    Some(PendingCall {
+        scope,
+        called: Some(called),
+        dynamic: true,
+        ..PendingCall::new(func)
+    })
+}
+
 /// `sodium_remove_param_values_from_backtrace()`: replaces the `args` of
 /// every frame in the exception's `trace` with an empty array.
 #[cold]
@@ -6213,10 +6978,695 @@ fn scrub_trace_args(o: &Obj) {
     }
 }
 
+// ----------------------------------------------------------------------
+// `call_user_func()` / `call_user_func_array()` written by name
+// ----------------------------------------------------------------------
+
+impl Vm {
+    /// `ZEND_INIT_USER_CALL` (`Zend/zend_vm_def.h`): resolves the callable
+    /// `callee` like the builtin's `Z_PARAM_FUNC` (`zend_is_callable`, in
+    /// the calling frame's scope, with the callable deprecations) and
+    /// starts a dynamic call of it (`ZEND_CALL_DYNAMIC`). A value that is
+    /// not callable is the builtin's `TypeError` for argument 1, named
+    /// after `call_user_func` or (`array`) `call_user_func_array`.
+    ///
+    /// The call site remembers a function named by a string and a method
+    /// of an `[$object, "name"]` array (by the object's class and the
+    /// calling scope), so a site called again with the same kind of
+    /// callable skips the resolution.
+    pub(crate) fn op_init_user_call(&mut self, callee: Operand, array: bool) -> VmResult<()> {
+        let cb = self.read(callee)?;
+        if let Some(call) = self.user_call_cached(&cb) {
+            self.push_pending(call);
+            return Ok(());
+        }
+        let mut call = self.user_call_resolve(&cb, array)?;
+        call.dynamic = true;
+        self.push_pending(call);
+        Ok(())
+    }
+
+    /// [`Vm::op_init_user_call`] run by the tape (`exec/tape.rs`), the op
+    /// at `at` in the current frame: the call it would push, returned
+    /// instead, for the tape to prepare (or push). The frame's resume point
+    /// is stored first (`SAVE_OPLINE()`: the "Use of "self" in callables"
+    /// deprecation, an undefined variable's warning and the `TypeError`
+    /// report this op's line, and an exception unwinds from it).
+    pub(crate) fn user_call_pending(
+        &mut self,
+        callee: Operand,
+        array: bool,
+        at: usize,
+    ) -> VmResult<PendingCall> {
+        self.frame_mut().ip = at + 1;
+        let cb = self.read(callee)?;
+        if let Some(call) = self.user_call_cached(&cb) {
+            return Ok(call);
+        }
+        let mut call = self.user_call_resolve(&cb, array)?;
+        call.dynamic = true;
+        Ok(call)
+    }
+
+    /// The call site's remembered resolution of `cb` ([`Vm::op_init_user_call`]),
+    /// as the pending call `zend_is_callable` would make of it: a plain
+    /// function named by a string (any case, one leading `\`), or the
+    /// method an `[$object, "name"]` array named for the same class and
+    /// calling scope. `None` on a miss.
+    #[inline]
+    fn user_call_cached(&self, cb: &Value) -> Option<PendingCall> {
+        let f = self.frame();
+        match cb {
+            Value::Str(s) => {
+                let name = s.as_bytes();
+                if let Some(p) = find_double_colon(name) {
+                    return user_call_static_call(f, &name[..p], &name[p + 2..]);
+                }
+                let slot = f.code.literals.len() + f.ip;
+                let cache = f.code.fcall_cache.borrow();
+                let func = cache.get(slot)?.as_ref()?.get()?;
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                if !func.name().as_bytes().eq_ignore_ascii_case(name) {
+                    return None;
+                }
+                let mut call = PendingCall::new(func);
+                call.dynamic = true;
+                Some(call)
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                    a.get(&ArrayKey::Int(0)).map(Value::deref),
+                    a.get(&ArrayKey::Int(1)).map(Value::deref),
+                ) else {
+                    return match (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) {
+                        (Some(Value::Str(c)), Some(Value::Str(m))) => {
+                            user_call_static_call(f, c.as_bytes(), m.as_bytes())
+                        }
+                        _ => None,
+                    };
+                };
+                let cls = object::class_of(&o);
+                let slot = f.ip.checked_sub(1)?;
+                let cache = f.code.method_cache.borrow();
+                let e = cache.get(slot)?.as_ref()?;
+                let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+                if e.class_addr != Rc::as_ptr(cls) as usize
+                    || e.scope_addr != scope_addr
+                    || !e.name.eq_ignore_ascii_case(m.as_bytes())
+                {
+                    return None;
+                }
+                let func = e.func.get()?;
+                let scope = match &e.method_scope {
+                    Some(w) => Some(w.upgrade()?),
+                    None => None,
+                };
+                let mut call = PendingCall {
+                    this: (!e.is_static).then(|| o.clone()),
+                    scope,
+                    called: Some(cls.clone()),
+                    ..PendingCall::new(func)
+                };
+                call.dynamic = true;
+                Some(call)
+            }
+            _ => None,
+        }
+    }
+
+    /// [`Vm::op_init_user_call`] on a cache miss: `zend_is_callable`, its
+    /// failure as the builtin's `TypeError`, and a resolution worth
+    /// remembering stored in the call site's cache.
+    #[inline(never)]
+    fn user_call_resolve(&mut self, cb: &Value, array: bool) -> VmResult<PendingCall> {
+        let fname = if array {
+            "call_user_func_array"
+        } else {
+            "call_user_func"
+        };
+        let call = match self.zend_is_callable(cb, false) {
+            Ok(Ok(call)) => call,
+            Ok(Err(reason)) => {
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "{fname}(): Argument #1 ($callback) must be a valid callback, {reason}"
+                    ),
+                ))
+            }
+            // An error handler threw on the "Use of "self" in callables"
+            // deprecation: `zend_is_callable_check_class` fails, and the
+            // opcode's `TypeError` gets the exception as its previous one.
+            Err(Throw::Exception(prev)) if names_callable_keyword(cb) => {
+                return Err(cuf_keyword_error(self, fname, &prev));
+            }
+            Err(t) => return Err(t),
+        };
+        self.remember_user_call(cb, &call);
+        Ok(call)
+    }
+
+    /// Stores the resolution `call` of `cb` in the running
+    /// `ZEND_INIT_USER_CALL`'s cache slots when [`Vm::user_call_cached`]
+    /// can rebuild it: a function found by its name (no class, no `$this`,
+    /// no trampoline), or a method an `[$object, "name"]` array found
+    /// directly (bound to that object, or static, its called class the
+    /// object's).
+    pub(crate) fn remember_user_call(&self, cb: &Value, call: &PendingCall) {
+        if call.magic_name.is_some() || call.closure.is_some() || call.pfa.is_some() {
+            return;
+        }
+        let f = self.frame();
+        match cb {
+            Value::Str(s) => {
+                let name = s.as_bytes();
+                if let Some(p) = find_double_colon(name) {
+                    self.remember_user_call_static(&name[..p], &name[p + 2..], call);
+                    return;
+                }
+                let name = name.strip_prefix(b"\\").unwrap_or(name);
+                if call.this.is_some()
+                    || call.scope.is_some()
+                    || call.called.is_some()
+                    || !call.func.name().as_bytes().eq_ignore_ascii_case(name)
+                {
+                    return;
+                }
+                let code = &f.code;
+                let slot = code.literals.len() + f.ip;
+                let mut cache = code.fcall_cache.borrow_mut();
+                if cache.len() <= slot {
+                    let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+                    crate::rtcache::grow_slots(&mut cache, size, || None);
+                }
+                cache[slot] = Some(crate::opcode::CachedFunc::new(&call.func));
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                    a.get(&ArrayKey::Int(0)).map(Value::deref),
+                    a.get(&ArrayKey::Int(1)).map(Value::deref),
+                ) else {
+                    if let (Some(Value::Str(c)), Some(Value::Str(m))) =
+                        (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+                    {
+                        self.remember_user_call_static(c.as_bytes(), m.as_bytes(), call);
+                    }
+                    return;
+                };
+                let cls = object::class_of(&o);
+                if find_double_colon(m.as_bytes()).is_some()
+                    || cls.hooks.as_ref().and_then(|h| h.get_method).is_some()
+                    || !call
+                        .func
+                        .name()
+                        .as_bytes()
+                        .eq_ignore_ascii_case(m.as_bytes())
+                    || !call.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, cls))
+                    || call.this.as_ref().is_some_and(|t| !Obj::ptr_eq(t, &o))
+                {
+                    return;
+                }
+                // Only a method of the class itself: one an object's
+                // `get_method` adds (a PDO driver's) depends on the object.
+                let declared = cls
+                    .methods
+                    .get(&m.to_ascii_lowercase())
+                    .is_some_and(|d| same_func(&d.func, &call.func));
+                let Some(slot) = f.ip.checked_sub(1).filter(|_| declared) else {
+                    return;
+                };
+                let entry = MethodCallCacheEntry {
+                    class_addr: Rc::as_ptr(cls) as usize,
+                    scope_addr: f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize),
+                    class: Rc::downgrade(cls),
+                    method_scope: call.scope.as_ref().map(Rc::downgrade),
+                    func: crate::opcode::CachedFunc::new(&call.func),
+                    is_static: call.this.is_none(),
+                    name_lit: None,
+                    name: m.clone(),
+                };
+                let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
+                    return;
+                };
+                if cache.len() <= slot {
+                    let size = f.code.ops.len().max(slot + 1);
+                    crate::rtcache::grow_slots(&mut cache, size, || None);
+                }
+                cache[slot] = Some(entry);
+            }
+            _ => {}
+        }
+    }
+
+    /// [`Vm::remember_user_call`] of a static method named by a
+    /// `"Class::name"` string or a `['Class', 'name']` array (`class` and
+    /// `method` its two parts): remembered in the op's slot of the method
+    /// cache, as a static method of the class itself (its name, not an
+    /// alias, and a method it declares), when the call has no `$this` and
+    /// the class is its called scope. [`user_call_static_hit`] judges a
+    /// later call again for the late static binding the calling frame's
+    /// `$this` may bring in.
+    fn remember_user_call_static(&self, class: &[u8], method: &[u8], call: &PendingCall) {
+        let class = class.strip_prefix(b"\\").unwrap_or(class);
+        let Some(cls) = call.called.as_ref() else {
+            return;
+        };
+        if call.this.is_some()
+            || find_double_colon(method).is_some()
+            || !cls.name.as_bytes().eq_ignore_ascii_case(class)
+            || !call.func.name().as_bytes().eq_ignore_ascii_case(method)
+        {
+            return;
+        }
+        let method = ZStr::from(method);
+        let declared = cls
+            .methods
+            .get(&method.to_ascii_lowercase())
+            .is_some_and(|d| d.flags & flags::STATIC != 0 && same_func(&d.func, &call.func));
+        let f = self.frame();
+        let Some(slot) = f.ip.checked_sub(1).filter(|_| declared) else {
+            return;
+        };
+        let entry = MethodCallCacheEntry {
+            class_addr: Rc::as_ptr(cls) as usize,
+            scope_addr: f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize),
+            class: Rc::downgrade(cls),
+            method_scope: call.scope.as_ref().map(Rc::downgrade),
+            func: crate::opcode::CachedFunc::new(&call.func),
+            is_static: true,
+            name_lit: None,
+            name: method,
+        };
+        let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
+            return;
+        };
+        if cache.len() <= slot {
+            let size = f.code.ops.len().max(slot + 1);
+            crate::rtcache::grow_slots(&mut cache, size, || None);
+        }
+        cache[slot] = Some(entry);
+    }
+
+    /// `ZEND_SEND_USER`: argument `n` (1-based) of the pending
+    /// `call_user_func()` call, by value (`GET_OP1_ZVAL_PTR_DEREF`). A
+    /// parameter that must be passed by reference gets a reference to a
+    /// copy, after the "must be passed by reference, value given" warning
+    /// (`zend_param_must_be_ref`); one that prefers a reference gets the
+    /// value.
+    pub(crate) fn op_send_user(&mut self, src: Operand, n: u32) -> VmResult<()> {
+        let v = self.read(src)?;
+        let i = (n as usize).saturating_sub(1);
+        let (by_ref, must) = {
+            let call = self.frame().calls.last().expect("pending call");
+            let by_ref = !call.is_magic_trampoline() && call.func.arg_by_ref(i);
+            (by_ref, by_ref && !prefers_ref(&call.func, i))
+        };
+        if !by_ref {
+            return self.op_send_val(v);
+        }
+        let v = if must {
+            self.param_must_be_ref(i)?;
+            Value::Reference(PhpRef::new(v))
+        } else {
+            v
+        };
+        self.push_arg(Some(i), None, v)
+    }
+
+    /// `ZEND_SEND_ARRAY`: the elements of the array `src` as the arguments
+    /// of the pending `call_user_func_array()` call: string keys are
+    /// named arguments (`zend_handle_named_arg`), a reference in the array
+    /// is passed as it is to a by-reference parameter and dereferenced for
+    /// a by-value one (kept for a `__call` trampoline), and a value for a
+    /// parameter that must be passed by reference is passed in a new
+    /// reference after the "must be passed by reference, value given"
+    /// warning. With `len` not [`Operand::Unused`], the elements are
+    /// those `array_slice($args, skip, len)` would give, all positional.
+    pub(crate) fn op_send_array(&mut self, src: Operand, len: Operand, skip: u32) -> VmResult<()> {
+        let ht = match self.read(src)? {
+            Value::Array(ht) => ht,
+            other => {
+                // `FREE_OP2`: a temporary length is released unread.
+                if let Operand::Tmp(t) = len {
+                    drop(std::mem::take(&mut self.frame_mut().tmps[t as usize]));
+                }
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
+                        given_type(&other)
+                    ),
+                ));
+            }
+        };
+        if len != Operand::Unused {
+            return self.send_array_slice(&ht, len, skip);
+        }
+        let mut have_named = false;
+        for (k, arg) in ht.iter() {
+            let (pos, name) = match k {
+                ArrayKey::Str(name) => {
+                    have_named = true;
+                    (self.arg_position(name)?, Some(name.clone()))
+                }
+                ArrayKey::Int(_) => {
+                    if have_named {
+                        return Err(self.make_throw(
+                            "Error",
+                            "Cannot use positional argument after named argument",
+                        ));
+                    }
+                    let call = self.frame().calls.last().expect("pending call");
+                    (Some(call.arg_count()), None)
+                }
+            };
+            let i = pos.unwrap_or_else(|| {
+                let call = self.frame().calls.last().expect("pending call");
+                call.func.params().len().saturating_sub(1)
+            });
+            let (v, by_ref) = self.send_array_value(arg, i)?;
+            if name.is_none() && !by_ref {
+                self.op_send_val(v)?;
+            } else {
+                self.push_arg(pos, name, v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The `array_slice($args, skip, len)` form of [`Vm::op_send_array`]
+    /// (`zend_compile_func_cufa` with a literal offset): `len` an int, or
+    /// `null` for the rest; anything else is converted as `array_slice()`'s
+    /// `?int $length` would be, its `TypeError` named after it.
+    fn send_array_slice(&mut self, ht: &ZArray, len: Operand, skip: u32) -> VmResult<()> {
+        let lv = self.read(len)?;
+        let count = ht.len();
+        let skip = skip as usize;
+        let mut len = match lv {
+            Value::Int(l) => l,
+            Value::Null => i64::try_from(count.wrapping_sub(skip)).unwrap_or(i64::MAX),
+            other => {
+                let parsed = if self.frame().code.strict_types {
+                    None
+                } else {
+                    self.parse_arg_long_weak(&other)?
+                };
+                match parsed {
+                    Some(l) => l,
+                    None => {
+                        return Err(self.make_throw(
+                            "TypeError",
+                            &format!(
+                            "array_slice(): Argument #3 ($length) must be of type ?int, {} given",
+                            given_type(&other)
+                        ),
+                        ))
+                    }
+                }
+            }
+        };
+        if skip >= count {
+            return Ok(());
+        }
+        let rest = i64::try_from(count - skip).unwrap_or(i64::MAX);
+        if len < 0 {
+            len += rest;
+        }
+        if len <= 0 {
+            return Ok(());
+        }
+        let len = usize::try_from(len.min(rest)).unwrap_or(usize::MAX);
+        for (i, (_, arg)) in ht.iter().skip(skip).take(len).enumerate() {
+            let (v, by_ref) = self.send_array_value(arg, i)?;
+            if by_ref {
+                self.push_arg(Some(i), None, v)?;
+            } else {
+                self.op_send_val(v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The value `ZEND_SEND_ARRAY` passes for array element `arg` as
+    /// argument `i` (0-based; the variadic parameter past the declared
+    /// ones) of the pending call, and whether the parameter is
+    /// by-reference (`ARG_SHOULD_BE_SENT_BY_REF`; never for a `__call`
+    /// trampoline).
+    fn send_array_value(&mut self, arg: &Value, i: usize) -> VmResult<(Value, bool)> {
+        let (trampoline, by_ref, prefer) = {
+            let call = self.frame().calls.last().expect("pending call");
+            (
+                call.is_magic_trampoline(),
+                call.func.arg_by_ref(i),
+                prefers_ref(&call.func, i),
+            )
+        };
+        if trampoline {
+            // "don't separate references for __call"
+            return Ok((arg.clone(), false));
+        }
+        if !by_ref {
+            return Ok((arg.deref(), false));
+        }
+        if arg.is_reference() || prefer {
+            return Ok((arg.clone(), true));
+        }
+        // By-value send is not allowed: a warning, but the call is made.
+        self.param_must_be_ref(i)?;
+        Ok((Value::Reference(PhpRef::new(arg.clone())), true))
+    }
+
+    /// `zend_param_must_be_ref` for argument `i` (0-based) of the pending
+    /// call: "f(): Argument #1 ($x) must be passed by reference, value
+    /// given".
+    #[cold]
+    fn param_must_be_ref(&mut self, i: usize) -> VmResult<()> {
+        let msg = {
+            let call = self.frame().calls.last().expect("pending call");
+            self.must_be_ref_message(call, i)
+        };
+        self.warning(&msg)
+    }
+
+    /// The text of `zend_param_must_be_ref` for argument `i` (0-based) of
+    /// `call`: the function as `get_function_or_method_name` names it
+    /// (`Closure::__invoke` for a closure called through `__invoke`), and
+    /// the parameter's name unless it is the variadic one.
+    fn must_be_ref_message(&self, call: &PendingCall, i: usize) -> String {
+        let params = call.func.params();
+        let pname = match params.get(i) {
+            Some(p) if !p.variadic => format!(" (${})", p.name),
+            _ => String::new(),
+        };
+        let fname = if call
+            .magic_name
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+            && call.func.is_closure()
+        {
+            "Closure::__invoke".to_string()
+        } else {
+            self.func_display(&call.func, call.scope.as_ref())
+        };
+        format!(
+            "{fname}(): Argument #{}{pname} must be passed by reference, value given",
+            i + 1
+        )
+    }
+}
+
+/// Whether the callable's class part (of `"C::m"` or `["C", "m"]`) is `self`, `parent` or `static`.
+fn names_callable_keyword(cb: &Value) -> bool {
+    let class = match cb.deref() {
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            match b.windows(2).rposition(|w| w == b"::") {
+                Some(p) => b[..p].to_ascii_lowercase(),
+                None => return false,
+            }
+        }
+        Value::Array(a) => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
+            Some(Value::Str(c)) => c.as_bytes().to_ascii_lowercase(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    matches!(class.as_slice(), b"self" | b"parent" | b"static")
+}
+
+/// The `TypeError` of `ZEND_INIT_USER_CALL` when the "Use of \"self\" in
+/// callables" deprecation threw `prev`.
+#[cold]
+fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &Obj) -> Throw {
+    let e = vm.make_throw(
+        "TypeError",
+        &format!(
+            "{fname}(): Argument #1 ($callback) must be a valid callback, \
+             cannot use \"self\"/\"parent\"/\"static\" in callables"
+        ),
+    );
+    if let Throw::Exception(o) = &e {
+        crate::exceptions::chain_previous(o, prev);
+    }
+    e
+}
+
+/// Whether `a` and `b` are the same function.
+fn same_func(a: &Func, b: &Func) -> bool {
+    match (a, b) {
+        (Func::User(x), Func::User(y)) => Rc::ptr_eq(x, y),
+        (Func::Builtin(x), Func::Builtin(y)) => Rc::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
+/// Whether argument `i` (0-based) of `func` is sent by reference only when
+/// it can be (`ZEND_SEND_PREFER_REF`, `ARG_MAY_BE_SENT_BY_REF`).
+/// The minimum argument count a builtin's zpp asks for, where it is more
+/// than its stub's required parameters: the callback variants of
+/// array_diff() and array_intersect() take `array $array, ...$rest` in
+/// their stubs and parse with `"+f"` (an array and a callback) or `"+ff"`
+/// (an array and two callbacks), so `array_udiff()` "expects at least 2
+/// arguments" (ref: ext/standard/array.c `php_array_diff`,
+/// `php_array_intersect`, `php_array_diff_key`, `php_array_intersect_key`).
+fn zpp_min_args(name: &[u8]) -> Option<usize> {
+    match name {
+        b"array_udiff"
+        | b"array_udiff_assoc"
+        | b"array_uintersect"
+        | b"array_uintersect_assoc"
+        | b"array_diff_ukey"
+        | b"array_diff_uassoc"
+        | b"array_intersect_ukey"
+        | b"array_intersect_uassoc" => Some(2),
+        b"array_udiff_uassoc" | b"array_uintersect_uassoc" => Some(3),
+        _ => None,
+    }
+}
+
+/// The exact argument count of a builtin whose zpp depends on how many
+/// arguments it got, for a count its stub's range refuses: strtr()
+/// parses `(2, 2)` for up to two arguments and `(3, 3)` for more, so it
+/// "expects exactly 2 arguments, 1 given" and "exactly 3 arguments, 4
+/// given" (ref: ext/standard/string.c `PHP_FUNCTION(strtr)`).
+fn zpp_exact_count(name: &[u8], given: usize) -> Option<usize> {
+    match name {
+        b"strtr" => Some(if given <= 2 { 2 } else { 3 }),
+        _ => None,
+    }
+}
+
+/// The type a builtin's argument `TypeError` names. That is the type the
+/// function parses with, which for an `array|object` parameter is not the
+/// stub's: `Z_PARAM_ARRAY_OR_OBJECT` and the `A`/`H` specifiers report
+/// `Z_EXPECTED_ARRAY` ("array", or "?array" when null is accepted), as
+/// `key()`, `current()`, `end()`, `array_walk()`, `http_build_query()`,
+/// `deflate_init()` and `ArrayObject::__construct()` do
+/// (ref: Zend/zend_API.h `Z_PARAM_ARRAY_OR_OBJECT_EX`, Zend/zend_API.c
+/// `zend_parse_arg_impl`).
+fn builtin_param_type_name(ty: &crate::types::TypeDecl) -> String {
+    use crate::types::mask;
+    if !ty.has_classes() && ty.mask & !mask::NULL == mask::ARRAY | mask::OBJECT {
+        return if ty.allows_null() { "?array" } else { "array" }.to_owned();
+    }
+    ty.to_php_string()
+}
+
+fn prefers_ref(func: &Func, i: usize) -> bool {
+    let params = func.params();
+    params
+        .get(i)
+        .or_else(|| params.last().filter(|p| p.variadic))
+        .is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0)
+}
+
 #[cfg(test)]
 mod buffer_tests {
     use super::*;
     use crate::VmOptions;
+
+    /// A literal default is the stub's value; `UNKNOWN` (`gen_stub`'s "the
+    /// function works it out") is no default, also when a script defined
+    /// a constant of that name (php-src never looks it up).
+    #[test]
+    fn builtin_defaults_literal_and_unknown() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        assert_eq!(
+            vm.run_script(b"<?php define('UNKNOWN', 7);", "unknown.php"),
+            0
+        );
+        let builtin = |vm: &Vm, name: &str| match vm.functions.get(&ZStr::from(name)) {
+            Some(Func::Builtin(b)) => b.clone(),
+            _ => panic!("{name} is a core builtin"),
+        };
+        let mt_rand = builtin(&vm, "mt_rand");
+        assert!(vm.builtin_default(&mt_rand, 0).is_none());
+        assert!(vm.builtin_default(&mt_rand, 1).is_none());
+        let round = builtin(&vm, "round");
+        assert!(matches!(vm.builtin_default(&round, 1), Some(Value::Int(0))));
+        assert!(vm.builtin_default(&round, 0).is_none(), "required");
+        assert!(vm.builtin_default(&round, 9).is_none(), "no such parameter");
+    }
+
+    /// A default named by an engine constant (`ob_start()`'s
+    /// `$flags = PHP_OUTPUT_HANDLER_STDFLAGS`, `str_pad()`'s
+    /// `$pad_type = STR_PAD_RIGHT`, `log()`'s `$base = M_E`: 112, 1 and
+    /// 2.718281828459045 under php8.5; the stub parser reads none of them
+    /// as a literal)
+    /// is resolved once and kept with the function, as is `UNKNOWN`'s "no
+    /// default"; a parameter past the declared ones keeps nothing.
+    #[test]
+    fn builtin_named_defaults_are_resolved_once() {
+        use crate::func::NamedDefault;
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let builtin = |vm: &Vm, name: &str| match vm.functions.get(&ZStr::from(name)) {
+            Some(Func::Builtin(b)) => b.clone(),
+            _ => panic!("{name} is a core builtin"),
+        };
+        let ob_start = builtin(&vm, "ob_start");
+        assert!(matches!(
+            ob_start.cached_default(2),
+            NamedDefault::Unresolved
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                vm.builtin_default(&ob_start, 2),
+                Some(Value::Int(112))
+            ));
+            assert!(matches!(
+                ob_start.cached_default(2),
+                NamedDefault::Value(Value::Int(112))
+            ));
+        }
+        let str_pad = builtin(&vm, "str_pad");
+        assert!(matches!(
+            vm.builtin_default(&str_pad, 3),
+            Some(Value::Int(1))
+        ));
+        assert!(matches!(
+            str_pad.cached_default(3),
+            NamedDefault::Value(Value::Int(1))
+        ));
+        let log = builtin(&vm, "log");
+        assert!(matches!(
+            vm.builtin_default(&log, 1),
+            Some(Value::Float(e)) if e.to_bits() == std::f64::consts::E.to_bits()
+        ));
+        assert!(matches!(
+            vm.builtin_default(&log, 1),
+            Some(Value::Float(e)) if e.to_bits() == std::f64::consts::E.to_bits()
+        ));
+        let mt_rand = builtin(&vm, "mt_rand");
+        for _ in 0..2 {
+            assert!(vm.builtin_default(&mt_rand, 1).is_none());
+            assert!(matches!(mt_rand.cached_default(1), NamedDefault::Absent));
+        }
+        assert!(vm.builtin_default(&mt_rand, 7).is_none());
+        assert!(
+            matches!(mt_rand.cached_default(7), NamedDefault::Unresolved),
+            "no such parameter"
+        );
+    }
 
     fn capacities(vm: &Vm) -> Vec<usize> {
         let mut capacities: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();

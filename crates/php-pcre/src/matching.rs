@@ -52,11 +52,18 @@ pub struct MatchOutcome {
     pub subject_valid_utf8: bool,
 }
 
+/// Offsets of the single match of `preg_match()` kept in place in
+/// [`MatchSpans`] (eight pairs: the whole match and seven groups) instead
+/// of a vector: php-src reads them from its global match data, without an
+/// allocation.
+const INLINE_OV: usize = 16;
+
 /// One recorded match: its ovector (`count` pairs) and `MARK`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Recorded {
-    /// Index of the first offset in [`MatchSpans::ov`].
-    at: usize,
+    /// Index of the first offset in [`MatchSpans::ov`], or `None` when
+    /// the offsets are in [`MatchSpans::ov_inline`].
+    at: Option<usize>,
     /// Pairs filled by PCRE2 (highest matched group + 1).
     count: usize,
     mark: Option<Vec<u8>>,
@@ -92,6 +99,11 @@ pub struct MatchSpans<'s> {
     warning: Option<&'static str>,
     subject_valid_utf8: bool,
     ov: Vec<usize>,
+    /// The offsets of `single` when they fit.
+    ov_inline: [usize; INLINE_OV],
+    /// The match of `preg_match()` (no vector for one match).
+    single: Option<Recorded>,
+    /// The matches of `preg_match_all()`.
     recorded: Vec<Recorded>,
 }
 
@@ -154,16 +166,27 @@ impl MatchSpans<'_> {
 
     /// The recorded matches (empty unless `capture` was requested), in order.
     pub fn matches(&self) -> impl Iterator<Item = MatchRef<'_>> + '_ {
-        self.recorded.iter().map(|r| MatchRef {
-            subject: self.subject,
-            ov: &self.ov[r.at..r.at + 2 * r.count],
-            mark: r.mark.as_deref(),
-        })
+        self.single
+            .iter()
+            .chain(self.recorded.iter())
+            .map(|r| MatchRef {
+                subject: self.subject,
+                ov: self.ov_of(r),
+                mark: r.mark.as_deref(),
+            })
+    }
+
+    /// The offsets of `r`.
+    fn ov_of(&self, r: &Recorded) -> &[usize] {
+        match r.at {
+            Some(at) => &self.ov[at..at + 2 * r.count],
+            None => &self.ov_inline[..2 * r.count],
+        }
     }
 
     /// Number of recorded matches.
     pub fn match_count(&self) -> usize {
-        self.recorded.len()
+        self.recorded.len() + usize::from(self.single.is_some())
     }
 
     /// Total length of the strings [`MatchSpans::into_outcome`] will copy:
@@ -212,10 +235,10 @@ impl MatchSpans<'_> {
             out.matches = Some(subpats);
             return out;
         }
-        let ov_of = |r: &Recorded| &self.ov[r.at..r.at + 2 * r.count];
+        let ov_of = |r: &Recorded| self.ov_of(r);
 
         if !self.global {
-            if let Some(r) = self.recorded.first() {
+            if let Some(r) = &self.single {
                 subpats = populate_subpat_array(
                     subject,
                     ov_of(r),
@@ -356,6 +379,8 @@ fn match_impl<'s>(
         warning: None,
         subject_valid_utf8: false,
         ov: Vec::new(),
+        ov_inline: [0; INLINE_OV],
+        single: None,
         recorded: Vec::new(),
     };
     if start_offset == i64::MIN {
@@ -420,16 +445,29 @@ fn match_impl<'s>(
                         return spans;
                     }
                     let n = pairs(count, num_subpats);
+                    let ov = &ex.ov()[..2 * n];
+                    if !global {
+                        let at = if ov.len() <= INLINE_OV {
+                            spans.ov_inline[..ov.len()].copy_from_slice(ov);
+                            None
+                        } else {
+                            spans.ov.extend_from_slice(ov);
+                            Some(0)
+                        };
+                        spans.single = Some(Recorded {
+                            at,
+                            count: n,
+                            mark: ex.mark(),
+                        });
+                        break 'outer;
+                    }
                     let at = spans.ov.len();
-                    spans.ov.extend_from_slice(&ex.ov()[..2 * n]);
+                    spans.ov.extend_from_slice(ov);
                     spans.recorded.push(Recorded {
-                        at,
+                        at: Some(at),
                         count: n,
                         mark: ex.mark(),
                     });
-                    if !global {
-                        break 'outer;
-                    }
                 }
 
                 let (s, e) = ex.span();
@@ -497,6 +535,33 @@ mod tests {
         let out = spans.into_outcome();
         assert_eq!(out.result, Ok(2));
         assert_eq!(out.matches.unwrap().len(), 4);
+    }
+
+    /// `preg_match()` keeps a match of up to eight pairs in place and a
+    /// larger one in the vector; both read back the same.
+    #[test]
+    fn single_match_offsets_inline_and_heap() {
+        let cfg = MatchConfig::default();
+        let small = Regex::compile(b"/(b)(c)?/").unwrap();
+        let spans = match_one_spans(&small, &cfg, b"abc", true, 0, 0);
+        assert!(spans.ov.is_empty() && spans.recorded.is_empty());
+        assert_eq!(spans.match_count(), 1);
+        let m = spans.matches().next().unwrap();
+        assert_eq!(
+            (m.count(), m.span(0), m.span(2)),
+            (3, Some((1, 3)), Some((2, 3)))
+        );
+        let big = Regex::compile(b"/(a)(b)(c)(d)(e)(f)(g)(h)(i)/").unwrap();
+        let spans = match_one_spans(&big, &cfg, b"xabcdefghi", true, 0, 0);
+        assert_eq!(spans.ov.len(), 20);
+        let m = spans.matches().next().unwrap();
+        assert_eq!(m.count(), 10);
+        assert_eq!(m.group(9), Some(&b"i"[..]));
+        assert_eq!(m.span(0), Some((1, 10)));
+        let out = spans.into_outcome();
+        assert_eq!(out.matches.unwrap().len(), 10);
+        let spans = match_one_spans(&small, &cfg, b"zzz", true, 0, 0);
+        assert_eq!((spans.result(), spans.match_count()), (Ok(0), 0));
     }
 
     #[test]

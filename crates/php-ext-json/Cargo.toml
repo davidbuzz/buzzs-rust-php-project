@@ -9,6 +9,7 @@ rust-version.workspace = true
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-json = { path = "../php-json" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true

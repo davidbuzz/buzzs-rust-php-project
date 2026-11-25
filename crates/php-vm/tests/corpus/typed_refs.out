@@ -1,0 +1,572 @@
+E[8192] Implicit conversion from float 6.5 to int loses precision @17
+array (
+  0 => 5,
+  1 => 51,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '5',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 5,
+    1 => '5',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 5,
+  15 => 6,
+  16 => 5,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 6.5 to int loses precision @17
+array (
+  0 => 5,
+  1 => 51,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '5',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 5,
+    1 => '5',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 5,
+  15 => 6,
+  16 => 5,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 8.5 to int loses precision @17
+array (
+  0 => 7,
+  1 => 71,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '7',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 7,
+    1 => '7',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 7,
+  15 => 8,
+  16 => 7,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 8.5 to int loses precision @17
+array (
+  0 => 7,
+  1 => 71,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '7',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 7,
+    1 => '7',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 7,
+  15 => 8,
+  16 => 7,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 3.5 to int loses precision @17
+array (
+  0 => 2,
+  1 => 21,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '2',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 2,
+    1 => '2',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 2,
+  15 => 3,
+  16 => 2,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 3.5 to int loses precision @17
+array (
+  0 => 2,
+  1 => 21,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '2',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 2,
+    1 => '2',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 2,
+  15 => 3,
+  16 => 2,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 2.5 to int loses precision @5
+E[8192] Implicit conversion from float 2.5 to int loses precision @13
+E[8192] Implicit conversion from float 2.5 to int loses precision @14
+E[8192] Implicit conversion from float 2.5 to int loses precision @16
+E[8192] Implicit conversion from float 3.5 to int loses precision @17
+E[8192] Implicit conversion from float 2.5 to int loses precision @18
+array (
+  0 => 2,
+  1 => 21,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '2.5',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 2,
+    1 => '2.5',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 2,
+  15 => 3,
+  16 => 2,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 2.5 to int loses precision @5
+E[8192] Implicit conversion from float 2.5 to int loses precision @13
+E[8192] Implicit conversion from float 2.5 to int loses precision @14
+E[8192] Implicit conversion from float 2.5 to int loses precision @16
+E[8192] Implicit conversion from float 3.5 to int loses precision @17
+E[8192] Implicit conversion from float 2.5 to int loses precision @18
+array (
+  0 => 2,
+  1 => 21,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '2.5',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 2,
+    1 => '2.5',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 2,
+  15 => 3,
+  16 => 2,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 4.5 to int loses precision @17
+array (
+  0 => 'Cannot assign string to reference held by property T::$i of type int',
+  1 => 0,
+  2 => 1,
+  3 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  4 => 9223372036854775807,
+  5 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  6 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  7 => -9223372036854775807-1,
+  8 => 'abc',
+  9 => 5.0,
+  10 => 'Cannot assign string to reference held by property T::$f of type float',
+  11 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  12 => 'Cannot assign string to property T::$i of type int',
+  13 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 'abc',
+  ),
+  14 => 'Cannot assign string to property T::$i of type int',
+  15 => -9223372036854775807-1,
+  16 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  17 => 'Cannot assign string to reference held by property T::$si of type int',
+  18 => 3,
+  19 => 4,
+  20 => true,
+  21 => 'Cannot assign string to reference held by property T::$i of type int',
+  22 => -9223372036854775807-1,
+)
+E[8192] Implicit conversion from float 5.5 to int loses precision @17
+array (
+  0 => 'Cannot assign string to reference held by property T::$i of type int',
+  1 => 0,
+  2 => 1,
+  3 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  4 => 9223372036854775807,
+  5 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  6 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  7 => -9223372036854775807-1,
+  8 => 'abc',
+  9 => 5.0,
+  10 => 'Cannot assign string to reference held by property T::$f of type float',
+  11 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  12 => 'Cannot assign string to property T::$i of type int',
+  13 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 'abc',
+  ),
+  14 => 'Cannot assign string to property T::$i of type int',
+  15 => -9223372036854775807-1,
+  16 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  17 => 'Cannot assign string to reference held by property T::$si of type int',
+  18 => 4,
+  19 => 5,
+  20 => true,
+  21 => 'Cannot assign string to reference held by property T::$i of type int',
+  22 => -9223372036854775807-1,
+)
+E[8192] Implicit conversion from float 2.5 to int loses precision @17
+array (
+  0 => 1,
+  1 => 11,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '1',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 1,
+    1 => '1',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 1,
+  15 => 2,
+  16 => true,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 2.5 to int loses precision @17
+array (
+  0 => 1,
+  1 => 11,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '1',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 1,
+    1 => '1',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 1,
+  15 => 2,
+  16 => true,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 3.5 to int loses precision @17
+array (
+  0 => 'Cannot assign null to reference held by property T::$i of type int',
+  1 => 0,
+  2 => 1,
+  3 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  4 => 9223372036854775807,
+  5 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  6 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  7 => -9223372036854775807-1,
+  8 => NULL,
+  9 => 5.0,
+  10 => 'Cannot assign string to reference held by property T::$f of type float',
+  11 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  12 => 'Cannot assign null to property T::$i of type int',
+  13 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => NULL,
+  ),
+  14 => 'Cannot assign null to property T::$i of type int',
+  15 => -9223372036854775807-1,
+  16 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  17 => 'Cannot assign null to reference held by property T::$si of type int',
+  18 => 2,
+  19 => 3,
+  20 => 'Cannot assign null to property T::$ib of type int|bool',
+  21 => 0,
+  22 => 'Cannot assign string to reference held by property T::$i of type int',
+  23 => -9223372036854775807-1,
+)
+E[8192] Implicit conversion from float 4.5 to int loses precision @17
+array (
+  0 => 'Cannot assign null to reference held by property T::$i of type int',
+  1 => 0,
+  2 => 1,
+  3 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  4 => 9223372036854775807,
+  5 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  6 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  7 => -9223372036854775807-1,
+  8 => NULL,
+  9 => 5.0,
+  10 => 'Cannot assign string to reference held by property T::$f of type float',
+  11 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  12 => 'Cannot assign null to property T::$i of type int',
+  13 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => NULL,
+  ),
+  14 => 'Cannot assign null to property T::$i of type int',
+  15 => -9223372036854775807-1,
+  16 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  17 => 'Cannot assign null to reference held by property T::$si of type int',
+  18 => 3,
+  19 => 4,
+  20 => 'Cannot assign null to property T::$ib of type int|bool',
+  21 => 0,
+  22 => 'Cannot assign string to reference held by property T::$i of type int',
+  23 => -9223372036854775807-1,
+)
+E[8192] Implicit conversion from float 101.5 to int loses precision @17
+array (
+  0 => 100,
+  1 => 1001,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '1e2',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 100,
+    1 => '1e2',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 100,
+  15 => 101,
+  16 => 100,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)
+E[8192] Implicit conversion from float 101.5 to int loses precision @17
+array (
+  0 => 100,
+  1 => 1001,
+  2 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  3 => 9223372036854775807,
+  4 => 'TypeError: Cannot increment a reference held by property T::$i of type int past its maximal value',
+  5 => 'Cannot decrement a reference held by property T::$i of type int past its minimal value',
+  6 => -9223372036854775807-1,
+  7 => '1e2',
+  8 => 5.0,
+  9 => 'Cannot assign string to reference held by property T::$f of type float',
+  10 => 
+  array (
+    0 => -9223372036854775807-1,
+    1 => 5.0,
+  ),
+  11 => 
+  array (
+    0 => 100,
+    1 => '1e2',
+  ),
+  12 => 2,
+  13 => 
+  array (
+    0 => 'x1',
+    1 => 'x2',
+  ),
+  14 => 100,
+  15 => 101,
+  16 => 100,
+  17 => 'Cannot assign string to reference held by property T::$i of type int',
+  18 => 2,
+)

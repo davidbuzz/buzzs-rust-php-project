@@ -36,10 +36,15 @@
 //!
 //! In UTF-8 locales glibc also classifies no byte `>= 0x80`, so the C tables
 //! are correct there too. Only single-byte locales such as `de_DE`
-//! (ISO-8859-1) differ; for those the VM can pass a [`CtypeTable`] —
-//! [`CtypeTable::latin1`] approximates glibc's ISO-8859-1 locales, and
-//! [`CtypeTable::from_fn`] builds a table from any classifier — to the
-//! `*_with` variants.
+//! (ISO-8859-1) differ: there `ctype_lower("\xe4")` is `true`.
+//! [`ctype_call_locale`] is what the extension binds: it asks the C
+//! library (`isalpha()`/…, under the locale `setlocale()` selected) about
+//! every byte `>= 0x80`, as `ext/ctype/ctype.c` does about every byte.
+//! Bytes below `0x80` keep the C answer without a call: POSIX fixes the
+//! classes of the portable character set, and no glibc locale changes
+//! them. A [`CtypeTable`] — [`CtypeTable::latin1`] approximates glibc's
+//! ISO-8859-1 locales, and [`CtypeTable::from_fn`] builds a table from
+//! any classifier — can be passed to the `*_with` variants instead.
 
 use php_runtime::Value;
 
@@ -155,6 +160,36 @@ impl CtypeClass {
 
     fn bit(self) -> u16 {
         1 << (self as u16)
+    }
+}
+
+impl CtypeClass {
+    /// Whether byte `c` belongs to the class under the C library's current
+    /// `LC_CTYPE` locale. Bytes below `0x80` are answered from the C
+    /// tables (see the module docs); the others by `isalpha()` and its
+    /// siblings, as `ext/ctype/ctype.c` does.
+    #[must_use]
+    pub fn matches_locale(self, c: u8) -> bool {
+        if c < 0x80 {
+            return self.matches(c);
+        }
+        let f: unsafe extern "C" fn(libc::c_int) -> libc::c_int = match self {
+            CtypeClass::Alnum => libc::isalnum,
+            CtypeClass::Alpha => libc::isalpha,
+            CtypeClass::Cntrl => libc::iscntrl,
+            CtypeClass::Digit => libc::isdigit,
+            CtypeClass::Graph => libc::isgraph,
+            CtypeClass::Lower => libc::islower,
+            CtypeClass::Print => libc::isprint,
+            CtypeClass::Punct => libc::ispunct,
+            CtypeClass::Space => libc::isspace,
+            CtypeClass::Upper => libc::isupper,
+            CtypeClass::Xdigit => libc::isxdigit,
+        };
+        // SAFETY: the <ctype.h> classifiers are defined for every value
+        // representable as `unsigned char` (here 0x80..=0xFF) and only
+        // read the locale's classification table.
+        unsafe { f(libc::c_int::from(c)) != 0 }
     }
 }
 
@@ -278,6 +313,13 @@ impl CtypeOutcome {
 #[must_use]
 pub fn ctype_call(class: CtypeClass, arg: &Value) -> CtypeOutcome {
     ctype_call_impl(class, arg, &|c| class.matches(c))
+}
+
+/// [`ctype_call`] under the current `LC_CTYPE` locale of the C library:
+/// what `ext/ctype/ctype.c` computes after a script's `setlocale()`.
+#[must_use]
+pub fn ctype_call_locale(class: CtypeClass, arg: &Value) -> CtypeOutcome {
+    ctype_call_impl(class, arg, &|c| class.matches_locale(c))
 }
 
 /// [`ctype_call`] with an explicit locale table.
@@ -404,6 +446,25 @@ mod tests {
         assert!(ctype_upper(b"AZ"));
         assert!(ctype_lower(b"az"));
         assert!(ctype_alnum(b"a1Z"));
+    }
+
+    /// Without a `setlocale()` the process runs in the C locale (test
+    /// binaries never call it), where no byte `>= 0x80` is classified;
+    /// php8.5 -r 'var_dump(ctype_lower("\xe4"), ctype_alpha("abc"));'
+    /// gives false, true. Under de_DE (ISO-8859-1) C PHP answers true
+    /// for "\xe4" (ext/ctype/tests/lc_ctype_inheritance.phpt), which
+    /// this crate gets from `islower()`; that needs a locale this box
+    /// does not have, so the CI run of that .phpt is its test.
+    #[test]
+    fn current_locale_classifies_high_bytes_through_libc() {
+        assert!(!CtypeClass::Lower.matches_locale(0xe4));
+        assert!(CtypeClass::Lower.matches_locale(b'a'));
+        assert!(!ctype_call_locale(CtypeClass::Lower, &Value::from(&b"\xe4"[..])).result);
+        for c in 0u8..=255 {
+            for class in CtypeClass::ALL {
+                assert_eq!(class.matches_locale(c), class.matches(c), "{class:?} {c}");
+            }
+        }
     }
 
     #[test]

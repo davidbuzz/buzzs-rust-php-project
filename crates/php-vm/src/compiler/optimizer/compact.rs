@@ -521,6 +521,7 @@ pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32
         | Op::InitDynCall { .. }
         | Op::InitMethodCall { .. }
         | Op::InitStatic { .. }
+        | Op::InitUserCall { .. }
         | Op::Isset { .. }
         | Op::IssetDimCv { .. }
         | Op::IssetObjProp { .. }
@@ -551,7 +552,9 @@ pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32
         | Op::ReturnRef { .. }
         | Op::Rope { .. }
         | Op::Send { .. }
+        | Op::SendArray { .. }
         | Op::SendUnpack { .. }
+        | Op::SendUser { .. }
         | Op::Strlen { .. }
         | Op::Throw(..)
         | Op::Ticks(..)

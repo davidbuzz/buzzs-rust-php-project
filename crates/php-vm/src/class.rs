@@ -707,3 +707,92 @@ mod tests {
         }
     }
 }
+
+/// The `Iterator` and `IteratorAggregate` methods of a class, resolved
+/// once per class: php-src's `zend_class_iterator_funcs`
+/// (`ce->iterator_funcs_ptr->zf_current` & co., filled by
+/// `zend_implement_iterator` / `zend_implement_aggregate` in
+/// `Zend/zend_interfaces.c`), which `zend_user_it_*` calls without a
+/// lookup by name. `foreach` over a user iterator called each of
+/// `valid()`, `current()`, `key()` and `next()` by name, a hashed lookup
+/// in the method table (about 160 instructions apiece) per element.
+///
+/// The methods of a linked class never change, so the table remembers
+/// them for the classes iterated last, in a small per-thread table keyed
+/// by the class: an entry holds the class and its methods weakly (it keeps
+/// neither alive, and while it holds the class's allocation no other class
+/// can take its address, so an address match is that class).
+pub(crate) mod iter_funcs {
+    use super::Class;
+    use crate::func::Method;
+    use std::cell::RefCell;
+    use std::rc::{Rc, Weak};
+
+    /// `Iterator::current()`.
+    pub(crate) const CURRENT: usize = 0;
+    /// `Iterator::key()`.
+    pub(crate) const KEY: usize = 1;
+    /// `Iterator::next()`.
+    pub(crate) const NEXT: usize = 2;
+    /// `Iterator::valid()`.
+    pub(crate) const VALID: usize = 3;
+    /// `Iterator::rewind()`.
+    pub(crate) const REWIND: usize = 4;
+    /// `IteratorAggregate::getIterator()`.
+    pub(crate) const GET_ITERATOR: usize = 5;
+
+    /// The method names as a script spells them (for a lookup by name),
+    /// by slot.
+    pub(crate) const NAMES: [&str; 6] =
+        ["current", "key", "next", "valid", "rewind", "getIterator"];
+
+    /// The lower-case keys of the method table, by slot.
+    const KEYS: [&[u8]; 6] = [
+        b"current",
+        b"key",
+        b"next",
+        b"valid",
+        b"rewind",
+        b"getiterator",
+    ];
+
+    /// Classes remembered at a time (direct-mapped by address).
+    const WAYS: usize = 16;
+
+    /// One class's methods.
+    struct Entry {
+        class: Weak<Class>,
+        methods: [Weak<Method>; 6],
+    }
+
+    thread_local! {
+        static TABLE: RefCell<[Option<Entry>; WAYS]> = const { RefCell::new([const { None }; WAYS]) };
+    }
+
+    /// The method of `cls` in slot `which` (one of the constants above), as
+    /// `cls.methods` holds it; `None` when the class has no such method or
+    /// `which` is out of range (the caller then calls it by name).
+    pub(crate) fn method(cls: &Rc<Class>, which: usize) -> Option<Rc<Method>> {
+        let addr = Rc::as_ptr(cls);
+        // Class entries are large allocations: the low bits carry little.
+        let way = (addr as usize >> 8) % WAYS;
+        TABLE
+            .try_with(|t| {
+                let mut t = t.try_borrow_mut().ok()?;
+                let slot = t.get_mut(way)?;
+                if !slot
+                    .as_ref()
+                    .is_some_and(|e| std::ptr::eq(e.class.as_ptr(), addr))
+                {
+                    *slot = Some(Entry {
+                        class: Rc::downgrade(cls),
+                        methods: KEYS
+                            .map(|k| cls.methods.get(k).map_or_else(Weak::new, Rc::downgrade)),
+                    });
+                }
+                slot.as_ref()?.methods.get(which)?.upgrade()
+            })
+            .ok()
+            .flatten()
+    }
+}

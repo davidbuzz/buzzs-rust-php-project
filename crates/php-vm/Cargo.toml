@@ -22,5 +22,15 @@ libc = "0.2"
 [build-dependencies]
 twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64"] }
 
+[dev-dependencies]
+# The script tests under tests/ call standard array, string, JSON and preg
+# functions, as real code does. (These crates depend on this one: cargo
+# builds the library once and links the test binaries against both.)
+php-ext-stdarr = { path = "../php-ext-stdarr" }
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+php-ext-json = { path = "../php-ext-json" }
+php-ext-pcre = { path = "../php-ext-pcre" }
+php-ext-spl = { path = "../php-ext-spl" }
+
 [lints]
 workspace = true

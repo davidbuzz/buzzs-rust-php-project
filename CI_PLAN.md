@@ -5,9 +5,9 @@ Status, 25 Nov 2026: upstream's layout is in place, but no run of it has happene
 - **Jobs:** `LINUX_X64` (on pull requests `RELEASE`; nightly `DEBUG`, `RELEASE`, `_REPEAT` and `_VARIATION`, each with all four test steps), `LINUX_ARM64`, `OPCACHE_VARIATION`, `COMMUNITY`, `BENCHMARKING` (pull requests), `LATEST_STABLE_RUST` (nightly), `UNIT_TESTS_LINUX_X64`, and the nightly failure issue.
 - **The Rust compiler:** pinned at 1.95.0, except in `LATEST_STABLE_RUST`.
 - **Replaced:** the earlier `x86_64-linux.yml`, `aarch64-linux.yml` and `nightly.yml`.
-- **Still to do:**
-  - the runner's upstream flags (step 1 below). Until then `actions/test-linux` uses the runner's own equivalents, and `OPCACHE_VARIATION` spells out `--file-cache-prime`/`--file-cache-use` as INI settings;
-  - the CI environment list from the first runs (step 3).
+- **The runner** takes run-tests.php's options (`-P`, `-q`, `-g`, `-x`, `--no-progress`, `--offline`/`--online`, `--show-slow`, `--set-timeout`, `--file-cache-prime`/`--file-cache-use`), and `actions/test-linux` and `OPCACHE_VARIATION` pass them as upstream does.
+- **The php-src root:** the fetch includes `run-tests.php`, which the runner finds the root by. Before that (the first runs, 24-25 Nov) the runner fell back to the repository root in CI, and the scope, baseline, environment and conflict lists matched nothing: about 25 of the 35 "new failures" of each step.
+- **Still to do:** the CI environment list from the runs after that fix (step 3 below); then the PHPT steps gate.
 
 ## Principle
 
@@ -48,17 +48,18 @@ with `MYSQL_TEST_USER=root MYSQL_TEST_PASSWD=root`, `PDO_MYSQL_TEST_DSN="mysql:h
 
 Ours runs the same INI settings, environment, `-j$(nproc)` and timeout through `phpt-runner --php target/<profile>/php`, plus `--baseline phpt-baseline.txt`. The PostgreSQL, Firebird, ODBC and DBLIB variables are dropped, as out of scope.
 
-To keep the command line nearly identical, the runner gets upstream's spellings:
+The command line is upstream's, option for option: the runner takes run-tests.php's spellings.
 
-| Upstream flag | Runner today | Work |
-|---|---|---|
-| `-P`, `--no-progress` | not there | Accept them (`-P` is what `--php` does; ours prints no progress bar). |
-| `--set-timeout 120` | `--timeout` | Add the alias. |
-| `--offline` | not there | Add it: sets `SKIP_ONLINE_TESTS=1`, as run-tests.php does. |
-| `-g FAIL,BORK,LEAK,XLEAK` | `-q` prints only non-passes | Add `-g` with run-tests.php's groups. |
-| `--show-slow 1000` | not there | Add it: list the tests slower than N ms. |
-| `--repeat 2` | there | — |
-| `--file-cache-prime`, `--file-cache-use` | not there | Port them from run-tests.php: they set `opcache.file_cache` and `opcache.record_warnings=1`, and when using also `opcache.jit=0` and `opcache.validate_timestamps=0`; ext/opcache's own tests are skipped. |
+| Upstream flag | In the runner |
+|---|---|
+| `-P`, `--no-progress` | accepted (`--php` names the binary; progress is only shown on a terminal) |
+| `--set-timeout 120` | an alias of `--timeout` |
+| `-x` | an alias of `--skip-slow` |
+| `--offline`, `--online` | `SKIP_ONLINE_TESTS=1` / `0`; offline is also the default |
+| `-g FAIL,BORK,LEAK,XLEAK` | only these result types are printed (`$SHOW_ONLY_GROUPS`); a timed-out test counts as `FAIL` |
+| `--show-slow 1000` | run-tests.php's "SLOW TEST SUMMARY" of the tests at or above that many ms |
+| `--repeat 2` | every test twice in one process |
+| `--file-cache-prime`, `--file-cache-use` | `opcache.file_cache=<tmp>/php-run-tests-file-cache`, `opcache.record_warnings=1`, `opcache.jit=0`, and when using also `opcache.validate_timestamps=0`; the directory is emptied before priming; tests under `ext/opcache` are left out |
 
 ## Jobs
 
@@ -99,7 +100,7 @@ To keep the command line nearly identical, the runner gets upstream's spellings:
 
 ## Order of work
 
-1. [ ] The runner's upstream flags: the aliases, `--offline`, `-g`, `--show-slow`, `--file-cache-prime` and `--file-cache-use`, each with tests.
+1. [x] The runner's upstream flags: the aliases, `--offline`, `-g`, `--show-slow`, `--file-cache-prime` and `--file-cache-use`, each with tests.
 2. [x] `test.yml`, `matrix.php` and `test-suite.yml` with `LINUX_X64` (PR configuration), `UNIT_TESTS_LINUX_X64`, and `LINUX_ARM64` moved in. PHPT steps informational.
 3. [ ] The CI environment list from the first runs; then the PHPT steps gate.
 4. [x] The nightly variations: `_REPEAT`, `_VARIATION`, `DEBUG`, the four test steps, and `OPCACHE_VARIATION`.

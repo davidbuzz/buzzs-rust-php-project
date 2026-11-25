@@ -1,4 +1,22 @@
 /*
+ * Derived from php-src sapi/apache2handler/mod_php.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Authors: Sascha Schumann <sascha@schumann.cx>
+ *            Parts based on Apache 1.3 SAPI module by
+ *            Rasmus Lerdorf and Zeev Suraski
+ * Derived from php-src sapi/apache2handler/apache_config.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Author: Sascha Schumann <sascha@schumann.cx>
+ * Derived from php-src sapi/apache2handler/sapi_apache2.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Authors: Sascha Schumann <sascha@schumann.cx>
+ *            Parts based on Apache 1.3 SAPI module by
+ *            Rasmus Lerdorf and Zeev Suraski
+ * Port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+/*
  * mod_phprust: the httpd side of the phprust apache2handler SAPI.
  *
  * This shim is deliberately small (ref: sapi/apache2handler/mod_php.c,

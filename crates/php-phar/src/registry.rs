@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/phar/util.c. Similarity metric to original: 30%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Gregory Beaver <cellog@php.net>
+//            Marcus Boerger <helly@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The per-request phar registry (`PHAR_G`): the file-name and alias maps,
 //! the `phar.cache_list` manifest cache, INI settings, archive opening and
 //! creation (`phar_open_from_filename()`, `phar_open_or_create_filename()`,

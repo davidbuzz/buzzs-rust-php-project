@@ -12,8 +12,9 @@
 //! from all frames of their backtrace, so secrets never show up in traces.
 //!
 //! The by-reference parameters (`&$state`, `&$string`) are declared
-//! untyped, mirroring the C `z` specifier: a non-string variable is reported
-//! with sodium's own `SodiumException` instead of a `TypeError`.
+//! `@unchecked string`: Reflection shows the stub's `string`, while, as with
+//! the C `z` specifier, a non-string variable is reported with sodium's own
+//! `SodiumException` instead of a `TypeError`.
 
 // Native handlers share one `fn(&mut Vm, &mut Args) -> VmResult<Value>`
 // signature, even those that cannot fail.
@@ -586,8 +587,8 @@ const FUNCTIONS: &[(&str, php_vm::ext::NativeFn)] = &[
     ("sodium_crypto_generichash(string $message, #[\\SensitiveParameter] string $key = \"\", int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string", generichash),
     ("sodium_crypto_generichash_keygen(): string", generichash_keygen),
     ("sodium_crypto_generichash_init(#[\\SensitiveParameter] string $key = \"\", int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string", generichash_init),
-    ("sodium_crypto_generichash_update(&$state, string $message): true", generichash_update),
-    ("sodium_crypto_generichash_final(&$state, int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string", generichash_final),
+    ("sodium_crypto_generichash_update(@unchecked string &$state, string $message): true", generichash_update),
+    ("sodium_crypto_generichash_final(@unchecked string &$state, int $length = SODIUM_CRYPTO_GENERICHASH_BYTES): string", generichash_final),
     ("sodium_crypto_kdf_derive_from_key(int $subkey_length, int $subkey_id, string $context, #[\\SensitiveParameter] string $key): string", kdf_derive_from_key),
     ("sodium_crypto_kdf_keygen(): string", kdf_keygen),
     ("sodium_crypto_pwhash(int $length, #[\\SensitiveParameter] string $password, string $salt, int $opslimit, int $memlimit, int $algo = SODIUM_CRYPTO_PWHASH_ALG_DEFAULT): string", pwhash),
@@ -605,10 +606,10 @@ const FUNCTIONS: &[(&str, php_vm::ext::NativeFn)] = &[
     ("sodium_crypto_secretbox_open(string $ciphertext, string $nonce, #[\\SensitiveParameter] string $key): string|false", secretbox_open),
     ("sodium_crypto_secretstream_xchacha20poly1305_keygen(): string", ss_keygen),
     ("sodium_crypto_secretstream_xchacha20poly1305_init_push(#[\\SensitiveParameter] string $key): array", ss_init_push),
-    ("sodium_crypto_secretstream_xchacha20poly1305_push(&$state, #[\\SensitiveParameter] string $message, string $additional_data = \"\", int $tag = SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE): string", ss_push),
+    ("sodium_crypto_secretstream_xchacha20poly1305_push(@unchecked string &$state, #[\\SensitiveParameter] string $message, string $additional_data = \"\", int $tag = SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE): string", ss_push),
     ("sodium_crypto_secretstream_xchacha20poly1305_init_pull(string $header, #[\\SensitiveParameter] string $key): string", ss_init_pull),
-    ("sodium_crypto_secretstream_xchacha20poly1305_pull(&$state, string $ciphertext, string $additional_data = \"\"): array|false", ss_pull),
-    ("sodium_crypto_secretstream_xchacha20poly1305_rekey(&$state): void", ss_rekey),
+    ("sodium_crypto_secretstream_xchacha20poly1305_pull(@unchecked string &$state, string $ciphertext, string $additional_data = \"\"): array|false", ss_pull),
+    ("sodium_crypto_secretstream_xchacha20poly1305_rekey(@unchecked string &$state): void", ss_rekey),
     ("sodium_crypto_shorthash(string $message, #[\\SensitiveParameter] string $key): string", shorthash),
     ("sodium_crypto_shorthash_keygen(): string", shorthash_keygen),
     ("sodium_crypto_sign(string $message, #[\\SensitiveParameter] string $secret_key): string", sign),
@@ -630,9 +631,9 @@ const FUNCTIONS: &[(&str, php_vm::ext::NativeFn)] = &[
     ("sodium_crypto_stream_xchacha20_keygen(): string", stream_xchacha20_keygen),
     ("sodium_crypto_stream_xchacha20_xor(#[\\SensitiveParameter] string $message, string $nonce, #[\\SensitiveParameter] string $key): string", stream_xchacha20_xor),
     ("sodium_crypto_stream_xchacha20_xor_ic(#[\\SensitiveParameter] string $message, string $nonce, int $counter, #[\\SensitiveParameter] string $key): string", stream_xchacha20_xor_ic),
-    ("sodium_add(&$string1, string $string2): void", add),
+    ("sodium_add(@unchecked string &$string1, string $string2): void", add),
     ("sodium_compare(#[\\SensitiveParameter] string $string1, #[\\SensitiveParameter] string $string2): int", compare),
-    ("sodium_increment(&$string): void", increment),
+    ("sodium_increment(@unchecked string &$string): void", increment),
     ("sodium_memcmp(#[\\SensitiveParameter] string $string1, #[\\SensitiveParameter] string $string2): int", memcmp),
     ("sodium_memzero(#[\\SensitiveParameter] &$string): void", memzero),
     ("sodium_pad(#[\\SensitiveParameter] string $string, int $block_size): string", pad),
@@ -736,6 +737,35 @@ mod tests {
         for (sig, _) in FUNCTIONS {
             let (name, _) = php_vm::ext::check_signature(sig);
             assert!(name.starts_with("sodium_"), "{sig}");
+        }
+    }
+
+    #[test]
+    fn by_reference_parameters_carry_the_stub_type() {
+        // sodium.stub.php: `string &$state`, `string &$string1`, ... The
+        // marker keeps the handler's own SodiumException for a non-string.
+        for name in [
+            "sodium_add",
+            "sodium_increment",
+            "sodium_crypto_generichash_update",
+            "sodium_crypto_generichash_final",
+            "sodium_crypto_secretstream_xchacha20poly1305_push",
+            "sodium_crypto_secretstream_xchacha20poly1305_pull",
+            "sodium_crypto_secretstream_xchacha20poly1305_rekey",
+        ] {
+            let sig = FUNCTIONS
+                .iter()
+                .map(|(sig, _)| *sig)
+                .find(|sig| sig.split('(').next() == Some(name))
+                .unwrap_or_default();
+            let s = php_vm::ext::parse_signature(sig);
+            let p = &s.params[0];
+            assert!(p.by_ref, "{name}");
+            assert_eq!(
+                p.ty.as_ref().map(|t| t.to_php_string()).as_deref(),
+                Some("string"),
+                "{name}"
+            );
         }
     }
 

@@ -41,17 +41,26 @@ use crate::rtcache::GlobalSlot;
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
+mod casts;
 mod dims;
+mod dyncalls;
 pub(in crate::exec) mod props;
+mod refs;
+mod static_dims;
 mod statics;
 mod strings;
 
+pub(super) use casts::cast_in;
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
-    fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_cv_is_miss, fetch_dims_cv_in,
-    fetch_dims_cv_is_in, incdec_dim_cv_in, isset_dim_cv_in,
+    fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in, fetch_dims_cv_in,
+    fetch_dims_is_miss_in, fetch_tmp_dims_in, in_array_in, incdec_dim_cv_in, isset_cv_dims_in,
+    isset_dim_cv_in, isset_tmp_dims_in, key_exists_in,
 };
-pub(super) use props::{prop_op_in, read_hit};
+pub(super) use dyncalls::init_dyn_method_call_in;
+pub(super) use props::{concat_prop_in, prop_op_in, read_hit};
+pub(super) use refs::step_ref;
+pub(super) use static_dims::{assign_static_dims_in, fetch_static_dims_in, isset_static_dims_in};
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
     incdec_static_prop_in, isset_static_prop_in,
@@ -438,42 +447,131 @@ fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
     })
 }
 
-/// [`dims_value_in`] in `Is` mode (`$cv[d1][d2] ?? $d`, a chain of
-/// `ZEND_FETCH_DIM_IS`): an offset an array on the way lacks, or a `null`
-/// container, ends the walk with `null`, without a notice. Every offset
-/// must still peek as an int or a string and every container be an array
-/// (directly; the variable itself possibly through a reference) or `null`;
-/// anything else is left to the generic fetch (`None`).
-#[inline(never)]
-fn dims_value_is_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
-    let segs = &f.code.places.get(place as usize)?.segs;
-    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
-    let guard;
-    let mut cur = match slot {
-        Value::Reference(r) => {
-            guard = r.try_borrow()?;
-            &*guard
-        }
-        v => v,
-    };
+/// The value of `cur[d1]...[dn]` along the dimension segments `segs` of
+/// frame `f` (`segs` not empty) when every container is an array holding
+/// the int or string offset its operand peeks as, the last element
+/// dereferenced and copied: [`dims_value_in`] from a value instead of a
+/// variable. `None` for anything else (`cur` itself is not looked
+/// through a reference).
+#[inline]
+fn dims_value_of(f: &Frame, cur: &Value, segs: &[Seg]) -> Option<Value> {
+    let mut cur = cur;
     for seg in segs {
         let Seg::Dim(dim) = seg else {
             return None;
         };
         let key = dim_ref_in(f, *dim)?;
-        match cur {
-            Value::Array(a) => match table_dim(a, key) {
-                Some(v) => cur = v,
-                None => return Some(Value::Null),
-            },
-            Value::Null => return Some(Value::Null),
-            _ => return None,
-        }
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = table_dim(a, key)?;
     }
     Some(match cur {
-        Value::Reference(r) => Value::clone(&*r.try_borrow()?),
-        v => v.clone(),
+        Value::Reference(r) => copy_value(&*r.try_borrow()?),
+        v => copy_value(v),
     })
+}
+
+/// The shapes of an argument place [`Frame::send_place_hit`] reads.
+#[derive(Clone, Copy)]
+enum ArgPlace {
+    /// `$cv[d1]...[dn]`: only dimensions.
+    CvDims(u32),
+    /// `$this->name` / `$cv->name`, a literal name.
+    Prop,
+    /// `$this->name[d1]...[dn]` / `$cv->name[...]`.
+    PropDims,
+    /// A place ending in `->name` after other segments (`$this->a->b`,
+    /// `$list[$k]->name`).
+    Chain,
+    /// `tmp[d1]...[dn]` (`f()['k']`).
+    TmpDims(u32),
+}
+
+impl ArgPlace {
+    /// The shape of place `pid` of frame `f`, `None` for one no hit path
+    /// reads (a plain variable is the caller's).
+    #[inline]
+    fn of(f: &Frame, pid: PlaceId) -> Option<Self> {
+        let p = f.code.places.get(pid as usize)?;
+        let all_dims = |segs: &[Seg]| segs.iter().all(|s| matches!(s, Seg::Dim(_)));
+        let cv_base = matches!(p.base, PlaceBase::Cv(_));
+        // A variable of a frame with an attached symbol table is left to
+        // the walk, as the plain variable sends leave it (`send_in`).
+        if cv_base && f.symtab_attached {
+            return None;
+        }
+        Some(match (&p.base, p.segs.as_slice()) {
+            (PlaceBase::Cv(cv), segs) if !segs.is_empty() && all_dims(segs) => {
+                ArgPlace::CvDims(*cv)
+            }
+            (PlaceBase::Value(Operand::Tmp(t)), segs) if !segs.is_empty() && all_dims(segs) => {
+                ArgPlace::TmpDims(*t)
+            }
+            (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_))]) => ArgPlace::Prop,
+            (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_)), rest @ ..])
+                if all_dims(rest) =>
+            {
+                ArgPlace::PropDims
+            }
+            (PlaceBase::Cv(_) | PlaceBase::This, [_, .., Seg::Prop(Operand::Lit(_))]) => {
+                ArgPlace::Chain
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl Frame {
+    /// The value of place `pid` of this (user) frame sent by value as an
+    /// argument (`ZEND_SEND_VAR` of what `ZEND_FETCH_DIM_R` /
+    /// `ZEND_FETCH_OBJ_R`, or their `_FUNC_ARG` forms for a by-value
+    /// parameter, fetched: `zend_compile_args` in `Zend/zend_compile.c`),
+    /// on the hits the specialised fetch ops take: `$cv[d1]...[dn]` with
+    /// every key present ([`dims_value_in`]), `$this->name` / `$cv->name`
+    /// on a property cache hit (`props::read_hit`), `$this->name[...]`
+    /// (`props::read_prop_dims_in`), `$this->a->b` / `$list[$k]->name`
+    /// with their cache entries filled (`props::read_chain_in`), and
+    /// `f()[d1]...` on a temporary array another handle shares (so that
+    /// releasing the temporary, as `FREE_OP1` does, frees nothing).
+    /// Consumed string offsets and the temporary base are released. `None`,
+    /// having changed nothing, for anything else (an undefined variable,
+    /// property or key and its diagnostic, `__get`, `ArrayAccess`, a
+    /// string offset, a hooked or lazy property, a cache not filled yet):
+    /// the generic place walk (`Vm::place_fetch`) then reads it.
+    #[inline(never)]
+    pub(crate) fn send_place_hit(&mut self, pid: PlaceId) -> Option<Value> {
+        if self.kind == FrameKind::Builtin {
+            return None;
+        }
+        match ArgPlace::of(self, pid)? {
+            ArgPlace::CvDims(cv) => {
+                let v = dims_value_in(self, cv, pid)?;
+                release_place_str_tmps(self, pid);
+                Some(v)
+            }
+            ArgPlace::Prop => props::read_hit(self, pid),
+            ArgPlace::PropDims => props::read_prop_dims_in(self, pid),
+            ArgPlace::Chain => props::read_chain_in(self, pid),
+            ArgPlace::TmpDims(t) => {
+                let v = {
+                    let Value::Array(a) = self.tmps.get(t as usize)? else {
+                        return None;
+                    };
+                    if a.refcount() < 2 {
+                        return None;
+                    }
+                    let segs = &self.code.places.get(pid as usize)?.segs;
+                    dims_value_of(self, &self.tmps[t as usize], segs)?
+                };
+                release_place_str_tmps(self, pid);
+                // Another handle holds the array: this release only
+                // drops a count.
+                drop(std::mem::take(&mut self.tmps[t as usize]));
+                Some(v)
+            }
+        }
+    }
 }
 
 /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand of frame
@@ -878,6 +976,11 @@ impl Vm {
         let undefined = || (mode == FetchMode::Is).then_some(Value::Null);
         match slot {
             GlobalSlot::GlobalCv(cv) => {
+                // The main frame's variable is the global's value only
+                // while no top-level include or `eval` runs above it.
+                if !self.main_is_global_top() {
+                    return None;
+                }
                 let main = self.frames.first()?;
                 let slot = main.cvs.get(cv as usize)?;
                 Some(slot.get().map_or_else(undefined, |v| Some(v.deref())))
@@ -937,6 +1040,11 @@ impl Vm {
         };
         let v = match slot {
             GlobalSlot::GlobalCv(cv) => {
+                // As in `fetch_global_cached`: not while a top-level
+                // include or `eval` runs above the main frame.
+                if !self.main_is_global_top() {
+                    return None;
+                }
                 fetched(self.frames.vec.first()?.cvs.get(cv as usize)?.get())?
             }
             GlobalSlot::GlobalStore(idx) => {
@@ -958,6 +1066,75 @@ impl Vm {
         }
         put_tmp(f.tmps.get_mut(dst as usize)?, v);
         Some(false)
+    }
+
+    /// `$GLOBALS['name'][$k]...` (also written `$GLOBALS['name']` as a
+    /// global base) read in `Read` or `Is` mode when `name` is a literal
+    /// naming a variable of the global scope's frame (not a superglobal)
+    /// that holds an array with every key on the way
+    /// ([`props::dims_read`]): `ZEND_FETCH_R` with `ZEND_FETCH_GLOBAL`,
+    /// then the `ZEND_FETCH_DIM_R`/`_IS` hits. The variable is found once
+    /// and remembered in the op array's global cache at
+    /// `places.len() + pid` (the entry at `pid` is
+    /// [`Vm::fetch_global_fast`]'s, which answers the base alone). A
+    /// consumed string offset is released. `None`, nothing consumed, for
+    /// the generic fetch (an undefined variable or key warns there).
+    pub(crate) fn fetch_global_dims_fast(
+        &mut self,
+        pid: PlaceId,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        // The main frame's variable is the global's value only while no
+        // top-level include or `eval` runs above it
+        // (`Vm::main_is_global_top`).
+        if mode == FetchMode::List || !self.main_is_global_top() {
+            return None;
+        }
+        let f = self.frames.last()?;
+        if f.kind == FrameKind::Builtin {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        let (lit, segs) = match (&p.base, p.segs.as_slice()) {
+            (PlaceBase::Global(Operand::Lit(lit)), segs @ [Seg::Dim(_), ..]) => (*lit, segs),
+            (PlaceBase::GlobalsArray, [Seg::Dim(Operand::Lit(lit)), segs @ ..])
+                if !segs.is_empty() =>
+            {
+                (*lit, segs)
+            }
+            _ => return None,
+        };
+        let idx = f.code.places.len() + pid as usize;
+        let cached = f.code.rt_cache.globals.try_borrow().ok()?.get(idx).copied();
+        let main = self.frames.first()?;
+        let cv = match cached {
+            Some(GlobalSlot::GlobalCv(cv)) => cv,
+            _ => {
+                let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+                    return None;
+                };
+                if main.kind != FrameKind::Main
+                    || crate::place::is_superglobal_name(name.as_bytes())
+                {
+                    return None;
+                }
+                let cv = main
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == name.as_bytes())?;
+                let cv = u32::try_from(cv).ok()?;
+                let mut cache = f.code.rt_cache.globals.try_borrow_mut().ok()?;
+                if cache.len() <= idx {
+                    crate::rtcache::grow_slots(&mut cache, idx + 1, || GlobalSlot::Empty);
+                }
+                cache[idx] = GlobalSlot::GlobalCv(cv);
+                cv
+            }
+        };
+        let v = props::dims_read(f, main.cvs.get(cv as usize)?.get()?, segs)?;
+        release_place_str_tmps(self.frame_mut(), pid);
+        Some(v)
     }
 
     /// [`crate::opcode::Op::FetchGlobal`]: global variable read
@@ -991,8 +1168,14 @@ impl Vm {
             None
         };
 
+        // The main frame's variables are the globals' values only while
+        // no top-level include or `eval` runs above it
+        // (`Vm::main_is_global_top`): else the caller reads the table.
+        let main_top = self.main_is_global_top();
         if let Some(slot) = cached {
             match slot {
+                // Resolved below, from the table.
+                GlobalSlot::GlobalCv(_) if !main_top => {}
                 GlobalSlot::GlobalCv(cv) => {
                     let main_frame = self.frames.first()?;
                     let slot = main_frame.cvs.get(cv as usize)?;
@@ -1043,14 +1226,20 @@ impl Vm {
         }
 
         // Try VM's global scope first:
+        let mut main_cv = false;
         if let Some(main_frame) = self.frames.first() {
             if main_frame.kind == FrameKind::Main {
-                if let Some(cv) = main_frame
+                let cv = main_frame
                     .code
                     .cv_names
                     .iter()
-                    .position(|n| n.as_bytes() == &name_bytes[..])
-                {
+                    .position(|n| n.as_bytes() == &name_bytes[..]);
+                // A variable of the main script read while an include or
+                // `eval` runs above it: from the table below, and not
+                // remembered as a table slot (the main frame's own writes
+                // do not reach the table once it runs again).
+                main_cv = cv.is_some();
+                if let Some(cv) = cv.filter(|_| main_top) {
                     let cv = cv as u32;
                     if cacheable {
                         let mut cache = code.rt_cache.globals.borrow_mut();
@@ -1080,7 +1269,7 @@ impl Vm {
         self.attach_globals_symbol_table();
         let idx = self.globals.borrow_mut().find(&name_bytes);
         if let Some(idx) = idx {
-            if cacheable {
+            if cacheable && !main_cv {
                 let mut cache = code.rt_cache.globals.borrow_mut();
                 if cache.len() <= pid as usize {
                     crate::rtcache::grow_slots(&mut cache, pid as usize + 1, || GlobalSlot::Empty);

@@ -33,6 +33,18 @@ fn stack_budget(vm: &Vm) -> Option<u64> {
     Some(max.saturating_sub(reserved).max(FRAME_BYTES))
 }
 
+/// Whether `v` is an array or a reference to one: anything else has a
+/// [`nesting_depth`] of 0.
+#[must_use]
+pub fn may_nest(v: &Value) -> bool {
+    match v {
+        Value::Array(_) => true,
+        // A reference being written is checked as before.
+        Value::Reference(r) => r.try_borrow().is_none_or(|v| matches!(*v, Value::Array(_))),
+        _ => false,
+    }
+}
+
 /// The array nesting depth of `v` (0 for a non-array), following
 /// references, ignoring arrays already on the current path (recursion is
 /// reported by php-stdarr itself) and stopping once `cap` is exceeded.
@@ -93,8 +105,22 @@ pub fn check_depth(vm: &mut Vm, depth: impl FnOnce(usize) -> usize) -> VmResult<
 
 #[cfg(test)]
 mod tests {
-    use super::nesting_depth;
-    use php_runtime::{PhpRef, Value, ZArray};
+    use super::{may_nest, nesting_depth};
+    use php_runtime::{PhpRef, Value, ZArray, ZStr};
+
+    /// `may_nest` is false exactly where `nesting_depth` is 0 for a
+    /// non-array.
+    #[test]
+    fn only_arrays_may_nest() {
+        let s = Value::Str(ZStr::from("name"));
+        assert!(!may_nest(&s) && nesting_depth(&s, 10) == 0);
+        assert!(!may_nest(&Value::Int(1)));
+        assert!(may_nest(&Value::Array(ZArray::new())));
+        assert!(may_nest(&Value::Reference(PhpRef::new(Value::Array(
+            ZArray::new()
+        )))));
+        assert!(!may_nest(&Value::Reference(PhpRef::new(s))));
+    }
 
     fn nest(levels: usize) -> Value {
         let mut v = Value::Array(ZArray::new());

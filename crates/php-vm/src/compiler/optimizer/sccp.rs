@@ -105,12 +105,13 @@ fn fold_abs(val: &Value) -> Option<Value> {
     }
 }
 
+/// `ZEND_STRLEN` of a literal: only a string folds (sccp.c / pass1.c). A
+/// null deprecates ("Passing null to parameter #1 ($string) of type string
+/// is deprecated", which an error handler may turn into an exception), and
+/// under `strict_types` an int, float or bool throws a `TypeError`.
 fn fold_strlen(val: &Value) -> Option<i64> {
     match val {
-        Value::Str(s) => Some(s.len() as i64),
-        Value::Int(n) => Some(n.to_string().len() as i64),
-        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::Null => Some(0),
+        Value::Str(s) => i64::try_from(s.len()).ok(),
         _ => None,
     }
 }
@@ -1372,6 +1373,7 @@ fn place_sends_may_bind(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
                 calls.push((callee, 0));
             }
             Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::InitParentHook { .. }
@@ -2200,6 +2202,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     Op::DoCall { .. }
                         | Op::InitFCall { .. }
                         | Op::InitDynCall { .. }
+                        | Op::InitUserCall { .. }
                         | Op::InitMethodCall { .. }
                         | Op::InitStaticCall { .. }
                 );
@@ -2501,6 +2504,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     Op::DoCall { .. }
                         | Op::InitFCall { .. }
                         | Op::InitDynCall { .. }
+                        | Op::InitUserCall { .. }
                         | Op::InitMethodCall { .. }
                         | Op::InitStaticCall { .. }
                 );

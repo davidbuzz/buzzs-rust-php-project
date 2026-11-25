@@ -16,16 +16,44 @@ use php_stdmisc::process::{self, CommandArg, ProcHost, Process};
 use php_streams::stream::CastAs;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::os::fd::{OwnedFd, RawFd};
+use std::rc::{Rc, Weak};
 
 /// The resource type name.
 const PROCESS: &str = "process";
 
-/// The payload of a `process` resource.
+/// The payload of a `process` resource (held as `Rc<ProcRes>`, shared
+/// with the copies `get_resources()` hands out).
 struct ProcRes {
     process: RefCell<Process>,
     pipes: RefCell<Vec<Value>>,
+    /// `proc_close()` ran (`zend_list_close()`).
+    closed: Cell<bool>,
+}
+
+thread_local! {
+    /// The `process` resources by handle, for `get_resources()`: C lists
+    /// one as long as a reference to it lives and it is not closed.
+    static LISTED: RefCell<Vec<(i64, Weak<ProcRes>)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn live(p: &Weak<ProcRes>) -> Option<Rc<ProcRes>> {
+    p.upgrade().filter(|p| !p.closed.get())
+}
+
+/// Adds the live `process` resources to a `get_resources()` list.
+fn live_processes(out: &mut Vec<(i64, &'static str, Value)>) {
+    LISTED.with(|l| {
+        let mut l = l.borrow_mut();
+        l.retain(|(_, p)| live(p).is_some());
+        for (h, p) in l.iter() {
+            if let Some(p) = live(p) {
+                let r = Resource::with_handle(*h, PROCESS, Some(Box::new(p)));
+                out.push((*h, PROCESS, Value::Resource(r)));
+            }
+        }
+    });
 }
 
 impl ProcRes {
@@ -230,14 +258,19 @@ fn proc_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         held.push(v);
     }
     a.set_ref(2, Value::Array(pipes));
-    let payload = ProcRes {
+    let payload = Rc::new(ProcRes {
         process: RefCell::new(proc),
         pipes: RefCell::new(held),
-    };
-    Ok(Value::Resource(Resource::new(
-        PROCESS,
-        Some(Box::new(payload)),
-    )))
+        closed: Cell::new(false),
+    });
+    let weak = Rc::downgrade(&payload);
+    let r = Resource::new(PROCESS, Some(Box::new(payload)));
+    LISTED.with(|l| {
+        let mut l = l.borrow_mut();
+        l.retain(|(_, p)| live(p).is_some());
+        l.push((r.handle(), weak));
+    });
+    Ok(Value::Resource(r))
 }
 
 /// The `process` resource argument #1, or the "not a valid process
@@ -247,7 +280,8 @@ fn process_arg(vm: &mut Vm, a: &Args) -> VmResult<Resource> {
         let ok = r
             .data()
             .as_ref()
-            .is_some_and(|d| d.downcast_ref::<ProcRes>().is_some());
+            .and_then(|d| d.downcast_ref::<Rc<ProcRes>>())
+            .is_some_and(|p| !p.closed.get());
         if ok {
             return Ok(r);
         }
@@ -263,14 +297,22 @@ fn process_arg(vm: &mut Vm, a: &Args) -> VmResult<Resource> {
 
 fn with_proc<R>(r: &Resource, f: impl FnOnce(&ProcRes) -> R) -> Option<R> {
     let d = r.data();
-    d.as_ref().and_then(|d| d.downcast_ref::<ProcRes>()).map(f)
+    d.as_ref()
+        .and_then(|d| d.downcast_ref::<Rc<ProcRes>>())
+        .filter(|p| !p.closed.get())
+        .map(|p| f(p))
 }
 
 fn proc_close(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = process_arg(vm, a)?;
     with_proc(&r, ProcRes::close_pipes);
     vm.flush_stdout();
-    let code = with_proc(&r, |p| p.process.borrow_mut().close(true)).unwrap_or(-1);
+    let code = with_proc(&r, |p| {
+        let code = p.process.borrow_mut().close(true);
+        p.closed.set(true);
+        code
+    })
+    .unwrap_or(-1);
     r.close();
     Ok(Value::Int(code))
 }
@@ -293,6 +335,8 @@ fn proc_terminate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
+    static LISTER: std::sync::Once = std::sync::Once::new();
+    LISTER.call_once(|| php_ext_streams::res::add_resource_lister(live_processes));
     m.function_static(
         "proc_open(array|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null)",
         proc_open,

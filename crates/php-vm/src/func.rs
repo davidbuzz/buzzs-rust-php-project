@@ -176,8 +176,6 @@ pub struct CallShape {
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
     first_ops: [Cell<u32>; FIRST_OPS],
-    /// [`UserFunction::plain_params`]; filled with `kind`.
-    plain_params: Cell<u32>,
     /// The machine code of a function compiled whole (`exec/tape/jit.rs`,
     /// "whole functions": a pure int function, its recursion included): 0
     /// while its plain calls are being counted, 1 once it was refused,
@@ -193,7 +191,15 @@ pub struct CallShape {
     /// is nothing else ([`UserFunction::ctor_fold`]), worked out on first
     /// use.
     fold: std::cell::OnceCell<Option<Box<[FoldStep]>>>,
+    /// [`UserFunction::near_plain_limit`]'s answer for a declaration of
+    /// shape [`CallShape::NOT_PLAIN`]: 0 while unknown, [`NEAR_NO`] when
+    /// its calls stay generic, else one more than the most arguments a
+    /// plain call of it passes.
+    near: Cell<u8>,
 }
+
+/// [`CallShape::near`] of a declaration whose calls all stay generic.
+const NEAR_NO: u8 = u8::MAX;
 
 impl Drop for CallShape {
     fn drop(&mut self) {
@@ -227,10 +233,8 @@ impl CallShape {
     /// Not worked out yet.
     const UNKNOWN: u8 = 0;
     /// Deprecated, `#[\NoDiscard]`, body-less or a generator, with static
-    /// variables, finally slots, a by-reference parameter, a variadic one
-    /// that is not the last, or more parameters than compiled variables.
-    /// (A trailing variadic parameter is plain:
-    /// [`UserFunction::plain_params`].)
+    /// variables, foreach or finally slots, a by-reference or variadic
+    /// parameter, or more parameters than compiled variables.
     pub const NOT_PLAIN: u8 = 1;
     /// Plain, and no parameter has a type other than `mixed`.
     pub const UNTYPED: u8 = 2;
@@ -261,20 +265,6 @@ impl UserFunction {
         s
     }
 
-    /// How many arguments a plain call (`Vm::push_simple_ucall`) binds
-    /// to parameters at most: one per parameter, but none to a trailing
-    /// variadic one (`...$args`), whose `RECV_VARIADIC` then runs in the
-    /// callee and collects the extra arguments a prepared call of the tape
-    /// left in the frame's argument buffer (`exec/tape/calls.rs`, `send`),
-    /// or nothing. Read from the call
-    /// shape: valid once [`UserFunction::call_shape`] found a plain
-    /// declaration (each plain path asks that first).
-    #[inline]
-    pub(crate) fn plain_params(&self) -> usize {
-        debug_assert!(self.call_shape.kind.get() > CallShape::NOT_PLAIN);
-        self.call_shape.plain_params.get() as usize
-    }
-
     /// Where a plain call (`Vm::push_simple_ucall`) of this function with
     /// `n` passed arguments starts: `first_op_after_recv` of its code,
     /// read from the table [`UserFunction::call_shape`] filled for a plain
@@ -285,6 +275,69 @@ impl UserFunction {
             Some(c) if self.call_shape.kind.get() > CallShape::NOT_PLAIN => c.get() as usize,
             _ => first_op_after_recv(&self.code, n) as usize,
         }
+    }
+
+    /// For a declaration of shape [`CallShape::NOT_PLAIN`] that differs
+    /// from a plain one only by its static variables, a trailing variadic
+    /// parameter or by-reference parameters, the most arguments a call of
+    /// it may pass and still take the plain call paths (the tape's
+    /// prepared call, `Vm::push_simple_ucall`); `None` for any other.
+    ///
+    /// php-src makes no difference between such calls and others at the
+    /// call: the static variables live with the function and
+    /// `ZEND_BIND_STATIC` binds them as the body runs; the arguments past
+    /// the declared ones wait in the call frame for `ZEND_RECV_VARIADIC`
+    /// (here: in the frame's argument buffer, after a `None` for each
+    /// declared parameter bound into its compiled variable, as the generic
+    /// call leaves them); a by-reference parameter that the call does not
+    /// reach (fewer arguments than its position, the limit) is bound from
+    /// its default by its `RECV_INIT` like any other. Every parameter must
+    /// be untyped (or `mixed`): the plain paths check argument types only
+    /// for [`CallShape::TYPED`]. A closure with static variables is left
+    /// out (its variables are its object's, `Frame::statics`).
+    ///
+    /// The JIT and the tape's whole-function paths read only
+    /// [`UserFunction::call_shape`] and keep away from these.
+    #[inline]
+    pub(crate) fn near_plain_limit(&self) -> Option<usize> {
+        let mut s = self.call_shape.near.get();
+        if s == 0 {
+            s = self.compute_near();
+            self.call_shape.near.set(s);
+        }
+        if s == NEAR_NO {
+            None
+        } else {
+            Some(usize::from(s - 1))
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compute_near(&self) -> u8 {
+        let nparams = self.params.len();
+        let plain_rest = self.flags
+            & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR)
+            == 0
+            && (self.flags & flags::CLOSURE == 0 || self.code.num_statics == 0)
+            && self.code.num_finally == 0
+            && nparams <= self.code.cv_names.len()
+            && self.params.iter().enumerate().all(|(i, p)| {
+                (!p.variadic || i + 1 == nparams) && p.ty.as_ref().is_none_or(TypeDecl::is_mixed)
+            });
+        if !plain_rest {
+            return NEAR_NO;
+        }
+        let variadic = self.params.last().is_some_and(|p| p.variadic);
+        let most = if variadic { usize::MAX } else { nparams };
+        let first_ref = self
+            .params
+            .iter()
+            .position(|p| p.by_ref)
+            .unwrap_or(usize::MAX);
+        // (At most 253: the count is kept in a byte, next to `NEAR_NO`.)
+        let limit = most.min(first_ref).min(usize::from(NEAR_NO) - 2);
+        u8::try_from(limit + 1).unwrap_or(NEAR_NO)
     }
 
     /// The steps of this function's body when the whole of it, called
@@ -357,20 +410,16 @@ impl UserFunction {
             // one, `FrameStack::push_in_place`, `Frame::clear_for_reuse`.)
             || self.code.num_finally != 0
             || self.params.len() > self.code.cv_names.len()
-            || self.params.iter().any(|p| p.by_ref)
-            // A variadic parameter only last (as the parser has it): a plain
-            // call binds it nothing ([`UserFunction::plain_params`]); the
-            // JIT's plain paths, which bind every parameter from an
-            // argument, refuse such a function (`flags::VARIADIC`).
-            || self.params.iter().rev().skip(1).any(|p| p.variadic)
+            // A variadic parameter too: the plain paths of the JIT and the
+            // tape's whole-function calls bind every parameter from an
+            // argument (a plain call passes at most one per parameter).
+            || self.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return CallShape::NOT_PLAIN;
         }
-        let plain = self.params.len() - usize::from(self.params.last().is_some_and(|p| p.variadic));
-        let Ok(plain) = u32::try_from(plain) else {
+        if u32::try_from(self.params.len()).is_err() {
             return CallShape::NOT_PLAIN;
-        };
-        self.call_shape.plain_params.set(plain);
+        }
         for (n, slot) in self.call_shape.first_ops.iter().enumerate() {
             slot.set(first_op_after_recv(&self.code, n));
         }
@@ -475,13 +524,37 @@ pub struct Builtin {
     /// The stub text `sig` is parsed from.
     text: StubText,
     /// [`Builtin::plain_call`], once worked out: [`PLAIN_UNKNOWN`],
-    /// [`PLAIN_NO`], [`PLAIN_NAMED`] or [`PLAIN_UNNAMED`].
+    /// [`PLAIN_NO`], [`PLAIN_NAMED`], [`PLAIN_UNNAMED`] or
+    /// [`PLAIN_NAMED_REF`].
     plain: Cell<u8>,
     /// [`Builtin::fast_eval_id`] plus one, once worked out
     /// ([`FAST_UNKNOWN`] before).
     fast: Cell<u8>,
-    /// [`Builtin::has_by_ref`] plus one, once worked out (0 before).
-    refs: Cell<u8>,
+    /// The position of the first by-reference parameter
+    /// ([`Builtin::plain_call_upto`]), [`NO_REF_PARAM`] when there is none;
+    /// worked out with `plain`.
+    first_ref: Cell<u8>,
+    /// [`Builtin::accepts`], once worked out.
+    accepts: OnceCell<Box<[u32]>>,
+    /// [`Builtin::name_str`], once asked for.
+    name_str: OnceCell<Box<str>>,
+    /// The resolved defaults of parameters whose stub default is a name
+    /// (`SORT_STRING`, `Class::CONST`, `UNKNOWN`), by position
+    /// ([`Builtin::cached_default`]): filled on first use.
+    named_defaults: RefCell<Vec<NamedDefault>>,
+}
+
+/// One parameter's entry of [`Builtin::cached_default`].
+#[derive(Clone, Debug, Default)]
+pub(crate) enum NamedDefault {
+    /// Not looked up yet, or not kept (resolved again on every call).
+    #[default]
+    Unresolved,
+    /// No default the call supplies (`UNKNOWN`, or a default that is no
+    /// constant name).
+    Absent,
+    /// A scalar constant's value.
+    Value(Value),
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -497,6 +570,71 @@ const PLAIN_NAMED: u8 = 2;
 /// callback's own call (`zend_compile_func_cuf`), so no frame of theirs
 /// shows in a backtrace.
 const PLAIN_UNNAMED: u8 = 3;
+/// [`PLAIN_NAMED`] for a function with a by-reference parameter: a plain
+/// call only while the call's arguments stop before it
+/// ([`Builtin::plain_call_upto`]); [`Builtin::plain_call`] answers
+/// [`PlainCall::No`] for it.
+const PLAIN_NAMED_REF: u8 = 4;
+/// [`Builtin::first_ref`] of a function without by-reference parameters.
+const NO_REF_PARAM: u8 = u8::MAX;
+
+/// The bit of [`Builtin::accepts`] a value has: its `types::mask` type
+/// bit (`null`, `false`, `true`, `int`, `float`, `string`, `array`,
+/// `object`, `resource` are bits 0 to 8 there), [`ACCEPT_REF`] for a
+/// reference. A parameter's entry has the bit when zpp takes the value as
+/// it is, the test `call::accepts_without_coercion` makes.
+#[inline]
+pub(crate) fn accept_bit(v: &Value) -> u32 {
+    use crate::types::mask;
+    match v {
+        Value::Null => mask::NULL,
+        Value::Bool(false) => mask::FALSE,
+        Value::Bool(true) => mask::TRUE,
+        Value::Int(_) => mask::LONG,
+        Value::Float(_) => mask::DOUBLE,
+        Value::Str(_) => mask::STRING,
+        Value::Array(_) => mask::ARRAY,
+        Value::Object(_) => mask::OBJECT,
+        Value::Resource(_) => mask::RESOURCE,
+        Value::Reference(_) => ACCEPT_REF,
+    }
+}
+
+/// [`accept_bit`] of a reference: only a parameter that takes anything
+/// (untyped, `mixed`, by reference, unchecked) has it.
+const ACCEPT_REF: u32 = 1 << 31;
+
+/// The [`Builtin::accepts`] entry of parameter `p`: every bit when its
+/// type is not checked against the argument before the handler runs (no
+/// type, `mixed`, a by-reference parameter, whose type the handler checks
+/// as `Z_PARAM_ARRAY_EX(.., 0, 1)` of `array_pop()` does, or one marked
+/// unchecked), else the value tags its type takes without coercion
+/// (`iterable` takes an array; an object only for `object`, a class type
+/// is checked by the generic call).
+fn param_accepts(p: &ParamInfo) -> u32 {
+    use crate::types::mask;
+    match &p.ty {
+        Some(ty)
+            if !p.by_ref && p.promote & crate::opcode::UNCHECKED_TYPE == 0 && !ty.is_mixed() =>
+        {
+            let scalar = mask::NULL
+                | mask::BOOL
+                | mask::LONG
+                | mask::DOUBLE
+                | mask::STRING
+                | mask::ARRAY
+                | mask::OBJECT
+                | mask::RESOURCE;
+            let iterable = if ty.mask & mask::ITERABLE != 0 {
+                mask::ARRAY
+            } else {
+                0
+            };
+            (ty.mask & scalar) | iterable
+        }
+        _ => u32::MAX,
+    }
+}
 
 /// How a call by name of a builtin can run on the tape ([`Builtin::plain_call`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,7 +658,10 @@ impl Builtin {
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
-            refs: Cell::new(0),
+            first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -540,7 +681,10 @@ impl Builtin {
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
-            refs: Cell::new(0),
+            first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -554,7 +698,10 @@ impl Builtin {
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
-            refs: Cell::new(0),
+            first_ref: Cell::new(NO_REF_PARAM),
+            accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -565,8 +712,47 @@ impl Builtin {
             // Depend on the name.
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
-            refs: Cell::new(0),
             ..self.clone()
+        }
+    }
+
+    /// The kept resolution of parameter `i`'s named default
+    /// (`Vm::builtin_default`): [`NamedDefault::Absent`] when the call
+    /// supplies no default, a constant's scalar value, or
+    /// [`NamedDefault::Unresolved`] when not resolved yet or not kept.
+    #[inline]
+    pub(crate) fn cached_default(&self, i: usize) -> NamedDefault {
+        self.named_defaults
+            .borrow()
+            .get(i)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Keeps the resolution of parameter `i`'s named default for
+    /// [`Builtin::cached_default`]: `None` for no default, or a scalar
+    /// (`null`, a bool, an int or a float, which owns no memory) that
+    /// depends on nothing a request can change. The table lives with the
+    /// function, beyond the request, so its allocation is not counted as
+    /// the request's memory (`memory_get_usage()`).
+    pub(crate) fn cache_default(&self, i: usize, v: Option<&Value>) {
+        let entry = match v {
+            None => NamedDefault::Absent,
+            Some(v @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => {
+                NamedDefault::Value(v.clone())
+            }
+            Some(_) => return,
+        };
+        let Ok(mut table) = self.named_defaults.try_borrow_mut() else {
+            return;
+        };
+        php_memlimit::persistent(|| {
+            if table.len() <= i {
+                table.resize(i + 1, NamedDefault::Unresolved);
+            }
+        });
+        if let Some(slot) = table.get_mut(i) {
+            *slot = entry;
         }
     }
 
@@ -586,25 +772,10 @@ impl Builtin {
     /// once.
     #[inline]
     pub(crate) fn plain_call(&self) -> PlainCall {
-        match self.plain.get() {
+        match self.plain_code() {
             PLAIN_NAMED => PlainCall::Named,
             PLAIN_UNNAMED => PlainCall::Unnamed,
-            PLAIN_NO => PlainCall::No,
-            _ => self.plain_call_slow(),
-        }
-    }
-
-    /// Whether a parameter is by reference (or prefers one). Worked out
-    /// once, from the signature: the tape's `send` asks per argument.
-    #[inline]
-    pub(crate) fn has_by_ref(&self) -> bool {
-        match self.refs.get() {
-            0 => {
-                let r = self.signature().params.iter().any(|p| p.by_ref);
-                self.refs.set(u8::from(r) + 1);
-                r
-            }
-            r => r == 2,
+            _ => PlainCall::No,
         }
     }
 
@@ -623,29 +794,150 @@ impl Builtin {
         }
     }
 
+    /// The worked-out [`Builtin::plain`] code. Not recursive (the slow path
+    /// stores it, then it is read again), so that the two answers above
+    /// inline into their callers: as a recursive function each was an
+    /// out-of-line call of ~36 instructions in the tape's native call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load and a test
+    fn plain_code(&self) -> u8 {
+        let code = self.plain.get();
+        if code != PLAIN_UNKNOWN {
+            return code;
+        }
+        self.plain_call_slow();
+        self.plain.get()
+    }
+
+    /// [`Builtin::plain_call`] decided per call rather than per function:
+    /// the answer for a call whose arguments stop before the returned
+    /// position, the first by-reference parameter's (`usize::MAX` when
+    /// there is none). php-src's `ZEND_SEND_VAL`/`ZEND_SEND_VAR` of the
+    /// arguments before it are the same whatever comes after them, so
+    /// `preg_match($re, $s)` or `str_replace($a, $b, $c)` is as plain as
+    /// `strlen($s)`; an argument at or past the position is sent by
+    /// reference (`ZEND_SEND_REF`, `calls::send_ref`) or the call is not
+    /// plain. Worked out once.
+    #[inline]
+    pub(crate) fn plain_call_upto(&self) -> (PlainCall, usize) {
+        match self.plain_code() {
+            PLAIN_NAMED => (PlainCall::Named, usize::MAX),
+            PLAIN_UNNAMED => (PlainCall::Unnamed, usize::MAX),
+            PLAIN_NAMED_REF => (PlainCall::Named, usize::from(self.first_ref.get())),
+            _ => (PlainCall::No, usize::MAX),
+        }
+    }
+
+    /// [`Builtin::plain_call_upto`] inline, for a caller that has just
+    /// called it (`calls::prepare`): the answer is worked out then, and
+    /// a second out-of-line call is not needed to read it again. Always
+    /// inline: merely `#[inline]`, it stayed a call of its own (11
+    /// instructions of every prepared builtin call).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load and a match, once per call
+    pub(crate) fn plain_call_known(&self) -> (PlainCall, usize) {
+        match self.plain.get() {
+            PLAIN_NAMED => (PlainCall::Named, usize::MAX),
+            PLAIN_UNNAMED => (PlainCall::Unnamed, usize::MAX),
+            PLAIN_NAMED_REF => (PlainCall::Named, usize::from(self.first_ref.get())),
+            PLAIN_UNKNOWN => self.plain_call_upto(),
+            _ => (PlainCall::No, usize::MAX),
+        }
+    }
+
+    /// The name as `&str` (a builtin's name is ASCII; one that is not
+    /// UTF-8 gives `""`), validated once: [`Args::func_name_str`] ran
+    /// `str::from_utf8` on every call (74 instructions of a
+    /// `current($arr)`, which passes its name along for its errors).
+    #[inline]
+    pub fn name_str(&self) -> &str {
+        self.name_str.get_or_init(|| {
+            // Persistent, like the parsed signature: the copy is not the
+            // memory of the request that calls the function first.
+            php_memlimit::persistent(|| {
+                std::str::from_utf8(self.name.as_bytes())
+                    .unwrap_or("")
+                    .into()
+            })
+        })
+    }
+
+    /// Whether a plain call with `n` arguments sent one by reference
+    /// ([`Builtin::plain_call_upto`]'s position is below `n`), from the
+    /// two cells directly once the answer is worked out: the call into
+    /// `plain_call_upto` cost a tape builtin call ~33 instructions.
+    #[inline]
+    pub(crate) fn sends_ref_within(&self, n: usize) -> bool {
+        match self.plain.get() {
+            PLAIN_NAMED_REF => usize::from(self.first_ref.get()) < n,
+            PLAIN_UNKNOWN => self.plain_call_upto().1 < n,
+            _ => false,
+        }
+    }
+
+    /// Whether the parameter at `pos` is by reference (a position past the
+    /// declared ones: the variadic one's), and whether it is
+    /// `ZEND_ARG_SEND_PREFER_REF` (by reference when the argument is a
+    /// variable, by value otherwise).
+    #[inline]
+    pub(crate) fn param_ref_at(&self, pos: usize) -> (bool, bool) {
+        let ps = &self.signature().params;
+        match ps.get(pos).or_else(|| ps.last().filter(|l| l.variadic)) {
+            Some(p) if p.by_ref => (true, p.promote & crate::opcode::PREFER_REF != 0),
+            _ => (false, false),
+        }
+    }
+
+    /// Per parameter, the [`accept_bit`]s of the values zpp takes as they
+    /// are (`call_builtin_impl`'s positional fast path; anything else is
+    /// coerced or rejected there): argument `i` of a direct call is taken
+    /// when `accept_bit(arg) & accepts[min(i, len - 1)] != 0`, a position
+    /// past the declared ones being the variadic parameter's. Empty when
+    /// every parameter takes anything, so a call of such a function tests
+    /// nothing. Worked out once.
+    #[inline]
+    pub(crate) fn accepts(&self) -> &[u32] {
+        self.accepts.get_or_init(|| self.accepts_slow())
+    }
+
     #[cold]
     #[inline(never)]
-    fn plain_call_slow(&self) -> PlainCall {
-        // (A by-reference parameter is no reason: the tape's `send` binds
-        // a variable to it as `ZEND_SEND_REF` does, and declines anything
-        // else for the generic send to report.)
-        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0;
-        let kind = if !plain {
-            PlainCall::No
+    fn accepts_slow(&self) -> Box<[u32]> {
+        let sig = self.signature();
+        // A table of the function, like its parsed signature: persistent,
+        // not the memory of the request that happens to call the function
+        // first (`memory_get_usage()` around a builtin's first call:
+        // ext/standard/tests/serialize/bug81142.phpt).
+        php_memlimit::persistent(|| {
+            let table: Vec<u32> = sig.params.iter().map(param_accepts).collect();
+            if table.iter().all(|&m| m == u32::MAX) {
+                Box::default()
+            } else {
+                table.into_boxed_slice()
+            }
+        })
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn plain_call_slow(&self) {
+        let first_ref = self.signature().params.iter().position(|p| p.by_ref);
+        let code = if self.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            PLAIN_NO
+        } else if let Some(pos) = first_ref {
+            // A position past `u8::MAX - 1` (none is) is never reached.
+            self.first_ref
+                .set(u8::try_from(pos).unwrap_or(NO_REF_PARAM - 1));
+            PLAIN_NAMED_REF
         } else if matches!(
             self.name.as_bytes(),
             b"call_user_func" | b"call_user_func_array"
         ) {
-            PlainCall::Unnamed
+            PLAIN_UNNAMED
         } else {
-            PlainCall::Named
+            PLAIN_NAMED
         };
-        self.plain.set(match kind {
-            PlainCall::No => PLAIN_NO,
-            PlainCall::Named => PLAIN_NAMED,
-            PlainCall::Unnamed => PLAIN_UNNAMED,
-        });
-        kind
+        self.plain.set(code);
     }
 
     /// Parses the stub text. The tables are persistent in php-src
@@ -687,6 +979,8 @@ impl std::ops::DerefMut for Builtin {
         self.signature();
         // Worked out again from the edited signature.
         self.plain.set(PLAIN_UNKNOWN);
+        self.accepts = OnceCell::new();
+        self.named_defaults = RefCell::new(Vec::new());
         self.sig.get_mut().expect("signature initialised above")
     }
 }
@@ -854,6 +1148,111 @@ pub struct Args {
     pub func: Option<Rc<Builtin>>,
 }
 
+/// The handler's copy of a sent argument (a builtin call's [`Args`],
+/// php-src's handler reading it in the frame): a handle's count
+/// incremented inline, where `Value::clone` is an out-of-line call
+/// dispatching on the tag (~23 instructions an argument).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument of a builtin call
+pub(crate) fn copy_arg(v: &Value) -> Value {
+    match v {
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        Value::Object(o) => Value::Object(o.clone()),
+        Value::Reference(r) => Value::Reference(r.clone()),
+        _ => crate::call::clone_value(v),
+    }
+}
+
+/// Empties a handler's argument copies front to back, as `Vec::clear`
+/// releases them, without a `Drain` (whose out-of-line drop cost ~22
+/// instructions a call) and without the out-of-line drop of a scalar.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per builtin call
+fn release_arg_copies(values: &mut Vec<Value>) {
+    for slot in values.iter_mut() {
+        if matches!(
+            slot,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            continue;
+        }
+        // A copy whose original the frame still holds is not the last
+        // handle: its count is decremented inline (`GC_DELREF`), without
+        // the out-of-line drop glue of a `Value` and its dispatch on the
+        // tag again (~30 instructions an argument). A last handle (the
+        // handler replaced the copy) is left to the glue.
+        match std::mem::take(slot) {
+            Value::Str(s) => drop(s),
+            Value::Array(a) if a.refcount() > 1 => drop(a),
+            Value::Object(o) if o.refcount() > 1 => drop(o),
+            Value::Reference(r) if r.refcount() > 1 => drop(r),
+            other => drop(other),
+        }
+    }
+    // Every element is a scalar now, which `clear`'s drop loop passes
+    // over with a tag test each.
+    values.clear();
+}
+
+impl Args {
+    /// Releases a builtin call's arguments once its handler returned: the
+    /// copies of the arguments front to back ([`release_arg_copies`]), the
+    /// two vectors back home or to their pools
+    /// ([`crate::vm::CallBufs::put_values`]), and the other fields emptied
+    /// only when set. Everything is then empty, so the caller forgets the
+    /// husk rather than run it through the drop glue: destructuring it by
+    /// value moved its fifteen words to another stack slot first, and
+    /// `put_val_vec`'s call with a drop call per value and the drop of the
+    /// empty named-argument vector cost ~130 instructions of a two-argument
+    /// call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per builtin call
+    pub(crate) fn release_into(&mut self, bufs: &mut crate::vm::CallBufs) {
+        release_arg_copies(&mut self.values);
+        bufs.put_values(std::mem::take(&mut self.values));
+        bufs.put_passed(std::mem::take(&mut self.passed));
+        // An empty vector that never allocated owns nothing.
+        if self.named.capacity() != 0 {
+            drop(std::mem::take(&mut self.named));
+        }
+        if self.this.is_some() {
+            self.this = None;
+        }
+        if self.called.is_some() {
+            self.called = None;
+        }
+        if self.func.is_some() {
+            self.func = None;
+        }
+    }
+}
+
+impl Args {
+    /// [`Args::release_into`] of a pooled record
+    /// (`crate::vm::CallBufs::take_args`): the copies of the arguments
+    /// released front to back, the vectors kept with their capacity, the
+    /// other fields emptied only when set.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per builtin call
+    pub(crate) fn release_in_place(&mut self) {
+        release_arg_copies(&mut self.values);
+        self.passed.clear();
+        if self.named.capacity() != 0 {
+            drop(std::mem::take(&mut self.named));
+        }
+        if self.this.is_some() {
+            self.this = None;
+        }
+        if self.called.is_some() {
+            self.called = None;
+        }
+        if self.func.is_some() {
+            self.func = None;
+        }
+    }
+}
+
 impl Args {
     /// Number of arguments.
     pub fn len(&self) -> usize {
@@ -941,12 +1340,158 @@ impl Args {
     /// (a builtin's name is ASCII; one that is not UTF-8 gives `""`): for
     /// the builtins that pass their name along on every call (`count()`,
     /// `array_key_exists()`, ...), where the copy was an allocation and a
-    /// UTF-8 scan per call.
+    /// UTF-8 scan per call; validated once per builtin
+    /// ([`Builtin::name_str`]).
     #[must_use]
     pub fn func_name_str(&self) -> &str {
-        self.func
-            .as_ref()
-            .and_then(|f| std::str::from_utf8(f.name.as_bytes()).ok())
-            .unwrap_or("")
+        self.func.as_ref().map_or("", |f| f.name_str())
+    }
+}
+
+#[cfg(test)]
+mod name_str_tests {
+    use super::{Args, Builtin};
+    use crate::{Vm, VmResult};
+    use php_runtime::{Value, ZStr};
+    use std::rc::Rc;
+
+    fn handler(_: &mut Vm, _: &mut Args) -> VmResult<Value> {
+        Ok(Value::Null)
+    }
+
+    #[test]
+    fn a_builtins_name_is_borrowed_as_str_and_kept() {
+        let b = Rc::new(Builtin::from_stub(
+            ZStr::from("current"),
+            "current(array|object $array): mixed",
+            0,
+            handler,
+        ));
+        assert_eq!(b.name_str(), "current");
+        // The same buffer the second time.
+        assert!(std::ptr::eq(b.name_str(), b.name_str()));
+        let args = Args {
+            values: Vec::new(),
+            passed: Vec::new(),
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(&b)),
+        };
+        assert_eq!(args.func_name_str(), "current");
+        let none = Args { func: None, ..args };
+        assert_eq!(none.func_name_str(), "");
+        let odd = Builtin::from_stub(ZStr::from(&b"\xff"[..]), "f(): mixed", 0, handler);
+        assert_eq!(odd.name_str(), "");
+    }
+}
+
+#[cfg(test)]
+mod plain_call_tests {
+    use super::{flags, Args, Builtin, PlainCall};
+    use crate::{Vm, VmResult};
+    use php_runtime::{Value, ZStr};
+
+    fn handler(_: &mut Vm, _: &mut Args) -> VmResult<Value> {
+        Ok(Value::Null)
+    }
+
+    fn builtin(stub: &str, fl: u32) -> Builtin {
+        let name = stub.split('(').next().unwrap_or_default();
+        Builtin::from_stub(ZStr::from(name), stub, fl, handler)
+    }
+
+    #[test]
+    fn by_value_functions_are_plain_whole() {
+        let b = builtin("strlen(string $string): int", 0);
+        assert_eq!(b.plain_call(), PlainCall::Named);
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, usize::MAX));
+        let b = builtin(
+            "call_user_func(callable $callback, mixed ...$args): mixed",
+            flags::VARIADIC,
+        );
+        assert_eq!(b.plain_call_upto(), (PlainCall::Unnamed, usize::MAX));
+    }
+
+    #[test]
+    fn by_reference_functions_are_plain_up_to_the_first_reference() {
+        let b = builtin(
+            "preg_match(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
+            0,
+        );
+        // Asked first through the per-call answer, then the per-function one.
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 2));
+        assert_eq!(b.plain_call(), PlainCall::No);
+        assert_eq!(b.param_ref_at(1), (false, false));
+        assert_eq!(b.param_ref_at(2), (true, false));
+        assert_eq!(b.param_ref_at(3), (false, false));
+        let b = builtin("array_pop(array &$array): mixed", 0);
+        assert_eq!(b.plain_call(), PlainCall::No);
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 0));
+        let b = builtin("f(array|object $array): mixed", 0);
+        assert_eq!(b.param_ref_at(0), (false, false));
+        let b = builtin("g(@prefer-ref array|object &$array): mixed", 0);
+        assert_eq!(b.param_ref_at(0), (true, true));
+    }
+
+    #[test]
+    fn a_variadic_by_reference_parameter_covers_every_later_position() {
+        let b = builtin(
+            "sscanf(string $string, string $format, mixed &...$vars): array|int|null",
+            flags::VARIADIC,
+        );
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 2));
+        assert_eq!(b.param_ref_at(2), (true, false));
+        assert_eq!(b.param_ref_at(5), (true, false));
+    }
+
+    #[test]
+    fn accepts_is_empty_when_every_parameter_takes_anything() {
+        let b = builtin(
+            "var_dump(mixed $value, mixed ...$values): void",
+            flags::VARIADIC,
+        );
+        assert!(b.accepts().is_empty());
+        let b = builtin("array_pop(array &$array): mixed", 0);
+        assert!(b.accepts().is_empty());
+        let b = builtin("f($x): mixed", 0);
+        assert!(b.accepts().is_empty());
+    }
+
+    #[test]
+    fn accepts_has_the_tags_each_type_takes_as_it_is() {
+        use super::accept_bit;
+        use php_runtime::ZArray;
+        let b = builtin(
+            "implode(array|string $separator, ?array $array = null): string",
+            0,
+        );
+        let t = b.accepts();
+        assert_eq!(t.len(), 2);
+        let s = Value::Str(ZStr::from("x"));
+        let a = Value::Array(ZArray::new());
+        assert_ne!(accept_bit(&s) & t[0], 0);
+        assert_ne!(accept_bit(&a) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Int(1)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Null) & t[0], 0);
+        assert_ne!(accept_bit(&Value::Null) & t[1], 0);
+        assert_eq!(accept_bit(&Value::Bool(true)) & t[1], 0);
+        let b = builtin("g(int|false $a, iterable $i, mixed $m): bool", 0);
+        let t = b.accepts();
+        assert_ne!(accept_bit(&Value::Bool(false)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Bool(true)) & t[0], 0);
+        assert_eq!(accept_bit(&Value::Float(1.0)) & t[0], 0);
+        assert_ne!(accept_bit(&a) & t[1], 0);
+        assert_eq!(t[2], u32::MAX);
+        let r = Value::Reference(php_runtime::PhpRef::new(Value::Int(1)));
+        assert_eq!(accept_bit(&r) & t[0], 0);
+        assert_ne!(accept_bit(&r) & t[2], 0);
+    }
+
+    #[test]
+    fn deprecated_functions_are_never_plain() {
+        let b = builtin("f(array &$a): void", flags::DEPRECATED);
+        assert_eq!(b.plain_call_upto(), (PlainCall::No, usize::MAX));
+        assert_eq!(b.plain_call(), PlainCall::No);
     }
 }

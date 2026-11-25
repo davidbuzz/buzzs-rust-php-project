@@ -1,0 +1,644 @@
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+array (
+  0 => 'A',
+  1 => 'A',
+  2 => 'A/A/A.C/A.C/A.C+d',
+  3 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+    2 => 'A',
+    3 => 'A',
+    4 => 'A.C',
+  ),
+  4 => 
+  array (
+    0 => 2,
+    1 => 'A',
+  ),
+  5 => 
+  array (
+    0 => 2,
+    1 => 'A',
+    2 => 'A.C',
+    3 => 'A.C',
+  ),
+  6 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  7 => 'B',
+  8 => 'B',
+  9 => 'B>B/A/B.C/A.C/A.C+d',
+  10 => 
+  array (
+    0 => 'B',
+    1 => 'A',
+    2 => 'B',
+    3 => 'B',
+    4 => 'B.C',
+  ),
+  11 => 
+  array (
+    0 => 4,
+    1 => 'B',
+  ),
+  12 => 
+  array (
+    0 => 4,
+    1 => 'B',
+    2 => 'B.C',
+    3 => 'B.C',
+  ),
+  13 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  14 => 'C3',
+  15 => 'C3',
+  16 => 'B>B/A/C.C/A.C/A.C+d',
+  17 => 
+  array (
+    0 => 'C3',
+    1 => 'A',
+    2 => 'C3',
+    3 => 'C3',
+    4 => 'C.C',
+  ),
+  18 => 
+  array (
+    0 => 5,
+    1 => 'B',
+  ),
+  19 => 
+  array (
+    0 => 101,
+    1 => 'B',
+    2 => 'C.C',
+    3 => 'C.C',
+  ),
+  20 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => true,
+    4 => false,
+  ),
+  21 => 'D2',
+  22 => 'D2',
+  23 => 'B>B/A/I.C!/A.C/A.C+d',
+  24 => 
+  array (
+    0 => 'D2',
+    1 => 'A',
+    2 => 'D2',
+    3 => 'D2',
+    4 => 'I.C!',
+  ),
+  25 => 
+  array (
+    0 => 6,
+    1 => 'B',
+  ),
+  26 => 
+  array (
+    0 => 102,
+    1 => 'B',
+    2 => 'I.C!',
+    3 => 'I.C!',
+  ),
+  27 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => true,
+    3 => true,
+    4 => false,
+  ),
+  28 => 
+  array (
+    0 => 'B',
+    1 => 'B',
+    2 => 'A',
+    3 => 'B',
+    4 => 'B',
+  ),
+  29 => 
+  array (
+    0 => 'C3',
+    1 => 'C3',
+    2 => 'A',
+    3 => 'C3',
+    4 => 'C3',
+  ),
+  30 => 
+  array (
+    0 => 'A',
+    1 => 'B0',
+    2 => 'B0',
+    3 => 'B0',
+  ),
+  31 => 
+  array (
+    0 => 1006,
+    1 => 1006,
+    2 => 102,
+  ),
+  32 => 'B0',
+  33 => 102,
+)
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+array (
+  0 => 'A',
+  1 => 'A',
+  2 => 'A/A/A.C/A.C/A.C+d',
+  3 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+    2 => 'A',
+    3 => 'A',
+    4 => 'A.C',
+  ),
+  4 => 
+  array (
+    0 => 1008,
+    1 => 'A',
+  ),
+  5 => 
+  array (
+    0 => 1008,
+    1 => 'A',
+    2 => 'A.C',
+    3 => 'A.C',
+  ),
+  6 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  7 => 'B',
+  8 => 'B',
+  9 => 'B>B0/A/B.C/A.C/A.C+d',
+  10 => 
+  array (
+    0 => 'B',
+    1 => 'A',
+    2 => 'B',
+    3 => 'B',
+    4 => 'B.C',
+  ),
+  11 => 
+  array (
+    0 => 1010,
+    1 => 'B0',
+  ),
+  12 => 
+  array (
+    0 => 1010,
+    1 => 'B0',
+    2 => 'B.C',
+    3 => 'B.C',
+  ),
+  13 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  14 => 'C3',
+  15 => 'C3',
+  16 => 'B>B0/A/C.C/A.C/A.C+d',
+  17 => 
+  array (
+    0 => 'C3',
+    1 => 'A',
+    2 => 'C3',
+    3 => 'C3',
+    4 => 'C.C',
+  ),
+  18 => 
+  array (
+    0 => 1011,
+    1 => 'B0',
+  ),
+  19 => 
+  array (
+    0 => 103,
+    1 => 'B0',
+    2 => 'C.C',
+    3 => 'C.C',
+  ),
+  20 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => true,
+    4 => false,
+  ),
+  21 => 'D2',
+  22 => 'D2',
+  23 => 'B>B0/A/I.C!/A.C/A.C+d',
+  24 => 
+  array (
+    0 => 'D2',
+    1 => 'A',
+    2 => 'D2',
+    3 => 'D2',
+    4 => 'I.C!',
+  ),
+  25 => 
+  array (
+    0 => 1012,
+    1 => 'B0',
+  ),
+  26 => 
+  array (
+    0 => 104,
+    1 => 'B0',
+    2 => 'I.C!',
+    3 => 'I.C!',
+  ),
+  27 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => true,
+    3 => true,
+    4 => false,
+  ),
+  28 => 
+  array (
+    0 => 'B',
+    1 => 'B',
+    2 => 'A',
+    3 => 'B',
+    4 => 'B',
+  ),
+  29 => 
+  array (
+    0 => 'C3',
+    1 => 'C3',
+    2 => 'A',
+    3 => 'C3',
+    4 => 'C3',
+  ),
+  30 => 
+  array (
+    0 => 'A',
+    1 => 'B1',
+    2 => 'B1',
+    3 => 'B1',
+  ),
+  31 => 
+  array (
+    0 => 2012,
+    1 => 2012,
+    2 => 104,
+  ),
+  32 => 'B1',
+  33 => 104,
+)
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+array (
+  0 => 'A',
+  1 => 'A',
+  2 => 'A/A/A.C/A.C/A.C+d',
+  3 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+    2 => 'A',
+    3 => 'A',
+    4 => 'A.C',
+  ),
+  4 => 
+  array (
+    0 => 2014,
+    1 => 'A',
+  ),
+  5 => 
+  array (
+    0 => 2014,
+    1 => 'A',
+    2 => 'A.C',
+    3 => 'A.C',
+  ),
+  6 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  7 => 'B',
+  8 => 'B',
+  9 => 'B>B1/A/B.C/A.C/A.C+d',
+  10 => 
+  array (
+    0 => 'B',
+    1 => 'A',
+    2 => 'B',
+    3 => 'B',
+    4 => 'B.C',
+  ),
+  11 => 
+  array (
+    0 => 2016,
+    1 => 'B1',
+  ),
+  12 => 
+  array (
+    0 => 2016,
+    1 => 'B1',
+    2 => 'B.C',
+    3 => 'B.C',
+  ),
+  13 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  14 => 'C3',
+  15 => 'C3',
+  16 => 'B>B1/A/C.C/A.C/A.C+d',
+  17 => 
+  array (
+    0 => 'C3',
+    1 => 'A',
+    2 => 'C3',
+    3 => 'C3',
+    4 => 'C.C',
+  ),
+  18 => 
+  array (
+    0 => 2017,
+    1 => 'B1',
+  ),
+  19 => 
+  array (
+    0 => 105,
+    1 => 'B1',
+    2 => 'C.C',
+    3 => 'C.C',
+  ),
+  20 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => true,
+    4 => false,
+  ),
+  21 => 'D2',
+  22 => 'D2',
+  23 => 'B>B1/A/I.C!/A.C/A.C+d',
+  24 => 
+  array (
+    0 => 'D2',
+    1 => 'A',
+    2 => 'D2',
+    3 => 'D2',
+    4 => 'I.C!',
+  ),
+  25 => 
+  array (
+    0 => 2018,
+    1 => 'B1',
+  ),
+  26 => 
+  array (
+    0 => 106,
+    1 => 'B1',
+    2 => 'I.C!',
+    3 => 'I.C!',
+  ),
+  27 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => true,
+    3 => true,
+    4 => false,
+  ),
+  28 => 
+  array (
+    0 => 'B',
+    1 => 'B',
+    2 => 'A',
+    3 => 'B',
+    4 => 'B',
+  ),
+  29 => 
+  array (
+    0 => 'C3',
+    1 => 'C3',
+    2 => 'A',
+    3 => 'C3',
+    4 => 'C3',
+  ),
+  30 => 
+  array (
+    0 => 'A',
+    1 => 'B2',
+    2 => 'B2',
+    3 => 'B2',
+  ),
+  31 => 
+  array (
+    0 => 3018,
+    1 => 3018,
+    2 => 106,
+  ),
+  32 => 'B2',
+  33 => 106,
+)
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
+array (
+  0 => 'A',
+  1 => 'A',
+  2 => 'A/A/A.C/A.C/A.C+d',
+  3 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+    2 => 'A',
+    3 => 'A',
+    4 => 'A.C',
+  ),
+  4 => 
+  array (
+    0 => 3020,
+    1 => 'A',
+  ),
+  5 => 
+  array (
+    0 => 3020,
+    1 => 'A',
+    2 => 'A.C',
+    3 => 'A.C',
+  ),
+  6 => 
+  array (
+    0 => true,
+    1 => false,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  7 => 'B',
+  8 => 'B',
+  9 => 'B>B2/A/B.C/A.C/A.C+d',
+  10 => 
+  array (
+    0 => 'B',
+    1 => 'A',
+    2 => 'B',
+    3 => 'B',
+    4 => 'B.C',
+  ),
+  11 => 
+  array (
+    0 => 3022,
+    1 => 'B2',
+  ),
+  12 => 
+  array (
+    0 => 3022,
+    1 => 'B2',
+    2 => 'B.C',
+    3 => 'B.C',
+  ),
+  13 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => false,
+    4 => false,
+  ),
+  14 => 'C3',
+  15 => 'C3',
+  16 => 'B>B2/A/C.C/A.C/A.C+d',
+  17 => 
+  array (
+    0 => 'C3',
+    1 => 'A',
+    2 => 'C3',
+    3 => 'C3',
+    4 => 'C.C',
+  ),
+  18 => 
+  array (
+    0 => 3023,
+    1 => 'B2',
+  ),
+  19 => 
+  array (
+    0 => 107,
+    1 => 'B2',
+    2 => 'C.C',
+    3 => 'C.C',
+  ),
+  20 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => false,
+    3 => true,
+    4 => false,
+  ),
+  21 => 'D2',
+  22 => 'D2',
+  23 => 'B>B2/A/I.C!/A.C/A.C+d',
+  24 => 
+  array (
+    0 => 'D2',
+    1 => 'A',
+    2 => 'D2',
+    3 => 'D2',
+    4 => 'I.C!',
+  ),
+  25 => 
+  array (
+    0 => 3024,
+    1 => 'B2',
+  ),
+  26 => 
+  array (
+    0 => 108,
+    1 => 'B2',
+    2 => 'I.C!',
+    3 => 'I.C!',
+  ),
+  27 => 
+  array (
+    0 => true,
+    1 => true,
+    2 => true,
+    3 => true,
+    4 => false,
+  ),
+  28 => 
+  array (
+    0 => 'B',
+    1 => 'B',
+    2 => 'A',
+    3 => 'B',
+    4 => 'B',
+  ),
+  29 => 
+  array (
+    0 => 'C3',
+    1 => 'C3',
+    2 => 'A',
+    3 => 'C3',
+    4 => 'C3',
+  ),
+  30 => 
+  array (
+    0 => 'A',
+    1 => 'B3',
+    2 => 'B3',
+    3 => 'B3',
+  ),
+  31 => 
+  array (
+    0 => 4024,
+    1 => 4024,
+    2 => 108,
+  ),
+  32 => 'B3',
+  33 => 108,
+)

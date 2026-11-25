@@ -79,9 +79,11 @@ pub fn canonicalize_locale_string(locale: &str) -> Option<String> {
 /// non-empty, otherwise `ValueError: Argument #N ($locale) "x" is invalid`.
 pub fn validate_locale_arg(locale: &str, arg: u32) -> crate::Result<()> {
     if crate::sys::loc::iso3_language(locale).is_empty() {
+        // `"%s"` of the `char*`: the name up to its first NUL.
+        let shown = locale.split('\0').next().unwrap_or_default();
         return Err(crate::Error::arg_value(
             arg,
-            format!("\"{locale}\" is invalid"),
+            format!("\"{shown}\" is invalid"),
         ));
     }
     Ok(())

@@ -31,7 +31,8 @@ fn run(code: &str) -> String {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let zlib = php_ext_zlib::Zlib;
-    let exts: [&dyn Extension; 2] = [&streams, &zlib];
+    let bz2 = php_ext_zlib::Bz2;
+    let exts: [&dyn Extension; 3] = [&streams, &zlib, &bz2];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
@@ -105,6 +106,24 @@ fn gzopen_failures() {
             var_dump(@gzopen("/nonexistent/x", "r"));"#
         ),
         "gzopen(): Argument #1 ($filename) must not contain any null bytes\nbool(false)\n"
+    );
+}
+
+/// ext/bz2 is an extension of its own: Reflection names it for its
+/// functions (the stream aliases too), and `get_extension_funcs()` lists
+/// them in bz2.stub.php's order, apart from zlib's.
+#[test]
+fn bz2_is_its_own_extension() {
+    let out = run(
+        r#"echo (new ReflectionFunction("bzcompress"))->getExtensionName(), " ",
+        (new ReflectionFunction("bzclose"))->getExtensionName(), " ",
+        (new ReflectionFunction("gzcompress"))->getExtensionName(), "\n",
+        implode(",", get_extension_funcs("bz2")), "\n",
+        (int) in_array("bzopen", get_extension_funcs("zlib")), "\n";"#,
+    );
+    assert_eq!(
+        out,
+        "bz2 bz2 zlib\nbzopen,bzread,bzwrite,bzflush,bzclose,bzerrno,bzerrstr,bzerror,bzcompress,bzdecompress\n0\n"
     );
 }
 

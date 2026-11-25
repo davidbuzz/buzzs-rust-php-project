@@ -13,7 +13,7 @@ use crate::class::{cflags, ConstExpr};
 use crate::func::{Args, Func};
 use crate::object;
 use crate::opcode::ParamInfo;
-use crate::types::{mask, TypeDecl};
+use crate::types::mask;
 use crate::vm::{Vm, VmResult};
 use php_parser::ast::{ClassRef, ExprKind, MagicConst, MemberName, NameKind};
 use php_runtime::{ArrayKey, Value, ZStr};
@@ -441,14 +441,16 @@ fn rp_has_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, p) = this_param(vm, a)?;
     let scope = f.scope(vm);
-    match p.ty {
+    // The type the arginfo declares, not the one the function parses
+    // with (`ReflectionParameter` reads `arg_info->type`).
+    match p.arginfo_type() {
         Some(t) => super::types::type_value(vm, &t, scope.as_ref(), true),
         None => Ok(Value::Null),
     }
 }
 fn rp_allows_null(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(with_param(vm, a, |_, _, p| {
-        p.ty.as_ref().is_none_or(TypeDecl::allows_null)
+        p.arginfo_type().is_none_or(|t| t.allows_null())
     })?))
 }
 fn rp_by_ref(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -471,13 +473,13 @@ fn rp_is_promoted(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rp_is_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| {
+    Ok(Value::Bool(p.arginfo_type().is_some_and(|t| {
         t.mask & !mask::NULL == mask::ARRAY && !t.has_classes()
     })))
 }
 fn rp_is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| {
+    Ok(Value::Bool(p.arginfo_type().is_some_and(|t| {
         t.mask & !mask::NULL == mask::CALLABLE && !t.has_classes()
     })))
 }
@@ -551,7 +553,8 @@ fn rp_get_declaring_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.deprecated("Method ReflectionParameter::getClass() is deprecated since 8.0, use ReflectionParameter::getType() instead")?;
     let (f, _, p) = this_param(vm, a)?;
-    let Some(t) = &p.ty else {
+    let declared = p.arginfo_type();
+    let Some(t) = declared.as_deref() else {
         return Ok(Value::Null);
     };
     let cn = if t.classes.is_empty()

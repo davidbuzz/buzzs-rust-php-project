@@ -1,0 +1,1282 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+//! Nested element and property accesses that take the frame-local fast
+//! paths (`unset($a[$k][$j])`, `unset($this->p[$k])`, ...) next to the
+//! cases that must still take the generic place walk: auto-vivification,
+//! warnings and their order, string offsets, scalars used as arrays,
+//! references, copy-on-write separation, `ArrayAccess`, magic methods,
+//! readonly and typed properties. The expected output is
+//! `/usr/bin/php8.5 -n` on each script (ref: Zend/zend_vm_def.h
+//! `ZEND_UNSET_DIM`, `ZEND_FETCH_DIM_UNSET`, `ZEND_FETCH_OBJ_UNSET`,
+//! `ZEND_FETCH_OBJ_W`, `ZEND_FETCH_DIM_W`, `ZEND_ASSIGN_DIM`, `ZEND_FETCH_OBJ_IS`,
+//! `ZEND_ISSET_ISEMPTY_DIM_OBJ`, `ZEND_PRE_INC`).
+
+#![allow(clippy::needless_raw_string_hashes)]
+
+mod common;
+
+use php_vm::VmOptions;
+use std::cell::RefCell;
+use std::io::Write;
+use std::rc::Rc;
+
+#[derive(Clone, Default)]
+struct Sink(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn run(source: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    String::from_utf8(output).expect("UTF-8 output")
+}
+
+/// Nested assignments and appends `$a[$k][] = v`, `$a[$k][$j] = [...]` on variables and properties.
+#[test]
+fn cv_dims() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+  $a = ['k' => [1]]; $k = 'k'; $j = 'j';
+  for ($i = 0; $i < 3; $i++) { $a[$k][] = $i; $a['n'][] = [$i]; $a[$k . 'x'][$j] = ['v' => $i]; }
+  var_dump($a);
+  $b = $a; $a[$k][] = 'after-copy'; var_dump(count($b['k']), count($a['k']));
+  $full = ['x' => [PHP_INT_MAX => 1]];
+  try { $full['x'][] = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $s = ['x' => 'str']; try { $s['x'][] = 'y'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $n = ['x' => 5]; try { $n['x'][] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $fa = ['x' => false]; $fa['x'][] = 1; var_dump($fa);
+  $nu = ['x' => null]; $nu['x'][] = 1; $nu['y']['z'][] = 2; var_dump($nu);
+  $u[$k][] = 1; var_dump($u);
+  $nl = null; $nl[$k][] = 1; var_dump($nl);
+  $r = &$a; $r[$k][] = 'viaref'; var_dump(end($a['k']));
+  $v = 1; $e = ['x' => [0 => 0]]; $e['x'][0] = &$v; $e['x'][0] = 7; var_dump($v);
+  $o = ['x' => new ArrayObject([])]; $o['x'][] = 'ao'; var_dump(count($o['x']));
+  $self = ['a' => [1]]; $self['a'][] = $self; var_dump($self);
+  $neg = ['x' => [-5 => 1]]; $neg['x'][] = 2; var_dump($neg);
+  $a[$undef][] = 1;
+}
+f();
+$g = ['x' => []];
+function gf() { global $g; $g['x'][] = 1; $g['y']['z'] = [1, 2]; }
+gf(); gf(); var_dump($g);
+$g['x'][] = 'top'; var_dump($GLOBALS['g']['x']);
+class C { public $cb = []; public ?array $na = null; public $s = 'str';
+  function add($p, $fn) { $this->cb[$p][] = $fn; $this->na['q'][] = $fn; } }
+$c = new C; $c->add(10, 'a'); $c->add(10, 'b'); $c->add(5, 'c'); var_dump($c->cb, $c->na);
+try { $c->s['x'][] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        r#"array(3) {
+  ["k"]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(0)
+    [2]=>
+    int(1)
+    [3]=>
+    int(2)
+  }
+  ["n"]=>
+  array(3) {
+    [0]=>
+    array(1) {
+      [0]=>
+      int(0)
+    }
+    [1]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    [2]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+  }
+  ["kx"]=>
+  array(1) {
+    ["j"]=>
+    array(1) {
+      ["v"]=>
+      int(2)
+    }
+  }
+}
+int(4)
+int(5)
+Cannot add element to the array as the next element is already occupied
+[] operator not supported for strings
+Cannot use a scalar value as an array
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 11
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(2) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["y"]=>
+  array(1) {
+    ["z"]=>
+    array(1) {
+      [0]=>
+      int(2)
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+string(6) "viaref"
+int(7)
+int(1)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    array(1) {
+      ["a"]=>
+      array(1) {
+        [0]=>
+        int(1)
+      }
+    }
+  }
+}
+array(1) {
+  ["x"]=>
+  array(2) {
+    [-5]=>
+    int(1)
+    [-4]=>
+    int(2)
+  }
+}
+
+Warning: Undefined variable $undef in t.php on line 20
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 20
+array(2) {
+  ["x"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(1)
+  }
+  ["y"]=>
+  array(1) {
+    ["z"]=>
+    array(2) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+    }
+  }
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+  [2]=>
+  string(3) "top"
+}
+array(2) {
+  [10]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [5]=>
+  array(1) {
+    [0]=>
+    string(1) "c"
+  }
+}
+array(1) {
+  ["q"]=>
+  array(3) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(1) "c"
+  }
+}
+Cannot access offset of type string on string
+"#
+    );
+}
+
+/// Reads of `$GLOBALS['name'][$k]` on variables of the global scope.
+#[test]
+fn globals_dims() {
+    assert_eq!(
+        run(r#"<?php
+$conf = ['db' => ['host' => 'h', 'port' => 1], 'list' => [1, 2]];
+$str = 'abc';
+$nul = null;
+function rd() {
+  $k = 'db';
+  var_dump($GLOBALS['conf'][$k]['host'], $GLOBALS['conf']['list'][1], $GLOBALS['conf'][$k]['nope'] ?? 'd');
+  var_dump($GLOBALS['conf']['missing']);
+  var_dump($GLOBALS['undefined_var']['x']);
+  var_dump($GLOBALS['str'][1], $GLOBALS['nul']['x']);
+  var_dump(isset($GLOBALS['conf'][$k]['port']), isset($GLOBALS['conf']['zz']['y']));
+  $GLOBALS['conf'][$k]['host'] = 'h2'; var_dump($GLOBALS['conf'][$k]['host']);
+  $GLOBALS['later'] = ['a' => 1]; var_dump($GLOBALS['later']['a']);
+  global $conf; $conf['db']['port'] = 2; var_dump($GLOBALS['conf']['db']['port']);
+}
+for ($i = 0; $i < 2; $i++) rd();
+var_dump($GLOBALS['conf']['db']);
+"#),
+        r#"string(1) "h"
+int(2)
+string(1) "d"
+
+Warning: Undefined array key "missing" in t.php on line 8
+NULL
+
+Warning: Undefined global variable $undefined_var in t.php on line 9
+
+Warning: Trying to access array offset on null in t.php on line 9
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 10
+string(1) "b"
+NULL
+bool(true)
+bool(false)
+string(2) "h2"
+int(1)
+int(2)
+string(2) "h2"
+int(2)
+string(1) "d"
+
+Warning: Undefined array key "missing" in t.php on line 8
+NULL
+
+Warning: Undefined global variable $undefined_var in t.php on line 9
+
+Warning: Trying to access array offset on null in t.php on line 9
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 10
+string(1) "b"
+NULL
+bool(true)
+bool(false)
+string(2) "h2"
+int(1)
+int(2)
+array(2) {
+  ["host"]=>
+  string(2) "h2"
+  ["port"]=>
+  int(2)
+}
+"#
+    );
+}
+
+/// Reads of `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
+#[test]
+fn prop_chain() {
+    assert_eq!(
+        run(r#"<?php
+class B { public $b = 1; public $arr = ['x' => 'y']; private $priv = 'p'; protected $prot = 'q'; public int $typed; public $u;
+  function __construct() { unset($this->u); }
+  function __get($n) { echo "__get $n\n"; return "magic-$n"; } }
+class Lazyish { public $v = 'lz'; }
+class A { public $a; public $list; public $n = null; public $s = 'str'; public $arr;
+  function __construct() { $this->a = new B; $this->list = ['k' => new B, 'i' => 5]; $this->arr = [1 => ['o' => new B]]; }
+  function run() {
+    $k = 'k';
+    var_dump($this->a->b, $this->a->arr, $this->list[$k]->b, $this->arr[1]['o']->b);
+    var_dump($this->a->nope ?? 'dflt', $this->a->priv, $this->a->prot, $this->a->u);
+    var_dump($this->a->typed ?? 'unset-typed');
+    try { var_dump($this->a->typed); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    var_dump($this->n->x);
+    var_dump($this->s->x);
+    var_dump($this->list['i']->x, $this->list['missing']->x ?? 'm');
+    $this->a->dyn = 'd'; var_dump($this->a->dyn);
+    $old = $this->a; $this->a = new Lazyish; var_dump($this->a->v); $this->a = $old;
+    for ($i = 0; $i < 3; $i++) { echo $this->a->b, $this->list[$k]->b; } echo "\n";
+    $r = &$this->list[$k]; var_dump($this->list[$k]->b); unset($r);
+  }
+}
+(new A)->run();
+$o = new A;
+var_dump($o->a->b, $o->a->arr['x'] ?? null);
+$reg = ['n' => new B]; $name = 'n';
+function useg() { global $reg, $name; var_dump($reg[$name]->b, $reg[$name]->arr, isset($reg[$name]), $reg[$name]->priv); }
+useg();
+$q = &$o; var_dump($q->a->b);
+class Sub extends B { public $b = 'sub'; }
+function rd($x) { return $x->a->b; }
+$o2 = new A; $o2->a = new Sub; var_dump(rd($o), rd($o2), rd($o));
+$arr = ['x' => ['y' => new B]]; $s = 'x'; var_dump($arr[$s]['y']->b, $arr[$s]['nope']->b ?? 'nn');
+"#),
+        r#"int(1)
+array(1) {
+  ["x"]=>
+  string(1) "y"
+}
+int(1)
+int(1)
+__get nope
+__get priv
+__get prot
+__get u
+string(10) "magic-nope"
+string(10) "magic-priv"
+string(10) "magic-prot"
+string(7) "magic-u"
+string(11) "unset-typed"
+Typed property B::$typed must not be accessed before initialization
+
+Warning: Attempt to read property "x" on null in t.php on line 14
+NULL
+
+Warning: Attempt to read property "x" on string in t.php on line 15
+NULL
+
+Warning: Attempt to read property "x" on int in t.php on line 16
+NULL
+string(1) "m"
+
+Deprecated: Creation of dynamic property B::$dyn is deprecated in t.php on line 17
+string(1) "d"
+string(2) "lz"
+111111
+int(1)
+int(1)
+string(1) "y"
+__get priv
+int(1)
+array(1) {
+  ["x"]=>
+  string(1) "y"
+}
+bool(true)
+string(10) "magic-priv"
+int(1)
+int(1)
+string(3) "sub"
+int(1)
+int(1)
+string(2) "nn"
+"#
+    );
+}
+
+/// Assignments to `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
+#[test]
+fn prop_chain_write() {
+    assert_eq!(
+        run(r#"<?php
+class Dt { public $id; function __construct($i) { $this->id = $i; } function __destruct() { echo "dtor {$this->id}\n"; } }
+class B { public $b = 1; public int $ti = 0; public ?B $self = null; public readonly int $ro; private $priv = 1; public $u; public $ref;
+  function __construct() { $this->ro = 1; unset($this->u); }
+  function __set($n, $v) { echo "__set $n\n"; } }
+class A { public $a; public $list; public $n = null; public $s = 'str';
+  function __construct() { $this->a = new B; $this->list = ['k' => new B]; }
+  function run() {
+    $k = 'k';
+    for ($i = 0; $i < 3; $i++) { $this->a->b = $i; $this->list[$k]->b = "s$i"; }
+    var_dump($this->a->b, $this->list['k']->b);
+    $this->a->ti = 5; var_dump($this->a->ti);
+    $this->a->ti = "7"; var_dump($this->a->ti);
+    try { $this->a->ti = "x"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    $this->a->self = new B; var_dump($this->a->self instanceof B);
+    try { $this->a->self = new A; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { $this->a->ro = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->a->priv = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $this->a->u = 3; $this->a->dyn = 4; $this->a->dyn = 5; var_dump($this->a->dyn);
+    try { $this->n->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->s->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->list['missing']->x = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $x = 1; $this->a->ref = &$x; $this->a->ref = 9; var_dump($x);
+    $this->a->b = new Dt(1); echo "replace\n"; $this->a->b = new Dt(2); echo "replaced\n"; $this->a->b = null; echo "end\n";
+    $r = $this->a->b = 'chained'; var_dump($r);
+    $copy = $this->list; $this->list['k']->b = 'shared'; var_dump($copy['k']->b);
+  }
+}
+(new A)->run();
+$reg = ['n' => new B]; $name = 'n';
+function useg() { global $reg, $name; $reg[$name]->b = 'g'; try { $reg[$name]->priv = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+useg(); var_dump($reg['n']->b);
+$o = new A; $o->a->b = 'out'; var_dump($o->a->b);
+class Sub extends B { public $b = 'sub'; }
+function wr($x, $v) { $x->a->b = $v; return $x->a->b; }
+$o2 = new A; $o2->a = new Sub; var_dump(wr($o, 1), wr($o2, 2), wr($o, 3));
+"#),
+        r#"int(2)
+string(2) "s2"
+int(5)
+int(7)
+Cannot assign string to property B::$ti of type int
+bool(true)
+Cannot assign A to property B::$self of type ?B
+Cannot modify readonly property B::$ro
+__set priv
+__set u
+__set dyn
+__set dyn
+
+Warning: Undefined property: B::$dyn in t.php on line 19
+NULL
+Attempt to assign property "x" on null
+Attempt to assign property "x" on string
+Attempt to assign property "x" on null
+int(9)
+replace
+dtor 1
+replaced
+dtor 2
+end
+string(7) "chained"
+string(6) "shared"
+__set priv
+string(1) "g"
+string(3) "out"
+int(1)
+int(2)
+int(3)
+"#
+    );
+}
+
+/// Reads, `isset()`/`empty()`, assignments and appends of `$this->p[$k]` (the frame-local hits of the `*ObjPropDim` ops).
+#[test]
+fn prop_dim1() {
+    assert_eq!(
+        run(r#"<?php
+class AA implements ArrayAccess {
+  public function offsetExists($o): bool { echo "offsetExists $o\n"; return true; }
+  public function offsetGet($o): mixed { echo "offsetGet $o\n"; return 7; }
+  public function offsetSet($o, $v): void { echo "offsetSet ", var_export($o, true), "\n"; }
+  public function offsetUnset($o): void {}
+}
+class P {
+  public $a = ['k' => 1, 5 => 'five', 'z' => null, 'e' => '', 'arr' => []];
+  public $n = null;
+  public $list = [];
+  public $full = [PHP_INT_MAX => 1];
+  public array $typed = [];
+  public ?array $nt = null;
+  public int $ti;
+  public $obj;
+  public $prio = [3, 4];
+  public $iter = [];
+  public $s = 'str';
+  function __construct() { $this->obj = new AA; }
+  function __isset($n) { echo "__isset $n\n"; return true; }
+  function __get($n) { echo "__get $n\n"; return [1, 2]; }
+  function run() {
+    $k = 'k'; $five = '5'; $i = 5; $m = 'missing';
+    var_dump($this->a[$k], $this->a[$five], $this->a[$i], $this->a['z'], $this->a[$k . '']);
+    var_dump(isset($this->a[$k]), isset($this->a['z']), isset($this->a[$m]), empty($this->a['e']), empty($this->a['arr']), empty($this->a[$m]), isset($this->n['x']), empty($this->n['x']));
+    var_dump($this->a[$m]);
+    var_dump($this->n['x']);
+    var_dump($this->s[0], isset($this->s[1]), isset($this->s['x']));
+    var_dump(isset($this->ti[0]), $this->obj[3], isset($this->obj[4]));
+    $this->obj[5] = 1; $this->obj[] = 2;
+    $x = $this->a['new'] = 'v'; var_dump($x);
+    $this->a[$k . 'x'] = [1]; $this->a[$five] = 'FIVE';
+    for ($j = 0; $j < 3; $j++) { $this->list[] = $j; $this->iter[$j] = $this->prio; }
+    $this->prio[] = 9;
+    var_dump($this->a, $this->list, $this->iter);
+    try { $this->full[] = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $this->typed['t'] = 1; $this->nt['q'] = 2; var_dump($this->typed, $this->nt);
+    try { $this->ti[0] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->s[0] = 'X'; var_dump($this->s); $this->s[] = 'y'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $copy = $this->a; $this->a['k'] = 2; var_dump($copy['k'], $this->a['k']);
+    $r = &$this->list; $this->list[] = 'viaref'; var_dump(count($r)); unset($r);
+    $v = 1; $this->a['refd'] = &$v; $this->a['refd'] = 2; var_dump($v, $this->a['refd'], isset($this->a['refd']));
+    $o = new stdClass; $this->a['o'] = $o; $this->a['o'] = 1; var_dump($o);
+    $this->a[1.5] = 'f'; $this->a[true] = 't'; $this->a[null] = 'n'; var_dump($this->a[1], $this->a['']);
+  }
+}
+(new P)->run();
+$p = new P; $q = &$p; var_dump($q->a['k'], isset($q->a['k'])); $q->a['k'] = 3; $q->list[] = 1; var_dump($p->a['k'], $p->list);
+function inner(P $p) { return $p->a['k']; } var_dump(inner($p));
+class Q extends P {} $qq = new Q; var_dump($qq->a['k']); $qq->a['k'] = 9; var_dump($qq->a['k'], inner($qq), inner($p));
+"#),
+        r#"int(1)
+string(4) "five"
+string(4) "five"
+NULL
+int(1)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+
+Warning: Undefined array key "missing" in t.php on line 27
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 28
+NULL
+string(1) "s"
+bool(true)
+bool(false)
+offsetGet 3
+offsetExists 4
+bool(false)
+int(7)
+bool(true)
+offsetSet 5
+offsetSet NULL
+string(1) "v"
+array(7) {
+  ["k"]=>
+  int(1)
+  [5]=>
+  string(4) "FIVE"
+  ["z"]=>
+  NULL
+  ["e"]=>
+  string(0) ""
+  ["arr"]=>
+  array(0) {
+  }
+  ["new"]=>
+  string(1) "v"
+  ["kx"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+}
+Cannot add element to the array as the next element is already occupied
+array(1) {
+  ["t"]=>
+  int(1)
+}
+array(1) {
+  ["q"]=>
+  int(2)
+}
+Cannot auto-initialize an array inside property P::$ti of type int
+string(3) "Xtr"
+[] operator not supported for strings
+int(1)
+int(2)
+int(4)
+int(2)
+int(2)
+bool(true)
+object(stdClass)#4 (0) {
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 45
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 45
+string(1) "t"
+string(1) "n"
+int(1)
+bool(true)
+int(3)
+array(1) {
+  [0]=>
+  int(1)
+}
+int(3)
+int(1)
+int(9)
+int(9)
+int(3)
+"#
+    );
+}
+
+/// Reads, `isset()`/`empty()` and assignments of `$this->p[$a][$b]`.
+#[test]
+fn prop_dims() {
+    assert_eq!(
+        run(r#"<?php
+class AA implements ArrayAccess {
+  public $d = [];
+  public function offsetExists($o): bool { echo "offsetExists $o\n"; return isset($this->d[$o]); }
+  public function offsetGet($o): mixed { echo "offsetGet $o\n"; return $this->d[$o] ?? null; }
+  public function offsetSet($o, $v): void { echo "offsetSet $o\n"; $this->d[$o] = $v; }
+  public function offsetUnset($o): void { echo "offsetUnset $o\n"; }
+}
+class H {
+  public $cb = [];
+  public $cache = ['g' => ['k' => 'v', 'z' => null, 'e' => '', 'zero' => '0']];
+  public ?array $na = null;
+  public $f = false;
+  public $s = 'abc';
+  public $i = 5;
+  public int $ti = 1;
+  public readonly array $ro;
+  public $aa;
+  public $u;
+  private $priv = ['a' => ['b' => 1]];
+  function __construct() { $this->ro = ['a' => ['b' => 1]]; $this->aa = ['x' => new AA]; unset($this->u); }
+  function __get($n) { echo "__get $n\n"; return ['m' => ['n' => 'magic']]; }
+  function add($p, $idx, $fn) { $this->cb[$p][$idx] = ['function' => $fn, 'accepted_args' => 1]; }
+  function has($p, $idx) { return isset($this->cb[$p][$idx]); }
+  function run() {
+    $g = 'g'; $k = 'k';
+    var_dump($this->cache[$g][$k], $this->cache['g']['z'], $this->cache[$g]['nope'] ?? 'dflt');
+    var_dump(isset($this->cache[$g][$k]), isset($this->cache[$g]['z']), isset($this->cache['x']['y']), empty($this->cache[$g]['e']), empty($this->cache[$g]['zero']), empty($this->cache[$g][$k]), empty($this->cache['q']['r']));
+    var_dump($this->cache[$g]['nope']);
+    var_dump($this->cache['nope'][$k]);
+    var_dump($this->cache[$g][$k][0], isset($this->cache[$g][$k][0]), isset($this->cache[$g][$k]['x']));
+    $copy = $this->cache;
+    $this->cache[$g][$k] = 'w'; $this->cache['new']['deep'] = 1; $this->cache[$g]['z'] = [1];
+    var_dump($copy['g']['k'], $this->cache);
+    $this->na['a']['b'] = 1; var_dump($this->na);
+    $this->f['a']['b'] = 1; var_dump($this->f);
+    try { $this->s['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->i['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->ti['a']['b'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    try { $this->ro['a']['b'] = 2; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    var_dump($this->ro['a']['b'], isset($this->ro['a']['b']));
+    try { $this->cache[$g][$k]['x'] = 1; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    $this->aa['x']['y'] = 5; var_dump($this->aa['x']['y'], isset($this->aa['x']['y']));
+    var_dump($this->u['m']['n']); var_dump(isset($this->u['m']['n']));
+    $this->dyn = ['a' => ['b' => 2]]; var_dump($this->dyn['a']['b'], isset($this->dyn['a']['c']));
+    $this->dyn['a']['c'] = 3; var_dump($this->dyn);
+    $r = &$this->cache['g']; $r['k'] = 'viaref'; var_dump($this->cache['g']['k']);
+    $this->cache['g']['k'] = 'again'; var_dump($r['k']); unset($r);
+    $x = 1; $this->cache['g']['ref'] = &$x; $this->cache['g']['ref'] = 2; var_dump($x, $this->cache['g']['ref']);
+    $this->cache['1']['2'] = 'num'; var_dump($this->cache[1][2], isset($this->cache['1']['2']));
+    var_dump($this->priv['a']['b']);
+    $this->cb[10]['a'] = 1; foreach ($this->cb[10] as $kk => $vv) { $this->cb[10]['b'] = 2; echo "$kk\n"; } var_dump($this->cb[10]);
+  }
+}
+$h = new H;
+for ($i = 0; $i < 3; $i++) { $h->add(10, "f$i", "strlen"); $h->add(20, "g", "trim"); }
+var_dump($h->has(10, 'f1'), $h->has(10, 'nope'), $h->has(30, 'x'), count($h->cb[10]));
+$h->run();
+try { var_dump($h->priv['a']['b']); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+var_dump(isset($h->priv['a']['b']));
+$h->cache['g']['outside'] = 1; var_dump($h->cache['g']['outside'], isset($h->cache['g']['outside']));
+class G2 extends H { function m() { return $this->cache['g']['k']; } }
+var_dump((new G2)->m());
+"#),
+        r#"bool(true)
+bool(false)
+bool(false)
+int(3)
+string(1) "v"
+NULL
+string(4) "dflt"
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+
+Warning: Undefined array key "nope" in t.php on line 29
+NULL
+
+Warning: Undefined array key "nope" in t.php on line 30
+
+Warning: Trying to access array offset on null in t.php on line 30
+NULL
+string(1) "v"
+bool(true)
+bool(false)
+string(1) "v"
+array(2) {
+  ["g"]=>
+  array(4) {
+    ["k"]=>
+    string(1) "w"
+    ["z"]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    ["e"]=>
+    string(0) ""
+    ["zero"]=>
+    string(1) "0"
+  }
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 36
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+Error: Cannot use a scalar value as an array
+Error: Cannot use a scalar value as an array
+Error: Cannot indirectly modify readonly property H::$ro
+int(1)
+bool(true)
+TypeError: Cannot access offset of type string on string
+offsetSet y
+offsetGet y
+offsetExists y
+int(5)
+bool(true)
+__get u
+string(5) "magic"
+__get u
+bool(true)
+
+Deprecated: Creation of dynamic property H::$dyn is deprecated in t.php on line 45
+int(2)
+bool(false)
+array(1) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(2)
+    ["c"]=>
+    int(3)
+  }
+}
+string(6) "viaref"
+string(5) "again"
+int(2)
+int(2)
+string(3) "num"
+bool(true)
+int(1)
+f0
+f1
+f2
+a
+array(5) {
+  ["f0"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["f1"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["f2"]=>
+  array(2) {
+    ["function"]=>
+    string(6) "strlen"
+    ["accepted_args"]=>
+    int(1)
+  }
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+}
+__get priv
+
+Warning: Undefined array key "a" in t.php on line 59
+
+Warning: Trying to access array offset on null in t.php on line 59
+NULL
+__get priv
+bool(false)
+int(1)
+bool(true)
+string(1) "v"
+"#
+    );
+}
+
+/// `++`/`--` of `$this->p[$k]`.
+#[test]
+fn prop_incdec() {
+    assert_eq!(
+        run(r#"<?php
+class C { public $counts = ['a' => 0, 'f' => 0.5, 's' => 'x', 'max' => PHP_INT_MAX, 'n' => null, 'min' => PHP_INT_MIN]; public $n = null;
+  public readonly array $ro; function __construct() { $this->ro = ['a' => 1]; }
+  function run() {
+    $k = 'a';
+    for ($i = 0; $i < 3; $i++) { $this->counts[$k]++; ++$this->counts['f']; }
+    var_dump($this->counts[$k]--, --$this->counts[$k], $this->counts[$k]++, ++$this->counts['f']);
+    $this->counts['s']++; var_dump($this->counts['s']);
+    $this->counts['max']++; $this->counts['min']--; var_dump($this->counts['max'], $this->counts['min']);
+    $this->counts['zz']++; var_dump($this->counts['zz']);
+    $this->counts['n']++; var_dump($this->counts['n']);
+    $this->n['x']++; var_dump($this->n);
+    try { $this->ro['a']++; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $copy = $this->counts; $this->counts[$k]++; var_dump($copy[$k], $this->counts[$k]);
+    $r = &$this->counts; $this->counts[$k]++; var_dump($r[$k]); unset($r);
+    $v = 10; $this->counts['ref'] = &$v; $this->counts['ref']++; var_dump($v);
+  }
+}
+(new C)->run();
+"#),
+        r#"int(3)
+int(1)
+int(1)
+float(4.5)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 8
+string(1) "y"
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+
+Warning: Undefined array key "zz" in t.php on line 10
+int(1)
+int(1)
+
+Warning: Undefined array key "x" in t.php on line 12
+array(1) {
+  ["x"]=>
+  int(1)
+}
+Cannot indirectly modify readonly property C::$ro
+int(2)
+int(3)
+int(4)
+int(11)
+"#
+    );
+}
+
+/// `++`/`--` and compound assignments of elements of arrays held by reference (`global`, `static`, `use (&$x)`, by-reference parameters).
+#[test]
+fn ref_dims() {
+    assert_eq!(
+        run(r#"<?php
+$counts = ['a' => 0, 'f' => 1.5, 's' => 'x', 'max' => PHP_INT_MAX, 'n' => null];
+function bump($k) { global $counts; ++$counts[$k]; $counts[$k]++; return $counts[$k]--; }
+var_dump(bump('a'), bump('f'), bump('s'), $counts);
+function over() { global $counts; $counts['max']++; var_dump($counts['max']); }
+over();
+function miss() { global $counts; $counts['zz']++; var_dump($counts['zz']); ++$counts['n']; var_dump($counts['n']); }
+miss();
+function addto($k, $v) { global $counts; $counts[$k] += $v; $counts[$k] -= 1; $counts[$k] *= 2; return $counts[$k]; }
+var_dump(addto('a', 10), addto('f', 0.5));
+function divz() { global $counts; try { $counts['a'] %= 0; } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; } }
+divz(); var_dump($counts['a']);
+function stat_counter($k) { static $c = []; $c[$k] = ($c[$k] ?? 0); ++$c[$k]; $c[$k] += 10; return $c; }
+stat_counter('x'); var_dump(stat_counter('x'));
+function cow() { global $counts; $copy = $counts; ++$counts['a']; $counts['a'] += 5; var_dump($copy['a'], $counts['a']); }
+cow();
+$fn = function () use (&$counts) { ++$counts['a']; $counts['a'] += 1; return $counts['a']; };
+var_dump($fn());
+function byref(array &$a) { ++$a['a']; $a['a'] += 2; } byref($counts); var_dump($counts['a']);
+function iter() { global $counts; foreach ($counts as $k => $v) { if ($k === 'a') { ++$counts['a']; } } var_dump($counts['a']); }
+iter();
+function iterref() { global $list; $list = [1, 2]; foreach ($list as &$v) { ++$list[1]; $list[0] += 1; } unset($v); var_dump($list); }
+iterref();
+$elref = ['x' => 1]; $rr = &$elref['x'];
+function elemref() { global $elref; ++$elref['x']; $elref['x'] += 1; } elemref(); var_dump($rr, $elref);
+"#),
+        r#"
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 3
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in t.php on line 3
+
+Deprecated: Decrement on non-numeric string has no effect and is deprecated in t.php on line 3
+int(2)
+float(3.5)
+string(1) "z"
+array(5) {
+  ["a"]=>
+  int(1)
+  ["f"]=>
+  float(2.5)
+  ["s"]=>
+  string(1) "z"
+  ["max"]=>
+  int(9223372036854775807)
+  ["n"]=>
+  NULL
+}
+float(9.223372036854776E+18)
+
+Warning: Undefined array key "zz" in t.php on line 7
+int(1)
+int(1)
+int(20)
+float(4)
+Modulo by zero
+int(20)
+array(1) {
+  ["x"]=>
+  int(22)
+}
+int(20)
+int(26)
+int(28)
+int(31)
+int(32)
+array(2) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(4)
+}
+int(3)
+array(1) {
+  ["x"]=>
+  &int(3)
+}
+"#
+    );
+}
+
+/// unset() of elements of a function variable, a reference and a global.
+#[test]
+fn unset_cv() {
+    assert_eq!(
+        run(r#"<?php
+class Dtor { public function __destruct() { echo "dtor\n"; } }
+function f() {
+  $a = ['x' => ['y' => 1, 'z' => 2], 'n' => null, 's' => 'str', 'f' => false, 5 => [1], 'o' => new Dtor];
+  $b = $a;
+  unset($a['x']['y']); var_dump($a['x'], $b['x']);
+  unset($a['missing']['y']); unset($a['n']['y']); unset($a['f']['y']);
+  try { unset($a['s']['y']); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  try { unset($a['s'][0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  unset($b); echo "before\n"; unset($a['o']); echo "after\n";
+  unset($a[5][0]); unset($a['5']); var_dump($a);
+  unset($u['k']); unset($u['k']['j']);
+  $i = 3; unset($a[$i]); $k = 'x'; unset($a[$k]['z']); var_dump($a);
+  $r = &$a; unset($r['n']); var_dump(array_keys($a));
+  $s = 'abc'; try { unset($s[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $n = 5; try { unset($n[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  $l = [1, 2, 3]; foreach ($l as $kk => &$vv) { if ($kk == 0) unset($l[1]); echo $vv, "\n"; } unset($vv);
+  $l = [1, 2, 3]; foreach ($l as $kk => $vv) { if ($kk == 0) unset($l[1]); echo $vv, "\n"; } var_dump($l);
+  $d = ['a' => ['b' => ['c' => ['d' => 1, 'e' => 2]]]]; unset($d['a']['b']['c']['d']); var_dump($d);
+  $q = ['k' => 1]; unset($q[$undef]); var_dump($q);
+  $m = [1 => 'a', '01' => 'b']; unset($m['1']); var_dump($m);
+}
+f();
+$g = ['a' => ['b' => 1, 'c' => 2]];
+function gl() { global $g; $x = 'b'; unset($g['a'][$x]); }
+gl(); var_dump($g);
+unset($g['a']['c']); var_dump($g, $GLOBALS['g']);
+"#),
+        r#"array(1) {
+  ["z"]=>
+  int(2)
+}
+array(2) {
+  ["y"]=>
+  int(1)
+  ["z"]=>
+  int(2)
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 7
+Cannot unset string offsets
+Cannot unset string offsets
+before
+dtor
+after
+array(4) {
+  ["x"]=>
+  array(1) {
+    ["z"]=>
+    int(2)
+  }
+  ["n"]=>
+  NULL
+  ["s"]=>
+  string(3) "str"
+  ["f"]=>
+  bool(false)
+}
+
+Warning: Undefined variable $u in t.php on line 12
+
+Warning: Undefined variable $u in t.php on line 12
+array(4) {
+  ["x"]=>
+  array(0) {
+  }
+  ["n"]=>
+  NULL
+  ["s"]=>
+  string(3) "str"
+  ["f"]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "s"
+  [2]=>
+  string(1) "f"
+}
+Cannot unset string offsets
+Cannot unset offset in a non-array variable
+1
+3
+1
+2
+3
+array(2) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(3)
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    array(1) {
+      ["c"]=>
+      array(1) {
+        ["e"]=>
+        int(2)
+      }
+    }
+  }
+}
+
+Warning: Undefined variable $undef in t.php on line 20
+array(1) {
+  ["k"]=>
+  int(1)
+}
+array(1) {
+  ["01"]=>
+  string(1) "b"
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["c"]=>
+    int(2)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(0) {
+  }
+}
+array(1) {
+  ["a"]=>
+  array(0) {
+  }
+}
+"#
+    );
+}
+
+/// unset() of elements of array properties.
+#[test]
+fn unset_prop() {
+    assert_eq!(
+        run(r#"<?php
+class O { public $c = ['g' => ['k' => 1, 'j' => 2]]; public readonly array $ro; public ?array $t = ['x' => 1]; private $p = ['a' => 1]; public $s = 'str';
+  public int $i = 1; public $u;
+  function __construct() { $this->ro = ['a' => [1]]; unset($this->u); }
+  function m() { $g = 'g'; unset($this->c[$g]['k']); unset($this->c['g']['zz']); unset($this->c['nope']['k']); var_dump($this->c);
+    try { unset($this->ro['a'][0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    unset($this->t['x']); unset($this->p['a']); var_dump($this->t, $this->p);
+    try { unset($this->s[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { unset($this->i[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+
+    $copy = $this->c; unset($this->c[$g]); var_dump($this->c, $copy);
+    $r = &$this->c; $r['z'] = [1, 2]; unset($this->c['z'][0]); var_dump($r);
+  }
+  function __get($n) { echo "__get $n\n"; return null; }
+}
+(new O)->m();
+$o = new O; unset($o->c['g']['j']); var_dump($o->c);
+class P { public $list = []; function add($k) { $this->list[$k][] = 1; } function del($k) { unset($this->list[$k][0]); if (!$this->list[$k]) unset($this->list[$k]); } }
+$p = new P; for ($i = 0; $i < 3; $i++) { $p->add('a'); $p->add('b'); $p->del('a'); } var_dump($p->list);
+$x = new stdClass; $x->d = ['a' => 1]; unset($x->d['a']); var_dump($x);
+class AA implements ArrayAccess { public function offsetExists($o): bool { return true; } public function offsetGet($o): mixed { return null; }
+  public function offsetSet($o, $v): void {} public function offsetUnset($o): void { echo "offsetUnset $o\n"; } }
+class Q { public $aa; function __construct() { $this->aa = ['x' => new AA]; } function m() { unset($this->aa['x']['y']); } }
+(new Q)->m();
+"#),
+        r#"array(1) {
+  ["g"]=>
+  array(1) {
+    ["j"]=>
+    int(2)
+  }
+}
+Cannot indirectly modify readonly property O::$ro
+array(0) {
+}
+array(0) {
+}
+Cannot unset string offsets
+Cannot unset offset in a non-array variable
+array(0) {
+}
+array(1) {
+  ["g"]=>
+  array(1) {
+    ["j"]=>
+    int(2)
+  }
+}
+array(1) {
+  ["z"]=>
+  array(1) {
+    [1]=>
+    int(2)
+  }
+}
+array(1) {
+  ["g"]=>
+  array(1) {
+    ["k"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(1)
+    [2]=>
+    int(1)
+  }
+}
+object(stdClass)#3 (1) {
+  ["d"]=>
+  array(0) {
+  }
+}
+offsetUnset y
+"#
+    );
+}
+
+/// unset() of an offset of a property holding no array.
+#[test]
+fn unset_prop_scalars() {
+    assert_eq!(
+        run(r#"<?php
+class O { public $s = 'str'; public int $i = 1; public $u; public $n = 5; function __construct() { unset($this->u); } function __get($n) { echo "__get $n\n"; return null; } }
+$o = new O;
+try { unset($o->s[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset($o->n[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset($o->s[0][1]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$o->a = ['s' => 'x']; try { unset($o->a['s'][0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+class O2 { public $f = false; public $n = null; public $fl = 1.5; }
+$o2 = new O2;
+unset($o2->f[0]); var_dump($o2->f);
+unset($o2->n[0]); var_dump($o2->n);
+try { unset($o2->fl[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$s = new stdClass; $s->x = 'q'; try { unset($s->x[0]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        r#"Cannot unset string offsets
+Cannot unset offset in a non-array variable
+Cannot use string offset as an array
+
+Deprecated: Creation of dynamic property O::$a is deprecated in t.php on line 7
+Cannot unset string offsets
+end
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 11
+bool(false)
+NULL
+Cannot unset offset in a non-array variable
+Cannot unset string offsets
+"#
+    );
+}

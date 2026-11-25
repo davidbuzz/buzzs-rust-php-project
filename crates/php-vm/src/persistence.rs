@@ -91,7 +91,12 @@ fn same_class_declaration(existing: &crate::class::Class, decl: &ClassDecl) -> b
 /// Installation makes an independent graph for every subsequent request.
 pub struct PersistentDeclarations {
     functions: Vec<(ZStr, Rc<UserFunction>)>,
+    /// In the declaration order, which is each file's own order (php-src's
+    /// class table order).
     classes: Vec<Rc<ClassDecl>>,
+    /// The indices of `classes` in an order that declares each after its
+    /// parent, interfaces and traits; empty when `classes` already is one.
+    install_order: Vec<u32>,
     aliases: Vec<(ZStr, ZStr)>,
     units: Vec<Rc<CompiledUnit>>,
     halt_offsets: HashMap<ZStr, i64>,
@@ -620,10 +625,24 @@ impl Vm {
                 Func::Builtin(_) => None,
             })
             .collect();
-        let classes: Vec<Rc<ClassDecl>> = self
+        // The preloaded classes in the declaration order (each file's own
+        // order), then as `preload_sort_classes()` leaves the script's
+        // class table.
+        let mut seen = HashSet::new();
+        let mut names: Vec<ZStr> = self
             .class_order
             .iter()
-            .filter(|name| self.classes.get(*name).is_some_and(|c| c.lc_name == **name))
+            .filter(|name| {
+                self.classes
+                    .get(*name)
+                    .is_some_and(|c| c.lc_name == **name && c.decl.is_some())
+                    && seen.insert((*name).clone())
+            })
+            .cloned()
+            .collect();
+        preload_sort_classes(&mut names, |name| self.classes.get(name).cloned());
+        let classes: Vec<Rc<ClassDecl>> = names
+            .iter()
             .filter_map(|name| {
                 self.classes
                     .get(name)?
@@ -663,9 +682,11 @@ impl Vm {
                 .collect(),
             scripts: scripts.clone(),
         };
+        let install_order = dependency_order(&classes);
         Ok(PersistentDeclarations {
             functions,
             classes,
+            install_order,
             aliases,
             units,
             halt_offsets: self.ext.halt_offsets.clone(),
@@ -706,12 +727,41 @@ impl Vm {
         // installs the linked classes without repeating them.
         let error_reporting = std::mem::replace(&mut self.error_reporting, 0);
         let linked = self.without_declared_observer(|vm| -> VmResult<()> {
-            for class in &classes {
+            let declare = |vm: &mut Vm, class: &Rc<ClassDecl>| -> VmResult<()> {
                 if vm.classes.contains_key(&class.name.to_ascii_lowercase()) {
-                    continue;
+                    return Ok(());
                 }
                 let anonymous = class.flags & crate::class::cflags::ANON != 0;
-                vm.declare_class(class, anonymous)?;
+                vm.declare_class(class, anonymous).map(|_| ())
+            };
+            if persistent.install_order.is_empty() {
+                for class in &classes {
+                    declare(vm, class)?;
+                }
+                return Ok(());
+            }
+            // The image lists a class above one it depends on (`class A
+            // extends B {}` above `class B {}` in a file): the classes are
+            // declared in dependency order, and the declaration order is
+            // put back to the image's.
+            let start = vm.class_order.len();
+            for &i in &persistent.install_order {
+                if let Some(class) = classes.get(i as usize) {
+                    declare(vm, class)?;
+                }
+            }
+            let installed = vm.class_order.split_off(start.min(vm.class_order.len()));
+            let mut left: HashSet<ZStr> = installed.iter().cloned().collect();
+            for class in &classes {
+                let lc = class.name.to_ascii_lowercase();
+                if left.remove(&lc) {
+                    vm.class_order.push(lc);
+                }
+            }
+            for name in installed {
+                if left.remove(&name) {
+                    vm.class_order.push(name);
+                }
             }
             Ok(())
         });
@@ -740,4 +790,94 @@ impl Vm {
         PRELOADED.with(|p| *p.borrow_mut() = Some(preloaded));
         Ok(())
     }
+}
+
+/// `preload_sort_classes()` (ext/opcache/ZendAccelerator.c), which
+/// `accel_preload()` runs over the preload script's class table: a class
+/// whose parent, or one of whose interfaces, is a user class listed after
+/// it changes places with that class, and is looked at again in its new
+/// place. (An exchange, not a move: `Early, Later extends Base, Mid
+/// implements I, I, Base` becomes `Early, Base, I, Mid, Later`.) Traits
+/// are not looked at. `names` are the lowercase names in table order.
+fn preload_sort_classes(
+    names: &mut [ZStr],
+    class: impl Fn(&ZStr) -> Option<Rc<crate::class::Class>>,
+) {
+    let user = |c: &crate::class::Class| c.flags & cflags::INTERNAL == 0;
+    let mut i = 0;
+    while i < names.len() {
+        let Some(c) = class(&names[i]) else {
+            i += 1;
+            continue;
+        };
+        let later = |names: &[ZStr], lc: &ZStr| {
+            names
+                .get(i + 1..)
+                .and_then(|rest| rest.iter().position(|n| n == lc))
+                .map(|j| i + 1 + j)
+        };
+        let dependency = c
+            .parent
+            .iter()
+            .chain(&c.interfaces)
+            .filter(|p| user(p))
+            .find_map(|p| later(names, &p.lc_name));
+        match dependency {
+            // `goto try_again`: the class now at `i` is looked at next.
+            Some(j) => names.swap(i, j),
+            None => i += 1,
+        }
+    }
+}
+
+/// An order of `classes` (their indices) in which each comes after the
+/// classes of the image it extends, implements or uses; empty when the
+/// image's own order is one. The image lists classes in their files'
+/// order (php-src's class table order: `zend_compile_class_decl()` adds a
+/// class when it is compiled, whenever it is bound), where a class may
+/// stand above its parent; php-src's preloaded classes are linked already
+/// and need no order, these are declared again in each request.
+fn dependency_order(classes: &[Rc<ClassDecl>]) -> Vec<u32> {
+    fn key(name: &ZStr) -> Vec<u8> {
+        let b = name.as_bytes();
+        b.strip_prefix(b"\\").unwrap_or(b).to_ascii_lowercase()
+    }
+    /// Places class `i` after the classes it depends on. `state`: 0 not
+    /// reached, 1 being placed (a cycle, which linking refused: left
+    /// where it is met), 2 placed.
+    fn place(
+        i: usize,
+        classes: &[Rc<ClassDecl>],
+        index: &HashMap<Vec<u8>, usize>,
+        state: &mut [u8],
+        order: &mut Vec<u32>,
+    ) {
+        if state[i] != 0 {
+            return;
+        }
+        state[i] = 1;
+        let d = &classes[i];
+        for dep in d.parent.iter().chain(&d.interfaces).chain(&d.traits) {
+            if let Some(&j) = index.get(&key(dep)) {
+                place(j, classes, index, state, order);
+            }
+        }
+        state[i] = 2;
+        #[allow(clippy::cast_possible_truncation)] // an image holds fewer classes than 2^32
+        order.push(i as u32);
+    }
+    let index: HashMap<Vec<u8>, usize> = classes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (key(&c.name), i))
+        .collect();
+    let mut state = vec![0u8; classes.len()];
+    let mut order = Vec::with_capacity(classes.len());
+    for i in 0..classes.len() {
+        place(i, classes, &index, &mut state, &mut order);
+    }
+    if order.iter().enumerate().all(|(k, &i)| k == i as usize) {
+        return Vec::new();
+    }
+    order
 }

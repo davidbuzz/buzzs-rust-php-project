@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqlnd/mysqlnd_vio.c. Similarity metric to original: 22%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Transport (`mysqlnd_vio.c`) and packet framing
 //! (`mysqlnd_protocol_frame_codec.c`): TCP / Unix-socket streams with
 //! optional TLS, read timeouts, 16 MiB packet splitting, sequence-number
@@ -328,10 +332,14 @@ impl Net {
         }
         let verify = o.ssl_verify_peer == SslPeer::Verify;
         let mut b = SslConnector::builder(SslMethod::tls_client()).ok()?;
-        if let Some(ca) = &o.ssl_ca {
-            b.set_ca_file(ca).ok()?;
+        // php_openssl_enable_peer_verification() (ext/openssl/xp_ssl.c)
+        // reads the CA settings only when the peer is verified.
+        if let Some(ca) = o.ssl_ca.as_ref().filter(|_| verify) {
+            if b.set_ca_file(ca).is_err() && !load_stream_cafile(&mut b, ca) {
+                return None;
+            }
         }
-        if let Some(capath) = &o.ssl_capath {
+        if let Some(capath) = o.ssl_capath.as_ref().filter(|_| verify) {
             let store = b.cert_store_mut();
             for entry in std::fs::read_dir(capath).ok()?.flatten() {
                 if let Ok(pem) = std::fs::read(entry.path()) {
@@ -661,9 +669,65 @@ impl Net {
     }
 }
 
+/// `php_openssl_load_stream_cafile()` (ext/openssl/xp_ssl.c): the fallback
+/// when OpenSSL cannot load `cafile` itself. A file that cannot be opened
+/// raises the plain `E_WARNING` "failed loading cafile stream: `%s'"
+/// (ext/mysqli/tests/gh8978.phpt); one without a usable certificate
+/// "no valid certs found cafile stream: '%s'". Returns whether any
+/// certificate was added.
+fn load_stream_cafile(b: &mut openssl::ssl::SslConnectorBuilder, cafile: &str) -> bool {
+    let Ok(pem) = std::fs::read(cafile) else {
+        diag::warn_plain(cafile_open_failure(cafile));
+        return false;
+    };
+    let store = b.cert_store_mut();
+    let mut added = 0usize;
+    if let Ok(certs) = openssl::x509::X509::stack_from_pem(&pem) {
+        for c in certs {
+            if store.add_cert(c).is_ok() {
+                added += 1;
+            }
+        }
+    }
+    if added == 0 {
+        diag::warn(format!("no valid certs found cafile stream: '{cafile}'"));
+    }
+    added > 0
+}
+
+/// The warning for a `cafile` that cannot be opened.
+fn cafile_open_failure(cafile: &str) -> String {
+    format!("failed loading cafile stream: `{cafile}'")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ext/mysqli/tests/gh8978.phpt: `mysqli_ssl_set(..., 'x509.ca', ...)`
+    /// with no such file warns "failed loading cafile stream: `x509.ca'"
+    /// without a function prefix, then the connection fails.
+    #[test]
+    fn missing_cafile_warns_plainly() {
+        let _ = diag::take();
+        let Ok(mut b) = SslConnector::builder(SslMethod::tls_client()) else {
+            panic!("an OpenSSL client context must build");
+        };
+        assert!(b.set_ca_file("/nonexistent/x509.ca").is_err());
+        assert!(!load_stream_cafile(&mut b, "/nonexistent/x509.ca"));
+        assert_eq!(
+            diag::take(),
+            vec![diag::Diag {
+                docref: false,
+                fatal: false,
+                message: "failed loading cafile stream: `/nonexistent/x509.ca'".to_string(),
+            }]
+        );
+        assert_eq!(
+            cafile_open_failure("x509.ca"),
+            "failed loading cafile stream: `x509.ca'"
+        );
+    }
 
     #[test]
     fn host_port_parsing() {

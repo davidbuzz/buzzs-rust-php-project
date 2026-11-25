@@ -83,6 +83,122 @@ fn repeat_runs_the_request_again_in_a_fresh_vm() {
     );
 }
 
+/// Each repeat is a request of its own, whose objects are numbered from 1
+/// as in php-src (`php8.5 --repeat 3` prints 2 every time): the objects the
+/// previous run's function and method statics held are freed with its VM,
+/// not handed out again to the next run's `new` in the order the drop freed
+/// them (2, then 1, then 3 before this was fixed).
+#[test]
+fn repeat_numbers_each_requests_objects_from_one() {
+    let out = php(&[
+        "--repeat",
+        "3",
+        "-r",
+        "function f($v = null) { static $x = null; if ($v !== null) { $x = $v; } return $x; } \
+         class K { function m($v = null) { static $y = null; if ($v !== null) { $y = $v; } return $y; } } \
+         f(new stdClass); (new K)->m(new stdClass); echo spl_object_id(new stdClass), \"\\n\";",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Executing for the first time...\n2\nFinished execution, repeating...\n2\n\
+         Finished execution, repeating...\n2\n"
+    );
+}
+
+/// The request's stream wrapper and filter registrations end with it
+/// (`php_shutdown_stream_hashes()`): the second run registers `test://` and
+/// the filter again and finds `data://` back, as `php8.5 --repeat 2` does.
+/// Before, the second run got "Protocol test:// is already defined", "Unable
+/// to unregister protocol data://" and `false` three times.
+#[test]
+fn repeat_starts_from_the_startup_stream_wrappers_and_filters() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "class W { public $context; function stream_open($p, $m, $o, &$op) { return true; } \
+         function stream_eof() { return true; } } \
+         var_dump(stream_wrapper_register(\"test\", \"W\")); \
+         var_dump(stream_wrapper_unregister(\"data\")); \
+         echo in_array(\"data\", stream_get_wrappers()) ? \"data\" : \"no data\", \"\\n\"; \
+         class F extends php_user_filter {} \
+         var_dump(stream_filter_register(\"myfilter\", \"F\"));",
+    ]);
+    assert!(out.status.success());
+    let run = "bool(true)\nbool(true)\nno data\nbool(true)\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+/// `PHP_RSHUTDOWN(basic)` puts back the value each `putenv()` name had
+/// before the request (`BG(putenv_ht)`, `php_putenv_destructor`), and
+/// `php_stream_error_state_cleanup()` drops the stored stream errors: the
+/// second run sees what the first saw. php8.5 prints `bool(false)` and
+/// `string(4) "orig"` in both runs; the stored errors are php-src master's
+/// (main/streams/stream_errors.c).
+#[test]
+fn repeat_starts_from_the_startup_environment_and_no_stored_stream_errors() {
+    let out = Command::new(env!("CARGO_BIN_EXE_php"))
+        .args(["-n", "-d", "memory_limit=1G", "--repeat", "2", "-r"])
+        .arg(
+            "var_dump(getenv('PHP_CLI_RELEASE_UNSET')); \
+             putenv('PHP_CLI_RELEASE_UNSET=value'); putenv('PHP_CLI_RELEASE_UNSET='); \
+             var_dump(getenv('PHP_CLI_RELEASE_PRESET')); \
+             putenv('PHP_CLI_RELEASE_PRESET=a'); putenv('PHP_CLI_RELEASE_PRESET=b'); \
+             var_dump(count(stream_last_errors())); \
+             $c = stream_context_create(['stream' => ['error_mode' => StreamErrorMode::Silent, \
+             'error_store' => StreamErrorStore::All]]); \
+             fopen('php://nonexistent', 'r', false, $c); \
+             var_dump(count(stream_last_errors()));",
+        )
+        .env_remove("PHP_CLI_RELEASE_UNSET")
+        .env("PHP_CLI_RELEASE_PRESET", "orig")
+        .output()
+        .expect("spawn php");
+    assert!(out.status.success());
+    let run = "bool(false)\nstring(4) \"orig\"\nint(0)\nint(1)\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+/// php-src starts its modules before `do_cli()` reads its arguments: what
+/// a module reports at startup comes first, once, whatever the run then
+/// does. Output of php8.5 for each command line (its version banner aside).
+#[test]
+fn module_startup_warnings_come_before_everything_a_run_prints() {
+    let warning = "\nWarning: PHP Startup: session.gc_probability must be greater than or equal \
+                   to 0 in Unknown on line 0\n";
+    let bad = ["-d", "session.gc_probability=-1"];
+    // A script that cannot be opened.
+    let out = php(&[bad[0], bad[1], "/nonexistent/php-cli-release.php"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), warning);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "Could not open input file: /nonexistent/php-cli-release.php\n"
+    );
+    assert_eq!(out.status.code(), Some(1));
+    // `-v`.
+    let out = php(&[bad[0], bad[1], "-v"]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.starts_with(&format!("{warning}PHP ")), "{text}");
+    // `--repeat`: ahead of the first line, and not again for the second run.
+    let out = php(&[bad[0], bad[1], "--repeat", "2", "-r", "echo \"run\\n\";"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "{warning}Executing for the first time...\nrun\nFinished execution, repeating...\nrun\n"
+        )
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
 #[test]
 fn lint_checks_every_file_given() {
     let good = temp("good.php");
@@ -127,4 +243,72 @@ fn lint_reports_compile_errors_through_the_engine() {
     assert_eq!(String::from_utf8_lossy(&out.stderr), message);
     assert_eq!(out.status.code(), Some(255));
     let _ = std::fs::remove_file(&file);
+}
+
+/// `mb_regex_set_options()` sets module globals (`MBREX(regex_default_options)`,
+/// `_syntax`) that `PHP_GINIT(mb_regex)` initialises once per thread and no
+/// request resets: php8.5's second run finds the first run's options.
+#[test]
+fn repeat_keeps_the_default_mbregex_options() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "var_dump(@mb_regex_set_options()); @mb_regex_set_options('i');",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Executing for the first time...\nstring(2) \"pr\"\n\
+         Finished execution, repeating...\nstring(2) \"ir\"\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+/// `OPENSSL_G(errors)` is a thread global no RSHUTDOWN empties: the error a
+/// run queued and did not read is the next run's first
+/// `openssl_error_string()` (php8.5 prints `bool(false)`, then
+/// `string(44) "error:1E08010C:DECODER routines::unsupported"` with
+/// OpenSSL 3).
+#[test]
+fn repeat_keeps_the_unread_openssl_errors() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "var_dump(openssl_error_string()); @openssl_pkey_get_private('junk');",
+    ]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (first, second) = text
+        .split_once("Finished execution, repeating...\n")
+        .expect("two runs");
+    assert_eq!(first, "Executing for the first time...\nbool(false)\n");
+    assert!(
+        second.starts_with("string(") && second.contains("\"error:"),
+        "{text}"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+/// `stream_wrapper_register()`'s `stream factory` resource is the
+/// request's (php-src frees it with the regular list): each run lists only
+/// its own, under the number the run gave it. Output of php8.5.
+#[test]
+fn repeat_starts_without_the_previous_runs_stream_factories() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "class W { public $context; } var_dump(count(get_resources('stream factory'))); \
+         stream_wrapper_register('foo', 'W'); \
+         var_dump(array_keys(get_resources('stream factory')));",
+    ]);
+    assert!(out.status.success());
+    let run = "int(0)\narray(1) {\n  [0]=>\n  int(4)\n}\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }

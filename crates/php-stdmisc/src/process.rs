@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/proc_open.c. Similarity metric to original: 24%
+//   Copyright © The PHP Group and Contributors. Author: Wez Furlong <wez@thebrainroom.com>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `proc_open()` and friends (`ext/standard/proc_open.c`, POSIX
 //! `posix_spawn` flavour).
 //!

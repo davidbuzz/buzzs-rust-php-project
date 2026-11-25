@@ -409,6 +409,9 @@ enum_codec!(Op: u16 {
         IncDecObjPropDim { place, dim, kind, dst } = 141,
         IssetObjProp { place, dst, empty } = 142,
         IssetObjPropDim { place, dim, dst, empty } = 143,
+        InitUserCall { callee, array } = 144,
+        SendUser { src, n } = 145,
+        SendArray { src, len, skip } = 146,
 });
 
 #[cfg(test)]
@@ -613,6 +616,8 @@ mod tests {
         echo named(...$args);
         $f = strlen(...);
         $g = named(?, 2);
+        echo call_user_func('named', 1, 2), call_user_func_array($g, $args);
+        echo call_user_func_array('named', array_slice([1, 2, 3], 1, $x));
         function &refret(array &$a) { return $a[0]; }
         function gen() {
             $x = yield 1;
@@ -687,6 +692,9 @@ mod tests {
             "YieldFrom",
             "SendNamed",
             "SendUnpack",
+            "InitUserCall",
+            "SendUser",
+            "SendArray",
             "AssignOp",
             "JmpNull",
             "FramelessICall",

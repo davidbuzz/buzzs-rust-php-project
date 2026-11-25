@@ -126,6 +126,21 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 - Track progress in `FEATURE_GAP.md` (update the % column for rows you advance; keep rows at 100% as the completion record).
 - Run `cargo fmt && cargo clippy --all-targets && cargo test` (scoped with `-p`) before declaring work done.
 
+## Licensing and attribution
+Most files here are ports of php-src C code, and a port is a derivative work. The C authors' copyright carries over into it, and BSD-3-Clause requires keeping their notice. Issue #23 was a php-src author finding their name replaced by ours. So:
+- Every Rust file that ports or closely follows a C file starts with the upstream notice, then the port's notice:
+  ```rust
+  // Derived from php-src ext/dom/html5_parser.c. Similarity metric to original: 35%
+  //   Copyright © The PHP Group and Contributors. Authors: Nora Dossche <ndossche@php.net>
+  // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+  // SPDX-License-Identifier: BSD-3-Clause
+  ```
+  Take the copyright and `Authors:` lines verbatim from the header of each C file the `ref:` comment cites, and list every file a port draws on. Never remove or replace an upstream notice. Use the plain `buzzs-rust-php-project - Copyright (c) ...` header only for files with no upstream source (tests written here, tooling, glue).
+- Code derived from a library php-src bundles keeps that library's notice and license, not BSD: libmbfl and libbcmath are LGPL-2.1, timelib is MIT, lexbor is Apache-2.0, and `THIRD_PARTY.md` lists the rest. Give its SPDX identifier in the header (`LGPL-2.1-only` for libmbfl, `LGPL-2.0-or-later` for libbcmath, as their headers say). Before porting a file under `ext/*/lib*`, `ext/*/<vendored lib>/` or anything listed in `modules/php-src/README.REDIST.BINS`, check its license. If the library is new to the repo, add a row to `THIRD_PARTY.md` and copy its license text unchanged into `LICENSES/`.
+- The similarity figure in the first line is what `scripts/similarity.py pair <rust file> <php-src file>` prints: the overlap of the two files in php-src's internal names (its docstring has the definition). `scripts/similarity.py label --min 30` is the rule that labels a file from the figure alone: its most similar php-src source file, at 30% or more, a threshold at which no file of known origin is mislabelled. A low figure is not evidence that a file is original: most ports rename what they take.
+- Port behaviour, not text. Function and variable names that mirror C are fine when they help cross-reference, but the notice must come with them.
+- Never copy code from `modules/php-rust` or any other project whose license we do not follow.
+
 ## Performance
 The target is parity or better with `/usr/bin/php8.5`. `scripts/acceptance.sh` builds the release `php` (`cargo build --release -p php-cli`: `target/release/php`) and runs `perf/bench/acceptance.py`, which counts user-space instructions per workload and compares each count against the **goal**: the instruction counts measured for the C implementation, recorded in `perf/bench/goal.tsv`. The acceptance criterion is one number per workload — candidate instructions ≤ 1.10 × goal — and the check passes only when **every** workload meets it. It currently passes: all 82 workloads meet the criterion (25 with the JIT off). The trace JIT (`crates/php-vm/src/exec/tape/jit.rs`) is on by default on x86-64 Linux: `BUZZS_JIT=0` turns it off, `BUZZS_JIT_DEBUG=1` prints what it compiles and why it refuses a loop, and `BUZZS_JIT_HOT=<n>` compiles a loop after n back edges instead of 1,000 (for test runs; a long loop is taken sooner either way: its count starts ahead by its length). Regenerate the goal with `acceptance.py --record` (measures `/usr/bin/php8.5`). Run the check after touching hot paths: the VM executor and php-runtime value/array/string code. Options: `--filter RX`, `ACCEPTANCE_SET=zend,micro,suite,ops`, `PHP_BIN=<path>` to skip the build. `perf/README.md` explains the measuring method (instruction counts, not wall clock, because the box is loaded). In hot paths, avoid needless allocation, cloning and indirection.
 

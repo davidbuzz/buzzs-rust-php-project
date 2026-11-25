@@ -209,6 +209,8 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "chr",
     "ord",
     "array_slice",
+    "call_user_func",
+    "call_user_func_array",
 ];
 
 /// The internal functions with `@frameless-function` handlers in php-src
@@ -391,6 +393,12 @@ pub(crate) struct FnCtx {
     /// instance (looked up by bytes).
     lit_strs: crate::class::NameMap<u32>,
     pub places: Vec<Place>,
+    /// The line of each segment of the place [`Compiler::compile_place`]
+    /// built last, with that place: the line the compiler was on once the
+    /// segment's offset or name was compiled (`CG(zend_lineno)` when
+    /// php-src emits the segment's FETCH opline). Read by
+    /// [`Compiler::fetch_place`], which splits a read across lines.
+    pub place_lines: Option<(Place, Vec<u32>)>,
     pub cv_names: Vec<ZStr>,
     cv_map: HashMap<Vec<u8>, u32>,
     pub num_tmps: u32,
@@ -463,6 +471,7 @@ impl FnCtx {
             literals: Vec::new(),
             lit_strs: crate::class::NameMap::default(),
             places: Vec::new(),
+            place_lines: None,
             cv_names: Vec::new(),
             cv_map: HashMap::new(),
             num_tmps: 0,

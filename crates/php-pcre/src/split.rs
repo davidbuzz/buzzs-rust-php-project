@@ -28,7 +28,6 @@ fn piece(subject: &[u8], start: usize, end: usize, offset_capture: bool) -> Valu
 ///
 /// Returns the list PHP returns, or the error that makes it return `false`
 /// (`preg_last_error()` is `NoError` on success, the error otherwise).
-#[allow(clippy::too_many_lines)]
 pub fn split(
     re: &Regex,
     cfg: &MatchConfig,
@@ -36,6 +35,22 @@ pub fn split(
     limit: i64,
     flags: i64,
 ) -> Result<MatchArray, PregError> {
+    split_with_tail(re, cfg, subject, limit, flags).map(|(out, _)| out)
+}
+
+/// [`split`], also telling whether the list's last entry is the whole
+/// subject as its tail (the piece from offset 0, without
+/// `PREG_SPLIT_OFFSET_CAPTURE`): `php_pcre_split_impl` adds that one as
+/// the subject string itself (`ZVAL_STR_COPY(&tmp, subject_str)` when
+/// `start_offset == 0`), every other piece as a new string.
+#[allow(clippy::too_many_lines)]
+pub fn split_with_tail(
+    re: &Regex,
+    cfg: &MatchConfig,
+    subject: &[u8],
+    limit: i64,
+    flags: i64,
+) -> Result<(MatchArray, bool), PregError> {
     let no_empty = flags & PREG_SPLIT_NO_EMPTY != 0;
     let delim_capture = flags & PREG_SPLIT_DELIM_CAPTURE != 0;
     let offset_capture = flags & PREG_SPLIT_OFFSET_CAPTURE != 0;
@@ -126,10 +141,12 @@ pub fn split(
 
     // `last:`
     let start = last_match;
+    let mut whole_tail = false;
     if !no_empty || start < len {
         out.push(piece(subject, start, len, offset_capture));
+        whole_tail = start == 0 && !offset_capture;
     }
-    Ok(out)
+    Ok((out, whole_tail))
 }
 
 /// `preg_grep($pattern, $array, $flags)`: returns the positions (into
@@ -165,29 +182,69 @@ where
     Ok(kept)
 }
 
+/// Whether `preg_quote()` escapes byte `c` (the first byte of the
+/// delimiter is `delim`, 0 for none).
+#[inline]
+fn quoted(c: u8, delim: u8) -> bool {
+    matches!(
+        c,
+        b'.' | b'\\'
+            | b'+'
+            | b'*'
+            | b'?'
+            | b'['
+            | b'^'
+            | b']'
+            | b'$'
+            | b'('
+            | b')'
+            | b'{'
+            | b'}'
+            | b'='
+            | b'!'
+            | b'>'
+            | b'<'
+            | b'|'
+            | b':'
+            | b'-'
+            | b'#'
+            | 0
+    ) || c == delim
+}
+
 /// `preg_quote($str, $delimiter)`: backslash-escapes
 /// `. \ + * ? [ ^ ] $ ( ) { } = ! > < | : - #`, turns NUL into `\000` and
 /// also escapes the first byte of `delimiter` when given.
 pub fn quote(input: &[u8], delimiter: Option<&[u8]>) -> Vec<u8> {
+    quote_if_needed(input, delimiter).unwrap_or_else(|| input.to_vec())
+}
+
+/// [`quote`], or `None` when nothing in `input` is escaped: `preg_quote()`
+/// then returns its argument itself (`RETURN_STR_COPY(str)` once its
+/// counting pass found `extra_len == 0`). The result is allocated at its
+/// exact length, as `zend_string_safe_alloc(1, len, extra_len, 0)`.
+pub fn quote_if_needed(input: &[u8], delimiter: Option<&[u8]>) -> Option<Vec<u8>> {
     let delim = delimiter.map_or(0, |d| d.first().copied().unwrap_or(0));
-    let mut out = Vec::with_capacity(input.len() + input.len() / 4);
+    let extra: usize = input
+        .iter()
+        .filter(|&&c| quoted(c, delim))
+        .map(|&c| if c == 0 { 3 } else { 1 })
+        .sum();
+    if extra == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(input.len() + extra);
     for &c in input {
-        match c {
-            b'.' | b'\\' | b'+' | b'*' | b'?' | b'[' | b'^' | b']' | b'$' | b'(' | b')' | b'{'
-            | b'}' | b'=' | b'!' | b'>' | b'<' | b'|' | b':' | b'-' | b'#' => {
+        if c == 0 {
+            out.extend_from_slice(b"\\000");
+        } else {
+            if quoted(c, delim) {
                 out.push(b'\\');
-                out.push(c);
             }
-            0 => out.extend_from_slice(b"\\000"),
-            _ => {
-                if c == delim {
-                    out.push(b'\\');
-                }
-                out.push(c);
-            }
+            out.push(c);
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -236,6 +293,35 @@ mod tests {
         assert_eq!(second.get_index(1), Some(&Value::Int(2)));
     }
 
+    /// The tail from offset 0 is told apart from a piece of the same length
+    /// (`/$/` with `PREG_SPLIT_NO_EMPTY`: the piece before the empty match).
+    #[test]
+    fn split_tells_the_whole_subject_tail() {
+        let cfg = MatchConfig::default();
+        let whole = |pat: &[u8], subject: &[u8], limit: i64, flags: i64| {
+            let re = Regex::compile(pat).unwrap();
+            split_with_tail(&re, &cfg, subject, limit, flags).unwrap().1
+        };
+        assert!(whole(b"/z/", b"abc", -1, 0));
+        assert!(whole(b"/z/", b"abc", -1, PREG_SPLIT_NO_EMPTY));
+        assert!(whole(b"/b/", b"abc", 1, 0));
+        assert!(!whole(b"/b/", b"abc", -1, 0));
+        assert!(!whole(b"/$/", b"abc", -1, 0), "the tail is the empty piece");
+        assert!(!whole(b"/$/", b"abc", -1, PREG_SPLIT_NO_EMPTY));
+        assert!(!whole(
+            b"/(abc)/",
+            b"abc",
+            -1,
+            PREG_SPLIT_NO_EMPTY | PREG_SPLIT_DELIM_CAPTURE
+        ));
+        assert!(!whole(b"/z/", b"abc", -1, PREG_SPLIT_OFFSET_CAPTURE));
+        assert!(whole(b"/z/", b"", -1, 0));
+        assert!(
+            !whole(b"/z/", b"", -1, PREG_SPLIT_NO_EMPTY),
+            "no entry at all"
+        );
+    }
+
     #[test]
     fn grep_and_quote() {
         let cfg = MatchConfig::default();
@@ -254,5 +340,14 @@ mod tests {
         assert_eq!(quote(b"a/b#c\0", Some(b"/x")), b"a\\/b\\#c\\000");
         assert_eq!(quote(b"", Some(b"/")), b"");
         assert_eq!(quote(b"a\0", Some(b"")), b"a\\000");
+        // Nothing to escape: no copy (the binding returns its argument).
+        assert_eq!(quote_if_needed(b"abc", None), None);
+        assert_eq!(quote_if_needed(b"", Some(b"/")), None);
+        assert_eq!(quote_if_needed(b"a/b", Some(b"#")), None);
+        let q = quote_if_needed(b"a/b", Some(b"/")).unwrap();
+        assert_eq!(q, b"a\\/b");
+        assert_eq!(q.capacity(), 4, "exact size");
+        // A delimiter that is special anyway is escaped once.
+        assert_eq!(quote(b"a#b", Some(b"#")), b"a\\#b");
     }
 }

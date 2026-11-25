@@ -469,10 +469,12 @@ struct Out {
 
 /// The truth of the temporary a jump tests, which the jump consumes
 /// (`ZEND_JMPZ` / `ZEND_JMPNZ` of a `TMP`: `i_zend_is_true`, then the
-/// operand's release): a bool, an int, a null, a float that is no NaN, or a
-/// string (released out of line). `None`, nothing changed, for anything
-/// else: a NaN (the generic op reports it), an array or an object (their
-/// release may queue a destructor), a reference.
+/// operand's release): a bool, an int, a null, a float that is no NaN, a
+/// string (released out of line), or an array or object whose release
+/// frees nothing it holds (`scalar::rc_tmp_truth`). `None`, nothing
+/// changed, for anything else: a NaN (the generic op reports it), an array
+/// or an object the temporary alone holds (its release may queue a
+/// destructor), a reference.
 #[inline(always)]
 // The test of the tape's jumps on a temporary; a float's truth is its
 // comparison with zero.
@@ -484,6 +486,7 @@ fn tmp_truth(slot: &mut Value) -> Option<bool> {
         Value::Null => false,
         Value::Float(x) if !x.is_nan() => x != 0.0,
         Value::Str(_) => return Some(str_truth(slot)),
+        Value::Array(_) | Value::Object(_) => return scalar::rc_tmp_truth(slot),
         _ => return None,
     };
     // A scalar owns nothing: overwritten without the drop glue.
@@ -602,7 +605,9 @@ enum Br {
 ///   may release a value or allocate);
 /// * `branch`: `unsafe fn(St, &Inst) -> Br`; a taken jump polls, as every
 ///   jump does;
-/// * `branch_poll`: the same, polling on the fall-through path as well.
+/// * `branch_poll`: the same, polling on the fall-through path as well;
+/// * `switch_f`: `unsafe fn(*mut Frame, &Inst) -> isize`, a jump to the
+///   byte offset the handler answers (0: declined).
 macro_rules! fam_arm {
     // The thin modes: the handler is called with the frame alone (`st.f`)
     // and reads any slot base from it (`frame_st`). Passed all four bases,
@@ -650,6 +655,25 @@ macro_rules! fam_arm {
                 }
             }
             Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
+        }
+    }};
+    // A jump to a target the handler picks (`scalar::match_jump`): it
+    // answers the target's byte offset from the instruction, or 0 when it
+    // declined. The targets are forward (no back edge for the JIT hook),
+    // and a taken jump polls, as every jump does.
+    (switch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
+        let off = ($h)($st.f, $inst);
+        if off == 0 {
+            return step_out($ip);
+        }
+        let at = $ip;
+        $ip = $ip.byte_offset(off);
+        if crate::interrupt::safe_point_due() {
+            return Out {
+                ip: $ip,
+                at,
+                why: WHY_POLL,
+            };
         }
     }};
     (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
@@ -1313,6 +1337,29 @@ tape_ops! {
         JmpSetC = (scalar::jmp_set_cv, 1, branch_f),
         CoalesceC = (scalar::coalesce_cv, 1, branch_f),
         CoalesceT = (scalar::coalesce_tmp, 1, branch_f),
+        TypeCheckX = (scalar::type_check, 1, poll_f),
+        CountX = (scalar::count, 1, poll_f),
+        InstanceOfX = (scalar::instance_of, 1, poll_f),
+        FeResetA = (scalar::fe_reset, 1, branch_poll_f),
+        FeFreeA = (scalar::fe_free, 1, poll_f),
+        CastX = (scalar::cast, 1, poll_f),
+        AssignLitC = (scalar::assign_lit_cv, 1, poll_f),
+        EqLitJmpC = (scalar::eq_lit_jmp::<0>, 2, branch_f),
+        EqLitJmpT = (scalar::eq_lit_jmp::<1>, 2, branch_f),
+        EqLitJmpK = (scalar::eq_lit_jmp::<2>, 2, branch_f),
+        EqLitTmpC = (scalar::eq_lit_tmp::<0>, 1, plain_f),
+        EqLitTmpT = (scalar::eq_lit_tmp::<1>, 1, plain_f),
+        EqLitTmpK = (scalar::eq_lit_tmp::<2>, 1, plain_f),
+        EqLitCvC = (scalar::eq_lit_cv::<0>, 2, plain_f),
+        EqLitCvT = (scalar::eq_lit_cv::<1>, 2, plain_f),
+        EqLitCvK = (scalar::eq_lit_cv::<2>, 2, plain_f),
+        JmpSetT = (scalar::jmp_set_tmp, 1, branch_poll_f),
+        FreeT = (scalar::free_tmp, 1, plain_f),
+        MatchJ = (scalar::match_jump, 1, switch_f),
+        FeFreeRetA = (scalar::fe_free_on_return, 1, poll_f),
+        ConstT = (scalar::fetch_const, 1, poll_f),
+        ConstTo = (scalar::fetch_const_to, 1, branch_poll_f),
+        FuncNumArgsT = (scalar::func_num_args, 1, poll_f),
 
         // ---- end of scalar ----
         //
@@ -1325,6 +1372,9 @@ tape_ops! {
         FetchDimSC = (dims::fetch_dim_str, 1, branch_poll_f),
         FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
         IssetDimC = (dims::isset_dim, 1, poll_f),
+        IssetDimL = (dims::isset_dim_lean, 1, poll_f),
+        IssetDimsC = (dims::isset_dims, 1, poll_f),
+        KeyExistsC = (dims::key_exists, 1, poll_f),
         AssignDimC = (dims::assign_dim_key, 1, poll_f),
         AssignDimIC = (dims::assign_dim_int, 1, poll_f),
         AssignDimsC = (dims::assign_dims, 1, poll_f),
@@ -1340,6 +1390,7 @@ tape_ops! {
         FeFetchA = (dims::fe_fetch, 1, branch_poll_f),
         FeFetchV = (dims::fe_fetch_v, 2, branch_poll_f),
         FeFetchKV = (dims::fe_fetch_kv, 3, branch_poll_f),
+        InArrayX = (dims::in_array, 1, poll_f),
 
         // ---- end of dims ----
         //
@@ -1355,8 +1406,20 @@ tape_ops! {
         IncDecStatic = (props::incdec_static, 1, poll_f),
         ThisConst = (props::this_const, 2, poll_f),
         ThisConstTo = (props::this_const_to, 2, branch_poll_f),
+        FetchThisT = (props::fetch_this, 1, poll_f),
+        ConcatObjProp = (props::concat_prop, 1, poll_f),
 
         // ---- end of props ----
+        //
+        //
+        //
+        // ---- statics (this file: `lower_statics`) ----
+        ClassConst = (statics_class_const, 1, poll_f),
+        ClassConstTo = (statics_class_const_to, 1, branch_poll_f),
+        StaticProp = (statics_static_prop, 1, poll_f),
+        StaticPropTo = (statics_static_prop_to, 1, branch_poll_f),
+
+        // ---- end of statics ----
         //
         //
         //
@@ -1380,10 +1443,16 @@ tape_ops! {
     }
 }
 
-/// [`hot::step`] out of line: the core loop must not carry its code.
+/// [`hot::step`] out of line: the core loop must not carry its code. An
+/// op its lean path declined because a variable holds a reference goes on
+/// to [`super::spec::step_ref`] before the generic loop.
 #[inline(never)]
 fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
-    hot::step(f, ops, lits, at)
+    let next = hot::step(f, ops, lits, at);
+    if next != DECLINED {
+        return next;
+    }
+    super::spec::step_ref(f, ops, lits, at)
 }
 
 /// The kind and operand field of a numeric operand; `None` when it has no
@@ -1481,8 +1550,127 @@ fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
         .or_else(|| family("scalar", scalar::lower))
         .or_else(|| family("dims", dims::lower))
         .or_else(|| family("props", props::lower))
+        .or_else(|| family("statics", lower_statics))
         .or_else(|| family("strs", strs::lower))
         .or_else(|| family("calls", calls::lower))
+        .or_else(|| family("places", lower_place))
+        .or_else(|| family("calls", calls::lower_entry))
+}
+
+/// Whether `p` is a place one of the frame-local nested-access paths can
+/// serve (`Vm::fetch_prop_dims_fast`, `Vm::fetch_global_dims_fast`,
+/// `Vm::isset_prop_dims_fast`, `Vm::assign_prop_dims_fast`,
+/// `Vm::unset_dims_fast`): `$this->p[$k]...` / `$cv->p[$k]...` (`dims`),
+/// a chain ending in a property (`$this->a->b`, `$cv[$k]->b`), or
+/// `$GLOBALS['name'][$k]...`; `cv_dims` admits `$cv[$k]...` too. Which
+/// ones hit is decided when they run.
+fn nested_place(p: &crate::opcode::Place, cv_dims: bool, chains: bool) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    let segs = p.segs.as_slice();
+    let prop_dims = matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(segs, [Seg::Prop(Operand::Lit(_)), Seg::Dim(_), ..]);
+    let chain = chains
+        && matches!(segs.last(), Some(Seg::Prop(Operand::Lit(_))))
+        && segs.len() >= 2
+        && matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(segs.first(), Some(Seg::Prop(Operand::Lit(_)) | Seg::Dim(_)));
+    let globals = matches!(
+        (&p.base, segs),
+        (PlaceBase::Global(Operand::Lit(_)), [Seg::Dim(_), ..])
+            | (
+                PlaceBase::GlobalsArray,
+                [Seg::Dim(Operand::Lit(_)), Seg::Dim(_), ..]
+            )
+    );
+    let cv = cv_dims && matches!((&p.base, segs), (PlaceBase::Cv(_), [Seg::Dim(_), ..]));
+    prop_dims || chain || globals || cv
+}
+
+/// An element of a temporary, a literal or a variable read as a value,
+/// `tmp[d1]...[dn]` (`f()['k']`, `self::MAP[$k]`, the elements
+/// `[$a, $b] = $x` reads): `spec::fetch_tmp_dims_in`.
+fn tmp_dims_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(
+        p.base,
+        PlaceBase::Value(Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Lit(_) | Operand::Cv(_))
+    ) && !p.segs.is_empty()
+        && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
+}
+
+/// An element of a static property, `A::$name[d1]...[dn]` (a literal
+/// name, a class that is not dynamic): `spec::fetch_static_dims_in`,
+/// `spec::isset_static_dims_in`, `spec::assign_static_dims_in`.
+fn static_dims_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(
+        p.base,
+        PlaceBase::StaticProp {
+            class: ClassSpec::Named(_)
+                | ClassSpec::SelfClass
+                | ClassSpec::Parent
+                | ClassSpec::Static,
+            name: Operand::Lit(_),
+        }
+    ) && !p.segs.is_empty()
+        && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
+}
+
+/// `$this->$name` / `$cv->$name`: a property named by a variable
+/// (`Vm::fetch_dyn_prop_fast`, `Vm::assign_dyn_prop_fast`).
+fn dyn_prop_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(p.segs.as_slice(), [Seg::Prop(Operand::Cv(_))])
+}
+
+/// The generic place ops whose nested shapes have a fast path that needs
+/// the VM ([`nested_place`]): run with it at hand ([`run_vm_op`], which
+/// declines to `Vm::run`'s generic op on a miss) instead of leaving the
+/// tape for `Vm::run`. A read in `Read` or `Is` mode, `isset()` /
+/// `empty()`, `unset()` and an assignment.
+fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
+    let place_of = |pid: u32| code.places.get(pid as usize);
+    let in_range = |o: Operand| match o {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => t < code.num_tmps,
+        Operand::Cv(c) => (c as usize) < code.cv_names.len(),
+        Operand::Lit(l) => (l as usize) < code.literals.len(),
+        Operand::Unused => false,
+    };
+    let ok = match *code.ops.get(i)? {
+        Op::Fetch { place, mode, dst } => {
+            let p = place_of(place)?;
+            dst < code.num_tmps
+                && ((mode != FetchMode::List && nested_place(p, false, true))
+                    || (matches!(mode, FetchMode::Read | FetchMode::Is | FetchMode::List)
+                        && tmp_dims_place(p))
+                    || (mode != FetchMode::List && static_dims_place(p))
+                    || (matches!(mode, FetchMode::Read | FetchMode::Is) && dyn_prop_place(p)))
+        }
+        Op::Isset { place, dst } | Op::Empty { place, dst } => {
+            let p = place_of(place)?;
+            dst < code.num_tmps && (nested_place(p, false, true) || static_dims_place(p))
+        }
+        Op::Unset { place } => nested_place(place_of(place)?, true, false),
+        // `function () use (...) {...}` / `fn() => ...`
+        // (`ZEND_DECLARE_LAMBDA_FUNCTION`): made with the VM at hand
+        // (`run_vm_op`).
+        Op::MakeClosure { idx, dst } => {
+            (idx as usize) < code.decls.functions.borrow().len() && dst < code.num_tmps
+        }
+        // `defined('NAME')`: the op's run-time cache hit (`run_vm_op`).
+        Op::Defined { name, dst } => {
+            (name as usize) < code.literals.len() && dst.is_none_or(|d| d < code.num_tmps)
+        }
+        Op::Assign { place, val, dst } => {
+            let p = place_of(place)?;
+            in_range(val)
+                && dst.is_none_or(|d| d < code.num_tmps)
+                && (nested_place(p, true, true) || static_dims_place(p) || dyn_prop_place(p))
+        }
+        _ => false,
+    };
+    ok.then(|| Inst::plain(TOp::VmOp))
 }
 
 /// The numeric instruction ([`tape_ops!`]'s generated families) of the op
@@ -1813,7 +2001,25 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     // slots are sized for its code and no symbol table is attached
     // (`usable` holds without the test).
     let mut fresh = false;
+    // Whether a call or return just changed the current frame: its resume
+    // point and code are read below from the frame the loop looks up
+    // anyway (`LOAD_OPLINE()`), instead of a lookup of their own at each
+    // switch (two lookups of the top frame per switch cost ~13
+    // instructions each).
+    let mut reload = false;
     'frames: loop {
+        let Some(f) = vm.frames.last_mut() else {
+            if reload {
+                return (0, LEFT);
+            }
+            flush(vm, &mut prep);
+            return (ip | switched, NO_SAFE_POINT);
+        };
+        if reload {
+            reload = false;
+            ip = f.ip;
+            code = Rc::as_ptr(&f.code);
+        }
         // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
         // them held by the current frame, so its heap block stays where it
         // is while that frame is current. Until the next call or return
@@ -1824,10 +2030,6 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         let c: &OpArray = unsafe { &*code };
         let ops: &[Op] = &c.ops;
         let lits: &[Value] = &c.literals;
-        let Some(f) = vm.frames.last_mut() else {
-            flush(vm, &mut prep);
-            return (ip | switched, NO_SAFE_POINT);
-        };
         let at = if fresh || usable(f, c) {
             fresh = false;
             let tape: &[Inst] = c.tape.get(c);
@@ -1895,11 +2097,7 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             if crate::interrupt::safe_point_due() {
                                 return (0, LEFT);
                             }
-                            let Some(f) = vm.frames.last() else {
-                                return (0, LEFT);
-                            };
-                            ip = f.ip;
-                            code = Rc::as_ptr(&f.code);
+                            reload = true;
                             continue 'frames;
                         }
                         let Some(f) = vm.frames.last_mut() else {
@@ -2120,12 +2318,9 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         if crate::interrupt::safe_point_due() {
             return (0, LEFT);
         }
-        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does.
-        let Some(f) = vm.frames.last() else {
-            return (0, LEFT);
-        };
-        ip = f.ip;
-        code = Rc::as_ptr(&f.code);
+        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does: at
+        // the top of the loop.
+        reload = true;
     }
 }
 
@@ -2247,6 +2442,19 @@ fn run_call(
                 DECLINED
             };
         }
+        // `$obj->$name()` (`calls::lower`): the site's method cache hit,
+        // pushed as the pending call; else the generic op in `Vm::run`.
+        Some(&Op::InitMethodCall { obj, name }) => {
+            flush(vm, prep);
+            let Some(f) = vm.frames.last_mut() else {
+                return DECLINED;
+            };
+            return if super::spec::init_dyn_method_call_in(f, obj, name, at) {
+                at + 1
+            } else {
+                DECLINED
+            };
+        }
         Some(&Op::New {
             class: ClassSpec::Named(lit),
             dst,
@@ -2268,6 +2476,15 @@ fn run_call(
             // `Class::name()` by the call site's cache; `self::`,
             // `parent::` and `static::` by the op's slot of the method
             // cache. Not a hot op: else the generic op in `Vm::run`.
+            // `$c::name()`: a declared class's public static method
+            // (`calls::init_dyn_static_call`), pushed as the pending call.
+            if let (&ClassSpec::Dyn(c), &Operand::Lit(lit)) = (class, name) {
+                return if calls::init_dyn_static_call(vm, c, lit) {
+                    at + 1
+                } else {
+                    DECLINED
+                };
+            }
             let call = match (class, name) {
                 (ClassSpec::Named(_), _) => calls::prepare_static(vm, at),
                 (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
@@ -2287,11 +2504,51 @@ fn run_call(
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
-            return if vm.init_closure_call_fast(cv) {
+            // `$f()` of a function's name (`calls::init_dyn_call_named`).
+            return if vm.init_closure_call_fast(cv) || calls::init_dyn_call_named(vm, cv) {
                 at + 1
             } else {
                 DECLINED
             };
+        }
+        // `call_user_func[_array]()` written by name: not hot ops, so a
+        // call not prepared here is the generic op's in `Vm::run`.
+        Some(&Op::InitUserCall { callee, array }) => {
+            flush(vm, prep);
+            return init_user_call(vm, prep, callee, array, ops, at);
+        }
+        Some(&Op::SendUser { src, n }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_user(vm, call, src, n) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
+        }
+        Some(&Op::SendArray {
+            src,
+            len: Operand::Unused,
+            skip: 0,
+        }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_array(vm, call, src) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
+        }
+        // `call_user_func_array($f, array_slice($args, 0, $n))`, its length
+        // computed after the call started.
+        Some(&Op::SendArray { src, len, skip }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_array_slice(vm, call, src, len, skip) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
         }
         Some(Op::Send { src }) => {
             if let Some(call) = prep.as_mut() {
@@ -2301,7 +2558,7 @@ fn run_call(
                         *prep = None;
                         return next;
                     }
-                } else if calls::send(vm, call, src) {
+                } else if calls::send(vm, call, src) || calls::send_ref(vm, call, src) {
                     return at + 1;
                 }
             }
@@ -2347,20 +2604,6 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
             None => DECLINED,
         },
-        Some(&Op::Isset { place, dst }) => match vm.static_dim_fast(place, true) {
-            Some(v) => {
-                vm.set_tmp(dst, v);
-                at + 1
-            }
-            None => DECLINED,
-        },
-        Some(&Op::RecvVariadic { n, cv }) => {
-            if vm.recv_variadic_fast(n, cv) {
-                at + 1
-            } else {
-                DECLINED
-            }
-        }
         Some(&Op::AssertCheck { dst, skip }) => {
             if crate::builtins::assert_ini(vm).0 == 1 {
                 at + 1
@@ -2381,18 +2624,142 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             Some(stored) => at + 1 + usize::from(stored),
             None => fetch_global_slow(vm, place, dst, to, mode, at),
         },
-        // A superglobal read as a whole.
-        Some(&Op::Fetch {
-            place,
-            mode: FetchMode::Read,
-            dst,
-        }) => match vm.fetch_place_fast(place) {
-            Some(v) => {
-                vm.set_tmp(dst, v);
+        // A superglobal read as a whole, or a nested read the tape lowered
+        // here (`lower_place`): `$this->p[$k][$j]`, `$this->a->b`,
+        // `$GLOBALS['name'][$k]`.
+        Some(&Op::Fetch { place, mode, dst }) => {
+            let fast = match mode {
+                FetchMode::Read => vm.fetch_place_fast(place),
+                // `[$a, $b] = $x`: only an element of a value (`lower_place`).
+                FetchMode::List => {
+                    return match super::spec::fetch_tmp_dims_in(vm.frame_mut(), place, false) {
+                        Some(v) => {
+                            vm.set_tmp(dst, v);
+                            at + 1
+                        }
+                        None => DECLINED,
+                    };
+                }
+                _ => None,
+            };
+            match fast
+                .or_else(|| vm.fetch_prop_dims_fast(place, mode))
+                .or_else(|| vm.fetch_global_dims_fast(place, mode))
+                .or_else(|| vm.fetch_dyn_prop_fast(place, mode))
+                .or_else(|| match mode {
+                    FetchMode::Read | FetchMode::Is => {
+                        let is = mode == FetchMode::Is;
+                        let f = vm.frame_mut();
+                        super::spec::fetch_tmp_dims_in(f, place, is)
+                            .or_else(|| super::spec::fetch_static_dims_in(f, place, is))
+                    }
+                    _ => None,
+                }) {
+                Some(v) => {
+                    vm.set_tmp(dst, v);
+                    at + 1
+                }
+                None => DECLINED,
+            }
+        }
+        // `isset()` / `empty()` of `$this->p[$k][$j]` & co. (`lower_place`).
+        Some(&Op::Isset { place, dst }) => match vm
+            .isset_prop_dims_fast(place, false)
+            .or_else(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, false))
+        {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
                 at + 1
             }
             None => DECLINED,
         },
+        Some(&Op::Empty { place, dst }) => match vm
+            .isset_prop_dims_fast(place, true)
+            .or_else(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, true))
+        {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `defined('NAME')` (`ZEND_DEFINED`) on a hit of its run-time
+        // cache slot; a miss is the generic op, which fills it.
+        Some(&Op::Defined { name, dst }) => match vm.defined_hit(name) {
+            Some(r) => {
+                vm.set_dst(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `ZEND_DECLARE_LAMBDA_FUNCTION` (`Vm::make_closure`: the bound
+        // variables, `$this` and the called scope, the cached closure of a
+        // static one), when no variable bound by value is undefined (its
+        // warning is the generic op's) and the frame has no attached symbol
+        // table. A throw is the op's ([`CALL_THREW`]).
+        Some(&Op::MakeClosure { idx, dst }) => {
+            let f = vm.frame();
+            if f.symtab_attached {
+                return DECLINED;
+            }
+            let Some(func) = f.code.decls.functions.borrow().get(idx as usize).cloned() else {
+                return DECLINED;
+            };
+            let undefined = |cv: u32| {
+                f.cvs
+                    .get(cv as usize)
+                    .and_then(crate::vm::CvSlot::get)
+                    .is_none()
+            };
+            if func
+                .uses
+                .iter()
+                .any(|u| !u.by_ref && !u.implicit && undefined(u.parent_cv))
+            {
+                return DECLINED;
+            }
+            match vm.make_closure(&func) {
+                Ok(c) => {
+                    vm.set_tmp(dst, c);
+                    at + 1
+                }
+                Err(t) => {
+                    vm.tape_throw = Some(t);
+                    at | CALL_THREW
+                }
+            }
+        }
+        // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. (`lower_place`).
+        Some(&Op::Unset { place }) => {
+            if vm.unset_dims_fast(place) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        // `$this->p[$k][$j] = v`, `$a[$k][] = v`, `$this->a->b = v` & co.
+        // (`lower_place`): the value as `Vm::run` reads it for a plain,
+        // array or object operand (`read` + `copy_on_assign`), a consumed
+        // temporary released once the store is done.
+        Some(&Op::Assign { place, val, dst }) => {
+            let Some(v) = super::spec::dim_value_in(vm.frame(), val) else {
+                return DECLINED;
+            };
+            match vm
+                .assign_prop_dims_fast(place, v)
+                .or_else(|v| super::spec::assign_static_dims_in(vm.frame_mut(), place, v))
+                .or_else(|v| vm.assign_dyn_prop_fast(place, v))
+            {
+                Ok(r) => {
+                    if let Operand::Tmp(t) = val {
+                        vm.set_tmp(t, Value::Null);
+                    }
+                    vm.set_dst(dst, r);
+                    at + 1
+                }
+                Err(_) => DECLINED,
+            }
+        }
         // An element of an object's property, on a property cache hit
         // (`Vm::run`'s own arms for these ops): a read into its temporary
         // or the variable of the `AssignCv` folded behind it (then
@@ -2456,6 +2823,36 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
             None => DECLINED,
         },
+        // `global $name` on a warm run-time cache (`Vm::bind_global_cached`),
+        // `static $x` once initialised (`Vm::bind_static_cached`: then on
+        // past the initialiser), `...$args` of an untyped variadic
+        // parameter (`Vm::recv_variadic_plain`).
+        // Each only over a variable whose old value releases nothing that
+        // could run a destructor or buffer a cycle root: the tape goes on
+        // without the safe point after the op where `Vm::run` would run
+        // them (`$o = new D; global $o;` destructs before the next
+        // statement).
+        Some(&Op::Global { cv, name }) => {
+            if bind_target_plain(vm, cv) && vm.bind_global_cached(cv, name) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::BindStatic { cv, idx, skip }) => {
+            if bind_target_plain(vm, cv) && vm.bind_static_cached(cv, idx) {
+                skip as usize
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::RecvVariadic { n, cv }) => {
+            if bind_target_plain(vm, cv) && vm.recv_variadic_plain(n, cv) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
         // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`),
         // past the `Nop`s of the call ops it replaced.
         Some(Op::FramelessICall(fc)) => match vm.frameless_icall_op(fc, at + 1) {
@@ -2468,6 +2865,24 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         },
         _ => DECLINED,
     }
+}
+
+/// Whether compiled variable `cv` of the current frame is undefined or
+/// holds a value whose release runs nothing (null, a bool, a number, a
+/// string): what [`run_vm_op`]'s binds require of the variable they bind.
+#[inline]
+fn bind_target_plain(vm: &Vm, cv: u32) -> bool {
+    vm.frames
+        .last()
+        .and_then(|f| f.cvs.get(cv as usize))
+        .is_some_and(|slot| {
+            matches!(
+                slot.get(),
+                None | Some(
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+                )
+            )
+        })
 }
 
 /// The address of the slot the read through the global scope at op `at`
@@ -2617,7 +3032,26 @@ fn send_and_enter(
     ops: &[Op],
     at: usize,
 ) -> usize {
-    let next = send_following(vm, &mut call, ops, at);
+    // A builtin's arguments in one pass (`calls::send_native_run`).
+    let next = if call.is_native() {
+        calls::send_native_run(vm, &mut call, ops, at + 1)
+    } else {
+        send_following(vm, &mut call, ops, at)
+    };
+    enter_after_sends(vm, prep, call, ops, next)
+}
+
+/// The rest of [`send_and_enter`] once the arguments are passed: the call
+/// made when the op at `next` is its `DoCall`, else kept in `prep`.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one copy per kind of call start
+fn enter_after_sends(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    mut call: calls::Prepared,
+    ops: &[Op],
+    next: usize,
+) -> usize {
     if let Some(&Op::DoCall { dst }) = ops.get(next) {
         if call.is_native() {
             // `ZEND_DO_ICALL` at once (as the loop's `DoCall` arm runs it).
@@ -2651,16 +3085,328 @@ fn send_and_enter(
 /// between, so each loop round trip saved changes nothing else. Returns
 /// where the tape goes on: the op after the last one passed (the `DoCall`,
 /// or a `Send` `calls::send` declined, which then runs as before).
+///
+/// The run is [`calls::send_run`]'s, which splits the frame stack once for
+/// all of them; a call without arguments does not call it.
 #[inline]
 fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize) -> usize {
+    let next = at + 1;
+    if matches!(ops.get(next), Some(Op::Send { .. })) {
+        calls::send_run(vm, call, ops, next)
+    } else {
+        next
+    }
+}
+
+/// `ZEND_INIT_USER_CALL` of `callee` at `at` ([`run_call`]; `array`: of
+/// `call_user_func_array()`): the call prepared on the call site's cache
+/// hit ([`calls::prepare_user_call`]); on a miss, the callback resolved
+/// as the generic op resolves it (`Vm::user_call_pending`: the
+/// deprecations, the `TypeError`, the cache filled) and the call it makes
+/// prepared ([`calls::prepare_pending`]), or pushed as the pending call
+/// when it is not one the tape makes. Then its `SendUser`s / `SendArray`
+/// right after it are passed and the call is made at its `DoCall` as
+/// [`send_and_enter`] makes other calls. A throw of the resolution is the
+/// op's ([`CALL_THREW`]). Out of line: `run_call`'s other arms keep their
+/// frame.
+#[inline(never)]
+fn init_user_call(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    callee: Operand,
+    array: bool,
+    ops: &[Op],
+    at: usize,
+) -> usize {
+    let mut call = match calls::prepare_user_call(vm, callee, at) {
+        Some(call) => call,
+        None => match user_call_miss(vm, callee, array, at) {
+            Ok(call) => call,
+            Err(next) => return next,
+        },
+    };
     let mut next = at + 1;
-    while let Some(Op::Send { src }) = ops.get(next) {
-        if !calls::send(vm, call, src) {
+    loop {
+        let sent = match ops.get(next) {
+            Some(&Op::SendUser { src, n }) => calls::send_user(vm, &mut call, src, n),
+            Some(&Op::SendArray {
+                src,
+                len: Operand::Unused,
+                skip: 0,
+            }) => calls::send_array(vm, &mut call, src),
+            Some(&Op::SendArray { src, len, skip }) => {
+                calls::send_array_slice(vm, &mut call, src, len, skip)
+            }
+            _ => false,
+        };
+        if !sent {
             break;
         }
         next += 1;
     }
-    next
+    enter_after_sends(vm, prep, call, ops, next)
+}
+
+/// [`init_user_call`] on a miss of the call site's cache: the call the
+/// generic op would push, prepared; `Err` with where the tape goes on
+/// when it is not (pushed as the pending call: the op after this one), or
+/// when the resolution threw (the op's index with [`CALL_THREW`], the
+/// throw in `Vm::tape_throw`). Not cold: a hook list's call site sees
+/// another callback on nearly every call, so the callbacks such a list
+/// holds (a function's name, `[$object, 'method']`) are resolved by one
+/// table lookup ([`calls::user_call_quick`]) before the generic
+/// resolution ([`user_call_resolve`]).
+#[inline(never)]
+fn user_call_miss(
+    vm: &mut Vm,
+    callee: Operand,
+    array: bool,
+    at: usize,
+) -> Result<calls::Prepared, usize> {
+    let pending = match calls::user_call_quick(vm, callee, at) {
+        Some(pending) => pending,
+        None => user_call_resolve(vm, callee, array, at)?,
+    };
+    match calls::prepare_pending(vm, pending) {
+        Ok(call) => Ok(call),
+        Err(pending) => {
+            if let Some(f) = vm.frames.last_mut() {
+                f.calls.push(pending);
+            }
+            Err(at + 1)
+        }
+    }
+}
+
+/// [`user_call_miss`]'s generic resolution (`Vm::user_call_pending`: the
+/// deprecations, the `TypeError`, the cache filled); `Err` with the op's
+/// index and [`CALL_THREW`] when it threw (the throw in `Vm::tape_throw`).
+#[cold]
+#[inline(never)]
+fn user_call_resolve(
+    vm: &mut Vm,
+    callee: Operand,
+    array: bool,
+    at: usize,
+) -> Result<crate::vm::PendingCall, usize> {
+    vm.user_call_pending(callee, array, at).map_err(|t| {
+        vm.tape_throw = Some(t);
+        at | CALL_THREW
+    })
+}
+
+// ---- statics: class constants and static properties ----
+//
+// `Name::C`, `self::C`, `parent::C`, `static::C` and `A::$x` reads on a
+// hit of the op's run-time cache (php-src's `ZEND_FETCH_CLASS_CONSTANT`
+// and `ZEND_FETCH_STATIC_PROP_R`/`_IS` with `CACHED_PTR`,
+// `Zend/zend_vm_def.h`): the hits `hot::step_ext` takes
+// (`spec::fetch_class_const_in`, `spec::fetch_static_prop_in`), as rows of
+// their own, so that a hit stays in the tape's loop instead of leaving it
+// for the second-level dispatch. A miss declines, having changed nothing,
+// and `hot::step_ext` (the row's `ext` flag), then the generic op, run it.
+
+/// The `e` field of a class-constant row: how the class is named.
+const SC_NAMED: u8 = 0;
+/// `self::`
+const SC_SELF: u8 = 1;
+/// `parent::`
+const SC_PARENT: u8 = 2;
+/// `static::`
+const SC_STATIC: u8 = 3;
+
+/// The `e` field of a static-property row: its fetch mode.
+const SP_READ: u8 = 0;
+/// `FetchMode::Is`
+const SP_IS: u8 = 1;
+/// `FetchMode::List`
+const SP_LIST: u8 = 2;
+
+/// The class operand of a class-constant row: `e` with, for a named
+/// class, its literal in `p`.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::cast_possible_truncation)] // one match in a thin handler
+fn statics_class(inst: &Inst) -> ClassSpec {
+    match inst.e {
+        SC_SELF => ClassSpec::SelfClass,
+        SC_PARENT => ClassSpec::Parent,
+        SC_STATIC => ClassSpec::Static,
+        // `p` came from a `u32` literal index (`lower_statics`).
+        _ => ClassSpec::Named(inst.p as u32),
+    }
+}
+
+/// The fetch mode of a static-property row (`e`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one match in a thin handler
+fn statics_mode(inst: &Inst) -> FetchMode {
+    match inst.e {
+        SP_IS => FetchMode::Is,
+        SP_LIST => FetchMode::List,
+        _ => FetchMode::Read,
+    }
+}
+
+/// The class-constant and static-property instruction of the op at `i`:
+/// a literal constant name and a class that is not dynamic (`$obj::C`
+/// stays `hot::step_ext`'s; `$this::C` is `props`' `ThisConst`), a static
+/// property read in any mode. Fields: `a` the name literal (constant) or
+/// the place (property), `b` the result temporary, `e` the class kind or
+/// the fetch mode, `p` a named class's literal; a `To` form jumps (`c`)
+/// past its folded `AssignCv` when the value went into that op's variable
+/// `d`.
+fn lower_statics(code: &OpArray, i: usize) -> Option<Inst> {
+    let plain = Inst::plain;
+    let to_row = |inst: Inst, cv: u32| -> Option<Inst> {
+        if (cv as usize) >= code.cv_names.len() {
+            return None;
+        }
+        Some(Inst {
+            c: rel(code, i, u32::try_from(i + 2).ok()?)?,
+            d: cv,
+            ..inst
+        })
+    };
+    let class_kind = |class: &ClassSpec| -> Option<(u8, usize)> {
+        Some(match *class {
+            ClassSpec::Named(l) if (l as usize) < code.literals.len() => (SC_NAMED, l as usize),
+            ClassSpec::SelfClass => (SC_SELF, 0),
+            ClassSpec::Parent => (SC_PARENT, 0),
+            ClassSpec::Static => (SC_STATIC, 0),
+            _ => return None,
+        })
+    };
+    match *code.ops.get(i)? {
+        Op::FetchClassConst {
+            ref class,
+            name: Operand::Lit(name),
+            dst,
+        } => {
+            let (e, p) = class_kind(class)?;
+            if dst >= code.num_tmps || (name as usize) >= code.literals.len() {
+                return None;
+            }
+            Some(Inst {
+                a: name,
+                b: dst,
+                e,
+                p,
+                ..plain(TOp::ClassConst)
+            })
+        }
+        Op::FetchClassConstTo {
+            ref class,
+            name,
+            dst,
+            to,
+        } => {
+            let (e, p) = class_kind(class)?;
+            if dst >= code.num_tmps || (name as usize) >= code.literals.len() {
+                return None;
+            }
+            to_row(
+                Inst {
+                    a: name,
+                    b: dst,
+                    e,
+                    p,
+                    ..plain(TOp::ClassConstTo)
+                },
+                to,
+            )
+        }
+        Op::FetchStaticProp {
+            place,
+            dst,
+            to,
+            mode,
+        } => {
+            if (place as usize) >= code.places.len() || dst >= code.num_tmps {
+                return None;
+            }
+            let e = match mode {
+                FetchMode::Read => SP_READ,
+                FetchMode::Is => SP_IS,
+                FetchMode::List => SP_LIST,
+            };
+            let inst = Inst {
+                a: place,
+                b: dst,
+                e,
+                ..plain(TOp::StaticProp)
+            };
+            match to {
+                None => Some(inst),
+                Some(cv) => to_row(
+                    Inst {
+                        op: TOp::StaticPropTo,
+                        ..inst
+                    },
+                    cv,
+                ),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`TOp::ClassConst`]: the cached value of the class constant into its
+/// temporary `b` (`spec::fetch_class_const_in`, the hit `hot::step_ext`
+/// takes).
+///
+/// # Safety
+/// `inst` is an instruction [`lower_statics`] built for `frame`, the
+/// current frame.
+#[inline(never)]
+unsafe fn statics_class_const(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    super::spec::fetch_class_const_in(f, &statics_class(inst), inst.a, inst.b, None).is_some()
+}
+
+/// [`TOp::ClassConstTo`]: as [`statics_class_const`], into the folded
+/// `AssignCv`'s variable `d` when that holds nothing to release (the jump
+/// past it), else into the temporary (falling through to the `AssignCv`).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_class_const_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match super::spec::fetch_class_const_in(f, &statics_class(inst), inst.a, inst.b, Some(inst.d)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
+}
+
+/// [`TOp::StaticProp`]: the static property's cached cell read into the
+/// temporary `b` (`spec::fetch_static_prop_in`).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_static_prop(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    super::spec::fetch_static_prop_in(f, inst.a, inst.b, None, statics_mode(inst)).is_some()
+}
+
+/// [`TOp::StaticPropTo`]: as [`statics_static_prop`], into the folded
+/// `AssignCv`'s variable `d` when it can (see [`statics_class_const_to`]).
+///
+/// # Safety
+/// As [`statics_class_const`].
+#[inline(never)]
+unsafe fn statics_static_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match super::spec::fetch_static_prop_in(f, inst.a, inst.b, Some(inst.d), statics_mode(inst)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
 }
 
 mod calls;

@@ -13,13 +13,20 @@ use php_vm::Vm;
 pub(crate) const E_DEPRECATED: i64 = 8192;
 
 thread_local! {
-    /// `OPENSSL_G(...)`: created on first use, dropped at RSHUTDOWN.
+    /// `OPENSSL_G(...)`: created on first use, kept for the thread's
+    /// later requests (`PHP_GINIT(openssl)`).
     static STATE: RefCell<Option<php_openssl::OpenSsl>> = const { RefCell::new(None) };
 }
 
-/// RSHUTDOWN: forgets the error queue.
+/// The end of a request: the error queue stays, as php-src has no
+/// RSHUTDOWN that empties it (`php --repeat 2` reads the first run's
+/// unread errors in the second).
 pub(crate) fn reset(_vm: &mut Vm) {
-    STATE.with(|s| *s.borrow_mut() = None);
+    STATE.with(|s| {
+        if let Some(ssl) = s.borrow_mut().as_mut() {
+            ssl.request_shutdown();
+        }
+    });
 }
 
 /// Runs `f` on the request state with the current `openssl.*` and

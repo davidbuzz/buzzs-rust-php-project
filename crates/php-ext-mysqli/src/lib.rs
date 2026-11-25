@@ -32,7 +32,7 @@ use php_mysqlnd::consts::{
     opt::MYSQL_OPT_COMPRESS, CLIENT_COMPRESS, MYSQLI_CONSTANTS, MYSQL_TYPE_JSON,
 };
 use php_mysqlnd::{Connection, OptionValue};
-use php_runtime::{Obj, Value, ZArray, ZStr};
+use php_runtime::{Obj, Value, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{
     acc, class_flags, Args, ClassBuilder, ClassHooks, Extension, InfoItem, ModuleBuilder, NativeFn,
@@ -161,64 +161,6 @@ const RECONNECT_FN: &str =
 const RECONNECT_M: &str =
     "because the reconnect feature has been removed in PHP 8.2 and this method is now redundant";
 
-/// Helper to map JSON field type representations (type ID `245` -> `MYSQL_TYPE_JSON` / `"json"`).
-/// Handles both MySQL's native type 245 and MariaDB's representation of JSON columns in result sets.
-fn fix_field_val(vm: &mut Vm, val: Value) -> Value {
-    if let Value::Object(ref o) = val {
-        let t = vm.get_property(o, "type").ok();
-        let table = vm.get_property(o, "table").ok();
-        let name = vm.get_property(o, "name").ok();
-        let length = vm.get_property(o, "length").ok();
-        let is_json = match (&table, &name, &t, &length) {
-            (_, _, Some(Value::Int(245)), _) => true,
-            (
-                Some(Value::Str(t_name)),
-                Some(Value::Str(c_name)),
-                Some(Value::Int(252 | 253 | 254)),
-                Some(Value::Int(l)),
-            ) => {
-                let tb = t_name.as_bytes();
-                let cb = c_name.as_bytes();
-                (*l > 65535 && (tb == b"test" && cb == b"id"))
-                    || cb == b"jsfield"
-                    || cb == b"c_json"
-                    || cb.starts_with(b"json")
-                    || cb.ends_with(b"json")
-            }
-            _ => false,
-        };
-        if is_json {
-            vm.set_property_raw(o, "type", Value::Int(i64::from(MYSQL_TYPE_JSON)));
-        }
-    }
-    val
-}
-
-/// `mysqli_fetch_field` wrapper supporting JSON field type mappings.
-fn fetch_field(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let val = result::fetch_field(vm, a)?;
-    Ok(fix_field_val(vm, val))
-}
-
-/// `mysqli_fetch_fields` wrapper supporting JSON field type mappings.
-fn fetch_fields(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let val = result::fetch_fields(vm, a)?;
-    if let Value::Array(ref arr) = val {
-        let mut fixed = Vec::with_capacity(arr.len());
-        for v in arr.values() {
-            fixed.push(fix_field_val(vm, v.clone()));
-        }
-        return Ok(Value::Array(ZArray::from_values(fixed)));
-    }
-    Ok(val)
-}
-
-/// `mysqli_fetch_field_direct` wrapper supporting JSON field type mappings.
-fn fetch_field_direct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let val = result::fetch_field_direct(vm, a)?;
-    Ok(fix_field_val(vm, val))
-}
-
 /// `mysqli_real_connect` wrapper supporting `MYSQLI_CLIENT_COMPRESS` in flags,
 /// enabling compression on the `mysqlnd` client connection.
 fn mysqli_real_connect(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -272,9 +214,9 @@ fn entries() -> Vec<Entry> {
         em("mysqli_stmt_execute(mysqli_stmt $statement, ?array $params = null): bool", S, "execute(?array $params = null): bool", stmt::execute),
         Entry { fn_dep: Some(("8.5", "use mysqli_stmt_execute() instead")), ..e("mysqli_execute(mysqli_stmt $statement, ?array $params = null): bool", stmt::execute) },
         em("mysqli_execute_query(mysqli $mysql, string $query, ?array $params = null): mysqli_result|bool", L, "execute_query(string $query, ?array $params = null): mysqli_result|bool", stmt::execute_query),
-        em("mysqli_fetch_field(mysqli_result $result): object|false", R, "fetch_field(): object|false", fetch_field),
-        em("mysqli_fetch_fields(mysqli_result $result): array", R, "fetch_fields(): array", fetch_fields),
-        em("mysqli_fetch_field_direct(mysqli_result $result, int $index): object|false", R, "fetch_field_direct(int $index): object|false", fetch_field_direct),
+        em("mysqli_fetch_field(mysqli_result $result): object|false", R, "fetch_field(): object|false", result::fetch_field),
+        em("mysqli_fetch_fields(mysqli_result $result): array", R, "fetch_fields(): array", result::fetch_fields),
+        em("mysqli_fetch_field_direct(mysqli_result $result, int $index): object|false", R, "fetch_field_direct(int $index): object|false", result::fetch_field_direct),
         e("mysqli_fetch_lengths(mysqli_result $result): array|false", result::fetch_lengths),
         em("mysqli_fetch_all(mysqli_result $result, int $mode = MYSQLI_NUM): array", R, "fetch_all(int $mode = MYSQLI_NUM): array", result::fetch_all),
         em("mysqli_fetch_array(mysqli_result $result, int $mode = MYSQLI_BOTH): array|null|false", R, "fetch_array(int $mode = MYSQLI_BOTH): array|null|false", result::fetch_array),

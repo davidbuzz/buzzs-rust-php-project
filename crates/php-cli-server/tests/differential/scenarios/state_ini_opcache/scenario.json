@@ -1,0 +1,44 @@
+{
+ "modes": [
+  "server",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/probe.php"
+  },
+  {
+   "path": "/set.php"
+  },
+  {
+   "path": "/probe.php"
+  },
+  {
+   "path": "/set.php"
+  },
+  {
+   "path": "/probe.php"
+  },
+  {
+   "path": "/probe.php"
+  },
+  {
+   "path": "/set.php"
+  },
+  {
+   "path": "/probe.php"
+  },
+  {
+   "path": "/set.php"
+  },
+  {
+   "path": "/probe.php"
+  }
+ ],
+ "args": [
+  "-d",
+  "opcache.enable=1",
+  "-d",
+  "opcache.enable_cli=1"
+ ]
+}

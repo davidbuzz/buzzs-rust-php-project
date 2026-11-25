@@ -444,6 +444,7 @@ dependencies = [
 name = "php-ctype"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-runtime",
 ]
 
@@ -669,6 +670,7 @@ name = "php-ext-json"
 version = "0.1.0"
 dependencies = [
  "php-json",
+ "php-memlimit",
  "php-runtime",
  "php-vm",
 ]
@@ -1129,6 +1131,7 @@ version = "0.1.0"
 name = "php-memlimit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mimalloc",
 ]
 
@@ -1374,6 +1377,11 @@ name = "php-vm"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-json",
+ "php-ext-pcre",
+ "php-ext-spl",
+ "php-ext-stdarr",
+ "php-ext-stdstr",
  "php-hash",
  "php-lexer",
  "php-mbstring",

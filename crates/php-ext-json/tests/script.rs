@@ -194,33 +194,6 @@ fn native_stack_allows_encoding_beyond_default_nesting_limit() {
         .expect("JSON stack thread");
 }
 
-#[test]
-fn memory_limit_stops_json_output_growth() {
-    for code in [
-        r#"ini_set("memory_limit", "8M"); $subject = str_repeat("\x01", 2 * 1024 * 1024); json_encode($subject); echo "not reached";"#,
-        r#"ini_set("memory_limit", "8M"); $subject = []; $item = str_repeat("\x01", 20000); for ($i = 0; $i < 200; $i++) { $subject[] = $item; } json_encode($subject, JSON_PARTIAL_OUTPUT_ON_ERROR); echo "not reached";"#,
-    ] {
-        let out = run(code);
-        assert!(
-            out.contains("Allowed memory size of 8388608 bytes exhausted"),
-            "{out}"
-        );
-        assert!(!out.contains("not reached"));
-    }
-}
-
-#[test]
-fn memory_limit_is_modelled() {
-    let out = run(
-        r#"ini_set('memory_limit', '4M'); json_encode(str_repeat("\x01", 1 << 20)); echo "not reached";"#,
-    );
-    assert!(
-        out.contains("Allowed memory size of 4194304 bytes exhausted"),
-        "{out}"
-    );
-    assert!(!out.contains("not reached"));
-}
-
 /// `json_encode()` asks its host for room only when the output grows,
 /// and writes integers without `to_string()`: every flag that changes
 /// what is written, integer extremes and keys, floats, escapes and

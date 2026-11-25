@@ -321,45 +321,29 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 // ReflectionConstant
 // ---------------------------------------------------------------------
 
-/// Finds a global constant (namespace part case-insensitive).
-fn find_constant(vm: &Vm, name: &[u8]) -> Option<(ZStr, Value)> {
+/// Finds a global constant (`zend_get_constant_ex()`,
+/// Zend/zend_constants.c): the lookup `constant()` makes, namespace part
+/// case-insensitive, plus `true`/`false`/`null` in any case. Returns the
+/// table key, the name the constant was declared with, and the value.
+fn find_constant(vm: &Vm, name: &[u8]) -> Option<(ZStr, ZStr, Value)> {
     let src = name.strip_prefix(b"\\").unwrap_or(name);
-    if let Some((k, v)) = vm.constants.get_key_value(src) {
-        return Some((k.clone(), v.clone()));
+    if let Some((k, v)) = vm.find_global_constant(src) {
+        let shown = vm.const_names.get(k).unwrap_or(k).clone();
+        return Some((k.clone(), shown, v.clone()));
     }
-    let ns_end = src.iter().rposition(|&c| c == b'\\');
-    let (ns, short) = match ns_end {
-        Some(p) => (&src[..p], &src[p..]),
-        None => (&src[..0], src),
+    if src.contains(&b'\\') {
+        return None;
+    }
+    // `zend_get_special_const()`: the engine's own `TRUE`, `FALSE` and
+    // `NULL` constants, found in any case and named in upper case.
+    let up = src.to_ascii_uppercase();
+    let v = match up.as_slice() {
+        b"TRUE" => Value::Bool(true),
+        b"FALSE" => Value::Bool(false),
+        b"NULL" => Value::Null,
+        _ => return None,
     };
-    let mut lc = ns.to_ascii_lowercase();
-    lc.extend_from_slice(short);
-    if let Some((k, v)) = vm.constants.get_key_value(lc.as_slice()) {
-        return Some((k.clone(), v.clone()));
-    }
-    if ns_end.is_none() {
-        let up = src.to_ascii_uppercase();
-        if matches!(up.as_slice(), b"TRUE" | b"FALSE" | b"NULL") {
-            let v = match up.as_slice() {
-                b"TRUE" => Value::Bool(true),
-                b"FALSE" => Value::Bool(false),
-                _ => Value::Null,
-            };
-            return Some((ZStr::from(src.to_ascii_lowercase()), v));
-        }
-    }
-    vm.constants
-        .iter()
-        .find(|(k, _)| {
-            let kb = k.as_bytes();
-            kb.len() == src.len() && {
-                let kp = kb.iter().rposition(|&c| c == b'\\');
-                kp == ns_end
-                    && kb[..kp.unwrap_or(0)].eq_ignore_ascii_case(&src[..ns_end.unwrap_or(0)])
-                    && kb[kp.unwrap_or(0)..] == src[ns_end.unwrap_or(0)..]
-            }
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
+    Some((ZStr::from(src.to_ascii_lowercase()), ZStr::from(up), v))
 }
 
 fn this_constant(vm: &mut Vm, a: &Args) -> VmResult<ConstRef> {
@@ -379,28 +363,28 @@ fn is_user_constant(vm: &Vm, name: &ZStr) -> bool {
 fn rk_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
     let n = str_arg(a, 0);
-    let Some((name, value)) = find_constant(vm, n.as_bytes()) else {
+    let Some((name, shown, value)) = find_constant(vm, n.as_bytes()) else {
         return Err(rexc(
             vm,
             &format!("Constant \"{}\" does not exist", n.to_string_lossy()),
         ));
     };
     set_name_props(&o, Some(&n), None);
-    object::set_internal(&o, Refl::Constant(ConstRef { name, value }));
+    object::set_internal(&o, Refl::Constant(ConstRef { name, shown, value }));
     Ok(Value::Null)
 }
 
 fn rk_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(this_constant(vm, a)?.name))
+    Ok(Value::Str(this_constant(vm, a)?.shown))
 }
 fn rk_in_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(super::in_ns(&this_constant(vm, a)?.name)))
+    Ok(Value::Bool(super::in_ns(&this_constant(vm, a)?.shown)))
 }
 fn rk_get_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(super::ns_name(&this_constant(vm, a)?.name)))
+    Ok(Value::Str(super::ns_name(&this_constant(vm, a)?.shown)))
 }
 fn rk_get_short_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(super::short_name(&this_constant(vm, a)?.name)))
+    Ok(Value::Str(super::short_name(&this_constant(vm, a)?.shown)))
 }
 fn rk_get_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(this_constant(vm, a)?.value)
@@ -456,7 +440,7 @@ fn rk_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if super::misc::constant_deprecated(vm, &c.name) {
         fl.push("deprecated");
     }
-    let s = super::export::const_string(vm, &c.name, &c.value, &fl, "")?;
+    let s = super::export::const_string(vm, &c.shown, &c.value, &fl, "")?;
     Ok(Value::Str(ZStr::from(s)))
 }
 

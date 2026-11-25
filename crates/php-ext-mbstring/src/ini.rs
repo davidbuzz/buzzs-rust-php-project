@@ -97,9 +97,16 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 /// `MINIT` + `RINIT`: builds the state from the startup INI values and
 /// reports the handlers' diagnostics as `PHP Startup` errors.
+///
+/// The default regex options and syntax (`mb_regex_set_options()`) are
+/// module globals php-src sets in `PHP_GINIT(mb_regex)` and no request
+/// resets: a VM made for a later request on this thread (`php --repeat`)
+/// starts with what the thread's previous request left, as php-src's
+/// second run does.
 pub(crate) fn startup(vm: &mut Vm) {
     let mut st = state_from_ini(vm);
     let diags = st.take_diagnostics();
+    st.set_regex_defaults(state::with(|prev| prev.regex_defaults()));
     state::replace(st);
     // Startup errors are displayed before the request: they do not count
     // as sent headers (other modules' INI handlers check that).

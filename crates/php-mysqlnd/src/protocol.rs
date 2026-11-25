@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqlnd/mysqlnd_wireprotocol.c. Similarity metric to original: 21%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Decoders and encoders for the individual protocol packets
 //! (ref: `mysqlnd_wireprotocol.c`). Decoders work on a complete payload and
 //! report malformed input the way mysqlnd does (a queued PHP warning plus a

@@ -71,7 +71,8 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         // The call instructions also take ops `Vm::run` runs itself
-        // (`InitMethodCall`), and so do the instructions of the ops the
+        // (`InitMethodCall`, `InitUserCall` and its `SendUser`s and
+        // `SendArray`), and so do the instructions of the ops the
         // tape runs with the VM at hand (a frameless call, a read through
         // the global scope).
         // An array literal's ops are `Vm::run`'s too, and its table and
@@ -79,11 +80,13 @@ fn check(code: &OpArray) -> Box<[Inst]> {
         if !matches!(
             inst.op,
             TOp::CallInit
+                | TOp::CallSend
                 | TOp::VmOp
                 | TOp::FramelessQ
                 | TOp::IncDecStatic
                 | TOp::InitArrayT
                 | TOp::ArrayAddT
+                | TOp::MatchJ
         ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
@@ -1075,9 +1078,15 @@ fn dims_in_every_specialised_form() {
     assert!(tape
         .iter()
         .any(|i| matches!(i.op, TOp::AssignDimC | TOp::AssignDimIC)));
+    // `isset($a[$k])` with a literal key takes the leaner row since it
+    // exists; either is the specialised form.
+    assert!(
+        has(TOp::IssetDimC) || has(TOp::IssetDimL),
+        "no isset row in {:?}",
+        tape.iter().map(|i| i.op).collect::<Vec<_>>()
+    );
     for op in [
         TOp::AssignOpDimC,
-        TOp::IssetDimC,
         TOp::FetchDimsC,
         TOp::AssignDimsC,
         TOp::AssignOpDimsC,
@@ -1303,6 +1312,369 @@ fn builtin_calls() {
         run(BUILTIN_CALLS),
         "abab|Ba|8|abab|abab|Ba|8|abab|abab|Ba|8|abab\n"
     );
+}
+
+const USER_CALLS: &str = r#"<?php
+function z() { return 'z'; }
+function add($a, $b = 10) { return $a + $b; }
+class K { function m($x) { return "m$x"; } static function s($x) { return "s$x"; } function __invoke($x) { return "i$x"; } }
+function f($cb, $args, $o, $up) {
+    $r = [];
+    $k = 'k';
+    $cl = function ($x) use ($k) { return "$k$x"; };
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = call_user_func($cb, $i);
+        $r[] = call_user_func_array($cb, $args);
+        $r[] = call_user_func_array($cb, [$i, $i]);
+        $r[] = call_user_func_array('z', []);
+        $r[] = call_user_func([$o, 'm'], $i);
+        $r[] = call_user_func([$o, 's'], $i + 1);
+        $r[] = call_user_func($cl, $i);
+        $r[] = call_user_func($o, $i);
+        $r[] = call_user_func($up, "a$i");
+        $r[] = call_user_func_array($up, ["b$i"]);
+    }
+    return implode("|", $r);
+}
+try { echo f('add', [1, 2], new K, 'strtoupper'), "\n"; } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function g($cb, $o) {
+    $r = [];
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = call_user_func($cb, $i, 1, 2);
+        $r[] = call_user_func_array($cb, ['b' => $i, 'a' => 1]);
+        $r[] = call_user_func($cb, call_user_func($cb, $i));
+        $r[] = call_user_func([$o, 'm'], $i);
+    }
+    return implode("|", $r);
+}
+echo g('add', new K), "\n";
+function w() { return call_user_func_array('add', array_slice(func_get_args(), 1)); }
+echo w(0, 1), w(0, 1, 2), "\n";
+"#;
+
+/// The call instructions of `code`'s `InitUserCall`s, `SendUser`s and
+/// `SendArray`s, in op order.
+fn user_call_insts(code: &OpArray, tape: &[Inst]) -> Vec<(&'static str, TOp)> {
+    code.ops
+        .iter()
+        .zip(tape)
+        .filter_map(|(op, inst)| {
+            let name = match op {
+                Op::InitUserCall { .. } => "init",
+                Op::SendUser { .. } => "user",
+                Op::SendArray { .. } => "array",
+                _ => return None,
+            };
+            Some((name, inst.op))
+        })
+        .collect()
+}
+
+/// The op array among `arrays` whose compiled variables include `name`.
+fn with_cv<'a>(arrays: &'a [Rc<OpArray>], name: &str) -> &'a OpArray {
+    arrays
+        .iter()
+        .find(|c| c.cv_names.iter().any(|n| n.as_bytes() == name.as_bytes()))
+        .expect("an op array with that variable")
+}
+
+/// `call_user_func[_array]()` written by name starts as a call
+/// instruction, its arguments as call sends, when nothing between it and
+/// its `DoCall` starts another call (`calls::user_call_stays_prepared`),
+/// also the `array_slice()` form; a callback call as an argument keeps
+/// the generic ops. The prepared calls (functions by name, methods, static
+/// methods through an object, closures with bound variables, invokable
+/// objects, builtins by a variable name, arrays of arguments, an empty
+/// one) and the ones handed back (more arguments than parameters, named
+/// arguments, nested callbacks) come out as in php-src.
+#[test]
+fn user_calls() {
+    let arrays = op_arrays(USER_CALLS);
+    for code in &arrays {
+        check(code);
+    }
+    let f = with_cv(&arrays, "up");
+    let insts = user_call_insts(f, &check(f));
+    assert!(insts.len() >= 16, "{insts:?}");
+    for (name, op) in &insts {
+        let want = if *name == "init" {
+            TOp::CallInit
+        } else {
+            TOp::CallSend
+        };
+        assert_eq!(*op, want, "{insts:?}");
+    }
+    // `g`: the outer call of `call_user_func($cb, call_user_func($cb, $i))`
+    // is generic, the inner one prepared.
+    let has = |c: &OpArray, name: &[u8]| c.cv_names.iter().any(|n| n.as_bytes() == name);
+    let g = arrays
+        .iter()
+        .find(|c| has(c, b"o") && !has(c, b"up"))
+        .expect("g");
+    let insts = user_call_insts(g, &check(g));
+    let generic = insts
+        .iter()
+        .filter(|(name, op)| *name == "init" && *op == TOp::Exit)
+        .count();
+    assert_eq!(generic, 1, "{insts:?}");
+    // `w`: the `array_slice()` form is a call send exactly when its call
+    // starts as a call instruction (`calls::send_array_slice`), as the
+    // whole array's is.
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            if let Op::SendArray { len, .. } = op {
+                if *len != crate::opcode::Operand::Unused {
+                    let start = (0..i)
+                        .rev()
+                        .find(|&s| {
+                            matches!(code.ops[s], Op::InitFCall { .. } | Op::InitUserCall { .. })
+                        })
+                        .expect("the call's start");
+                    let want = if tape[start].op == TOp::CallInit {
+                        TOp::CallSend
+                    } else {
+                        TOp::Exit
+                    };
+                    assert_eq!(tape[i].op, want, "op {i}: {op:?}");
+                }
+            }
+        }
+    }
+    assert_eq!(
+        run(USER_CALLS),
+        "10|3|0|z|m0|s1|k0|i0|A0|B0|11|3|2|z|m1|s2|k1|i1|A1|B1|12|3|4|z|m2|s3|k2|i2|A2|B2\n\
+         1|1|20|m0|2|2|21|m1|3|3|22|m2\n\
+         113\n"
+    );
+}
+
+const HOOK_CALLS: &str = r#"<?php
+function one($x) { return "one$x"; }
+class O { function m($x, $y = '') { return "m$x$y"; } }
+function hooks($hl, $args) {
+    $r = [];
+    foreach ($hl as $h) {
+        $r[] = call_user_func_array($h['function'], array_slice($args, 0, (int) $h['accepted_args']));
+    }
+    return implode("|", $r);
+}
+$o = new O;
+$list = [['function' => 'one', 'accepted_args' => 1], ['function' => [$o, 'm'], 'accepted_args' => 2], ['function' => 'ONE', 'accepted_args' => 1]];
+for ($i = 0; $i < 3; $i++) echo hooks($list, [$i, 'b', 'c']), "\n";
+"#;
+
+/// A hook list's call, `call_user_func_array($h['function'],
+/// array_slice($args, 0, (int) $h['accepted_args']))`: the call starts as
+/// a call instruction and its sliced `SendArray` is a call send
+/// (`calls::send_array_slice`), and a callback that changes on every call
+/// is resolved by the quick miss (`calls::user_call_quick`) as php-src
+/// resolves it.
+#[test]
+fn hook_calls() {
+    let arrays = op_arrays(HOOK_CALLS);
+    let h = with_cv(&arrays, "hl");
+    let insts = user_call_insts(h, &check(h));
+    assert_eq!(
+        insts,
+        [("init", TOp::CallInit), ("array", TOp::CallSend)],
+        "{insts:?}"
+    );
+    assert_eq!(
+        run(HOOK_CALLS),
+        "one0|m0b|one0\none1|m1b|one1\none2|m2b|one2\n"
+    );
+}
+
+const THIS_AND_CLOSURES: &str = r#"<?php
+class K { public $n = 5; function get() { $f = function () { return $this; }; return $f; } }
+function uses_this() { return $this; }
+function make($k) {
+    $a = function ($x) use ($k) { return $k . $x; };
+    $b = fn($x) => $x . $k;
+    $c = static fn() => 'c';
+    return $a(1) . $b(2) . $c();
+}
+for ($i = 0; $i < 3; $i++) { echo make("k$i"), ' ', ((new K)->get())()->n, "\n"; }
+"#;
+
+/// `$this` as a value is a row of its own (`props::fetch_this`) and a
+/// closure's creation runs with the VM at hand (`run_vm_op`), not in
+/// `Vm::run`.
+#[test]
+fn this_and_closures() {
+    let arrays = op_arrays(THIS_AND_CLOSURES);
+    let (mut this, mut closures) = (0, 0);
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            match op {
+                Op::FetchThis { .. }
+                    if !matches!(
+                        code.ops.get(i + 1),
+                        Some(Op::FetchClassConst { .. } | Op::FetchClassConstTo { .. })
+                    ) =>
+                {
+                    assert_eq!(tape[i].op, TOp::FetchThisT, "op {i}: {op:?}");
+                    this += 1;
+                }
+                Op::MakeClosure { .. } => {
+                    assert_eq!(tape[i].op, TOp::VmOp, "op {i}: {op:?}");
+                    closures += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(this >= 1 && closures >= 3, "{this} {closures}");
+    assert_eq!(run(THIS_AND_CLOSURES), "k012k0c 5\nk112k1c 5\nk212k2c 5\n");
+}
+
+const RETURNS_AND_CONSTANTS: &str = r#"<?php
+define('RT', 'rt');
+function first($a) { foreach ($a as $k => $v) { if ($v > 1) { return "$k=$v"; } } return 'none'; }
+function consts() { $x = RT; return $x . RT; }
+for ($i = 0; $i < 3; $i++) { echo first([0, 1, 5]), first([]), consts(), "\n"; }
+"#;
+
+/// A `return` inside a `foreach` frees the iterator with a row of its own
+/// (`scalar::fe_free_on_return`), and a constant defined at run time is
+/// read by one (`scalar::fetch_const`, `scalar::fetch_const_to` into the
+/// variable of its folded `AssignCv`, then past it).
+#[test]
+fn foreach_returns_and_constants() {
+    let arrays = op_arrays(RETURNS_AND_CONSTANTS);
+    let (mut frees, mut consts) = (0, 0);
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            match op {
+                Op::FeFreeOnReturn { .. } => {
+                    assert_eq!(tape[i].op, TOp::FeFreeRetA, "op {i}: {op:?}");
+                    frees += 1;
+                }
+                Op::FetchConst { fallback: None, .. } => {
+                    assert_eq!(tape[i].op, TOp::ConstT, "op {i}: {op:?}");
+                    consts += 1;
+                }
+                Op::FetchConstTo { fallback: None, .. } => {
+                    assert_eq!(tape[i].op, TOp::ConstTo, "op {i}: {op:?}");
+                    assert_eq!(target(&tape, i), i + 2, "op {i}: past the AssignCv");
+                    consts += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(frees >= 1 && consts >= 2, "{frees} {consts}");
+    assert_eq!(
+        run(RETURNS_AND_CONSTANTS),
+        "2=5nonertrt\n2=5nonertrt\n2=5nonertrt\n"
+    );
+}
+
+const PROP_CONCAT: &str = r#"<?php
+class P { public $s = 'a'; }
+function app($o, $k) { $o->s .= $k; $o->s .= 'x'; return $o->s; }
+$p = new P;
+for ($i = 0; $i < 3; $i++) { echo app($p, $i), "\n"; }
+"#;
+
+/// `$o->p .= v` is a row of its own (`props::concat_prop`), not the
+/// number cases' `AssignOpObjProp` row.
+#[test]
+fn property_concat() {
+    let arrays = op_arrays(PROP_CONCAT);
+    let mut rows = 0;
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            if let Op::AssignOpObjProp {
+                op: php_runtime::BinaryOp::Concat,
+                ..
+            } = op
+            {
+                assert_eq!(tape[i].op, TOp::ConcatObjProp, "op {i}: {op:?}");
+                rows += 1;
+            }
+        }
+    }
+    assert_eq!(rows, 2);
+    assert_eq!(run(PROP_CONCAT), "a0x\na0x1x\na0x1x2x\n");
+}
+
+const DYN_METHODS: &str = r#"<?php
+class A { function m($x) { return "m$x"; } function n($x) { return "n$x"; } }
+function dyn($o, $name, $x) { return $o->$name($x); }
+$a = new A;
+for ($i = 0; $i < 3; $i++) { echo dyn($a, 'm', $i), dyn($a, $i == 1 ? 'n' : 'M', $i), "\n"; }
+"#;
+
+/// `$obj->$name()` starts as a call instruction (`run_call`:
+/// `spec::init_dyn_method_call_in`), its arguments the generic `Send`s.
+#[test]
+fn dynamic_method_calls() {
+    let arrays = op_arrays(DYN_METHODS);
+    let f = with_cv(&arrays, "name");
+    let tape = check(f);
+    let inits: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InitMethodCall { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(inits, [TOp::CallInit], "{inits:?}");
+    assert_eq!(run(DYN_METHODS), "m0m0\nm1n1\nm2m2\n");
+}
+
+const IN_ARRAY_AND_ARGS: &str = r#"<?php
+function f($x) { return (in_array($x, ['a', 'b'], true) ? 'y' : 'n') . func_num_args(); }
+for ($i = 0; $i < 3; $i++) { echo f('a'), f('c', 2), "\n"; }
+"#;
+
+/// `in_array()` of a literal haystack and `func_num_args()` with its
+/// result used are rows of their own (`dims::in_array`,
+/// `scalar::func_num_args`).
+#[test]
+fn in_array_and_func_num_args() {
+    let arrays = op_arrays(IN_ARRAY_AND_ARGS);
+    let f = with_cv(&arrays, "x");
+    let tape = check(f);
+    let rows: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InArray { .. } | Op::FuncNumArgs { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(rows, [TOp::InArrayX, TOp::FuncNumArgsT], "{rows:?}");
+    assert_eq!(run(IN_ARRAY_AND_ARGS), "y1n2\ny1n2\ny1n2\n");
+}
+
+const DYN_STATICS: &str = r#"<?php
+class S { static function s($x) { return "s$x"; } }
+function lower($x) { return "l$x"; }
+function st($cls, $fname, $x) { return $cls::s($x) . $fname($x); }
+for ($i = 0; $i < 3; $i++) { echo st('S', 'lower', $i), "\n"; }
+"#;
+
+/// `$c::name()` and `$f()` start as call instructions (`run_call`:
+/// `calls::init_dyn_static_call`, `calls::init_dyn_call_named`).
+#[test]
+fn dynamic_static_and_function_calls() {
+    let arrays = op_arrays(DYN_STATICS);
+    let f = with_cv(&arrays, "cls");
+    let tape = check(f);
+    let inits: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InitStaticCall { .. } | Op::InitDynCall { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(inits, [TOp::CallInit, TOp::CallInit], "{inits:?}");
+    assert_eq!(run(DYN_STATICS), "s0l0\ns1l1\ns2l2\n");
 }
 
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
@@ -1611,4 +1983,201 @@ fn only_the_first_element_carries_the_literal_shape() {
         .map(|(i, _)| tape[i].d)
         .collect();
     assert_eq!(shapes, vec![4, 0, 0, 0]);
+}
+
+const LITERAL_ASSIGNMENTS: &str = r#"<?php
+function f() {
+  $out = '';
+  for ($i = 0; $i < 3; $i++) {
+    $s = 'lit';
+    $e = [];
+    $p = [1, 2];
+    $s = 'x' . $s;
+    $e[] = $i;
+    $p[] = $i;
+    $out .= $s . count($e) . count($p) . $p[2] . ' ';
+    $s = [3];
+    $out .= count($s);
+  }
+  return $out;
+}
+echo f(), "\n";
+"#;
+
+/// `$cv = <string literal>` and `$cv = <array literal>` with the result
+/// unused are [`TOp::AssignLitC`] rows (`ZEND_ASSIGN_SPEC_CV_CONST`); the
+/// arrays assigned are separated from their literals when written.
+#[test]
+fn string_and_array_literal_assignments() {
+    let arrays = op_arrays(LITERAL_ASSIGNMENTS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "out");
+    let tape = check(code);
+    let rows = tape.iter().filter(|i| i.op == TOp::AssignLitC).count();
+    // `$out = ''`, `$s = 'lit'`, `$e = []`, `$p = [1, 2]`, `$s = [3]`.
+    assert_eq!(rows, 5, "{:?}", code.ops);
+    assert_eq!(run(LITERAL_ASSIGNMENTS), "xlit130 1xlit131 1xlit132 1\n");
+}
+
+const EQUALITY_ROWS: &str = r#"<?php
+function f($a, $b) {
+  $n = 0;
+  for ($i = 0; $i < 3; $i++) {
+    if ($a === 'x') $n++;
+    if ($a !== null) $n++;
+    if ($b == false) $n++;
+    if ($a == '1e3') $n++;
+    $r = $a === 'x';
+    $q = $b != [];
+    echo $r ? 'r' : '-', $q ? 'q' : '-', ($a == '') ? 'e' : '-';
+  }
+  return $n;
+}
+echo f('x', 0), "\n";
+echo f('1000', []), "\n";
+"#;
+
+/// `===`, `!==`, `==`, `!=` of a variable and a literal null, bool,
+/// string or empty array are rows of their own as branches and into
+/// variables; `==` with a numeric string literal is not (the generic
+/// comparison converts).
+#[test]
+fn equality_with_literals_is_a_row() {
+    let arrays = op_arrays(EQUALITY_ROWS);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "q");
+    let tape = check(code);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert!(count(TOp::EqLitJmpC) >= 3, "{:?}", code.ops);
+    assert_eq!(count(TOp::EqLitCvC), 2, "{:?}", code.ops);
+    let numeric = code
+        .ops
+        .iter()
+        .position(|op| match *op {
+            Op::CmpJmp { b, .. } => matches!(
+                b,
+                crate::opcode::Operand::Lit(l)
+                    if code.literals[l as usize].as_str().is_some_and(|s| s.as_bytes() == b"1e3")
+            ),
+            _ => false,
+        })
+        .expect("the comparison with '1e3'");
+    assert!(
+        !matches!(
+            tape[numeric].op,
+            TOp::EqLitJmpC | TOp::EqLitJmpT | TOp::EqLitJmpK
+        ),
+        "{:?}",
+        tape[numeric].op
+    );
+    assert_eq!(run(EQUALITY_ROWS), "rq-rq-rq-9\n---------9\n");
+}
+
+const TEMPORARY_TRUTH: &str = r#"<?php
+function id($x) { return $x; }
+function f($a) {
+  $out = '';
+  for ($i = 0; $i < 3; $i++) {
+    $r = id($a) ?: 'none';
+    $a['k'];
+    $out .= ($r === 'none' ? 'n' : 'y') . (!$a['k'] ? '!' : '.');
+    if ($a['k']) { $out .= 'T'; }
+  }
+  return $out;
+}
+echo f(['k' => [1]]), ' ', f(['k' => '']), "\n";
+"#;
+
+/// `TMP ?: ...` and `ZEND_FREE` of a temporary are rows
+/// ([`TOp::JmpSetT`], [`TOp::FreeT`]).
+#[test]
+fn temporary_truth_and_free_rows() {
+    let arrays = op_arrays(TEMPORARY_TRUTH);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "r");
+    let tape = check(code);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert_eq!(count(TOp::JmpSetT), 1, "{:?}", code.ops);
+    assert!(count(TOp::FreeT) >= 1, "{:?}", code.ops);
+    assert_eq!(run(TEMPORARY_TRUTH), "y.Ty.Ty.T y!y!y!\n");
+}
+
+const MATCH_TABLE: &str = r#"<?php
+function g($v) {
+  return match ($v) { 'a' => 1, 'b', 'c' => 2, 10 => 3, '10' => 4, default => 0 };
+}
+$out = '';
+foreach (['a', 'b', 'c', 10, '10', 10.0, null, 'd'] as $v) { $out .= g($v); }
+echo $out, "\n";
+"#;
+
+/// A `match` with a jump table is a row ([`TOp::MatchJ`]) whose table
+/// gives the jump.
+#[test]
+fn match_with_a_table_is_a_row() {
+    let arrays = op_arrays(MATCH_TABLE);
+    for code in &arrays {
+        check(code);
+    }
+    let code = arrays
+        .iter()
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::Match { .. })))
+        .expect("the function with the match");
+    let tape = check(code);
+    assert_eq!(
+        tape.iter().filter(|i| i.op == TOp::MatchJ).count(),
+        1,
+        "{:?}",
+        code.ops
+    );
+    assert_eq!(run(MATCH_TABLE), "12234000\n");
+}
+
+/// `isset($a[...])` / `empty(...)` with an offset in a variable, an int
+/// literal or a string literal that is no integer in digits gets the lean
+/// row (`IssetDimL`); a string literal in digits keeps the general row.
+/// Expected output from `/usr/bin/php8.5 -n`.
+#[test]
+fn isset_of_a_string_literal_key_has_its_own_row() {
+    let src = "<?php function f($a, $k) { $r = []; \
+               for ($i = 0; $i < 3; $i++) { $r[] = isset($a['key']); $r[] = empty($a['nope']); \
+               $r[] = isset($a['5']); $r[] = isset($a[$k]); $r[] = isset($a[5]); } \
+               return $r; } \
+               echo implode(',', array_map(fn($v) => var_export($v, true), f(['key' => 0, 5 => 1], 'key'))), \"\\n\";";
+    let arrays = op_arrays(src);
+    let tape = check(&arrays[1]);
+    let rows = |op: TOp| tape.iter().filter(|inst| inst.op == op).count();
+    assert_eq!(rows(TOp::IssetDimL), 4);
+    assert_eq!(rows(TOp::IssetDimC), 1);
+    assert_eq!(
+        run(src),
+        "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true\n"
+    );
+}
+
+/// `isset($a['x']['y'])` / `empty(...)` of a variable's nested elements
+/// gets a row (`IssetDimsC`) instead of leaving the tape for
+/// `hot::step_ext`; one offset, a plain variable and a property's
+/// elements keep their rows. Expected output from `/usr/bin/php8.5 -n`.
+#[test]
+fn isset_of_nested_elements_has_a_row() {
+    let src = "<?php function f($a, $k) { $r = []; \
+               for ($i = 0; $i < 3; $i++) { $r[] = isset($a['x']['y']); $r[] = empty($a[$k]['z']); \
+               $r[] = isset($a['x']); $r[] = isset($a); $r[] = isset($a['x']['y'][0]); } \
+               return $r; } \
+               echo implode(',', array_map(fn($v) => var_export($v, true), f(['x' => ['y' => [1]]], 'x'))), \"\\n\";";
+    let arrays = op_arrays(src);
+    let tape = check(&arrays[1]);
+    let rows = |op: TOp| tape.iter().filter(|inst| inst.op == op).count();
+    assert_eq!(rows(TOp::IssetDimsC), 3);
+    assert_eq!(
+        run(src),
+        "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true\n"
+    );
 }

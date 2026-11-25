@@ -806,3 +806,29 @@ var_dump(get_browser(null));"#,
          bool(false)\n"
     );
 }
+
+/// `get_resources()` lists a `process` resource while it is referenced
+/// and not closed (`proc_open()` registers it in `EG(regular_list)`); the
+/// expected output is php8.5's.
+#[test]
+fn get_resources_lists_processes() {
+    let ext = php_ext_stdmisc::StdMisc;
+    let streams = php_ext_streams::Streams;
+    let exts: [&dyn Extension; 2] = [&ext, &streams];
+    let out = run_with(
+        &VmOptions::default(),
+        &exts,
+        // (No count() here: this VM has only the two extensions under test.)
+        r"function n($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
+$p = proc_open('true', [], $pipes);
+$last = null;
+foreach (get_resources() as $id => $r) { $last = $id; }
+var_dump($last === (int) $p);
+echo n(get_resources('process')), PHP_EOL;
+proc_open('true', [], $pipes);
+echo n(get_resources('process')), PHP_EOL;
+proc_close($p);
+echo n(get_resources('process')), PHP_EOL;",
+    );
+    assert_eq!(out, "bool(true)\n1\n1\n0\n");
+}

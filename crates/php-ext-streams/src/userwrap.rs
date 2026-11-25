@@ -30,6 +30,25 @@ thread_local! {
     static PROTOCOL_RESOURCES: RefCell<Vec<(Vec<u8>, Resource)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// `zend_close_rsrc_list()` for the `stream factory` resources the
+/// request's `stream_wrapper_register()` calls allocated (the request's
+/// wrapper registrations themselves go with `php_shutdown_stream_hashes()`):
+/// closed in reverse order of creation, as the regular list is. Kept, each
+/// request on a long-running worker, or under `php --repeat`, left one more
+/// behind.
+pub fn shutdown() {
+    let held = PROTOCOL_RESOURCES.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for (_, r) in held.into_iter().rev() {
+        r.close();
+    }
+}
+
+/// The `stream factory` resources still open, in order of creation.
+#[must_use]
+pub fn live_factories() -> Vec<Resource> {
+    PROTOCOL_RESOURCES.with(|p| p.borrow().iter().map(|(_, r)| r.clone()).collect())
+}
+
 /// Forgets the last instantiated object.
 pub fn clear_last_object() {
     LAST_OBJECT.with(|l| *l.borrow_mut() = None);
@@ -249,4 +268,25 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         "stream_wrapper_restore(string $protocol): bool",
         stream_wrapper_restore,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The request's `stream factory` resources are closed at its end, and
+    /// the next request holds none of them.
+    #[test]
+    fn shutdown_closes_the_requests_factories() {
+        let a = Resource::new("stream factory", None);
+        let b = Resource::new("stream factory", None);
+        PROTOCOL_RESOURCES.with(|p| {
+            p.borrow_mut().push((b"a".to_vec(), a.clone()));
+            p.borrow_mut().push((b"b".to_vec(), b.clone()));
+        });
+        assert_eq!(live_factories().len(), 2);
+        shutdown();
+        assert!(a.is_closed() && b.is_closed());
+        assert!(live_factories().is_empty());
+    }
 }

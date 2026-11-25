@@ -14,6 +14,7 @@ rust-version.workspace = true
 # executable (`php`, `php-cgi`) the linker relaxes the accesses to
 # local-exec, so the binaries are unchanged.
 mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
+libc = "0.2"
 
 [lints]
 workspace = true

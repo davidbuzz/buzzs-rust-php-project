@@ -1,0 +1,143 @@
+{
+ "modes": [
+  "server"
+ ],
+ "requests": [
+  {
+   "path": "/a.css"
+  },
+  {
+   "path": "/a.json"
+  },
+  {
+   "path": "/a.txt"
+  },
+  {
+   "path": "/a.png"
+  },
+  {
+   "path": "/a.unknownext"
+  },
+  {
+   "path": "/a.svg"
+  },
+  {
+   "path": "/a.js"
+  },
+  {
+   "path": "/a.wasm"
+  },
+  {
+   "path": "/missing.php"
+  },
+  {
+   "path": "/missing.css"
+  },
+  {
+   "path": "/missing/"
+  },
+  {
+   "path": "/withindex"
+  },
+  {
+   "path": "/withindex/"
+  },
+  {
+   "path": "/withhtml/"
+  },
+  {
+   "path": "/withhtml"
+  },
+  {
+   "path": "/empty/"
+  },
+  {
+   "path": "/sub/x.php"
+  },
+  {
+   "path": "/sub/x.php/pi/a?q"
+  },
+  {
+   "path": "/sub/../a.txt"
+  },
+  {
+   "path": "/%2e%2e/etc/passwd"
+  },
+  {
+   "path": "/sub%2Fx.php"
+  },
+  {
+   "path": "/a.txt?x=1"
+  },
+  {
+   "path": "/A.TXT"
+  },
+  {
+   "path": "/"
+  },
+  {
+   "path": "/index.php/extra"
+  },
+  {
+   "path": "/nonexistent/deep/path.php"
+  },
+  {
+   "path": "/a.txt/"
+  },
+  {
+   "method": "HEAD",
+   "path": "/a.css"
+  },
+  {
+   "method": "POST",
+   "path": "/a.txt",
+   "body": "x=1"
+  },
+  {
+   "method": "HEAD",
+   "path": "/missing.php"
+  },
+  {
+   "path": "/a.txt",
+   "headers": [
+    [
+     "Range",
+     "bytes=0-1"
+    ]
+   ]
+  },
+  {
+   "path": "/a.txt",
+   "headers": [
+    [
+     "If-Modified-Since",
+     "Mon, 01 Jan 2035 00:00:00 GMT"
+    ]
+   ]
+  },
+  {
+   "method": "OPTIONS",
+   "path": "/a.txt"
+  },
+  {
+   "method": "PATCH",
+   "path": "/index.php"
+  },
+  {
+   "method": "FOO",
+   "path": "/index.php"
+  },
+  {
+   "raw": "GET /a.txt HTTP/1.0\r\n\r\n"
+  },
+  {
+   "raw": "GET / HTTP/1.1\r\n\r\n"
+  },
+  {
+   "raw": "garbage\r\n\r\n"
+  },
+  {
+   "raw": "GET /index.php HTTP/2.0\r\nHost: x\r\n\r\n"
+  }
+ ]
+}

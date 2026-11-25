@@ -2,9 +2,10 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/standard/string.c` functions.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 
-use php_runtime::string::{format_long, ZStrBuf, LONG_MAX_LEN};
+use php_runtime::string::ZStrBuf;
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdstr::analysis::{self, CharCounts, WordCount};
 use php_stdstr::error::Notices;
@@ -28,7 +29,9 @@ fn pos_result(r: Option<i64>) -> Value {
 
 /// An optional `?int` argument.
 fn opt_int(a: &Args, n: usize) -> Option<i64> {
-    a.opt(n).map(|_| a.int(n))
+    // `Z_PARAM_LONG_OR_NULL` read in place: `Args::opt` copied the value
+    // out first only to test it for `null`.
+    a.opt_int(n)
 }
 
 fn bin2hex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -137,6 +140,15 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm,
         pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
     )?;
+    // `php_explode()` keeping every piece (a separator found, a limit
+    // above the number of pieces): the list built to size, each piece
+    // `zend_string_init_fast`, with no vector of the pieces first.
+    if pieces > 1 && i64::try_from(pieces).is_ok_and(|p| limit >= p) {
+        return Ok(Value::Array(ZArray::from_list_sized(
+            pieces,
+            search::split_all(sep.as_bytes(), s.as_bytes()).map(|p| Value::Str(ZStr::init_fast(p))),
+        )));
+    }
     let r = search::explode_slices(sep.as_bytes(), s.as_bytes(), limit);
     let parts = check(vm, r)?;
     // `php_explode()`: the input itself when it is not split
@@ -152,60 +164,110 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ))))
 }
 
+/// `ZVAL_DEREF`: the value itself, or the one a reference points at
+/// (a copy only then).
+#[inline]
+fn deref_cow(v: &Value) -> Cow<'_, Value> {
+    match v {
+        Value::Reference(r) => Cow::Owned(r.get()),
+        v => Cow::Borrowed(v),
+    }
+}
+
+/// Whether piece `v` keeps `php_implode`'s result `IS_STR_VALID_UTF8`
+/// (see [`implode_valid_utf8`]).
+#[inline]
+fn piece_valid_utf8(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => s.is_valid_utf8(),
+        Value::Object(_) | Value::Resource(_) => false,
+        _ => true,
+    }
+}
+
 /// `php_implode()`: the pieces joined straight into the result string
 /// (one exactly sized allocation for string and integer pieces), with its
 /// single-element case: the element's own string (`zval_get_string`, no
-/// copy for a string).
-fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
+/// copy for a string). The result is flagged `IS_STR_VALID_UTF8` as
+/// [`implode_valid_utf8`] says, worked out in the same pass.
+///
+/// The pieces are read where they lie (`ZEND_HASH_FOREACH_VAL` +
+/// `ZVAL_DEREF`): a copy of each, made twice and dropped twice, plus a
+/// third pass for the flag, cost about two thirds of a three-piece call.
+fn implode_zstr(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> VmResult<ZStr> {
     if pieces.is_empty() {
         return Ok(ZStr::empty());
     }
     if pieces.len() == 1 {
         if let Some((_, v)) = pieces.iter().next() {
-            if let Value::Str(s) = v.deref() {
-                return Ok(s);
+            if let Value::Str(s) = &*deref_cow(v) {
+                return Ok(s.clone());
             }
         }
     }
-    let known: usize = pieces
-        .iter()
-        .map(|(_, v)| match v {
+    if let Some(r) = implode_strings(vm, glue, pieces) {
+        return r;
+    }
+    let mut known = 0usize;
+    let mut valid = pieces.len() == 1 || glue.is_valid_utf8();
+    for (_, v) in pieces.iter() {
+        let v = deref_cow(v);
+        known = known.saturating_add(match &*v {
             Value::Str(s) => s.len(),
             Value::Int(n) => php_runtime::string::long_str_len(*n),
-            Value::Reference(_) => match v.deref() {
-                Value::Str(s) => s.len(),
-                Value::Int(n) => php_runtime::string::long_str_len(n),
-                _ => 0,
-            },
             _ => 0,
-        })
-        .sum();
-    let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
+        });
+        valid &= piece_valid_utf8(&v);
+    }
+    let glue_bytes = glue.as_bytes();
+    let total = known.saturating_add(
+        glue_bytes
+            .len()
+            .saturating_mul(pieces.len().saturating_sub(1)),
+    );
     mem::check(vm, mem::zstr(total))?;
     let mut out = ZStrBuf::with_capacity(total);
     for (i, (_, v)) in pieces.iter().enumerate() {
         if i > 0 {
-            out.push(glue);
+            out.push_str(glue);
         }
-        // The elements are read in place (a reference's value is taken
-        // out of it): no reference count changes per piece.
-        match v {
-            Value::Str(s) => out.push(s.as_bytes()),
-            Value::Int(n) => {
-                let mut buf = [0u8; LONG_MAX_LEN];
-                out.push(format_long(*n, &mut buf));
-            }
-            other => match other.deref() {
-                Value::Str(s) => out.push(s.as_bytes()),
-                Value::Int(n) => {
-                    let mut buf = [0u8; LONG_MAX_LEN];
-                    out.push(format_long(n, &mut buf));
-                }
-                other => out.push(to_str(vm, &other)?.as_bytes()),
-            },
+        match &*deref_cow(v) {
+            Value::Str(s) => out.push_str(s),
+            Value::Int(n) => out.push_long(*n),
+            other => out.push(to_str(vm, other)?.as_bytes()),
         }
     }
-    Ok(out.finish())
+    let out = out.finish();
+    if valid && !out.is_valid_utf8() {
+        out.mark_valid_utf8();
+    }
+    Ok(out)
+}
+
+/// [`implode_zstr`] of two or more pieces that are all strings (not behind
+/// references), the common case: `php_implode()`'s first pass sums the
+/// lengths, then the result is allocated once and each piece and glue is
+/// copied in (`ZStr::join_exact`), with no per-piece capacity or flag
+/// work. `None`, having done nothing, when a piece is anything else.
+fn implode_strings(vm: &mut Vm, glue: &ZStr, pieces: &ZArray) -> Option<VmResult<ZStr>> {
+    let mut known = 0usize;
+    let mut valid = glue.is_valid_utf8();
+    for v in pieces.values() {
+        let Value::Str(s) = v else {
+            return None;
+        };
+        known = known.saturating_add(s.len());
+        valid &= s.is_valid_utf8();
+    }
+    let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
+    if let Err(e) = mem::check(vm, mem::zstr(total)) {
+        return Some(Err(e));
+    }
+    let strs = pieces.values().map(|v| match v {
+        Value::Str(s) => s.as_bytes(),
+        _ => &[],
+    });
+    Some(Ok(ZStr::join_exact(glue.as_bytes(), total, valid, strs)))
 }
 
 fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -237,11 +299,7 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    let out = implode_zstr(vm, glue.as_bytes(), pieces)?;
-    if !out.is_valid_utf8() && implode_valid_utf8(&glue, pieces) {
-        out.mark_valid_utf8();
-    }
-    Ok(Value::Str(out))
+    Ok(Value::Str(implode_zstr(vm, &glue, pieces)?))
 }
 
 /// Whether `php_implode` flags its result `IS_STR_VALID_UTF8`: an empty
@@ -250,17 +308,9 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// floats, bools, null and arrays (`"Array"`, a known string) convert to
 /// ASCII; an object's or resource's string is not known here, so it
 /// counts as unflagged.
+#[cfg(test)]
 fn implode_valid_utf8(glue: &ZStr, pieces: &ZArray) -> bool {
-    let piece = |v: &Value| match v {
-        Value::Str(s) => s.is_valid_utf8(),
-        Value::Reference(_) => match v.deref() {
-            Value::Str(s) => s.is_valid_utf8(),
-            Value::Object(_) | Value::Resource(_) => false,
-            _ => true,
-        },
-        Value::Object(_) | Value::Resource(_) => false,
-        _ => true,
-    };
+    let piece = |v: &Value| piece_valid_utf8(&v.deref());
     match pieces.len() {
         0 => true,
         1 => pieces.iter().all(|(_, v)| piece(v)),
@@ -532,12 +582,34 @@ fn chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(ZStr::from_byte(c)))
 }
 
+/// `php_ucfirst()` / `php_lcfirst()`: the interned empty string for an
+/// empty argument (`RETURN_EMPTY_STRING()`), the argument itself when its
+/// first byte does not change (`zend_string_copy`), else one copy with
+/// the first byte changed (`zend_string_init`). A new string was made
+/// every time (a copy into a vector and a second into the string).
+fn first_byte_mapped(s: Cow<'_, ZStr>, map: fn(&u8) -> u8) -> ZStr {
+    let Some(c) = s.as_bytes().first() else {
+        return ZStr::empty();
+    };
+    let r = map(c);
+    if r == *c {
+        return s.into_owned();
+    }
+    ZStr::from_slice_mapped(s.as_bytes(), |b| b[0] = r)
+}
+
 fn ucfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::ucfirst(a.zstr(0).as_bytes())))
+    Ok(Value::Str(first_byte_mapped(
+        a.zstr(0),
+        u8::to_ascii_uppercase,
+    )))
 }
 
 fn lcfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::lcfirst(a.zstr(0).as_bytes())))
+    Ok(Value::Str(first_byte_mapped(
+        a.zstr(0),
+        u8::to_ascii_lowercase,
+    )))
 }
 
 fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -574,11 +646,7 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         if s.is_empty() {
             return Ok(bytes(ZStr::empty()));
         }
-        return Ok(bytes(transform::strtr(
-            s.as_bytes(),
-            from.as_bytes(),
-            to.as_bytes(),
-        )));
+        return Ok(Value::Str(strtr_chars(s, from.as_bytes(), to.as_bytes())));
     }
     let Value::Array(pairs) = from else {
         let msg = format!("must be of type array, {} given", crate::type_name(&from));
@@ -587,38 +655,109 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if s.is_empty() {
         return Ok(bytes(ZStr::empty()));
     }
-    let mut ps: Vec<(Vec<u8>, Value)> = Vec::with_capacity(pairs.len());
-    for (k, v) in pairs.iter() {
-        let key = match k {
-            ArrayKey::Int(i) => i.to_string().into_bytes(),
-            ArrayKey::Str(s) => s.as_bytes().to_vec(),
+    // `php_strtr_array()`: the subject itself for no pairs.
+    if pairs.is_empty() {
+        return Ok(Value::Str(s));
+    }
+    if pairs.len() == 1 {
+        return strtr_one_pair(vm, s, &pairs);
+    }
+    Ok(Value::Str(strtr_table(vm, s, &pairs)?))
+}
+
+/// `php_strtr_ex()`: the subject itself (`zend_string_copy`) when no byte
+/// changes (no `$from` byte, for one byte; no byte that translates to
+/// another, for more), else the translated copy.
+fn strtr_chars(s: ZStr, from: &[u8], to: &[u8]) -> ZStr {
+    let n = from.len().min(to.len());
+    let unchanged = match n {
+        0 => true,
+        1 => !s.as_bytes().contains(&from[0]),
+        _ => false,
+    };
+    if unchanged {
+        return s;
+    }
+    let r = transform::strtr(s.as_bytes(), from, to);
+    if n > 1 && r == s.as_bytes() {
+        return s;
+    }
+    ZStr::from(r)
+}
+
+/// `php_strtr_array()` of one pair: the replacement converted first, an
+/// empty key warned about, and the subject itself when the key does not
+/// occur (`php_char_to_str_ex()` / `php_str_to_str_ex()` return
+/// `zend_string_copy(str)` then).
+fn strtr_one_pair(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<Value> {
+    let Some((k, v)) = pairs.iter().next() else {
+        return Ok(Value::Str(s));
+    };
+    let key: Cow<'_, [u8]> = match k {
+        ArrayKey::Int(i) => Cow::Owned(i.to_string().into_bytes()),
+        ArrayKey::Str(k) => Cow::Borrowed(k.as_bytes()),
+    };
+    let val = to_str(vm, v)?;
+    if key.is_empty() {
+        vm.php_warning("Ignoring replacement of empty string")?;
+        return Ok(Value::Str(s));
+    }
+    let count = mem::occurrences(s.as_bytes(), &key, false);
+    if count == 0 {
+        return Ok(Value::Str(s));
+    }
+    let hay = s.as_bytes();
+    let grown = hay
+        .len()
+        .saturating_add(count.saturating_mul(val.len().saturating_sub(key.len())));
+    mem::check(vm, mem::zstr(grown))?;
+    let mut out = Vec::with_capacity(
+        grown.saturating_sub(count.saturating_mul(key.len().saturating_sub(val.len()))),
+    );
+    let mut p = 0;
+    while let Some(r) = search::memnstr(&hay[p..], &key) {
+        out.extend_from_slice(&hay[p..p + r]);
+        out.extend_from_slice(val.as_bytes());
+        p += r + key.len();
+    }
+    out.extend_from_slice(&hay[p..]);
+    Ok(bytes(out))
+}
+
+/// `php_strtr_array_ex()`: the keys summed up (an empty one warned about),
+/// then the subject scanned with each candidate looked up in the pairs
+/// array itself by its own hash (`zend_hash_str_find`; a numeric-looking
+/// candidate finds an integer key, as php-src's table of the integer keys
+/// as strings does), each replacement converted when it is used. The
+/// subject itself when nothing is replaced (`RETURN_STR_COPY`). Copying
+/// every key and value into a vector and a `SipHash` map first cost ~1,000
+/// instructions a call.
+fn strtr_table(vm: &mut Vm, s: ZStr, pairs: &ZArray) -> VmResult<ZStr> {
+    let mut keys = transform::StrtrKeys::new();
+    for (k, _) in pairs.iter() {
+        let taken = match k {
+            ArrayKey::Int(i) => keys.add(i.to_string().as_bytes(), s.len()),
+            ArrayKey::Str(k) => keys.add(k.as_bytes(), s.len()),
         };
-        ps.push((key, v.clone()));
+        if !taken && matches!(k, ArrayKey::Str(k) if k.is_empty()) {
+            vm.php_warning("Ignoring replacement of empty string")?;
+        }
     }
     let mut alloc = s.len();
-    let mut n = Notices::new();
-    let r = transform::strtr_pairs_with(
+    let r = transform::strtr_scan_with(
         s.as_bytes(),
-        &ps,
-        &mut n,
-        |key, v, notices, capacity| -> VmResult<ZStr> {
-            emit(vm, std::mem::take(notices))?;
+        &keys,
+        |key| pairs.get_sym(key),
+        |key, v, capacity| -> VmResult<ZStr> {
             let val = to_str(vm, v)?;
-            if ps.len() == 1 {
-                let count = mem::occurrences(s.as_bytes(), key, false);
-                alloc =
-                    alloc.saturating_add(count.saturating_mul(val.len().saturating_sub(key.len())));
-            } else {
-                alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
-            }
+            alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
             if alloc > capacity {
                 mem::check(vm, mem::zstr(alloc - capacity))?;
             }
             Ok(val)
         },
-    );
-    emit(vm, n)?;
-    Ok(bytes(r?))
+    )?;
+    Ok(r.map_or(s, ZStr::from))
 }
 
 fn strrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -683,6 +822,9 @@ fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmRe
     let Some(first) = search::memnstr(hay, search) else {
         return Ok((subject, 0));
     };
+    if search.len() == replace.len() {
+        return Ok(replace_same_len(hay, first, search, replace));
+    }
     let mut count = 1usize;
     let mut p = first + search.len();
     while let Some(r) = search::memnstr(&hay[p..], search) {
@@ -715,6 +857,47 @@ fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmRe
     Ok((out.finish(), i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
+/// [`replace_cs`] when `replace` is as long as `search` (`first` is the
+/// first occurrence): `php_str_to_str_ex()`'s `needle_len == str_len`
+/// case, the subject copied once (`zend_string_init`) and each occurrence
+/// overwritten in the copy, with no counting pass and no piecewise
+/// building; one byte for one byte is a single pass over the copy.
+fn replace_same_len(hay: &[u8], first: usize, search: &[u8], replace: &[u8]) -> (ZStr, i64) {
+    let n = search.len();
+    let mut count = 0usize;
+    let out = ZStr::from_slice_mapped(hay, |b| {
+        if let ([from], [to]) = (search, replace) {
+            for c in &mut b[first..] {
+                if *c == *from {
+                    *c = *to;
+                    count += 1;
+                }
+            }
+            return;
+        }
+        let mut at = first;
+        loop {
+            b[at..at + n].copy_from_slice(replace);
+            count += 1;
+            let next = at + n;
+            match search::memnstr(&hay[next..], search) {
+                Some(r) => at = next + r,
+                None => break,
+            }
+        }
+    });
+    (out, i64::try_from(count).unwrap_or(i64::MAX))
+}
+
+/// A string argument read in place when it is a string (no copy of the
+/// handle), else converted ([`to_str`]).
+fn str_cow<'a>(vm: &mut Vm, v: &'a Value) -> VmResult<Cow<'a, ZStr>> {
+    match v {
+        Value::Str(s) => Ok(Cow::Borrowed(s)),
+        other => Ok(Cow::Owned(to_str(vm, other)?)),
+    }
+}
+
 fn replace_in_subject(
     vm: &mut Vm,
     search: &Value,
@@ -726,8 +909,8 @@ fn replace_in_subject(
         return Ok((subject, 0));
     }
     let Value::Array(searches) = search else {
-        let s = to_str(vm, search)?;
-        let r = to_str(vm, replace)?;
+        let s = str_cow(vm, search)?;
+        let r = str_cow(vm, replace)?;
         if !ci && !s.is_empty() {
             return replace_cs(vm, subject, &s, &r);
         }
@@ -792,10 +975,12 @@ fn replace_in_subject(
 }
 
 fn str_replace_common(vm: &mut Vm, a: &Args, ci: bool) -> VmResult<Value> {
-    let search = a.at(0);
-    let replace = a.at(1);
-    let subject = a.at(2);
-    if !matches!(search, Value::Array(_)) && matches!(replace, Value::Array(_)) {
+    // The arguments read in place (`Z_PARAM_ARRAY_HT_OR_STR` takes no
+    // reference): copying the three out cost a clone and a drop each.
+    let search = a.at_ref(0);
+    let replace = a.at_ref(1);
+    let subject = a.at_ref(2);
+    if !matches!(*search, Value::Array(_)) && matches!(*replace, Value::Array(_)) {
         return Err(a.type_error(
             vm,
             2,
@@ -803,7 +988,7 @@ fn str_replace_common(vm: &mut Vm, a: &Args, ci: bool) -> VmResult<Value> {
         ));
     }
     let mut count = 0;
-    let result = if let Value::Array(subjects) = subject {
+    let result = if let Value::Array(subjects) = &*subject {
         let mut out = HashTable::new();
         for (k, v) in subjects.iter() {
             let s = to_str(vm, &v.deref())?;
@@ -870,15 +1055,15 @@ fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Results up to this many bytes are built on the stack by `str_repeat()`.
 const STR_REPEAT_STACK: usize = 256;
+/// Longer results are filled this many bytes at a time (a block of whole
+/// copies of the input).
+const STR_REPEAT_BLOCK: usize = 4096;
 
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let times = a.int(1);
     if times >= 0 && (s.is_empty() || times == 0) {
         return Ok(Value::Str(ZStr::empty()));
-    }
-    if times == 1 {
-        return Ok(Value::Str(s));
     }
     if times > 0 {
         let total = s
@@ -899,14 +1084,38 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
             return Ok(Value::Str(out));
         }
+        // A longer one too is one exactly sized string, as php-src's is
+        // (`zend_string_safe_alloc(len, mult, 0, 0)`): a vector wrapped
+        // into a string costs a second, small allocation, which
+        // `memory_get_usage()` shows (ext/pcre/tests/bug81243.phpt compares
+        // the usage around `str_repeat($s, 1)`). It is filled a block of
+        // whole copies at a time (php-src: `memset` for one byte, else
+        // copies doubling in size).
+        let bytes = s.as_bytes();
+        let mut out = ZStrBuf::with_capacity(total);
+        if bytes.len() >= STR_REPEAT_BLOCK {
+            for _ in 0..total / bytes.len() {
+                out.push(bytes);
+            }
+        } else {
+            let block = bytes.repeat((STR_REPEAT_BLOCK / bytes.len()).min(total / bytes.len()));
+            let mut left = total;
+            while left >= block.len() {
+                out.push(&block);
+                left -= block.len();
+            }
+            out.push(&block[..left]);
+        }
+        let out = out.finish();
+        // `ZSTR_COPY_CONCAT_PROPERTIES(result, input_str)`.
+        if s.is_valid_utf8() {
+            out.mark_valid_utf8();
+        }
+        return Ok(Value::Str(out));
     }
+    // A negative count: the ValueError.
     let r = transform::str_repeat(s.as_bytes(), times);
-    let out = ZStr::from(check(vm, r)?);
-    // `ZSTR_COPY_CONCAT_PROPERTIES(result, input_str)`.
-    if s.is_valid_utf8() {
-        out.mark_valid_utf8();
-    }
-    Ok(Value::Str(out))
+    Ok(Value::Str(ZStr::from(check(vm, r)?)))
 }
 
 fn count_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1092,6 +1301,9 @@ fn utf8_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     use php_stdstr::csv;
+    // `has()`, not the value: an omitted argument holds its stub default,
+    // but zpp leaves C's `zend_string *` NULL then, which is what tells
+    // csv_options() to deprecate an omitted `$escape`.
     let sep = a.has(1).then(|| a.str(1));
     let enc = a.has(2).then(|| a.str(2));
     let esc = a.has(3).then(|| a.str(3));
@@ -1168,7 +1380,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("ucfirst(string $string): string", ucfirst)
         .function_static("lcfirst(string $string): string", lcfirst)
         .function_static("ucwords(string $string, string $separators = \" \\t\\r\\n\\f\\v\"): string", ucwords)
-        .function_static("strtr(string $string, mixed $from, ?string $to = null): string", strtr)
+        .function_static("strtr(string $string, mixed $from, @zpp-not-null ?string $to = null): string", strtr)
         .function_static("strrev(string $string): string", strrev)
         .function_static("similar_text(string $string1, string $string2, &$percent = null): int", similar_text)
         .function_static("addcslashes(string $string, string $characters): string", addcslashes)
@@ -1180,7 +1392,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("hebrev(string $string, int $max_chars_per_line = 0): string", hebrev)
         .function_static("nl2br(string $string, bool $use_xhtml = true): string", nl2br)
         .function_static("strip_tags(string $string, array|string|null $allowed_tags = null): string", strip_tags_fn)
-        .function_static("str_getcsv(string $string, string $separator = \",\", string $enclosure = UNKNOWN, string $escape = UNKNOWN): array", str_getcsv)
+        .function_static("str_getcsv(string $string, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array", str_getcsv)
         .function_static("str_repeat(string $string, int $times): string", str_repeat)
         .function_static("count_chars(string $string, int $mode = 0): array|string", count_chars)
         .function_static("strnatcmp(string $string1, string $string2): int", strnatcmp)
@@ -1218,8 +1430,93 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use super::implode_valid_utf8;
-    use php_runtime::{Value, ZArray, ZStr};
+    use super::{implode_valid_utf8, implode_zstr};
+    use php_runtime::{PhpRef, Value, ZArray, ZStr};
+
+    /// `implode_zstr` joins as `php_implode` does (strings, ints, a float,
+    /// a reference's target) and flags the result exactly as
+    /// [`implode_valid_utf8`] says.
+    #[test]
+    fn implode_joins_and_flags_in_one_pass() {
+        let mut vm = php_vm::Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()));
+        let valid = |s: &str| {
+            let z = ZStr::from(s);
+            z.mark_valid_utf8();
+            Value::Str(z)
+        };
+        let raw = |b: &[u8]| Value::Str(ZStr::from(b));
+        let by_ref = Value::Reference(PhpRef::new(valid("rr")));
+        let cases: Vec<(ZStr, Vec<Value>, &[u8])> = vec![
+            (
+                ZStr::from(","),
+                vec![valid("ab"), valid("cd"), Value::Int(-12)],
+                &b"ab,cd,-12"[..],
+            ),
+            (
+                ZStr::from(", "),
+                vec![valid("ab"), raw(b"\xff\xfe")],
+                &b"ab, \xff\xfe"[..],
+            ),
+            (
+                ZStr::from("\u{e9}"),
+                vec![valid("x"), by_ref, Value::Float(1.5)],
+                "x\u{e9}rr\u{e9}1.5".as_bytes(),
+            ),
+            (ZStr::from("-"), vec![Value::Int(7)], &b"7"[..]),
+            (ZStr::from("-"), vec![valid("only")], &b"only"[..]),
+            (ZStr::from("-"), vec![], &b""[..]),
+            (
+                ZStr::from("-"),
+                vec![Value::Null, Value::Bool(true), valid("z")],
+                &b"-1-z"[..],
+            ),
+            // All strings: the one-allocation path (`implode_strings`).
+            (
+                ZStr::from(","),
+                vec![valid("a"), valid("bc"), valid(""), valid("d")],
+                &b"a,bc,,d"[..],
+            ),
+            (ZStr::from(""), vec![valid("a"), valid("b")], &b"ab"[..]),
+            (
+                ZStr::from(&b"\xff"[..]),
+                vec![valid("a"), valid("b")],
+                &b"a\xffb"[..],
+            ),
+            (
+                ZStr::from(" | "),
+                vec![valid("x"), raw(b"y\xc3")],
+                &b"x | y\xc3"[..],
+            ),
+        ];
+        for (glue, pieces, joined) in cases {
+            let arr = ZArray::from_values(pieces);
+            let out = implode_zstr(&mut vm, &glue, &arr).unwrap();
+            assert_eq!(out.as_bytes(), joined);
+            let want = implode_valid_utf8(&glue, &arr);
+            assert!(
+                out.is_valid_utf8() == want || out.is_interned(),
+                "{joined:?}: flag {} want {want}",
+                out.is_valid_utf8()
+            );
+        }
+    }
+
+    /// A list with a hole (an unset element) and a reference among strings
+    /// joins what is left, as `ZEND_HASH_FOREACH_VAL` + `ZVAL_DEREF` read
+    /// it (`/usr/bin/php8.5 -n`: `$a = ['a', 'b', 'c']; unset($a[1]);
+    /// implode(',', $a)` is `a,c`).
+    #[test]
+    fn implode_skips_holes_and_reads_references() {
+        let mut vm = php_vm::Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()));
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        let mut arr = ZArray::from_values([s("a"), s("b"), s("c")]);
+        arr.make_mut().remove(&php_runtime::ArrayKey::Int(1));
+        let out = implode_zstr(&mut vm, &ZStr::from(","), &arr).unwrap();
+        assert_eq!(out.as_bytes(), b"a,c");
+        let arr = ZArray::from_values([s("a"), Value::Reference(PhpRef::new(s("r"))), s("c")]);
+        let out = implode_zstr(&mut vm, &ZStr::from(","), &arr).unwrap();
+        assert_eq!(out.as_bytes(), b"a,r,c");
+    }
 
     fn list(items: Vec<Value>) -> ZArray {
         ZArray::from_values(items)

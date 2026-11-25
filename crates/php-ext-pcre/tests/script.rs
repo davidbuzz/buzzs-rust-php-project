@@ -176,6 +176,63 @@ fn split_grep_quote() {
     assert_eq!(out, "a|b|c;xz;1;a\\.b\\*c\\#");
 }
 
+/// `preg_quote()` returns its argument itself when nothing is escaped
+/// and the interned empty string for an empty one (`/usr/bin/php8.5 -n`).
+#[test]
+fn preg_quote_returns_its_argument_when_nothing_is_escaped() {
+    let out = run(r"$s = str_repeat('abc', 3);
+        $q = preg_quote($s);
+        debug_zval_dump($q);
+        debug_zval_dump(preg_quote(''));
+        debug_zval_dump(preg_quote(str_repeat('a.', 2)));
+        debug_zval_dump(preg_quote(str_repeat('a/', 2), '/'));");
+    assert_eq!(
+        out,
+        "string(9) \"abcabcabc\" refcount(3)\nstring(0) \"\" interned\nstring(6) \"a\\.a\\.\" refcount(1)\nstring(6) \"a\\/a\\/\" refcount(1)\n"
+    );
+}
+
+/// With nothing replaced, `preg_replace()`, `preg_replace_callback()` (also
+/// over an array of patterns or of subjects, and with a limit of 0) return
+/// the subject string itself, and `preg_split()`'s tail from offset 0 is
+/// the subject itself, but not a piece of the same length before an empty
+/// match (`/usr/bin/php8.5 -n`'s `debug_zval_dump()`).
+#[test]
+fn unchanged_subjects_are_returned_themselves() {
+    let out = run(r"$s = str_repeat('abc', 3);
+$r = preg_replace('/z/', 'y', $s);
+debug_zval_dump($r);
+$r2 = preg_replace_callback('/z/', fn($m) => 'y', $s);
+debug_zval_dump($r2);
+$r3 = preg_replace(['/z/', '/q/'], 'y', $s);
+debug_zval_dump($r3);
+debug_zval_dump(preg_replace('/z/', 'y', [$s]));
+debug_zval_dump(preg_replace('/a/', 'y', $s, 0));
+debug_zval_dump(preg_replace('/a/', 'y', $s));
+$p = preg_split('/z/', $s);
+debug_zval_dump($p[0]);
+debug_zval_dump(preg_split('/$/', $s, -1, PREG_SPLIT_NO_EMPTY));
+");
+    assert_eq!(
+        out,
+        r#"string(9) "abcabcabc" refcount(3)
+string(9) "abcabcabc" refcount(4)
+string(9) "abcabcabc" refcount(5)
+array(1) packed refcount(1){
+  [0]=>
+  string(9) "abcabcabc" refcount(5)
+}
+string(9) "abcabcabc" refcount(5)
+string(9) "ybcybcybc" refcount(1)
+string(9) "abcabcabc" refcount(6)
+array(1) packed refcount(1){
+  [0]=>
+  string(9) "abcabcabc" refcount(1)
+}
+"#
+    );
+}
+
 #[test]
 fn compile_errors_warn_and_set_last_error() {
     let out = run(r"var_dump(@preg_match('/(/', 'a'));
@@ -201,4 +258,45 @@ fn constants_are_defined() {
         r"echo PREG_SPLIT_DELIM_CAPTURE, PREG_UNMATCHED_AS_NULL, ' ', PCRE_VERSION_MAJOR, ' ', gettype(PCRE_JIT_SUPPORT);",
     );
     assert_eq!(out, "2512 10 boolean");
+}
+
+/// The replacement result made from its parts in one string: matches at
+/// the start, the end and everywhere, no match (the subject itself), an
+/// empty subject, an empty result, a result longer than 1 KiB, the
+/// callback form, `preg_filter()` with nothing replaced, and an invalid
+/// pattern (`/usr/bin/php8.5 -n`).
+#[test]
+fn replace_result_from_parts() {
+    let out = run(
+        r"echo preg_replace('/o/', '0', '  Hello World  ', -1, $c), $c, '|';
+        echo preg_replace('/z/', '0', 'abc', -1, $c), $c, '|';
+        echo preg_replace('/c$/', 'XY', 'abc'), '|';
+        echo preg_replace('/^a/', 'XY', 'abc'), '|';
+        echo preg_replace('/^/', '>', ''), '|';
+        echo preg_replace('/a/', '', 'aaa'), '|';
+        $big = ''; for ($i = 0; $i < 700; $i++) { $big .= 'ab'; }
+        $r = preg_replace('/b/', 'cc', $big); echo strlen($r), $r[0], $r[-1], $r[-3], '|';
+        echo preg_replace_callback('/b/', fn($m) => 'Q', 'abcb'), '|';
+        echo preg_replace_callback('/z/', fn($m) => 'Q', 'abcb'), '|';
+        var_dump(preg_filter('/z/', 'A', 'abc'));
+        var_dump(@preg_replace('/(', 'x', 'abc'));",
+    );
+    assert_eq!(
+        out,
+        "  Hell0 W0rld  2|abc0|abXY|XYbc|>||2100aca|aQcQ|abcb|NULL\nNULL\n"
+    );
+}
+
+/// `preg_match()`/`preg_match_all()` read the pattern and the subject in
+/// place: a reference subject and integer subjects converted to strings
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn match_reads_arguments_in_place() {
+    let out = run(
+        r#"$s = "abc"; $r = &$s; var_dump(preg_match("/b/", $r, $m), $m[0], preg_match("/2/", 123), preg_match_all("/\d/", 1203, $mm), implode(",", $mm[0]));"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nstring(1) \"b\"\nint(1)\nint(4)\nstring(7) \"1,2,0,3\"\n"
+    );
 }
