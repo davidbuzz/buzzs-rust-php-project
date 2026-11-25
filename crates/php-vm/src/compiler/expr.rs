@@ -704,62 +704,9 @@ impl Compiler<'_> {
             ExprKind::Closure(c) => self.compile_closure(c)?,
             ExprKind::ArrowFn(a) => self.compile_arrow_fn(a)?,
             ExprKind::Match { subject, arms } => self.compile_match(subject, arms)?,
-            ExprKind::Pipe { left, right } => {
-                let l = self.compile_expr(left)?;
-                // `x |> f(...)`: call the callable with x.
-                match &right.kind {
-                    ExprKind::Call { callee, args } if args.is_first_class_callable() => {
-                        match &**callee {
-                            Callee::Name(n) => self.emit_init_fcall(n),
-                            Callee::Expr(ex) => {
-                                let c = self.compile_expr(ex)?;
-                                self.emit(Op::InitDynCall { callee: c });
-                            }
-                        }
-                    }
-                    // `zend_partial_apply`: `x |> $o->m(...)` and
-                    // `x |> C::m(...)` are the plain calls `$o->m(x)` and
-                    // `C::m(x)`.
-                    ExprKind::MethodCall {
-                        object,
-                        name,
-                        args,
-                        nullsafe: false,
-                    } if args.is_first_class_callable() => {
-                        let o = if is_this_var(object) {
-                            self.method_call_this(object)?
-                        } else {
-                            self.compile_chain(object)?
-                        };
-                        let n = self.method_member_name(name, right.span.line)?;
-                        self.f().line = right.span.line;
-                        self.emit(Op::InitMethodCall { obj: o, name: n });
-                    }
-                    ExprKind::StaticCall { class, name, args }
-                        if args.is_first_class_callable()
-                            && self.parent_hook_property(class, name).is_none() =>
-                    {
-                        let spec = self.chain_class_spec(class)?;
-                        let n = self.method_member_name(name, right.span.line)?;
-                        self.f().line = right.span.line;
-                        self.emit(Op::InitStaticCall {
-                            class: spec,
-                            name: n,
-                        });
-                    }
-                    _ => {
-                        let c = self.compile_expr(right)?;
-                        self.emit(Op::InitDynCall { callee: c });
-                    }
-                }
-                self.emit(Op::Send {
-                    src: ArgSrc::Val(l),
-                });
-                let t = self.tmp();
-                self.f().line = line;
-                self.emit(Op::DoCall { dst: Some(t) });
-                Operand::Tmp(t)
-            }
+            ExprKind::Pipe { left, right } => self
+                .compile_pipe(left, right, line, true)?
+                .unwrap_or(Operand::Unused),
         })
     }
 
@@ -2178,10 +2125,68 @@ impl Compiler<'_> {
         });
     }
 
-    /// Compiles calls and `new`; returns the result operand.
-    #[allow(clippy::too_many_lines)]
+    /// Compiles calls, `new` and the pipe operator; returns the result
+    /// operand (`None` when `need` is false and the call's result is
+    /// unused).
     pub(crate) fn compile_call_like(&mut self, e: &Expr, need: bool) -> CResult<Option<Operand>> {
+        if let ExprKind::Pipe { left, right } = &e.kind {
+            return self.compile_pipe(left, right, e.span.line, need);
+        }
+        self.compile_call_like_ex(e, need, None)
+    }
+
+    /// `zend_compile_pipe()`: the left operand is evaluated first, then
+    /// sent to the right-hand side. A right-hand side that
+    /// `zend_partial_apply()` accepts (see [`pipe_partial_applies`]) is
+    /// compiled as the plain call with the operand where the placeholder
+    /// stands (`$x |> foo(1, ?)` is `foo(1, $x)`, after `$x`): no Closure
+    /// is created. Anything else is `($rhs)($x)`, the right-hand side
+    /// compiled after the operand and called dynamically.
+    fn compile_pipe(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
+        let l = self.compile_expr(left)?;
+        // A variable is copied into a temporary (`ZEND_QM_ASSIGN`) so that
+        // a by-reference parameter never binds to it, and so that the
+        // value sent is the one read before the other arguments run.
+        let piped = match l {
+            Operand::Cv(_) | Operand::TmpKeep(_) => {
+                let t = self.tmp();
+                self.emit(Op::Move { src: l, dst: t });
+                Operand::Tmp(t)
+            }
+            other => other,
+        };
+        if pipe_partial_applies(right) {
+            return self.compile_call_like_ex(right, need, Some(piped));
+        }
+        let c = self.compile_expr(right)?;
+        self.emit(Op::InitDynCall { callee: c });
+        self.emit(Op::Send {
+            src: ArgSrc::Val(piped),
+        });
+        self.f().line = line;
+        let dst = need.then(|| self.tmp());
+        self.emit(Op::DoCall { dst });
+        Ok(dst.map(Operand::Tmp))
+    }
+
+    /// [`Self::compile_call_like`] for a call or `new`; `pipe` is the
+    /// operand of a pipe whose right-hand side is this call, sent where
+    /// the call's only placeholder stands ([`Self::compile_pipe`]).
+    #[allow(clippy::too_many_lines)]
+    fn compile_call_like_ex(
+        &mut self,
+        e: &Expr,
+        need: bool,
+        pipe: Option<Operand>,
+    ) -> CResult<Option<Operand>> {
         let line = e.span.line;
+        let partial = pipe.is_none() && args_of(e).is_some_and(ArgList::is_partial);
         match &e.kind {
             ExprKind::Call { callee, args } => {
                 // `zend_compile_call`: a string literal callee (`'f'()`,
@@ -2197,9 +2202,15 @@ impl Compiler<'_> {
                 let mut fbc = None;
                 let mut frameless = false;
                 if let Some(n) = name {
-                    if !args.is_partial() {
-                        if let Some(r) = self.compile_special_call(n, args, line, need)? {
-                            return Ok(Some(r));
+                    if !partial {
+                        // (A piped call is never a special function: their
+                        // compilers read the arguments from the syntax tree,
+                        // where the piped operand has no node. It is the
+                        // regular call by name.)
+                        if pipe.is_none() {
+                            if let Some(r) = self.compile_special_call(n, args, line, need)? {
+                                return Ok(Some(r));
+                            }
                         }
                         fbc = self.known_fbc(n);
                         frameless = fbc.is_none() && self.frameless_ns_call(n, args);
@@ -2211,14 +2222,14 @@ impl Compiler<'_> {
                     self.emit(Op::InitDynCall { callee: c });
                 }
                 if !frameless {
-                    return self.finish_call_at(args, line, line, need, fbc);
+                    return self.finish_call_at(args, line, line, need, fbc, pipe);
                 }
                 // `zend_compile_ns_call` with a frameless branch: the
                 // arguments are compiled for the namespaced call (calls in
                 // them get no frameless branch of their own), then again,
                 // for reading, for `ZEND_FRAMELESS_ICALL_n`.
                 self.f().in_frameless_branch = true;
-                let r = self.finish_call_at(args, line, line, need, None);
+                let r = self.finish_call_at(args, line, line, need, None, pipe);
                 self.f().in_frameless_branch = false;
                 let r = r?;
                 self.check_frameless_args(args)?;
@@ -2250,7 +2261,7 @@ impl Compiler<'_> {
                 };
                 // zend_compile_method_call(): a callable conversion inside a
                 // short-circuiting chain.
-                if args.is_partial() && self.f().sc_jumps.len() != checkpoint {
+                if partial && self.f().sc_jumps.len() != checkpoint {
                     return self.err(
                         "Cannot combine nullsafe operator with Closure creation",
                         line,
@@ -2259,7 +2270,7 @@ impl Compiler<'_> {
                 let n = self.method_member_name(name, line)?;
                 self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
-                self.finish_call_at(args, line, member_name_line(name), need, None)
+                self.finish_call_at(args, line, member_name_line(name), need, None, pipe)
             }
             ExprKind::StaticCall { class, name, args }
                 if self.parent_hook_property(class, name).is_some() =>
@@ -2312,7 +2323,7 @@ impl Compiler<'_> {
                     prop: p,
                     set: is_set,
                 });
-                self.finish_call_at(args, line, line, need, None)
+                self.finish_call_at(args, line, line, need, None, pipe)
             }
             ExprKind::StaticCall { class, name, args } => {
                 let spec = self.chain_class_spec(class)?;
@@ -2322,7 +2333,7 @@ impl Compiler<'_> {
                     class: spec,
                     name: n,
                 });
-                self.finish_call_at(args, line, member_name_line(name), need, None)
+                self.finish_call_at(args, line, member_name_line(name), need, None, pipe)
             }
             ExprKind::New { class, args } => {
                 // `ZEND_AST_NEW` takes the line of its class child, which
@@ -2381,6 +2392,8 @@ impl Compiler<'_> {
     /// method and static calls use the line of the method name
     /// (`zend_compile_call_common(..., method_ast lineno)`). `fbc` is the
     /// called function when the compiler knows it ([`Self::known_fbc`]).
+    /// `pipe` is a piped operand that takes the place of the only
+    /// placeholder ([`Self::compile_pipe`]), making the call a plain one.
     fn finish_call_at(
         &mut self,
         args: &ArgList,
@@ -2388,7 +2401,12 @@ impl Compiler<'_> {
         call_line: u32,
         need: bool,
         fbc: Option<super::FunctionInfo>,
+        pipe: Option<Operand>,
     ) -> CResult<Option<Operand>> {
+        if pipe.is_some() {
+            self.compile_args_piped(args, fbc.as_ref(), pipe)?;
+            return Ok(self.emit_do_call(call_line, need));
+        }
         if args.is_first_class_callable() {
             let t = self.tmp();
             self.f().line = line;
@@ -2416,6 +2434,11 @@ impl Compiler<'_> {
             return Ok(Some(Operand::Tmp(t)));
         }
         self.compile_args(args, fbc.as_ref())?;
+        Ok(self.emit_do_call(call_line, need))
+    }
+
+    /// The `DoCall` of [`Self::finish_call_at`], after the arguments.
+    fn emit_do_call(&mut self, call_line: u32, need: bool) -> Option<Operand> {
         // `zend_compile_call_common` gives the call opcode the call's own
         // line (`opline->lineno = lineno`) but leaves `CG(zend_lineno)`
         // where compiling the last argument put it, so the opcodes that
@@ -2426,7 +2449,7 @@ impl Compiler<'_> {
         let dst = need.then(|| self.tmp());
         self.emit(Op::DoCall { dst });
         self.f().line = after_args;
-        Ok(dst.map(Operand::Tmp))
+        dst.map(Operand::Tmp)
     }
 
     /// Arguments of a partial application (`zend_compile_args_ex` with
@@ -2604,6 +2627,19 @@ impl Compiler<'_> {
         args: &ArgList,
         fbc: Option<&super::FunctionInfo>,
     ) -> CResult<()> {
+        self.compile_args_piped(args, fbc, None)
+    }
+
+    /// [`Self::compile_args`] of a call whose placeholder takes a piped
+    /// operand (`zend_partial_apply` puts the operand's node in the
+    /// placeholder's place, so `zend_compile_args` sends it as a positional
+    /// or named value). Without `pipe`, placeholders send nothing.
+    fn compile_args_piped(
+        &mut self,
+        args: &ArgList,
+        fbc: Option<&super::FunctionInfo>,
+        mut pipe: Option<Operand>,
+    ) -> CResult<()> {
         let mut seen_named = false;
         let mut seen_unpack = false;
         for (i, a) in args.args.iter().enumerate() {
@@ -2666,9 +2702,33 @@ impl Compiler<'_> {
                     let src = self.arg_src_for(value)?;
                     self.emit(Op::SendNamed { name: n, src });
                 }
-                ArgKind::Placeholder
-                | ArgKind::VariadicPlaceholder
-                | ArgKind::NamedPlaceholder(_) => {}
+                ArgKind::Placeholder | ArgKind::VariadicPlaceholder => {
+                    let Some(p) = pipe.take() else { continue };
+                    if seen_named {
+                        return self.err(
+                            "Cannot use positional argument after named argument",
+                            a.span.line,
+                        );
+                    }
+                    if seen_unpack {
+                        return self.err(
+                            "Cannot use positional argument after argument unpacking",
+                            a.span.line,
+                        );
+                    }
+                    self.emit(Op::Send {
+                        src: ArgSrc::Val(p),
+                    });
+                }
+                ArgKind::NamedPlaceholder(id) => {
+                    let Some(p) = pipe.take() else { continue };
+                    seen_named = true;
+                    let n = self.lit_str(&id.name);
+                    self.emit(Op::SendNamed {
+                        name: n,
+                        src: ArgSrc::Val(p),
+                    });
+                }
             }
         }
         Ok(())
@@ -2841,6 +2901,70 @@ impl Compiler<'_> {
         }
         Ok(Some(Operand::Tmp(result)))
     }
+}
+
+/// The argument list of a call or `new`.
+fn args_of(e: &Expr) -> Option<&ArgList> {
+    match &e.kind {
+        ExprKind::Call { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::StaticCall { args, .. }
+        | ExprKind::New { args, .. } => Some(args),
+        _ => None,
+    }
+}
+
+/// `zend_partial_apply()` for `zend_compile_pipe()`: whether `$x |> e`
+/// compiles as the plain call `e` with `$x` in its placeholder's place.
+/// `e` is a function, method or static-method call (not `new`, not `?->`)
+/// that is a partial application with exactly one placeholder: `?`,
+/// `name: ?` or `...` (so `f(...)` too), and not `...` after a named
+/// argument (`f(a: 1, ...)` would become a positional argument after a
+/// named one). A call of a function named `assert` is never rewritten
+/// (`zend_is_pipe_optimizable_callable_name`): its compilation adds the
+/// message argument.
+fn pipe_partial_applies(e: &Expr) -> bool {
+    let args = match &e.kind {
+        ExprKind::Call { callee, args } => {
+            let assert = match &**callee {
+                Callee::Name(n) => n.name.eq_ignore_ascii_case(b"assert"),
+                Callee::Expr(ex) => {
+                    matches!(&ex.kind, ExprKind::String(s) if s.eq_ignore_ascii_case(b"assert"))
+                }
+            };
+            if assert {
+                return false;
+            }
+            args
+        }
+        ExprKind::MethodCall {
+            args,
+            nullsafe: false,
+            ..
+        }
+        | ExprKind::StaticCall { args, .. } => args,
+        _ => return false,
+    };
+    let mut placeholders = 0u32;
+    let mut named = false;
+    for a in &args.args {
+        match &a.kind {
+            ArgKind::Named { .. } => named = true,
+            ArgKind::NamedPlaceholder(_) => {
+                named = true;
+                placeholders += 1;
+            }
+            ArgKind::Placeholder => placeholders += 1,
+            ArgKind::VariadicPlaceholder => {
+                if named {
+                    return false;
+                }
+                placeholders += 1;
+            }
+            ArgKind::Positional(_) | ArgKind::Unpack(_) => {}
+        }
+    }
+    placeholders == 1
 }
 
 /// Whether the arguments `args` of `array_map()`'s callback make a partial
