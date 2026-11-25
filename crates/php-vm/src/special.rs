@@ -908,6 +908,7 @@ impl Vm {
     /// and while observers are enabled (they see every internal call).
     /// `dst` is the call's result temporary (`pending_call_dst`).
     #[inline]
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_in_place(&mut self, dst: Option<u32>) -> Option<VmResult<Value>> {
         if self.observer.enabled {
             return None;
@@ -925,6 +926,27 @@ impl Vm {
         let sent = call.inline_args.get(..n)?;
         if !call.args.is_empty() || !plain_call(call) || !frameless_args(class, sent) {
             return None;
+        }
+        // `in_array()` and the `str_contains()` family: answered by
+        // [`Vm::frameless_two`], the pending call popped as the handler's
+        // call would pop it (its argument buffer back to the pool).
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST) && (2..=3).contains(&n) {
+            let b = Rc::clone(b);
+            let mut sent: [Option<Value>; 3] = [None, None, None];
+            for (slot, arg) in sent.iter_mut().zip(call.inline_args[..n].iter_mut()) {
+                *slot = arg.take();
+            }
+            let PendingCall { args: spare, .. } = frame.calls.pop()?;
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &sent[..n]) else {
+                unreachable!("frameless_two answers the arguments frameless_args accepts")
+            };
+            drop(sent);
+            drop(b);
+            let r = r.and_then(|v| self.check_interrupt().map(|()| v));
+            if spare.capacity() > 0 {
+                self.put_arg_vec(spare);
+            }
+            return Some(r);
         }
         let quick = if n == 1 {
             frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
@@ -1088,6 +1110,7 @@ impl Vm {
     /// tape then makes it with the builtin's frame). `calls_len` is the
     /// number of pending calls the caller had when the call was prepared:
     /// the call is its newest.
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_prepared(
         &mut self,
         b: &Rc<Builtin>,
@@ -1120,6 +1143,28 @@ impl Vm {
         if let Some(v) = quick {
             // The argument: a number or a string (no side effect).
             frame.args.clear();
+            if let Err(e) = self.check_interrupt() {
+                return Some(Err(e));
+            }
+            self.put_call_result(dst, v);
+            return Some(Ok(()));
+        }
+        // `in_array()` and the `str_contains()` family, whose accepted
+        // arguments [`Vm::frameless_two`] always answers: taken out of the
+        // frame, as the handler's call would leave it.
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST) && (2..=3).contains(&n) {
+            let mut sent: [Option<Value>; 3] = [None, None, None];
+            for (slot, arg) in sent.iter_mut().zip(frame.args.drain(..)) {
+                *slot = arg;
+            }
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &sent[..n]) else {
+                unreachable!("frameless_two answers the arguments frameless_args accepts")
+            };
+            drop(sent);
+            let v = match r {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }
@@ -1206,6 +1251,77 @@ impl Vm {
 }
 
 impl Vm {
+    /// The handler of a two- or three-argument frameless call evaluated
+    /// without the handler's argument and result vectors: `in_array()`
+    /// and the `str_contains()` family, as their handlers
+    /// compute them (`php_stdarr::basic::in_array`, `php_stdstr::search`),
+    /// for arguments [`frameless_args`] accepted for `class`. `None` for
+    /// every other call (the handler then runs).
+    #[inline]
+    fn frameless_two(
+        &mut self,
+        name: &[u8],
+        class: u32,
+        args: &[Option<Value>],
+    ) -> Option<VmResult<Value>> {
+        use php_stdstr::search;
+        match (class, args) {
+            (fl::STR_TEST, [Some(Value::Str(h)), Some(Value::Str(n))]) => {
+                let (h, n) = (h.as_bytes(), n.as_bytes());
+                let r = match name {
+                    b"str_contains" => search::str_contains(h, n),
+                    b"str_starts_with" => search::str_starts_with(h, n),
+                    b"str_ends_with" => search::str_ends_with(h, n),
+                    _ => return None,
+                };
+                Some(Ok(Value::Bool(r)))
+            }
+            (fl::IN_ARRAY, [Some(needle), Some(Value::Array(haystack))]) => Some(
+                php_stdarr::basic::in_array(self, needle, haystack, false)
+                    .map(Value::Bool)
+                    .map_err(|e| self.rt_throw(e)),
+            ),
+            (
+                fl::IN_ARRAY,
+                [Some(needle), Some(Value::Array(haystack)), Some(Value::Bool(strict))],
+            ) => Some(
+                php_stdarr::basic::in_array(self, needle, haystack, *strict)
+                    .map(Value::Bool)
+                    .map_err(|e| self.rt_throw(e)),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The first run of a namespaced frameless call site
+    /// ([`FramelessCall::ns`]): as its `InitFCall` would resolve it
+    /// (`Vm::op_init_fcall`). A namespaced function cached for the name or
+    /// declared is the call's (`None`: the call's own ops run and resolve
+    /// it, as when no function of either name exists); otherwise the global function, cached in the site's slot
+    /// `slot` for the rest of the request, as `ZEND_JMP_FRAMELESS` and
+    /// `ZEND_INIT_NS_FCALL_BY_NAME` cache their outcome.
+    #[cold]
+    #[inline(never)]
+    fn frameless_ns_first_run(&mut self, ns: u32, global: u32, slot: usize) -> Option<Func> {
+        let code = Rc::clone(&self.frame().code);
+        let by_literal = code.fcall_cache.borrow().get(ns as usize).is_some_and(|c| {
+            c.as_ref()
+                .and_then(crate::opcode::CachedFunc::get)
+                .is_some()
+        });
+        if by_literal || self.functions.contains_key(&self.lit_str(ns)) {
+            return None;
+        }
+        let func = self.functions.get(&self.lit_str(global)).cloned()?;
+        let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+        let mut cache = code.fcall_cache.borrow_mut();
+        if cache.len() <= slot {
+            crate::rtcache::grow_slots(&mut cache, size, || None);
+        }
+        cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
+        Some(func)
+    }
+
     /// [`Op::FramelessICall`](crate::opcode::Op::FramelessICall) in
     /// place (`ZEND_FRAMELESS_ICALL_n`): when the call site resolved to a
     /// builtin with a frameless class (its run-time cache entry, filled by
@@ -1225,6 +1341,7 @@ impl Vm {
     /// while observers are enabled: the op then runs the call's ops
     /// (`INIT_FCALL`, `SEND`s, `DO_ICALL`) one after the other.
     #[inline]
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_op(
         &mut self,
         fc: &FramelessCall,
@@ -1237,12 +1354,32 @@ impl Vm {
         if frame.symtab_attached {
             return None;
         }
-        let cached = frame
-            .code
-            .fcall_cache
-            .borrow()
-            .get(fc.name as usize)
-            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+        let cached = match fc.ns {
+            None => frame
+                .code
+                .fcall_cache
+                .borrow()
+                .get(fc.name as usize)
+                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get)),
+            // `ZEND_JMP_FRAMELESS`: the call site's slot, where its
+            // `InitFCall` keeps the global fallback it resolved to
+            // (`Vm::op_init_fcall`, at the same `ip`), decided on the site's
+            // first run as there.
+            Some(ns) => {
+                let slot = frame.code.literals.len() + ip;
+                let site = frame
+                    .code
+                    .fcall_cache
+                    .borrow()
+                    .get(slot)
+                    .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+                match site {
+                    Some(f) => Some(f),
+                    None => Some(self.frameless_ns_first_run(ns, fc.name, slot)?),
+                }
+            }
+        };
+        let frame = self.frames.last_mut()?;
         let Some(Func::Builtin(b)) = cached else {
             return None;
         };
@@ -1286,14 +1423,18 @@ impl Vm {
             }
         }
         frame.ip = ip;
-        let quick = if n == 1 {
-            frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
-        } else {
-            None
+        let quick = match n {
+            1 => frameless_inline(b.name.as_bytes(), class, sent[0].as_ref()).map(Ok),
+            2 | 3 => self.frameless_two(b.name.as_bytes(), class, &sent[..n]),
+            _ => None,
         };
         if let Some(v) = quick {
             drop(b);
             drop(sent);
+            let v = match v {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }

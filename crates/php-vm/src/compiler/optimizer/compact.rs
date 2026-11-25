@@ -411,6 +411,9 @@ pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32
         // Formed after the optimizer (`specialise::fuse_frameless_calls`).
         Op::FramelessICall(fc) => {
             f(&mut fc.name);
+            if let Some(ns) = &mut fc.ns {
+                f(ns);
+            }
             f(&mut fc.display);
         }
         Op::FetchConst { name, fallback, .. } | Op::FetchConstTo { name, fallback, .. } => {

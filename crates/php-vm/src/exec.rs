@@ -2058,7 +2058,12 @@ impl Vm {
                     // The call ops an `Op::FramelessICall` replaced, one
                     // after the other (the `Nop`s after it follow).
                     Op::FramelessICall(fc) => {
-                        self.op_init_fcall(fc.name, None, fc.display)?;
+                        // A namespaced call's own `InitFCall` (its name
+                        // first, then the global fallback).
+                        match fc.ns {
+                            Some(ns) => self.op_init_fcall(ns, Some(fc.name), fc.display)?,
+                            None => self.op_init_fcall(fc.name, None, fc.display)?,
+                        }
                         for src in &fc.args[..usize::from(fc.argc).min(3)] {
                             self.op_send(src, None)?;
                         }

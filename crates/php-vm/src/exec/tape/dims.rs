@@ -278,8 +278,10 @@ fn made_str(code: &OpArray, i: usize, dim: Operand) -> bool {
             dst,
             ..
         } => *dst == t,
+        // (A namespaced call may run a user function of that name.)
         Op::FramelessICall(fc) => {
             fc.dst == Some(t)
+                && fc.ns.is_none()
                 && matches!(
                     code.literals.get(fc.name as usize),
                     Some(Value::Str(name)) if STRING_BUILTINS.contains(&name.as_bytes())

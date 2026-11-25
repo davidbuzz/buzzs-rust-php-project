@@ -203,6 +203,7 @@ enum_codec!(ArgSrc: u8 {
 
 struct_codec!(FramelessCall {
     name,
+    ns,
     display,
     args,
     vals,

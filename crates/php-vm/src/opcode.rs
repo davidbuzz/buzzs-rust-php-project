@@ -266,8 +266,16 @@ pub enum ArgSrc {
 /// `send_back`: how many ops back).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FramelessCall {
-    /// The lower-case function name literal (the run-time cache key).
+    /// The lower-case function name literal (the run-time cache key): the
+    /// global builtin's.
     pub name: u32,
+    /// A namespaced call's own name literal (`app\in_array`, the
+    /// `InitFCall`'s `name`, `name` above being its global fallback):
+    /// php-src's `ZEND_JMP_FRAMELESS`, which runs the call in place only
+    /// while no such function was found when the call site first ran (the
+    /// site's run-time cache slot keeps the outcome). `None` for a call by
+    /// a global name.
+    pub ns: Option<u32>,
     /// The display name literal.
     pub display: u32,
     /// The arguments' `Send` sources (`args[..argc]`).
