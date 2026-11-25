@@ -366,11 +366,16 @@ impl<'a> Scanner<'a> {
             return Some(Token::Int(if negative { v } else { -v }));
         }
         if self.options & BIGINT_AS_STRING != 0 {
-            Some(Token::Str(if self.validate {
-                Vec::new()
-            } else {
-                text.to_vec()
-            }))
+            if self.validate {
+                return Some(Token::Str(Vec::new()));
+            }
+            // `ZVAL_STRINGL`: a copy of the digits, reserved like a string.
+            self.pending = PendingStr {
+                start,
+                end: p,
+                copy: false,
+            };
+            Some(Token::StrLen(text.len()))
         } else {
             Some(Token::Double(parse_double(text)))
         }

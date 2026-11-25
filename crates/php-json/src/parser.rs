@@ -19,6 +19,7 @@
 //!   nesting to 4998 arrays or 2499 objects regardless of `$depth`.
 
 use crate::error::{ErrorCode, JsonError};
+use crate::memory::zend_string_size;
 use crate::scanner::{Scanner, Token};
 use php_runtime::{RuntimeError, ZStr};
 
@@ -30,13 +31,6 @@ const YYMAXDEPTH: usize = 10_000;
 /// stops at the next value ([`Sink::aborted`]). Only a large allocation can
 /// jump from under the limit to over the hard ceiling at once.
 const RESERVE_MIN: usize = 4096;
-
-/// `_ZSTR_STRUCT_SIZE(len)` rounded by `ZEND_MM_ALIGNED_SIZE`: the bytes
-/// php-src allocates for a `zend_string` of `len` bytes (a 24-byte header,
-/// the bytes and the terminating NUL). Saturates instead of overflowing.
-pub(crate) fn zend_string_size(len: usize) -> usize {
-    len.saturating_add(24 + 1 + 7) & !7
-}
 
 /// A failure inside a semantic action.
 #[derive(Debug)]

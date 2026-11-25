@@ -433,6 +433,29 @@ fn large_strings_are_reserved_first() {
     let key = format!("{{\"{}\": 1}}", "k".repeat(8000));
     assert!(decode(key.as_bytes(), Some(true), 512, 0, &mut h).is_err());
     assert_eq!(h.reserved, [8032]);
+
+    // So is a big integer kept as a string (`ZVAL_STRINGL` of its digits).
+    let mut h = TestHost::new();
+    let digits = "9".repeat(5000);
+    let v = decode(
+        digits.as_bytes(),
+        None,
+        512,
+        crate::flags::BIGINT_AS_STRING,
+        &mut h,
+    )
+    .expect("decode");
+    assert_eq!(h.reserved, [5032]);
+    assert!(matches!(&v, Value::Str(s) if s.as_bytes() == digits.as_bytes()));
+    h.reserve_limit = Some(5000);
+    let r = decode(
+        digits.as_bytes(),
+        None,
+        512,
+        crate::flags::BIGINT_AS_STRING,
+        &mut h,
+    );
+    assert!(r.is_err());
 }
 
 #[test]
