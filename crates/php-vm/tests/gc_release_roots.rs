@@ -5,7 +5,10 @@
 //! by returning frames (bound by `global`, `static` or `$b = &$a`),
 //! references freed while buffered (`GC_REMOVE_FROM_BUFFER`: their slot
 //! is reused, so they never move the threshold), objects and arrays in
-//! the variables of returning frames. The expected output is
+//! the variables of returning frames, arrays released while held
+//! elsewhere (every non-persistent array is collectable: buffered once,
+//! out of the buffer when freed) and what they do to the threshold and to
+//! when garbage cycles are destructed. The expected output is
 //! `/usr/bin/php8.5 -n` on each script (ref: Zend/zend_gc.c,
 //! Zend/zend_execute.c `i_free_compiled_variables`).
 
@@ -136,4 +139,165 @@ held($o, 2); echo st(), "\n";
 for ($i = 0; $i < 5; $i++) { held(new stdClass, $i); } echo st(), "\n";
 "#;
     assert_eq!(run(src), "roots=0\nroots=1\nroots=1\nroots=1\n");
+}
+
+/// Arrays released while another holder remains are possible roots, once
+/// each; a literal's array stays held by the literal (no opcache: C's
+/// literal arrays are refcounted then); strings never are; a separated
+/// copy freed leaves nothing (tools/div/g1.php; C: `php8.5 -n`).
+#[test]
+fn arrays_released_while_held_are_roots() {
+    let src = r#"<?php
+function held($a) { return count($a); }
+function f() {
+    gc_collect_cycles();
+    $r = [];
+    $a = [1, 2, 3]; $b = $a; unset($b);                 $r[] = gc_status()['roots'];
+    $c = [1, [2]]; held($c);                            $r[] = gc_status()['roots'];
+    $d = ['x' => new stdClass]; $e = $d; $e = null;     $r[] = gc_status()['roots'];
+    $s = str_repeat('a', 3); $t = $s; unset($t);        $r[] = gc_status()['roots'];
+    $o = new stdClass; $p = $o; unset($p);              $r[] = gc_status()['roots'];
+    $n = gc_collect_cycles();                           $r[] = $n; $r[] = gc_status()['roots'];
+    $lit = [1, 2]; $m = $lit; unset($m);                $r[] = gc_status()['roots'];
+    $big = range(1, 5); $q = $big; $q[] = 6; unset($q); $r[] = gc_status()['roots'];
+    return implode(',', $r);
+}
+echo f(), "\n", f(), "\n";
+function many() { gc_collect_cycles(); $keep = []; for ($i = 0; $i < 12000; $i++) { $x = [$i]; $keep[] = $x; } $s = gc_status(); return $s['roots'] . ' runs=' . $s['runs'] . ' threshold=' . $s['threshold']; }
+echo many(), "\n";
+class D { public $self; public $id; function __construct($id) { $this->id = $id; $this->self = $this; } function __destruct() { echo "d{$this->id} "; } }
+function cycles() { gc_collect_cycles(); for ($i = 0; $i < 3; $i++) { new D($i); } $junk = []; for ($i = 0; $i < 10100; $i++) { $x = [$i, [$i]]; $y = $x; unset($y); } echo "| after loop\n"; }
+cycles(); echo "\n";
+"#;
+    assert_eq!(
+        run(src),
+        "1,2,3,3,4,0,0,1,1\n\
+         1,2,3,3,4,0,0,1,1\n\
+         1999 runs=5 threshold=20001\n\
+         | after loop\n\
+         \n\
+         d0 d1 d2 "
+    );
+}
+
+/// A buffered array that is freed leaves the buffer (the count goes
+/// back), one released twice is counted once, and one freed with the
+/// object holding it leaves too.
+#[test]
+fn freed_arrays_leave_the_buffer() {
+    let src = r#"<?php
+function f() {
+  $r = [];
+  $a = range(1, 3); $b = $a; unset($b); $r[] = gc_status()['roots'];
+  $b = $a; $b = 0; $c = $a; unset($c); $r[] = gc_status()['roots'];
+  unset($a); $r[] = gc_status()['roots'];
+  $p = range(1, 2); $q = range(1, 2); $p2 = $p; $q2 = $q; unset($p2, $q2); $r[] = gc_status()['roots'];
+  $p = null; $r[] = gc_status()['roots'];
+  $s = range(1, 2); $t = $s; unset($t); $r[] = gc_status()['roots'];
+  $q = null; $s = null; $r[] = gc_status()['roots'];
+  $o = new stdClass; $o->list = range(1, 2); $l = $o->list; unset($l); $r[] = gc_status()['roots'];
+  $o = null; $r[] = gc_status()['roots'];
+  return implode(',', $r);
+}
+echo f(), "\n", f(), "\n";
+"#;
+    assert_eq!(run(src), "1,1,0,2,1,2,0,1,0\n1,1,0,2,1,2,0,1,0\n");
+}
+
+/// The script of [`literal_and_nested_array_roots`].
+const LITERALS: &str = r#"<?php
+function st() { $s = gc_status(); return "runs={$s['runs']} collected={$s['collected']} threshold={$s['threshold']} roots={$s['roots']}"; }
+function f() {
+  $r = [];
+  $a = [1]; $b = $a; unset($b); $r[] = gc_status()['roots'];
+  $c = $a; unset($c); $c = $a; $c = 1; $r[] = gc_status()['roots'];
+  unset($a); $r[] = gc_status()['roots'];
+  $x = [2]; $y = $x; unset($y); $r[] = gc_status()['roots'];
+  $z = [3]; $w = $z; unset($w); $r[] = gc_status()['roots'];
+  $x = null; $r[] = gc_status()['roots'];
+  $e = []; $f = $e; unset($f); $r[] = gc_status()['roots'];
+  $n = [[1], [2]]; $m = $n; unset($n); $r[] = gc_status()['roots'];
+  unset($m); $r[] = gc_status()['roots'];
+  $in = [5]; $out = [$in, $in]; unset($out); $r[] = gc_status()['roots'];
+  return implode(',', $r);
+}
+echo f(), "\n", st(), "\n";
+echo gc_collect_cycles(), " ", st(), "\n";
+"#;
+
+/// Literal arrays stay held by their literal, the empty array is never a
+/// root, and an array freed holding arrays still held elsewhere buffers
+/// them (`zend_array_destroy`); a run empties the buffer.
+#[test]
+fn literal_and_nested_array_roots() {
+    assert_eq!(
+        run(LITERALS),
+        "1,1,1,2,3,3,3,4,4,5\n\
+         runs=0 collected=0 threshold=10001 roots=5\n\
+         0 runs=1 collected=0 threshold=10001 roots=0\n"
+    );
+}
+
+/// No buffered array survives a request: the next request on the same
+/// thread starts with an empty buffer and counts the same roots.
+#[test]
+fn array_roots_do_not_survive_a_request() {
+    let first = run(LITERALS);
+    assert_eq!(run(LITERALS), first);
+    let src = r#"<?php
+$keep = [range(1, 2)];
+$k2 = $keep[0];
+unset($k2);
+echo gc_status()['roots'], "\n";
+"#;
+    assert_eq!(run(src), "1\n");
+    assert_eq!(run(src), "1\n");
+}
+
+/// Object cycles (each object holds an array holding it) are collected,
+/// destructors and all, when the roots buffered by array releases reach
+/// the threshold, before the loop ends; the run collected fewer than 100
+/// nodes, so the threshold rises.
+#[test]
+fn array_roots_trigger_a_run_at_the_threshold() {
+    let src = r#"<?php
+function st() { $s = gc_status(); return "runs={$s['runs']} collected={$s['collected']} threshold={$s['threshold']} roots={$s['roots']}"; }
+class D { public $arr; public $id; function __construct($id) { $this->id = $id; $this->arr = [$this]; } function __destruct() { echo "d{$this->id} "; } }
+function t() {
+  for ($i = 0; $i < 3; $i++) { new D($i); }
+  $keep = [];
+  for ($i = 0; $i < 10100; $i++) { $x = [$i]; $keep[] = $x; }
+  echo "| after loop\n";
+  return count($keep);
+}
+echo t(), "\n", st(), "\n";
+"#;
+    assert_eq!(
+        run(src),
+        "d0 d1 d2 | after loop\n\
+         10100\n\
+         runs=2 collected=6 threshold=20001 roots=0\n"
+    );
+}
+
+/// `gc_adjust_threshold`: an automatic run over array roots that frees
+/// nothing raises the threshold by 10000; a productive one brings it
+/// back down to 10001.
+#[test]
+fn threshold_after_unproductive_and_productive_runs() {
+    let src = r#"<?php
+function st() { $s = gc_status(); return "runs={$s['runs']} collected={$s['collected']} threshold={$s['threshold']} roots={$s['roots']}"; }
+function unprod() { $keep = []; for ($i = 0; $i < 10500; $i++) { $x = [$i]; $keep[] = $x; } return count($keep); }
+echo unprod(), " ", st(), "\n";
+function prod() { for ($i = 0; $i < 25000; $i++) { $o = new stdClass; $o->a = [$o]; } }
+prod();
+echo st(), "\n";
+echo unprod(), " ", st(), "\n";
+"#;
+    assert_eq!(
+        run(src),
+        "10500 runs=1 collected=0 threshold=20001 roots=0\n\
+         runs=2 collected=40000 threshold=10001 roots=5000\n\
+         10500 runs=3 collected=50000 threshold=10001 roots=0\n"
+    );
 }
