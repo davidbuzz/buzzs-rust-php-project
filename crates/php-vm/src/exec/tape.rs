@@ -1483,6 +1483,69 @@ fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
         .or_else(|| family("props", props::lower))
         .or_else(|| family("strs", strs::lower))
         .or_else(|| family("calls", calls::lower))
+        .or_else(|| family("places", lower_place))
+}
+
+/// Whether `p` is a place one of the frame-local nested-access paths can
+/// serve (`Vm::fetch_prop_dims_fast`, `Vm::fetch_global_dims_fast`,
+/// `Vm::isset_prop_dims_fast`, `Vm::assign_prop_dims_fast`,
+/// `Vm::unset_dims_fast`): `$this->p[$k]...` / `$cv->p[$k]...` (`dims`),
+/// a chain ending in a property (`$this->a->b`, `$cv[$k]->b`), or
+/// `$GLOBALS['name'][$k]...`; `cv_dims` admits `$cv[$k]...` too. Which
+/// ones hit is decided when they run.
+fn nested_place(p: &crate::opcode::Place, cv_dims: bool, chains: bool) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    let segs = p.segs.as_slice();
+    let prop_dims = matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(segs, [Seg::Prop(Operand::Lit(_)), Seg::Dim(_), ..]);
+    let chain = chains
+        && matches!(segs.last(), Some(Seg::Prop(Operand::Lit(_))))
+        && segs.len() >= 2
+        && matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(segs.first(), Some(Seg::Prop(Operand::Lit(_)) | Seg::Dim(_)));
+    let globals = matches!(
+        (&p.base, segs),
+        (PlaceBase::Global(Operand::Lit(_)), [Seg::Dim(_), ..])
+            | (
+                PlaceBase::GlobalsArray,
+                [Seg::Dim(Operand::Lit(_)), Seg::Dim(_), ..]
+            )
+    );
+    let cv = cv_dims && matches!((&p.base, segs), (PlaceBase::Cv(_), [Seg::Dim(_), ..]));
+    prop_dims || chain || globals || cv
+}
+
+/// The generic place ops whose nested shapes have a fast path that needs
+/// the VM ([`nested_place`]): run with it at hand ([`run_vm_op`], which
+/// declines to `Vm::run`'s generic op on a miss) instead of leaving the
+/// tape for `Vm::run`. A read in `Read` or `Is` mode, `isset()` /
+/// `empty()`, `unset()` and an assignment.
+fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
+    let place_of = |pid: u32| code.places.get(pid as usize);
+    let in_range = |o: Operand| match o {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => t < code.num_tmps,
+        Operand::Cv(c) => (c as usize) < code.cv_names.len(),
+        Operand::Lit(l) => (l as usize) < code.literals.len(),
+        Operand::Unused => false,
+    };
+    let ok = match *code.ops.get(i)? {
+        Op::Fetch { place, mode, dst } => {
+            mode != FetchMode::List
+                && dst < code.num_tmps
+                && nested_place(place_of(place)?, false, true)
+        }
+        Op::Isset { place, dst } | Op::Empty { place, dst } => {
+            dst < code.num_tmps && nested_place(place_of(place)?, false, false)
+        }
+        Op::Unset { place } => nested_place(place_of(place)?, true, false),
+        Op::Assign { place, val, dst } => {
+            in_range(val)
+                && dst.is_none_or(|d| d < code.num_tmps)
+                && nested_place(place_of(place)?, true, true)
+        }
+        _ => false,
+    };
+    ok.then(|| Inst::plain(TOp::VmOp))
 }
 
 /// The numeric instruction ([`tape_ops!`]'s generated families) of the op
@@ -2321,18 +2384,68 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             Some(stored) => at + 1 + usize::from(stored),
             None => fetch_global_slow(vm, place, dst, to, mode, at),
         },
-        // A superglobal read as a whole.
-        Some(&Op::Fetch {
-            place,
-            mode: FetchMode::Read,
-            dst,
-        }) => match vm.fetch_place_fast(place) {
-            Some(v) => {
-                vm.set_tmp(dst, v);
+        // A superglobal read as a whole, or a nested read the tape lowered
+        // here (`lower_place`): `$this->p[$k][$j]`, `$this->a->b`,
+        // `$GLOBALS['name'][$k]`.
+        Some(&Op::Fetch { place, mode, dst }) => {
+            let fast = if mode == FetchMode::Read {
+                vm.fetch_place_fast(place)
+            } else {
+                None
+            };
+            match fast
+                .or_else(|| vm.fetch_prop_dims_fast(place, mode))
+                .or_else(|| vm.fetch_global_dims_fast(place, mode))
+            {
+                Some(v) => {
+                    vm.set_tmp(dst, v);
+                    at + 1
+                }
+                None => DECLINED,
+            }
+        }
+        // `isset()` / `empty()` of `$this->p[$k][$j]` & co. (`lower_place`).
+        Some(&Op::Isset { place, dst }) => match vm.isset_prop_dims_fast(place, false) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
                 at + 1
             }
             None => DECLINED,
         },
+        Some(&Op::Empty { place, dst }) => match vm.isset_prop_dims_fast(place, true) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. (`lower_place`).
+        Some(&Op::Unset { place }) => {
+            if vm.unset_dims_fast(place) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        // `$this->p[$k][$j] = v`, `$a[$k][] = v`, `$this->a->b = v` & co.
+        // (`lower_place`): the value as `Vm::run` reads it for a plain,
+        // array or object operand (`read` + `copy_on_assign`), a consumed
+        // temporary released once the store is done.
+        Some(&Op::Assign { place, val, dst }) => {
+            let Some(v) = super::spec::dim_value_in(vm.frame(), val) else {
+                return DECLINED;
+            };
+            match vm.assign_prop_dims_fast(place, v) {
+                Ok(r) => {
+                    if let Operand::Tmp(t) = val {
+                        vm.set_tmp(t, Value::Null);
+                    }
+                    vm.set_dst(dst, r);
+                    at + 1
+                }
+                Err(_) => DECLINED,
+            }
+        }
         // An element of an object's property, on a property cache hit
         // (`Vm::run`'s own arms for these ops): a read into its temporary
         // or the variable of the `AssignCv` folded behind it (then
