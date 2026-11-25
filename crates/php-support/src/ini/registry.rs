@@ -748,8 +748,10 @@ impl IniRegistry {
                 let e = &self.entries[n];
                 IniEntryInfo {
                     name: n.clone(),
+                    // PHP_FUNCTION(ini_get_all): orig_value, else value
+                    // (a directive modified from NULL has no orig_value).
                     global_value: if e.modified {
-                        e.orig_value.clone()
+                        e.orig_value.clone().or_else(|| e.value.clone())
                     } else {
                         e.value.clone()
                     },

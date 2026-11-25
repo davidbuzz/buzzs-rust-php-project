@@ -80,3 +80,24 @@ fn refused_session_ini_restore_keeps_the_value() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn ini_restore_cannot_unset_open_basedir() {
+    // OnUpdateBaseDir refuses an empty value at runtime, and a refused
+    // restore leaves the entry modified (zend_restore_ini_entry_cb).
+    let d = temp_dir("basedir");
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "var_dump(ini_set('open_basedir', '/tmp')); ini_restore('open_basedir'); \
+             var_dump(ini_get('open_basedir'), ini_get_all()['open_basedir']['global_value']);",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "string(0) \"\"\nstring(4) \"/tmp\"\nstring(4) \"/tmp\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}

@@ -1342,6 +1342,14 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if n == "memory_limit" || n == "max_memory_limit" {
         vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
     }
+    // The value a refused restore keeps (`zend_restore_ini_entry_cb()`
+    // leaves the entry alone when its on_modify fails, e.g.
+    // `OnUpdateBaseDir` refusing to unset open_basedir at runtime).
+    let before = if vm.ini.is_modified(&n) {
+        vm.ini.raw(&n).map(<[u8]>::to_vec)
+    } else {
+        None
+    };
     vm.ini.ini_restore(&n, &mut sink);
     vm.sync_ini(&n);
     if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
@@ -1349,7 +1357,19 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.ini_stage = crate::ext::IniStage::Restore;
         let r = h(vm, &v);
         vm.ini_stage = crate::ext::IniStage::Runtime;
-        r?;
+        if !r? {
+            if let Some(before) = before {
+                vm.ini.alter(
+                    &n,
+                    &before,
+                    php_support::ini::Access::SYSTEM,
+                    php_support::ini::Stage::Runtime,
+                    true,
+                    &mut sink,
+                );
+                vm.sync_ini(&n);
+            }
+        }
     }
     Ok(Value::Null)
 }
