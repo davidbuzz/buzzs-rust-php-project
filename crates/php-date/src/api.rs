@@ -1,4 +1,4 @@
-// Derived from php-src ext/date/php_date.c. Similarity metric to original: 9%
+// Derived from php-src ext/date/php_date.c. Similarity metric to original: 21%
 //   Copyright © The PHP Group and Contributors. Authors: Derick Rethans <derick@derickrethans.nl>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

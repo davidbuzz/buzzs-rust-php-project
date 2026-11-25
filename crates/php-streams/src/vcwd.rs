@@ -1,4 +1,4 @@
-// Derived from php-src Zend/zend_virtual_cwd.c. Similarity metric to original: 8%
+// Derived from php-src Zend/zend_virtual_cwd.c. Similarity metric to original: 15%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andi Gutmans <andi@php.net>
 //            Sascha Schumann <sascha@schumann.cx>

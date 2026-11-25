@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/url_scanner_ex.re. Similarity metric to original: 19%
+// Derived from php-src ext/standard/url_scanner_ex.re. Similarity metric to original: 36%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Sascha Schumann <sascha@schumann.cx>
 //           Yasuo Ohgaki <yohgaki@ohgaki.net>

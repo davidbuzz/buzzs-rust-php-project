@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/image.c. Similarity metric to original: 27%
+// Derived from php-src ext/standard/image.c. Similarity metric to original: 39%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@php.net>
 //            Marcus Boerger <helly@php.net>

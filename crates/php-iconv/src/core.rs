@@ -1,4 +1,4 @@
-// Derived from php-src ext/iconv/iconv.c. Similarity metric to original: 8%
+// Derived from php-src ext/iconv/iconv.c. Similarity metric to original: 17%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rui Hirokawa <rui_hirokawa@ybb.ne.jp>
 //            Stig Bakken <ssb@php.net>

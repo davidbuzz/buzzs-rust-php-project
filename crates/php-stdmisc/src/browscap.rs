@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/browscap.c. Similarity metric to original: 15%
+// Derived from php-src ext/standard/browscap.c. Similarity metric to original: 26%
 //   Copyright © The PHP Group and Contributors. Author: Zeev Suraski <zeev@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

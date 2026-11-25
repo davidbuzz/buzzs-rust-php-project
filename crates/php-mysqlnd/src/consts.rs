@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_enum_n_def.h. Similarity metric to original: 37%
+// Derived from php-src ext/mysqlnd/mysqlnd_enum_n_def.h. Similarity metric to original: 48%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

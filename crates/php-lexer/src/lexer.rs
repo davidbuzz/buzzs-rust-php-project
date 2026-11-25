@@ -1,4 +1,4 @@
-// Derived from php-src Zend/zend_language_scanner.l. Similarity metric to original: 6%
+// Derived from php-src Zend/zend_language_scanner.l. Similarity metric to original: 19%
 //   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
 //   Authors: Marcus Boerger <helly@php.net>
 //            Nuno Lopes <nlopess@php.net>

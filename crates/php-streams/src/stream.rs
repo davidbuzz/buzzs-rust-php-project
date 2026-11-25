@@ -1,4 +1,4 @@
-// Derived from php-src main/streams/streams.c. Similarity metric to original: 10%
+// Derived from php-src main/streams/streams.c. Similarity metric to original: 24%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Wez Furlong <wez@thebrainroom.com>
 //            Borrowed code from:

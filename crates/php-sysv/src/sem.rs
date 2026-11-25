@@ -1,4 +1,4 @@
-// Derived from php-src ext/sysvsem/sysvsem.c. Similarity metric to original: 22%
+// Derived from php-src ext/sysvsem/sysvsem.c. Similarity metric to original: 40%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Tom May <tom@go2net.com>
 //            Gavin Sherry <gavin@linuxworld.com.au>

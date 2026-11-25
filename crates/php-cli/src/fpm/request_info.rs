@@ -1,4 +1,4 @@
-// Derived from php-src sapi/fpm/fpm/fpm_main.c. Similarity metric to original: 21%
+// Derived from php-src sapi/fpm/fpm/fpm_main.c. Similarity metric to original: 29%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
 //            Stig Bakken <ssb@php.net>

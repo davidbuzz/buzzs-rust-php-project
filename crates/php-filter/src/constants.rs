@@ -1,4 +1,4 @@
-// Derived from php-src ext/filter/filter_private.h. Similarity metric to original: 39%
+// Derived from php-src ext/filter/filter_private.h. Similarity metric to original: 72%
 //   Copyright © The PHP Group and Contributors. Authors: Derick Rethans <derick@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

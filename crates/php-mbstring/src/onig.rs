@@ -1,4 +1,4 @@
-// Derived from php-src ext/mbstring/php_mbregex.c. Similarity metric to original: 19%
+// Derived from php-src ext/mbstring/php_mbregex.c. Similarity metric to original: 38%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Tsukada Takuya <tsukada@fminn.nagano.nagano.jp>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>

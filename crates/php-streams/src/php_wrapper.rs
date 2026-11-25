@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/php_fopen_wrapper.c. Similarity metric to original: 9%
+// Derived from php-src ext/standard/php_fopen_wrapper.c. Similarity metric to original: 23%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@php.net>
 //            Jim Winstead <jimw@php.net>

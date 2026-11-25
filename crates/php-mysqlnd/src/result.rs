@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_result.c. Similarity metric to original: 6%
+// Derived from php-src ext/mysqlnd/mysqlnd_result.c. Similarity metric to original: 17%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

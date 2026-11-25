@@ -1,4 +1,4 @@
-// Derived from php-src ext/zip/php_zip.c. Similarity metric to original: 7%
+// Derived from php-src ext/zip/php_zip.c. Similarity metric to original: 20%
 //   Copyright © The PHP Group and Contributors. Author: Piere-Alain Joye <pierre@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

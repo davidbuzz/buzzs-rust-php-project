@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/math.c. Similarity metric to original: 14%
+// Derived from php-src ext/standard/math.c. Similarity metric to original: 27%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Jim Winstead <jimw@php.net>
 //            Stig Sæther Bakken <ssb@php.net>

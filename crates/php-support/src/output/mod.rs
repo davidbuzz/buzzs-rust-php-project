@@ -1,4 +1,4 @@
-// Derived from php-src main/output.c. Similarity metric to original: 7%
+// Derived from php-src main/output.c. Similarity metric to original: 16%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Zeev Suraski <zeev@php.net>
 //            Thies C. Arntzen <thies@thieso.net>

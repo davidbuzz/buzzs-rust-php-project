@@ -1,4 +1,4 @@
-// Derived from php-src ext/soap/php_encoding.c. Similarity metric to original: 33%
+// Derived from php-src ext/soap/php_encoding.c. Similarity metric to original: 52%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Brad Lafountain <rodif_bl@yahoo.com>
 //            Shane Caraveo <shane@caraveo.com>

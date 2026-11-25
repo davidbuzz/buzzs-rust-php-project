@@ -1,4 +1,4 @@
-// Derived from php-src ext/exif/exif.c. Similarity metric to original: 24%
+// Derived from php-src ext/exif/exif.c. Similarity metric to original: 40%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@php.net>
 //            Marcus Boerger <helly@php.net>

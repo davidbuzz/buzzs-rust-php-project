@@ -1,4 +1,4 @@
-// Derived from php-src ext/pdo/pdo_dbh.c. Similarity metric to original: 15%
+// Derived from php-src ext/pdo/pdo_dbh.c. Similarity metric to original: 32%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Wez Furlong <wez@php.net>
 //           Marcus Boerger <helly@php.net>

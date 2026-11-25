@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_connection.c. Similarity metric to original: 18%
+// Derived from php-src ext/mysqlnd/mysqlnd_connection.c. Similarity metric to original: 34%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

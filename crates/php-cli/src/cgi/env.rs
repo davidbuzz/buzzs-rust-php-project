@@ -1,4 +1,4 @@
-// Derived from php-src sapi/cgi/cgi_main.c. Similarity metric to original: 14%
+// Derived from php-src sapi/cgi/cgi_main.c. Similarity metric to original: 25%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
 //            Stig Bakken <ssb@php.net>

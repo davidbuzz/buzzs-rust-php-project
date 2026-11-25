@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqli/mysqli_nonapi.c. Similarity metric to original: 12%
+// Derived from php-src ext/mysqli/mysqli_nonapi.c. Similarity metric to original: 22%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Georg Richter <georg@php.net>
 //            Andrey Hristov <andrey@php.net>

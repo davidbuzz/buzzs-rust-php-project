@@ -1,4 +1,4 @@
-// Derived from php-src ext/dom/xpath.c. Similarity metric to original: 7%
+// Derived from php-src ext/dom/xpath.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Christian Stocker <chregu@php.net>
 //            Rob Richards <rrichards@php.net>

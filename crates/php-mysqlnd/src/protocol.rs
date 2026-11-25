@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_wireprotocol.c. Similarity metric to original: 10%
+// Derived from php-src ext/mysqlnd/mysqlnd_wireprotocol.c. Similarity metric to original: 21%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

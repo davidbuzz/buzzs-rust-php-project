@@ -1,4 +1,4 @@
-// Derived from php-src ext/opcache/zend_accelerator_module.c. Similarity metric to original: 6%
+// Derived from php-src ext/opcache/zend_accelerator_module.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andi Gutmans <andi@php.net>
 //            Zeev Suraski <zeev@php.net>

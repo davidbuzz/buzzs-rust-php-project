@@ -1,4 +1,4 @@
-// Derived from php-src ext/soap/php_schema.c. Similarity metric to original: 12%
+// Derived from php-src ext/soap/php_schema.c. Similarity metric to original: 25%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Brad Lafountain <rodif_bl@yahoo.com>
 //            Shane Caraveo <shane@caraveo.com>

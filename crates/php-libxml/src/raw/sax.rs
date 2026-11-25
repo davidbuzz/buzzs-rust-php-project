@@ -1,4 +1,4 @@
-// Derived from php-src ext/xml/compat.c. Similarity metric to original: 26%
+// Derived from php-src ext/xml/compat.c. Similarity metric to original: 42%
 //   Copyright © The PHP Group and Contributors. Authors: Sterling Hughes <sterling@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

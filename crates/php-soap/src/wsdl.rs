@@ -1,4 +1,4 @@
-// Derived from php-src ext/soap/php_sdl.c. Similarity metric to original: 14%
+// Derived from php-src ext/soap/php_sdl.c. Similarity metric to original: 24%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Brad Lafountain <rodif_bl@yahoo.com>
 //            Shane Caraveo <shane@caraveo.com>

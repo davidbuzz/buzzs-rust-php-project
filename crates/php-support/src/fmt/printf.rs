@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/formatted_print.c. Similarity metric to original: 22%
+// Derived from php-src ext/standard/formatted_print.c. Similarity metric to original: 40%
 //   Copyright © The PHP Group and Contributors. Author: Stig Sæther Bakken <ssb@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

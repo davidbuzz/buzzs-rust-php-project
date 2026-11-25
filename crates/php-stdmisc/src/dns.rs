@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/dns.c. Similarity metric to original: 10%
+// Derived from php-src ext/standard/dns.c. Similarity metric to original: 25%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: The typical suspects
 //            Pollita <pollita@php.net>

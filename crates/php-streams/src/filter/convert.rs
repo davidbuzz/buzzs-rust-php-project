@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/filters.c. Similarity metric to original: 18%
+// Derived from php-src ext/standard/filters.c. Similarity metric to original: 32%
 //   Copyright © The PHP Group and Contributors.
 //   Authors:
 //           Wez Furlong (wez@thebrainroom.com)

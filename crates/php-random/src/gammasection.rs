@@ -1,4 +1,4 @@
-// Derived from php-src ext/random/gammasection.c. Similarity metric to original: 44%
+// Derived from php-src ext/random/gammasection.c. Similarity metric to original: 77%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Tim Düsterhus <timwolla@php.net>
 //            Based on code from: Frédéric Goualard

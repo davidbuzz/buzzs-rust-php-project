@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_ps_codec.c. Similarity metric to original: 20%
+// Derived from php-src ext/mysqlnd/mysqlnd_ps_codec.c. Similarity metric to original: 43%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

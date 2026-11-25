@@ -1,4 +1,4 @@
-// Derived from php-src ext/session/mod_files.c. Similarity metric to original: 13%
+// Derived from php-src ext/session/mod_files.c. Similarity metric to original: 31%
 //   Copyright © The PHP Group and Contributors. Author: Sascha Schumann <sascha@schumann.cx>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

@@ -1,4 +1,4 @@
-// Derived from php-src ext/spl/spl_fixedarray.c. Similarity metric to original: 8%
+// Derived from php-src ext/spl/spl_fixedarray.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Antony Dovgal <tony@daylessday.org>
 //           Etienne Kneuss <colder@php.net>

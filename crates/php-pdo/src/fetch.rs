@@ -1,4 +1,4 @@
-// Derived from php-src ext/pdo/pdo_stmt.c. Similarity metric to original: 12%
+// Derived from php-src ext/pdo/pdo_stmt.c. Similarity metric to original: 23%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Wez Furlong <wez@php.net>
 //           Marcus Boerger <helly@php.net>

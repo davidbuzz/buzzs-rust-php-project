@@ -1,4 +1,4 @@
-// Derived from php-src Zend/zend_operators.c. Similarity metric to original: 7%
+// Derived from php-src Zend/zend_operators.c. Similarity metric to original: 17%
 //   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
 //   Authors: Andi Gutmans <andi@php.net>
 //            Zeev Suraski <zeev@php.net>

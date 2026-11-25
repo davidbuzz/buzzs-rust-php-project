@@ -1,4 +1,4 @@
-// Derived from php-src ext/dom/element.c. Similarity metric to original: 9%
+// Derived from php-src ext/dom/element.c. Similarity metric to original: 23%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Christian Stocker <chregu@php.net>
 //            Rob Richards <rrichards@php.net>

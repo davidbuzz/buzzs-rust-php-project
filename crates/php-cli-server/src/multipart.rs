@@ -1,4 +1,4 @@
-// Derived from php-src main/rfc1867.c. Similarity metric to original: 16%
+// Derived from php-src main/rfc1867.c. Similarity metric to original: 32%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@php.net>
 //            Jani Taskinen <jani@php.net>

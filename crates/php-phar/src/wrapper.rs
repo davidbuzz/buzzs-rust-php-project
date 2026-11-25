@@ -1,4 +1,4 @@
-// Derived from php-src ext/phar/stream.c. Similarity metric to original: 14%
+// Derived from php-src ext/phar/stream.c. Similarity metric to original: 31%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Gregory Beaver <cellog@php.net>
 //            Marcus Boerger <helly@php.net>

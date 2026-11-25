@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/pack.c. Similarity metric to original: 14%
+// Derived from php-src ext/standard/pack.c. Similarity metric to original: 28%
 //   Copyright © The PHP Group and Contributors. Author: Chris Schneider <cschneid@relog.ch>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

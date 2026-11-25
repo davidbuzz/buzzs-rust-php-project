@@ -1,4 +1,4 @@
-// Derived from php-src ext/soap/soap.c. Similarity metric to original: 11%
+// Derived from php-src ext/soap/soap.c. Similarity metric to original: 22%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Brad Lafountain <rodif_bl@yahoo.com>
 //            Shane Caraveo <shane@caraveo.com>

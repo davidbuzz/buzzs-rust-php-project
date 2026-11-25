@@ -1,4 +1,4 @@
-// Derived from php-src ext/spl/spl_observer.c. Similarity metric to original: 6%
+// Derived from php-src ext/spl/spl_observer.c. Similarity metric to original: 16%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Marcus Boerger <helly@php.net>
 //            Etienne Kneuss <colder@php.net>

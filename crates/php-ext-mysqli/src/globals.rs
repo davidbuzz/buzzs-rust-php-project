@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqli/php_mysqli_structs.h. Similarity metric to original: 21%
+// Derived from php-src ext/mysqli/php_mysqli_structs.h. Similarity metric to original: 28%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Georg Richter <georg@php.net>
 //            Andrey Hristov <andrey@php.net>

@@ -1,4 +1,4 @@
-// Derived from php-src ext/dom/domimplementation.c. Similarity metric to original: 12%
+// Derived from php-src ext/dom/domimplementation.c. Similarity metric to original: 29%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Christian Stocker <chregu@php.net>
 //            Rob Richards <rrichards@php.net>

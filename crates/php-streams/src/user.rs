@@ -1,4 +1,4 @@
-// Derived from php-src main/streams/userspace.c. Similarity metric to original: 6%
+// Derived from php-src main/streams/userspace.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Wez Furlong <wez@thebrainroom.com>
 //            Sara Golemon <pollita@php.net>

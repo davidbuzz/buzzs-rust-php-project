@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/password.c. Similarity metric to original: 7%
+// Derived from php-src ext/standard/password.c. Similarity metric to original: 20%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Anthony Ferrara <ircmaxell@php.net>
 //            Charles R. Portwood II <charlesportwoodii@erianna.com>

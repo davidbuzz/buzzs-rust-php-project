@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/array.c. Similarity metric to original: 7%
+// Derived from php-src ext/standard/array.c. Similarity metric to original: 14%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andi Gutmans <andi@php.net>
 //            Zeev Suraski <zeev@php.net>

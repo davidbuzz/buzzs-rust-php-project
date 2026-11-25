@@ -1,4 +1,4 @@
-// Derived from php-src Zend/zend_partial.c. Similarity metric to original: 6%
+// Derived from php-src Zend/zend_partial.c. Similarity metric to original: 15%
 //   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
 //   Authors: Arnaud Le Blanc <arnaud.lb@gmail.com>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>

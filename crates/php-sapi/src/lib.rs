@@ -1,4 +1,4 @@
-// Derived from php-src main/SAPI.h. Similarity metric to original: 13%
+// Derived from php-src main/SAPI.h. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors. Author: Zeev Suraski <zeev@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

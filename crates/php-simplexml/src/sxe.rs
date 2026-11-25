@@ -1,4 +1,4 @@
-// Derived from php-src ext/simplexml/simplexml.c. Similarity metric to original: 10%
+// Derived from php-src ext/simplexml/simplexml.c. Similarity metric to original: 23%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Sterling Hughes <sterling@php.net>
 //            Marcus Boerger <helly@php.net>

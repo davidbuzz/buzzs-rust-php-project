@@ -1,4 +1,4 @@
-// Derived from php-src ext/mbstring/mbstring.c. Similarity metric to original: 6%
+// Derived from php-src ext/mbstring/mbstring.c. Similarity metric to original: 12%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Tsukada Takuya <tsukada@fminn.nagano.nagano.jp>
 //           Rui Hirokawa <hirokawa@php.net>

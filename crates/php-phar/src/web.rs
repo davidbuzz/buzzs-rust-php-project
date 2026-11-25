@@ -1,4 +1,4 @@
-// Derived from php-src ext/phar/phar_object.c. Similarity metric to original: 7%
+// Derived from php-src ext/phar/phar_object.c. Similarity metric to original: 16%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Gregory Beaver <cellog@php.net>
 //            Marcus Boerger <helly@php.net>

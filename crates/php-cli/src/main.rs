@@ -1,4 +1,4 @@
-// Derived from php-src sapi/cli/php_cli.c. Similarity metric to original: 8%
+// Derived from php-src sapi/cli/php_cli.c. Similarity metric to original: 23%
 //   Copyright © The PHP Group and Contributors.
 //   Author: Edin Kadribasic <edink@php.net>
 //           Marcus Boerger <helly@php.net>

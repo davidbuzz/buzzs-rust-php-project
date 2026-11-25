@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/string.c. Similarity metric to original: 9%
+// Derived from php-src ext/standard/string.c. Similarity metric to original: 13%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@php.net>
 //            Stig Sæther Bakken <ssb@php.net>

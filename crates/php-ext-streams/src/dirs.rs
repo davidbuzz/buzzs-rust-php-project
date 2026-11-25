@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/dir.c. Similarity metric to original: 8%
+// Derived from php-src ext/standard/dir.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors. Author: Thies C. Arntzen <thies@thieso.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

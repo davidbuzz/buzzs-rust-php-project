@@ -1,4 +1,4 @@
-// Derived from php-src ext/spl/spl_iterators.c. Similarity metric to original: 6%
+// Derived from php-src ext/spl/spl_iterators.c. Similarity metric to original: 18%
 //   Copyright © The PHP Group and Contributors. Authors: Marcus Boerger <helly@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

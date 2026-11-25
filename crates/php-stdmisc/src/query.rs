@@ -1,4 +1,4 @@
-// Derived from php-src main/php_variables.c. Similarity metric to original: 11%
+// Derived from php-src main/php_variables.c. Similarity metric to original: 22%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
 //            Zeev Suraski <zeev@php.net>

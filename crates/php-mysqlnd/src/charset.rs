@@ -1,4 +1,4 @@
-// Derived from php-src ext/mysqlnd/mysqlnd_charset.c. Similarity metric to original: 26%
+// Derived from php-src ext/mysqlnd/mysqlnd_charset.c. Similarity metric to original: 38%
 //   Copyright © The PHP Group and Contributors.
 //   Authors: Andrey Hristov <andrey@php.net>
 //            Ulf Wendel <uw@php.net>

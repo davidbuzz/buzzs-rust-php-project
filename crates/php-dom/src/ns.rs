@@ -1,4 +1,4 @@
-// Derived from php-src ext/dom/namespace_compat.c. Similarity metric to original: 10%
+// Derived from php-src ext/dom/namespace_compat.c. Similarity metric to original: 31%
 //   Copyright © The PHP Group and Contributors. Authors: Nora Dossche <ndossche@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

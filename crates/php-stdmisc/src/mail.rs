@@ -1,4 +1,4 @@
-// Derived from php-src ext/standard/mail.c. Similarity metric to original: 17%
+// Derived from php-src ext/standard/mail.c. Similarity metric to original: 36%
 //   Copyright © The PHP Group and Contributors. Author: Rasmus Lerdorf <rasmus@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

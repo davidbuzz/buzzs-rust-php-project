@@ -1,4 +1,4 @@
-// Derived from php-src ext/pdo/pdo_sql_parser.re. Similarity metric to original: 25%
+// Derived from php-src ext/pdo/pdo_sql_parser.re. Similarity metric to original: 48%
 //   Copyright © The PHP Group and Contributors. Author: George Schlossnagle <george@omniti.com>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause

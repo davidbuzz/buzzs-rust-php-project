@@ -1,4 +1,4 @@
-// Derived from php-src Zend/zend_exceptions.c. Similarity metric to original: 5%
+// Derived from php-src Zend/zend_exceptions.c. Similarity metric to original: 14%
 //   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
 //   Authors: Andi Gutmans <andi@php.net>
 //            Marcus Boerger <helly@php.net>

@@ -1,4 +1,4 @@
-// Derived from php-src ext/phar/stub.h. Similarity metric to original: 52%
+// Derived from php-src ext/phar/stub.h. Similarity metric to original: 80%
 //   Copyright © The PHP Group and Contributors. Authors: Gregory Beaver <cellog@php.net>
 // Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause
