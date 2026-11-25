@@ -1814,18 +1814,26 @@ impl Vm {
             // first run as there.
             Some(ns) => {
                 let slot = frame.code.literals.len() + ip;
-                let site = frame
-                    .code
-                    .fcall_cache
-                    .borrow()
-                    .get(slot)
-                    .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
-                let site = match site {
-                    Some(f) => f,
-                    None => self.frameless_ns_first_run(ns, fc.name, slot)?,
+                // The site's builtin handle read from its entry in place
+                // (`CachedFunc::get` built a whole `Func` per call).
+                let cached = {
+                    let cache = frame.code.fcall_cache.borrow();
+                    match cache.get(slot) {
+                        Some(Some(entry)) => match &entry.func {
+                            crate::opcode::CachedFuncKind::Builtin(b) => Some(Some(Rc::clone(b))),
+                            _ => Some(None),
+                        },
+                        _ => None,
+                    }
                 };
-                let Func::Builtin(b) = site else {
-                    return None;
+                let b = match cached {
+                    Some(Some(b)) => b,
+                    // A user function took the name: the generic ops.
+                    Some(None) => return None,
+                    None => match self.frameless_ns_first_run(ns, fc.name, slot)? {
+                        Func::Builtin(b) => b,
+                        Func::User(_) => return None,
+                    },
                 };
                 if b.flags & flags::FRAMELESS == 0
                     || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
@@ -1855,7 +1863,7 @@ impl Vm {
         // decline.
         let mut args = self.call_bufs.take_args();
         let mut read = true;
-        for operand in &fc.vals[..n] {
+        for (i, operand) in fc.vals[..n].iter().enumerate() {
             let v = match *operand {
                 Operand::Lit(l) => frame
                     .code
@@ -1877,6 +1885,14 @@ impl Vm {
                     Value::Reference(r) => r.get(),
                     v => crate::func::copy_arg(v),
                 }),
+                // `$this->name` / `$cv->name` (`specialise::prop_arg_place`):
+                // the property cache hit's value, as the `Send` reads it on
+                // its hit (no side effect: on a decline the `Send` reads it
+                // again, a miss's warning or `__get()` included).
+                Operand::Unused => match &fc.args[i] {
+                    crate::opcode::ArgSrc::Place(pid) => frame.send_place_hit(*pid),
+                    _ => None,
+                },
                 _ => None,
             };
             let Some(v) = v else {

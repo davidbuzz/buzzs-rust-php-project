@@ -1115,7 +1115,16 @@ fn frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
                 vals[argc] = match src {
                     ArgSrc::Val(Operand::Lit(l)) => Operand::Lit(*l),
                     ArgSrc::Val(Operand::Cv(cv)) => Operand::Cv(*cv),
-                    ArgSrc::Place(pid) => Operand::Cv(plain_cv(&oa.places, *pid)?),
+                    // `$this->name` / `$cv->name` (`in_array($m,
+                    // $this->list)`): read by the op from the property cache
+                    // hit (`Frame::send_place_hit`), marked `Unused` here.
+                    // The `Send`s follow the op directly, so reading it at
+                    // the op is reading it at its `Send`.
+                    ArgSrc::Place(pid) => match plain_cv(&oa.places, *pid) {
+                        Some(cv) => Operand::Cv(cv),
+                        None if prop_arg_place(&oa.places, *pid) => Operand::Unused,
+                        None => return None,
+                    },
                     _ => return None,
                 };
                 args[argc] = src.clone();
@@ -1195,6 +1204,21 @@ pub(crate) fn unfuse_frameless_calls(ops: &[Op]) -> std::borrow::Cow<'_, [Op]> {
         out[i + 1 + n] = Op::DoCall { dst: fc.dst };
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// Whether place `pid` is `$this->name` or `$cv->name`, one property named
+/// by a literal: a frameless call's argument the op reads itself
+/// (`Vm::frameless_icall_op`, through `Frame::send_place_hit`).
+fn prop_arg_place(places: &[crate::opcode::Place], pid: u32) -> bool {
+    places.get(pid as usize).is_some_and(|p| {
+        matches!(
+            (&p.base, p.segs.as_slice()),
+            (
+                crate::opcode::PlaceBase::This | crate::opcode::PlaceBase::Cv(_),
+                [crate::opcode::Seg::Prop(Operand::Lit(_))]
+            )
+        )
+    })
 }
 
 /// The CV of a place that is a plain compiled variable (`$cv`).

@@ -410,3 +410,57 @@ ynyyny 1,2,3 1111 113 R Typed static property App\B::$typed must not be accessed
 "#
     );
 }
+
+/// Frameless builtins (`in_array()`, `array_key_exists()`, `strlen()`,
+/// `str_contains()`, `count()`) with `$this->name` / `$obj->name`
+/// arguments, read by the frameless op from the property cache hit: a
+/// private property, `__get()`, a property holding a reference, a typed
+/// uninitialized and an undefined property (their errors and warnings),
+/// and a namespaced function of the same name taking the call. Expected
+/// output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn frameless_calls_read_property_arguments() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class R {
+  public $list = ['auth', 'web', 'api']; public $map = ['k' => 1, 5 => 'x']; public $s = 'hello world'; private $priv = ['p'];
+  public int $typed; public $ref;
+  public function __get($n) { echo "__get($n) "; return ['magic']; }
+  function run($m) {
+    return implode(',', [in_array($m, $this->list) ? 'Y' : 'N', in_array($m, $this->list, true) ? 'Y' : 'N',
+      array_key_exists('k', $this->map) ? 'K' : '-', strlen($this->s), str_contains($this->s, 'wor') ? 'C' : '-',
+      in_array('p', $this->priv) ? 'P' : '-', count($this->list), in_array('magic', $this->magic) ? 'M' : '-',
+      in_array(1, $this->ref) ? 'R' : '-']);
+  }
+}
+class S { public $x = [1, 2]; }
+function run() {
+  $r = new R; $arr = [1, 2]; $r->ref = &$arr;
+  for ($i = 0; $i < 3; $i++) {
+    echo $r->run('web'), ' ', $r->run(0), ' ';
+    $s = new S; echo in_array(2, $s->x) ? 'S' : '-', ' ';
+    try { echo in_array(1, $r->typed); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), ' '; }
+    try { $p = new S; echo in_array(1, $p->undefinedProp) ? 'u' : 'n'; } catch (\TypeError $e) { echo $e->getMessage(), ' '; }
+    $arr[] = 9; echo "\n";
+  }
+}
+run();
+namespace Other;
+function in_array($a, $b) { return 'OVERRIDDEN'; }
+class Q { public $l = [1]; function t() { return in_array(1, $this->l); } }
+echo (new Q)->t(), "\n";
+"#),
+        r#"__get(magic) Y,Y,K,11,C,P,3,M,R __get(magic) N,N,K,11,C,P,3,M,R S Error: Typed property App\R::$typed must not be accessed before initialization 
+Warning: Undefined property: App\S::$undefinedProp in t.php on line 21
+in_array(): Argument #2 ($haystack) must be of type array, null given 
+__get(magic) Y,Y,K,11,C,P,3,M,R __get(magic) N,N,K,11,C,P,3,M,R S Error: Typed property App\R::$typed must not be accessed before initialization 
+Warning: Undefined property: App\S::$undefinedProp in t.php on line 21
+in_array(): Argument #2 ($haystack) must be of type array, null given 
+__get(magic) Y,Y,K,11,C,P,3,M,R __get(magic) N,N,K,11,C,P,3,M,R S Error: Typed property App\R::$typed must not be accessed before initialization 
+Warning: Undefined property: App\S::$undefinedProp in t.php on line 21
+in_array(): Argument #2 ($haystack) must be of type array, null given 
+OVERRIDDEN
+"#
+    );
+}
