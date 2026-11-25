@@ -88,6 +88,15 @@ fn shutdown(vm: &mut Vm) {
     http::shutdown();
     dirs::shutdown();
     files::restore_umask();
+    // `php_request_shutdown()` step 15, `php_shutdown_stream_hashes()`: the
+    // request's own wrapper and filter registrations go
+    // (`stream_wrapper_register()`, `_unregister()`, `_restore()`,
+    // `stream_filter_register()`), with the stat cache and the cached
+    // request body. The next request on this thread, in a long-running
+    // worker or under `php --repeat`, starts from the startup registrations
+    // and without stored stream errors (`php_stream_error_state_cleanup()`).
+    php_streams::state::reset_request();
+    errors::shutdown();
 }
 
 impl Extension for Streams {

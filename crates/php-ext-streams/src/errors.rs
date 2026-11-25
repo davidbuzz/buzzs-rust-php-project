@@ -57,6 +57,15 @@ thread_local! {
     static CLASSES: RefCell<Vec<Rc<Class>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// `php_stream_error_state_cleanup()`, the last step of
+/// `php_shutdown_stream_hashes()`: the request's stored errors
+/// (`stream_last_errors()`) and the running operation's context end with
+/// the request.
+pub(crate) fn shutdown() {
+    STORED.with(|s| s.borrow_mut().clear());
+    OP_CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
 /// The context of the running operation, without consuming it.
 pub fn operation_context() -> Option<ContextRef> {
     OP_CONTEXT.with(|c| c.borrow().clone())

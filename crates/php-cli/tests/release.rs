@@ -106,6 +106,68 @@ fn repeat_numbers_each_requests_objects_from_one() {
     );
 }
 
+/// The request's stream wrapper and filter registrations end with it
+/// (`php_shutdown_stream_hashes()`): the second run registers `test://` and
+/// the filter again and finds `data://` back, as `php8.5 --repeat 2` does.
+/// Before, the second run got "Protocol test:// is already defined", "Unable
+/// to unregister protocol data://" and `false` three times.
+#[test]
+fn repeat_starts_from_the_startup_stream_wrappers_and_filters() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "class W { public $context; function stream_open($p, $m, $o, &$op) { return true; } \
+         function stream_eof() { return true; } } \
+         var_dump(stream_wrapper_register(\"test\", \"W\")); \
+         var_dump(stream_wrapper_unregister(\"data\")); \
+         echo in_array(\"data\", stream_get_wrappers()) ? \"data\" : \"no data\", \"\\n\"; \
+         class F extends php_user_filter {} \
+         var_dump(stream_filter_register(\"myfilter\", \"F\"));",
+    ]);
+    assert!(out.status.success());
+    let run = "bool(true)\nbool(true)\nno data\nbool(true)\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+/// `PHP_RSHUTDOWN(basic)` puts back the value each `putenv()` name had
+/// before the request (`BG(putenv_ht)`, `php_putenv_destructor`), and
+/// `php_stream_error_state_cleanup()` drops the stored stream errors: the
+/// second run sees what the first saw. php8.5 prints `bool(false)` and
+/// `string(4) "orig"` in both runs; the stored errors are php-src master's
+/// (main/streams/stream_errors.c).
+#[test]
+fn repeat_starts_from_the_startup_environment_and_no_stored_stream_errors() {
+    let out = Command::new(env!("CARGO_BIN_EXE_php"))
+        .args(["-n", "-d", "memory_limit=1G", "--repeat", "2", "-r"])
+        .arg(
+            "var_dump(getenv('PHP_CLI_RELEASE_UNSET')); \
+             putenv('PHP_CLI_RELEASE_UNSET=value'); putenv('PHP_CLI_RELEASE_UNSET='); \
+             var_dump(getenv('PHP_CLI_RELEASE_PRESET')); \
+             putenv('PHP_CLI_RELEASE_PRESET=a'); putenv('PHP_CLI_RELEASE_PRESET=b'); \
+             var_dump(count(stream_last_errors())); \
+             $c = stream_context_create(['stream' => ['error_mode' => StreamErrorMode::Silent, \
+             'error_store' => StreamErrorStore::All]]); \
+             fopen('php://nonexistent', 'r', false, $c); \
+             var_dump(count(stream_last_errors()));",
+        )
+        .env_remove("PHP_CLI_RELEASE_UNSET")
+        .env("PHP_CLI_RELEASE_PRESET", "orig")
+        .output()
+        .expect("spawn php");
+    assert!(out.status.success());
+    let run = "bool(false)\nstring(4) \"orig\"\nint(0)\nint(1)\n";
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Executing for the first time...\n{run}Finished execution, repeating...\n{run}")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
 #[test]
 fn lint_checks_every_file_given() {
     let good = temp("good.php");
