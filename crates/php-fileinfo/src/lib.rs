@@ -123,6 +123,12 @@ const MAGIC_CHECK: i32 = 0x40;
 const MAGIC_COMPRESS_TRANSP: i32 = 0x0200_0000;
 /// `MAGIC_NO_CHECK_SIMH`.
 const MAGIC_NO_CHECK_SIMH: i32 = 0x0080_0000;
+/// `MAGIC_NO_CHECK_ELF`: php-src compiles its libmagic without
+/// `BUILTIN_ELF` (`readelf.c` is not in `config.m4`), so an ELF file is
+/// described by the magic entries alone ("ELF 64-bit LSB pie executable,
+/// x86-64, version 1 (SYSV)"), without the system library's "dynamically
+/// linked, interpreter …, BuildID[sha1]=…, stripped" details.
+const MAGIC_NO_CHECK_ELF: i32 = 0x0001_0000;
 /// The first word of a compiled (`.mgc`) database, `MAGICNO`.
 const MAGICNO: u32 = 0xF11E_041C;
 
@@ -192,10 +198,11 @@ pub fn strerror(err: &std::io::Error) -> String {
 }
 
 /// `zend_long` → C `int` (truncating, as the C cast does), minus the flags
-/// PHP's libmagic build does not support.
+/// PHP's libmagic build does not support, plus `MAGIC_NO_CHECK_ELF` for the
+/// ELF reader it does not compile in.
 #[allow(clippy::cast_possible_truncation)]
 fn c_flags(flags: i64) -> i32 {
-    (flags as i32) & !(MAGIC_COMPRESS | MAGIC_COMPRESS_TRANSP)
+    ((flags as i32) & !(MAGIC_COMPRESS | MAGIC_COMPRESS_TRANSP)) | MAGIC_NO_CHECK_ELF
 }
 
 /// The `finfo_file()`/`finfo::file()` checks on `$filename` that are not

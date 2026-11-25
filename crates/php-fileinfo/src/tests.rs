@@ -124,6 +124,25 @@ fn set_flags_persists() {
     assert_eq!(r.unwrap(), b"text/x-php");
 }
 
+/// php-src's libmagic has no ELF reader: the description stops after the
+/// magic entries' "version 1 (SYSV)" (values from php-src master's bundled
+/// libmagic, built standalone; /usr/bin/php8.5 gives the same).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn elf_details_are_not_read() {
+    use std::io::Read as _;
+    let mut elf = Vec::new();
+    std::fs::File::open("/proc/self/exe")
+        .and_then(|f| f.take(1 << 16).read_to_end(&mut elf))
+        .expect("read the test binary");
+    let mut f = default_finfo(FILEINFO_NONE);
+    let (r, _) = warnings(|warn| f.buffer(&elf, 0, warn));
+    let desc = String::from_utf8(r.unwrap()).unwrap();
+    assert!(desc.starts_with("ELF 64-bit LSB "), "{desc}");
+    assert!(desc.ends_with(", x86-64, version 1 (SYSV)"), "{desc}");
+    assert!(!desc.contains("linked"), "{desc}");
+}
+
 #[test]
 fn compress_flag_is_ignored() {
     let gz = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x4b\x4c\x4a\x06\x00\xc2\x41\x24\x35\x03\x00\x00\x00";
