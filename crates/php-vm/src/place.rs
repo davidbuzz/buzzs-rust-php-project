@@ -3706,14 +3706,30 @@ impl Vm {
                 // An undefined-variable offset is read before the object's
                 // handlers run (`zend_fetch_dimension_address`,
                 // `ZEND_ASSIGN_DIM`, `zend_binary_assign_op_obj_dim`).
+                // An exception the error handler throws there is held: the
+                // opcode goes on, and the "Cannot use object ... as array"
+                // error of an object without ArrayAccess is chained onto it
+                // (`zend_throw_error` while `EG(exception)` is set).
+                let mut held = None;
                 if matches!(seg, RSeg::Dim(Value::Null)) {
                     if let Some(name) = take_pending(segs, i) {
-                        self.warning(&crate::exec::undefined_var_msg(&name))?;
+                        held = self.rw_undefined_var(&name)?;
                     }
                 }
-                // `zend_binary_assign_op_obj_dim` reads OP_DATA next.
-                if last && matches!(wop, WOp::AssignOp(..)) {
-                    self.take_pending_value_warning(segs)?;
+                // `zend_binary_assign_op_obj_dim` reads OP_DATA next (a
+                // warning raised while an exception is pending reaches no
+                // handler: `zend_call_function` returns at once).
+                if last && matches!(wop, WOp::AssignOp(..)) && held.is_none() {
+                    held = self.held_value_warning(segs)?;
+                }
+                if let Some(t) = held {
+                    if crate::ext::hooks_of(&obj).is_some()
+                        || self.instance_of(&obj, b"arrayaccess")
+                    {
+                        return Err(t);
+                    }
+                    let assign_op = last && matches!(wop, WOp::AssignOp(..));
+                    return Err(self.object_as_array_error(&obj, Some(t), assign_op));
                 }
                 let key = match seg {
                     RSeg::Dim(k) => k.clone(),
@@ -3838,16 +3854,13 @@ impl Vm {
                 if !self.instance_of(&obj, b"arrayaccess") {
                     // `ZEND_ASSIGN_DIM` reads OP_DATA before
                     // `zend_std_write_dimension` throws.
-                    if last && matches!(wop, WOp::Assign(Value::Null)) {
-                        self.take_pending_value_warning(segs)?;
-                    }
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!(
-                            "Cannot use object of type {} as array",
-                            object::display_name(&object::class_of(&obj).name)
-                        ),
-                    ));
+                    let held = if last && matches!(wop, WOp::Assign(Value::Null)) {
+                        self.held_value_warning(segs)?
+                    } else {
+                        None
+                    };
+                    let assign_op = last && matches!(wop, WOp::AssignOp(..));
+                    return Err(self.object_as_array_error(&obj, held, assign_op));
                 }
                 if last {
                     let assign_ref = matches!(wop, WOp::AssignRef(_));
@@ -4253,6 +4266,55 @@ impl Vm {
     /// before an object's final write (`offsetSet`, a native
     /// `write_dimension`, the property's), as `ZEND_ASSIGN_DIM` and
     /// `ZEND_ASSIGN_OBJ` read `OP_DATA` before calling the handlers.
+    /// [`Vm::take_pending_value_warning`] for an opcode that goes on after
+    /// an exception the error handler throws: that exception is returned
+    /// (see [`Vm::rw_undefined_var`]); an exit or a fatal error stops at
+    /// once.
+    fn held_value_warning(&mut self, segs: &[RSeg]) -> VmResult<Option<Throw>> {
+        match take_pending(segs, VALUE) {
+            Some(name) => self.rw_undefined_var(&name),
+            None => Ok(None),
+        }
+    }
+
+    /// The error of an array access on an object without ArrayAccess:
+    /// `zend_bad_array_access` from `zend_std_write_dimension` and the
+    /// other standard dimension handlers (Zend/zend_object_handlers.c),
+    /// chained onto `held`, the exception already in flight, as
+    /// `zend_throw_error` chains onto `EG(exception)`. `$o[k] op= v`
+    /// throws twice (`zend_binary_assign_op_obj_dim`, Zend/zend_execute.c:
+    /// `read_dimension` fails, then `zend_use_object_as_array`), the
+    /// second error chained onto the first.
+    #[cold]
+    #[inline(never)]
+    fn object_as_array_error(&mut self, obj: &Obj, held: Option<Throw>, assign_op: bool) -> Throw {
+        let msg = format!(
+            "Cannot use object of type {} as array",
+            object::display_name(&object::class_of(obj).name)
+        );
+        let mut prev = match held {
+            Some(Throw::Exception(o)) => Some(o),
+            Some(t) => return t,
+            None => None,
+        };
+        for _ in 0..usize::from(assign_op) {
+            match self.make_throw("Error", &msg) {
+                Throw::Exception(o) => {
+                    if let Some(p) = &prev {
+                        crate::exceptions::chain_previous(&o, p);
+                    }
+                    prev = Some(o);
+                }
+                t => return t,
+            }
+        }
+        let t = self.make_throw("Error", &msg);
+        if let (Throw::Exception(o), Some(p)) = (&t, &prev) {
+            crate::exceptions::chain_previous(o, p);
+        }
+        t
+    }
+
     fn take_pending_value_warning(&mut self, segs: &[RSeg]) -> VmResult<()> {
         match take_pending(segs, VALUE) {
             Some(name) => self.warning(&crate::exec::undefined_var_msg(&name)),
