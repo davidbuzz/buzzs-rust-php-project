@@ -609,7 +609,16 @@ pub(crate) struct Heap {
     current: AtomicPtr<Chunk>,
     /// Chunks held.
     chunks: AtomicUsize,
+    /// Chunks held when the last [`gc`](Self::gc) finished. Owner only.
+    gc_chunks: AtomicUsize,
+    /// Pages in use when the last [`gc`](Self::gc) finished. Owner only.
+    gc_pages: AtomicUsize,
 }
+
+/// How many pages (beyond those in use after the last collection) the
+/// request-end collection lets the free lists hold before it runs
+/// ([`Heap::gc_at_request_end`]): 256 KiB.
+const GC_SLACK_PAGES: usize = 64;
 
 impl Heap {
     pub(crate) const fn new() -> Self {
@@ -620,6 +629,8 @@ impl Heap {
             last: AtomicPtr::new(ptr::null_mut()),
             current: AtomicPtr::new(ptr::null_mut()),
             chunks: AtomicUsize::new(0),
+            gc_chunks: AtomicUsize::new(0),
+            gc_pages: AtomicUsize::new(0),
         }
     }
 
@@ -901,11 +912,66 @@ impl Heap {
     /// The calling thread owns the heap; `inner` as in [`alloc`](Self::alloc).
     pub(crate) unsafe fn gc<A: GlobalAlloc>(&self, inner: &A) -> usize {
         // SAFETY: forwarded contract.
-        unsafe {
+        let freed = unsafe {
             self.gc_take_remote();
             self.gc_count_and_unlink();
             self.gc_release(inner)
+        };
+        self.gc_chunks.store(self.chunks(), Relaxed);
+        // SAFETY: forwarded contract.
+        self.gc_pages.store(unsafe { self.used_pages() }, Relaxed);
+        freed
+    }
+
+    /// The collection at the end of a request: [`gc`](Self::gc), unless
+    /// the heap holds no more chunks than the last collection left and at
+    /// most [`GC_SLACK_PAGES`] more pages in use. Then the blocks the
+    /// request freed stay on their free lists for the next request, which
+    /// takes them before it carves a run; collecting would walk every one
+    /// of them (thousands for a small page) to give back nothing that
+    /// matters. Usage figures count live bytes, so neither way changes
+    /// what `memory_get_usage()` reports. Returns the bytes released.
+    ///
+    /// php-src empties its heap at request end in a few hundred
+    /// instructions (`zend_mm_shutdown(heap, 0, 0)` keeps the cached
+    /// chunks and resets the free lists), as nothing in it outlives the
+    /// request; this heap also holds what the SAPI keeps across requests.
+    ///
+    /// # Safety
+    ///
+    /// As for [`gc`](Self::gc).
+    pub(crate) unsafe fn gc_at_request_end<A: GlobalAlloc>(&self, inner: &A) -> usize {
+        // SAFETY: forwarded contract. Blocks other threads freed are taken
+        // over either way.
+        unsafe { self.gc_take_remote() };
+        // SAFETY: forwarded contract.
+        let used = unsafe { self.used_pages() };
+        if self.chunks() <= self.gc_chunks.load(Relaxed)
+            && used <= self.gc_pages.load(Relaxed).saturating_add(GC_SLACK_PAGES)
+        {
+            return 0;
         }
+        // SAFETY: forwarded contract.
+        unsafe { self.gc(inner) }
+    }
+
+    /// Pages in use over all chunks, the header pages included.
+    ///
+    /// # Safety
+    ///
+    /// The calling thread owns the heap.
+    unsafe fn used_pages(&self) -> usize {
+        let mut used = 0;
+        let mut chunk = self.first.load(Relaxed);
+        while !chunk.is_null() {
+            // SAFETY: `chunk` is a live chunk of this heap's list, read
+            // through the raw pointer.
+            unsafe {
+                used += PAGES - (*chunk).free_pages as usize;
+                chunk = (*chunk).next;
+            }
+        }
+        used
     }
 
     /// The first step of [`gc`](Self::gc): splices each remote list onto
@@ -1541,6 +1607,60 @@ mod tests {
         assert_eq!(unsafe { heap.gc(&System) }, 4 * PAGE_SIZE);
         assert!(free_list(&heap, bin).is_empty());
         assert!(free_list(&heap, other).is_empty());
+    }
+
+    /// The request-end collection runs once the heap grew past what the
+    /// last collection left (by more than the slack), and otherwise leaves
+    /// the freed blocks on their lists, where the next allocations of
+    /// their bin find them.
+    #[test]
+    fn request_end_collects_only_after_growth() {
+        let heap = Heap::new();
+        let bin = small_size_to_bin(1024); // 8 elements per 2-page run
+        let per_run = usize::from(BIN_ELEMENTS[bin]);
+        let pages = usize::from(BIN_PAGES[bin]);
+        let alloc_runs = |runs: usize| -> Vec<*mut u8> {
+            // SAFETY: this thread owns `heap`; `bin < BINS`.
+            (0..runs * per_run)
+                .map(|_| unsafe { heap.alloc(&System, bin) })
+                .collect()
+        };
+        let free_all = |blocks: &[*mut u8]| {
+            for &p in blocks {
+                // SAFETY: allocated above, freed once, by the owner.
+                unsafe { heap.free(p, bin, true) };
+            }
+        };
+        // Nothing collected yet: the first request end collects.
+        let small = alloc_runs(2);
+        free_all(&small);
+        // SAFETY: this thread owns `heap`.
+        assert_eq!(
+            unsafe { heap.gc_at_request_end(&System) },
+            2 * pages * PAGE_SIZE
+        );
+        assert!(free_list(&heap, bin).is_empty());
+        // A request within the slack: its blocks stay listed.
+        let small = alloc_runs(2);
+        free_all(&small);
+        // SAFETY: as above.
+        assert_eq!(unsafe { heap.gc_at_request_end(&System) }, 0);
+        assert_eq!(free_list(&heap, bin).len(), 2 * per_run);
+        // The next request takes them before it carves a run.
+        let again = alloc_runs(2);
+        assert!(again.iter().all(|p| small.contains(p)));
+        assert!(free_list(&heap, bin).is_empty());
+        free_all(&again);
+        // A request past the slack is collected (its first runs are the
+        // listed blocks again).
+        let runs = GC_SLACK_PAGES / pages + 1;
+        let big = alloc_runs(runs);
+        free_all(&big);
+        // SAFETY: as above.
+        let freed = unsafe { heap.gc_at_request_end(&System) };
+        assert_eq!(freed, runs * pages * PAGE_SIZE);
+        assert!(free_list(&heap, bin).is_empty());
+        assert_eq!(heap.chunks(), 1);
     }
 
     #[test]

@@ -1790,7 +1790,7 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             if self.is_owner() {
                 // SAFETY: the calling thread owns the heap, whose chunks
                 // all come from `inner`.
-                unsafe { self.heap.gc(&self.inner) };
+                unsafe { self.heap.gc_at_request_end(&self.inner) };
             }
             self.unbind_current_thread();
         }
