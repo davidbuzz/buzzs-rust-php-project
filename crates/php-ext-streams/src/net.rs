@@ -107,7 +107,7 @@ impl StreamOps for FdSockOps {
         true
     }
 
-    fn write(&mut self, _st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
+    fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
         let fd = self.raw().ok_or(OpFailed)?;
         // SAFETY: `buf` is a valid readable buffer of `buf.len()` bytes.
         let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_NOSIGNAL) };
@@ -116,6 +116,8 @@ impl StreamOps for FdSockOps {
             if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
                 return Ok(0);
             }
+            // `php_sockop_write()`'s warning.
+            st.send_failed(buf.len(), e);
             return Err(OpFailed);
         }
         Ok(usize::try_from(n).unwrap_or(0))
@@ -989,14 +991,17 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let data = str_arg(a, 1);
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
-    let fd = cell
+    let has_fd = cell
         .get()
-        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
-    let Some(fd) = fd else {
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false))
+        .is_some();
+    if !has_fd {
         return Ok(Value::Bool(false));
-    };
+    }
     let target = if a.has(3) { str_arg(a, 3) } else { Vec::new() };
-    if !target.is_empty() {
+    let addr = if target.is_empty() {
+        None
+    } else {
         let Some(addr) = parse_network_address(&target) else {
             vm.php_warning(&format!(
                 "Failed to parse `{}' into a valid network address",
@@ -1004,25 +1009,34 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ))?;
             return Ok(Value::Bool(false));
         };
-        let n = php_streams::sys::sendto(fd, &data, flags | libc::MSG_NOSIGNAL, &addr);
-        return Ok(n.map_or(Value::Bool(false), |n| {
-            Value::Int(i64::try_from(n).unwrap_or(0))
-        }));
-    }
-    // SAFETY: `data` is valid for `data.len()` bytes.
-    let n = unsafe {
-        libc::send(
-            fd,
-            data.as_ptr().cast(),
-            data.len(),
-            flags | libc::MSG_NOSIGNAL,
-        )
+        Some(addr)
     };
-    Ok(if n < 0 {
-        Value::Bool(false)
-    } else {
-        Value::Int(i64::try_from(n).unwrap_or(0))
-    })
+    // `sock_sendto()` (main/streams/xp_socket.c): -1 on failure, with
+    // php_stream_warn(NetworkSendFailed, strerror(errno)).
+    let r = res::with_stream(vm, &cell, |s| {
+        let fd = s.cast(CastAs::FdForSelect, false)?;
+        let flags = flags | libc::MSG_NOSIGNAL;
+        let r = match &addr {
+            Some(addr) => php_streams::sys::sendto(fd, &data, flags, addr),
+            None => {
+                // SAFETY: `data` is valid for `data.len()` bytes.
+                let n = unsafe { libc::send(fd, data.as_ptr().cast(), data.len(), flags) };
+                usize::try_from(n).map_err(|_| php_streams::sys::last_errno())
+            }
+        };
+        Some(match r {
+            Ok(n) => i64::try_from(n).unwrap_or(0),
+            Err(e) => {
+                s.state.warn(
+                    php_streams::diag::StreamErrorCode::NetworkSendFailed,
+                    php_streams::sys::strerror(e),
+                );
+                -1
+            }
+        })
+    })?
+    .flatten();
+    Ok(r.map_or(Value::Bool(false), Value::Int))
 }
 
 /// `php_network_parse_network_address_with_port()`: `host:port` or

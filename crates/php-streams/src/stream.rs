@@ -181,6 +181,21 @@ impl StreamState {
     pub fn notice(&self, code: StreamErrorCode, msg: impl Into<Vec<u8>>) {
         self.error(Severity::Notice, code, false, msg);
     }
+
+    /// A socket write's failure (`php_sockop_write()` in
+    /// main/streams/xp_socket.c): "Send of %zu bytes failed with errno=%d
+    /// %s", unless the stream suppresses errors.
+    pub fn send_failed(&self, count: usize, errno: i32) {
+        if self.flags & flags::SUPPRESS_ERRORS == 0 {
+            self.warn(
+                StreamErrorCode::NetworkSendFailed,
+                format!(
+                    "Send of {count} bytes failed with errno={errno} {}",
+                    crate::sys::strerror(errno)
+                ),
+            );
+        }
+    }
 }
 
 /// The operations of a stream implementation (`php_stream_ops`).

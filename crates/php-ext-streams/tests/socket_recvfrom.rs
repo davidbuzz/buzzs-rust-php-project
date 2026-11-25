@@ -3,7 +3,7 @@
 //! `stream_socket_recvfrom()`'s `$address` is the sender of the datagram
 //! (`sock_recvfrom()` in main/streams/xp_socket.c uses recvfrom()), so an
 //! unconnected UDP server can answer it with `stream_socket_sendto()`; a
-//! connected TCP socket gives "".
+//! connected TCP socket gives "". Failed sends warn as C's do.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -68,5 +68,33 @@ var_dump(stream_socket_recvfrom($p, 10, 0, $taddr), $taddr);
         out,
         "string(5) \"hello\"\nbool(true)\nint(4)\nstring(4) \"back\"\n\
          string(2) \"hi\"\nstring(0) \"\"\n"
+    );
+}
+
+/// A failed send warns as C does: `stream_socket_sendto()` returns -1
+/// with the `strerror()` text (php_stream_warn(NetworkSendFailed) in
+/// master's main/streams/xp_socket.c; php8.5 still appends "\n"), and
+/// `fwrite()` returns false with "Send of %zu bytes failed with errno=%d
+/// %s". A datagram over 64 KiB is EMSGSIZE.
+#[test]
+fn failed_sends_warn() {
+    let out = run(r#"
+$c = stream_socket_client('udp://127.0.0.1:12345');
+$big = str_repeat('1', 1024 * 1024);
+var_dump(@stream_socket_sendto($c, $big));
+var_dump(error_get_last()['message']);
+var_dump(@stream_socket_sendto($c, $big, 0, '127.0.0.1:9'));
+var_dump(error_get_last()['message']);
+var_dump(@fwrite($c, $big));
+var_dump(error_get_last()['message']);
+var_dump(stream_socket_sendto($c, 'ok'));
+"#);
+    assert_eq!(
+        out,
+        "int(-1)\nstring(40) \"stream_socket_sendto(): Message too long\"\n\
+         int(-1)\nstring(40) \"stream_socket_sendto(): Message too long\"\n\
+         bool(false)\n\
+         string(69) \"fwrite(): Send of 1048576 bytes failed with errno=90 Message too long\"\n\
+         int(2)\n"
     );
 }

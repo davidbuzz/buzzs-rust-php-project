@@ -141,12 +141,15 @@ impl StreamOps for SocketOps {
         }
     }
 
-    fn write(&mut self, _st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
+    fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
         let sock = self.sock.as_mut().ok_or(OpFailed)?;
         match sock.send(buf) {
             Ok(n) => Ok(n),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(_) => Err(OpFailed),
+            Err(e) => {
+                st.send_failed(buf.len(), sys::errno_of(&e));
+                Err(OpFailed)
+            }
         }
     }
 
