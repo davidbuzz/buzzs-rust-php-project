@@ -2109,6 +2109,18 @@ fn place_arg(
     }
     caller.send_place_hit(pid)
 }
+/// `ZEND_SEND_REF` of `src` for the prepared call, where [`send`] stopped
+/// at a by-reference parameter: a user callee's ([`send_ref_user`]) or a
+/// builtin's ([`send_ref_native`]). `false`, having changed nothing, when
+/// neither takes it: the call is materialized and the generic send runs.
+#[inline(never)]
+pub(super) fn send_ref(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    match prep.callee {
+        Callee::User(_) => send_ref_user(vm, prep, src),
+        Callee::Native(..) => send_ref_native(vm, prep, src),
+        Callee::Quick(..) => false,
+    }
+}
 
 /// `ZEND_SEND_REF` of a plain variable (`f($x)` of a by-reference
 /// parameter) for the prepared call, which [`send`] declined because the
@@ -2123,7 +2135,7 @@ fn place_arg(
 /// generic send, with its diagnostics ("Only variables should be passed by
 /// reference", "could not be passed by reference"), runs.
 #[inline(never)]
-pub(super) fn send_ref(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+fn send_ref_user(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let n = prep.n;
     let Callee::User(uf) = &prep.callee else {
         return false;
@@ -2183,6 +2195,58 @@ fn ref_limit(uf: &UserFunction, from: usize) -> usize {
         None => from,
     };
     most.min(MAX_ARGS).min(uf.code.cv_names.len())
+}
+
+/// `ZEND_SEND_REF` (`ZEND_SEND_VAR_EX` of a by-reference parameter) into a
+/// prepared builtin call, for the argument [`send`] stopped at: the
+/// parameter at its position is by reference (`ZEND_ARG_SEND_PREFER_REF`
+/// ones too) and the argument is a bare compiled variable of a frame
+/// whose symbol table is not attached. The variable becomes a reference
+/// if it is not one (an undefined one a reference to null, without a
+/// notice: `Vm::cv_make_ref_fast`, what the generic send's
+/// `Vm::place_make_ref` does for it) and the reference is the argument.
+/// The send limit then moves to the next by-reference parameter.
+///
+/// `false`, having changed nothing, for anything else: a value or a
+/// call's result (the generic send raises the error or the notice, or
+/// passes a prefer-ref argument by value), a property or an element (its
+/// walk may report or run user code, which would take the pooled frame),
+/// a by-value parameter past the limit, or a call that is not the
+/// caller's newest. The call then becomes the generic one.
+#[inline(never)]
+fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let ArgSrc::Place(pid) = src else {
+        return false;
+    };
+    let Callee::Native(b, _) = &prep.callee else {
+        return false;
+    };
+    let n = prep.n;
+    let limit = native_limit(b);
+    if n >= limit || !b.param_ref_at(n).0 {
+        return false;
+    }
+    let next = (n + 1..limit)
+        .find(|&i| b.param_ref_at(i).0)
+        .unwrap_or(limit);
+    let live = vm.frames.live;
+    let caller = live.checked_sub(1).and_then(|i| vm.frames.vec.get(i));
+    match (caller, vm.frames.vec.get(live)) {
+        (Some(caller), Some(frame))
+            if caller.calls.len() == prep.calls_len && frame.args.len() == n => {}
+        _ => return false,
+    }
+    // The current frame is the caller (the prepared one is above it).
+    let Some(r) = vm.cv_make_ref_fast(*pid) else {
+        return false;
+    };
+    let Some(frame) = vm.frames.vec.get_mut(live) else {
+        return false;
+    };
+    frame.args.push(Some(Value::Reference(r)));
+    prep.n = n + 1;
+    prep.limit = next;
+    true
 }
 
 /// The value of compiled variable `cv` of `frame` as an argument: a copy,

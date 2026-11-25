@@ -2030,7 +2030,7 @@ impl Vm {
     /// (`preg_match($re, $s, $m)`) cost a copy of all the frame's variables.
     /// `None` for any other place or frame state.
     #[inline]
-    fn cv_make_ref_fast(&mut self, pid: PlaceId) -> Option<PhpRef> {
+    pub(crate) fn cv_make_ref_fast(&mut self, pid: PlaceId) -> Option<PhpRef> {
         let f = self.frames.last_mut()?;
         if f.symtab_attached
             || !matches!(
