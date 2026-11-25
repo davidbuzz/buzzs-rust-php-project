@@ -2276,7 +2276,7 @@ fn ref_limit(uf: &UserFunction, from: usize) -> usize {
 #[inline(never)]
 fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let ArgSrc::Place(pid) = src else {
-        return false;
+        return send_prefer_ref_value(vm, prep, src);
     };
     let Callee::Native(b, _) = &prep.callee else {
         return false;
@@ -2308,6 +2308,52 @@ fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     };
     frame.args.push(Some(Value::Reference(r)));
     prep.n = n + 1;
+    prep.limit = next;
+    true
+}
+
+/// `ZEND_SEND_VAL_EX` / `ZEND_SEND_VAR_NO_REF_EX` of a value or a call's
+/// result into a prepared builtin call at a `ZEND_ARG_SEND_PREFER_REF`
+/// parameter (`current(f())`, `array_multisort($a, SORT_DESC)`): php-src
+/// passes it by value, with no notice and no error, so [`send`] takes it
+/// as it takes a by-value argument, and the send limit moves to the next
+/// by-reference parameter. A temporary holding a reference (a function
+/// returning by reference) is sent as that reference there
+/// (`ZVAL_COPY_VALUE` of the variable), which `send` would dereference: it
+/// is left to the generic send, as is every other argument and parameter.
+#[inline(never)]
+fn send_prefer_ref_value(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let (ArgSrc::Val(op) | ArgSrc::CallResult(op)) = src else {
+        return false;
+    };
+    let Callee::Native(b, _) = &prep.callee else {
+        return false;
+    };
+    let n = prep.n;
+    let limit = native_limit(b);
+    if n >= limit || b.param_ref_at(n) != (true, true) {
+        return false;
+    }
+    if let Operand::Tmp(t) = op {
+        let held = vm
+            .frames
+            .live
+            .checked_sub(1)
+            .and_then(|i| vm.frames.vec.get(i))
+            .and_then(|caller| caller.tmps.get(*t as usize));
+        if !matches!(held, Some(v) if !matches!(v, Value::Reference(_))) {
+            return false;
+        }
+    }
+    let next = (n + 1..limit)
+        .find(|&i| b.param_ref_at(i).0)
+        .unwrap_or(limit);
+    let saved = prep.limit;
+    prep.limit = n + 1;
+    if !send(vm, prep, src) {
+        prep.limit = saved;
+        return false;
+    }
     prep.limit = next;
     true
 }

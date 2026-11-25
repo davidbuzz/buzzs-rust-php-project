@@ -3191,9 +3191,9 @@ impl Vm {
     /// with no named arguments, `$this`, scope, closure, `__call` name or
     /// partial application, not dynamic and not a constructor, with no
     /// observer, of a function `Builtin::plain_call_upto` answers
-    /// [`PlainCall::Named`](crate::func::PlainCall) for up to the last
-    /// argument, given at least its required arguments, each accepted as it
-    /// is ([`Builtin::accepts`]); a function with a frameless class whose
+    /// [`PlainCall::Named`](crate::func::PlainCall) for, given at least its
+    /// required arguments, each accepted as it is ([`Builtin::accepts`]),
+    /// by value (a value at a prefer-ref parameter too); a function with a frameless class whose
     /// arguments allow its frameless call keeps that one. Returns `None`,
     /// having changed nothing, otherwise.
     ///
@@ -3221,7 +3221,7 @@ impl Vm {
         }
         let n = usize::from(call.inline_count);
         let (kind, upto) = b.plain_call_upto();
-        if kind != crate::func::PlainCall::Named || n > upto {
+        if kind != crate::func::PlainCall::Named {
             return None;
         }
         let sig = b.signature();
@@ -3237,10 +3237,22 @@ impl Vm {
         }
         let table = b.accepts();
         let last = table.last().copied().unwrap_or(u32::MAX);
+        // From the first by-reference parameter on, a by-reference
+        // position takes only a value sent to a prefer-ref parameter
+        // (`current(f())`: `ZEND_SEND_VAR_NO_REF_EX` passes it by value); a
+        // reference sent by the generic `Send` is the general call's
+        // (typed-reference writes, `flush_typed_arg_writes`).
         let taken = sent.iter().enumerate().all(|(i, arg)| {
-            arg.as_ref().is_some_and(|v| {
-                crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
-            })
+            let Some(v) = arg else {
+                return false;
+            };
+            if i >= upto {
+                let (by_ref, prefer) = b.param_ref_at(i);
+                if by_ref {
+                    return prefer && !matches!(v, Value::Reference(_));
+                }
+            }
+            crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0
         });
         if !taken {
             return None;

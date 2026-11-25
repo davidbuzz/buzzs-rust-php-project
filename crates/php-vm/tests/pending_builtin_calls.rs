@@ -113,3 +113,32 @@ echo $r, "\n";
     assert_eq!(status, 0, "{out}");
     assert_eq!(out, "650\n[\"3-k\",0]\ntt,b\n");
 }
+
+/// Values sent to `ZEND_ARG_SEND_PREFER_REF` parameters (`current()`,
+/// `key()`, `array_multisort()`'s) are passed by value, with no notice; a
+/// function's result returned by reference is sent as that reference, so
+/// `array_multisort(g())` sorts what `g()` returns a reference to.
+#[test]
+fn prefer_ref_parameters_take_values_and_returned_references() {
+    let (status, out) = run(r#"<?php
+function f() { return [3, 1, 2]; }
+function &g() { static $a = [3, 1, 2]; return $a; }
+function t() {
+    echo current(f()), key(f()), current([5, 6]), "\n";
+    $a = [3, 1, 2];
+    var_dump(array_multisort($a, SORT_DESC));
+    echo implode(',', $a), "\n";
+    var_dump(array_multisort(f()));
+    $r = &g();
+    var_dump(array_multisort(g()));
+    echo implode(',', $r), "\n";
+}
+t();
+echo current(f()), key(f()), "\n";
+"#);
+    assert_eq!(status, 0, "{out}");
+    assert_eq!(
+        out,
+        "305\nbool(true)\n3,2,1\nbool(true)\nbool(true)\n1,2,3\n30\n"
+    );
+}
