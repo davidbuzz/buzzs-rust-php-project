@@ -126,31 +126,25 @@ pub struct VmOptions {
     pub ini: Vec<(String, String)>,
 }
 
+/// Directives the VM itself reads that belong to an extension, registered
+/// under that extension's name so that a VM without the extension still
+/// knows them (`ini_get_all('date')`, `--re`, ReflectionExtension list
+/// them where C does). Core's and ext/standard's own directives are
+/// php-support's `core_directives()` table.
 fn extra_directives() -> Vec<IniDirective> {
-    let d = |n: &str, v: Option<&str>, h: ModifyHandler| {
-        IniDirective::new(n, v, Access::ALL, h, "Core")
+    let d = |n: &str, v: Option<&str>, h: ModifyHandler, module: &str| {
+        IniDirective::new(n, v, Access::ALL, h, module)
     };
     vec![
+        // ext/date/php_date.c, the first entry of its PHP_INI_BEGIN.
+        d("date.timezone", Some("UTC"), ModifyHandler::None, "date"),
+        // ext/mbstring/mbstring.c, the first entry of its PHP_INI_BEGIN.
         d(
-            "include_path",
-            Some(".:/usr/share/php"),
+            "mbstring.language",
+            Some("neutral"),
             ModifyHandler::None,
+            "mbstring",
         ),
-        d(
-            "zend.exception_string_param_max_len",
-            Some("15"),
-            ModifyHandler::ExceptionStringParamMaxLen,
-        ),
-        d("assert.active", Some("1"), ModifyHandler::Bool),
-        d("assert.bail", Some("0"), ModifyHandler::Bool),
-        d("assert.warning", Some("1"), ModifyHandler::Bool),
-        d("assert.callback", None, ModifyHandler::None),
-        d("assert.exception", Some("1"), ModifyHandler::Bool),
-        d("date.timezone", Some("UTC"), ModifyHandler::None),
-        d("arg_separator", Some("&"), ModifyHandler::None),
-        d("highlight.bg", Some("#FFFFFF"), ModifyHandler::None),
-        d("mbstring.language", Some("neutral"), ModifyHandler::None),
-        d("zend.enable_gc", Some("1"), ModifyHandler::Bool),
     ]
 }
 

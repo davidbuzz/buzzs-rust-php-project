@@ -1009,7 +1009,9 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("fiber.stack_size", None, A::ALL, H::FiberStackSize),
         c("zend.max_allowed_stack_size", Some("0"), A::SYSTEM, H::Long),
         c("zend.reserved_stack_size", Some("0"), A::SYSTEM, H::Long),
-        // ext/standard (a selection used throughout the test suite)
+        // ext/standard, in basic_functions.c's MINIT order: var.c,
+        // file.c, assert.c, url_scanner_ex.re.
+        s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
         s("user_agent", None, A::ALL, H::String),
         s("from", None, A::ALL, H::String),
         s("default_socket_timeout", Some("60"), A::ALL, H::Long),
@@ -1019,15 +1021,20 @@ pub fn core_directives() -> Vec<IniDirective> {
             A::ALL,
             H::AutoDetectLineEndings,
         ),
-        s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
-        s("url_rewriter.tags", Some("form="), A::ALL, H::String),
-        s("url_rewriter.hosts", Some(""), A::ALL, H::String),
+        s("assert.active", Some("1"), A::ALL, H::Bool),
+        s("assert.bail", Some("0"), A::ALL, H::Bool),
+        s("assert.warning", Some("1"), A::ALL, H::Bool),
+        s("assert.callback", None, A::ALL, H::None),
+        s("assert.exception", Some("1"), A::ALL, H::Bool),
         s(
             "session.trans_sid_tags",
             Some("a=href,area=href,frame=src,form="),
             A::ALL,
             H::String,
         ),
+        s("session.trans_sid_hosts", Some(""), A::ALL, H::String),
+        s("url_rewriter.tags", Some("form="), A::ALL, H::String),
+        s("url_rewriter.hosts", Some(""), A::ALL, H::String),
     ]
 }
 
