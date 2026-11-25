@@ -1994,7 +1994,41 @@ impl Vm {
             Ok(r) => return Ok(r),
             Err(v) => v,
         };
+        self.vivify_cv_array(pid);
         self.with_cv_symtab(pid, |vm| vm.place_assign_impl(pid, v))
+    }
+
+    /// `$cv[...] = v` / `$cv[] = v` on an undefined or null variable of a
+    /// function whose symbol table is not attached: `ZEND_ASSIGN_DIM` and
+    /// `ZEND_FETCH_DIM_W` make the variable an empty array before they
+    /// look at the offset (no diagnostic; the array stays when the offset
+    /// then throws). Made here, the walk starts from the array in the
+    /// variable's private one-slot table ([`CvRoot`]) instead of from the
+    /// whole table attached for an undefined variable (every variable of
+    /// the frame copied in and back), which is what `$list[] = $x` without
+    /// an initialisation cost each time. A reference (possibly typed) and
+    /// `false` (deprecated) keep the generic walk.
+    #[inline]
+    fn vivify_cv_array(&mut self, pid: PlaceId) {
+        let Some(f) = self.frames.last_mut() else {
+            return;
+        };
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
+            return;
+        }
+        let Some(p) = f.code.places.get(pid as usize) else {
+            return;
+        };
+        let (PlaceBase::Cv(cv), Some(Seg::Dim(_) | Seg::Append)) = (&p.base, p.segs.first()) else {
+            return;
+        };
+        let cv = *cv as usize;
+        if let Some(slot) = f.cvs.get_mut(cv) {
+            let slot = slot.as_mut();
+            if matches!(slot, None | Some(Value::Null)) {
+                *slot = Some(Value::Array(ZArray::new()));
+            }
+        }
     }
 
     /// `place = $cv` with `$cv` undefined ([`Vm::place_assign_undef_cv_impl`]).

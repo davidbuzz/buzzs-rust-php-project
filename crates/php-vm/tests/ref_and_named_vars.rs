@@ -559,3 +559,135 @@ int(1)
 "#
     );
 }
+
+/// `$cv[...] = v` and `$cv[] = v` on undefined, null and `false` variables: the array made first (kept when the offset throws), offsets that warn or throw through an error handler, nested appends, a variable unset and filled again in a loop.
+#[test]
+fn assign_dim_to_undefined_variables() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+  try { $a[[]] = 1; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($a);
+  $b[$undef] = 1; var_dump($b);
+  try { $c['x']->p = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; } var_dump($c);
+  $n = null; $n[] = 'v'; var_dump($n);
+  $fa = false; $fa[] = 1; var_dump($fa);
+  $d['x'][] = 2; $d['x']['y']['z'] = 3; var_dump($d);
+  set_error_handler(function ($no, $msg) { throw new Exception($msg); });
+  try { $ee[$undef2] = 1; } catch (Exception $ex) { echo $ex->getMessage(), "\n"; } var_dump($ee);
+  restore_error_handler();
+  try { $g[PHP_INT_MAX] = 1; $g[] = 2; } catch (Error $ex) { echo $ex->getMessage(), "\n"; } var_dump(count($g));
+  $s = ''; try { $s[] = 'x'; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+  $h[1.5] = 'f'; var_dump($h);
+  $o = new ArrayObject; $o['k'] = 1; var_dump(count($o));
+  for ($i = 0; $i < 3; $i++) { unset($l); $l[] = $i; $l[] = $i; } var_dump($l);
+  var_dump(array_keys(get_defined_vars()));
+}
+f();
+"#),
+        r#"Cannot access offset of type array on array
+array(0) {
+}
+
+Warning: Undefined variable $undef in t.php on line 4
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 4
+array(1) {
+  [""]=>
+  int(1)
+}
+Attempt to assign property "p" on null
+array(1) {
+  ["x"]=>
+  NULL
+}
+array(1) {
+  [0]=>
+  string(1) "v"
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 7
+array(1) {
+  [0]=>
+  int(1)
+}
+array(1) {
+  ["x"]=>
+  array(2) {
+    [0]=>
+    int(2)
+    ["y"]=>
+    array(1) {
+      ["z"]=>
+      int(3)
+    }
+  }
+}
+Undefined variable $undef2
+array(0) {
+}
+Cannot add element to the array as the next element is already occupied
+int(1)
+[] operator not supported for strings
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 14
+array(1) {
+  [1]=>
+  string(1) "f"
+}
+int(1)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(2)
+}
+array(15) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "e"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(1) "c"
+  [4]=>
+  string(1) "n"
+  [5]=>
+  string(2) "fa"
+  [6]=>
+  string(1) "d"
+  [7]=>
+  string(2) "ee"
+  [8]=>
+  string(2) "ex"
+  [9]=>
+  string(1) "g"
+  [10]=>
+  string(1) "s"
+  [11]=>
+  string(1) "h"
+  [12]=>
+  string(1) "o"
+  [13]=>
+  string(1) "i"
+  [14]=>
+  string(1) "l"
+}
+"#
+    );
+}
+
+/// `$a[$a] = 1` with `$a` undefined: `ZEND_ASSIGN_DIM` makes `$a` an array before it reads the offset, which is then that array.
+#[test]
+fn assign_dim_reads_the_offset_after_the_container() {
+    assert_eq!(
+        run(r#"<?php
+function f() { try { $a[$a] = 1; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; } var_dump($a); }
+f();
+"#),
+        r#"TypeError: Cannot access offset of type array on array
+array(0) {
+}
+"#
+    );
+}
