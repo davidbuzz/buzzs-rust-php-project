@@ -1392,3 +1392,66 @@ pub(in crate::exec) fn isset_cv_dims_in(
     release_place_str_tmps(f, place);
     Some(r)
 }
+
+/// [`Op::InArray`](crate::opcode::Op::InArray): `in_array($needle,
+/// [literals...][, strict])` of frame `f` where the needle settles it by a
+/// key lookup in the literal set `set` (`ZEND_IN_ARRAY`'s
+/// `zend_hash_find_ex` / `zend_hash_index_find` paths): a string, in
+/// strict mode an int (anything else is not in a strict set), in loose
+/// mode `null` or `false` (equal only to `""`). The needle is read as
+/// `Vm::read` reads it (a defined variable, through a reference; a
+/// literal; a temporary, its string released when consumed); the result
+/// goes to `dst` when there is one. `false`, nothing changed, for
+/// anything else (an undefined variable, a loose comparison with each
+/// element).
+#[inline(never)]
+pub(in crate::exec) fn in_array_in(
+    f: &mut Frame,
+    a: Operand,
+    set: u32,
+    strict: bool,
+    dst: Option<u32>,
+) -> bool {
+    let r = {
+        let Some(Value::Array(keys)) = f.code.literals.get(set as usize) else {
+            return false;
+        };
+        let guard;
+        let needle = match a {
+            Operand::Cv(c) => match f.cvs.get(c as usize).and_then(CvSlot::get) {
+                Some(Value::Reference(r)) => {
+                    let Some(g) = r.try_borrow() else {
+                        return false;
+                    };
+                    guard = g;
+                    &*guard
+                }
+                Some(v) => v,
+                None => return false,
+            },
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(Value::Reference(_)) | None => return false,
+                Some(v) => v,
+            },
+            Operand::Lit(l) => match f.code.literals.get(l as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+            Operand::Unused => return false,
+        };
+        match needle {
+            Value::Str(s) => keys.get_str(s.as_bytes()).is_some(),
+            Value::Int(i) if strict => keys.get_int(*i).is_some(),
+            // A consumed array or object needle would be released here.
+            Value::Array(_) | Value::Object(_) if matches!(a, Operand::Tmp(_)) => return false,
+            _ if strict => false,
+            Value::Null | Value::Bool(false) => keys.get_str(b"").is_some(),
+            _ => return false,
+        }
+    };
+    release_str_tmp_in(f, a);
+    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+        put_tmp(slot, Value::Bool(r));
+    }
+    true
+}

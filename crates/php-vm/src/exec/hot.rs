@@ -156,6 +156,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             }
             | Op::FeFree { .. }
             | Op::KeyExists { .. }
+            | Op::InArray { .. }
             | Op::RecvInit { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
@@ -957,6 +958,17 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         },
         Op::FeFree { iter } => {
             if !fe_free_array_in(f, iter) {
+                return DECLINED;
+            }
+        }
+        // `ZEND_IN_ARRAY` settled by one key lookup.
+        Op::InArray {
+            a,
+            set,
+            strict,
+            dst,
+        } => {
+            if !spec::in_array_in(f, a, set, strict, dst) {
                 return DECLINED;
             }
         }

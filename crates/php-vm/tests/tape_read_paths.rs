@@ -214,6 +214,43 @@ array(1) {
     );
 }
 
+/// `in_array()` with a literal haystack: string and int needles, strict and loose, null/false, numeric strings, and the needles that compare element by element.
+#[test]
+fn in_array_literal() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+  $needles = ['a', 'b', '', '1', 1, 2, 1.0, null, false, true, '01', [1], 'x' => 'c'];
+  $r = 'b'; $ref = &$r;
+  for ($t = 0; $t < 3; $t++) {
+    $out = [];
+    foreach ($needles as $n) {
+      $out[] = [in_array($n, ['a', 'b', 'c']), in_array($n, ['a', 'b', 'c'], true), in_array($n, [1, 2, 3]), in_array($n, [1, 2, 3], true), in_array($n, ['', 'z'])];
+    }
+    echo json_encode($out), "\n";
+    echo json_encode([in_array($ref, ['b']), in_array('a' . $t, ['a0', 'a2']), in_array(strtoupper('b'), ['B'], true)]), "\n";
+    if (in_array($needles['x'], ['c', 'd'], true)) { echo "branch\n"; }
+    echo json_encode([@in_array($undef, ['', 'x']), in_array(new ArrayObject([]), ['a'])]), "\n";
+  }
+}
+f();
+"#),
+        r#"[[true,true,false,false,false],[true,true,false,false,false],[false,false,false,false,true],[false,false,true,false,false],[false,false,true,true,false],[false,false,true,true,false],[false,false,true,false,false],[false,false,false,false,true],[false,false,false,false,true],[true,false,true,false,true],[false,false,true,false,false],[false,false,false,false,false],[true,true,false,false,false]]
+[true,true,true]
+branch
+[true,false]
+[[true,true,false,false,false],[true,true,false,false,false],[false,false,false,false,true],[false,false,true,false,false],[false,false,true,true,false],[false,false,true,true,false],[false,false,true,false,false],[false,false,false,false,true],[false,false,false,false,true],[true,false,true,false,true],[false,false,true,false,false],[false,false,false,false,false],[true,true,false,false,false]]
+[true,false,true]
+branch
+[true,false]
+[[true,true,false,false,false],[true,true,false,false,false],[false,false,false,false,true],[false,false,true,false,false],[false,false,true,true,false],[false,false,true,true,false],[false,false,true,false,false],[false,false,false,false,true],[false,false,false,false,true],[true,false,true,false,true],[false,false,true,false,false],[false,false,false,false,false],[true,true,false,false,false]]
+[true,true,true]
+branch
+[true,false]
+"#
+    );
+}
+
 /// `array_key_exists()`: int, string and numeric-string keys, null values, references, property and literal arrays, odd keys and non-arrays.
 #[test]
 fn key_exists() {
