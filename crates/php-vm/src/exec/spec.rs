@@ -41,11 +41,13 @@ use crate::rtcache::GlobalSlot;
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
+mod casts;
 mod dims;
 mod props;
 mod statics;
 mod strings;
 
+pub(super) use casts::cast_in;
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
     fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in, fetch_dims_cv_in,

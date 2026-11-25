@@ -13,7 +13,7 @@ use super::{
 use super::{Num, KL};
 use crate::exec::hot;
 use crate::exec::spec::plain_truth;
-use crate::opcode::{BinKind, ClassSpec, ForeachKind, Op, OpArray, Operand, UnKind};
+use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, UnKind};
 use crate::vm::Frame;
 use php_runtime::{BinaryOp, Value};
 use std::rc::Rc;
@@ -257,6 +257,36 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             d: u32::try_from(i).ok()?,
             ..plain(TOp::FeFreeA)
         },
+        // `(int)`, `(float)`, `(bool)`, `(array)` (`(string)` is the
+        // `dims` family's `CastStrT`, or `hot::step_ext`'s).
+        Op::Cast {
+            kind: kind @ (CastKind::Int | CastKind::Float | CastKind::Bool | CastKind::Array),
+            a,
+            dst,
+        } => {
+            let (ka, ia) = match a {
+                Operand::Cv(c) if (c as usize) < code.cv_names.len() => (0, c),
+                Operand::Tmp(t) if t < code.num_tmps => (1, t),
+                Operand::TmpKeep(t) if t < code.num_tmps => (2, t),
+                Operand::Lit(l) if (l as usize) < code.literals.len() => (3, l),
+                _ => return None,
+            };
+            if dst >= code.num_tmps {
+                return None;
+            }
+            Inst {
+                a: ia,
+                b: dst,
+                k: ka,
+                e: match kind {
+                    CastKind::Int => 0,
+                    CastKind::Float => 1,
+                    CastKind::Bool => 2,
+                    _ => 3,
+                },
+                ..plain(TOp::CastX)
+            }
+        }
         _ => return None,
     })
 }
@@ -357,6 +387,32 @@ pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
         Some(false) => Br::Jump,
         None => Br::Decline,
     }
+}
+
+/// `Op::Cast` to int, float, bool or array (`spec::cast_in`): the operand's
+/// kind in `k` (variable, consumed temporary, kept temporary, literal) and
+/// index in `a`, the result temporary in `b`, the kind of cast in `e`.
+/// Releases a consumed operand, so it polls.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn cast(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let a = match inst.k {
+        0 => Operand::Cv(inst.a),
+        1 => Operand::Tmp(inst.a),
+        2 => Operand::TmpKeep(inst.a),
+        _ => Operand::Lit(inst.a),
+    };
+    let kind = match inst.e {
+        0 => CastKind::Int,
+        1 => CastKind::Float,
+        2 => CastKind::Bool,
+        _ => CastKind::Array,
+    };
+    crate::exec::spec::cast_in(f, kind, a, inst.b)
 }
 
 /// `Op::FeFree` of an array iterator (`ZEND_FE_FREE`:

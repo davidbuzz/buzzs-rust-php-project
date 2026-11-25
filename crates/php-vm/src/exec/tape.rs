@@ -1318,6 +1318,7 @@ tape_ops! {
         InstanceOfX = (scalar::instance_of, 1, poll_f),
         FeResetA = (scalar::fe_reset, 1, branch_poll_f),
         FeFreeA = (scalar::fe_free, 1, poll_f),
+        CastX = (scalar::cast, 1, poll_f),
 
         // ---- end of scalar ----
         //

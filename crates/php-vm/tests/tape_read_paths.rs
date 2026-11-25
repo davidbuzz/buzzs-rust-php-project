@@ -45,6 +45,88 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// `(int)`, `(float)`, `(bool)`, `(array)` of variables, temporaries, literals and references, with the conversions that warn or call user code.
+#[test]
+fn casts() {
+    assert_eq!(
+        run(r#"<?php
+class S { function __toString(): string { return "7"; } }
+function f() {
+  $vals = [null, true, false, 0, 42, -3, 1.9, -1.9, 0.0, '', '0', '12', ' 12', '12 ', '12abc', 'abc', '1e3', '0x1A', '1.5', [], [0], 'x' => [1, 2]];
+  $r = 5; $ref = &$r;
+  for ($t = 0; $t < 3; $t++) {
+    $out = [];
+    foreach ($vals as $v) { $out[] = [(int)$v, (float)$v, (bool)$v, (array)$v]; }
+    echo json_encode($out), "\n";
+    $a = ['k' => '33', 'f' => 2.5, 'n' => null];
+    echo json_encode([(int)$a['k'], (float)$a['f'], (bool)$a['n'], (array)$a['k'], (int)($a['k'] . '1'), (array)$a, (int)$ref, (bool)$ref, (array)$ref, (int)'77', (bool)'0', (array)null]), "\n";
+    echo json_encode([(int)1e30, (int)NAN, (int)INF]), "\n";
+    echo json_encode([(array)NAN]), "\n";
+    echo json_encode([(int)$undef, (bool)new S, (array)new S, (int)[1, 2] + (int)(bool)[]]), "\n";
+    try { echo (int)new S; } catch (Error $e) { echo get_class($e), "\n"; }
+    echo json_encode([(float)'1e3abc', (float)' 2.5', (float)'abc']), "\n";
+  }
+}
+f();
+"#),
+        r#"[[0,0,false,[]],[1,1,true,[true]],[0,0,false,[false]],[0,0,false,[0]],[42,42,true,[42]],[-3,-3,true,[-3]],[1,1.9,true,[1.9]],[-1,-1.9,true,[-1.9]],[0,0,false,[0]],[0,0,false,[""]],[0,0,false,["0"]],[12,12,true,["12"]],[12,12,true,[" 12"]],[12,12,true,["12 "]],[12,12,true,["12abc"]],[0,0,true,["abc"]],[1000,1000,true,["1e3"]],[0,0,true,["0x1A"]],[1,1.5,true,["1.5"]],[0,0,false,[]],[1,1,true,[0]],[1,1,true,[1,2]]]
+[33,2.5,false,["33"],331,{"k":"33","f":2.5,"n":null},5,true,[5],77,false,[]]
+
+Warning: The float 1.0E+30 is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float NAN is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float INF is not representable as an int, cast occurred in t.php on line 12
+[5076964154930102272,0,0]
+
+Warning: unexpected NAN value was coerced to array in t.php on line 13
+
+
+Warning: Undefined variable $undef in t.php on line 14
+[0,true,[],1]
+
+Warning: Object of class S could not be converted to int in t.php on line 15
+1[1000,2.5,0]
+[[0,0,false,[]],[1,1,true,[true]],[0,0,false,[false]],[0,0,false,[0]],[42,42,true,[42]],[-3,-3,true,[-3]],[1,1.9,true,[1.9]],[-1,-1.9,true,[-1.9]],[0,0,false,[0]],[0,0,false,[""]],[0,0,false,["0"]],[12,12,true,["12"]],[12,12,true,[" 12"]],[12,12,true,["12 "]],[12,12,true,["12abc"]],[0,0,true,["abc"]],[1000,1000,true,["1e3"]],[0,0,true,["0x1A"]],[1,1.5,true,["1.5"]],[0,0,false,[]],[1,1,true,[0]],[1,1,true,[1,2]]]
+[33,2.5,false,["33"],331,{"k":"33","f":2.5,"n":null},5,true,[5],77,false,[]]
+
+Warning: The float 1.0E+30 is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float NAN is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float INF is not representable as an int, cast occurred in t.php on line 12
+[5076964154930102272,0,0]
+
+Warning: unexpected NAN value was coerced to array in t.php on line 13
+
+
+Warning: Undefined variable $undef in t.php on line 14
+[0,true,[],1]
+
+Warning: Object of class S could not be converted to int in t.php on line 15
+1[1000,2.5,0]
+[[0,0,false,[]],[1,1,true,[true]],[0,0,false,[false]],[0,0,false,[0]],[42,42,true,[42]],[-3,-3,true,[-3]],[1,1.9,true,[1.9]],[-1,-1.9,true,[-1.9]],[0,0,false,[0]],[0,0,false,[""]],[0,0,false,["0"]],[12,12,true,["12"]],[12,12,true,[" 12"]],[12,12,true,["12 "]],[12,12,true,["12abc"]],[0,0,true,["abc"]],[1000,1000,true,["1e3"]],[0,0,true,["0x1A"]],[1,1.5,true,["1.5"]],[0,0,false,[]],[1,1,true,[0]],[1,1,true,[1,2]]]
+[33,2.5,false,["33"],331,{"k":"33","f":2.5,"n":null},5,true,[5],77,false,[]]
+
+Warning: The float 1.0E+30 is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float NAN is not representable as an int, cast occurred in t.php on line 12
+
+Warning: The float INF is not representable as an int, cast occurred in t.php on line 12
+[5076964154930102272,0,0]
+
+Warning: unexpected NAN value was coerced to array in t.php on line 13
+
+
+Warning: Undefined variable $undef in t.php on line 14
+[0,true,[],1]
+
+Warning: Object of class S could not be converted to int in t.php on line 15
+1[1000,2.5,0]
+"#
+    );
+}
+
 /// `$cv[k] ?? d` and `$cv[k][j] ?? d`: hits, misses, undefined and scalar containers, string offsets, odd keys, ArrayAccess.
 #[test]
 fn coalesce_dim_miss() {

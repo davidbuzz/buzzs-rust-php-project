@@ -142,7 +142,11 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::ConcatCv { .. }
             | Op::Rope { .. }
             | Op::Cast {
-                kind: CastKind::String,
+                kind: CastKind::String
+                    | CastKind::Int
+                    | CastKind::Float
+                    | CastKind::Bool
+                    | CastKind::Array,
                 ..
             }
             | Op::FeFetch { .. }
@@ -898,6 +902,13 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Str(s));
+        }
+        // `(int)`, `(float)`, `(bool)`, `(array)` of the operand types
+        // that convert silently (`exec/spec/casts.rs`).
+        Op::Cast { kind, a, dst } => {
+            if !spec::cast_in(f, kind, a, dst) {
+                return DECLINED;
+            }
         }
         // `ZEND_ROPE_END` of strings and integers.
         Op::Rope { ref parts, dst } => {
