@@ -202,6 +202,22 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
     }
     let stored = match cache.get_mut(idx) {
         Some(slot) => {
+            let mut entry = entry;
+            let mut old = std::mem::replace(slot, PropCacheEntry::default());
+            // The replaced entry, for another class, is kept as the
+            // alternate (one level: its own alternate goes, its box is
+            // reused for it, so a site cycling through three classes does
+            // not allocate per refill).
+            if old.class_addr != 0 && old.class_addr != entry.class_addr {
+                let boxed = match old.alt.take() {
+                    Some(mut b) => {
+                        *b = old;
+                        b
+                    }
+                    None => Box::new(old),
+                };
+                entry.alt = Some(boxed);
+            }
             *slot = entry;
             true
         }
@@ -843,6 +859,7 @@ impl Vm {
             ok_class_addr: 0,
             ok_class: Weak::new(),
             flags: 0,
+            alt: None,
         };
         let hooks = cls.hooks.as_deref();
         let read_ok = hooks.is_none_or(|hk| hk.read_property.is_none());
@@ -927,6 +944,22 @@ impl Vm {
         let Some(cls) = with_base_obj(frame, base, |obj| object::class_of(obj).clone()) else {
             return false;
         };
+        // The alternate entry is for this class and scope: the two swap
+        // (the alternate's class is alive: its address is the object's).
+        let scope = scope_addr(frame);
+        if let Ok(mut cache) = code.prop_cache.try_borrow_mut() {
+            if let Some(e) = cache.get_mut(pid as usize) {
+                if let Some(mut alt) = e.alt.take() {
+                    if alt.class_addr == Rc::as_ptr(&cls) as usize && alt.scope_addr == scope {
+                        let mut prev = std::mem::replace(e, *alt);
+                        prev.alt = None;
+                        e.alt = Some(Box::new(prev));
+                        return true;
+                    }
+                    e.alt = Some(alt);
+                }
+            }
+        }
         let entry = self.cache_entry_for(&cls, name, frame.scope.as_ref(), base, lit);
         store_entry(code, pid as usize, code.places.len(), entry)
     }

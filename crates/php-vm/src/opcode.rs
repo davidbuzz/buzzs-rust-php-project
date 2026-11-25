@@ -1615,6 +1615,11 @@ pub struct PropCacheEntry {
     pub ok_class: std::rc::Weak<crate::class::Class>,
     /// `PC_*` bits of `place::propcache`: which fast paths apply.
     pub flags: u8,
+    /// The entry this one replaced, for another class (a site that sees
+    /// objects of two classes, a base class's method running for its
+    /// subclasses): a refill for that class swaps the two instead of
+    /// looking the property up again (`place::propcache::store_entry`).
+    pub alt: Option<Box<PropCacheEntry>>,
 }
 
 /// An [`OpArray::fcall_cache`] entry. User functions and classes are held

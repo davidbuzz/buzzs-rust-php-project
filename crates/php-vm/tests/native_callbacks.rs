@@ -853,3 +853,43 @@ v2 2 bad toString@4 Object of class App\Plain could not be converted to string t
 "#
     );
 }
+
+/// Property sites that see objects of several classes (a base class's
+/// method running for its subclasses): the property cache keeps the entry
+/// it replaces as an alternate and swaps back to it, and a declined read
+/// refills on the tape; subclasses redeclaring the property, a get hook, an
+/// unset property taken by `__get()`, dynamic properties, writes, `isset()`
+/// and `unset()`. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn polymorphic_property_sites() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+#[\AllowDynamicProperties]
+class B { public $types = []; protected $x = 'B'; public function t() { return ($this->types ? 'T' : '-') . $this->x; }
+  public function w($v) { $this->x = $v; return $this->x; } public function i() { return isset($this->x) ? 'i' : 'n'; } }
+class C1 extends B {}
+class C2 extends B { protected $x = 'C2'; }
+class C3 extends B { public $types = [1]; }
+class Hk extends B { public $types { get => ['h']; } }
+class Mg extends B { public function __construct() { unset($this->x); } public function __get($n) { return "magic:$n"; } }
+class Dy extends B { public function __construct() { $this->extra = 'e'; } }
+function read($o) { return $o->types ? count($o->types) : 0; }
+function run() {
+  $os = [new C1, new C2, new C3, new Hk, new Mg, new Dy, new B];
+  for ($i = 0; $i < 3; $i++) {
+    foreach ($os as $k => $o) { echo $o->t(), read($o), $o->i(), ' '; }
+    foreach ($os as $k => $o) { echo $o->w("w$i$k"), ' '; }
+    foreach ([$os[0], $os[1], $os[0], $os[2], $os[0], $os[1]] as $o) { echo $o->t(); }
+    unset($os[0]->types); echo isset($os[0]->types) ? 'set' : 'unset', ' '; $os[0]->types = [];
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"-B0i -C20i TB1i TB1i -magic:x0n -B0i -B0i w00 w01 w02 w03 w04 w05 w06 -w00-w01-w00Tw02-w00-w01unset 
+-w000i -w010i Tw021i Tw031i -w040i -w050i -w060i w10 w11 w12 w13 w14 w15 w16 -w10-w11-w10Tw12-w10-w11unset 
+-w100i -w110i Tw121i Tw131i -w140i -w150i -w160i w20 w21 w22 w23 w24 w25 w26 -w20-w21-w20Tw22-w20-w21unset 
+"#
+    );
+}

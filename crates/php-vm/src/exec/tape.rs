@@ -2675,6 +2675,24 @@ fn declined_vm_step(
             DECLINED
         };
     }
+    // `$obj->name` whose site cache holds another class (a method of a base
+    // class running for several subclasses): the read and the cache's
+    // refill (`Vm::fetch_obj_prop_fast`: a hit, else `prop_cache_read`)
+    // here, rather than `Vm::run`'s arm after a trip out of the tape. No
+    // user code runs (a miss that needs `__get()` declines).
+    if let Some(&Op::FetchObjProp {
+        place,
+        dst,
+        to,
+        mode,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        return match vm.fetch_obj_prop_fast(place, dst, to, mode) {
+            Some(skipped) => at + 1 + usize::from(skipped),
+            None => DECLINED,
+        };
+    }
     // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
     // `$this->array[(string) $key] = $value`): `Vm::run`'s arm, here.
     if let Some(&Op::Cast {
