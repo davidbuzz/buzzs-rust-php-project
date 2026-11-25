@@ -1369,6 +1369,7 @@ tape_ops! {
         FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
         IssetDimC = (dims::isset_dim, 1, poll_f),
         IssetDimL = (dims::isset_dim_lean, 1, poll_f),
+        IssetDimsC = (dims::isset_dims, 1, poll_f),
         KeyExistsC = (dims::key_exists, 1, poll_f),
         AssignDimC = (dims::assign_dim_key, 1, poll_f),
         AssignDimIC = (dims::assign_dim_int, 1, poll_f),

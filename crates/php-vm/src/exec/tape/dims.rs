@@ -25,10 +25,12 @@ use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
     concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in,
-    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_dim_cv_in, key_exists_in,
-    put_tmp, rope_in,
+    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_cv_dims_in, isset_dim_cv_in,
+    key_exists_in, put_tmp, rope_in,
 };
-use crate::opcode::{BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Seg};
+use crate::opcode::{
+    BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, PlaceBase, Seg,
+};
 use crate::vm::{CvSlot, ForeachIter, Frame};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
@@ -377,6 +379,25 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 k: dk,
                 e: u8::from(empty),
                 ..plain(op)
+            }
+        }
+        // `isset($cv[d1]...[dn])` / `empty(...)` with two or more offsets
+        // (`spec::isset_cv_dims_in`): the place in `b`, the variable in
+        // `a`, the result's slot in `c`.
+        Op::Isset { place, dst } | Op::Empty { place, dst } => {
+            let p = code.places.get(place as usize)?;
+            let PlaceBase::Cv(cv) = p.base else {
+                return None;
+            };
+            if p.segs.len() < 2 || !p.segs.iter().all(|s| matches!(s, Seg::Dim(_))) {
+                return None;
+            }
+            Inst {
+                a: ((cv as usize) < code.cv_names.len()).then_some(cv)?,
+                b: place_idx(code, place)?,
+                c: dst_off(code, dst)?,
+                e: u8::from(matches!(code.ops[i], Op::Empty { .. })),
+                ..plain(TOp::IssetDimsC)
             }
         }
         Op::KeyExists { key, array, dst } => {
@@ -1519,6 +1540,31 @@ fn isset_lean(f: &Frame, inst: &Inst) -> Option<bool> {
         Value::Reference(r) => !r.try_borrow()?.is_null(),
         _ => true,
     })
+}
+
+/// `TOp::IssetDimsC`: `isset($cv[d1]...[dn])` / `empty(...)` of the
+/// place in `b` (`ZEND_FETCH_DIM_IS` along the chain and
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` on the last container:
+/// `spec::isset_cv_dims_in`), the result into the slot in `c`. Before,
+/// the op had no row and left the tape for `hot::step_ext`, which runs
+/// the same function: 27,600 times a request on a large framework
+/// application's page. Declines, nothing changed, what that declines
+/// (a string offset, `ArrayAccess`, a symbol table).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn isset_dims(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let Some(r) = isset_cv_dims_in(f, inst.a, inst.b, inst.e != 0) else {
+        return false;
+    };
+    let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) else {
+        return false;
+    };
+    put_tmp(slot, Value::Bool(r));
+    true
 }
 
 /// `Op::KeyExists`: `array_key_exists($key, $array)` (`key_exists_in`):

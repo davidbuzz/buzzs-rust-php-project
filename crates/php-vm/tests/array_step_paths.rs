@@ -1325,3 +1325,78 @@ Warning: Undefined array key "nope" in t.php on line 14
 get(magic) mget(magic) d
 outsidenul
 "#;
+
+/// `isset($a['x']['y'])` and `empty(...)` over every kind of element and
+/// container on the way: missing keys, null, falsy values, lists, string
+/// offsets, scalars, references, `ArrayAccess`, undefined and null
+/// variables, float and null keys, and the branch forms.
+#[test]
+fn isset_of_nested_elements() {
+    assert_eq!(run(ISSET_NESTED), ISSET_NESTED_OUT);
+}
+
+const ISSET_NESTED: &str = r#"<?php
+class AA implements ArrayAccess {
+    public function offsetExists($o): bool { echo "exists($o) "; return true; }
+    public function offsetGet($o): mixed { echo "get($o) "; return ['in' => 0]; }
+    public function offsetSet($o, $v): void {}
+    public function offsetUnset($o): void {}
+}
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $t = ['deep' => 1];
+        $x = ['a' => ['b' => 1, 'n' => null, 'z' => 0, 's' => 'str', 'e' => '', 'arr' => [], 'o' => new stdClass], 'l' => [[1, 0]], 's' => 'abc', 'i' => 5, 'r' => &$t, 'aa' => new AA];
+        $k = 'a';
+        $j = 'b';
+        echo json_encode([isset($x['a']['b']), isset($x['a']['n']), isset($x['a']['nope']), isset($x['nope']['b']), isset($x[$k][$j]), isset($x['l'][0][1]), isset($x['l'][0][2]), isset($x['l']['0'][0])]), "\n";
+        echo json_encode([empty($x['a']['b']), empty($x['a']['n']), empty($x['a']['z']), empty($x['a']['s']), empty($x['a']['e']), empty($x['a']['arr']), empty($x['a']['o']), empty($x['a']['nope']), empty($x['l'][0][1])]), "\n";
+        echo json_encode([isset($x['s'][1]), isset($x['s']['k']), isset($x['s'][9]), empty($x['s'][0]), isset($x['i']['k']), isset($x['r']['deep']), isset($x['r']['nope'])]), "\n";
+        echo json_encode([isset($x['aa']['k']), isset($x['aa']['k']['in']), empty($x['aa']['k']['in'])]), "\n";
+        echo json_encode([isset($undef['a']['b']), empty($undef['a']['b'])]), "\n";
+        $n = null;
+        echo json_encode([isset($n['a']['b']), isset($x['a']['b']['c']), isset($x['a']['s']['c'])]), "\n";
+        echo json_encode([isset($x[$k . ''][$j . '']), isset($x[1.5]['b']), isset($x[null]['b'])]), "\n";
+        if (isset($x['a']['b'])) { echo "branch\n"; }
+        if (!empty($x['a']['n'])) { echo "never\n"; }
+    }
+}
+f();
+"#;
+
+const ISSET_NESTED_OUT: &str = r#"[true,false,false,false,true,true,false,true]
+[false,true,true,false,true,true,false,true,true]
+[true,false,false,false,false,true,false]
+exists(k) exists(k) get(k) exists(k) get(k) [true,true,true]
+[false,true]
+[false,false,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 21
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 21
+[true,false,false]
+branch
+[true,false,false,false,true,true,false,true]
+[false,true,true,false,true,true,false,true,true]
+[true,false,false,false,false,true,false]
+exists(k) exists(k) get(k) exists(k) get(k) [true,true,true]
+[false,true]
+[false,false,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 21
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 21
+[true,false,false]
+branch
+[true,false,false,false,true,true,false,true]
+[false,true,true,false,true,true,false,true,true]
+[true,false,false,false,false,true,false]
+exists(k) exists(k) get(k) exists(k) get(k) [true,true,true]
+[false,true]
+[false,false,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 21
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 21
+[true,false,false]
+branch
+"#;

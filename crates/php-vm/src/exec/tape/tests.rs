@@ -1877,7 +1877,7 @@ fn isset_of_a_string_literal_key_has_its_own_row() {
                for ($i = 0; $i < 3; $i++) { $r[] = isset($a['key']); $r[] = empty($a['nope']); \
                $r[] = isset($a['5']); $r[] = isset($a[$k]); $r[] = isset($a[5]); } \
                return $r; } \
-               echo json_encode(f(['key' => 0, 5 => 1], 'key')), \"\\n\";";
+               echo implode(',', array_map(fn($v) => var_export($v, true), f(['key' => 0, 5 => 1], 'key'))), \"\\n\";";
     let arrays = op_arrays(src);
     let tape = check(&arrays[1]);
     let rows = |op: TOp| tape.iter().filter(|inst| inst.op == op).count();
@@ -1885,6 +1885,27 @@ fn isset_of_a_string_literal_key_has_its_own_row() {
     assert_eq!(rows(TOp::IssetDimC), 1);
     assert_eq!(
         run(src),
-        "[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]\n"
+        "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true\n"
+    );
+}
+
+/// `isset($a['x']['y'])` / `empty(...)` of a variable's nested elements
+/// gets a row (`IssetDimsC`) instead of leaving the tape for
+/// `hot::step_ext`; one offset, a plain variable and a property's
+/// elements keep their rows. Expected output from `/usr/bin/php8.5 -n`.
+#[test]
+fn isset_of_nested_elements_has_a_row() {
+    let src = "<?php function f($a, $k) { $r = []; \
+               for ($i = 0; $i < 3; $i++) { $r[] = isset($a['x']['y']); $r[] = empty($a[$k]['z']); \
+               $r[] = isset($a['x']); $r[] = isset($a); $r[] = isset($a['x']['y'][0]); } \
+               return $r; } \
+               echo implode(',', array_map(fn($v) => var_export($v, true), f(['x' => ['y' => [1]]], 'x'))), \"\\n\";";
+    let arrays = op_arrays(src);
+    let tape = check(&arrays[1]);
+    let rows = |op: TOp| tape.iter().filter(|inst| inst.op == op).count();
+    assert_eq!(rows(TOp::IssetDimsC), 3);
+    assert_eq!(
+        run(src),
+        "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true\n"
     );
 }
