@@ -3366,7 +3366,7 @@ impl Vm {
     }
 
     pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
-        let v = v.unwrap_or_default();
+        let mut v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
         if self.frames[fidx].generator.is_some() {
@@ -3380,6 +3380,14 @@ impl Vm {
             }
             return Ok(Flow::Reload);
         }
+        // `ZEND_RETURN` with no `EX(return_value)` (the caller does not use
+        // the result): the value is released here, the callee still the
+        // current frame, before `zend_leave_helper` frees its variables.
+        let thrown = if fidx > base && self.frames[fidx].ret == RetTarget::Discard {
+            self.release_unused_result(std::mem::take(&mut v))
+        } else {
+            None
+        };
         let is_main = Rc::ptr_eq(&self.frames[fidx].vars, &self.globals)
             || self.frames[fidx].kind == crate::vm::FrameKind::Main;
         if is_main && fidx <= base {
@@ -3407,6 +3415,12 @@ impl Vm {
             (frame.ret, by_ref)
         };
         self.frames.release_top(&self.empty_code);
+        // An exception from a destructor the release above ran is
+        // rethrown in the caller once the frame is left
+        // (`zend_leave_helper`'s `zend_rethrow_exception`).
+        if let Some(t) = thrown {
+            return Err(t);
+        }
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {
             return Ok(Flow::Done(v));
@@ -3415,6 +3429,31 @@ impl Vm {
             self.set_tmp(t, v);
         }
         Ok(Flow::Reload)
+    }
+
+    /// The release of a result the caller does not use, in the returning
+    /// frame (`ZEND_RETURN`'s `zval_ptr_dtor` of the returned temporary
+    /// when `EX(return_value)` is NULL; `ZEND_OBSERVER_FREE_RETVAL` with
+    /// an observer): a destructor it queues runs now, with the callee
+    /// still in its backtrace. A returned compiled variable arrives here
+    /// as a copy, so its value is released with the frame's variables, as
+    /// in php-src. Returns what such a destructor threw, for the caller of
+    /// the frame (ref: Zend/zend_vm_def.h `ZEND_RETURN`).
+    #[inline]
+    pub(crate) fn release_unused_result(&mut self, v: Value) -> Option<Throw> {
+        if matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            std::mem::forget(v);
+            return None;
+        }
+        drop(v);
+        if object::has_pending_destructors() {
+            self.run_pending_destructors().err()
+        } else {
+            None
+        }
     }
 
     /// `Fetching properties on non-enums in constant expressions is not

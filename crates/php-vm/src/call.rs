@@ -2569,8 +2569,17 @@ impl Vm {
                     if matches!(slot, Value::Reference(_)) || !return_accepts(rt, slot) {
                         return None;
                     }
+                    // An unused result whose release may run a destructor
+                    // is left to `Vm::op_return_raw`, which runs it in this
+                    // frame and rethrows what it throws in the caller
+                    // (`ZEND_RETURN`'s release of the temporary).
+                    if !at_base && frame.ret == RetTarget::Discard && may_destruct(slot) {
+                        return None;
+                    }
                     std::mem::take(slot)
                 }
+                // A literal is shared with the op array: its release here
+                // frees nothing.
                 Operand::Lit(i) => {
                     let lit = frame.code.literals.get(i as usize)?;
                     if matches!(lit, Value::Reference(_)) || !return_accepts(rt, lit) {
@@ -2591,25 +2600,42 @@ impl Vm {
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
-            gc_on_release(frame, caller);
             let ret = frame.ret;
+            // `ZEND_RETURN` releases an unused result before the frame is
+            // left (`EX(return_value)` is NULL). What arrives here cannot
+            // run a destructor (`may_destruct`; a compiled variable's value
+            // is a copy, released with the frame's variables); a scalar
+            // owns nothing, so the out-of-line drop glue is skipped.
+            let v = match ret {
+                RetTarget::Discard if !at_base => {
+                    if is_scalar(&v) {
+                        std::mem::forget(v);
+                    } else {
+                        drop(v);
+                    }
+                    None
+                }
+                _ => Some(v),
+            };
+            gc_on_release(frame, caller);
             // `ZEND_RETURN` copies the value into the caller's result slot
             // (`EX(return_value)`) before `zend_leave_helper` releases the
             // frame: done here, through the caller already at hand, when
             // the slot holds a scalar (its release has no effect). Another
             // value in the slot is released after the frame, by `set_tmp`
             // below, as before.
-            let v = match ret {
+            let v = match (ret, v) {
+                (_, None) => None,
                 // The execution's result: no caller slot.
-                _ if at_base => Some(v),
-                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                (_, v) if at_base => v,
+                (RetTarget::Tmp(t), Some(v)) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
                         None
                     }
                     _ => Some(v),
                 },
-                RetTarget::Discard => Some(v),
+                (RetTarget::Discard, v) => v,
             };
             // `FrameStack::release_top` of the frame at hand: released in
             // place, without the out-of-line call and the second lookup of
@@ -2627,20 +2653,9 @@ impl Vm {
         if at_base {
             return Some(crate::exec::Flow::Done(v));
         }
-        match ret {
-            RetTarget::Tmp(t) => self.set_tmp(t, v),
-            // An unused result (`g();`): a scalar owns nothing, so the
-            // out-of-line drop glue is skipped.
-            RetTarget::Discard => {
-                if matches!(
-                    v,
-                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-                ) {
-                    std::mem::forget(v);
-                } else {
-                    drop(v);
-                }
-            }
+        // An unused result was released above, in the frame.
+        if let RetTarget::Tmp(t) = ret {
+            self.set_tmp(t, v);
         }
         Some(crate::exec::Flow::Reload)
     }
@@ -5412,6 +5427,19 @@ fn returns_directly(v: &Value) -> bool {
         v,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
     )
+}
+
+/// Whether releasing `v`, one handle of a value, may run a destructor: an
+/// object or a non-empty array held nowhere else (an array's elements may
+/// be the last handles of objects). Anything else only loses a count.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per discarded return
+fn may_destruct(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => o.refcount() == 1,
+        Value::Array(a) => a.refcount() == 1 && !a.is_empty(),
+        _ => false,
+    }
 }
 
 /// Whether `v` is a scalar, whose release does nothing.
