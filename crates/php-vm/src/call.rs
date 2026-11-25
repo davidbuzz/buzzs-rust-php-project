@@ -2353,7 +2353,10 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> Option<crate::exec::Flow> {
-        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_)) {
+        if !matches!(
+            val,
+            Operand::Cv(_) | Operand::Tmp(_) | Operand::Lit(_) | Operand::Unused
+        ) {
             return self.return_generic::<false>(val, base, ip);
         }
         if self.observer.enabled {
@@ -2425,6 +2428,10 @@ impl Vm {
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
+                // `return;` and the implicit return at the end of a body:
+                // null for no return type and for `void` (any other type
+                // has `verify_return`'s diagnostics, in `return_generic`).
+                Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => Value::Null,
                 _ => return self.return_generic::<false>(val, base, ip),
             };
             // `SAVE_OPLINE()`: the release below may report this line.
@@ -4418,6 +4425,47 @@ impl Vm {
         let v = self.recv_check(n, v)?;
         self.cv_bind(cv, v);
         Ok(())
+    }
+
+    /// `ZEND_RECV_VARIADIC` without the generic op: the arguments past the
+    /// `n` declared ones collected into a list in variable `cv`, when the
+    /// variadic parameter takes them as they are (no type but `mixed`, by
+    /// value), there are no named arguments, the variable is empty and the
+    /// frame has no attached symbol table. `false`, nothing changed,
+    /// otherwise ([`Vm::op_recv_variadic`] checks the types and binds).
+    pub(crate) fn recv_variadic_fast(&mut self, n: u32, cv: u32) -> bool {
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
+        if frame.symtab_attached || !frame.named.is_empty() {
+            return false;
+        }
+        let Some(uf) = frame.ufunc.as_ref() else {
+            return false;
+        };
+        let plain = uf.params.last().is_some_and(|p| {
+            p.variadic && !p.by_ref && p.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed)
+        });
+        if !plain
+            || !frame
+                .cvs
+                .get(cv as usize)
+                .is_some_and(|s| s.get().is_none())
+        {
+            return false;
+        }
+        let from = (n as usize).min(frame.args.len());
+        let list = if from == frame.args.len() {
+            ZArray::new()
+        } else {
+            let mut arr = HashTable::with_capacity_packed(frame.args.len() - from);
+            let _ = arr.push_all(frame.args[from..].iter().flatten().cloned());
+            ZArray::from_table(arr)
+        };
+        if let Some(slot) = frame.cvs.get_mut(cv as usize) {
+            slot.set(Some(Value::Array(list)));
+        }
+        true
     }
 
     pub(crate) fn op_recv_variadic(&mut self, n: u32, cv: u32) -> VmResult<()> {

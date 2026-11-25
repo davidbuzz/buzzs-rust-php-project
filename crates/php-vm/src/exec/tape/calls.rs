@@ -113,6 +113,9 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
         // the VM at hand (`run_vm_op`).
         Op::FramelessICall(_) => Some(plain(TOp::VmOp)),
+        // `ZEND_RECV_VARIADIC` (`Vm::recv_variadic_fast`, out of line in
+        // `run_vm_op`: an arm in the tape's hot block cost every call).
+        Op::RecvVariadic { .. } => Some(plain(TOp::VmOp)),
         // A read of a superglobal (`$_GET`) or of a global variable by
         // name (`$GLOBALS['name']`): resolved through the VM's global
         // scope, so run there as well (`Vm::fetch_place_fast`,

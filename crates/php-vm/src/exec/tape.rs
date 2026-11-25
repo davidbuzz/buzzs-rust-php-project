@@ -2328,6 +2328,13 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
     match ops.get(at) {
         // `ZEND_ASSERT_CHECK`, as `Vm::run`'s arm makes it: with
         // assertions off at run time, `true` and past the assertion.
+        Some(&Op::RecvVariadic { n, cv }) => {
+            if vm.recv_variadic_fast(n, cv) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
         Some(&Op::AssertCheck { dst, skip }) => {
             if crate::builtins::assert_ini(vm).0 == 1 {
                 at + 1
