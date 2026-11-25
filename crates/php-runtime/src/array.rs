@@ -2357,27 +2357,26 @@ impl HashTable {
     /// forgetting a scalar or releasing a string (what the collector looks
     /// at when a table is released). A loop over the storage itself: a
     /// table of scalars costs a tag test an element.
+    ///
+    /// The variants array, object, resource and reference are adjacent, so
+    /// the loop tests one range of tags (one compare an element, where the
+    /// three-variant pattern took two and a bit test); the rare resource is
+    /// sorted out behind it.
     pub fn for_each_counted<'a>(&'a self, mut f: impl FnMut(&'a Value)) {
+        let mut visit = |slot: &'a Option<Value>| {
+            if let Some(
+                v @ (Value::Array(_) | Value::Object(_) | Value::Resource(_) | Value::Reference(_)),
+            ) = slot
+            {
+                if !matches!(v, Value::Resource(_)) {
+                    f(v);
+                }
+            }
+        };
         match &self.store {
             Store::Uninit => {}
-            Store::Packed(values) => {
-                for slot in values {
-                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
-                        slot
-                    {
-                        f(v);
-                    }
-                }
-            }
-            Store::Hash(data) => {
-                for bucket in &data.buckets {
-                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
-                        &bucket.val
-                    {
-                        f(v);
-                    }
-                }
-            }
+            Store::Packed(values) => values.iter().for_each(&mut visit),
+            Store::Hash(data) => data.buckets.iter().for_each(|b| visit(&b.val)),
         }
     }
 
@@ -5507,6 +5506,43 @@ mod tests {
         assert_eq!(s.refcount(), s_rc);
         assert_eq!(inner.refcount(), inner_rc);
         assert_eq!(shared.refcount(), shared_rc);
+    }
+
+    /// `for_each_counted` visits the arrays and references of a packed
+    /// table and of a hash, in order, and skips scalars, strings, holes
+    /// and resources.
+    #[test]
+    fn for_each_counted_visits_arrays_objects_and_references() {
+        let fill = |t: &mut HashTable| {
+            t.push(Value::Int(1)).unwrap();
+            t.push(Value::Array(ZArray::new())).unwrap();
+            t.push(Value::Str(ZStr::from("s"))).unwrap();
+            t.push(Value::Resource(crate::value::Resource::new("stream", None)))
+                .unwrap();
+            t.push(Value::Reference(crate::PhpRef::new(Value::Null)))
+                .unwrap();
+            t.push(Value::Float(2.0)).unwrap();
+            t.push(Value::Array(ZArray::new())).unwrap();
+            t.remove(&ArrayKey::Int(5));
+        };
+        let mut packed = HashTable::new();
+        fill(&mut packed);
+        let mut hash = HashTable::with_capacity_mixed(0);
+        hash.insert("k", Value::Null);
+        fill(&mut hash);
+        assert!(matches!(packed.store, Store::Packed(_)));
+        assert!(matches!(hash.store, Store::Hash(_)));
+        for t in [&packed, &hash] {
+            let mut seen = Vec::new();
+            t.for_each_counted(|v| {
+                seen.push(match v {
+                    Value::Array(_) => 'a',
+                    Value::Reference(_) => 'r',
+                    _ => '?',
+                });
+            });
+            assert_eq!(seen, ['a', 'r', 'a']);
+        }
     }
 
     #[test]
