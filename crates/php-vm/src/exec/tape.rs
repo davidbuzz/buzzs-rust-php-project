@@ -61,6 +61,42 @@
 //! allocate ends with a poll for a safe point (a queued destructor, a
 //! delayed `memory_limit` violation), as every hot op does.
 //!
+//! # Frame switches without leaving the loop (`BUZZS_INCORE=1`)
+//!
+//! php-src switches frames inside its one loop: `ZEND_DO_UCALL` sets
+//! `execute_data = call` and loads the callee's first opline,
+//! `zend_leave_helper` frees the callee and sets `execute_data =
+//! EX(prev_execute_data)` (ref: `Zend/zend_vm_def.h`). Behind the switch
+//! ([`incore`], read once: lowered tapes are cached for the process), the
+//! tape does the same for a plain return and for the entry of a call the
+//! tape prepared:
+//!
+//! * The core's state for a frame is its [`St`] (the variables', the
+//!   temporaries' and the literals' bases and the frame) and the
+//!   instruction pointer; `run_tape` adds the op array, the tape's base and
+//!   the JIT context. A switch in the core replaces `St` and the pointer
+//!   only, so it is made only by the instantiation without a JIT context
+//!   (`run_core::<false>`) and only into a frame whose tape has none
+//!   either; anything else leaves the core as today.
+//! * A row's handler reaches the VM through a thread-local pointer
+//!   [`run_tape`] sets before it enters the core ([`core_set`]), as
+//!   `jit::JitCtx::set_vm` does for compiled rows; it is null while a call
+//!   is prepared (`run_tape`'s local `prep`), so no frame is left with a
+//!   prepared call open.
+//! * `Op::Return` of a variable, a temporary, a literal or nothing is a
+//!   [`TOp::Ret`] row: `calls::ret_core` makes `Vm::return_simple`'s
+//!   direct return (whatever it declines stays declined: the row then
+//!   behaves as [`TOp::Exit`]) and answers the caller and its resume
+//!   instruction. A return from the frame `Vm::run` started at (`base`)
+//!   is declined there, so it still leaves `run_tape`.
+//! * A call `run_call` entered goes on in the callee's frame inside the
+//!   inner loop of `run_tape`, with no restart of its outer loop.
+//! * Every switch is a safe point, as before: due after it, the core
+//!   stops ([`WHY_LEFT`]) and `run_tape` answers `LEFT`. A switch the core
+//!   made is recorded ([`core_switched`]): `run_tape` then reads the new
+//!   current frame's op array, tape and pointer before it looks at why the
+//!   core stopped, and reports `SWITCHED`.
+//!
 //! # Safety
 //!
 //! Slot access is unchecked. It is sound because [`lower`] only emits a
