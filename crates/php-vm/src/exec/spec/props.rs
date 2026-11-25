@@ -1051,6 +1051,8 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
             let new_val = copy_value(src);
             let result = dst.map(|_| copy_value(&new_val));
             *cell = Some(new_val);
+            // (As `store_in`: the slot is no longer one `unset()` left.)
+            od.set_slot_unset(slot, false);
             (None, result)
         }
         _ => return false,
