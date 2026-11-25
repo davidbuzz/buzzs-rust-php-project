@@ -1457,7 +1457,8 @@ pub(super) unsafe extern "C" fn num_bin_tmp(
     }
     // SAFETY: the caller's contract.
     let Some(result) = (unsafe { num_result(st, inst) }) else {
-        return false;
+        // SAFETY: the caller's contract (`dst` holds a scalar).
+        return unsafe { eq_slots_tmp(frame, inst) };
     };
     // SAFETY: a scalar has nothing to drop; `dst` is valid for writes.
     unsafe { std::ptr::write(dst, result) };
@@ -1548,7 +1549,9 @@ pub(super) unsafe fn num_bin_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> bo
     }
     // SAFETY: the caller's contract.
     let Some(r) = (unsafe { num_result(st, inst) }) else {
-        return false;
+        // SAFETY: the caller's contract (the variable holds nothing to
+        // release).
+        return unsafe { eq_slots_cv(frame, inst) };
     };
     // SAFETY: as above; undefined or a scalar has nothing to drop.
     std::mem::forget(unsafe { cv_slot(st, inst.d) }.replace(r));
@@ -1573,6 +1576,125 @@ pub(super) unsafe fn num_assign_op_cv(frame: *mut crate::vm::Frame, inst: &Inst)
     // SAFETY: `a` is a validated variable offset; it held a number, which
     // owns nothing.
     std::mem::forget(unsafe { cv_slot(st, inst.a) }.replace(r));
+    true
+}
+
+/// The index in [`NUM_OPS`] of `==`; `!=`, `===` and `!==` follow it.
+const NUM_EQUAL: u8 = 9;
+
+/// An operand of a [`num_bin_tmp`] / [`num_bin_cv`] row (kind `kind`,
+/// field `x`) that an equality of two slots can read without a
+/// diagnostic or a release: a defined variable that is not a reference,
+/// or a temporary holding a scalar (a temporary of these rows may be
+/// consumed or kept, so one holding a string or more is left to the
+/// generic op, which releases it). `None` for anything else, a number
+/// literal included.
+///
+/// # Safety
+/// As [`num_of_kind`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn eq_slot<'a>(st: St, kind: u8, x: u32) -> Option<&'a Value> {
+    let v: &Value = match kind {
+        // SAFETY: the caller's contract.
+        KC => unsafe { &*cv_slot(st, x) }.as_ref()?,
+        // SAFETY: the caller's contract.
+        KT => unsafe { tmp_slot(st, x) },
+        _ => return None,
+    };
+    match v {
+        Value::Reference(_) => None,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => Some(v),
+        _ if kind == KC => Some(v),
+        _ => None,
+    }
+}
+
+/// `==`, `!=`, `===`, `!==` ([`NUM_OPS`] 9 to 12) of the two slots of a
+/// [`num_bin_tmp`] / [`num_bin_cv`] row that hold no plain numbers, as
+/// `spec::cmp_simple_in` decides it without conversions: two nulls, two
+/// bools, two arrays one of which is empty, `===` of two objects (the
+/// same one), two strings (`===` by their bytes, `==` by
+/// `zendi_smart_streq`), and `===` of two types (false). `None` for the
+/// rest.
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn eq_slots(st: St, inst: &Inst) -> Option<bool> {
+    let ident = match inst.e.checked_sub(NUM_EQUAL)? {
+        0 | 1 => false,
+        2 | 3 => true,
+        _ => return None,
+    };
+    // SAFETY: the caller's contract.
+    let x = unsafe { eq_slot(st, inst.k >> 4, inst.a) }?;
+    // SAFETY: the caller's contract.
+    let y = unsafe { eq_slot(st, inst.k & 0xf, inst.b) }?;
+    let same = match (x, y) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(p), Value::Bool(q)) => p == q,
+        (Value::Array(p), Value::Array(q)) if p.is_empty() || q.is_empty() => {
+            p.is_empty() && q.is_empty()
+        }
+        (Value::Object(p), Value::Object(q)) if ident => php_runtime::Obj::ptr_eq(p, q),
+        (Value::Str(s), Value::Str(t)) => {
+            php_runtime::ZStr::ptr_eq(s, t)
+                || if ident {
+                    s.as_bytes() == t.as_bytes()
+                } else {
+                    php_runtime::ops::smart_streq(s.as_bytes(), t.as_bytes())
+                }
+        }
+        (p, q) => {
+            if !ident || std::mem::discriminant(p) == std::mem::discriminant(q) {
+                return None;
+            }
+            false
+        }
+    };
+    // `!=` (10) and `!==` (12) are the even ones.
+    Some(same != ((inst.e & 1) == 0))
+}
+
+/// [`num_bin_tmp`]'s miss: an equality of two slots ([`eq_slots`]) into
+/// the result temporary, which the caller found holding a scalar.
+/// `false`, nothing changed, for anything else.
+///
+/// # Safety
+/// As [`num_bin_tmp`]; the result temporary holds a scalar.
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+unsafe fn eq_slots_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_slots(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `c` is a validated temporary offset, holding a scalar (the
+    // caller's contract; an operand it may be was only read).
+    unsafe { std::ptr::write(st.tmps.add(inst.c as usize).cast::<Value>(), Value::Bool(r)) };
+    true
+}
+
+/// [`num_bin_cv`]'s miss: an equality of two slots ([`eq_slots`]) into the
+/// variable `d`, which the caller found holding nothing to release.
+///
+/// # Safety
+/// As [`num_bin_tmp`]; the variable `d` is undefined or holds a scalar.
+#[inline(never)]
+unsafe fn eq_slots_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_slots(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `d` is a validated variable offset; undefined or a scalar
+    // has nothing to drop (an operand it may be was only read).
+    std::mem::forget(unsafe { cv_slot(st, inst.d) }.replace(Value::Bool(r)));
     true
 }
 

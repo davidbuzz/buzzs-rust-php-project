@@ -236,3 +236,30 @@ f();
         "122340000002Blo 122340000002Blo 122340000002Blo \nY\nUnhandledMatchError: Unhandled match case 'z'\nUnhandled match case 5\n\nWarning: Undefined variable $undef in t.php on line 20\n0\n"
     );
 }
+
+/// `===`, `!==`, `==`, `!=` of two variables into a variable and into a
+/// temporary, for pairs of every type: strings (numeric ones compare as
+/// numbers under `==`: `'1e3' == '1000'`, `' 1' == '1'`), nulls, bools,
+/// arrays, the same and different objects, NaN, a string and a number.
+#[test]
+fn equality_of_two_variables() {
+    assert_eq!(
+        run(r#"<?php
+class O {}
+function f($a, $b) {
+  $o = '';
+  for ($i = 0; $i < 2; $i++) {
+    $r1 = $a === $b; $r2 = $a !== $b; $r3 = $a == $b; $r4 = $a != $b;
+    $t = [$a === $b, $a == $b, $a !== $b, $a != $b];
+    $o .= (int)$r1 . (int)$r2 . (int)$r3 . (int)$r4 . implode('', array_map('intval', $t)) . ' ';
+  }
+  return $o;
+}
+$x = new O; $y = new O;
+$pairs = [['abc', 'abc'], ['abc', 'abd'], ['1e3', '1000'], ['10', '1e1'], ['abc', 'ABC'], [null, null], [null, false], [true, true], [true, 1], [[], []], [[], [1]], [[1], [1]], [$x, $x], [$x, $y], ['', null], [0, 'a'], ['1', 1], [1.0, 1], [NAN, NAN], [' 1', '1'], ['INF', INF]];
+foreach ($pairs as [$p, $q]) echo f($p, $q), "\n";
+$r = 'abc'; $s = &$r; echo f($s, 'abc'), "\n";
+"#),
+        "10101100 10101100 \n01010011 01010011 \n01100110 01100110 \n01100110 01100110 \n01010011 01010011 \n10101100 10101100 \n01100110 01100110 \n10101100 10101100 \n01100110 01100110 \n10101100 10101100 \n01010011 01010011 \n10101100 10101100 \n10101100 10101100 \n01100110 01100110 \n01100110 01100110 \n01010011 01010011 \n01100110 01100110 \n01100110 01100110 \n01010011 01010011 \n01100110 01100110 \n01100110 01100110 \n10101100 10101100 \n"
+    );
+}
