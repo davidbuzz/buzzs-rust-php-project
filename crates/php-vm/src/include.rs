@@ -674,6 +674,19 @@ impl Vm {
         for &i in &unit.hoisted_functions {
             let f = unit.decls.functions.borrow()[i as usize].clone();
             let lc = ZStr::from(f.name.to_ascii_lowercase());
+            // One probe of the table (`zend_hash_add_ptr`) for a function
+            // not declared yet; the observer, when there is one, is told
+            // before the function is in the table, as below.
+            if !self.observer.enabled {
+                if let std::collections::hash_map::Entry::Vacant(v) =
+                    self.functions.entry(lc.clone())
+                {
+                    crate::builtins::info::note_user_function(v.key());
+                    v.insert(crate::func::Func::User(f));
+                    crate::func::bump_func_table_version();
+                    continue;
+                }
+            }
             if let Some(existing) = self.functions.get(&lc) {
                 // A preloaded script included again: its preloaded
                 // functions are not declared again.
