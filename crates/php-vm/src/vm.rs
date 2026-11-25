@@ -3797,6 +3797,34 @@ mod tests {
     }
 
     #[test]
+    fn argument_records_are_lent_whole_and_the_pool_keeps_eight() {
+        let code = Rc::new(OpArray::default());
+        let mut bufs = super::CallBufs::prewarmed(&code);
+        let prewarmed = bufs.args_pool.len();
+        assert_eq!(prewarmed, 4);
+        // Calls nested ten deep: the prewarmed records, then new ones.
+        let mut held: Vec<_> = (0..10).map(|_| bufs.take_args()).collect();
+        assert!(bufs.args_pool.is_empty());
+        for a in &held {
+            assert!(a.values.is_empty() && a.values.capacity() >= 8);
+            assert!(a.passed.is_empty() && a.passed.capacity() >= 8);
+        }
+        // Back in the reverse order; the pool keeps eight.
+        while let Some(a) = held.pop() {
+            bufs.put_args(a);
+        }
+        assert_eq!(bufs.args_pool.len(), super::ARGS_POOL);
+        // A record goes back with the capacity it has.
+        let mut a = bufs.take_args();
+        a.values.push(Value::Int(1));
+        a.passed.push(true);
+        a.release_in_place();
+        let ptr = a.values.as_ptr();
+        bufs.put_args(a);
+        assert_eq!(bufs.take_args().values.as_ptr(), ptr);
+    }
+
+    #[test]
     fn lent_call_buffers_go_home_and_nested_calls_take_pooled_ones() {
         let code = Rc::new(OpArray::default());
         let mut bufs = super::CallBufs::prewarmed(&code);

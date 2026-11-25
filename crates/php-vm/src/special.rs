@@ -2183,7 +2183,12 @@ mod tests {
         let pools = |vm: &Vm| {
             let mut sizes: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();
             sizes.sort_unstable();
-            (sizes, vm.call_bufs.values.len(), vm.call_bufs.passed.len())
+            (
+                sizes,
+                vm.call_bufs.values.len(),
+                vm.call_bufs.passed.len(),
+                vm.call_bufs.args_pool.len(),
+            )
         };
         let before = pools(&vm);
         let status = vm.run_script(
@@ -2200,6 +2205,12 @@ for ($i = 0; $i < 3; $i++) {
         assert_eq!(pools(&vm), before);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
         assert!(vm.call_bufs.values.iter().all(Vec::is_empty));
+        // The pooled argument records came back empty.
+        assert!(vm
+            .call_bufs
+            .args_pool
+            .iter()
+            .all(|a| a.values.is_empty() && a.passed.is_empty() && a.func.is_none()));
     }
 
     /// Frameless calls made in place (`Vm::frameless_icall_in_place`):
