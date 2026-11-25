@@ -285,3 +285,56 @@ Array
 "#
     );
 }
+
+/// Writes of every kind of value to the variables of frames whose symbol
+/// table is attached (a function that used `extract()`, a top-level
+/// `eval()`), each mirrored into the table, as `get_defined_vars()`,
+/// `compact()` and `$GLOBALS` show.
+#[test]
+fn writes_in_attached_frames_reach_the_table() {
+    assert_eq!(
+        run(r#"<?php
+function attached() {
+    extract(['a' => 1]);
+    $b = 2.5; $c = 'str'; $d = null; $e = true;
+    for ($i = 0; $i < 3; $i++) { $a += $i; $c .= $i; $b *= 2; }
+    $obj = new stdClass; $arr = [1, 2];
+    $obj = 5; $arr = 'gone';
+    var_dump(get_defined_vars());
+    return compact('a', 'c');
+}
+var_dump(attached());
+eval('$x = 1; for ($k = 0; $k < 3; $k++) { $x = $x * 3; $s = "s$k"; }');
+var_dump($x, $s, $GLOBALS['x'], $GLOBALS['s']);
+"#),
+        r#"array(8) {
+  ["b"]=>
+  float(20)
+  ["c"]=>
+  string(6) "str012"
+  ["d"]=>
+  NULL
+  ["e"]=>
+  bool(true)
+  ["i"]=>
+  int(3)
+  ["a"]=>
+  int(4)
+  ["obj"]=>
+  int(5)
+  ["arr"]=>
+  string(4) "gone"
+}
+array(2) {
+  ["a"]=>
+  int(4)
+  ["c"]=>
+  string(6) "str012"
+}
+int(27)
+string(2) "s2"
+int(27)
+string(2) "s2"
+"#
+    );
+}

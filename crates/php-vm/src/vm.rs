@@ -2243,9 +2243,21 @@ impl Frame {
                 None => st.find_or_add(name.as_bytes()),
             };
             let idx = idx as usize;
-            if idx < st.slots.len() {
-                if let Some(old) = std::mem::replace(&mut st.slots[idx], Some(v.clone())) {
-                    crate::gc::release_duplicate(old);
+            if let Some(slot) = st.slots.get_mut(idx) {
+                // Every write of a compiled variable of an attached frame
+                // (the top level of an included file, a function that used
+                // `extract()`) comes here: a scalar is copied and the old
+                // scalar forgotten inline, without the out-of-line
+                // `Value::clone` and drop glue.
+                if let Some(old) = slot.replace(crate::call::clone_value(v)) {
+                    if matches!(
+                        old,
+                        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                    ) {
+                        std::mem::forget(old);
+                    } else {
+                        crate::gc::release_duplicate(old);
+                    }
                 }
             }
         }
