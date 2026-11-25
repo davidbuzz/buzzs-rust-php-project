@@ -1381,6 +1381,38 @@ impl ZStr {
         *self = Self::from_parts(self.as_bytes(), other, 0);
     }
 
+    /// The store of `zend_assign_to_string_offset` (Zend/zend_execute.c):
+    /// byte `c` at `offset`, the string padded with spaces first when it
+    /// is shorter than `offset`. A string this handle alone owns, and that
+    /// is not interned, is written in place: php-src separates only a
+    /// shared or interned string, so `$s[$i] = 'x'` never makes a second
+    /// copy of an unshared one. Any other string is replaced by one new
+    /// string. The cached hash and `IS_STR_VALID_UTF8` are forgotten
+    /// (`zend_string_forget_hash_val`).
+    pub fn set_byte(&mut self, offset: usize, c: u8) {
+        let len = self.len();
+        if offset < len && self.is_unique_mutable() {
+            // SAFETY: this is the only handle (refcount 1, not interned), so
+            // nothing else reads the bytes; `ptr` is valid for `len` bytes,
+            // inline or external, and `offset < len`.
+            unsafe {
+                let h = self.0.as_mut();
+                *h.ptr.add(offset) = c;
+            }
+            self.forget_hash();
+            return;
+        }
+        let mut v = Vec::with_capacity(len.max(offset.saturating_add(1)));
+        v.extend_from_slice(self.as_bytes());
+        if offset >= len {
+            v.resize(offset, b' ');
+            v.push(c);
+        } else {
+            v[offset] = c;
+        }
+        *self = ZStr::from(v);
+    }
+
     /// `$s .= $t` (`concat_function` with `result == op1`): [`ZStr::append`]
     /// of another string, keeping `IS_STR_VALID_UTF8` when it holds for both
     /// (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH`).
@@ -2181,6 +2213,38 @@ mod tests {
 
     /// `join_exact` gives `php_implode()`'s bytes in a string of exactly
     /// the summed length, flagged as asked, and stops at `total`.
+    #[test]
+    fn set_byte_writes_in_place_only_when_unshared() {
+        // Unshared: the block stays, the hash is forgotten.
+        let mut s = ZStr::from(b"hello world, this is not a short string".as_slice());
+        let before = s.as_bytes().as_ptr();
+        let _ = s.hash_value();
+        s.set_byte(0, b'J');
+        assert_eq!(s.as_bytes()[..5], *b"Jello");
+        assert_eq!(s.as_bytes().as_ptr(), before);
+        assert_eq!(s.known_hash(), None);
+        assert_eq!(s.hash_value(), ZStr::from(s.as_bytes()).hash_value());
+        // Shared: the other handle keeps its bytes.
+        let mut a = ZStr::from(b"shared".as_slice());
+        let b = a.clone();
+        a.set_byte(1, b'X');
+        assert_eq!(a.as_bytes(), b"sXared");
+        assert_eq!(b.as_bytes(), b"shared");
+        // Past the end: padded with spaces.
+        let mut p = ZStr::from(b"ab".as_slice());
+        p.set_byte(5, b'X');
+        assert_eq!(p.as_bytes(), b"ab   X");
+        let mut e = ZStr::from(b"".as_slice());
+        e.set_byte(0, b'z');
+        assert_eq!(e.as_bytes(), b"z");
+        // An interned string is never written.
+        let lit = ZStr::intern(b"interned-literal");
+        let mut w = lit.clone();
+        w.set_byte(0, b'I');
+        assert_eq!(w.as_bytes(), b"Interned-literal");
+        assert_eq!(lit.as_bytes(), b"interned-literal");
+    }
+
     #[test]
     fn join_exact_joins_with_glue_in_one_block() {
         let parts: [&[u8]; 4] = [b"a", b"", b"bcd", b"e"];

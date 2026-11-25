@@ -765,15 +765,9 @@ fn assign_string_offset(
         ));
     }
     let c = bytes[0];
-    let mut v = str.as_bytes().to_vec();
-    let off = usize::try_from(offset).unwrap_or(0);
-    if off >= v.len() {
-        v.resize(off, b' ');
-        v.push(c);
-    } else {
-        v[off] = c;
-    }
-    *str = ZStr::from(v);
+    // In place when the variable holds the only handle
+    // (`zend_assign_to_string_offset` separates a shared string only).
+    str.set_byte(usize::try_from(offset).unwrap_or(0), c);
     Ok(Value::Str(ZStr::from_byte(c)))
 }
 
