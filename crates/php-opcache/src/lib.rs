@@ -92,12 +92,61 @@ pub enum CacheLookup<'a, T> {
     Miss,
 }
 
+/// The hasher of [`ScriptCache::scripts`]: a script is found by its path in
+/// every include, and the table needs no protection against chosen keys
+/// (php-src hashes the path with the unseeded `zend_inline_hash_func`). A
+/// word-at-a-time multiply-rotate hash over the path's bytes.
+pub type PathHash = std::hash::BuildHasherDefault<PathHasher>;
+
+/// See [`PathHash`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PathHasher(u64);
+
+impl PathHasher {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl std::hash::Hasher for PathHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            let mut w = [0u8; 8];
+            w.copy_from_slice(c);
+            self.add(u64::from_le_bytes(w));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut w = [0u8; 8];
+            w[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(w) ^ ((rest.len() as u64) << 56));
+        }
+    }
+
+    fn write_u8(&mut self, i: u8) {
+        self.add(u64::from(i));
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        // The table takes its bucket from the low bits and its tag from
+        // the top ones: fold the well-mixed high half into the low half.
+        self.0 ^ (self.0 >> 29)
+    }
+}
+
 /// The in-memory compiled script cache.
 #[derive(Debug)]
 pub struct ScriptCache<T> {
     /// Cached scripts keyed by full canonical path. Changed only through
     /// the methods, which keep [`ScriptCache::used_memory`] in step.
-    pub scripts: HashMap<String, ScriptEntry<T>>,
+    pub scripts: HashMap<String, ScriptEntry<T>, PathHash>,
     /// The number of scripts the cache holds (`max_cached_keys`).
     pub max_cached_keys: usize,
     /// The memory the scripts may take (`opcache.memory_consumption`);
@@ -551,7 +600,7 @@ impl<T> ScriptCache<T> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         Self {
-            scripts: HashMap::new(),
+            scripts: HashMap::default(),
             start_time: now,
             last_restart_time: 0,
             hits: 0,
@@ -698,6 +747,8 @@ impl<T> ScriptCache<T> {
             self.misses += 1;
             return CacheLookup::Stale;
         }
+        // Looked up again for the update: the returned borrow would
+        // otherwise hold the table through the eviction above.
         let Some(entry) = self.scripts.get_mut(path) else {
             return CacheLookup::Miss;
         };
@@ -1016,6 +1067,26 @@ mod tests {
         assert_eq!(accel_hash_size(16229), 16229);
         assert_eq!(accel_hash_size(1_000_000), 1_048_793);
         assert_eq!(accel_hash_size(2_000_000), 2_000_000);
+    }
+
+    #[test]
+    fn the_path_hash_separates_paths_of_every_length() {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let h = |p: &str| {
+            let mut s = PathHash::default().build_hasher();
+            p.hash(&mut s);
+            s.finish()
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut p = String::from("/");
+        for &c in b"abcdefghijklmnopqrstuvwxyzabcdefghijklmn" {
+            p.push(char::from(c));
+            assert!(seen.insert(h(&p)), "collision at {p}");
+            assert!(seen.insert(h(&format!("{p}/x.php"))));
+        }
+        // Same bytes up to a trailing zero: the length is in the hash.
+        assert_ne!(h("/a/b"), h("/a/b\0"));
+        assert_eq!(h("/srv/www/index.php"), h("/srv/www/index.php"));
     }
 
     #[test]

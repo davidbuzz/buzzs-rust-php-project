@@ -35,6 +35,11 @@ thread_local! {
 /// load); `None` when the directive is empty.
 fn blacklist(vm: &mut Vm) -> Option<Rc<Blacklist>> {
     let pattern = get_ini_string(vm, "opcache.blacklist_filename");
+    blacklist_from(vm, &pattern)
+}
+
+/// [`blacklist`] for the `opcache.blacklist_filename` value `pattern`.
+fn blacklist_from(vm: &mut Vm, pattern: &str) -> Option<Rc<Blacklist>> {
     if pattern.is_empty() {
         return None;
     }
@@ -47,11 +52,11 @@ fn blacklist(vm: &mut Vm) -> Option<Rc<Blacklist>> {
     if loaded.is_some() {
         return loaded;
     }
-    let list = Rc::new(Blacklist::load(&pattern));
+    let list = Rc::new(Blacklist::load(pattern));
     for warning in &list.warnings {
         vm_accel_log(vm, AccelLog::Warning, warning);
     }
-    BLACKLIST.with(|b| *b.borrow_mut() = Some((pattern, list.clone())));
+    BLACKLIST.with(|b| *b.borrow_mut() = Some((pattern.to_owned(), list.clone())));
     Some(list)
 }
 
@@ -983,16 +988,73 @@ struct Probe {
     /// The script's key: its resolved path.
     realpath: std::path::PathBuf,
     real_str: String,
+    /// The directives the include is served under.
+    dirs: Rc<Directives>,
     /// Modification time (`zend_get_file_handle_timestamp`), determined
     /// on first use (see [`Probe::mtime`]).
     mtime: std::cell::OnceCell<Option<i64>>,
     now_sec: i64,
     /// `opcache.file_cache`, empty when unset.
-    file_cache_dir: String,
+    file_cache_dir: Rc<str>,
     file_cache_only: bool,
     /// `opcache.file_cache_read_only`: entries are only read, never
     /// written or removed.
     file_cache_read_only: bool,
+}
+
+/// The directives every include reads (`ZCG(accel_directives)`, which
+/// php-src's INI handlers keep up to date), read again only when the
+/// registry's values may have changed (`IniRegistry::generation`:
+/// an `ini_set()`, a restore, the end of a request), not once per include.
+struct Directives {
+    generation: u64,
+    /// `opcache.enable`.
+    enable: bool,
+    /// [`enabled_for_sapi`].
+    for_sapi: bool,
+    file_cache_only: bool,
+    file_cache: Rc<str>,
+    file_cache_read_only: bool,
+    blacklist_filename: String,
+    validate_timestamps: bool,
+    revalidate_freq: i64,
+    record_warnings: bool,
+}
+
+impl Directives {
+    fn read(vm: &Vm) -> Directives {
+        Directives {
+            generation: vm.ini.generation(),
+            enable: vm.ini_bool("opcache.enable"),
+            for_sapi: enabled_for_sapi(vm),
+            file_cache_only: vm.ini_bool("opcache.file_cache_only"),
+            file_cache: Rc::from(get_ini_string(vm, "opcache.file_cache")),
+            file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
+            blacklist_filename: get_ini_string(vm, "opcache.blacklist_filename"),
+            validate_timestamps: vm.ini_bool("opcache.validate_timestamps"),
+            revalidate_freq: vm.ini_long("opcache.revalidate_freq"),
+            record_warnings: vm.ini_bool("opcache.record_warnings"),
+        }
+    }
+
+    /// The directives as `vm` has them now.
+    fn current(vm: &Vm) -> Rc<Directives> {
+        thread_local! {
+            static DIRECTIVES: RefCell<Option<Rc<Directives>>> = const { RefCell::new(None) };
+        }
+        let generation = vm.ini.generation();
+        DIRECTIVES.with(|d| {
+            let mut d = d.borrow_mut();
+            match &*d {
+                Some(dirs) if dirs.generation == generation => dirs.clone(),
+                _ => {
+                    let dirs = Rc::new(Directives::read(vm));
+                    *d = Some(dirs.clone());
+                    dirs
+                }
+            }
+        })
+    }
 }
 
 impl Probe {
@@ -1032,19 +1094,34 @@ thread_local! {
 /// normalized is resolved here.
 fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
     use std::os::unix::ffi::OsStrExt;
-    use std::path::Component;
     let bytes = filename.as_bytes();
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(bytes));
-    let normalized = path.is_absolute()
-        && !bytes.windows(2).any(|w| w == b"//")
-        && !bytes.ends_with(b"/")
-        && path
-            .components()
-            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-    if normalized {
+    if is_normalized_absolute(bytes) {
         return path.to_path_buf();
     }
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `path` is absolute and normalized: no empty, `.` or `..`
+/// segment and no trailing slash (`/` itself is not a script).
+fn is_normalized_absolute(path: &[u8]) -> bool {
+    let Some(rest) = path.strip_prefix(b"/") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .split(|&b| b == b'/')
+            .all(|seg| !seg.is_empty() && seg != b"." && seg != b"..")
+}
+
+/// The cache key of a resolved path: the path itself when it is UTF-8,
+/// as it always is in practice (checked without building a lossy copy).
+fn key_string(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    match std::str::from_utf8(path.as_os_str().as_bytes()) {
+        Ok(s) => s.to_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 /// `persistent_compile_file`'s checks: whether opcache handles `filename`
@@ -1053,11 +1130,10 @@ fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
 /// see [`Probe::mtime`].
 fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     use std::os::unix::ffi::OsStrExt;
-    let enable = vm.ini_bool("opcache.enable");
-    let for_sapi = enabled_for_sapi(vm);
-    let file_cache_only = vm.ini_bool("opcache.file_cache_only");
+    let dirs = Directives::current(vm);
+    let file_cache_only = dirs.file_cache_only;
     ensure_system_id(vm);
-    if !enable || (!for_sapi && !file_cache_only) {
+    if !dirs.enable || (!dirs.for_sapi && !file_cache_only) {
         return None;
     }
     // The index the processes forked from this one share (opened before
@@ -1065,7 +1141,10 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     php_opcache::shared_index::init();
     let realpath = script_key_path(filename);
     // A blacklisted script is compiled, never cached (`persistent_compile_file`).
-    if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
+    if !dirs.blacklist_filename.is_empty()
+        && blacklist_from(vm, &dirs.blacklist_filename)
+            .is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes()))
+    {
         return None;
     }
     let now_sec = std::time::SystemTime::now()
@@ -1074,13 +1153,14 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
         .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0);
     Some(Probe {
-        real_str: realpath.to_string_lossy().into_owned(),
+        real_str: key_string(&realpath),
         realpath,
         mtime: std::cell::OnceCell::new(),
         now_sec,
-        file_cache_dir: get_ini_string(vm, "opcache.file_cache"),
+        file_cache_dir: dirs.file_cache.clone(),
         file_cache_only,
-        file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
+        file_cache_read_only: dirs.file_cache_read_only,
+        dirs,
     })
 }
 
@@ -1092,8 +1172,8 @@ fn lookup(
     p: &Probe,
     filename: &ZStr,
 ) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
-    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
-    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+    let validate_timestamps = p.dirs.validate_timestamps;
+    let revalidate_freq = p.dirs.revalidate_freq;
 
     // 1. In-memory cache check (unless file_cache_only)
     if !p.file_cache_only {
@@ -1121,7 +1201,7 @@ fn lookup(
             if !vm.install_cached_unit(&unit, filename) {
                 return Ok(None);
             }
-            if vm.ini_bool("opcache.record_warnings") {
+            if p.dirs.record_warnings {
                 vm.emit_compile_warnings(&unit, filename)?;
             }
             return Ok(Some(unit));
@@ -1147,7 +1227,7 @@ fn lookup(
     } else {
         0
     };
-    let cache_dir = std::path::Path::new(&p.file_cache_dir);
+    let cache_dir = std::path::Path::new(&*p.file_cache_dir);
     let consistency_checks = vm.ini_bool("opcache.file_cache_consistency_checks");
     match file_cache::read_file_cache(
         cache_dir,
@@ -1258,7 +1338,7 @@ fn opcache_compile_hook(
         }
         let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
         if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
-            let cache_dir = std::path::Path::new(&p.file_cache_dir);
+            let cache_dir = std::path::Path::new(&*p.file_cache_dir);
             if let Err(msg) = store_in_file_cache(cache_dir, &p.realpath, mtime, fingerprint, unit)
             {
                 accel_log_warning(vm, &format!("{msg}\n"));
@@ -2245,6 +2325,48 @@ fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Which include paths are taken as they are, without a `realpath`:
+    /// an absolute path with no empty, `.` or `..` segment.
+    #[test]
+    fn normalized_absolute_paths_need_no_resolving() {
+        for p in [
+            "/a.php",
+            "/srv/www/inc/f1.php",
+            "/a/.hidden/b.php",
+            "/a/b..c/x",
+        ] {
+            assert!(is_normalized_absolute(p.as_bytes()), "{p}");
+        }
+        for p in [
+            "",
+            "/",
+            "a.php",
+            "./a.php",
+            "/a//b.php",
+            "/a/b/",
+            "/a/./b.php",
+            "/a/../b.php",
+            "/a/.",
+            "/a/..",
+            "//a.php",
+        ] {
+            assert!(!is_normalized_absolute(p.as_bytes()), "{p}");
+        }
+        assert_eq!(
+            script_key_path(&ZStr::from("/srv/www/x.php")),
+            std::path::PathBuf::from("/srv/www/x.php")
+        );
+    }
+
+    #[test]
+    fn cache_keys_are_the_path_text() {
+        use std::os::unix::ffi::OsStrExt;
+        let p = std::path::Path::new("/srv/www/\u{e9}t\u{e9}.php");
+        assert_eq!(key_string(p), "/srv/www/\u{e9}t\u{e9}.php");
+        let raw = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/a/\xff.php"));
+        assert_eq!(key_string(raw), "/a/\u{fffd}.php");
+    }
 
     #[test]
     fn test_parse_jit_mode() {
