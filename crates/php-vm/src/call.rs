@@ -5978,7 +5978,13 @@ impl Vm {
                 {
                     return;
                 }
-                let Some(slot) = f.ip.checked_sub(1) else {
+                // Only a method of the class itself: one an object's
+                // `get_method` adds (a PDO driver's) depends on the object.
+                let declared = cls
+                    .methods
+                    .get(&m.to_ascii_lowercase())
+                    .is_some_and(|d| same_func(&d.func, &call.func));
+                let Some(slot) = f.ip.checked_sub(1).filter(|_| declared) else {
                     return;
                 };
                 let entry = MethodCallCacheEntry {
@@ -6246,6 +6252,15 @@ fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &Obj) -> Throw {
         crate::exceptions::chain_previous(o, prev);
     }
     e
+}
+
+/// Whether `a` and `b` are the same function.
+fn same_func(a: &Func, b: &Func) -> bool {
+    match (a, b) {
+        (Func::User(x), Func::User(y)) => Rc::ptr_eq(x, y),
+        (Func::Builtin(x), Func::Builtin(y)) => Rc::ptr_eq(x, y),
+        _ => false,
+    }
 }
 
 /// Whether argument `i` (0-based) of `func` is sent by reference only when
