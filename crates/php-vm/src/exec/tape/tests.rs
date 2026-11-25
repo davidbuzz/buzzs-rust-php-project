@@ -1532,21 +1532,35 @@ for ($i = 0; $i < 3; $i++) { echo first([0, 1, 5]), first([]), consts(), "\n"; }
 "#;
 
 /// A `return` inside a `foreach` frees the iterator with a row of its own
-/// (`scalar::fe_free_on_return`).
+/// (`scalar::fe_free_on_return`), and a constant defined at run time is
+/// read by one (`scalar::fetch_const`, `scalar::fetch_const_to` into the
+/// variable of its folded `AssignCv`, then past it).
 #[test]
 fn foreach_returns_and_constants() {
     let arrays = op_arrays(RETURNS_AND_CONSTANTS);
-    let mut frees = 0;
+    let (mut frees, mut consts) = (0, 0);
     for code in &arrays {
         let tape = check(code);
         for (i, op) in code.ops.iter().enumerate() {
-            if let Op::FeFreeOnReturn { .. } = op {
-                assert_eq!(tape[i].op, TOp::FeFreeRetA, "op {i}: {op:?}");
-                frees += 1;
+            match op {
+                Op::FeFreeOnReturn { .. } => {
+                    assert_eq!(tape[i].op, TOp::FeFreeRetA, "op {i}: {op:?}");
+                    frees += 1;
+                }
+                Op::FetchConst { fallback: None, .. } => {
+                    assert_eq!(tape[i].op, TOp::ConstT, "op {i}: {op:?}");
+                    consts += 1;
+                }
+                Op::FetchConstTo { fallback: None, .. } => {
+                    assert_eq!(tape[i].op, TOp::ConstTo, "op {i}: {op:?}");
+                    assert_eq!(target(&tape, i), i + 2, "op {i}: past the AssignCv");
+                    consts += 1;
+                }
+                _ => {}
             }
         }
     }
-    assert!(frees >= 1, "{frees}");
+    assert!(frees >= 1 && consts >= 2, "{frees} {consts}");
     assert_eq!(
         run(RETURNS_AND_CONSTANTS),
         "2=5nonertrt\n2=5nonertrt\n2=5nonertrt\n"

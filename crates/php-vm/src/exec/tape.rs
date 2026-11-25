@@ -1357,6 +1357,8 @@ tape_ops! {
         FreeT = (scalar::free_tmp, 1, plain_f),
         MatchJ = (scalar::match_jump, 1, switch_f),
         FeFreeRetA = (scalar::fe_free_on_return, 1, poll_f),
+        ConstT = (scalar::fetch_const, 1, poll_f),
+        ConstTo = (scalar::fetch_const_to, 1, branch_poll_f),
 
         // ---- end of scalar ----
         //

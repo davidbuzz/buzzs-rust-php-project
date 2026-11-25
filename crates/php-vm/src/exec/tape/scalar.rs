@@ -333,6 +333,36 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             d: u32::try_from(i).ok()?,
             ..plain(TOp::FeFreeRetA)
         },
+        // `ZEND_FETCH_CONSTANT` of a global name (a constant `define()`d
+        // at run time: one known at compile time is a literal) on its
+        // run-time cache hit; the `To` form jumps (`c`) past its folded
+        // `AssignCv` when the value went into that op's variable `d`.
+        Op::FetchConst {
+            name,
+            fallback: None,
+            dst,
+        } if (name as usize) < code.literals.len() && dst < code.num_tmps => Inst {
+            a: name,
+            b: dst,
+            ..plain(TOp::ConstT)
+        },
+        Op::FetchConstTo {
+            name,
+            fallback: None,
+            dst,
+            to,
+        } if (name as usize) < code.literals.len()
+            && dst < code.num_tmps
+            && (to as usize) < code.cv_names.len() =>
+        {
+            Inst {
+                a: name,
+                b: dst,
+                c: rel(code, i, u32::try_from(i + 2).ok()?)?,
+                d: to,
+                ..plain(TOp::ConstTo)
+            }
+        }
         // `(int)`, `(float)`, `(bool)`, `(array)` (`(string)` is the
         // `dims` family's `CastStrT`, or `hot::step_ext`'s).
         Op::Cast {
@@ -609,6 +639,36 @@ pub(super) unsafe fn fe_free_on_return(frame: *mut Frame, inst: &Inst) -> bool {
         Some(_) => return false,
     }
     !crate::object::has_pending_destructors()
+}
+
+/// [`TOp::ConstT`]: the cached value of the constant named by literal
+/// `inst.a` into temporary `inst.b` (`spec::fetch_const_in`, the hit
+/// `hot::step_ext` takes). Declines on a miss, having changed nothing.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fetch_const(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    crate::exec::spec::fetch_const_in(f, inst.a, inst.b, None).is_some()
+}
+
+/// [`TOp::ConstTo`]: as [`fetch_const`], into the folded `AssignCv`'s
+/// variable `inst.d` when that holds nothing to release (the jump past
+/// it), else into the temporary (falling through to the `AssignCv`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fetch_const_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match crate::exec::spec::fetch_const_in(f, inst.a, inst.b, Some(inst.d)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
 }
 
 /// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.

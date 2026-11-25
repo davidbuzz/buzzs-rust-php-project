@@ -3741,12 +3741,19 @@ fn plan(
             }
         } else if matches!(
             tape[i].op,
-            TOp::Ext | TOp::ClassConst | TOp::ClassConstTo | TOp::StaticProp | TOp::StaticPropTo
+            TOp::Ext
+                | TOp::ClassConst
+                | TOp::ClassConstTo
+                | TOp::StaticProp
+                | TOp::StaticPropTo
+                | TOp::ConstT
+                | TOp::ConstTo
         ) {
             // A hot spec row the tape left to the interpreter, or one of
-            // the tape's class-constant and static-property rows (the
-            // `statics` rows of `exec/tape.rs`, which run the same cache
-            // hits): the op itself is still at this index, so the planners
+            // the tape's class-constant, static-property and run-time
+            // constant rows (which run the same cache hits; `plan_const`
+            // reads a `FetchConst[To]` whatever row it became): the op
+            // itself is still at this index, so the planners
             // decode it (static properties and constants inline; anything
             // else stays the interpreted row).
             match plan_ext(st, code, i) {
