@@ -527,6 +527,8 @@ pub struct Builtin {
     first_ref: Cell<u8>,
     /// [`Builtin::accepts`], once worked out.
     accepts: OnceCell<Box<[u32]>>,
+    /// [`Builtin::name_str`], once asked for.
+    name_str: OnceCell<Box<str>>,
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -629,6 +631,7 @@ impl Builtin {
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
         }
     }
 
@@ -649,6 +652,7 @@ impl Builtin {
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
         }
     }
 
@@ -663,6 +667,7 @@ impl Builtin {
             plain: Cell::new(PLAIN_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
+            name_str: OnceCell::new(),
         }
     }
 
@@ -745,6 +750,19 @@ impl Builtin {
             PLAIN_UNKNOWN => self.plain_call_upto(),
             _ => (PlainCall::No, usize::MAX),
         }
+    }
+
+    /// The name as `&str` (a builtin's name is ASCII; one that is not
+    /// UTF-8 gives `""`), validated once: [`Args::func_name_str`] ran
+    /// `str::from_utf8` on every call (74 instructions of a
+    /// `current($arr)`, which passes its name along for its errors).
+    #[inline]
+    pub fn name_str(&self) -> &str {
+        self.name_str.get_or_init(|| {
+            std::str::from_utf8(self.name.as_bytes())
+                .unwrap_or("")
+                .into()
+        })
     }
 
     /// Whether a plain call with `n` arguments sent one by reference
@@ -1192,13 +1210,49 @@ impl Args {
     /// (a builtin's name is ASCII; one that is not UTF-8 gives `""`): for
     /// the builtins that pass their name along on every call (`count()`,
     /// `array_key_exists()`, ...), where the copy was an allocation and a
-    /// UTF-8 scan per call.
+    /// UTF-8 scan per call; validated once per builtin
+    /// ([`Builtin::name_str`]).
     #[must_use]
     pub fn func_name_str(&self) -> &str {
-        self.func
-            .as_ref()
-            .and_then(|f| std::str::from_utf8(f.name.as_bytes()).ok())
-            .unwrap_or("")
+        self.func.as_ref().map_or("", |f| f.name_str())
+    }
+}
+
+#[cfg(test)]
+mod name_str_tests {
+    use super::{Args, Builtin};
+    use crate::{Vm, VmResult};
+    use php_runtime::{Value, ZStr};
+    use std::rc::Rc;
+
+    fn handler(_: &mut Vm, _: &mut Args) -> VmResult<Value> {
+        Ok(Value::Null)
+    }
+
+    #[test]
+    fn a_builtins_name_is_borrowed_as_str_and_kept() {
+        let b = Rc::new(Builtin::from_stub(
+            ZStr::from("current"),
+            "current(array|object $array): mixed",
+            0,
+            handler,
+        ));
+        assert_eq!(b.name_str(), "current");
+        // The same buffer the second time.
+        assert!(std::ptr::eq(b.name_str(), b.name_str()));
+        let args = Args {
+            values: Vec::new(),
+            passed: Vec::new(),
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(Rc::clone(&b)),
+        };
+        assert_eq!(args.func_name_str(), "current");
+        let none = Args { func: None, ..args };
+        assert_eq!(none.func_name_str(), "");
+        let odd = Builtin::from_stub(ZStr::from(&b"\xff"[..]), "f(): mixed", 0, handler);
+        assert_eq!(odd.name_str(), "");
     }
 }
 
