@@ -355,13 +355,23 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..
         } => {
             let (dk, di) = dim_operand(code, dim)?;
+            // A string literal that is no integer in digits is looked up
+            // as it is ([`isset_dim_str`]).
+            let op = match code.literals.get(di as usize) {
+                Some(Value::Str(s))
+                    if dk == KIND_LIT && matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_)) =>
+                {
+                    TOp::IssetDimSC
+                }
+                _ => TOp::IssetDimC,
+            };
             Inst {
                 a: ((cv as usize) < code.cv_names.len()).then_some(cv)?,
                 b: di,
                 c: dst_off(code, dst)?,
                 k: dk,
                 e: u8::from(empty),
-                ..plain(TOp::IssetDimC)
+                ..plain(op)
             }
         }
         Op::KeyExists { key, array, dst } => {
@@ -1320,6 +1330,57 @@ pub(super) unsafe fn isset_dim(frame: *mut Frame, inst: &Inst) -> bool {
     let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     isset_dim_cv_in(f, inst.a, dim, inst.c >> SLOT_SHIFT, inst.e != 0)
+}
+
+/// `TOp::IssetDimSC`: `isset($cv['key'])` / `empty($cv['key'])` with a
+/// string literal that is no integer in digits ([`isset_lit_lean`]), else
+/// [`isset_dim`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn isset_dim_str(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    if let Some(r) = isset_lit_lean(f, inst) {
+        if let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) {
+            put_tmp(slot, Value::Bool(r));
+            return true;
+        }
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { isset_dim(frame, inst) }
+}
+
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` of a `CV` array and a `CONST` string
+/// offset as php-src runs it: `zend_hash_find_known_hash` with the
+/// literal's stored hash and a type test, here without a call (the
+/// literal's own bucket key matches by pointer). The array is the one the
+/// variable holds directly; a list or an empty table has no string key.
+/// `None` for anything else ([`isset_dim`]: a reference, another
+/// container, an element whose truth needs a conversion).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `isset_dim_str`
+fn isset_lit_lean(f: &Frame, inst: &Inst) -> Option<bool> {
+    let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
+        return None;
+    };
+    let Some(Value::Str(key)) = f.code.literals.get(inst.b as usize) else {
+        return None;
+    };
+    let empty = inst.e != 0;
+    let Some(v) = arr.lean_find(key, key.hash_now()) else {
+        return Some(empty);
+    };
+    if empty {
+        return crate::exec::spec::plain_truth(v).map(|t| !t);
+    }
+    Some(match v {
+        Value::Null => false,
+        Value::Reference(r) => !r.try_borrow()?.is_null(),
+        _ => true,
+    })
 }
 
 /// `Op::KeyExists`: `array_key_exists($key, $array)` (`key_exists_in`):

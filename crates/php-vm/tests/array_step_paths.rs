@@ -527,3 +527,195 @@ Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php o
 Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 71
 {"k":"again","new":"v2","7":"seven","":"n","8":"pushed","r":99,"obj":1,"1":"b"}
 "#;
+
+/// `isset($a['key'])` and `empty($a['key'])` with string literals over
+/// every kind of element (null, falsy scalars, arrays, objects, a
+/// reference), keys in digits, lists and empty tables, strings, null and
+/// undefined containers, `ArrayAccess`, an array behind a reference, and
+/// a key deleted and added again.
+#[test]
+fn isset_by_literal_key() {
+    assert_eq!(run(ISSET_LIT), ISSET_LIT_OUT);
+}
+
+const ISSET_LIT: &str = r#"<?php
+class AA implements ArrayAccess {
+    public function offsetExists($o): bool { echo "exists($o) "; return $o === 'key'; }
+    public function offsetGet($o): mixed { echo "get($o) "; return 0; }
+    public function offsetSet($o, $v): void {}
+    public function offsetUnset($o): void {}
+}
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $a = ['key' => 1, 'nul' => null, 'zero' => 0, 'str0' => '0', 'empty' => '', 'arr' => [], 'full' => [1], 'f' => 0.0, 'obj' => new stdClass, 'no' => false, 5 => 'five'];
+        $t = null;
+        $a['ref'] = &$t;
+        foreach (['key', 'nul', 'zero', 'str0', 'empty', 'arr', 'full', 'f', 'obj', 'no', 'ref', 'missing'] as $k) {}
+        var_dump(isset($a['key']), isset($a['nul']), isset($a['zero']), isset($a['missing']), isset($a['ref']), isset($a['obj']));
+        var_dump(empty($a['key']), empty($a['nul']), empty($a['zero']), empty($a['str0']), empty($a['empty']), empty($a['arr']), empty($a['full']), empty($a['f']), empty($a['obj']), empty($a['no']), empty($a['ref']), empty($a['missing']));
+        $t = 'set';
+        var_dump(isset($a['ref']), empty($a['ref']));
+        // Digits: the int key.
+        var_dump(isset($a['5']), isset($a['05']), isset($a['-0']));
+        // A list has no string key.
+        $l = [1, 2, 3];
+        var_dump(isset($l['key']), empty($l['key']), isset($l['1']));
+        $e = [];
+        var_dump(isset($e['key']), empty($e['key']));
+        // Other containers.
+        $s = 'abc';
+        var_dump(isset($s['key']), isset($s['1']), empty($s['key']));
+        $n = null;
+        var_dump(isset($n['key']), empty($n['key']));
+        var_dump(isset($undef['key']), empty($undef['key']));
+        $o = new AA;
+        var_dump(isset($o['key']), empty($o['key']), isset($o['other']));
+        // Through a reference.
+        $arr = ['key' => 1];
+        $r = &$arr;
+        var_dump(isset($arr['key']), empty($arr['key']), isset($arr['nope']));
+        unset($r);
+        // Deleted and added again.
+        $d = ['key' => 1, 'x' => 2];
+        unset($d['key']);
+        var_dump(isset($d['key']));
+        $d['key'] = 3;
+        var_dump(isset($d['key']), empty($d['key']));
+    }
+}
+f();
+"#;
+
+const ISSET_LIT_OUT: &str = r#"bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+exists(key) exists(key) get(key) exists(other) bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+exists(key) exists(key) get(key) exists(other) bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+exists(key) exists(key) get(key) exists(other) bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+"#;
