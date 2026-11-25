@@ -316,6 +316,11 @@ class Normaliser:
 
     def __call__(self, resp: bytes) -> bytes:
         resp = resp.replace(b":" + self.port, b":PORT")
+        # A var_dump()ed string holding the version: its length goes with it.
+        resp = re.sub(rb'string\(\d+\) "([^"\n]*PHP/8\.\d+\.\d+[^"\n]*)"',
+                      lambda m: b'string(%d) "%s"' % (
+                          len(VER_RE.sub(b"PHP/VER", m.group(1))),
+                          VER_RE.sub(b"PHP/VER", m.group(1))), resp)
         resp = VER_RE.sub(b"PHP/VER", resp)
         # 8.5.12's server echoes the request's Host; master does not.
         resp = re.sub(rb"^Host: [^\r\n]*\r\n", b"", resp, flags=re.M)
@@ -438,8 +443,9 @@ def run_scenario(path: Path, opts) -> bool:
                     if opts.verbose:
                         print("---- C ----\n" + a.decode("latin-1"))
                         print("---- ours ----\n" + b.decode("latin-1"))
-                    break
-            else:
+                    if not opts.every:
+                        break
+            if ok:
                 print(f"same {label} ({len(c_out)} requests)")
     return ok
 
@@ -451,6 +457,8 @@ def main() -> int:
     ap.add_argument("--ref-cgi", default="/usr/bin/php-cgi8.5")
     ap.add_argument("--mode", dest="modes", action="append", choices=["server", "cgi", "fcgi"])
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--every", action="store_true",
+                    help="report every request that differs, not only the first")
     ap.add_argument("scenarios", nargs="*")
     opts = ap.parse_args()
     signal.signal(signal.SIGTERM, on_signal)
