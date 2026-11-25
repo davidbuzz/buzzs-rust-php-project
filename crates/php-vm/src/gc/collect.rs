@@ -71,6 +71,8 @@ struct PassResult {
     zombies: Vec<Obj>,
     /// Whether the pass had anything to look at (`num_roots != 0`).
     ran: bool,
+    /// Whether the pass counted itself in `runs` as it started.
+    counted: bool,
 }
 
 fn has_pending_dtor(d: &ObjectData) -> bool {
@@ -111,7 +113,7 @@ impl Vm {
             with_state(|s| {
                 // The re-run after destructors always finds the destructor
                 // objects buffered as roots in php-src.
-                if pass.ran || rerun {
+                if (pass.ran || rerun) && !pass.counted {
                     s.runs += 1;
                 }
                 s.collected += u64::try_from(pass.count).unwrap_or(0);
@@ -129,9 +131,12 @@ impl Vm {
             rerun = true;
             extra.extend(pass.zombies.into_iter().map(Value::Object));
         }
+        // `zend_gc_check_root_tmpvars` with `gc_active` still set: the
+        // live temporaries buffered again cannot make a run due before the
+        // threshold is adjusted for this one.
+        self.root_live_temporaries();
         drop(guard);
         with_state(|s| s.collector_time += start.elapsed());
-        self.root_live_temporaries();
         // Values released by freeing (e.g. `WeakMap` entries) may have
         // queued destructors of ordinary objects.
         let r = self.run_pending_destructors();
@@ -193,6 +198,11 @@ impl Vm {
             refs.extend((p.take)());
         }
         let had_roots = !roots.is_empty() || !refs.is_empty() || !extra.is_empty();
+        // `GC_G(gc_runs)++` as a pass with roots starts: a destructor it
+        // calls sees the run counted in `gc_status()`.
+        if had_roots {
+            with_state(|s| s.runs += 1);
+        }
         let mut g = Graph::default();
         let mut root_nodes: Vec<(usize, Option<u32>)> = Vec::with_capacity(roots.len());
         for (slot, o) in &roots {
@@ -237,6 +247,7 @@ impl Vm {
         drop(white_objs);
         let mut res = PassResult {
             ran: had_roots || garbage > 0,
+            counted: had_roots,
             ..PassResult::default()
         };
         if garbage == 0 {

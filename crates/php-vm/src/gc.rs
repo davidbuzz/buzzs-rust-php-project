@@ -884,9 +884,18 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
         return None;
     }
     if !s.roots.has_unused() {
-        // May set the buffered roots aside (the new root then starts an
-        // empty buffer).
-        note_new_slot(s);
+        if php_runtime::ref_roots::take_freed_slot() {
+            // `GC_FETCH_UNUSED()`: the slot a buffered array or reference
+            // left when it was freed (a `foreach` loop's array, buffered
+            // again after a run, then freed with the loop): no new slot,
+            // no threshold check. That root is still counted in
+            // `ref_pending`; the object takes its place.
+            s.ref_pending = s.ref_pending.saturating_sub(1);
+        } else {
+            // May set the buffered roots aside (the new root then starts
+            // an empty buffer).
+            note_new_slot(s);
+        }
     }
     let i = s.roots.insert_new(o, d.handle.get());
     d.flags

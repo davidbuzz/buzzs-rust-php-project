@@ -767,3 +767,40 @@ fn object_in_released_local_arrays_is_buffered_once() {
     let disabled = script.replacen("<?php ", "<?php gc_disable(); ", 1);
     assert_eq!(run(&disabled), "int(1)\nint(1)\n");
 }
+
+/// gh13670_002.phpt, traced: a destructor sees its run counted in
+/// `gc_status()` (`GC_G(gc_runs)++` as a pass starts); the live
+/// temporaries buffered again after a run (`zend_gc_check_root_tmpvars`,
+/// here a `foreach` loop's array) make no run due before the threshold is
+/// adjusted; and the slot that array leaves when it is freed takes the
+/// next object root without a threshold check (one buffer, one unused
+/// list). Without that the collector ran as the next `foreach` started,
+/// thirteen runs in all instead of nine. Expected from php8.5 -n (the
+/// final root count is left out: see the trace in the commit message).
+#[test]
+fn destructor_work_does_not_rerun_the_collector_at_once() {
+    let script = "<?php\n\
+        register_shutdown_function(function () { global $shutdown; $shutdown = true; });\n\
+        class Cycle { public $self; public function __construct() { $this->self = $this; } }\n\
+        class Canary { public $self; public function __construct() { $this->self = $this; }\n\
+          public function __destruct() { global $shutdown; if (!$shutdown) { $s = gc_status(); echo \"d{$s['runs']},{$s['collected']},{$s['threshold']},{$s['roots']} \"; work(); } } }\n\
+        function work() {\n\
+            global $objs, $defaultThreshold;\n\
+            new Canary();\n\
+            for ($i = 0; $i < 100; $i++) { new Cycle(); }\n\
+            foreach (array_slice($objs, 0, $defaultThreshold) as $obj) { $o = $obj; }\n\
+        }\n\
+        $defaultThreshold = gc_status()['threshold'];\n\
+        $objs = [];\n\
+        for ($i = 0; $i < $defaultThreshold*2; $i++) { $obj = new stdClass; $objs[] = $obj; }\n\
+        work();\n\
+        foreach ($objs as $obj) { $o = $obj; }\n\
+        $s = gc_status();\n\
+        echo \"\\n{$s['runs']},{$s['collected']},{$s['threshold']}\\n\";";
+    assert_eq!(
+        run(script),
+        "d2,0,20001,101 d3,100,20001,102 d4,201,10001,102 d5,302,10001,102 \
+         d6,403,20001,102 d7,504,20001,102 d8,605,10001,102 d9,706,10001,102 \n\
+         9,807,20001\n"
+    );
+}

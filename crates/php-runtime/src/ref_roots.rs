@@ -412,6 +412,17 @@ fn reuse_freed_slot() -> bool {
         .unwrap_or(false)
 }
 
+/// `GC_HAS_UNUSED()` for a root of another kind (an object, which the VM
+/// buffers itself): takes a slot freed by a buffered reference or array,
+/// if there is one. php-src has one root buffer and one list of unused
+/// slots, so the next root of any kind reuses such a slot without
+/// checking the threshold.
+#[inline]
+#[must_use]
+pub fn take_freed_slot() -> bool {
+    reuse_freed_slot()
+}
+
 /// The buffer was emptied: no freed slot is left to reuse.
 fn forget_freed_slots() {
     let _ = FREED.try_with(|n| n.set(0));
