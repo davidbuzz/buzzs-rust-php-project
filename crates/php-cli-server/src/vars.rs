@@ -581,6 +581,9 @@ fn parse_cookie(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: b
     cookie
 }
 
+/// The size `$_SERVER` starts with.
+const SERVER_CAPACITY: usize = 64;
+
 /// Populates every superglobal for the request.
 #[allow(clippy::too_many_lines)]
 pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &AuthData) {
@@ -663,8 +666,13 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         }
     };
 
-    // $_SERVER
-    let mut server = ZArray::new();
+    // $_SERVER, sized for what the server and its request set (some 40
+    // entries), so that it is not grown five times on the way.
+    let mut server = if has(b'S') {
+        ZArray::with_capacity(SERVER_CAPACITY)
+    } else {
+        ZArray::new()
+    };
     if let (true, Some(cgi)) = (has(b'S'), &ctx.cgi) {
         // sapi_cgi_register_variables(): the environment, then PHP_SELF.
         use std::os::unix::ffi::OsStrExt;
@@ -742,8 +750,11 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     let mut env = ZArray::new();
     if has(b'E') {
         use std::os::unix::ffi::OsStrExt;
+        // Sized for the environment, not grown entry by entry.
+        let vars: Vec<_> = std::env::vars_os().collect();
+        env = ZArray::with_capacity(vars.len());
         let t = env.make_mut();
-        for (k, v) in std::env::vars_os() {
+        for (k, v) in vars {
             t.insert(
                 ArrayKey::from_bytes(k.as_bytes()),
                 Value::Str(ZStr::from(v.as_bytes())),
