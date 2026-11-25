@@ -2383,9 +2383,10 @@ impl Vm {
     /// the operand is a defined compiled variable, a temporary not holding
     /// a reference, a literal, or none (`return;`, the implicit return of
     /// a body, without a return type or with `void`), and the value is
-    /// accepted by the return type as it is (`verify_return`'s fast path). The result is then the
-    /// one `op_return` gives: the same checks, the same release order
-    /// ([`Frame::release_returning`]: the possible roots, then the release) and a
+    /// accepted by the return type as it is (`verify_return`'s fast path).
+    /// The result is then the one `op_return` gives: the same checks, the
+    /// same release order ([`Frame::release_returning`]: each variable's
+    /// possible root and release, then the call's handle) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
     /// `ip` is the instruction after the `RETURN`, stored as the frame's
     /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
@@ -5756,8 +5757,9 @@ fn release_result_slot(v: Value) {
     drop(v);
 }
 
-/// A value [`Vm::return_simple`] returns as it is: a scalar, null or a
-/// string (no possible cycle root, nothing for `gc::frame_released`).
+/// A value [`Vm::return_simple`] moves out of a compiled variable: a
+/// scalar, null or a string (no possible cycle root, nothing for the
+/// release to record).
 #[inline(always)]
 #[allow(clippy::inline_always)] // one test per return
 fn returns_directly(v: &Value) -> bool {
