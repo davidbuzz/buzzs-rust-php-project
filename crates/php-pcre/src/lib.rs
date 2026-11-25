@@ -46,7 +46,7 @@ mod replace;
 mod split;
 mod value;
 
-pub use cache::{MatchConfig, Pcre, RegexCache, PCRE_CACHE_SIZE};
+pub use cache::{pattern_hash, MatchConfig, Pcre, RegexCache, PCRE_CACHE_SIZE};
 pub use error::{CompileError, PregError};
 pub use matching::{
     match_all, match_all_spans, match_one, match_one_spans, MatchFailure, MatchOutcome, MatchRef,
