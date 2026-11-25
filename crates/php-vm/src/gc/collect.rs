@@ -159,7 +159,8 @@ impl Vm {
                     ForeachIter::Iterator { obj, .. } | ForeachIter::Generator { obj, .. } => {
                         super::root_live_obj(obj);
                     }
-                    ForeachIter::Array { .. } | ForeachIter::Native(..) | ForeachIter::Empty => {}
+                    ForeachIter::Array { arr, .. } => super::root_live_array(arr),
+                    ForeachIter::Native(..) | ForeachIter::Empty => {}
                 }
             }
         }

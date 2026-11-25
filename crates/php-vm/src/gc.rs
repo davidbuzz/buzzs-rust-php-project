@@ -678,22 +678,32 @@ pub fn add_root_provider(p: RootProvider) {
 ///
 /// Call it with the old value at the engine's release sites (assignment
 /// overwrite, `unset`, scope exit, element/property overwrite or removal)
-/// *before* dropping it. Only objects are buffered here; references are
-/// recorded by a `php-runtime` [`RootProvider`], and arrays never close a
-/// cycle on their own (in this value model every cycle passes through an
-/// object or a reference). Releasing the last handle of an array releases
-/// its elements (`zend_array_destroy`), which buffers the objects among
-/// them that are still referenced elsewhere. Cheap when the value is not
-/// an object or an unshared non-empty array: inline, the release of an
-/// object's last handle (the common case of an overwritten variable) is a
-/// count test.
+/// *before* dropping it; the `_nogc` sites of php-src (temporaries) do not
+/// call it. Objects are buffered here; references by a `php-runtime`
+/// [`RootProvider`], as are arrays: an array that stays held elsewhere is
+/// buffered unless its header mark says it is buffered already or
+/// immutable (`GC_MAY_LEAK`; [`php_runtime::ref_roots::array_released`]).
+/// Releasing the last handle of an array releases its elements
+/// (`zend_array_destroy`), which buffers those still held elsewhere.
+/// Cheap when the value is not an object or an unshared non-empty array:
+/// inline, the release of an object's last handle (the common case of an
+/// overwritten variable) is a count test, and that of a shared array
+/// already buffered a count test and a test of its mark.
 #[inline]
 pub fn possible_root(v: &Value) {
     match v {
         Value::Object(o) => root_obj(o),
         // Releasing the last handle of a reference releases its value.
         Value::Reference(r) if r.refcount() == 1 => released_ref(r),
-        Value::Array(a) if a.refcount() == 1 && !a.is_empty() => released_array(a),
+        Value::Array(a) => {
+            if a.refcount() == 1 {
+                if !a.is_empty() {
+                    released_array(a);
+                }
+            } else if a.gc_root_mark() == 0 {
+                php_runtime::ref_roots::array_released(a);
+            }
+        }
         _ => {}
     }
 }
@@ -708,15 +718,21 @@ pub(crate) fn possible_root_obj(o: &Obj) {
 #[inline(never)]
 fn released_ref(r: &php_runtime::PhpRef) {
     if let Some(inner) = r.try_borrow() {
-        if let Value::Object(o) = &*inner {
-            root_obj(o);
+        match &*inner {
+            Value::Object(o) => root_obj(o),
+            // `zend_reference` freed: `i_zval_ptr_dtor` of its array.
+            Value::Array(a) if a.refcount() >= 2 && a.gc_root_mark() == 0 => {
+                php_runtime::ref_roots::array_released(a);
+            }
+            _ => {}
         }
     }
 }
 
 /// `zend_array_destroy` → `i_zval_ptr_dtor` on every element of an array
-/// whose last handle is being released: objects that stay referenced become
-/// possible roots; unshared nested arrays are released in turn.
+/// whose last handle is being released: objects and arrays that stay
+/// referenced become possible roots; unshared nested arrays are released
+/// in turn.
 #[inline(never)]
 fn released_array(a: &php_runtime::ZArray) {
     // One load: the state is borrowed only to buffer a root.
@@ -731,10 +747,12 @@ fn released_array(a: &php_runtime::ZArray) {
         // Only the elements that can be or hold a root: a table of scalars
         // and strings costs a tag test an element.
         arr.for_each_counted(|v| match v {
-            Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
-                pending.push(inner);
+            Value::Array(inner) if inner.refcount() == 1 => {
+                if !inner.is_empty() {
+                    pending.push(inner);
+                }
             }
-            Value::Object(_) | Value::Reference(_) => possible_root(v),
+            Value::Array(_) | Value::Object(_) | Value::Reference(_) => possible_root(v),
             _ => {}
         });
         let Some(next) = pending.pop() else {
@@ -775,6 +793,7 @@ pub(crate) fn release_duplicate(v: Value) {
 pub(crate) fn root_live_value(v: &Value) {
     match v {
         Value::Object(o) => root_live_obj(o),
+        Value::Array(a) => root_live_array(a),
         Value::Reference(r) => match r.try_borrow().as_deref() {
             Some(Value::Object(o)) => root_live_obj(o),
             // A reference to an array is the root in this model.
@@ -782,6 +801,16 @@ pub(crate) fn root_live_value(v: &Value) {
             _ => {}
         },
         _ => {}
+    }
+}
+
+/// [`root_live_value`] for an array held by a live temporary or a
+/// `foreach` loop (`ZEND_LIVE_LOOP`): buffered whatever its count, as
+/// `gc_check_possible_root` does, unless it is buffered already or
+/// immutable.
+pub(crate) fn root_live_array(a: &php_runtime::ZArray) {
+    if a.gc_root_mark() == 0 {
+        php_runtime::ref_roots::array_released(a);
     }
 }
 
@@ -1130,6 +1159,12 @@ fn thaw(s: &mut GcState) {
     }
 }
 
+/// Runs `f`, the growth of a `php-runtime` root buffer, outside
+/// `memory_get_usage()` (see [`RootBuffer`]).
+fn persistent_scope(f: &mut dyn FnMut()) {
+    php_memlimit::persistent(f);
+}
+
 /// `gc_grow_root_buffer`.
 #[cold]
 #[inline(never)]
@@ -1207,6 +1242,8 @@ pub fn wants_run() -> bool {
 /// Resets the collector for a new request (`gc_reset`), with
 /// `zend.enable_gc` as given.
 pub(crate) fn request_startup(enable: bool) {
+    // No array stays marked as buffered into the next request.
+    php_runtime::ref_roots::clear_arrays();
     with_state(|s| {
         let providers = std::mem::take(&mut s.providers);
         forget_last_root();
@@ -1299,6 +1336,7 @@ pub fn status() -> GcStatus {
 /// Registers the `gc_*` builtins, the `zend.enable_gc` modify handler and
 /// the traversal of the engine's native object states.
 pub(crate) fn register(vm: &mut Vm) {
+    php_runtime::ref_roots::set_persistent_scope(Some(persistent_scope));
     builtins::register(vm);
     traverse::register_engine_traversals();
     let on = vm.ini.get_bool("zend.enable_gc");
