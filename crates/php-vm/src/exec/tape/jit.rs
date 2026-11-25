@@ -172,6 +172,12 @@ const TAG_REF: u8 = 8;
 /// the layout tests' `array_handle_layout`.
 #[allow(clippy::cast_possible_truncation)] // an offset inside a table
 const ARRAY_COUNT: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::NUM_ELEMENTS_OFFSET as u32;
+/// Byte offset of an array's root buffer mark (a `u32`; 0: not buffered,
+/// so a release to a non-zero count must buffer it, as
+/// `gc_check_possible_root` does in `i_zval_ptr_dtor`) from the handle
+/// word. Pinned by the layout tests' `array_handle_layout`.
+#[allow(clippy::cast_possible_truncation)] // an offset inside a table
+const ARRAY_GC_ROOT: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::GC_ROOT_OFFSET as u32;
 /// Byte offset of `Frame::this`, the `Option<Obj>`: `None` is a null
 /// pointer (`Option<NonNull>`'s niche, pinned by the layout tests'
 /// `option_pointers_are_null`).
@@ -6203,6 +6209,10 @@ impl Emitter {
                     self.load_int(KC, inst.a);
                     self.count_op(7, 1); // cmp qword [rax], 1
                     self.jcc(0x84, jo); // je: the last handle
+                                        // Not in the root buffer yet: the interpreted row
+                                        // buffers it (`gc_check_possible_root`).
+                    self.cmpl_rax(ARRAY_GC_ROOT, 0);
+                    self.jcc(0x84, jo); // je
                     self.count_op(5, 1); // sub qword [rax], 1
                     self.set_label(store);
                     self.copy_slot(m.kb, inst.b, m.ka, inst.a);
@@ -6565,6 +6575,9 @@ impl Emitter {
             self.load_int(KC, m.db);
             self.count_op(7, 1); // cmp qword [rax], 1
             self.jcc(0x84, side); // je: the last handle
+                                  // Not in the root buffer yet: the interpreted row buffers it.
+            self.cmpl_rax(ARRAY_GC_ROOT, 0);
+            self.jcc(0x84, side); // je
             self.count_op(5, 1); // sub qword [rax], 1
             self.set_label(store);
         }
@@ -9979,6 +9992,16 @@ mod layout_tests {
             assert_eq!(strong(), 2);
             let count = std::ptr::read_unaligned(handle.add(ARRAY_COUNT as usize).cast::<u32>());
             assert_eq!(count, 3);
+            // The root buffer mark the compiled rows test before they
+            // drop a handle in place: 0 until the array is buffered.
+            let mark =
+                || std::ptr::read_unaligned(handle.add(ARRAY_GC_ROOT as usize).cast::<u32>());
+            assert_eq!(mark(), 0);
+            let was = php_runtime::ref_roots::set_recording(true);
+            php_runtime::ref_roots::array_released(&a);
+            php_runtime::ref_roots::set_recording(was);
+            assert_eq!(mark(), a.gc_root_mark());
+            assert_ne!(mark(), 0);
         }
         let empty = Value::Array(ZArray::new());
         let words = std::ptr::from_ref(&empty).cast::<u8>();
