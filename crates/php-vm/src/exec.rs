@@ -500,7 +500,12 @@ impl Vm {
     /// reference to null, false or an array: [`Vm::read_cv_op_data`]);
     /// `Ok(false)`, nothing changed, leaves every other case to the walk.
     #[inline(never)]
-    fn assign_dim_array_access(&mut self, cv: u32, dim: Operand, val: Operand) -> VmResult<bool> {
+    pub(crate) fn assign_dim_array_access(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        val: Operand,
+    ) -> VmResult<bool> {
         let Some((obj, m)) = self.array_access_target(cv, dim, AaFn::Set) else {
             return Ok(false);
         };
@@ -527,7 +532,7 @@ impl Vm {
     /// `offsetGet()` call. The result is stored as the fetch stores it.
     /// `Ok(None)`, nothing changed, leaves every other case to the walk.
     #[inline(never)]
-    fn fetch_dim_array_access(
+    pub(crate) fn fetch_dim_array_access(
         &mut self,
         cv: u32,
         dim: Operand,

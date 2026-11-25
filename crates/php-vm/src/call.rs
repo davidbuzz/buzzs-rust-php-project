@@ -5278,16 +5278,15 @@ impl Vm {
             return None;
         };
         let n = args.len();
-        if m.is_static()
-            || uf.is_generator()
-            || uf.code.num_statics != 0
-            || uf.code.num_finally != 0
-            || uf.flags & flags::DEPRECATED != 0
+        // A plain declaration (`CallShape`: no generator, statics,
+        // `finally`, deprecation, by-reference or variadic parameter, and
+        // a compiled variable per parameter), worked out once.
+        let shape = uf.call_shape();
+        if shape == crate::func::CallShape::NOT_PLAIN
+            || m.is_static()
             || self.has_observers()
             || n < uf.required as usize
             || n > uf.params.len()
-            || self.frames.len() > 50_000
-            || uf.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return None;
         }
@@ -5298,10 +5297,11 @@ impl Vm {
                 *a = v;
             }
         }
-        if !uf.params[..n]
-            .iter()
-            .zip(args.iter())
-            .all(|(p, v)| p.ty.as_ref().is_none_or(|ty| param_accepts(ty, v)))
+        if shape == crate::func::CallShape::TYPED
+            && !uf.params[..n]
+                .iter()
+                .zip(args.iter())
+                .all(|(p, v)| p.ty.as_ref().is_none_or(|ty| param_accepts(ty, v)))
         {
             return None;
         }
@@ -5311,39 +5311,8 @@ impl Vm {
             return Some(Err(t));
         }
         let uf = uf.clone();
-        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
-        let f = &mut self.frames[idx];
-        f.this = Some(o.clone());
-        f.scope = Some(m.scope());
-        f.called = Some(object::class_of(o).clone());
-        f.ret = RetTarget::Discard;
-        f.caller_strict = false;
-        f.called_from_internal = true;
-        f.is_ctor = false;
-        f.args.clear();
-        f.args.resize(n, None);
-        for (i, a) in args.iter_mut().enumerate() {
-            let v = std::mem::take(a);
-            if let Some(slot) = f.cvs.get_mut(i) {
-                slot.set(Some(v));
-            }
-        }
-        // The RECV ops of the passed arguments are skipped, as
-        // `push_user_call`'s plain entry skips them.
-        let mut first_op = 0;
-        for i in 0..n {
-            match uf.code.ops.get(first_op) {
-                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
-                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
-                    first_op = *skip as usize;
-                }
-                _ => break,
-            }
-        }
-        f.ip = first_op;
-        f.func = Some(m.func.clone());
-        f.ufunc = Some(uf);
-        let base = self.frames.len() - 1;
+        let base =
+            crate::exec::tape::calls::push_method_from_native(self, o, m.scope(), &uf, args)?;
         Some(match self.execute(base) {
             Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
             r => r,

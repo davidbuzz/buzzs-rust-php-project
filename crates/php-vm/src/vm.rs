@@ -2092,6 +2092,7 @@ impl Frame {
         self.caller_strict = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.called_from_internal = false;
         // Every field is in its released state now, and the function's
         // handles and slot sizes are kept: the next call of the same
         // function in this slot readies nothing (`calls::ready_frame`).

@@ -2169,9 +2169,26 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     }
                     _ => break at,
                 };
-                if next == DECLINED {
-                    break at;
-                }
+                let next = if next == DECLINED {
+                    // A dimension of an `ArrayAccess` object (`$obj[$k] = $v`,
+                    // `$obj[$k]`): its user method called here, with the VM at
+                    // hand, rather than leaving the tape for one op of
+                    // `Vm::run` (`array_access_step`).
+                    let alt = array_access_step(vm, &mut prep, ops, at);
+                    if alt == DECLINED {
+                        break at;
+                    }
+                    let Some(f) = vm.frames.last_mut() else {
+                        return (0, NO_SAFE_POINT);
+                    };
+                    fp = f;
+                    if alt & CALL_THREW != 0 {
+                        return ((alt & !CALL_THREW) | switched, hot::THREW);
+                    }
+                    alt
+                } else {
+                    next
+                };
                 if crate::interrupt::safe_point_due() {
                     flush(vm, &mut prep);
                     return (next | switched, at);
@@ -2570,6 +2587,66 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// A declined `Op::AssignDimCv` / `Op::FetchDimCv` whose variable holds an
+/// object with user `ArrayAccess` methods (`zend_std_write_dimension` /
+/// `zend_std_read_dimension`): the method called as `Vm::run`'s arm calls
+/// it (`Vm::assign_dim_array_access`, `Vm::fetch_dim_array_access`), after
+/// the resume point is saved (`SAVE_OPLINE()`: the method's backtrace and
+/// warnings name this line) and a call being prepared became the pending
+/// one (the method runs in a nested execution above this frame). Returns
+/// the op to go on at, `at | CALL_THREW` with `tape_throw` set when the
+/// method threw, or `DECLINED`, nothing changed, for anything else (the
+/// op then runs in `Vm::run`). Out of line and cold: the tape's loop
+/// carries only the call.
+#[cold]
+#[inline(never)]
+fn array_access_step(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
+    let cv = match ops.get(at) {
+        Some(&Op::AssignDimCv { cv, .. } | &Op::FetchDimCv { cv, .. }) => cv,
+        _ => return DECLINED,
+    };
+    let is_object = vm
+        .frames
+        .last()
+        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(crate::vm::CvSlot::get)
+        .is_some_and(|v| matches!(v, Value::Object(_)));
+    if !is_object {
+        return DECLINED;
+    }
+    flush(vm, prep);
+    vm.frame_mut().ip = at + 1;
+    let r = match ops[at] {
+        Op::AssignDimCv { cv, dim, val, .. } => vm
+            .assign_dim_array_access(cv, dim, val)
+            .map(|done| done.then_some(at + 1)),
+        Op::FetchDimCv {
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
+        } => vm
+            .fetch_dim_array_access(cv, dim, dst, to, mode)
+            .map(|r| r.map(|skipped| at + 1 + usize::from(skipped))),
+        _ => Ok(None),
+    };
+    match r {
+        Ok(Some(next)) => next,
+        Ok(None) => DECLINED,
+        Err(t) => {
+            vm.tape_throw = Some(t);
+            at | CALL_THREW
+        }
+    }
 }
 
 /// Runs the op at `at` that needs the VM without being a call's start
@@ -3409,7 +3486,7 @@ unsafe fn statics_static_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
     }
 }
 
-mod calls;
+pub(crate) mod calls;
 mod dims;
 pub(crate) mod jit;
 mod props;

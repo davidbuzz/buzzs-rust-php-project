@@ -1914,6 +1914,69 @@ fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     }
 }
 
+/// The frame of a user method called from native code
+/// (`zend_call_known_instance_method`: `offsetGet()`, `__toString()`,
+/// `__get()`, a callback's method), pushed as the tape's prepared calls
+/// push theirs: the pooled frame above the current one readied for `uf`
+/// (nothing to do when the last call of the same function in that slot
+/// left it, [`ready_frame`]), `$this`, the method's scope and the
+/// object's class filled, the arguments moved into the compiled
+/// variables, the `RECV`s of the passed ones skipped and the literal
+/// defaults of the others bound, and the frame entered directly
+/// (`Frame::direct`: its return releases it in one pass and keeps it
+/// ready for the next such call). The caller (`Vm::enter_method_direct`)
+/// has checked that the declaration makes a plain call, that `args` fits
+/// it, has the declared types as they are, holds no reference, and that
+/// no observer is active. Returns the frame's index (the nested
+/// execution's base), or `None`, having changed nothing, when no pooled
+/// frame is at hand or the stack is past its backstop.
+pub(crate) fn push_method_from_native(
+    vm: &mut Vm,
+    this: &Obj,
+    scope: Rc<crate::class::Class>,
+    uf: &Rc<UserFunction>,
+    args: &mut [Value],
+) -> Option<usize> {
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let frame = vm.frames.vec.get_mut(live)?;
+    if !frame.args.is_empty() {
+        return None;
+    }
+    let n = args.len();
+    ready_frame(frame, uf);
+    fill(&mut frame.this, Some(this.clone()));
+    fill(&mut frame.scope, Some(scope));
+    fill(
+        &mut frame.called,
+        Some(Rc::clone(crate::object::class_of(this))),
+    );
+    for (slot, a) in frame.cvs.iter_mut().zip(args.iter_mut()) {
+        // A readied frame's compiled variables are empty.
+        if let Some(old) = slot.as_mut().replace(std::mem::take(a)) {
+            drop(old);
+        }
+    }
+    frame.ret = RetTarget::Discard;
+    frame.caller_strict = false;
+    frame.called_from_internal = true;
+    frame.is_ctor = false;
+    #[allow(clippy::cast_possible_truncation)] // at most the parameter count
+    {
+        frame.direct_argc = n as u32;
+    }
+    frame.ip = uf.plain_first_op(n);
+    if n < uf.params.len() {
+        bind_literal_defaults(frame, uf, n);
+    }
+    frame.direct = true;
+    vm.frames.live = live + 1;
+    Some(live)
+}
+
 /// `ZEND_INIT_METHOD_CALL` of `Op::InitMethodCall { obj, name: Lit(lit) }`
 /// at `slot` in the current frame: on the method cache hit
 /// `Vm::init_method_call_fast` takes (the object's class and the calling

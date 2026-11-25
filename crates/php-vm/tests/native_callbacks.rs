@@ -475,3 +475,105 @@ array(2) {
 "##
     );
 }
+
+/// `$obj[$k] = $v`, `$obj[$k]` and `$obj[$k] ?? d` of user `ArrayAccess`
+/// objects (a subclass too) called from the tape, an exception out of
+/// `offsetSet()` (its line and trace), an object without `ArrayAccess`, an
+/// `ArrayObject`; and the user methods native code calls (`__toString()`,
+/// `__get()`/`__set()`/`__isset()`/`__unset()`, `getIterator()`,
+/// `jsonSerialize()`, `count()` with a default) entered on a direct frame:
+/// `func_get_args()`, `func_num_args()`, `debug_backtrace()`, a throw, a
+/// recursive `__get()`. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn array_access_and_native_method_calls() {
+    let out = run(r#"<?php
+namespace App;
+class OA implements \ArrayAccess {
+    public array $a = [];
+    public function offsetExists(mixed $o): bool { echo "exists($o) "; return isset($this->a[$o]); }
+    public function offsetGet(mixed $o): mixed { echo "get($o) "; return $this->a[$o] ?? 'none'; }
+    public function offsetSet(mixed $o, mixed $v): void {
+        if ($o === 'bad') { throw new \RuntimeException("bad key"); }
+        echo "set($o) "; $this->a[$o ?? 'null'] = $v;
+    }
+    public function offsetUnset(mixed $o): void { unset($this->a[$o]); }
+}
+class Sub extends OA {}
+class Plain {}
+function trace(\Throwable $e) { return $e->getMessage() . ' @' . $e->getLine() . ' ' . count($e->getTrace()) . ' ' . ($e->getTrace()[0]['function'] ?? '-') . ':' . ($e->getTrace()[0]['line'] ?? '-'); }
+function run() {
+    $c = new OA; $s = new Sub; $p = new Plain; $ao = new \ArrayObject([]);
+    for ($i = 0; $i < 3; $i++) {
+        $c['k'] = $i; $c[$i] = 'v' . $i; $s['x'] = $i;
+        $v = $c['k']; echo $v, ' ';
+        $w = $c['missing'] ?? 'dflt'; echo $w, ' ';
+        $z = $s['x'] ?? 'no'; echo $z, ' ';
+        $ao['q'] = $i; echo $ao['q'], ' ';
+        try { $c['bad'] = 1; } catch (\RuntimeException $e) { echo trace($e), ' '; }
+        try { $p['x'] = 1; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), ' '; }
+        try { $q = $p['x']; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+        $r = $c; $r['shared'] = $i; echo count($c->a), "\n";
+    }
+}
+run();
+"#);
+    assert_eq!(
+        out,
+        r#"set(k) set(0) set(x) get(k) 0 exists(missing) dflt exists(x) get(x) 0 0 bad key @8 2 offsetSet:24 Error: Cannot use object of type App\Plain as array Cannot use object of type App\Plain as array set(shared) 3
+set(k) set(1) set(x) get(k) 1 exists(missing) dflt exists(x) get(x) 1 1 bad key @8 2 offsetSet:24 Error: Cannot use object of type App\Plain as array Cannot use object of type App\Plain as array set(shared) 4
+set(k) set(2) set(x) get(k) 2 exists(missing) dflt exists(x) get(x) 2 2 bad key @8 2 offsetSet:24 Error: Cannot use object of type App\Plain as array Cannot use object of type App\Plain as array set(shared) 5
+"#
+    );
+    let out = run(r#"<?php
+namespace App;
+class M {
+    public $log = [];
+    public function __toString(): string { return 'M' . count(func_get_args()) . func_num_args(); }
+    public function __get($n) { $this->log[] = "get:$n"; return strtoupper($n); }
+    public function __set($n, $v) { $this->log[] = "set:$n=" . (is_object($v) ? 'obj' : $v); }
+    public function __isset($n) { return $n === 'yes'; }
+    public function __unset($n) { $this->log[] = "unset:$n"; }
+}
+class T {
+    public function __toString(): string { $bt = debug_backtrace(); return count($bt) . ':' . ($bt[1]['function'] ?? '-'); }
+}
+class Ex { public function __toString(): string { throw new \LogicException('nope'); } }
+class Rec { public $d = 0; public function __get($n) { return $this->d < 3 ? ($this->d++) . ',' . $this->x : 'end'; } }
+class It implements \IteratorAggregate { public function getIterator(): \Iterator { return new \ArrayIterator([1, 2]); } }
+class J implements \JsonSerializable { public function __construct(private $v = 7) {} public function jsonSerialize(): mixed { return ['v' => $this->v]; } }
+class C implements \Countable { public function count(int $mode = 5): int { return $mode + func_num_args(); } }
+function run() {
+    $m = new M; $t = new T; $r = new Rec; $c = new C;
+    for ($i = 0; $i < 4; $i++) {
+        echo $m, ' ', (string)$m, ' ', "x{$m}y", ' ', strlen($m), ' ';
+        echo $m->foo, $m->bar, ' ';
+        $m->baz = $i; $m->obj = $m; unset($m->gone);
+        echo isset($m->yes) ? 'Y' : 'N', isset($m->no) ? 'Y' : 'N', empty($m->yes) ? 'E' : 'F', ' ';
+        echo $t, ' ', implode(',', [$t, $m]), ' ';
+        try { echo new Ex; } catch (\LogicException $e) { echo $e->getMessage(), '@', $e->getLine(), ' '; }
+        $r->d = 0; echo $r->x, ' ';
+        foreach (new It as $v) { echo $v; }
+        echo ' ', json_encode(new J), ' ', count($c), ' ', str_repeat('=', 1), "\n";
+    }
+    echo implode('|', $m->log), "\n";
+}
+run();
+"#);
+    assert_eq!(
+        out,
+        r#"M00 M00 xM00y 3 FOOBAR YNF 2:App\run 3:implode,M00 nope@14 
+Warning: Undefined property: App\Rec::$x in t.php on line 15
+0, 12 {"v":7} 5 =
+M00 M00 xM00y 3 FOOBAR YNF 2:App\run 3:implode,M00 nope@14 
+Warning: Undefined property: App\Rec::$x in t.php on line 15
+0, 12 {"v":7} 5 =
+M00 M00 xM00y 3 FOOBAR YNF 2:App\run 3:implode,M00 nope@14 
+Warning: Undefined property: App\Rec::$x in t.php on line 15
+0, 12 {"v":7} 5 =
+M00 M00 xM00y 3 FOOBAR YNF 2:App\run 3:implode,M00 nope@14 
+Warning: Undefined property: App\Rec::$x in t.php on line 15
+0, 12 {"v":7} 5 =
+get:foo|get:bar|set:baz=0|set:obj=obj|unset:gone|get:yes|get:foo|get:bar|set:baz=1|set:obj=obj|unset:gone|get:yes|get:foo|get:bar|set:baz=2|set:obj=obj|unset:gone|get:yes|get:foo|get:bar|set:baz=3|set:obj=obj|unset:gone|get:yes
+"#
+    );
+}
