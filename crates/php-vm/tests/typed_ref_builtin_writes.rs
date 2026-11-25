@@ -74,3 +74,32 @@ caught 0: Cannot assign array to reference held by property P::$ni of type ?int,
 "###
     );
 }
+
+/// More property types under the same rule: `?array` and `string`
+/// receiving preg_match()'s array, `float` and `bool` receiving
+/// similar_text()'s percentage, a typed static property, a builtin that
+/// takes its argument by reference as an array (sort()), and a variable
+/// bound to a typed property.
+#[test]
+fn builtin_writes_coerce_or_refuse_for_each_property_type() {
+    let line = r###"["Cannot assign array to reference held by property T::$s of type string","abc",1,["a","a"],2,100,2,true,"bb",2,"sort(): Argument #1 ($array) must be of type array, string given","abc",[1,3],1,100]"###;
+    assert_eq!(
+        run(r###"<?php
+class T { public ?int $ni = null; public string $s = 'abc'; public float $f = 1.5; public ?array $a = null; public bool $b = false; public static int $si = 0; }
+function f($i) {
+  $t = new T; $o = [];
+  try { $o[] = preg_match('/(a)/', 'xa', $t->s); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->s;
+  try { $o[] = preg_match('/(a)/', 'xa', $t->a); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->a;
+  try { $o[] = similar_text('ab', 'ab', $t->f); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->f;
+  try { $o[] = similar_text('ab', 'ab', $t->b); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->b;
+  try { $o[] = str_replace('a', 'b', 'aa', T::$si); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = T::$si;
+  try { $o[] = sort($t->s); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->s;
+  $t->a = [3, 1]; sort($t->a); $o[] = $t->a;
+  $r = &$t->ni; try { $o[] = similar_text('a', 'a', $r); } catch (TypeError $e) { $o[] = $e->getMessage(); } $o[] = $t->ni;
+  return $o;
+}
+for ($i = 0; $i < 3; $i++) { echo json_encode(f($i)), "\n"; }
+"###),
+        format!("{line}\n{line}\n{line}\n")
+    );
+}
