@@ -122,8 +122,16 @@ impl Vm {
         } else {
             o
         };
-        if let Some(a) = self.internal_object_array(o)? {
-            return Ok(Some(a));
+        // A closure's name, file, line, static variables and parameters
+        // are its `get_debug_info` (`zend_closure_get_debug_info`), for
+        // var_dump(), print_r() and debug_zval_dump() only: for every other
+        // purpose it is the standard table of a class without properties,
+        // so json_encode() gives `{}`, var_export() an empty
+        // `__set_state()` and current()/key() nothing.
+        if purpose == PropertyPurpose::Debug {
+            if let Some(a) = self.internal_object_array(o)? {
+                return Ok(Some(a));
+            }
         }
         if matches!(purpose, PropertyPurpose::VarExport | PropertyPurpose::Json) {
             let mut t = object::PropTableBuilder::new(object::data(o));

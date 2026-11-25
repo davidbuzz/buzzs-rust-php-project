@@ -142,3 +142,45 @@ TypeError: Cannot access offset of type stdClass on array
 "
     );
 }
+
+/// A closure's name, file, line, static variables and parameters are its
+/// debug information only (`zend_closure_get_debug_info`): json_encode(),
+/// var_export(), get_object_vars(), the internal-pointer functions and
+/// foreach see a class without properties.
+#[test]
+fn closure_debug_properties_are_for_debug_output_only() {
+    let out = run(r#"<?php
+set_error_handler(function ($n, $m) { echo "$n: $m\n"; return true; });
+$y = 5;
+$f = function ($a) use ($y) { return 1; };
+$g = fn() => 1;
+echo json_encode($f), json_encode($g), json_encode([$f, 'k' => $g]), "\n";
+var_export($g); echo "\n";
+var_dump(get_object_vars($f), count((array) $f));
+var_dump(current($f), key($f));
+$x = $f; var_dump(end($x), next($x), reset($x), prev($x));
+foreach ($f as $k => $v) { echo "never\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"{}{}{"0":{},"k":{}}
+\Closure::__set_state(array(
+))
+array(0) {
+}
+int(1)
+8192: current(): Calling current() on an object is deprecated
+8192: key(): Calling key() on an object is deprecated
+bool(false)
+NULL
+8192: end(): Calling end() on an object is deprecated
+8192: next(): Calling next() on an object is deprecated
+8192: reset(): Calling reset() on an object is deprecated
+8192: prev(): Calling prev() on an object is deprecated
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+"#
+    );
+}
