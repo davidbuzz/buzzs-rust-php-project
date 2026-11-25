@@ -118,21 +118,17 @@ pub fn hide_args() {
     }
 }
 
-/// `get_ps_title()`: the last title set, or the original command line.
+/// `get_ps_title()`: the last title set, or the empty string before any
+/// was (C's `ps_buffer_cur_len` starts at 0: `cli_get_process_title()`
+/// returns `""`, not the command line); `None` when titles cannot be
+/// set at all.
 #[must_use]
 pub fn get() -> Option<Vec<u8>> {
     if let Some(t) = TITLE.with(|t| t.borrow().clone()) {
         return Some(t);
     }
-    let (start, size) = argv_area()?;
-    // SAFETY: see `argv_area`; the area is `size` readable bytes.
-    let bytes = unsafe { std::slice::from_raw_parts(start, size) };
-    Some(
-        bytes
-            .iter()
-            .map(|&c| if c == 0 { b' ' } else { c })
-            .collect(),
-    )
+    argv_area()?;
+    Some(Vec::new())
 }
 
 #[cfg(test)]
@@ -140,6 +136,11 @@ mod tests {
     #[test]
     fn captures_the_argument_area() {
         assert!(super::available());
-        assert!(super::get().is_some_and(|t| !t.is_empty()));
+    }
+
+    /// php8.5 -r 'var_dump(cli_get_process_title());' prints string(0) "".
+    #[test]
+    fn title_is_empty_until_one_is_set() {
+        assert_eq!(super::get(), Some(Vec::new()));
     }
 }
