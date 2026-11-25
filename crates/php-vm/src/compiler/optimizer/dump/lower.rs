@@ -386,9 +386,17 @@ pub(crate) fn literal_return_value(
         Op::Return {
             val: Operand::Lit(l),
         } => f.code.literals.get(l as usize)?.clone(),
+        // A body without `return` returns nothing, which only `void`
+        // accepts: any other return type (`mixed` and `?T` included) throws
+        // "Return value must be of type T, none returned", and `never`
+        // throws "never-returning function must not implicitly return"
+        // (php-src never inlines a function with a return type at all,
+        // `ZEND_ACC_HAS_TYPE_HINTS` in `zend_try_inline_call`).
         Op::Return {
             val: Operand::Unused,
-        } => Value::Null,
+        } if f.return_type.as_ref().is_none_or(crate::types::TypeDecl::is_void) => {
+            Value::Null
+        }
         _ => return None,
     };
     // A literal of another type than the declared return type is
