@@ -312,6 +312,44 @@ impl Vm {
     }
 
     /// `$a instanceof B`.
+    /// `$a instanceof $b` of two compiled variables of the running frame,
+    /// as [`Vm::op_instanceof`] answers it: `$b` an object (its class) or a
+    /// class name (the object's class or an ancestor by name, else the class
+    /// table without autoloading: an alias, another class or none); `$a`
+    /// not an object is false. `None`, nothing changed, for an undefined
+    /// variable, a reference or another type of `$b` (the generic op, with
+    /// its warning and errors).
+    pub(crate) fn instanceof_cv_fast(&self, a: u32, b: u32) -> Option<bool> {
+        let f = self.frames.last()?;
+        if f.symtab_attached {
+            return None;
+        }
+        let v = f.cvs.get(a as usize)?.get()?;
+        let c = f.cvs.get(b as usize)?.get()?;
+        if matches!(v, Value::Reference(_)) {
+            return None;
+        }
+        match c {
+            Value::Object(co) => Some(match v {
+                Value::Object(o) => object::class_of(o).is_subclass_of(object::class_of(co)),
+                _ => false,
+            }),
+            // By name first; else the class table (no autoloading, as
+            // `ZEND_INSTANCEOF`): an alias or another class, or none.
+            Value::Str(s) => Some(match v {
+                Value::Object(o) => {
+                    let cls = object::class_of(o);
+                    cls.instance_of_name_ci(s.as_bytes())
+                        || self
+                            .find_class(s.as_bytes())
+                            .is_some_and(|c| cls.is_subclass_of(&c))
+                }
+                _ => false,
+            }),
+            _ => None,
+        }
+    }
+
     pub(crate) fn op_instanceof(&mut self, v: &Value, spec: &ClassSpec) -> VmResult<bool> {
         let cls = match spec {
             // `ZEND_INSTANCEOF` caches the class once found (it never

@@ -581,3 +581,50 @@ Cannot access private property App\A::$priv
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `$a instanceof $b` of two variables answered in place: `$b` an object
+/// or a class name the object answers to (parent, interface, other case),
+/// an alias and unknown or leading-backslash names (the class lookup),
+/// non-object and reference left sides, invalid class operands (their
+/// errors) and an undefined variable. Expected output: php-src's (PHP 8.4
+/// CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // the script and its expected output
+fn dynamic_instanceof() {
+    let src = r#"<?php
+namespace App;
+interface I {} class E implements I {} class F extends E {} class G {}
+class_alias(E::class, 'App\Alias');
+function t() {
+  $f = new F; $g = new G; $e = new E;
+  foreach ([E::class, 'app\e', 'APP\F', I::class, G::class, 'App\Alias', 'App\Nope', '\App\E', $e, $g, $f] as $c) {
+    $r = [$f instanceof $c, $g instanceof $c];
+    $s = 'str'; $n = null; $i = 5;
+    $r[] = $s instanceof $c; $r[] = $n instanceof $c; $r[] = $i instanceof $c;
+    $ref = &$f; $r[] = $ref instanceof $c; unset($ref);
+    echo json_encode($r), "\n";
+  }
+  foreach ([null, 5, [], 1.5] as $bad) { try { var_dump($f instanceof $bad); } catch (\Error $x) { echo get_class($x), ': ', $x->getMessage(), "\n"; } }
+  var_dump(@$undef instanceof $e);
+}
+t();
+"#;
+    let expected = r#"[true,false,false,false,false,true]
+[true,false,false,false,false,true]
+[true,false,false,false,false,true]
+[true,false,false,false,false,true]
+[false,true,false,false,false,false]
+[true,false,false,false,false,true]
+[false,false,false,false,false,false]
+[true,false,false,false,false,true]
+[true,false,false,false,false,true]
+[false,true,false,false,false,false]
+[true,false,false,false,false,true]
+Error: Class name must be a valid object or a string
+Error: Class name must be a valid object or a string
+Error: Class name must be a valid object or a string
+Error: Class name must be a valid object or a string
+bool(false)
+"#;
+    assert_eq!(run(src), expected);
+}

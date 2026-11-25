@@ -2394,6 +2394,14 @@ impl Vm {
                         Flow::Next
                     }
                     Op::InstanceOf { a, class, dst } => {
+                        if let (Operand::Cv(av), crate::opcode::ClassSpec::Dyn(Operand::Cv(bv))) =
+                            (a, class)
+                        {
+                            if let Some(r) = self.instanceof_cv_fast(*av, *bv) {
+                                self.set_tmp(*dst, Value::Bool(r));
+                                continue 'ops;
+                            }
+                        }
                         let v = self.read(*a)?;
                         let r = self.op_instanceof(&v, class)?;
                         self.set_tmp(*dst, Value::Bool(r));

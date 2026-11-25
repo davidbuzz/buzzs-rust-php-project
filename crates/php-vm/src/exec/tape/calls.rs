@@ -127,6 +127,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         } if auto_global_place(code, *place) || static_dim_place(code, *place) => {
             Some(plain(TOp::VmOp))
         }
+        // `$a instanceof $b` of two variables (`Vm::instanceof_cv_fast`).
+        Op::InstanceOf {
+            a: Operand::Cv(_),
+            class: ClassSpec::Dyn(Operand::Cv(_)),
+            ..
+        } => Some(plain(TOp::VmOp)),
         // `self::class`, `static::class`, `parent::class`
         // (`Vm::class_name_fast`).
         Op::FetchClassName {
