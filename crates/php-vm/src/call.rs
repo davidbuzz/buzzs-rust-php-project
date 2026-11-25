@@ -4768,6 +4768,9 @@ impl Vm {
                 }
             }
         }
+        if let Some(r) = self.call_prepared_direct(template, args) {
+            return r;
+        }
         // `call_pending` for a by-value user callee: the interrupt check,
         // dereferenced arguments, the deprecation, then the frame.
         self.check_interrupt()?;
@@ -4804,6 +4807,87 @@ impl Vm {
             Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
             r => r,
         }
+    }
+
+    /// [`Vm::call_prepared`] of a plain user callee (`usort()`'s comparator,
+    /// `array_map()`'s callback when it is not compiled whole), made as the
+    /// pending call it builds would be but without it: the interrupt
+    /// check, the frame as `push_user_call`'s plain branch sets it up (the
+    /// template's `$this`, scope and called class, the arguments in their
+    /// compiled variables, the `RECV`s of passed parameters skipped, a
+    /// closure's bound variables after them), then the nested execution.
+    /// `None`, having changed nothing, for anything that branch does not
+    /// take (see [`Vm::call_user_method_direct`]; also a constructor) or a
+    /// reference argument: the pending call is then made.
+    fn call_prepared_direct(
+        &mut self,
+        template: &PendingCall,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        let Func::User(uf) = &template.func else {
+            return None;
+        };
+        let n = args.len();
+        if template.is_ctor
+            || uf.flags & flags::DEPRECATED != 0
+            || uf.is_generator()
+            || uf.code.num_statics != 0
+            || uf.code.num_finally != 0
+            || self.has_observers()
+            || n < uf.required as usize
+            || n > uf.params.len()
+            || self.frames.len() > 50_000
+            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return None;
+        }
+        for (p, v) in uf.params.iter().zip(args.iter()) {
+            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+                return None;
+            }
+        }
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let uf = Rc::clone(uf);
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+        let frame = &mut self.frames[idx];
+        frame.this.clone_from(&template.this);
+        frame.scope.clone_from(&template.scope);
+        frame.called.clone_from(&template.called);
+        frame.ret = RetTarget::Discard;
+        frame.caller_strict = template.strict;
+        frame.called_from_internal = true;
+        frame.is_ctor = false;
+        frame.args.clear();
+        frame.args.resize(n, None);
+        for (i, v) in args.iter_mut().enumerate() {
+            if let Some(slot) = frame.cvs.get_mut(i) {
+                slot.set(Some(std::mem::take(v)));
+            }
+        }
+        let mut first_op = 0;
+        for i in 0..n {
+            match uf.code.ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => break,
+            }
+        }
+        frame.ip = first_op;
+        frame.func = Some(Func::User(Rc::clone(&uf)));
+        frame.ufunc = Some(uf);
+        if let Some(c) = &template.closure {
+            self.bind_closure_vars(idx, c);
+            self.frames[idx].closure = Some(c.clone());
+        }
+        let base = self.frames.len() - 1;
+        Some(match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
     }
 
     /// [`Vm::call_prepared`] of a user function whose whole body runs as

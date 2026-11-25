@@ -1039,3 +1039,75 @@ Cannot access offset of type array on array
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Callbacks called from array functions, the direct frame path among
+/// them: closures with by-value and by-reference `use`, `$this`-bound
+/// and static closures, method and `Class::method` callables, typed
+/// parameters that coerce or reject, static variables, a throwing
+/// comparator, by-reference `array_walk()`, first-class callables,
+/// defaults, a deprecated function, generators and a backtrace from a
+/// callback. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn callbacks_from_array_functions() {
+    let src = r#"$a = [3, 1, 2, 5, 4];
+$calls = 0; $w = 10;
+usort($a, function ($x, $y) use (&$calls, $w) { $calls++; return ($x <=> $y) * ($w > 5 ? 1 : -1); }); echo implode(',', $a), " $calls\n";
+class K { public $dir = -1; function sorter() { return function ($x, $y) { return $this->dir * ($x <=> $y); }; } static function cmp($x, $y) { return $y <=> $x; } function m($x) { return $x * 2; } }
+$b = [1, 3, 2]; usort($b, (new K)->sorter()); echo implode(',', $b), "\n";
+$b = [1, 3, 2]; usort($b, ['K', 'cmp']); echo implode(',', $b), "\n";
+$b = [1, 3, 2]; usort($b, 'K::cmp'); echo implode(',', $b), "\n";
+echo implode(',', array_map([new K, 'm'], [1, 2])), "\n";
+echo implode(',', array_map(fn(int $x) => $x + 1, ['5', 6, 7.0])), "\n";
+try { array_map(fn(int $x) => $x, ['abc']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo implode(',', array_map(function ($x) { static $n = 0; return $x . ++$n; }, ['a', 'b'])), "\n";
+try { usort($a, function ($x, $y) { throw new RuntimeException("in cmp"); }); } catch (RuntimeException $e) { echo $e->getMessage(), ' ', $e->getLine(), "\n"; }
+$arr = [1, 2]; array_walk($arr, function (&$v, $k) { $v *= 10; }); echo implode(',', $arr), "\n";
+echo implode(',', array_map(strtoupper(...), ['x', 'y'])), "\n";
+function dflt($x, $y = 'd') { return "$x$y"; } echo implode(',', array_map('dflt', [1, 2])), "\n";
+#[\Deprecated] function old($x) { return $x; } echo implode(',', array_map('old', [1])), "\n";
+echo implode(',', array_filter([1, 2, 3, 4], function ($v) { return $v % 2 == 0; })), "\n";
+$s = static fn($x, $y) => $x <=> $y; $c = [2, 1]; usort($c, $s); echo implode(',', $c), "\n";
+$ref = 5; $byref = [1]; echo implode(',', array_map(fn($x) => $x + $ref, $byref)), "\n";
+uasort($a, fn($x, $y) => $x - $y); var_export($a); echo "\n";
+uksort($a, function (int $x, int $y): int { return $y - $x; }); var_export($a); echo "\n";
+function gen($x) { yield $x; } foreach (array_map('gen', [1]) as $g) { echo get_class($g), "\n"; }
+echo implode(',', array_map(function ($x) { return debug_backtrace()[1]['function']; }, [1])), "\n";
+"#;
+    let expected = r#"1,2,3,4,5 6
+3,2,1
+3,2,1
+3,2,1
+2,4
+6,7,8
+{closure:test.php:11}(): Argument #1 ($x) must be of type int, string given
+a1,b2
+in cmp 13
+10,20
+X,Y
+1d,2d
+
+Deprecated: Function old() is deprecated in test.php on line 17
+1
+2,4
+1,2
+6
+array (
+  0 => 1,
+  1 => 2,
+  2 => 3,
+  3 => 4,
+  4 => 5,
+)
+array (
+  4 => 5,
+  3 => 4,
+  2 => 3,
+  1 => 2,
+  0 => 1,
+)
+Generator
+array_map
+"#;
+    assert_eq!(run(src), expected);
+}
