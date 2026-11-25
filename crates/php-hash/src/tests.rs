@@ -437,3 +437,42 @@ fn diagnostics_survive_error_path() {
     .unwrap_err();
     assert!(e.diagnostics.is_empty());
 }
+
+/// md5 over every block boundary (the unrolled steps), in one call and
+/// fed in pieces of 1 and 7 bytes, and bin2hex's digits
+/// (`/usr/bin/php8.5 -n`: `md5()` of `chr(($i * 7 + 3) & 255)` for
+/// `$i < n`).
+#[test]
+fn md5_block_boundaries() {
+    use crate::algo::HashState;
+    let cases: [(usize, &str); 12] = [
+        (0, "d41d8cd98f00b204e9800998ecf8427e"),
+        (1, "8666683506aacd900bbd5a74ac4edf68"),
+        (3, "c9aee4810523ef8658121b8d492c6b41"),
+        (55, "52c0e574e1198de5fe3f8f11440dcb1b"),
+        (56, "46c9907fc908ee68b1e7b8e71286a518"),
+        (63, "a62f6d59e837867693f042f5b8f5a236"),
+        (64, "7160b8fb5e9e4023d549c3971fbaeead"),
+        (65, "70bd662e7aefbda85a0f7244167b7897"),
+        (119, "e84905d4214f4d1ca56c2cdcc152b143"),
+        (120, "e3eb5a6c8669ea01a8c185b8abc8a5dc"),
+        (128, "10b2da1a82f16d99a81a7203fe9f02cb"),
+        (1000, "10046f077f2082ac19676b8079f1cb1a"),
+    ];
+    for (n, want) in cases {
+        #[allow(clippy::cast_possible_truncation)]
+        let data: Vec<u8> = (0..n).map(|i| ((i * 7 + 3) & 255) as u8).collect();
+        assert_eq!(bin2hex(&md5(&data)), want, "md5 of {n} bytes");
+        for piece in [1, 7] {
+            let mut st = crate::algo::md::Md5::new();
+            for p in data.chunks(piece) {
+                st.update(p);
+            }
+            let mut out = [0u8; 16];
+            st.finish(&mut out);
+            assert_eq!(bin2hex(&out), want, "md5 of {n} bytes in pieces of {piece}");
+        }
+    }
+    assert_eq!(bin2hex(b"\x00\x0f\xf0\xff\xa5"), "000ff0ffa5");
+    assert_eq!(bin2hex(b""), "");
+}

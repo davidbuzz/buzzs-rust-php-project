@@ -1,0 +1,72 @@
+Undefined variable $u1 @7
+Undefined variable $u2 @8
+Undefined variable $u3 @10
+Undefined variable $u4 @12
+Undefined variable $u5 @13
+Undefined variable $u6 @16
+Undefined variable $u7 @17
+Undefined variable $u8 @20
+Undefined variable $u9 @24
+Undefined array key "zz" @25
+Undefined variable $u10 @27
+Undefined array key "yy" @28
+Undefined variable $u11 @31
+Undefined variable $u12 @33
+Undefined variable $u13 @34
+Undefined variable $u14 @35
+foreach() argument must be of type array|object, null given @35
+Undefined variable $u15 @38
+Uninitialized string offset 10 @41
+Undefined variable $u16 @42
+Undefined variable $u17 @45
+Undefined variable $u18 @50
+Undefined array key 1 @53
+Undefined variable $u19 @57
+Undefined variable $u1 @7
+Undefined variable $u2 @8
+Undefined variable $u3 @10
+Undefined variable $u4 @12
+Undefined variable $u5 @13
+Undefined variable $u6 @16
+Undefined variable $u7 @17
+Undefined variable $u8 @20
+Undefined variable $u9 @24
+Undefined array key "zz" @25
+Undefined variable $u10 @27
+Undefined array key "yy" @28
+Undefined variable $u11 @31
+Undefined variable $u12 @33
+Undefined variable $u13 @34
+Undefined variable $u14 @35
+foreach() argument must be of type array|object, null given @35
+Undefined variable $u15 @38
+Uninitialized string offset 10 @41
+Undefined variable $u16 @42
+Undefined variable $u17 @45
+Undefined variable $u18 @50
+Undefined array key 1 @53
+Undefined variable $u19 @57
+Undefined variable $u1 @7
+Undefined variable $u2 @8
+Undefined variable $u3 @10
+Undefined variable $u4 @12
+Undefined variable $u5 @13
+Undefined variable $u6 @16
+Undefined variable $u7 @17
+Undefined variable $u8 @20
+Undefined variable $u9 @24
+Undefined array key "zz" @25
+Undefined variable $u10 @27
+Undefined array key "yy" @28
+Undefined variable $u11 @31
+Undefined variable $u12 @33
+Undefined variable $u13 @34
+Undefined variable $u14 @35
+foreach() argument must be of type array|object, null given @35
+Undefined variable $u15 @38
+Uninitialized string offset 10 @41
+Undefined variable $u16 @42
+Undefined variable $u17 @45
+Undefined variable $u18 @50
+Undefined array key 1 @53
+Undefined variable $u19 @57

@@ -3,7 +3,7 @@
 //! `array_push`, `array_pop`, `array_shift`, `array_unshift`,
 //! `array_splice`.
 
-use crate::util::{cannot_add_element, deref, with_array};
+use crate::util::{cannot_add_element, deref_owned, with_array, with_array_in_place};
 use php_runtime::{PhpRef, RtResult, RuntimeContext, Value, ZArray};
 
 fn len_i64(a: &ZArray) -> i64 {
@@ -12,46 +12,61 @@ fn len_i64(a: &ZArray) -> i64 {
 
 /// `array_push(array &$array, mixed ...$values): int`.
 pub fn array_push(array: &PhpRef, values: &[Value]) -> RtResult<i64> {
-    with_array(array, "array_push", 1, "array", |a| {
+    array_push_owned(array, values.to_vec())
+}
+
+/// [`array_push`] of values the caller owns (the copies of the
+/// arguments): each moved into the array, not copied again. The array is
+/// written in place ([`with_array_in_place`]).
+pub fn array_push_owned(array: &PhpRef, values: Vec<Value>) -> RtResult<i64> {
+    with_array_in_place(array, "array_push", 1, "array", |a| {
         if !values.is_empty() {
             let t = a.make_mut();
             for v in values {
-                t.push(v.clone()).map_err(|_| cannot_add_element())?;
+                t.push(v).map_err(|_| cannot_add_element())?;
             }
         }
         Ok(len_i64(a))
-    })
+    })?
 }
 
 /// `array_pop(array &$array): mixed`.
 pub fn array_pop(array: &PhpRef) -> RtResult<Value> {
-    let v = with_array(array, "array_pop", 1, "array", |a| {
+    let v = with_array_in_place(array, "array_pop", 1, "array", |a| {
         if a.is_empty() {
-            return Ok(Value::Null);
+            return Value::Null;
         }
-        Ok(a.make_mut().pop().unwrap_or_default())
+        a.make_mut().pop().unwrap_or_default()
     })?;
-    Ok(deref(&v))
+    // Read after the borrow ends: the element may be a reference to the
+    // array's own variable.
+    Ok(deref_owned(v))
 }
 
 /// `array_shift(array &$array): mixed`.
 pub fn array_shift(array: &PhpRef) -> RtResult<Value> {
-    let v = with_array(array, "array_shift", 1, "array", |a| {
+    let v = with_array_in_place(array, "array_shift", 1, "array", |a| {
         if a.is_empty() {
-            return Ok(Value::Null);
+            return Value::Null;
         }
-        Ok(a.make_mut().shift().unwrap_or_default())
+        a.make_mut().shift().unwrap_or_default()
     })?;
-    Ok(deref(&v))
+    Ok(deref_owned(v))
 }
 
 /// `array_unshift(array &$array, mixed ...$values): int`.
 pub fn array_unshift(array: &PhpRef, values: &[Value]) -> RtResult<i64> {
-    with_array(array, "array_unshift", 1, "array", |a| {
+    array_unshift_owned(array, values.to_vec())
+}
+
+/// [`array_unshift`] of values the caller owns: moved in, not copied
+/// again; the array written in place ([`with_array_in_place`]).
+pub fn array_unshift_owned(array: &PhpRef, values: Vec<Value>) -> RtResult<i64> {
+    with_array_in_place(array, "array_unshift", 1, "array", |a| {
         let t = a.make_mut();
-        t.unshift(values.to_vec());
+        t.unshift(values);
         t.reset();
-        Ok(len_i64(a))
+        len_i64(a)
     })
 }
 

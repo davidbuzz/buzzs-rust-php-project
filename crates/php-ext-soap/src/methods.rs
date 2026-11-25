@@ -158,22 +158,21 @@ pub(crate) fn var_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(Value::Int(i)) => Some(i),
         _ => None,
     };
-    let (tn, tns, nn, nns) = (
-        opt_bytes(a, 2),
-        opt_bytes(a, 3),
-        opt_bytes(a, 4),
-        opt_bytes(a, 5),
-    );
+    let opt_str = |n: usize| match a.opt(n) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    };
+    let (tn, tns, nn, nns) = (opt_str(2), opt_str(3), opt_str(4), opt_str(5));
     with_host(vm, |h| {
         php_soap::objects::soap_var_construct(
             h,
             &this,
             &data,
             encoding,
-            tn.as_deref(),
-            tns.as_deref(),
-            nn.as_deref(),
-            nns.as_deref(),
+            tn.as_ref(),
+            tns.as_ref(),
+            nn.as_ref(),
+            nns.as_ref(),
         )
     })?;
     Ok(Value::Null)

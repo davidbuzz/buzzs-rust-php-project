@@ -3,16 +3,17 @@
 //! Socket transports (`main/streams/transports.c`, `xp_socket.c`).
 //!
 //! A minimal client side: `stream_socket_client()` for `tcp://`, `udp://`
-//! and `unix://` using `std::net` / `std::os::unix::net`. Servers, `udg://`,
-//! crypto (`ssl://`, `tls://`) and asynchronous connects are not
-//! implemented.
+//! and `unix://` using `std::net` / `std::os::unix::net`, with TCP's
+//! asynchronous connect (`STREAM_CLIENT_ASYNC_CONNECT`). Servers and crypto
+//! (`ssl://`, `tls://`) live in the extension crates.
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixDatagram, UnixStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::context::ContextRef;
 use crate::stream::{
     CastAs, OpFailed, Stream, StreamOps, StreamOption, StreamState, OPT_ERR, OPT_NOTIMPL, OPT_OK,
 };
@@ -140,12 +141,15 @@ impl StreamOps for SocketOps {
         }
     }
 
-    fn write(&mut self, _st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
+    fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
         let sock = self.sock.as_mut().ok_or(OpFailed)?;
         match sock.send(buf) {
             Ok(n) => Ok(n),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(_) => Err(OpFailed),
+            Err(e) => {
+                st.send_failed(buf.len(), sys::errno_of(&e));
+                Err(OpFailed)
+            }
         }
     }
 
@@ -301,6 +305,192 @@ fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
 /// `stream_socket_client($remote, ..., $timeout)`: connects and returns a
 /// socket stream. `timeout` defaults to `default_socket_timeout`.
 pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream, ConnectError> {
+    socket_client_ex(remote, timeout, false, None)
+}
+
+/// `PHP_TIMEOUT_ERROR_VALUE`.
+const TIMEOUT_ERROR: i32 = libc::ETIMEDOUT;
+
+/// `IP_BIND_ADDRESS_NO_PORT` (linux/in.h), which C sets before binding a
+/// client socket so that the port is picked at `connect()`.
+const IP_BIND_ADDRESS_NO_PORT: i32 = 24;
+
+fn errno_err(errno: i32) -> ConnectError {
+    ConnectError {
+        errno,
+        message: sys::strerror(errno),
+    }
+}
+
+/// `php_network_connect_socket()` (main/network.c): `connect()` on the
+/// descriptor made non-blocking, then, unless `asynchronous`, a poll for
+/// the outcome bounded by `timeout` (`None` waits forever) and
+/// `SO_ERROR`. An asynchronous connect that is still pending is success.
+/// The descriptor is left non-blocking.
+fn connect_socket(
+    fd: RawFd,
+    addr: &std::net::SocketAddr,
+    asynchronous: bool,
+    timeout: Option<Duration>,
+) -> Result<(), ConnectError> {
+    let _ = sys::set_blocking(fd, false);
+    match sys::connect_addr(fd, addr) {
+        Ok(false) => return Ok(()),
+        Ok(true) if asynchronous => return Ok(()),
+        Ok(true) => {}
+        Err(e) => return Err(errno_err(e)),
+    }
+    // PHP_POLLREADABLE | POLLOUT.
+    let events = libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLOUT;
+    let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
+    loop {
+        // php_tvtoto_ms(): whole milliseconds, truncated.
+        let ms = match (timeout, deadline) {
+            (None, _) | (Some(_), None) => -1,
+            (Some(_), Some(d)) => {
+                i32::try_from(d.saturating_duration_since(Instant::now()).as_millis())
+                    .unwrap_or(i32::MAX)
+            }
+        };
+        match sys::poll_fds(&[(fd, events)], ms) {
+            Err(libc::EINTR) => {
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    return Err(errno_err(TIMEOUT_ERROR));
+                }
+            }
+            // C: `ret = -1` with no error code or text.
+            Err(_) => {
+                return Err(ConnectError {
+                    errno: 0,
+                    message: String::new(),
+                })
+            }
+            Ok(r) if r.first().copied().unwrap_or(0) == 0 => {
+                return Err(errno_err(TIMEOUT_ERROR));
+            }
+            Ok(_) => {
+                return match sys::socket_error(fd) {
+                    Ok(0) => Ok(()),
+                    Ok(e) => Err(errno_err(e)),
+                    Err(_) => Err(ConnectError {
+                        errno: 0,
+                        message: String::new(),
+                    }),
+                };
+            }
+        }
+    }
+}
+
+/// Binds a client socket to the `bindto` context option's address before
+/// it connects, warning as C does when that fails; the connection is
+/// attempted either way.
+fn bind_local(fd: RawFd, v6: bool, host: &str, port: u16) {
+    let ip: Option<std::net::IpAddr> = if v6 {
+        host.parse::<std::net::Ipv6Addr>().ok().map(Into::into)
+    } else {
+        host.parse::<std::net::Ipv4Addr>().ok().map(Into::into)
+    };
+    let Some(ip) = ip else {
+        crate::diag::warning(format!("Invalid IP Address: {host}"));
+        return;
+    };
+    sys::setsockopt_int(fd, libc::SOL_IP, IP_BIND_ADDRESS_NO_PORT, 1);
+    if let Err(e) = sys::bind_addr(fd, &std::net::SocketAddr::new(ip, port)) {
+        crate::diag::warning(format!(
+            "Failed to bind to '{host}:{port}', system said: {}",
+            sys::strerror(e)
+        ));
+    }
+}
+
+/// `php_network_connect_socket_to_host_ex()` (main/network.c): tries each
+/// resolved address in turn with a socket of `ty` until one connects,
+/// within one `timeout` for all of them. With a `bindto` address, IPv6
+/// addresses are skipped for an IPv4 one, and an IPv6 (or `"0"`) one is
+/// dropped for IPv4 addresses. Every attempt that fails is reported by the
+/// next one; when no address could even be tried the error is empty
+/// ("Unknown error").
+fn connect_to_host(
+    addrs: &[std::net::SocketAddr],
+    ty: i32,
+    asynchronous: bool,
+    timeout: Option<Duration>,
+    bindto: Option<(&str, u16)>,
+) -> Result<std::os::fd::OwnedFd, ConnectError> {
+    let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
+    let mut bindto = bindto;
+    let mut error = ConnectError {
+        errno: 0,
+        message: String::new(),
+    };
+    for a in addrs {
+        if let Some((h, _)) = bindto {
+            if a.is_ipv6() && !h.contains(':') {
+                // Expect an IPv4 address: skip to the next.
+                continue;
+            }
+            if !a.is_ipv6() && (h.contains(':') || h == "0") {
+                // An IPv4 socket cannot bind to an IPv6 address.
+                bindto = None;
+            }
+        }
+        let Ok(fd) = sys::ip_socket(a, ty) else {
+            continue;
+        };
+        if let Some((h, p)) = bindto {
+            bind_local(fd.as_raw_fd(), a.is_ipv6(), h, p);
+        }
+        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        match connect_socket(fd.as_raw_fd(), a, asynchronous, left.or(timeout)) {
+            Ok(()) => return Ok(fd),
+            Err(e) => error = e,
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            // Time limit expired: no further attempts.
+            break;
+        }
+    }
+    Err(error)
+}
+
+/// The `socket` context option `bindto` (`php_tcp_sockop_connect()`):
+/// `host:port` or `[host6]:port`; one that does not parse is ignored.
+///
+/// # Errors
+/// A value that is not a string fails the connect.
+fn bindto_option(ctx: Option<&ContextRef>) -> Result<Option<(String, u16)>, ConnectError> {
+    let Some(ctx) = ctx else {
+        return Ok(None);
+    };
+    match ctx.borrow().get("socket", "bindto") {
+        None => Ok(None),
+        Some(Value::Str(b)) => Ok(parse_host_port(&String::from_utf8_lossy(b)).ok()),
+        Some(_) => Err(ConnectError {
+            errno: 0,
+            message: "local_addr context option is not a string.".into(),
+        }),
+    }
+}
+
+/// [`socket_client`] with C's connect options: `asynchronous` is
+/// `STREAM_CLIENT_ASYNC_CONNECT` (`STREAM_XPORT_OP_CONNECT_ASYNC`,
+/// `main/streams/xp_socket.c`), where a TCP connection is started but not
+/// waited for and `timeout` does not apply; `ctx` supplies the `socket`
+/// option `bindto` for `tcp://` and `udp://`.
+///
+/// The stream is a blocking one, as in C. C leaves an asynchronously
+/// connected descriptor non-blocking and makes a blocking stream's reads
+/// and writes wait with poll(); these socket ops rely on the descriptor's
+/// mode instead, so it is put back into blocking mode: a pending
+/// connection carries on in the background, and a blocking send() waits
+/// for it as C's poll() would.
+pub fn socket_client_ex(
+    remote: &[u8],
+    timeout: Option<Duration>,
+    asynchronous: bool,
+    ctx: Option<&ContextRef>,
+) -> Result<Stream, ConnectError> {
     let remote_s = String::from_utf8_lossy(remote).into_owned();
     let n = crate::wrapper::scheme_len(remote);
     let (proto, name) = if remote.get(n..n + 3) == Some(b"://") && n > 1 {
@@ -315,6 +505,7 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
     let (sock, label) = match proto {
         "tcp" | "udp" => {
             let (host, port) = parse_host_port(name)?;
+            let bindto = bindto_option(ctx)?;
             let addrs: Vec<_> = (host.as_str(), port)
                 .to_socket_addrs()
                 .map_err(|e| {
@@ -331,32 +522,18 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
                     ConnectError { errno: 0, message }
                 })?
                 .collect();
-            if proto == "tcp" {
-                let mut last = io::Error::from_raw_os_error(libc::ECONNREFUSED);
-                let mut found = None;
-                for a in addrs {
-                    let r = if timeout.is_zero() {
-                        TcpStream::connect(a)
-                    } else {
-                        TcpStream::connect_timeout(&a, timeout)
-                    };
-                    match r {
-                        Ok(s) => {
-                            found = Some(s);
-                            break;
-                        }
-                        Err(e) => last = e,
-                    }
-                }
-                (Sock::Tcp(found.ok_or_else(|| io_err(&last))?), "tcp_socket")
+            let bindto = bindto.as_ref().map(|(h, p)| (h.as_str(), *p));
+            let ty = if proto == "tcp" {
+                libc::SOCK_STREAM
             } else {
-                let a = addrs
-                    .first()
-                    .ok_or_else(|| io_err(&io::Error::from_raw_os_error(libc::EINVAL)))?;
-                let bind = if a.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
-                let s = UdpSocket::bind(bind).map_err(|e| io_err(&e))?;
-                s.connect(a).map_err(|e| io_err(&e))?;
-                (Sock::Udp(s), "udp_socket")
+                libc::SOCK_DGRAM
+            };
+            let fd = connect_to_host(&addrs, ty, asynchronous, Some(timeout), bindto)?;
+            let _ = sys::set_blocking(fd.as_raw_fd(), true);
+            if proto == "tcp" {
+                (Sock::Tcp(TcpStream::from(fd)), "tcp_socket")
+            } else {
+                (Sock::Udp(UdpSocket::from(fd)), "udp_socket")
             }
         }
         "unix" => {
@@ -405,6 +582,7 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
 mod tests {
     use super::*;
     use std::net::TcpListener;
+    use std::os::fd::FromRawFd;
 
     #[test]
     fn tcp_roundtrip_and_short_reads() {
@@ -445,6 +623,134 @@ mod tests {
         );
         let e = socket_client(b"tcp://localhost", None).unwrap_err();
         assert_eq!(e.message, "Failed to parse address \"localhost\"");
+    }
+
+    /// `STREAM_CLIENT_ASYNC_CONNECT` alone still connects (C's
+    /// `php_stream_xport_create()` connects for `STREAM_XPORT_CONNECT` or
+    /// `STREAM_XPORT_CONNECT_ASYNC`); the socket becomes writable once the
+    /// connection is up, and then carries data both ways.
+    #[test]
+    fn async_connect_connects() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut s = socket_client_ex(
+            format!("tcp://127.0.0.1:{port}").as_bytes(),
+            Some(Duration::from_secs(5)),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.ops_label(), "tcp_socket");
+        let fd = s.cast(CastAs::FdForSelect, false).unwrap();
+        let ready = sys::poll_fds(&[(fd, libc::POLLOUT)], 5000).unwrap();
+        assert_ne!(ready[0] & libc::POLLOUT, 0);
+        let (mut c, _) = l.accept().unwrap();
+        assert_eq!(s.write(b"ping").unwrap(), 4);
+        let mut b = [0u8; 4];
+        c.read_exact(&mut b).unwrap();
+        assert_eq!(&b, b"ping");
+        c.write_all(b"pong").unwrap();
+        let got = s.read_vec(100).unwrap();
+        assert!(!got.is_empty() && b"pong".starts_with(&got));
+        // The stream is a blocking one, as in C (`"blocked" => true`).
+        let meta = s.meta_data();
+        assert_eq!(meta[1], ("blocked".to_string(), Value::Bool(true)));
+    }
+
+    /// A refused asynchronous connect is reported by the socket (readable
+    /// and writable, with the error pending), not by the connect.
+    #[test]
+    fn async_connect_refused_later() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        match socket_client_ex(
+            format!("tcp://127.0.0.1:{port}").as_bytes(),
+            None,
+            true,
+            None,
+        ) {
+            Ok(mut s) => {
+                let fd = s.cast(CastAs::FdForSelect, false).unwrap();
+                let ready = sys::poll_fds(&[(fd, libc::POLLOUT)], 5000).unwrap();
+                assert_ne!(
+                    ready[0] & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP),
+                    0
+                );
+            }
+            // Loopback may refuse at once, as C's connect() would see.
+            Err(e) => assert_eq!(e.errno, libc::ECONNREFUSED),
+        }
+    }
+
+    fn bindto(v: Value) -> ContextRef {
+        let mut c = crate::context::StreamContext::new();
+        c.set("socket", "bindto", v);
+        c.shared()
+    }
+
+    fn local_ip(s: &mut Stream) -> std::net::IpAddr {
+        let fd = s.cast(CastAs::FdForSelect, false).unwrap();
+        // SAFETY: test-only borrow of the stream's descriptor; `forget`
+        // keeps it open.
+        let sock = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+        let ip = sock.local_addr().unwrap().ip();
+        std::mem::forget(sock);
+        ip
+    }
+
+    /// `socket` `bindto` binds the client before it connects (php8.5:
+    /// `stream_socket_get_name($c, false)` is the bound address).
+    #[test]
+    fn bindto_binds_the_client() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let ctx = bindto(Value::Str(b"127.0.0.2:0".to_vec()));
+        let remote = format!("tcp://127.0.0.1:{port}");
+        let mut s = socket_client_ex(remote.as_bytes(), None, false, Some(&ctx)).unwrap();
+        assert_eq!(local_ip(&mut s).to_string(), "127.0.0.2");
+        // An address that does not parse is ignored.
+        let ctx = bindto(Value::Str(b"bogus".to_vec()));
+        assert!(socket_client_ex(remote.as_bytes(), None, false, Some(&ctx)).is_ok());
+        // One that is not an address of this host warns, and the connect
+        // goes ahead.
+        let ctx = bindto(Value::Str(b"128.0.0.1:0".to_vec()));
+        assert!(socket_client_ex(remote.as_bytes(), None, false, Some(&ctx)).is_ok());
+    }
+
+    /// php8.5: `Unable to connect to tcp://..:1 (local_addr context option
+    /// is not a string.)` with `$error_code` 0; an IPv4 `bindto` skips the
+    /// IPv6 addresses, and none left is "Unknown error" (an empty text).
+    #[test]
+    fn bindto_errors() {
+        let ctx = bindto(Value::Int(5));
+        let e = socket_client_ex(b"tcp://127.0.0.1:1", None, false, Some(&ctx)).unwrap_err();
+        assert_eq!(
+            (e.errno, e.message.as_str()),
+            (0, "local_addr context option is not a string.")
+        );
+        let ctx = bindto(Value::Str(b"127.0.0.1:0".to_vec()));
+        let e = socket_client_ex(b"tcp://[::1]:1", None, false, Some(&ctx)).unwrap_err();
+        assert_eq!((e.errno, e.message.as_str()), (0, ""));
+    }
+
+    /// A timed-out connect is `ETIMEDOUT`, "Connection timed out", as C's
+    /// `PHP_TIMEOUT_ERROR_VALUE` (php8.5: `$error_code` 110).
+    #[test]
+    fn timeout_error_text() {
+        let e = errno_err(TIMEOUT_ERROR);
+        assert_eq!((e.errno, e.message.as_str()), (110, "Connection timed out"));
+    }
+
+    /// A zero timeout polls once (C: `php_pollfd_for()` with 0): a loopback
+    /// connection is up by then (php8.5 connects).
+    #[test]
+    fn zero_timeout_loopback_connects() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let remote = format!("tcp://127.0.0.1:{port}");
+        assert!(socket_client_ex(remote.as_bytes(), Some(Duration::ZERO), false, None).is_ok());
     }
 
     #[test]

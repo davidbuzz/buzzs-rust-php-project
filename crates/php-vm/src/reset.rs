@@ -8,9 +8,84 @@ use crate::func::Func;
 use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+
+thread_local! {
+    /// The function table the last full pass of [`Vm::request_reset`] on
+    /// this thread left: its VM (by the VM's own `empty_code`, which the
+    /// `Weak` keeps from being reused by another VM) and its length.
+    static CLEAN_FUNCTIONS: RefCell<Option<(Weak<crate::opcode::OpArray>, usize)>> =
+        const { RefCell::new(None) };
+}
+
+/// The objects store and the collector as the next request's VM must find
+/// them, once a request's VM was dropped on this thread and another request
+/// follows on it (`php --repeat`, `php -l` with more files): what the
+/// dropped VM's request leaked to cycles is freed, and the next request's
+/// objects are numbered from 1 again. php-src gives each request a fresh
+/// objects store (`zend_objects_store_init()` from `init_executor()`) and
+/// collector (`gc_reset()`); here both are per thread and outlive a VM, so
+/// without this the next request reuses the handles the drop freed, in the
+/// order it freed them (`var_dump()`'s `#n`, `spl_object_id()`).
+pub fn release_dropped_vm_objects() {
+    crate::object::free_object_storage();
+    crate::gc::request_startup(crate::gc::enabled());
+    crate::object::reset_store();
+}
+
+/// A user class at the end of its request: what its static variables,
+/// static properties, constants, defaults and enum cases hold is dropped.
+fn clear_user_class(c: &crate::class::Class) {
+    for m in c.methods.values() {
+        if let Func::User(u) = &m.func {
+            u.statics.borrow_mut().clear();
+        }
+    }
+    for p in &c.static_props {
+        *p.cell.borrow_mut() = Value::Null;
+    }
+    for k in &c.consts {
+        *k.value.borrow_mut() = None;
+    }
+    *c.defaults.borrow_mut() = None;
+    c.enum_cases.borrow_mut().clear();
+}
+
+/// An internal class at the end of a request: its static properties go
+/// back to their initial values and its constants, defaults and enum cases
+/// are evaluated again when next used. `Closure`'s first-class-callable
+/// cache (`f(...)`, see `closure.rs`) lives in its enum cases: its closures
+/// are the request's objects, and a function of the next request may have
+/// the same name.
+fn reset_internal_class(c: &crate::class::Class) {
+    for p in &c.static_props {
+        if let Some(crate::class::ConstExpr::Value(init)) = &p.default {
+            *p.cell.borrow_mut() = init.clone();
+        } else {
+            *p.cell.borrow_mut() = Value::Null;
+        }
+        p.initialized.set(true);
+    }
+    for k in &c.consts {
+        *k.value.borrow_mut() = None;
+    }
+    *c.defaults.borrow_mut() = None;
+    c.enum_cases.borrow_mut().clear();
+}
 
 impl Vm {
+    /// Whether the function table holds no user function: it has the
+    /// length the last full pass of [`Vm::request_reset`] left this VM's
+    /// table with (see there).
+    fn functions_clean(&self) -> bool {
+        CLEAN_FUNCTIONS.with(|c| {
+            c.borrow().as_ref().is_some_and(|(vm, len)| {
+                std::ptr::eq(vm.as_ptr(), Rc::as_ptr(&self.empty_code))
+                    && *len == self.functions.len()
+            })
+        })
+    }
+
     /// `zend_deactivate()` after `shutdown_executor()`, for a SAPI that
     /// drops the VM once the request is over (CGI, FPM):
     /// `zend_ini_deactivate()` restores every directive the request
@@ -63,8 +138,11 @@ impl Vm {
     /// handle counter and extension state.
     #[allow(clippy::too_many_lines)] // php_request_shutdown()'s steps, in order
     pub fn request_reset(&mut self) {
-        // Ensure request shutdown hooks ran if not already completed.
-        if !self.in_shutdown {
+        // The extensions' request shutdown (`RSHUTDOWN`) runs once per
+        // request, as `php_request_shutdown()` runs it: when `Vm::shutdown`
+        // ran (it sets `request_ending` first and always reaches its
+        // `run_shutdown_hooks()`), the hooks are not run a second time.
+        if !self.in_shutdown && !self.request_ending {
             self.in_shutdown = true;
             self.run_shutdown_hooks();
         }
@@ -73,70 +151,68 @@ impl Vm {
         self.in_shutdown = false;
         self.executor_active = true;
 
-        // 1. User functions: clear static variables, then retain only internal functions.
-        for f in self.functions.values() {
-            if let Func::User(u) = f {
-                u.statics.borrow_mut().clear();
-            }
-        }
-        self.functions.retain(|_, f| !f.is_user());
-        crate::func::bump_func_table_version();
-
-        // 2. Classes: clear user class static props, constants, defaults, enum cases,
-        // and retain only internal classes.
-        for c in self.classes.values() {
-            if c.flags & cflags::INTERNAL != 0 {
-                continue;
-            }
-            for m in c.methods.values() {
-                if let Func::User(u) = &m.func {
+        // 1. User functions: their static variables are cleared and they
+        // leave the table, internal functions stay; one pass over the
+        // table. Nothing a drop runs here can reach the table: destructors
+        // are off since the request's shutdown. php-src stops at the first
+        // persistent function (`zend_hash_discard()` past
+        // `EG(persistent_functions_count)`); here the pass over the
+        // thousands of internal functions is skipped when the table has
+        // the length the previous reset of this VM left it with. Internal
+        // functions leave the table only at startup (`disable_functions`)
+        // or together with their own registration (the destructor
+        // fiber's), so a request that declared a function grows it, and
+        // one that registered an internal function too gets the pass.
+        if !self.functions_clean() {
+            self.functions.retain(|_, f| match f {
+                Func::User(u) => {
                     u.statics.borrow_mut().clear();
+                    false
                 }
-            }
-            for p in &c.static_props {
-                *p.cell.borrow_mut() = Value::Null;
-            }
-            for k in &c.consts {
-                *k.value.borrow_mut() = None;
-            }
-            *c.defaults.borrow_mut() = None;
-            c.enum_cases.borrow_mut().clear();
+                Func::Builtin(_) => true,
+            });
+            crate::func::bump_func_table_version();
+            let stamp = (Rc::downgrade(&self.empty_code), self.functions.len());
+            CLEAN_FUNCTIONS.with(|c| *c.borrow_mut() = Some(stamp));
         }
-        // An internal class stays under its own name only: an alias of one
+        crate::builtins::info::forget_user_functions();
+
+        // 2. Classes: a user class's static properties, constants,
+        // defaults and enum cases are cleared and it leaves the table. An
+        // internal class stays under its own name only: an alias of one
         // (`class_alias('stdClass', 'foo')`) is the request's, like every
         // entry php-src's `shutdown_executor()` discards past the startup
         // classes. Kept, it would make the next request's `class foo {}`
         // "Cannot redeclare class stdClass".
+        let mut dropped = false;
         self.classes.retain(|key, c| {
-            c.flags & cflags::INTERNAL != 0
-                && key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes())
-        });
-        self.class_order.retain(|name| {
-            self.classes
-                .get(name)
-                .is_some_and(|c| c.flags & cflags::INTERNAL != 0)
-        });
-
-        // Reset internal class static properties and constants to initial defaults.
-        for c in self.classes.values() {
             if c.flags & cflags::INTERNAL != 0 {
-                for p in &c.static_props {
-                    if let Some(crate::class::ConstExpr::Value(init)) = &p.default {
-                        *p.cell.borrow_mut() = init.clone();
-                    } else {
-                        *p.cell.borrow_mut() = Value::Null;
-                    }
-                    p.initialized.set(true);
+                // The lowercase name is usually the very key (one pointer
+                // compare); the case-insensitive compare is left for the
+                // rest.
+                if *key == c.lc_name || key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes()) {
+                    return true;
                 }
-                for k in &c.consts {
-                    *k.value.borrow_mut() = None;
-                }
-                *c.defaults.borrow_mut() = None;
-                // `Closure`'s first-class-callable cache (`f(...)`, see
-                // `closure.rs`): its closures are the request's objects, and
-                // a function of the next request may have the same name.
-                c.enum_cases.borrow_mut().clear();
+            } else {
+                clear_user_class(c);
             }
+            dropped = true;
+            false
+        });
+        // Then the internal classes' static properties go back to their
+        // initial values: after the user classes, as a subclass that does
+        // not redeclare a static property shares its parent's cell.
+        for c in self.classes.values() {
+            reset_internal_class(c);
+        }
+        // The declaration order lists the table's names: with nothing
+        // dropped (a request that declared no class) it still does.
+        if dropped || self.class_order.len() != self.classes.len() {
+            self.class_order.retain(|name| {
+                self.classes
+                    .get(name)
+                    .is_some_and(|c| c.flags & cflags::INTERNAL != 0)
+            });
         }
 
         // Clear bound class declarations, units, parsed sources, anonymous counter.
@@ -144,6 +220,9 @@ impl Vm {
         self.units.clear();
         self.parsed_sources.borrow_mut().clear();
         self.anon_counter = 0;
+        // The linked classes kept for the next requests may be handed out
+        // again; those of declarations no cached script holds are dropped.
+        crate::classlink::end_request();
 
         // 3. User constants: remove all user-defined constants.
         for name in std::mem::take(&mut self.user_constants) {
@@ -349,6 +428,90 @@ mod tests {
         sink.0.borrow_mut().clear();
         vm.run_script(b"<?php echo gc_collect_cycles();", "req2.php");
         assert_eq!(sink.0.borrow().as_slice(), b"0");
+    }
+
+    thread_local! {
+        static HOOK_RUNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn count_hook(_: &mut Vm) {
+        HOOK_RUNS.with(|n| n.set(n.get() + 1));
+    }
+
+    /// An extension's request shutdown runs once per request, as
+    /// `php_request_shutdown()` runs `RSHUTDOWN`: the reset after a
+    /// request that went through `Vm::shutdown` does not run it again; a
+    /// request reset without one (an aborted request) still runs it.
+    #[test]
+    fn request_reset_runs_shutdown_hooks_once() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.shutdown_hooks.push(count_hook);
+        HOOK_RUNS.with(|n| n.set(0));
+        vm.run_script(b"<?php echo 1;", "req1.php");
+        assert_eq!(HOOK_RUNS.with(std::cell::Cell::get), 1);
+        vm.request_reset();
+        assert_eq!(HOOK_RUNS.with(std::cell::Cell::get), 1, "hooks ran twice");
+        // A reset with no shutdown before it runs them.
+        vm.request_reset();
+        assert_eq!(HOOK_RUNS.with(std::cell::Cell::get), 2);
+    }
+
+    /// Two requests in a row on one VM, each declaring functions, classes
+    /// (one extending an internal class) and an alias: the second sees
+    /// none of the first's (no "Cannot redeclare") and its own in
+    /// declaration order, the alias last under its lower-case name
+    /// (`get_declared_classes()`, as php8.5 prints it).
+    #[test]
+    fn request_reset_between_requests_that_declare_classes() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        let script: &[u8] = b"<?php
+            echo function_exists('fa') ? 'stale ' : '', class_exists('A', false) ? 'stale ' : '';
+            function fa() { static $n = 0; return ++$n; }
+            class A extends Exception { public static $s = 0; }
+            class B extends A {}
+            class_alias('B', 'C');
+            A::$s++; fa(); echo fa(), A::$s, ' ';
+            $d = get_declared_classes();
+            echo implode(',', array_slice($d, -2)), \"\n\";";
+        vm.run_script(script, "req1.php");
+        vm.request_reset();
+        vm.run_script(script, "req2.php");
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        // Hoisted declarations come first: the script sees its own.
+        assert_eq!(out, "stale stale 21 B,c\n".repeat(2));
+    }
+
+    /// A reset after a request that declared no function skips its pass
+    /// over the function table; a request declaring one after such
+    /// requests still loses it (and its static variables) at the next
+    /// reset, and the internal functions stay throughout.
+    #[test]
+    fn request_reset_drops_functions_declared_after_requests_without_any() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        let plain: &[u8] =
+            b"<?php echo function_exists('fb') ? 'stale' : 'none', ' ', strlen('abc'), \"\n\";";
+        let declaring: &[u8] = b"<?php
+            echo function_exists('fb') ? 'stale ' : '';
+            function fb() { static $n = 0; return ++$n; }
+            fb(); echo fb(), \"\n\";";
+        vm.run_script(plain, "r1.php");
+        vm.request_reset();
+        let builtins = vm.functions.len();
+        vm.run_script(plain, "r2.php");
+        vm.request_reset();
+        assert_eq!(vm.functions.len(), builtins);
+        vm.run_script(declaring, "r3.php");
+        vm.request_reset();
+        assert!(vm.functions.get(&ZStr::from("fb")).is_none());
+        assert_eq!(vm.functions.len(), builtins);
+        vm.run_script(plain, "r4.php");
+        vm.request_reset();
+        vm.run_script(declaring, "r5.php");
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(out, "none 3\nnone 3\nstale 2\nnone 3\nstale 2\n");
     }
 
     #[test]

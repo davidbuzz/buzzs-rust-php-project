@@ -1123,8 +1123,12 @@ pub fn len32<T>(s: &[T]) -> i32 {
 }
 
 /// A NUL-terminated copy of `s` for passing as `const char*`.
+///
+/// ext/intl hands ICU the `char*` of a PHP string, which ICU reads up to
+/// the first NUL byte: `"a\0b"` is the locale `"a"`, not `"ab"`.
 pub fn cstring(s: &str) -> std::ffi::CString {
-    std::ffi::CString::new(s.replace('\0', "")).unwrap_or_default()
+    let head = s.split('\0').next().unwrap_or_default();
+    std::ffi::CString::new(head).unwrap_or_default()
 }
 
 /// A NUL-terminated copy of UTF-16 text.
@@ -1252,4 +1256,17 @@ pub fn error_name(code: i32) -> String {
 /// Null `UParseError*`-compatible pointer helper.
 pub fn null_mut<T>() -> *mut T {
     ptr::null_mut()
+}
+
+#[cfg(test)]
+mod cstring_tests {
+    use super::cstring;
+
+    #[test]
+    fn a_c_string_stops_at_the_first_nul() {
+        assert_eq!(cstring("a\0b").as_bytes(), b"a");
+        assert_eq!(cstring("\0x").as_bytes(), b"");
+        assert_eq!(cstring("en_US").as_bytes(), b"en_US");
+        assert_eq!(cstring("").as_bytes(), b"");
+    }
 }

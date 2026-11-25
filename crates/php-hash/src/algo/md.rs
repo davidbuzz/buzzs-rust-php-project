@@ -245,93 +245,113 @@ impl Md5 {
         }
     }
 
+    /// `body()` of Solar Designer's md5.c: the 64 steps written out with
+    /// their message word, constant and shift fixed (`STEP(F, a, b, c, d,
+    /// SET(0), 0xd76aa478, 7)` ...), as php-src's macros expand them. A
+    /// loop over the steps that picked the round function, the word index
+    /// and the shift at run time cost ~2,000 instructions a block against
+    /// php-src's ~500.
+    #[allow(
+        clippy::many_single_char_names,
+        clippy::unreadable_literal,
+        clippy::inline_always
+    )]
     fn body(abcd: &mut [u32; 4], data: &[u8]) {
-        const S: [u32; 64] = [
-            7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20,
-            5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-            6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-        ];
-        const K: [u32; 64] = [
-            0xd76a_a478,
-            0xe8c7_b756,
-            0x2420_70db,
-            0xc1bd_ceee,
-            0xf57c_0faf,
-            0x4787_c62a,
-            0xa830_4613,
-            0xfd46_9501,
-            0x6980_98d8,
-            0x8b44_f7af,
-            0xffff_5bb1,
-            0x895c_d7be,
-            0x6b90_1122,
-            0xfd98_7193,
-            0xa679_438e,
-            0x49b4_0821,
-            0xf61e_2562,
-            0xc040_b340,
-            0x265e_5a51,
-            0xe9b6_c7aa,
-            0xd62f_105d,
-            0x0244_1453,
-            0xd8a1_e681,
-            0xe7d3_fbc8,
-            0x21e1_cde6,
-            0xc337_07d6,
-            0xf4d5_0d87,
-            0x455a_14ed,
-            0xa9e3_e905,
-            0xfcef_a3f8,
-            0x676f_02d9,
-            0x8d2a_4c8a,
-            0xfffa_3942,
-            0x8771_f681,
-            0x6d9d_6122,
-            0xfde5_380c,
-            0xa4be_ea44,
-            0x4bde_cfa9,
-            0xf6bb_4b60,
-            0xbebf_bc70,
-            0x289b_7ec6,
-            0xeaa1_27fa,
-            0xd4ef_3085,
-            0x0488_1d05,
-            0xd9d4_d039,
-            0xe6db_99e5,
-            0x1fa2_7cf8,
-            0xc4ac_5665,
-            0xf429_2244,
-            0x432a_ff97,
-            0xab94_23a7,
-            0xfc93_a039,
-            0x655b_59c3,
-            0x8f0c_cc92,
-            0xffef_f47d,
-            0x8584_5dd1,
-            0x6fa8_7e4f,
-            0xfe2c_e6e0,
-            0xa301_4314,
-            0x4e08_11a1,
-            0xf753_7e82,
-            0xbd3a_f235,
-            0x2ad7_d2bb,
-            0xeb86_d391,
-        ];
+        #[inline(always)]
+        fn f(x: u32, y: u32, z: u32) -> u32 {
+            z ^ (x & (y ^ z))
+        }
+        #[inline(always)]
+        fn g(x: u32, y: u32, z: u32) -> u32 {
+            y ^ (z & (x ^ y))
+        }
+        #[inline(always)]
+        fn h(x: u32, y: u32, z: u32) -> u32 {
+            x ^ y ^ z
+        }
+        #[inline(always)]
+        fn i(x: u32, y: u32, z: u32) -> u32 {
+            y ^ (x | !z)
+        }
+        /// `STEP(f, a, b, c, d, x, t, s)`.
+        macro_rules! step {
+            ($f:ident, $a:ident, $b:ident, $c:ident, $d:ident, $x:expr, $t:expr, $s:expr) => {
+                $a = $a
+                    .wrapping_add($f($b, $c, $d))
+                    .wrapping_add($x)
+                    .wrapping_add($t)
+                    .rotate_left($s)
+                    .wrapping_add($b);
+            };
+        }
         for chunk in data.chunks_exact(64) {
             let x: [u32; 16] = le_words(chunk);
             let [mut a, mut b, mut c, mut d] = *abcd;
-            for i in 0..64 {
-                let (f, g) = match i / 16 {
-                    0 => (d ^ (b & (c ^ d)), i),
-                    1 => (c ^ (d & (b ^ c)), (5 * i + 1) % 16),
-                    2 => (b ^ c ^ d, (3 * i + 5) % 16),
-                    _ => (c ^ (b | !d), (7 * i) % 16),
-                };
-                let t = a.wrapping_add(f).wrapping_add(x[g]).wrapping_add(K[i]);
-                a = d;
-                d = c;
-                c = b;
-                b = b.wrapping_add(t.rotate_left(S[i]));
+            {
+                step!(f, a, b, c, d, x[0], 0xd76aa478_u32, 7);
+                step!(f, d, a, b, c, x[1], 0xe8c7b756_u32, 12);
+                step!(f, c, d, a, b, x[2], 0x242070db_u32, 17);
+                step!(f, b, c, d, a, x[3], 0xc1bdceee_u32, 22);
+                step!(f, a, b, c, d, x[4], 0xf57c0faf_u32, 7);
+                step!(f, d, a, b, c, x[5], 0x4787c62a_u32, 12);
+                step!(f, c, d, a, b, x[6], 0xa8304613_u32, 17);
+                step!(f, b, c, d, a, x[7], 0xfd469501_u32, 22);
+                step!(f, a, b, c, d, x[8], 0x698098d8_u32, 7);
+                step!(f, d, a, b, c, x[9], 0x8b44f7af_u32, 12);
+                step!(f, c, d, a, b, x[10], 0xffff5bb1_u32, 17);
+                step!(f, b, c, d, a, x[11], 0x895cd7be_u32, 22);
+                step!(f, a, b, c, d, x[12], 0x6b901122_u32, 7);
+                step!(f, d, a, b, c, x[13], 0xfd987193_u32, 12);
+                step!(f, c, d, a, b, x[14], 0xa679438e_u32, 17);
+                step!(f, b, c, d, a, x[15], 0x49b40821_u32, 22);
+                step!(g, a, b, c, d, x[1], 0xf61e2562_u32, 5);
+                step!(g, d, a, b, c, x[6], 0xc040b340_u32, 9);
+                step!(g, c, d, a, b, x[11], 0x265e5a51_u32, 14);
+                step!(g, b, c, d, a, x[0], 0xe9b6c7aa_u32, 20);
+                step!(g, a, b, c, d, x[5], 0xd62f105d_u32, 5);
+                step!(g, d, a, b, c, x[10], 0x02441453_u32, 9);
+                step!(g, c, d, a, b, x[15], 0xd8a1e681_u32, 14);
+                step!(g, b, c, d, a, x[4], 0xe7d3fbc8_u32, 20);
+                step!(g, a, b, c, d, x[9], 0x21e1cde6_u32, 5);
+                step!(g, d, a, b, c, x[14], 0xc33707d6_u32, 9);
+                step!(g, c, d, a, b, x[3], 0xf4d50d87_u32, 14);
+                step!(g, b, c, d, a, x[8], 0x455a14ed_u32, 20);
+                step!(g, a, b, c, d, x[13], 0xa9e3e905_u32, 5);
+                step!(g, d, a, b, c, x[2], 0xfcefa3f8_u32, 9);
+                step!(g, c, d, a, b, x[7], 0x676f02d9_u32, 14);
+                step!(g, b, c, d, a, x[12], 0x8d2a4c8a_u32, 20);
+                step!(h, a, b, c, d, x[5], 0xfffa3942_u32, 4);
+                step!(h, d, a, b, c, x[8], 0x8771f681_u32, 11);
+                step!(h, c, d, a, b, x[11], 0x6d9d6122_u32, 16);
+                step!(h, b, c, d, a, x[14], 0xfde5380c_u32, 23);
+                step!(h, a, b, c, d, x[1], 0xa4beea44_u32, 4);
+                step!(h, d, a, b, c, x[4], 0x4bdecfa9_u32, 11);
+                step!(h, c, d, a, b, x[7], 0xf6bb4b60_u32, 16);
+                step!(h, b, c, d, a, x[10], 0xbebfbc70_u32, 23);
+                step!(h, a, b, c, d, x[13], 0x289b7ec6_u32, 4);
+                step!(h, d, a, b, c, x[0], 0xeaa127fa_u32, 11);
+                step!(h, c, d, a, b, x[3], 0xd4ef3085_u32, 16);
+                step!(h, b, c, d, a, x[6], 0x04881d05_u32, 23);
+                step!(h, a, b, c, d, x[9], 0xd9d4d039_u32, 4);
+                step!(h, d, a, b, c, x[12], 0xe6db99e5_u32, 11);
+                step!(h, c, d, a, b, x[15], 0x1fa27cf8_u32, 16);
+                step!(h, b, c, d, a, x[2], 0xc4ac5665_u32, 23);
+                step!(i, a, b, c, d, x[0], 0xf4292244_u32, 6);
+                step!(i, d, a, b, c, x[7], 0x432aff97_u32, 10);
+                step!(i, c, d, a, b, x[14], 0xab9423a7_u32, 15);
+                step!(i, b, c, d, a, x[5], 0xfc93a039_u32, 21);
+                step!(i, a, b, c, d, x[12], 0x655b59c3_u32, 6);
+                step!(i, d, a, b, c, x[3], 0x8f0ccc92_u32, 10);
+                step!(i, c, d, a, b, x[10], 0xffeff47d_u32, 15);
+                step!(i, b, c, d, a, x[1], 0x85845dd1_u32, 21);
+                step!(i, a, b, c, d, x[8], 0x6fa87e4f_u32, 6);
+                step!(i, d, a, b, c, x[15], 0xfe2ce6e0_u32, 10);
+                step!(i, c, d, a, b, x[6], 0xa3014314_u32, 15);
+                step!(i, b, c, d, a, x[13], 0x4e0811a1_u32, 21);
+                step!(i, a, b, c, d, x[4], 0xf7537e82_u32, 6);
+                step!(i, d, a, b, c, x[11], 0xbd3af235_u32, 10);
+                step!(i, c, d, a, b, x[2], 0x2ad7d2bb_u32, 15);
+                step!(i, b, c, d, a, x[9], 0xeb86d391_u32, 21);
             }
             abcd[0] = abcd[0].wrapping_add(a);
             abcd[1] = abcd[1].wrapping_add(b);

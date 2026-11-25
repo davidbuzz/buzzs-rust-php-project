@@ -30,12 +30,14 @@
 use super::super::{discard_unrooted, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
-use crate::opcode::{ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceId, PROP_CACHE_THIS};
+use crate::opcode::{
+    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
+};
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
-use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZStr};
+use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// The plain data of a property cache entry that a hit needs, copied out
@@ -270,6 +272,246 @@ fn isset_deref(v: &Value, empty: bool) -> Option<bool> {
         }
         v => isset_of(v, empty),
     }
+}
+
+/// The array a declared property slot holds, directly or through a
+/// reference (left by `&$this->a`, a by-reference argument or `foreach` by
+/// reference), for reading.
+#[inline(always)]
+fn slot_array<R>(slot: Option<&Value>, read: impl FnOnce(&ZArray) -> Option<R>) -> Option<R> {
+    match slot? {
+        Value::Array(a) => read(a),
+        Value::Reference(r) => match &*r.try_borrow()? {
+            Value::Array(a) => read(a),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_OBJ_R` + `ZEND_FETCH_DIM_R` (or the `_IS` pair) of
+/// `$this->name[dim]` / `$cv->name[dim]` on a property cache hit, read in
+/// frame `f` alone: the base holds the object directly (a reference base
+/// takes [`Vm::prop_cache_read_elem`]), the declared slot holds an array
+/// with the int or string offset `dim` peeks as. The element,
+/// dereferenced and copied; `None` otherwise.
+#[inline(always)]
+fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = plain_obj(f, base, class)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let v = match slots.get(slot)? {
+        Some(Value::Array(a)) => elem_copy(a, key),
+        Some(Value::Reference(r)) => elem_copy_ref(r, key),
+        _ => None,
+    };
+    drop(slots);
+    v
+}
+
+/// The element of `a` at the int or string offset `key`, dereferenced and
+/// copied (`zend_fetch_dimension_address_inner` with `BP_VAR_R`, then
+/// `ZVAL_COPY_DEREF`). A string offset's probe is inlined
+/// (`HashTable::sym_zstr_probe`): it is the body of the element read.
+#[inline(always)]
+fn elem_copy(a: &ZArray, key: super::DimRef<'_>) -> Option<Value> {
+    let el = match key {
+        super::DimRef::Str(s) => a.sym_zstr_probe(s),
+        k => super::table_dim(a, k),
+    }?;
+    match el {
+        Value::Reference(r) => Some(copy_value(&*r.try_borrow()?)),
+        v => Some(copy_value(v)),
+    }
+}
+
+/// [`elem_copy`] of the array a slot holds through a reference (left by
+/// `&$this->a`, a by-reference argument or `foreach` by reference), out of
+/// line.
+#[inline(never)]
+fn elem_copy_ref(r: &php_runtime::PhpRef, key: super::DimRef<'_>) -> Option<Value> {
+    match &*r.try_borrow()? {
+        Value::Array(a) => elem_copy(a, key),
+        _ => None,
+    }
+}
+
+/// Whether `$this->name[dim]` / `$cv->name[dim]` read in `Is` mode (the
+/// operand of `??`: `ZEND_FETCH_OBJ_IS`, then `ZEND_FETCH_DIM_IS`) is
+/// null without a diagnostic, on the property cache hit [`read_dim_hit`]
+/// takes: the declared slot holds an array without the int or string
+/// offset `dim` peeks as, or null, a bool, an int or a float (a scalar
+/// container reads as null in that mode). `false` for anything else (a
+/// string or an object container, a reference, an uninitialized slot, a
+/// miss of the cache), which the generic walk reads. The walk ran for
+/// every such miss before (`place_fetch`).
+#[inline(never)]
+fn is_dim_miss_hit(f: &Frame, pid: PlaceId, dim: Operand) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ, PC_DYN) else {
+        return false;
+    };
+    let Some(key) = super::dim_ref_in(f, dim) else {
+        return false;
+    };
+    let Some(od) = hit_data(f, &hit) else {
+        return false;
+    };
+    let Ok(slots) = od.slots.try_borrow() else {
+        return false;
+    };
+    let miss = match slots.get(hit.slot) {
+        Some(Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => true,
+        Some(Some(Value::Array(a))) => super::table_dim(a, key).is_none(),
+        _ => false,
+    };
+    drop(slots);
+    miss
+}
+
+/// `isset($this->name[dim])` / `empty(...)` (`ZEND_FETCH_OBJ_IS`, then
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ`) on a property cache hit in frame `f`
+/// alone, as [`read_dim_hit`]: a missing key or a null property answers
+/// without conversions. `None` for the slower paths.
+#[inline(always)]
+fn isset_dim_hit(f: &Frame, pid: PlaceId, dim: Operand, empty: bool) -> Option<bool> {
+    let hit = hit_key(f, pid, PC_ISSET, PC_DYN)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = hit_data(f, &hit)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let r = match slots.get(hit.slot)?.as_ref()? {
+        Value::Null => Some(empty),
+        v => slot_array(Some(v), |a| match super::table_dim(a, key) {
+            Some(el) => isset_deref(el, empty),
+            None => Some(empty),
+        }),
+    };
+    drop(slots);
+    r
+}
+
+/// `$this->name[dim] = val` / `$this->name[] = val` (`dim`
+/// [`Operand::Unused`]) on a property cache hit for writing in frame `f`
+/// alone (`ZEND_FETCH_OBJ_W` + `ZEND_ASSIGN_DIM` + `OP_DATA`): the base
+/// holds the object directly, the declared slot holds an array (also
+/// through a reference), the offset is an int or a string and the value
+/// is plain, an array or an object; the store is
+/// [`super::dims::assign_write_dim`]'s (separation, an existing element
+/// overwritten unless it is a reference, a missing one added). The
+/// offset's string temporary and the value's temporary are consumed and
+/// the value written to `dst` when used. `false`, nothing changed but a
+/// separation, otherwise.
+#[inline(never)]
+fn assign_dim_hit(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    use super::dims::{assign_write_sep, WriteDim};
+    let Some((class, slot, base, _)) = plain_key(f, pid, PC_READ | PC_WRITE) else {
+        return false;
+    };
+    let Some(v) = super::dim_value_in(f, val) else {
+        return false;
+    };
+    let wd = if dim == Operand::Unused {
+        WriteDim::Append
+    } else {
+        match super::dim_ref_in(f, dim) {
+            Some(super::DimRef::Int(i)) => WriteDim::Int(i),
+            Some(super::DimRef::Str(s)) => WriteDim::Str(s),
+            None => return false,
+        }
+    };
+    let Some(od) = plain_obj(f, base, class) else {
+        return false;
+    };
+    let ret = dst.map(|_| copy_value(&v));
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return false;
+    };
+    let ok = match slots.get_mut(slot) {
+        Some(Some(Value::Array(arr))) => assign_write_sep(arr, wd, v),
+        Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
+            Some(mut inner) => match &mut *inner {
+                Value::Array(arr) => assign_write_sep(arr, wd, v),
+                _ => false,
+            },
+            None => false,
+        },
+        _ => false,
+    };
+    drop(slots);
+    if !ok {
+        return false;
+    }
+    if matches!(wd, WriteDim::Str(_)) {
+        super::release_str_tmp_in(f, dim);
+    }
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let (Some(d), Some(r)) = (dst, ret) {
+        if let Some(slot) = f.tmps.get_mut(d as usize) {
+            put_tmp(slot, r);
+        }
+    }
+    true
+}
+
+/// `$this->name[dim]++` & co. (`ZEND_FETCH_OBJ_RW` + `ZEND_FETCH_DIM_RW`
+/// + `PRE/POST_INC/DEC`) on a property cache hit for writing in frame `f`
+/// alone, as [`assign_dim_hit`]: the declared slot holds an array (also
+/// through a reference) whose element at the int or string offset is an
+/// int that does not overflow, or a float. The array is separated when
+/// shared, the element updated in place, and the expression's value
+/// returned (a consumed string offset released). `None`, nothing changed,
+/// otherwise (a missing key warns on the generic path).
+#[inline(never)]
+fn incdec_dim_hit(f: &mut Frame, pid: PlaceId, dim: Operand, kind: IncDecKind) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = hit_data(f, &hit)?;
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let step = |arr: &mut ZArray| -> Option<(Value, Value)> {
+        let (old, new) = match super::table_dim(arr, key)? {
+            Value::Int(i) => {
+                let i = *i;
+                let n = if kind.is_inc() {
+                    i.checked_add(1)?
+                } else {
+                    i.checked_sub(1)?
+                };
+                (Value::Int(i), Value::Int(n))
+            }
+            Value::Float(x) => {
+                let x = *x;
+                let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
+                (Value::Float(x), Value::Float(n))
+            }
+            _ => return None,
+        };
+        let el = super::table_dim_mut(arr.make_mut(), key)?;
+        // A number replaces a number: no drop glue to run.
+        std::mem::forget(std::mem::replace(el, copy_value(&new)));
+        Some((old, new))
+    };
+    let r = match slots.get_mut(hit.slot)? {
+        Some(Value::Array(arr)) => step(arr),
+        Some(Value::Reference(r)) => match &mut *r.try_borrow_mut()? {
+            Value::Array(arr) => step(arr),
+            _ => None,
+        },
+        _ => None,
+    };
+    drop(slots);
+    let (old, new) = r?;
+    super::release_str_tmp_in(f, dim);
+    Some(if kind.is_post() { old } else { new })
 }
 
 /// `isset()`/`empty()` of the property `hit` describes in `od` when it is
@@ -571,17 +813,282 @@ fn incdec_in(od: &ObjectData, slot: usize, kind: IncDecKind) -> Option<Value> {
     }
 }
 
-/// [`incdec_in`] on a cache hit of place `pid` in frame `f`.
+/// [`incdec_in`] on a cache hit of place `pid` in frame `f`: the entry
+/// and the object as the plain hits take them ([`plain_key`],
+/// [`plain_obj`]); a base holding the object through a reference out of
+/// line ([`incdec_ref_base`]).
 #[inline(always)]
 fn incdec_hit(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
-    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
-    if let Some(od) = hit_data(f, &hit) {
-        return incdec_in(od, hit.slot, kind);
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ | PC_WRITE)?;
+    if let Some(od) = plain_obj(f, base, class) {
+        return incdec_in(od, slot, kind);
     }
+    incdec_ref_base(f, pid, kind)
+}
+
+/// [`incdec_hit`] when the base is a compiled variable holding the object
+/// through a reference (`$o = &$x; $o->p++`).
+#[inline(never)]
+fn incdec_ref_base(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
     if !base_is_ref(f, &hit) {
         return None;
     }
     with_hit_obj(f, &hit, |od| incdec_in(od, hit.slot, kind))
+}
+
+/// `ZEND_ASSIGN_OBJ_OP` of `.=` (`$this->p .= 'x'`, `$cv->p .= $s`) on a
+/// property cache hit of place `pid` in frame `f`: a declared property
+/// holding a string, whose type (`accept`) takes a string, extended in
+/// place by a string or an int (`concat_function`: the string moved out of
+/// its slot, so that one nothing else holds grows without a copy), the
+/// value operand consumed (`FREE_OP_DATA`) and the result into `dst`.
+/// `false`, having changed nothing, for anything else (another value in
+/// the property or the operand, a reference, a typed property that does
+/// not take a string, a miss): the generic op, which also fills the cache.
+#[inline(never)]
+pub(in crate::exec) fn concat_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
+        return false;
+    };
+    if hit.accept != u32::MAX && hit.accept & crate::types::mask::STRING == 0 {
+        return false;
+    }
+    let res = {
+        let rhs = match val {
+            Operand::Lit(l) => f.code.literals.get(l as usize),
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+            _ => None,
+        };
+        let rhs = match rhs {
+            Some(v @ (Value::Str(_) | Value::Int(_))) => v,
+            _ => return false,
+        };
+        let apply = |od: &ObjectData| concat_slot_in(od, hit.slot, rhs, dst.is_some());
+        if let Some(od) = hit_data(f, &hit) {
+            apply(od)
+        } else if base_is_ref(f, &hit) {
+            with_hit_obj(f, &hit, apply)
+        } else {
+            None
+        }
+    };
+    let Some(res) = res else {
+        return false;
+    };
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let Some(v) = res {
+        put_dst(f, dst, v);
+    }
+    true
+}
+
+/// [`concat_prop_in`]'s `.=` of `rhs` (a string or an int) onto the string
+/// in the initialized declared slot `slot` of `od`: `Some` once done, with
+/// the new value when `want` (the op's result is used); `None`, nothing
+/// changed, when the slot holds anything else.
+#[inline(always)]
+fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Option<Option<Value>> {
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let Some(Some(cell)) = slots.get_mut(slot) else {
+        return None;
+    };
+    let Value::Str(s) = cell else {
+        return None;
+    };
+    let s = std::mem::take(s);
+    let new = match rhs {
+        Value::Str(t) if s.is_empty() => t.clone(),
+        Value::Str(t) => s.concat_owned_str_spare(t),
+        Value::Int(n) => s.concat_owned_long_spare(*n),
+        // Unreachable (the caller checked): the string goes back.
+        _ => s,
+    };
+    let out = want.then(|| Value::Str(new.clone()));
+    *cell = Value::Str(new);
+    Some(out)
+}
+
+/// The cache entry of place `pid` in frame `f` when it is filled in `f`'s
+/// class scope for a declared property and allows every access in `want`:
+/// the object's class address, the slot, the place's base and the
+/// accepted types, read under one borrow of the cache (the plain hits
+/// below need nothing else of it). An unfilled entry's class address (0)
+/// matches no object, so it is not tested here.
+#[inline(always)]
+fn plain_key(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32, u32)> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
+        return None;
+    }
+    let key = (e.class_addr, e.slot as usize, e.base, e.accept);
+    drop(cache);
+    Some(key)
+}
+
+/// The data of the object the base `base` holds directly in frame `f`
+/// (`$this`, or a compiled variable holding the object itself) when it is
+/// of the class at address `class` and not lazy: `Z_OBJ_P(container)` and
+/// `EXPECTED(zobj->ce == CACHED_PTR(cache_slot))`.
+#[inline(always)]
+fn plain_obj(f: &Frame, base: u32, class: usize) -> Option<&ObjectData> {
+    let obj: &Obj = if base == PROP_CACHE_THIS {
+        f.this.as_ref()?
+    } else {
+        match f.cvs.get(base as usize)?.get()? {
+            Value::Object(o) => o,
+            _ => return None,
+        }
+    };
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != class || !od.not_lazy() {
+        return None;
+    }
+    Some(od)
+}
+
+/// `ZEND_FETCH_OBJ_R` on a cache hit in its plainest form: a declared,
+/// initialized slot holding a value (not a reference) of an object the
+/// base holds directly, copied. `None` for anything else, which
+/// [`read_hit`] then tries.
+#[inline(always)]
+fn read_plain(f: &Frame, pid: PlaceId) -> Option<Value> {
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ)?;
+    let od = plain_obj(f, base, class)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let v = match slots.get(slot)? {
+        Some(Value::Reference(_)) | None => None,
+        Some(v) => Some(copy_value(v)),
+    };
+    drop(slots);
+    v
+}
+
+/// `ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a cache hit in its
+/// plainest form: the value (not a reference, of a type the property
+/// takes as-is) replaces the value (not a reference) of an initialized
+/// declared slot of an object the base holds directly; the old value is
+/// released once the slots are no longer borrowed (a scalar is
+/// forgotten), a consumed temporary released and the result written to
+/// `dst` when used. `false`, having changed nothing, for anything else,
+/// which [`assign_hit`] then tries.
+#[inline(always)]
+fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
+    let Some((class, slot, base, accept)) = plain_key(f, pid, PC_WRITE) else {
+        return false;
+    };
+    let src = match val {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize),
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get),
+        Operand::Lit(lit) => f.code.literals.get(lit as usize),
+        Operand::Unused => None,
+    };
+    let Some(src) = src else {
+        return false;
+    };
+    if matches!(src, Value::Reference(_)) || !accepts(accept, src) {
+        return false;
+    }
+    let Some(od) = plain_obj(f, base, class) else {
+        return false;
+    };
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return false;
+    };
+    let Some(Some(cur)) = slots.get_mut(slot) else {
+        return false;
+    };
+    if matches!(cur, Value::Reference(_)) {
+        return false;
+    }
+    let new_val = copy_value(src);
+    let result = dst.map(|_| copy_value(&new_val));
+    let old = std::mem::replace(cur, new_val);
+    drop(slots);
+    // The old value is released once nothing is borrowed (a destructor
+    // may touch the object).
+    discard_unrooted(Some(old));
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let (Some(d), Some(r)) = (dst, result) {
+        if let Some(slot) = f.tmps.get_mut(d as usize) {
+            put_tmp(slot, r);
+        }
+    }
+    true
+}
+
+/// [`assign_hit`] out of line: the cases [`assign_plain`] declines (a
+/// dynamic property, an undefined slot, a class-typed property, a
+/// reference base).
+#[inline(never)]
+fn assign_hit_slow(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
+    assign_hit(f, pid, val, dst)
+}
+
+/// [`incdec_hit`] and the result into `dst`: [`prop_op_in`]'s
+/// `IncDecObjProp` arm.
+#[inline(always)]
+fn incdec_op(f: &mut Frame, pid: PlaceId, kind: IncDecKind, dst: Option<u32>) -> bool {
+    let Some(res) = incdec_hit(f, pid, kind) else {
+        return false;
+    };
+    put_dst(f, dst, res);
+    true
+}
+
+/// The single-op entry points of the tape's property handlers
+/// (`exec/tape/props.rs`). Methods, so that the tape reaches them without
+/// a re-export: each is the arm [`prop_op_in`] runs for its op, with the
+/// plainest hit tried first inline and the rest of the hit out of line.
+impl Frame {
+    /// `$o->p` read on a cache hit in its plainest form ([`read_plain`]);
+    /// the caller tries [`read_hit`] on `None`.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_read_plain(&self, pid: PlaceId) -> Option<Value> {
+        read_plain(self, pid)
+    }
+
+    /// `$o->p = v` on a cache hit ([`assign_plain`], else [`assign_hit`]),
+    /// exactly as [`prop_op_in`]'s `AssignObjProp` arm.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_assign_hit(
+        &mut self,
+        pid: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> bool {
+        assign_plain(self, pid, val, dst) || assign_hit_slow(self, pid, val, dst)
+    }
+
+    /// `$o->p++` & co. on a cache hit, exactly as [`prop_op_in`]'s
+    /// `IncDecObjProp` arm.
+    #[inline(always)]
+    pub(in crate::exec) fn prop_incdec_hit(
+        &mut self,
+        pid: PlaceId,
+        kind: IncDecKind,
+        dst: Option<u32>,
+    ) -> bool {
+        incdec_op(self, pid, kind, dst)
+    }
 }
 
 /// The frame-local fast paths of the property ops (`exec/hot.rs`, which
@@ -758,6 +1265,17 @@ impl Vm {
         if mode == FetchMode::List {
             return None;
         }
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(v) = read_dim_hit(f, pid, dim) {
+                super::release_str_tmp_in(f, dim);
+                return Some(store_fetched_in(f, dst, to, v));
+            }
+            // `$this->name['k'] ?? d` with nothing there: null, silently.
+            if mode == FetchMode::Is && is_dim_miss_hit(f, pid, dim) {
+                super::release_str_tmp_in(f, dim);
+                return Some(store_fetched_in(f, dst, to, Value::Null));
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let v = self.prop_cache_read_elem(pid, &key)?;
         self.release_tmp_str(dim);
@@ -806,6 +1324,11 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
+        if let Some(f) = self.frames.last_mut() {
+            if assign_dim_hit(f, pid, dim, val, dst) {
+                return true;
+            }
+        }
         let key = match dim {
             Operand::Unused => None,
             other => Some(match self.peek_dim_key(other) {
@@ -941,6 +1464,11 @@ impl Vm {
         dim: Operand,
         kind: IncDecKind,
     ) -> Option<Value> {
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(r) = incdec_dim_hit(f, pid, dim, kind) {
+                return Some(r);
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let r = self.prop_cache_incdec_elem(pid, &key, kind)?;
         self.release_tmp_str(dim);
@@ -965,6 +1493,12 @@ impl Vm {
         dim: Operand,
         empty: bool,
     ) -> Option<bool> {
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(r) = isset_dim_hit(f, pid, dim, empty) {
+                super::release_str_tmp_in(f, dim);
+                return Some(r);
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let r = self.prop_cache_isset_elem_pure(pid, &key, empty)?;
         self.release_tmp_str(dim);
@@ -1216,6 +1750,715 @@ impl Vm {
         };
         self.set_tmp(dst, Value::Bool(v));
         Ok(Flow::Next)
+    }
+}
+
+/// The keys of the dimensions after the head `->name` of place `pid` of
+/// frame `f` (`$base->name[d1]...[dn]`, one to [`super::MAX_WRITE_DIMS`]
+/// of them, the last possibly `[]`), as [`dim_keys_in`]. `None` for any
+/// other shape.
+fn prop_dim_keys_in(
+    f: &Frame,
+    pid: PlaceId,
+) -> Option<([Option<ArrayKey>; super::MAX_WRITE_DIMS], usize)> {
+    let segs = f.code.places.get(pid as usize)?.segs.get(1..)?;
+    dim_keys_in(f, segs)
+}
+
+/// The keys of the dimension segments `segs` of frame `f` (at most
+/// [`super::MAX_WRITE_DIMS`]), and how many: every offset peeks as an int
+/// or a string ([`super::dim_key_in`]), the last segment may be `[]`
+/// (`None`, an append). All are computed before a write walk changes
+/// anything.
+pub(super) fn dim_keys_in(
+    f: &Frame,
+    segs: &[crate::opcode::Seg],
+) -> Option<([Option<ArrayKey>; super::MAX_WRITE_DIMS], usize)> {
+    use crate::opcode::Seg;
+    if segs.is_empty() || segs.len() > super::MAX_WRITE_DIMS {
+        return None;
+    }
+    let mut keys: [Option<ArrayKey>; super::MAX_WRITE_DIMS] = Default::default();
+    let last = segs.len() - 1;
+    for (i, (key, seg)) in keys.iter_mut().zip(segs).enumerate() {
+        *key = match seg {
+            Seg::Dim(dim) => Some(super::dim_key_in(f, *dim)?),
+            Seg::Append if i == last => None,
+            _ => return None,
+        };
+    }
+    Some((keys, segs.len()))
+}
+
+/// `unset($this->name[d1]...[dn])` / `unset($cv->name[...])` of place
+/// `pid` of frame `f` on a property cache hit for writing (a declared,
+/// initialized, accessible slot that is neither readonly nor
+/// set-restricted, holding an array directly or through a reference not
+/// borrowed elsewhere): `ZEND_FETCH_OBJ_UNSET`, which hands out the slot
+/// (`get_property_ptr_ptr` with `BP_VAR_UNSET`: no magic method is
+/// consulted for an initialized slot), then the dimension chain of
+/// [`super::dims::unset_dims`]. A consumed string offset is released and
+/// the removed element dropped. `false`, nothing changed but separations,
+/// for the generic walk.
+#[inline(never)]
+pub(super) fn unset_prop_dims_in(f: &mut Frame, pid: PlaceId) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_WRITE, PC_DYN) else {
+        return false;
+    };
+    let Some((keys, n)) = prop_dim_keys_in(f, pid) else {
+        return false;
+    };
+    let Some(keys) = keys.get(..n) else {
+        return false;
+    };
+    let slot = hit.slot;
+    let removed = with_hit_obj(f, &hit, |od| {
+        let mut slots = od.slots.try_borrow_mut().ok()?;
+        let res = match slots.get_mut(slot)? {
+            Some(Value::Array(arr)) => super::dims::unset_dims(arr, keys),
+            Some(Value::Reference(r)) => {
+                let mut guard = r.try_borrow_mut()?;
+                let res = match &mut *guard {
+                    Value::Array(arr) => super::dims::unset_dims(arr, keys),
+                    _ => None,
+                };
+                drop(guard);
+                res
+            }
+            _ => None,
+        };
+        drop(slots);
+        res
+    });
+    let Some(removed) = removed else {
+        return false;
+    };
+    super::release_place_str_tmps(f, pid);
+    drop(removed);
+    true
+}
+
+/// The dimensions after the head `->name` of place `pid` of frame `f`
+/// when the place is `$base->name[d1]...[dn]` (one or more offsets, none
+/// `[]`).
+#[inline(always)]
+fn prop_dim_segs(f: &Frame, pid: PlaceId) -> Option<&[crate::opcode::Seg]> {
+    let segs = f.code.places.get(pid as usize)?.segs.get(1..)?;
+    (!segs.is_empty()).then_some(segs)
+}
+
+/// The value of `cur[d1]...[dn]` along the dimension segments `segs` of
+/// frame `f`, cloned and dereferenced, when every container is an array
+/// (`cur` itself possibly through a reference) holding the int or string
+/// offset its operand peeks as: the chain of `ZEND_FETCH_DIM_R`/`_IS`
+/// hits. `None` (a miss, which warns in `Read` mode, a string offset, an
+/// object, an element held by reference on the way) for the generic walk.
+#[inline]
+pub(super) fn dims_read(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Value> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = super::table_dim(a, key)?;
+    }
+    Some(match cur {
+        Value::Reference(r) => copy_value(&*r.try_borrow()?),
+        v => copy_value(v),
+    })
+}
+
+/// `isset(cur[d1]...[dn])` (or, with `empty`, `empty(...)`) along `segs`
+/// of frame `f`: a missing key, or a null container on the way, answers
+/// at once (`ZEND_FETCH_DIM_IS` yields null, `ZEND_ISSET_ISEMPTY_DIM_OBJ`
+/// on null is false); the last element is tested without conversions.
+/// `None` for a string offset, an object (`offsetExists()`), an element
+/// held by reference on the way, an offset that needs converting, or a
+/// value whose truth needs a cast handler.
+#[inline]
+fn dims_isset(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg], empty: bool) -> Option<bool> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        cur = match cur {
+            Value::Array(a) => match super::table_dim(a, key) {
+                Some(v) => v,
+                None => return Some(empty),
+            },
+            Value::Null => return Some(empty),
+            _ => return None,
+        };
+    }
+    isset_deref(cur, empty)
+}
+
+/// `cur[k1]...[kn] = v` on the table `tbl` of an array along `keys` (all
+/// `Some` but possibly the last, `None` being `[]`): the
+/// `ZEND_FETCH_DIM_W` chain, separating each nested array
+/// (`SEPARATE_ARRAY`) and making a missing or null element on the way an
+/// empty array (silently, as the generic walk's `descend` does), then
+/// `ZEND_ASSIGN_DIM`'s store of `v` over the element, or added, or
+/// appended. `Some(old)` on success (the replaced element, null for an
+/// added one; `v` taken); `None`, `v` left and nothing created, when an
+/// element on the way is of another kind (a reference, an object, a
+/// string, `false`, ...), the last one is a reference (the generic
+/// assignment writes through it) or an append finds the next index taken
+/// (the generic assignment throws; an array created on the way is empty,
+/// so this only happens to one that existed). Arrays on the way may have
+/// been separated, which the generic walk repeats as no-ops.
+pub(super) fn store_dims(
+    tbl: &mut php_runtime::HashTable,
+    keys: &[Option<ArrayKey>],
+    v: &mut Option<Value>,
+) -> Option<Value> {
+    let (first, rest) = keys.split_first()?;
+    if rest.is_empty() {
+        let Some(key) = first else {
+            let new = v.take()?;
+            return match tbl.push(new) {
+                Ok(_) => Some(Value::Null),
+                Err(back) => {
+                    *v = Some(back);
+                    None
+                }
+            };
+        };
+        if matches!(tbl.get(key), Some(Value::Reference(_))) {
+            return None;
+        }
+        let new = v.take()?;
+        return Some(std::mem::replace(tbl.lookup_ex(key.clone()).0, new));
+    }
+    let key = first.as_ref()?;
+    let (elem, _) = tbl.lookup_ex(key.clone());
+    if matches!(elem, Value::Null) {
+        *elem = Value::Array(php_runtime::ZArray::new());
+    }
+    let Value::Array(inner) = elem else {
+        return None;
+    };
+    store_dims(inner.make_mut(), rest, v)
+}
+
+/// `$this->name[d1]...[dn]` / `$cv->name[...]` read (`Read` or `Is`
+/// mode: no diagnostic on a hit) of place `pid` of frame `f` on a
+/// property cache hit for reading: `ZEND_FETCH_OBJ_R`/`_IS` of an
+/// initialized declared slot or an existing dynamic property, then
+/// [`dims_read`]. A consumed string offset is released. `None`, nothing
+/// consumed, for the generic fetch.
+#[inline(never)]
+pub(super) fn read_prop_dims_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let v = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = dims_read(f, table.as_deref()?.get_zstr(name)?, segs);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = dims_read(f, slots.get(slot)?.as_ref()?, segs);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
+/// The `Is`-mode read of `$this->name[d1]...[dn]` / `$cv->name[...]`
+/// (`$this->map[$k][$j] ?? d`) that [`read_prop_dims_in`] did not take,
+/// on the same property cache hit: a key missing on the way, or a null or
+/// `bool`/`int`/`float` container, gives null silently
+/// (`ZEND_FETCH_DIM_IS`, [`super::dims::is_dims_value`]); every offset
+/// must be an int or a string. A consumed string offset is released.
+/// `None`, nothing consumed, for the generic fetch (a string offset,
+/// `ArrayAccess`, a property the cache does not hold: `__get`, hooks).
+#[inline(never)]
+pub(super) fn read_prop_dims_is_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    if !super::dims::plain_dims(f, segs) {
+        return None;
+    }
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let v = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = super::dims::is_dims_value(f, Some(table.as_deref()?.get_zstr(name)?), segs);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = super::dims::is_dims_value(f, Some(slots.get(slot)?.as_ref()?), segs);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
+/// `isset($this->name[d1]...[dn])` / `empty(...)` (and on `$cv->name`) of
+/// place `pid` of frame `f` on a property cache hit for `isset()`:
+/// `ZEND_FETCH_OBJ_IS` of an initialized declared slot or an existing
+/// dynamic property, then [`dims_isset`]. A consumed string offset is
+/// released. `None`, nothing consumed, for the generic `place_isset`.
+#[inline(never)]
+pub(super) fn isset_prop_dims_in(f: &mut Frame, pid: PlaceId, empty: bool) -> Option<bool> {
+    let hit = hit_key(f, pid, PC_ISSET, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let r = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = dims_isset(f, table.as_deref()?.get_zstr(name)?, segs, empty);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = dims_isset(f, slots.get(slot)?.as_ref()?, segs, empty);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(r)
+}
+
+/// `$this->name[d1]...[dn] = v` / `$cv->name[...] = v` (one to four
+/// offsets, none `[]`) of place `pid` of frame `f` on a property cache hit
+/// for writing, when the declared, initialized slot holds an array
+/// directly: `ZEND_FETCH_OBJ_W` (which hands out the slot: no magic
+/// method, no type check for a nested write into an array) and the chain
+/// of [`store_dims`]. Returns the replaced element (to be released once
+/// nothing is borrowed), `v` taken; `None`, `v` left, for the generic
+/// assignment (a null or `false` property, whose promotion a type may
+/// forbid, a reference, a dynamic property, ...).
+#[inline(never)]
+pub(super) fn assign_prop_dims_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    v: &mut Option<Value>,
+) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_WRITE, PC_DYN)?;
+    let (keys, n) = prop_dim_keys_in(f, pid)?;
+    let keys = keys.get(..n)?;
+    let slot = hit.slot;
+    let old = with_hit_obj(f, &hit, |od| {
+        let mut slots = od.slots.try_borrow_mut().ok()?;
+        let r = match slots.get_mut(slot)? {
+            Some(Value::Array(arr)) => store_dims(arr.make_mut(), keys, v),
+            _ => None,
+        };
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(old)
+}
+
+/// The object at the end of the dimension segments `segs` of frame `f`
+/// from `cur` (itself possibly through a reference): every container an
+/// array holding the int or string offset its operand peeks as, the last
+/// element an object (also through a reference), its handle copied. The
+/// chain of `ZEND_FETCH_DIM_R`/`_IS` hits before a `ZEND_FETCH_OBJ_R`;
+/// `None` for anything else.
+#[inline]
+fn dims_to_object(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Obj> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = super::table_dim(a, key)?;
+    }
+    match cur {
+        Value::Object(o) => Some(o.clone()),
+        Value::Reference(r) => match &*r.try_borrow()? {
+            Value::Object(o) => Some(o.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_OBJ_R`/`_IS` of a place's last `->name` (literal `lit`) on
+/// `obj`, with that segment's own cache entry `idx` (see
+/// `place::propcache`'s tail entries), in frame `f` alone: the entry was
+/// filled for the object's class and the frame's scope and allows plain
+/// reads, the object is not lazy, and the property is an initialized
+/// declared slot or an existing dynamic property. Its value, dereferenced
+/// and copied; `None` otherwise.
+#[inline]
+fn read_tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj) -> Option<Value> {
+    let od = object::data(obj);
+    let (slot, flags) = {
+        let cache = f.code.prop_cache.try_borrow().ok()?;
+        let e = cache.get(idx)?;
+        if e.class_addr == 0
+            || e.lit != lit
+            || Rc::as_ptr(&od.class) as usize != e.class_addr
+            || e.scope_addr != scope_addr(f)
+            || e.flags & PC_READ == 0
+        {
+            return None;
+        }
+        (e.slot as usize, e.flags)
+    };
+    if !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return None;
+    }
+    let dyn_prop = if flags & PC_DYN == 0 {
+        None
+    } else {
+        match f.code.literals.get(lit as usize) {
+            Some(Value::Str(name)) => Some(name),
+            _ => return None,
+        }
+    };
+    read_in(od, slot, dyn_prop)
+}
+
+/// The object a place ending in `->name` (literal `lit`) holds that last
+/// property on, reached without the walk: `$this->a->b` / `$cv->a[$k]->b`
+/// (the head from its cache entry, as [`read_hit`], then dimensions) or
+/// `$cv[$k]...->b` (the variable, possibly a reference, then dimensions),
+/// with the index of the last segment's own cache entry and `lit`. The
+/// containers are only read: a write through the object needs no
+/// separation of the arrays on the way (`FETCH_DIM_W` would separate
+/// them, which no PHP code can observe: the copies share the object).
+/// `None` for any other shape or container.
+#[inline]
+fn chain_object(f: &Frame, pid: PlaceId) -> Option<(Obj, usize, u32)> {
+    use crate::opcode::Seg;
+    let p = f.code.places.get(pid as usize)?;
+    let (Seg::Prop(Operand::Lit(lit)), mid) = p.segs.split_last()? else {
+        return None;
+    };
+    if crate::place::propcache::cacheable_head(p) {
+        // `[->head, [dims...], ->name]`: one property before the last at
+        // least, read through the head's entry.
+        let (_, dims) = mid.split_first()?;
+        let hit = hit_key(f, pid, PC_READ, PC_DYN)?;
+        let od = hit_data(f, &hit)?;
+        let slots = od.slots.try_borrow().ok()?;
+        let o = dims_to_object(f, slots.get(hit.slot)?.as_ref()?, dims);
+        drop(slots);
+        return Some((o?, f.code.places.len() + pid as usize, *lit));
+    }
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    if mid.is_empty() {
+        return None;
+    }
+    let o = dims_to_object(f, f.cvs.get(cv as usize)?.get()?, mid)?;
+    Some((o, pid as usize, *lit))
+}
+
+/// A read (`Read` or `Is` mode: no diagnostic on a hit) of a place ending
+/// in `->name` whose object [`chain_object`] reaches, the last property
+/// read with its own cache entry ([`read_tail_hit`]). A consumed string
+/// offset is released. `None`, nothing consumed, for the generic fetch
+/// (which also fills the entries).
+#[inline(never)]
+pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
+    let v = read_tail_hit(f, idx, lit, &obj)?;
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
+/// The tail cache entry `idx` (literal `lit`) as a [`Hit`] for `obj` in
+/// frame `f`, when it was filled for the object's class and the frame's
+/// scope, allows every access in `want`, and the object is not lazy.
+#[inline]
+fn tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj, want: u8) -> Option<Hit> {
+    let od = object::data(obj);
+    let hit = {
+        let cache = f.code.prop_cache.try_borrow().ok()?;
+        let e = cache.get(idx)?;
+        if e.class_addr == 0
+            || e.lit != lit
+            || Rc::as_ptr(&od.class) as usize != e.class_addr
+            || e.scope_addr != scope_addr(f)
+            || e.flags & want != want
+        {
+            return None;
+        }
+        Hit {
+            class: e.class_addr,
+            slot: e.slot as usize,
+            ok_class: e.ok_class_addr,
+            base: e.base,
+            lit: e.lit,
+            accept: e.accept,
+            flags: e.flags,
+        }
+    };
+    if !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return None;
+    }
+    Some(hit)
+}
+
+/// `ZEND_ASSIGN_OBJ` of `v` to the last `->name` of a place whose object
+/// [`chain_object`] reaches (`$this->a->b = v`, `$list[$k]->name = v`),
+/// on that segment's cache entry for writing: the value (not a reference,
+/// of a type the property takes as-is) replaces an initialized slot's
+/// value (not a reference), or fills an undefined slot `__set()` cannot
+/// claim, or replaces the value of an existing dynamic property, as
+/// [`assign_hit`] does ([`store_in`]). Consumed string offsets are
+/// released. The replaced value on success (released by the caller);
+/// `None` for the generic assignment, `v` dropped (the caller keeps a
+/// copy).
+#[inline(never)]
+#[allow(clippy::option_option)] // "stored, replacing this" or "for the walk"
+fn assign_chain_in(f: &mut Frame, pid: PlaceId, v: Value) -> Option<Option<Value>> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
+    let hit = tail_hit(f, idx, lit, &obj, PC_WRITE)?;
+    if matches!(v, Value::Reference(_)) || !hit_accepts(&hit, &v) {
+        return None;
+    }
+    let dyn_key = if hit.flags & PC_DYN == 0 {
+        None
+    } else {
+        match f.code.literals.get(lit as usize) {
+            Some(Value::Str(name)) => Some(ArrayKey::Str(name.clone())),
+            _ => return None,
+        }
+    };
+    let old = store_in(object::data(&obj), &hit, dyn_key, v)?;
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(old)
+}
+
+/// Whether place `pid` of the current frame is `$this->name[d1]...[dn]`
+/// or `$cv->name[...]`: a literal property name and only dimensions
+/// after it.
+#[inline]
+fn is_prop_dims_place(f: &Frame, pid: PlaceId) -> bool {
+    f.code.places.get(pid as usize).is_some_and(|p| {
+        matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+            && matches!(
+                p.segs.as_slice(),
+                [
+                    crate::opcode::Seg::Prop(Operand::Lit(_)),
+                    crate::opcode::Seg::Dim(_),
+                    ..
+                ]
+            )
+    })
+}
+
+impl Vm {
+    /// Fills the property cache entry of place `pid`'s head after a miss of
+    /// one of the `*_prop_dims_in` fast paths, when the entry is unfilled
+    /// or was filled for another class or scope than the object's
+    /// (php-src's `CACHE_POLYMORPHIC_PTR` is overwritten on such a miss
+    /// too). Returns whether it was filled, so that the caller tries its
+    /// fast path once more; an entry that matches but declined the access
+    /// stays as it is (`false`).
+    #[cold]
+    #[inline(never)]
+    fn prop_head_refill(&self, pid: PlaceId) -> bool {
+        let stale = {
+            let f = self.frame();
+            let Ok(cache) = f.code.prop_cache.try_borrow() else {
+                return false;
+            };
+            match cache.get(pid as usize) {
+                None => true,
+                Some(e) => {
+                    e.class_addr == 0
+                        || e.scope_addr != scope_addr(f)
+                        || crate::place::propcache::with_base_obj(f, e.base, |o| {
+                            Rc::as_ptr(object::class_of(o)) as usize != e.class_addr
+                        })
+                        .unwrap_or(false)
+                }
+            }
+        };
+        stale && self.prop_cache_fill(pid)
+    }
+
+    /// [`unset_prop_dims_in`] after a cache miss ([`Vm::prop_head_refill`]).
+    #[cold]
+    #[inline(never)]
+    pub(in crate::exec) fn unset_prop_dims_refill(&mut self, pid: PlaceId) -> bool {
+        if !self.prop_head_refill(pid) {
+            return false;
+        }
+        match self.frames.last_mut() {
+            Some(f) => unset_prop_dims_in(f, pid),
+            None => false,
+        }
+    }
+
+    /// The current frame, when it runs user code (a builtin's frame has no
+    /// places of its own).
+    #[inline(always)]
+    fn user_frame_mut(&mut self) -> Option<&mut Frame> {
+        self.frames
+            .last_mut()
+            .filter(|f| f.kind != FrameKind::Builtin)
+    }
+
+    /// `Fetch` (`Read` or `Is` mode) of `$this->name[d1]...[dn]` /
+    /// `$cv->name[...]` without the place walk ([`read_prop_dims_in`]),
+    /// filling the head's cache entry on a miss, or of a place ending in a
+    /// property whose cache entries are filled ([`read_chain_in`]). `None`
+    /// for the generic fetch.
+    pub(crate) fn fetch_prop_dims_fast(&mut self, pid: PlaceId, mode: FetchMode) -> Option<Value> {
+        if mode == FetchMode::List {
+            return None;
+        }
+        let f = self.user_frame_mut()?;
+        if !is_prop_dims_place(f, pid) {
+            // `$this->a->b`, `$list[$k]->name` & co.
+            return read_chain_in(f, pid);
+        }
+        // A hit; in `Is` mode also a missing key (`?? d`).
+        let read = |f: &mut Frame| {
+            read_prop_dims_in(f, pid).or_else(|| {
+                if mode == FetchMode::Is {
+                    read_prop_dims_is_in(f, pid)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(v) = read(f) {
+            return Some(v);
+        }
+        if !self.prop_head_refill(pid) {
+            return None;
+        }
+        read(self.user_frame_mut()?)
+    }
+
+    /// `isset()` / `empty()` of `$this->name[d1]...[dn]` / `$cv->name[...]`
+    /// without the place walk ([`isset_prop_dims_in`]), filling the
+    /// head's cache entry on a miss. `None` for the generic `place_isset`.
+    pub(crate) fn isset_prop_dims_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
+        let f = self.user_frame_mut()?;
+        if !is_prop_dims_place(f, pid) {
+            // `isset($this->a->b)`, `isset($list[$k]->name)`: the chain's
+            // read on its cache hits (an existing, initialized property:
+            // no `__isset`), then the value tested.
+            let v = read_chain_in(f, pid)?;
+            return if empty {
+                plain_truth(&v).map(|t| !t)
+            } else {
+                Some(!v.is_null())
+            };
+        }
+        if let Some(r) = isset_prop_dims_in(f, pid, empty) {
+            return Some(r);
+        }
+        if !self.prop_head_refill(pid) {
+            return None;
+        }
+        isset_prop_dims_in(self.user_frame_mut()?, pid, empty)
+    }
+
+    /// `$this->name[d1]...[dn] = v` / `$cv->name[...] = v` without the
+    /// place walk ([`assign_prop_dims_in`]), filling the head's cache
+    /// entry on a miss: the assignment's value on success, `v` back
+    /// otherwise for the generic assignment.
+    pub(crate) fn assign_prop_dims_fast(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+        let Some(f) = self.user_frame_mut() else {
+            return Err(v);
+        };
+        if !is_prop_dims_place(f, pid) {
+            // `$this->a->b = v`, `$list[$k]->name = v`.
+            if matches!(
+                f.code.places.get(pid as usize).and_then(|p| p.segs.last()),
+                Some(crate::opcode::Seg::Prop(_))
+            ) {
+                let ret = v.clone();
+                return match assign_chain_in(f, pid, v) {
+                    Some(old) => {
+                        super::super::release_rooted(old);
+                        Ok(ret)
+                    }
+                    None => Err(ret),
+                };
+            }
+            // `$a[$k][] = v`, `$a[$k][$j] = [...]` & co. on a variable.
+            let ret = v.clone();
+            let mut slot = Some(v);
+            return match (super::dims::assign_cv_dims_in(f, pid, &mut slot), slot) {
+                (Some(old), None) => {
+                    super::super::release_rooted(Some(old));
+                    Ok(ret)
+                }
+                (_, Some(v)) => Err(v),
+                (None, None) => Ok(ret),
+            };
+        }
+        let ret = v.clone();
+        let mut slot = Some(v);
+        let mut old = assign_prop_dims_in(f, pid, &mut slot);
+        if old.is_none() && slot.is_some() && self.prop_head_refill(pid) {
+            if let Some(f) = self.user_frame_mut() {
+                old = assign_prop_dims_in(f, pid, &mut slot);
+            }
+        }
+        match (old, slot) {
+            (Some(old), None) => {
+                super::super::release_rooted(Some(old));
+                Ok(ret)
+            }
+            (_, Some(v)) => Err(v),
+            (None, None) => Ok(ret),
+        }
     }
 }
 

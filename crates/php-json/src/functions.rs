@@ -77,8 +77,23 @@ pub fn json_encode(
     } else if code != ErrorCode::None {
         return Err(host.json_exception(code.message(), code.code()));
     }
-    Ok(Value::Str(ZStr::from(buf)))
+    Ok(Value::Str(ZStr::from(trimmed(buf))))
 }
+
+/// `smart_str_extract` trims the buffer to its length
+/// (`smart_str_trim_to_size`), so the spare room the output grew into is
+/// not kept (and counted by `memory_get_usage()`) with the result.
+/// Short outputs are copied into the string's own block anyway.
+fn trimmed(mut buf: Vec<u8>) -> Vec<u8> {
+    if buf.len() > TRIM_MIN && buf.capacity() > buf.len() {
+        buf.shrink_to_fit();
+    }
+    buf
+}
+
+/// Outputs up to this length are copied into a new string's own block (see
+/// `ZStr::from`), which drops the spare capacity without a reallocation.
+const TRIM_MIN: usize = 1024;
 
 /// `json_decode(string $json, ?bool $associative = null, int $depth = 512,
 /// int $flags = 0): mixed`.
@@ -178,4 +193,20 @@ pub fn json_last_error(state: &JsonState) -> i64 {
 #[must_use]
 pub fn json_last_error_msg(state: &JsonState) -> String {
     state.last_error.msg()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trimmed;
+
+    #[test]
+    fn large_outputs_are_trimmed_to_size() {
+        let mut buf = Vec::with_capacity(8192);
+        buf.resize(2000, b'a');
+        assert_eq!(trimmed(buf).capacity(), 2000);
+        // Short outputs are left for the string to copy.
+        let mut buf = Vec::with_capacity(8192);
+        buf.resize(1000, b'a');
+        assert_eq!(trimmed(buf).capacity(), 8192);
+    }
 }

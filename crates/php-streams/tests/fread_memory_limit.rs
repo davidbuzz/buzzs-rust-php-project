@@ -27,7 +27,8 @@ fn lengths_beyond_memory_limit_record_fatal() {
     let r = file::fgetcsv(&mut s, Some(i64::MAX - 1), |line, _| line);
     assert_eq!(r.ok(), Some(None));
     let over = php_memlimit::take().expect("violation recorded");
-    assert_eq!(over.tried, usize::MAX >> 1);
+    // php-src reports a huge block rounded up to its page alignment.
+    assert_eq!(over.tried, 1 << 63);
     php_memlimit::clear();
 
     php_memlimit::set_limit(None).expect("unlimited");

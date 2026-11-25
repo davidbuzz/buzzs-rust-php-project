@@ -127,3 +127,31 @@ echo "done\n";
     assert_eq!(status, 0);
     assert_eq!(output, "d2 <- d1\ndone\n");
 }
+
+/// The property table `ArrayObject`/`ArrayIterator` read from a wrapped
+/// object is no second owner of the property values: `unset($o->p)` and an
+/// assignment over the property release the old value at once, as with
+/// php-src's one `zobj->properties`. Output of php8.5 (without its
+/// deprecation of object backing stores, hidden here by `@`).
+#[test]
+fn a_wrapped_objects_property_is_released_when_the_object_lets_go_of_it() {
+    let (status, output) = run(r#"<?php
+class Bar { function __destruct() { echo "Bar destroyed\n"; } }
+$o = new stdClass; $o->p = new Bar;
+$a = @new ArrayObject($o);
+foreach ($a as $k => $v) { }
+unset($v);
+unset($o->p);
+echo "after unset\n";
+$o2 = new stdClass; $o2->q = new Bar;
+$it = @new ArrayIterator($o2);
+var_dump(count($it));
+$o2->q = 1;
+echo "after overwrite\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "Bar destroyed\nafter unset\nint(1)\nBar destroyed\nafter overwrite\n"
+    );
+}

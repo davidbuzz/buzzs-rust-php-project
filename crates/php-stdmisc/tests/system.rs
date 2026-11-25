@@ -115,6 +115,50 @@ fn phpinfo_html_page() {
     ));
 }
 
+/// `putenv()` of a name set earlier in the request first undoes that
+/// earlier call (`zend_hash_del(&BG(putenv_ht), ...)`), so request shutdown
+/// puts back the value from before the request, not an intermediate one.
+/// php8.5 `--repeat 2`: the second run starts from `false` and `orig`.
+#[test]
+fn env_restore_puts_back_the_value_from_before_the_request() {
+    let mut st = EnvState::default();
+    // Not set before the request: set, set to empty, unset.
+    let unset = b"PHPRUST_STDMISC_RESTORE_UNSET";
+    assert!(st.putenv(b"PHPRUST_STDMISC_RESTORE_UNSET=value").unwrap());
+    assert!(st.putenv(b"PHPRUST_STDMISC_RESTORE_UNSET=").unwrap());
+    assert_eq!(
+        export(&system::getenv(Some(unset), false, None).unwrap()),
+        "''"
+    );
+    assert!(st.putenv(unset).unwrap());
+    // Set before the request: changed twice.
+    let preset = b"PHPRUST_STDMISC_RESTORE_PRESET";
+    let mut before = EnvState::default();
+    assert!(before
+        .putenv(b"PHPRUST_STDMISC_RESTORE_PRESET=orig")
+        .unwrap());
+    assert!(st.putenv(b"PHPRUST_STDMISC_RESTORE_PRESET=a").unwrap());
+    assert!(st.putenv(b"PHPRUST_STDMISC_RESTORE_PRESET=b").unwrap());
+    assert_eq!(
+        export(&system::getenv(Some(preset), false, None).unwrap()),
+        "'b'"
+    );
+    st.request_shutdown();
+    assert!(matches!(
+        system::getenv(Some(unset), false, None).unwrap(),
+        Value::Bool(false)
+    ));
+    assert_eq!(
+        export(&system::getenv(Some(preset), false, None).unwrap()),
+        "'orig'"
+    );
+    before.request_shutdown();
+    assert!(matches!(
+        system::getenv(Some(preset), false, None).unwrap(),
+        Value::Bool(false)
+    ));
+}
+
 #[test]
 fn env_put_get_restore() {
     let mut st = EnvState::default();

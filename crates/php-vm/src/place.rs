@@ -765,15 +765,9 @@ fn assign_string_offset(
         ));
     }
     let c = bytes[0];
-    let mut v = str.as_bytes().to_vec();
-    let off = usize::try_from(offset).unwrap_or(0);
-    if off >= v.len() {
-        v.resize(off, b' ');
-        v.push(c);
-    } else {
-        v[off] = c;
-    }
-    *str = ZStr::from(v);
+    // In place when the variable holds the only handle
+    // (`zend_assign_to_string_offset` separates a shared string only).
+    str.set_byte(usize::try_from(offset).unwrap_or(0), c);
     Ok(Value::Str(ZStr::from_byte(c)))
 }
 
@@ -1506,6 +1500,14 @@ pub(crate) fn flush_deferred_ref_assigns() {
     }
 }
 
+/// Whether `op` on `cur` is the `.=` php-src's typed paths make on the
+/// string in place (`zend_binary_assign_op_typed_prop()` /
+/// `_typed_ref()`: `concat_function(zptr, zptr, value)`), which a failure
+/// leaves as it was, rather than into a temporary that is checked.
+fn concats_in_place(op: BinaryOp, cur: &Value) -> bool {
+    op == BinaryOp::Concat && matches!(cur, Value::Str(_))
+}
+
 pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
     match wop {
         WOp::Assign(val) => {
@@ -1826,6 +1828,43 @@ impl Vm {
                 .is_some_and(|f| Rc::ptr_eq(&f.vars, store))
     }
 
+    /// Drops the handles that compiled variables keep on slot `idx` of
+    /// `store` before a walk changes that slot in place: the running
+    /// frame's, and, when `store` is the global table, those of every frame
+    /// of the global scope attached to it (the main script and top-level
+    /// `include`/`eval` frames, [`Vm::sync_global_frames`]). Their copies
+    /// would otherwise hold a second handle on the slot's array, and every
+    /// write through `$GLOBALS['g'][...]` from a function separated it: the
+    /// whole array copied per write (php-src's table slots are
+    /// `IS_INDIRECT` into the CVs, `ZEND_FETCH_W` with `ZEND_FETCH_GLOBAL`
+    /// writes the one value in place). The sync after the write
+    /// ([`Frame::sync_from_symbol_table`], [`Vm::sync_global_frames`])
+    /// gives them the new value back.
+    ///
+    /// [`Frame::sync_from_symbol_table`]: crate::vm::Frame::sync_from_symbol_table
+    pub(crate) fn clear_cvs_for_slot(&mut self, store: &Rc<RefCell<VarStore>>, idx: usize) {
+        self.frame_mut().clear_cv_for_symtab_slot(store, idx);
+        if !Rc::ptr_eq(store, &self.globals) {
+            if let Some(main) = self.frames.get_mut(0) {
+                if main.symtab_attached {
+                    main.clear_cv_for_symtab_slot(store, idx);
+                }
+            }
+            return;
+        }
+        let running = self.frames.len().saturating_sub(1);
+        for f in self
+            .frames
+            .iter_mut()
+            .take(running)
+            .take_while(|f| f.kind == crate::vm::FrameKind::Main || Rc::ptr_eq(&f.vars, store))
+        {
+            if f.symtab_attached {
+                f.clear_cv_for_symtab_slot(store, idx);
+            }
+        }
+    }
+
     /// [`Vm::store_in_globals`] for the base of a write walk
     /// (`$GLOBALS[...]` writes the global table too).
     fn base_in_globals(&self, base: &RBase) -> bool {
@@ -1989,7 +2028,46 @@ impl Vm {
 
     /// `place = v`.
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        // `$this->p[$k][$j] = v` & co. into an array property: no walk.
+        let v = match self.assign_prop_dims_fast(pid, v) {
+            Ok(r) => return Ok(r),
+            Err(v) => v,
+        };
+        self.vivify_cv_array(pid);
         self.with_cv_symtab(pid, |vm| vm.place_assign_impl(pid, v))
+    }
+
+    /// `$cv[...] = v` / `$cv[] = v` on an undefined or null variable of a
+    /// function whose symbol table is not attached: `ZEND_ASSIGN_DIM` and
+    /// `ZEND_FETCH_DIM_W` make the variable an empty array before they
+    /// look at the offset (no diagnostic; the array stays when the offset
+    /// then throws). Made here, the walk starts from the array in the
+    /// variable's private one-slot table ([`CvRoot`]) instead of from the
+    /// whole table attached for an undefined variable (every variable of
+    /// the frame copied in and back), which is what `$list[] = $x` without
+    /// an initialisation cost each time. A reference (possibly typed) and
+    /// `false` (deprecated) keep the generic walk.
+    #[inline]
+    fn vivify_cv_array(&mut self, pid: PlaceId) {
+        let Some(f) = self.frames.last_mut() else {
+            return;
+        };
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
+            return;
+        }
+        let Some(p) = f.code.places.get(pid as usize) else {
+            return;
+        };
+        let (PlaceBase::Cv(cv), Some(Seg::Dim(_) | Seg::Append)) = (&p.base, p.segs.first()) else {
+            return;
+        };
+        let cv = *cv as usize;
+        if let Some(slot) = f.cvs.get_mut(cv) {
+            let slot = slot.as_mut();
+            if matches!(slot, None | Some(Value::Null)) {
+                *slot = Some(Value::Array(ZArray::new()));
+            }
+        }
     }
 
     /// `place = $cv` with `$cv` undefined ([`Vm::place_assign_undef_cv_impl`]).
@@ -2004,7 +2082,54 @@ impl Vm {
 
     /// `place =& v`.
     pub(crate) fn place_assign_ref(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let v = match self.cv_assign_ref_fast(pid, v) {
+            Ok(r) => return Ok(r),
+            Err(v) => v,
+        };
         self.with_cv_symtab(pid, |vm| vm.place_assign_ref_impl(pid, v))
+    }
+
+    /// `$cv =& <reference>` (`ZEND_ASSIGN_REF` with a CV result operand,
+    /// `zend_assign_to_variable_reference`, `Zend/zend_execute.c`) in a
+    /// function whose symbol table is not attached: the CV slot is the
+    /// variable, so it is bound to the reference in place and its old value
+    /// released (`zval_ptr_dtor`: a possible root, a destructor when it was
+    /// the last handle), as [`Vm::write_var_root`] does on a table slot,
+    /// minus the attach/detach round trip of [`Vm::with_cv_symtab`] that
+    /// copied all the frame's variables into the table and back for each
+    /// `$a = &$b` and each iteration of `foreach (... as &$v)`. `Err` hands
+    /// `v` back, unchanged, for any other place, frame state or a value
+    /// that is not a reference ("Only variables should be assigned by
+    /// reference" and the other diagnostics stay the generic path's).
+    #[inline]
+    fn cv_assign_ref_fast(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+        let Value::Reference(r) = v else {
+            return Err(v);
+        };
+        let Some(f) = self.frames.last_mut() else {
+            return Err(Value::Reference(r));
+        };
+        // Not the main script's frame: the global table may still hold its
+        // own handle of the old value ([`Vm::bare_cv_slot`]).
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
+            return Err(Value::Reference(r));
+        }
+        let cv = match f.code.places.get(pid as usize) {
+            Some(p) if p.segs.is_empty() => match p.base {
+                PlaceBase::Cv(cv) => cv as usize,
+                _ => return Err(Value::Reference(r)),
+            },
+            _ => return Err(Value::Reference(r)),
+        };
+        let Some(slot) = f.cvs.get_mut(cv) else {
+            return Err(Value::Reference(r));
+        };
+        let old = slot.set(Some(Value::Reference(r.clone())));
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        Ok(Value::Reference(r))
     }
 
     /// Makes a place a reference.
@@ -2025,7 +2150,7 @@ impl Vm {
     /// (`preg_match($re, $s, $m)`) cost a copy of all the frame's variables.
     /// `None` for any other place or frame state.
     #[inline]
-    fn cv_make_ref_fast(&mut self, pid: PlaceId) -> Option<PhpRef> {
+    pub(crate) fn cv_make_ref_fast(&mut self, pid: PlaceId) -> Option<PhpRef> {
         let f = self.frames.last_mut()?;
         if f.symtab_attached
             || !matches!(
@@ -2044,9 +2169,133 @@ impl Vm {
         Some(slot.get_or_insert(Value::Null).make_ref())
     }
 
+    /// The reference a by-reference argument of a prepared native call
+    /// (`calls::send_ref`) gets for place `pid` of the current frame, when
+    /// making it can neither report anything nor run user code, so that no
+    /// frame is pushed over the prepared one: `$this->p` or `$o->p` on a
+    /// property cache hit ([`Vm::prop_cache_make_ref`], as
+    /// [`Vm::place_make_ref`] starts), or `$a[$k]` / `$this->p[$k]` of an
+    /// array held by a compiled variable (directly or through a reference)
+    /// or by a cached declared property ([`Vm::prop_cache_container`]),
+    /// `$k` an int or string literal or compiled variable: the element
+    /// becomes a reference, created as null when missing
+    /// (`ZEND_FETCH_DIM_W`, no notice) and the array separated first when
+    /// shared (`SEPARATE_ARRAY`). `None`, having changed nothing, for any
+    /// other place or frame state (the generic send then makes it).
+    pub(crate) fn place_make_ref_quiet(&mut self, pid: PlaceId) -> Option<PhpRef> {
+        /// What the place is, read before anything changes.
+        enum Shape {
+            Prop,
+            CvDim(u32, ArrayKey),
+            PropDim(ArrayKey),
+        }
+        let shape = {
+            let f = self.frames.last()?;
+            if f.symtab_attached
+                || !matches!(
+                    f.kind,
+                    crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+                )
+            {
+                return None;
+            }
+            let p = f.code.places.get(pid as usize)?;
+            match (&p.base, p.segs.as_slice()) {
+                (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_))]) => Shape::Prop,
+                (PlaceBase::Cv(cv), [Seg::Dim(k)]) => Shape::CvDim(*cv, quiet_key(f, *k)?),
+                (PlaceBase::Cv(_) | PlaceBase::This, [Seg::Prop(Operand::Lit(_)), Seg::Dim(k)]) => {
+                    Shape::PropDim(quiet_key(f, *k)?)
+                }
+                _ => return None,
+            }
+        };
+        match shape {
+            Shape::Prop => self.prop_cache_make_ref(pid),
+            Shape::CvDim(cv, key) => {
+                let slot = self.frames.last_mut()?.cvs.get_mut(cv as usize)?;
+                match slot.as_mut().as_mut()? {
+                    Value::Array(a) => Some(element_make_ref(a, key)),
+                    Value::Reference(r) => {
+                        let mut held = r.try_borrow_mut()?;
+                        match &mut *held {
+                            Value::Array(a) => Some(element_make_ref(a, key)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            Shape::PropDim(key) => {
+                let (obj, idx) = self.prop_cache_container(pid)?;
+                let data = object::data(&obj);
+                let mut slots = data.slots.try_borrow_mut().ok()?;
+                match slots.get_mut(idx)?.as_mut()? {
+                    Value::Array(a) => Some(element_make_ref(a, key)),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// `unset(place)`.
     pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
+        // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. on arrays: no
+        // walk, no symbol table.
+        if self.unset_dims_fast(pid) {
+            return Ok(());
+        }
+        if self.cv_unset_fast(pid) {
+            return Ok(());
+        }
         self.with_cv_symtab(pid, |vm| vm.place_unset_impl(pid))
+    }
+
+    /// The bare compiled variable `place` names in the running frame, when
+    /// that frame is a function's and its symbol table is not attached:
+    /// the CV slot is then the variable (php-src's `EX_VAR`), and an access
+    /// to it needs no table. Not the main script's: the global table keeps
+    /// its own entry for each of its variables, which an undefined slot
+    /// would not clear when the table is attached again
+    /// ([`crate::vm::Frame::sync_cvs_to_symtab`] skips undefined slots).
+    #[inline]
+    fn bare_cv_slot(&self, pid: PlaceId) -> Option<u32> {
+        let f = self.frames.last()?;
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        match (&p.base, p.segs.is_empty()) {
+            (PlaceBase::Cv(cv), true) => Some(*cv),
+            _ => None,
+        }
+    }
+
+    /// `unset($cv)` (`ZEND_UNSET_CV`) in a frame whose symbol table is not
+    /// attached: the slot becomes undefined, then the old value is
+    /// released (a possible cycle root; its destructor, which already sees
+    /// the variable unset, when this was its last handle), as
+    /// [`Vm::write_var_root`] does on a table slot, without
+    /// [`Vm::with_cv_symtab`] copying all the frame's variables into the
+    /// table and back. `false`, having changed nothing, for any other
+    /// place or frame state.
+    #[inline]
+    fn cv_unset_fast(&mut self, pid: PlaceId) -> bool {
+        let Some(cv) = self.bare_cv_slot(pid) else {
+            return false;
+        };
+        let Some(slot) = self
+            .frames
+            .last_mut()
+            .and_then(|f| f.cvs.get_mut(cv as usize))
+        else {
+            return false;
+        };
+        let old = slot.set(None);
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        true
     }
 
     /// `place op= v`.
@@ -2059,7 +2308,94 @@ impl Vm {
         if let Some(r) = self.assign_op_cv_scalar(pid, op, &v) {
             return r;
         }
+        let v = match self.assign_op_cv_slot(pid, op, v) {
+            Ok(r) => return r,
+            Err(v) => v,
+        };
         self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v, None))
+    }
+
+    /// `$cv op= v` (`ZEND_ASSIGN_OP` on a CV) of a defined variable of a
+    /// function whose symbol table is not attached, for the operands
+    /// [`Vm::assign_op_cv_scalar`] leaves out: `$s .= $object` (a
+    /// `__toString()` call), an array, an operand whose conversion warns.
+    /// The generic path's steps on the slot itself: the current value
+    /// (through a reference, if the variable is one) is read, the
+    /// operation runs (its diagnostics and user code with it), and the
+    /// result is written as [`Vm::write_var_root`] writes it (through a
+    /// typed reference's checks; the old value released as a possible
+    /// root). Without [`Vm::with_cv_symtab`], no copy of all the frame's
+    /// variables into the table and back around the operation (about 2,600
+    /// of the 7,000 instructions of `$s .= $object`). `Err` hands `v` back,
+    /// having changed nothing, for an undefined variable (whose warning
+    /// and exception order the generic path keeps), `$array += $array`
+    /// (made in place there), any other place or frame state.
+    fn assign_op_cv_slot(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        v: Value,
+    ) -> Result<VmResult<Value>, Value> {
+        let Some(cv) = self.bare_cv_slot(pid) else {
+            return Err(v);
+        };
+        let Some(f) = self.frames.last() else {
+            return Err(v);
+        };
+        let vars = Rc::as_ptr(&f.vars);
+        let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(cur) => cur.deref(),
+            None => return Err(v),
+        };
+        if op == BinaryOp::Add && matches!((&cur, &v), (Value::Array(_), Value::Array(_))) {
+            return Err(v);
+        }
+        let nv = match self.assign_op_value(op, &cur, &v) {
+            Ok(nv) => nv,
+            Err(t) if concats_in_place(op, &cur) => return Ok(Err(t)),
+            Err(t) => {
+                drop(cur);
+                return Ok(Err(self.failed_assign_op_cv(cv, vars, t)));
+            }
+        };
+        // The old value's handle is released before the write, so that
+        // the release below sees the count php-src's would.
+        drop(cur);
+        // The same frame: user code run by the operation (`__toString()`)
+        // returned to it, unless a fiber switched stacks meanwhile.
+        let Some(f) = self
+            .frames
+            .last_mut()
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+        else {
+            return Ok(Ok(nv));
+        };
+        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+            return Ok(Ok(nv));
+        };
+        let held = match slot.get() {
+            Some(Value::Reference(r)) => Some(r.clone()),
+            _ => None,
+        };
+        let old = match held {
+            Some(r) if crate::typed_refs::has_type_sources(&r) => {
+                return Ok(self.assign_ref(&r, nv));
+            }
+            // The table, if user code attached it meanwhile, holds the
+            // same reference.
+            Some(r) => Some(r.set(nv.clone())),
+            None => {
+                let old = slot.set(Some(nv.clone()));
+                // Attached by user code meanwhile: the table mirrors the slot.
+                f.sync_cv_to_symtab(cv, &nv);
+                old
+            }
+        };
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        Ok(Ok(nv))
     }
 
     /// `$cv op= v` (`ZEND_ASSIGN_OP` on a compiled variable) without the
@@ -2504,12 +2840,7 @@ impl Vm {
                     // so the frame's copy must not be written back over it
                     // when the error handler attaches or syncs the symbol
                     // table (`global $x` / `$GLOBALS` writes; bug79793).
-                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
-                    if let Some(main) = self.frames.get_mut(0) {
-                        if main.symtab_attached {
-                            main.clear_cv_for_symtab_slot(&store, idx);
-                        }
-                    }
+                    self.clear_cvs_for_slot(&store, idx);
                     let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                         let mut st = store.borrow_mut();
                         let step = match st.slots.get_mut(idx) {
@@ -2528,7 +2859,7 @@ impl Vm {
                     }
                 } else {
                     drop(st);
-                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
+                    self.clear_cvs_for_slot(&store, idx);
                     let mut st = store.borrow_mut();
                     let slot = st.slots[idx].as_mut().expect("slot defined");
                     let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
@@ -2723,6 +3054,58 @@ impl Vm {
             }
         }
         Ok(())
+    }
+
+    /// A compound assignment to the variable or static property `base`
+    /// whose operation threw `err`: a typed reference or a typed static
+    /// property takes the checked UNDEF result
+    /// (`zend_binary_assign_op_typed_ref()`,
+    /// `zend_binary_assign_op_typed_prop()`, Zend/zend_execute.c); any
+    /// other variable stays as it was (`zend_binary_op(var_ptr, var_ptr,
+    /// value)` leaves `op1`). Returns the exception to throw.
+    #[cold]
+    #[inline(never)]
+    fn failed_assign_op_root(&mut self, base: &RBase, err: Throw) -> Throw {
+        match base {
+            RBase::Cell(cell) => self.failed_assign_op_static(cell, err),
+            RBase::Var(store, idx) => {
+                let held = match store.borrow().slots.get(*idx) {
+                    Some(Some(Value::Reference(r))) => Some(r.clone()),
+                    _ => None,
+                };
+                match held {
+                    Some(r) => self.failed_assign_op_ref(&r, err),
+                    None => err,
+                }
+            }
+            _ => err,
+        }
+    }
+
+    /// [`Vm::failed_assign_op_root`] for compiled variable `cv` of the
+    /// frame whose variables are `vars`, when that frame is still the
+    /// current one.
+    #[cold]
+    #[inline(never)]
+    fn failed_assign_op_cv(
+        &mut self,
+        cv: u32,
+        vars: *const RefCell<VarStore>,
+        err: Throw,
+    ) -> Throw {
+        let held = self
+            .frames
+            .last()
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            .and_then(|f| f.cvs.get(cv as usize))
+            .and_then(|slot| match slot.get() {
+                Some(Value::Reference(r)) => Some(r.clone()),
+                _ => None,
+            });
+        match held {
+            Some(r) => self.failed_assign_op_ref(&r, err),
+            None => err,
+        }
     }
 
     /// The binary operation of a compound assignment.
@@ -3130,7 +3513,15 @@ impl Vm {
         };
         let nv = match self.assign_op_value(op, &cur, rhs) {
             Ok(nv) => nv,
-            Err(e) => return Err(held.unwrap_or(e)),
+            Err(e) => {
+                let in_place = concats_in_place(op, &cur);
+                drop(cur);
+                return Err(match held {
+                    Some(t) => t,
+                    None if in_place => e,
+                    None => self.failed_assign_op_root(&RBase::Var(store.clone(), idx), e),
+                });
+            }
         };
         let r = self.write_var_root(store, idx, WOp::Assign(nv))?;
         match held {
@@ -3161,12 +3552,7 @@ impl Vm {
         wop: WOp,
     ) -> VmResult<Value> {
         if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
-            self.frame_mut().clear_cv_for_symtab_slot(store, idx);
-            if let Some(main) = self.frames.get_mut(0) {
-                if main.symtab_attached {
-                    main.clear_cv_for_symtab_slot(store, idx);
-                }
-            }
+            self.clear_cvs_for_slot(store, idx);
         }
         match wop {
             WOp::Assign(v) => {
@@ -3311,17 +3697,28 @@ impl Vm {
                             // `zend_assign_op_overloaded_property` and the
                             // `get_property_ptr_ptr` path alike: read, operate,
                             // write back through the property handlers.
-                            let cur = match self.native_read_property(
+                            let (cur, native) = match self.native_read_property(
                                 &obj,
                                 name,
                                 crate::ext::PropCtx::ReadWrite,
                             )? {
-                                Some(v) => v.deref(),
-                                None => {
-                                    self.fetch_property_rw(&obj, name, RwThrow::Op(op, &rhs))?
+                                Some(v) => (v.deref(), true),
+                                None => (
+                                    self.fetch_property_rw(&obj, name, RwThrow::Op(op, &rhs))?,
+                                    false,
+                                ),
+                            };
+                            let nv = match self.assign_op_value(op, &cur, &rhs) {
+                                Ok(nv) => nv,
+                                // `zend_binary_assign_op_typed_prop` keeps
+                                // the checked UNDEF result; the handlers'
+                                // path writes only on success.
+                                Err(t) if native || concats_in_place(op, &cur) => return Err(t),
+                                Err(t) => {
+                                    drop(cur);
+                                    return Err(self.failed_assign_op_prop(&obj, name, t));
                                 }
                             };
-                            let nv = self.assign_op_value(op, &cur, &rhs)?;
                             drop(cur);
                             self.write_property(&obj, name, nv)
                         }
@@ -3376,7 +3773,13 @@ impl Vm {
                             self.flush_diags(diags)?;
                             self.finish_step(s, segs, w)
                         }
-                        _ => Ok(Value::Null),
+                        // `ZEND_FETCH_OBJ_UNSET` hands `ZEND_UNSET_DIM` &
+                        // co. the property's value: a string throws
+                        // "Cannot unset string offsets", another scalar
+                        // "Cannot unset offset in a non-array variable",
+                        // `false` deprecates, null unsets nothing.
+                        Some(other) => self.descend_temp(other, segs, i + 1, wop),
+                        None => Ok(Value::Null),
                     };
                 }
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
@@ -3413,14 +3816,38 @@ impl Vm {
                 // An undefined-variable offset is read before the object's
                 // handlers run (`zend_fetch_dimension_address`,
                 // `ZEND_ASSIGN_DIM`, `zend_binary_assign_op_obj_dim`).
+                // An exception the error handler throws there is held: the
+                // opcode goes on, and the "Cannot use object ... as array"
+                // error of an object without ArrayAccess is chained onto it
+                // (`zend_throw_error` while `EG(exception)` is set).
+                let mut held = None;
                 if matches!(seg, RSeg::Dim(Value::Null)) {
                     if let Some(name) = take_pending(segs, i) {
-                        self.warning(&crate::exec::undefined_var_msg(&name))?;
+                        held = self.rw_undefined_var(&name)?;
                     }
                 }
-                // `zend_binary_assign_op_obj_dim` reads OP_DATA next.
-                if last && matches!(wop, WOp::AssignOp(..)) {
-                    self.take_pending_value_warning(segs)?;
+                // `zend_binary_assign_op_obj_dim` reads OP_DATA next (a
+                // warning raised while an exception is pending reaches no
+                // handler: `zend_call_function` returns at once).
+                if last && matches!(wop, WOp::AssignOp(..)) && held.is_none() {
+                    held = self.held_value_warning(segs)?;
+                }
+                if let Some(t) = held {
+                    if crate::ext::hooks_of(&obj).is_some() {
+                        let keyopt = match seg {
+                            RSeg::Dim(k) => Some(k),
+                            _ => None,
+                        };
+                        if !last {
+                            return Err(t);
+                        }
+                        return Err(self.native_dim_write_held(&obj, keyopt, &wop, t));
+                    }
+                    if self.instance_of(&obj, b"arrayaccess") {
+                        return Err(t);
+                    }
+                    let assign_op = last && matches!(wop, WOp::AssignOp(..));
+                    return Err(self.object_as_array_error(&obj, Some(t), assign_op));
                 }
                 let key = match seg {
                     RSeg::Dim(k) => k.clone(),
@@ -3436,7 +3863,14 @@ impl Vm {
                             WOp::Assign(v) => {
                                 if let Some(f) = h.write_dimension {
                                     if v.is_null() {
-                                        self.take_pending_value_warning(segs)?;
+                                        // `ZEND_ASSIGN_DIM` goes on with an
+                                        // exception the "Undefined
+                                        // variable" warning threw.
+                                        if let Some(t) = self.held_value_warning(segs)? {
+                                            return Err(
+                                                self.native_dim_write_held(&obj, keyopt, &wop, t)
+                                            );
+                                        }
                                     }
                                     if f(self, &obj, keyopt, v)? {
                                         return Ok(v.clone());
@@ -3545,16 +3979,13 @@ impl Vm {
                 if !self.instance_of(&obj, b"arrayaccess") {
                     // `ZEND_ASSIGN_DIM` reads OP_DATA before
                     // `zend_std_write_dimension` throws.
-                    if last && matches!(wop, WOp::Assign(Value::Null)) {
-                        self.take_pending_value_warning(segs)?;
-                    }
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!(
-                            "Cannot use object of type {} as array",
-                            object::display_name(&object::class_of(&obj).name)
-                        ),
-                    ));
+                    let held = if last && matches!(wop, WOp::Assign(Value::Null)) {
+                        self.held_value_warning(segs)?
+                    } else {
+                        None
+                    };
+                    let assign_op = last && matches!(wop, WOp::AssignOp(..));
+                    return Err(self.object_as_array_error(&obj, held, assign_op));
                 }
                 if last {
                     let assign_ref = matches!(wop, WOp::AssignRef(_));
@@ -3702,12 +4133,7 @@ impl Vm {
             crate::gc::release_duplicate(Value::Reference(src));
             return self.write_place(base, &segs, WOp::Assign(v));
         };
-        self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
-        if let Some(main) = self.frames.get_mut(0) {
-            if main.symtab_attached {
-                main.clear_cv_for_symtab_slot(&store, idx);
-            }
-        }
+        self.clear_cvs_for_slot(&store, idx);
         let mut wop = WOp::AssignDeref(Box::new(DeferredRead {
             src,
             hit: DeferredHit::None,
@@ -3960,6 +4386,157 @@ impl Vm {
     /// before an object's final write (`offsetSet`, a native
     /// `write_dimension`, the property's), as `ZEND_ASSIGN_DIM` and
     /// `ZEND_ASSIGN_OBJ` read `OP_DATA` before calling the handlers.
+    /// [`Vm::take_pending_value_warning`] for an opcode that goes on after
+    /// an exception the error handler throws: that exception is returned
+    /// (see [`Vm::rw_undefined_var`]); an exit or a fatal error stops at
+    /// once.
+    fn held_value_warning(&mut self, segs: &[RSeg]) -> VmResult<Option<Throw>> {
+        match take_pending(segs, VALUE) {
+            Some(name) => self.rw_undefined_var(&name),
+            None => Ok(None),
+        }
+    }
+
+    /// The last step of `$o[k] = v` or `$o[k] op= v` on an object with
+    /// native dimension handlers (`ArrayObject`, `SplFixedArray`, ...)
+    /// after the "Undefined variable" warning of the offset or the value
+    /// threw `held`: php-src goes on with the opcode, so the handler
+    /// still writes (`spl_array_write_dimension()` appends for a null
+    /// offset), and an error it throws is chained onto `held`
+    /// (`zend_throw_exception_internal()` while `EG(exception)` is set).
+    /// A method the class overrides in user code is not called
+    /// (`zend_call_function()` returns at once with an exception
+    /// pending), and neither does the handler then write. Returns the
+    /// exception to throw.
+    #[cold]
+    #[inline(never)]
+    fn native_dim_write_held(
+        &mut self,
+        obj: &Obj,
+        key: Option<&Value>,
+        wop: &WOp,
+        held: Throw,
+    ) -> Throw {
+        let Throw::Exception(prev) = &held else {
+            return held;
+        };
+        let Some(h) = crate::ext::hooks_of(obj) else {
+            return held;
+        };
+        let cls = object::class_of(obj).clone();
+        let user = |name: &[u8]| {
+            cls.find_method(name)
+                .is_some_and(|m| matches!(m.func, crate::func::Func::User(_)))
+        };
+        let r = self.with_diagnostics_lost(|vm| match wop {
+            WOp::Assign(v) if !user(b"offsetset") => match h.write_dimension {
+                Some(f) => f(vm, obj, key, v).map(|_| ()),
+                None => Ok(()),
+            },
+            WOp::AssignOp(op, rhs) if !user(b"offsetget") && !user(b"offsetset") => {
+                // `zend_binary_assign_op_obj_dim`: read, operate, write.
+                let k = key.cloned().unwrap_or(Value::Null);
+                match (h.read_dimension, h.write_dimension) {
+                    (Some(read), Some(write)) => match read(vm, obj, &k) {
+                        Ok(Some(cur)) => match vm.assign_op_value(*op, &cur.deref(), rhs) {
+                            Ok(nv) => {
+                                drop(cur);
+                                write(vm, obj, key, &nv).map(|_| ())
+                            }
+                            Err(e) => Err(e),
+                        },
+                        Ok(None) => Ok(()),
+                        Err(e) => Err(e),
+                    },
+                    _ => Ok(()),
+                }
+            }
+            _ => Ok(()),
+        });
+        match r {
+            Ok(()) => held,
+            Err(Throw::Exception(new)) => {
+                crate::exceptions::chain_previous(&new, prev);
+                Throw::Exception(new)
+            }
+            Err(t) => t,
+        }
+    }
+
+    /// Runs `f` as php-src runs code while an exception is pending: the
+    /// user error handler is not called (`zend_call_function()` returns at
+    /// once, and `zend_error_impl()` then reports nothing), so a
+    /// diagnostic `f` raises is neither shown nor kept for
+    /// `error_get_last()`. Errors outside the handler's mask take the
+    /// default path as before; a fatal error still stops.
+    #[cold]
+    #[inline(never)]
+    fn with_diagnostics_lost<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let mask = self
+            .error_handlers
+            .last()
+            .filter(|h| !h.callback.is_null())
+            .map_or(0, |h| h.mask);
+        let reporting = self.error_reporting;
+        self.error_reporting &= !mask;
+        let saved = self
+            .error_handlers
+            .last_mut()
+            .map(|h| std::mem::replace(&mut h.mask, 0));
+        let last = self.last_error.clone();
+        let r = f(self);
+        let lost = self
+            .last_error
+            .as_ref()
+            .is_some_and(|e| e.level & mask != 0);
+        if lost {
+            self.last_error = last;
+        }
+        self.error_reporting = reporting;
+        if let (Some(m), Some(h)) = (saved, self.error_handlers.last_mut()) {
+            h.mask = m;
+        }
+        r
+    }
+
+    /// The error of an array access on an object without ArrayAccess:
+    /// `zend_bad_array_access` from `zend_std_write_dimension` and the
+    /// other standard dimension handlers (Zend/zend_object_handlers.c),
+    /// chained onto `held`, the exception already in flight, as
+    /// `zend_throw_error` chains onto `EG(exception)`. `$o[k] op= v`
+    /// throws twice (`zend_binary_assign_op_obj_dim`, Zend/zend_execute.c:
+    /// `read_dimension` fails, then `zend_use_object_as_array`), the
+    /// second error chained onto the first.
+    #[cold]
+    #[inline(never)]
+    fn object_as_array_error(&mut self, obj: &Obj, held: Option<Throw>, assign_op: bool) -> Throw {
+        let msg = format!(
+            "Cannot use object of type {} as array",
+            object::display_name(&object::class_of(obj).name)
+        );
+        let mut prev = match held {
+            Some(Throw::Exception(o)) => Some(o),
+            Some(t) => return t,
+            None => None,
+        };
+        for _ in 0..usize::from(assign_op) {
+            match self.make_throw("Error", &msg) {
+                Throw::Exception(o) => {
+                    if let Some(p) = &prev {
+                        crate::exceptions::chain_previous(&o, p);
+                    }
+                    prev = Some(o);
+                }
+                t => return t,
+            }
+        }
+        let t = self.make_throw("Error", &msg);
+        if let (Throw::Exception(o), Some(p)) = (&t, &prev) {
+            crate::exceptions::chain_previous(o, p);
+        }
+        t
+    }
+
     fn take_pending_value_warning(&mut self, segs: &[RSeg]) -> VmResult<()> {
         match take_pending(segs, VALUE) {
             Some(name) => self.warning(&crate::exec::undefined_var_msg(&name)),
@@ -4062,12 +4639,7 @@ impl Vm {
         if let RBase::Var(store, idx) = &base {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
-                    self.frame_mut().clear_cv_for_symtab_slot(store, *idx);
-                    if let Some(main) = self.frames.get_mut(0) {
-                        if main.symtab_attached {
-                            main.clear_cv_for_symtab_slot(store, *idx);
-                        }
-                    }
+                    self.clear_cvs_for_slot(store, *idx);
                     let mut st = store.borrow_mut();
                     if let Some(Value::Str(s)) = st.slots.get_mut(*idx).and_then(Option::as_mut) {
                         if !ZStr::ptr_eq(s, add) {
@@ -4118,7 +4690,13 @@ impl Vm {
             Ok(nv) => nv,
             Err(e) => {
                 let err = self.rt_throw(e);
-                return Err(pending.unwrap_or(err));
+                let in_place = concats_in_place(op, &cur);
+                drop(cur);
+                return Err(match pending {
+                    Some(t) => t,
+                    None if in_place => err,
+                    None => self.failed_assign_op_root(&base2, err),
+                });
             }
         };
         drop(cur);
@@ -4647,6 +5225,14 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
+        // `$this->p[$k][$j]` & co. on an array property: no walk.
+        if let Some(v) = self.fetch_prop_dims_fast(pid, mode) {
+            return Ok(v);
+        }
+        // `$GLOBALS['name'][$k]` on a variable of the global scope.
+        if let Some(v) = self.fetch_global_dims_fast(pid, mode) {
+            return Ok(v);
+        }
         if matches!(
             self.frame().code.places[pid as usize].base,
             PlaceBase::Global(_) | PlaceBase::GlobalsArray
@@ -5002,6 +5588,10 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
+        // `isset($this->p[$k][$j])` & co. on an array property: no walk.
+        if let Some(r) = self.isset_prop_dims_fast(pid, empty) {
+            return Ok(r);
+        }
         let (single, head) = {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
@@ -5266,21 +5856,28 @@ impl Vm {
         if is_superglobal_name(&name_bytes) {
             self.is_auto_global(&name_bytes);
         }
-        if let Some(main_frame) = self.frames.first() {
-            if main_frame.kind == crate::vm::FrameKind::Main {
-                if let Some(cv) = main_frame
-                    .code
-                    .cv_names
-                    .iter()
-                    .position(|n| n.as_bytes() == &name_bytes[..])
-                {
-                    if let Some(slot) = main_frame.cvs.get(cv) {
-                        if let Some(v) = slot.get() {
-                            return Some(v.deref());
-                        }
+        // The main frame's own variable when that frame is the newest of
+        // the global scope; while a top-level include or `eval` runs above
+        // it (`Vm::main_is_global_top`), the table, which
+        // `attach_globals_symbol_table` just brought up to date from that
+        // frame, has the current value.
+        let main = self
+            .frames
+            .first()
+            .filter(|f| f.kind == crate::vm::FrameKind::Main && self.main_is_global_top());
+        if let Some(main_frame) = main {
+            if let Some(cv) = main_frame
+                .code
+                .cv_names
+                .iter()
+                .position(|n| n.as_bytes() == &name_bytes[..])
+            {
+                if let Some(slot) = main_frame.cvs.get(cv) {
+                    if let Some(v) = slot.get() {
+                        return Some(v.deref());
                     }
-                    return None;
                 }
+                return None;
             }
         }
         let idx = self.globals.borrow_mut().find(&name_bytes)?;
@@ -5411,6 +6008,35 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
 }
 
 pub(crate) mod propcache;
+
+/// The array key operand `k` of frame `f` stands for, when reading it can
+/// report nothing: an int or a string literal, or a compiled variable
+/// holding one (not through a reference). `None` otherwise.
+fn quiet_key(f: &crate::vm::Frame, k: Operand) -> Option<ArrayKey> {
+    let v = match k {
+        Operand::Lit(i) => f.code.literals.get(i as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+        _ => return None,
+    };
+    match v {
+        Value::Int(i) => Some(ArrayKey::Int(*i)),
+        Value::Str(s) => Some(ArrayKey::from_zstr(s)),
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_DIM_W` + make-ref of element `key` of array `a`: the array
+/// separated when shared, the element created as null when missing, and
+/// the element made a reference (or its reference returned).
+fn element_make_ref(a: &mut ZArray, key: ArrayKey) -> PhpRef {
+    let t = a.make_mut();
+    if let Some(v) = t.get_mut(&key) {
+        return v.make_ref();
+    }
+    let r = PhpRef::new(Value::Null);
+    t.insert(key, Value::Reference(r.clone()));
+    r
+}
 
 #[cfg(test)]
 mod tests;

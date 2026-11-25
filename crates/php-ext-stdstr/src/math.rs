@@ -278,7 +278,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("decoct(int $num): string", decoct)
         .function_static("dechex(int $num): string", dechex)
         .function_static("base_convert(string $num, int $from_base, int $to_base): string", base_convert)
-        .function_static("number_format(int|float $num, int $decimals = 0, ?string $decimal_separator = \".\", ?string $thousands_separator = \",\"): string", number_format)
+        .function_static("number_format(@zpp-number float $num, int $decimals = 0, ?string $decimal_separator = \".\", ?string $thousands_separator = \",\"): string", number_format)
         .function_static("fmod(float $num1, float $num2): float", fmod)
         .function_static("fdiv(float $num1, float $num2): float", fdiv)
         .function_static("fpow(float $num, float $exponent): float", fpow);

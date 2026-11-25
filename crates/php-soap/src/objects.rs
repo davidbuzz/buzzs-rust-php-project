@@ -3,7 +3,7 @@
 //! Constructors of the value classes (`SoapParam`, `SoapHeader`,
 //! `SoapVar`) and the global functions.
 
-use php_runtime::{Obj, RtResult, RuntimeError, Value};
+use php_runtime::{Obj, RtResult, RuntimeError, Value, ZStr};
 
 use crate::consts::*;
 use crate::encoders::default_by_type;
@@ -95,10 +95,10 @@ pub fn soap_var_construct(
     this: &Obj,
     data: &Value,
     encoding: Option<i64>,
-    type_name: Option<&[u8]>,
-    type_namespace: Option<&[u8]>,
-    node_name: Option<&[u8]>,
-    node_namespace: Option<&[u8]>,
+    type_name: Option<&ZStr>,
+    type_namespace: Option<&ZStr>,
+    node_name: Option<&ZStr>,
+    node_namespace: Option<&ZStr>,
 ) -> RtResult<()> {
     match encoding {
         None => host.write_slot(this, "enc_type", Value::Int(UNKNOWN_TYPE)),
@@ -122,8 +122,10 @@ pub fn soap_var_construct(
         ("enc_name", node_name),
         ("enc_namens", node_namespace),
     ] {
+        // `ZVAL_STR_COPY` (ext/soap/soap.c): the property shares the
+        // argument's string; a 2 GiB node name is not copied.
         if let Some(v) = v.filter(|v| !v.is_empty()) {
-            host.write_slot(this, slot, Value::from(v));
+            host.write_slot(this, slot, Value::Str(v.clone()));
         }
     }
     Ok(())

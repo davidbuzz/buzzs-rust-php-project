@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/file.c. Similarity metric to original: 21%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Stig Bakken <ssb@php.net>
+//            Andi Gutmans <andi@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            PHP 4.0 patches by Thies C. Arntzen (thies@thieso.net)
+//            PHP streams by Wez Furlong (wez@thebrainroom.com)
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `get_meta_tags()` (`php_next_meta_token` in `ext/standard/file.c`).
 
 use php_streams::stream::Stream;

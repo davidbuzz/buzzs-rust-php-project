@@ -1,5 +1,8 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src Zend/zend_partial.c. Similarity metric to original: 15%
+//   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
+//   Authors: Arnaud Le Blanc <arnaud.lb@gmail.com>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Partial function application (`f($a, ?, ...)`), after php-src's
 //! `Zend/zend_partial.c`.
 //!

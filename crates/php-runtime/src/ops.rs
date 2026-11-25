@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src Zend/zend_operators.c. Similarity metric to original: 17%
+//   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
+//   Authors: Andi Gutmans <andi@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! PHP operators (`zend_operators.c`): arithmetic, bitwise, concatenation,
 //! comparison, increment/decrement and logical operators.
 //!

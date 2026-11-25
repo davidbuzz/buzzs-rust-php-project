@@ -122,9 +122,29 @@ fn is_c_locale(name: &[u8]) -> bool {
 /// `pcre_get_compiled_regex_cache()`: compiles `pattern` (or fetches it
 /// from the cache), emitting PHP's warnings. `Ok(None)` means the pattern
 /// is invalid; the warning was emitted and `preg_last_error()` set.
-pub(crate) fn compile(vm: &mut Vm, pattern: &[u8]) -> VmResult<Option<Regex>> {
-    sync_config(vm);
+///
+/// A hit (the common case) is one lookup by the hash the string already
+/// carries (`zend_hash_find(&PCRE_G(pcre_cache), regex)`): the pattern is
+/// not hashed again and nothing is allocated.
+pub(crate) fn compile(vm: &mut Vm, pattern: &ZStr) -> VmResult<Option<Regex>> {
+    if CONFIG_STALE.with(Cell::get) {
+        sync_config(vm);
+    }
     let locale = ctype_locale();
+    if locale.is_none() {
+        let bytes = pattern.as_bytes();
+        let hash = pattern.hash_value();
+        if let Some(re) = with(|p| p.cached(bytes, hash)) {
+            return Ok(Some(re));
+        }
+    }
+    compile_slow(vm, pattern.as_bytes(), locale)
+}
+
+/// [`compile`] past a cache hit: compiles (under the locale's key when
+/// one is set), emitting the warnings.
+#[inline(never)]
+fn compile_slow(vm: &mut Vm, pattern: &[u8], locale: Option<Vec<u8>>) -> VmResult<Option<Regex>> {
     // The cache outlives the request (`pemalloc` in php-src): what a
     // compilation keeps is not part of `memory_get_usage()`.
     let (result, warnings) = with(|p| {
@@ -185,6 +205,30 @@ mod tests {
         let mut grown = small;
         grown.append(b"\xff");
         assert!(!known_valid_utf8(&grown));
+    }
+
+    /// The cache is looked up by the string's own hash, so the two hashes
+    /// must be one function.
+    #[test]
+    fn string_hash_is_the_cache_hash() {
+        for p in [
+            &b""[..],
+            b"/",
+            b"/a+/",
+            b"/abcdefgh/",
+            b"/(\\d+)-(\\d+)/u",
+            b"\xff\x00",
+        ] {
+            assert_eq!(
+                ZStr::from(p).hash_value(),
+                php_pcre::pattern_hash(p),
+                "{p:?}"
+            );
+        }
+        assert_eq!(
+            ZStr::intern(b"/interned/i").hash_value(),
+            php_pcre::pattern_hash(b"/interned/i")
+        );
     }
 
     #[test]

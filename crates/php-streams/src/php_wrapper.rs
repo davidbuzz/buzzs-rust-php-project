@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/php_fopen_wrapper.c. Similarity metric to original: 23%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Jim Winstead <jimw@php.net>
+//            Hartmut Holzgraefe <hholzgra@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `php://` wrapper (`ext/standard/php_fopen_wrapper.c`).
 
 use crate::context::ContextRef;

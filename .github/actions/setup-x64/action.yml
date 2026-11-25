@@ -1,0 +1,11 @@
+# php-src's actions/setup-x64: what the tests expect of the host. Kept: the de_DE locale
+# (ext/ctype and others test under it). Left out, being out of scope: the slapd (LDAP),
+# snmpd and MSSQL (ODBC, DBLIB) setup. Also used on the AArch64 runner.
+name: Setup
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -x
+        sudo locale-gen de_DE

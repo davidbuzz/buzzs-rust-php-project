@@ -1,0 +1,135 @@
+-- 0
+ctor a0
+ctor b0
+in scope
+dtor a0
+dtor b0
+b0
+ctor x0
+ctor y0
+dtor x0
+overwritten
+dtor y0
+unset
+ctor e1
+ctor e2
+dtor e1
+dtor e2
+arr null
+ctor u0
+dtor u0
+ok
+ctor o0
+clone o0'
+clone o0''
+dtor o0
+dtor o0'
+dtor o0''
+array (
+  0 => 'o0',
+  1 => 'o0\'',
+  2 => 'o0\'\'',
+)
+array (
+  0 => 0,
+  1 => 0,
+  2 => 1,
+  3 => -1,
+)
+ctor r0
+dtor r0
+after discarded ret
+ctor r0
+kept
+dtor r0
+end 0
+-- 1
+ctor a1
+ctor b1
+in scope
+dtor a1
+dtor b1
+b1
+ctor x1
+ctor y1
+dtor x1
+overwritten
+dtor y1
+unset
+ctor e1
+ctor e2
+dtor e1
+dtor e2
+arr null
+ctor u1
+dtor u1
+caught boom1
+ctor o1
+clone o1'
+clone o1''
+dtor o1
+dtor o1'
+dtor o1''
+array (
+  0 => 'o1',
+  1 => 'o1\'',
+  2 => 'o1\'\'',
+)
+array (
+  0 => 0,
+  1 => 0,
+  2 => 3,
+  3 => 1,
+)
+ctor r1
+dtor r1
+after discarded ret
+ctor r1
+kept
+dtor r1
+end 1
+-- 2
+ctor a2
+ctor b2
+in scope
+dtor a2
+dtor b2
+b2
+ctor x2
+ctor y2
+dtor x2
+overwritten
+dtor y2
+unset
+ctor e1
+ctor e2
+dtor e1
+dtor e2
+arr null
+ctor u2
+dtor u2
+ok
+ctor o2
+clone o2'
+clone o2''
+dtor o2
+dtor o2'
+dtor o2''
+array (
+  0 => 'o2',
+  1 => 'o2\'',
+  2 => 'o2\'\'',
+)
+array (
+  0 => 0,
+  1 => 0,
+  2 => 2,
+  3 => 1,
+)
+ctor r2
+dtor r2
+after discarded ret
+ctor r2
+kept
+dtor r2
+end 2

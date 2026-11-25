@@ -190,6 +190,75 @@ var_dump(function_exists('f2'), new C instanceof I);
     );
 }
 
+/// The preloaded classes are declared again in each request, whatever
+/// order their file has them in: a class above its parent, and a child of
+/// a class that uses a trait with a static variable
+/// (ext/opcache/tests/preload_trait_multiple_fixup.phpt). The declaration
+/// order is the one `preload_sort_classes()` leaves: a class changes
+/// places with a parent or interface listed after it. Expected output
+/// from php8.5 with `opcache.preload`.
+#[test]
+fn preloaded_classes_install_in_dependency_order_and_list_as_php_src_sorts_them() {
+    assert_eq!(
+        preload_file_then_run(
+            "order",
+            r#"<?php
+class Later extends Base { function who() { return "later"; } }
+class Base {}
+trait T3 { public function method() { static $x; $str = "Foo"; echo "$str\n"; } }
+class C3 { use T3; }
+class C4 extends C3 {}
+"#,
+            r#"<?php
+(new C4)->method();
+echo (new Later)->who(), "\n";
+$on = false;
+foreach (get_declared_classes() as $c) { $on = $on || $c === 'Base'; if ($on) { echo $c, ','; } }
+echo "\n";
+"#,
+        ),
+        "Foo\nlater\nBase,Later,C3,C4,\n"
+    );
+    assert_eq!(
+        preload_file_then_run(
+            "order2",
+            r"<?php
+class Early {}
+class Later extends Base {}
+class Mid implements I2 {}
+interface I2 {}
+class Base {}
+class Child extends Later {}
+trait T {}
+class U { use T; }
+class V extends U {}
+class W {}
+",
+            r#"<?php
+$on = false;
+foreach (get_declared_classes() as $c) { $on = $on || $c === 'Early'; if ($on) { echo $c, ','; } }
+echo "\n";
+"#,
+        ),
+        "Early,Base,Mid,Later,Child,U,V,W,\n"
+    );
+    // A trait listed after the class that uses it: php-src's sort leaves
+    // it there, and the class is still declared.
+    assert_eq!(
+        preload_file_then_run(
+            "order3",
+            r#"<?php
+class U2 { use T2; }
+trait T2 { function hi() { return "hi"; } }
+"#,
+            r#"<?php
+echo (new U2)->hi(), "\n";
+"#,
+        ),
+        "hi\n"
+    );
+}
+
 /// A function declared inside a function while preloading is preloaded,
 /// and its declaration is gone from the enclosing function.
 #[test]

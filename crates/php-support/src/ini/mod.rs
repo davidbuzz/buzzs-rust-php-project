@@ -24,8 +24,8 @@ mod value;
 
 pub use quantity::{parse_bool, parse_quantity, parse_uquantity};
 pub use registry::{
-    core_directives, Access, IniDirective, IniEntryInfo, IniRegistry, IniTyped, ModifyHandler,
-    Stage, CLI_OVERRIDES,
+    core_directives, Access, IniDirective, IniDisplayer, IniEntryInfo, IniRegistry, IniTyped,
+    ModifyHandler, Stage, CLI_OVERRIDES,
 };
 pub use value::{IniKey, IniMap, IniScalar, IniValue};
 

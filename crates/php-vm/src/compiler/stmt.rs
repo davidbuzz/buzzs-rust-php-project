@@ -1358,7 +1358,8 @@ impl Compiler<'_> {
             ExprKind::Call { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticCall { .. }
-            | ExprKind::New { .. } => {
+            | ExprKind::New { .. }
+            | ExprKind::Pipe { .. } => {
                 let saved = std::mem::take(&mut self.f().sc_jumps);
                 let r = self.compile_call_like(e, false);
                 let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
@@ -1418,6 +1419,9 @@ impl Compiler<'_> {
             if !super::expr::is_superglobal(&id.name) {
                 self.note_cv_write(&id.name);
                 let cv = self.cv(&id.name);
+                // zend_compile_assign moves to the variable's line before
+                // ZEND_ASSIGN, and the next list element is fetched there.
+                self.f().line = target.span.line;
                 self.emit(Op::AssignCv { cv, val, dst });
                 return Ok(());
             }

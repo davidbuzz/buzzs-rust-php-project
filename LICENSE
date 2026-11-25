@@ -1,4 +1,18 @@
 Copyright © 2025–2026, David Buzz <davidbuzz@gmail.com>
+Copyright © 1999–2026, The PHP Group and Contributors.
+Copyright © 1999–2026, Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc.
+
+buzzs-rust-php-project is a Rust port of php-src
+(https://github.com/php/php-src). Most of its source files are translations
+of php-src C files and remain derivative works of them: the copyright in
+those files is shared between the php-src authors (The PHP Group and
+Contributors, Zend Technologies, and the individual authors named in each
+C file's header) and the authors of the port. Parts of this repository are
+derived from third-party code bundled with php-src that is NOT covered by
+the license below; see THIRD_PARTY.md and the LICENSES/ directory.
+
+Except where THIRD_PARTY.md or a file's header says otherwise, the
+following license applies:
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -33,58 +47,42 @@ Addendum: reusing files from this repository
 This addendum states, in plain terms, what you must do to stay compliant
 when you copy, port, or redistribute file/s from buzzs-rust-php-project
 (https://github.com/davidbuzz/buzzs-rust-php-project). It restates the
-BSD-3-Clause conditions above; where it is simpler than the license text,
-the license text governs.
+license conditions above; where it is simpler than the license text, the
+license text governs.
 
-1. Keep the notices. Every source file in this repository carries a
-   two-line copyright header:
-
-       // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-
-   If you copy a file (whole, modified, or ported to another language),
-   keep that header in the copy, and ship the full BSD-3-Clause text
-   above (the LICENSE file) with your distribution. For source
-   redistributions the header and license text must be in the files and
-   the distribution; for binary-only redistributions, reproduce the
-   copyright notice and this list of conditions in your documentation
-   or equivalent (an About/Licenses page, for example).
+1. Keep the notices. Keep every copyright notice in a file you copy —
+   the port's own and the upstream ones (The PHP Group and Contributors,
+   Zend Technologies, the authors a ported file names, and any
+   third-party notice) — whether you copy the file whole, modify it, or
+   port it to another language. Ship this LICENSE file, THIRD_PARTY.md
+   and the LICENSES/ directory with your distribution. For binary-only
+   redistributions, reproduce the copyright notices and the license
+   conditions in your documentation or equivalent (an About/Licenses
+   page, for example).
 
 2. Say what is yours. You do not need to mark unchanged copies, but you
    may not present copied or derived files as your original work. If you
    modify a file, you may add your own copyright notice on top of the
-   existing one — the existing notice stays.
+   existing ones — the existing notices stay.
 
-3. Don't use the name. Neither the name of the project
-   (buzzs-rust-php-project), nor "David Buzz", may be used to endorse or
-   promote products derived from this software without prior written
-   permission. Saying you built something that uses or was derived from
-   this project, factually, is fine.
+3. Don't use the names. Neither the name of the project
+   (buzzs-rust-php-project), nor "David Buzz", nor the names of the
+   php-src copyright holders and contributors (The PHP Group, Zend
+   Technologies, or any author) may be used to endorse or promote products
+   derived from this software without prior written permission. Saying,
+   factually, that you built something that uses or was derived from this
+   project is fine.
 
-4. Third-party files travel under their own licenses. Some files in this
-   repository are ports or copies of PHP/Zend sources and carry PHP-3.01
-   or Zend copyright notices instead of (or alongside) the BSD header.
-   The BSD grant above does not cover them; if you reuse those files,
-   you must comply with the PHP License 3.01 (or the notice in the file)
-   yourself. The same applies to the test tree under modules/php-src
-   (PHP-3.01, © The PHP Group and Contributors), tools/lcov
-   (GPL-2.0-or-later), and linked system libraries. When in doubt, the
-   header at the top of each file states which license covers it.
+4. Third-party code travels under its own license. Some files are derived
+   from libraries that php-src bundles under their own licenses (libmbfl
+   and libbcmath under the GNU LGPL 2.1, timelib under MIT, lexbor under
+   Apache 2.0, and others). THIRD_PARTY.md lists them, the crates that
+   derive from each, and the license text in LICENSES/. The BSD grant
+   above does not cover those portions; if you reuse them you must comply
+   with their licenses. The same applies to the test tree under
+   modules/php-src (php-src's own license), tools/lcov
+   (GPL-2.0-or-later), and linked system libraries.
 
 5. No warranty, no liability. The software comes as-is, exactly as the
-   disclaimer above says; you are responsible for what you do with it.
-
-There is no requirement to contribute changes back, no copyleft, and no
-fee. Attribution of the notices above is the whole of the compliance
-burden.
-
----
-
-Third-party components retain their own licenses and are not covered by the
-grant above. Notably:
-
-- modules/php-src (the upstream PHP source tree, used as the compatibility
-  oracle and test suite): PHP-3.01, Copyright © 1999–2026 The PHP Group and
-  Contributors.
-- tools/lcov: GPL-2.0-or-later.
-- Linked system libraries (PCRE2, libxml2, libzip, OpenSSL, ICU, libmagic,
-  libsodium, SQLite, zlib, bzip2): their respective licenses.
+   disclaimers above and in the third-party licenses say; you are
+   responsible for what you do with it.

@@ -696,6 +696,12 @@ macro_rules! operand_visitor {
                 },
                 Op::SendUnpack { src } => f(src),
                 Op::DoCall { .. } => {}
+                Op::InitUserCall { callee, .. } => f(callee),
+                Op::SendUser { src, .. } => f(src),
+                Op::SendArray { src, len, .. } => {
+                    f(src);
+                    f(len);
+                }
                 Op::CallableConvert { .. } => {}
                 Op::SendPlaceholder { .. } => {}
                 Op::CallablePartial { .. } => {}

@@ -69,6 +69,34 @@ fn str_replace_arrays_and_count() {
     );
 }
 
+/// `explode()` with every piece kept (the list built to size) and with a
+/// limit, then appended to: keys, values and the next index as php8.5
+/// gives them.
+#[test]
+fn explode_lists_append_like_php() {
+    let out = run(r#"
+        function t() {
+            foreach ([[',', 'a,b,c', PHP_INT_MAX], [',', 'a,b,c', 3], [',', 'a,b,c', 2],
+                      [',', ',a,', 5], [',,', 'a,,,b,,', 9], [',', 'abc', 9], [',', '', 4],
+                      [',', 'a,b,c', -1], ['ab', 'xabyabz', 3]] as [$d, $s, $l]) {
+                $r = explode($d, $s, $l);
+                $r[] = 'n';
+                foreach ($r as $k => $v) { echo "$k=$v "; }
+                echo "\n";
+            }
+            $r = explode(',', str_repeat('x,', 20));
+            $r[] = 'n';
+            echo $r[19], '|', $r[20], '|', $r[21], "\n";
+        }
+        t();
+    "#);
+    assert_eq!(
+        out,
+        "0=a 1=b 2=c 3=n \n0=a 1=b 2=c 3=n \n0=a 1=b,c 2=n \n0= 1=a 2= 3=n \n\
+         0=a 1=,b 2= 3=n \n0=abc 1=n \n0= 1=n \n0=a 1=b 2=n \n0=x 1=y 2=z 3=n \nx||n\n"
+    );
+}
+
 #[test]
 fn substr_replace_forms() {
     let out = run(r#"
@@ -297,8 +325,14 @@ fn unchanged_htmlspecialchars_preserves_literal_and_dynamic_identity() {
     );
 }
 
+/// `str_repeat($s, 1)` is a string of its own, as in php-src, which always
+/// allocates the result (`zend_string_safe_alloc`): `debug_zval_dump()`
+/// shows refcount 1 where the argument itself would show `interned`.
+/// (That the copy takes exactly the room of the original is tested with
+/// the `php` binary, which has the counting allocator: php-cli's
+/// `concat_empty_literal.rs`.) Expected output from `/usr/bin/php8.5 -n`.
 #[test]
-fn str_repeat_one_preserves_string_storage() {
+fn str_repeat_one_is_a_new_string_of_the_same_size() {
     use php_runtime::{Value, ZStr};
 
     let ext = php_ext_stdstr::StdStr;
@@ -315,16 +349,22 @@ fn str_repeat_one_preserves_string_storage() {
         let Value::Str(repeated) = repeated else {
             panic!("string result");
         };
-        assert!(ZStr::ptr_eq(&input, &repeated));
-        assert_eq!(input.is_interned(), repeated.is_interned());
+        assert_eq!(input.as_bytes(), repeated.as_bytes());
+        assert!(!ZStr::ptr_eq(&input, &repeated));
+        assert!(!repeated.is_interned());
     }
     assert_eq!(
         run(r#"
             debug_zval_dump(str_repeat('abc', 1), str_repeat('abc', 0), str_repeat('', 2));
             try { str_repeat('', -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+            // Longer than one block of the fill, and not a whole number of blocks.
+            $r = str_repeat('abc', 3000); $ok = strlen($r) === 9000;
+            for ($i = 0; $i < 9000; $i += 3) { $ok = $ok && $r[$i] === 'a' && $r[$i + 1] === 'b' && $r[$i + 2] === 'c'; }
+            echo strlen(str_repeat('ab', 5000)), ' ', $ok ? 'same' : 'differs', "\n";
         "#),
-        "string(3) \"abc\" interned\nstring(0) \"\" interned\nstring(0) \"\" interned\n\
-         str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n"
+        "string(3) \"abc\" refcount(1)\nstring(0) \"\" interned\nstring(0) \"\" interned\n\
+         str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n\
+         10000 same\n"
     );
 }
 
@@ -411,7 +451,162 @@ fn memory_limit_is_enforced_for_large_results() {
     );
     assert_eq!(
         out,
-        "2000\nPHP Fatal error:  Allowed memory size of 8388608 bytes exhausted (tried to allocate 100000032 bytes) in t.php on line 1\n"
+        "2000\nPHP Fatal error:  Allowed memory size of 8388608 bytes exhausted (tried to allocate 100003840 bytes) in t.php on line 1\n"
             .replace("PHP Fatal error:  ", "\nFatal error: ")
+    );
+}
+
+/// `strspn()`/`strcspn()` read `$length` in place: `null`, a negative and
+/// a positive length, none, and a `TypeError` (`/usr/bin/php8.5 -n`).
+#[test]
+fn spn_length_argument() {
+    assert_eq!(
+        run(
+            r#"echo strcspn("abcdef", "e", 1, null), strspn("aab", "a", 0, 1), strcspn("abcdef", "f", 0, -2), strspn("aab", "ab", 1), "|"; try { strspn("a", "a", 0, "x"); } catch (TypeError $e) { echo $e->getMessage(); }"#
+        ),
+        "3142|strspn(): Argument #4 ($length) must be of type ?int, string given"
+    );
+}
+
+/// `str_replace()` with arguments read in place and a replacement as long
+/// as the search patched into one copy: one byte, several bytes,
+/// overlapping candidates, the last byte, no occurrence, a replacement
+/// equal to the search, longer and empty replacements, array subjects
+/// and searches, numbers, and a reference subject (`/usr/bin/php8.5 -n`).
+#[test]
+fn str_replace_same_length_and_in_place() {
+    let out = run(
+        r"echo str_replace('l', 'L', '  Hello World  ', $c), $c, '|';
+        echo str_replace('aa', 'bb', 'aaaaa', $c), $c, '|';
+        echo str_replace('ab', 'xy', 'abab_ab', $c), $c, '|';
+        echo str_replace('z', 'y', 'abc', $c), $c, '|';
+        echo str_replace('c', 'c', 'abc', $c), $c, '|';
+        echo str_replace('d', 'D', 'abcd', $c), $c, '|';
+        echo str_replace('l', 'LL', 'hello', $c), $c, '|';
+        echo str_replace('ll', '', 'hello', $c), $c, '|';
+        echo implode(',', str_replace('a', 'A', ['x' => 'banana', 'y' => 'cherry', 3])), '|';
+        echo str_replace(['a', 'b'], ['b', 'c'], 'ab', $c), $c, '|';
+        echo str_replace(1, 2, 1213, $c), $c, '|';
+        $s = 'aXa'; $r = &$s; echo str_replace('X', 'Y', $r), $s;",
+    );
+    assert_eq!(
+        out,
+        "  HeLLo WorLd  3|bbbba2|xyxy_xy3|abc0|abc1|abcD1|heLLLLo2|heo1|bAnAnA,cherry,3|cc3|22232|aYaaXa"
+    );
+}
+
+/// `ucfirst()`/`lcfirst()` return the argument itself when the first byte
+/// does not change (`zend_string_copy`: one more reference), a new string
+/// when it does, and the interned empty string for `''`
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn ucfirst_lcfirst_share_unchanged_strings() {
+    let out = run(r#"$a = ''; for ($i = 0; $i < 3; $i++) { $a .= 'Ab'; }
+        $b = ucfirst($a); debug_zval_dump($b); $c = lcfirst($a); debug_zval_dump($c);
+        debug_zval_dump(ucfirst(''), lcfirst(''));
+        echo ucfirst('hello'), lcfirst('HELLO'), ucfirst('1x'), ucfirst("\xe9t") === "\xe9t" ? 'same' : 'changed', lcfirst('a'), ucfirst('b');"#);
+    assert_eq!(
+        out,
+        "string(6) \"AbAbAb\" refcount(3)\nstring(6) \"abAbAb\" refcount(2)\nstring(0) \"\" interned\nstring(0) \"\" interned\nHellohELLO1xsameaB"
+    );
+}
+
+/// The default charset hint of `htmlspecialchars()` follows `ini_set()`
+/// of `default_charset` and `internal_encoding` (worked out once per INI
+/// generation): UTF-8, ISO-8859-1, `internal_encoding` taking precedence
+/// and given up again, an explicit `$encoding` (`/usr/bin/php8.5 -n`).
+#[test]
+fn htmlspecialchars_default_charset_follows_ini() {
+    let out = run(r#"echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('default_charset', 'ISO-8859-1'); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('internal_encoding', 'UTF-8'); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('internal_encoding', ''); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        echo bin2hex(htmlspecialchars("\xe9<", ENT_QUOTES, 'UTF-8')), '|';
+        ini_set('default_charset', 'UTF-8'); echo bin2hex(htmlspecialchars("\xe9<")), '|', htmlspecialchars('plain');"#);
+    assert_eq!(
+        out,
+        "efbfbd266c743b|e9266c743b|efbfbd266c743b|e9266c743b||efbfbd266c743b|plain"
+    );
+}
+
+/// `htmlspecialchars()` returns its argument itself when nothing needs
+/// encoding (php-src master's `html_verbatim_prefix_len()` fast path:
+/// `zend_string_copy`, so refcount(3) here; PHP 8.5 copies and shows 2),
+/// the interned empty string for `''`, and encodes after the verbatim
+/// prefix as before: quotes by flags, UTF-8 kept or substituted, double
+/// encoding off, `ENT_DISALLOWED`, single-byte and partially supported
+/// charsets (`/usr/bin/php8.5 -n` for the encoded results).
+#[test]
+fn htmlspecialchars_verbatim_prefix() {
+    let out = run(
+        r#"$p = ''; for ($i = 0; $i < 2; $i++) { $p .= 'plain text'; }
+        $r = htmlspecialchars($p); debug_zval_dump($r);
+        $e = ''; for ($i = 0; $i < 1; $i++) { $e .= ''; } debug_zval_dump(htmlspecialchars($e));
+        echo htmlspecialchars("a<b>&c\"d'e"), '|', htmlspecialchars("x'y\"z", ENT_NOQUOTES), '|', htmlspecialchars("x'y", ENT_COMPAT), '|';
+        echo htmlspecialchars("caf\xc3\xa9 & t\xc3\xa9"), '|', bin2hex(htmlspecialchars("ok\xff<")), '|', htmlspecialchars("ok\xc3\xa9"), '|';
+        echo htmlspecialchars("&amp; &lt; &bogus;", ENT_QUOTES, null, false), '|', bin2hex(htmlspecialchars("abc\x01\x7f", ENT_QUOTES | ENT_DISALLOWED | ENT_HTML5)), '|';
+        echo bin2hex(htmlspecialchars("\xe9t\xe9", ENT_QUOTES, 'ISO-8859-1')), '|', bin2hex(htmlspecialchars("\x81\x40<", ENT_QUOTES, 'SJIS')), '|', htmlspecialchars("it's", ENT_QUOTES | ENT_HTML5);"#,
+    );
+    assert_eq!(
+        out,
+        "string(20) \"plain textplain text\" refcount(3)\nstring(0) \"\" interned\n\
+         a&lt;b&gt;&amp;c&quot;d&#039;e|x'y\"z|x'y|caf\u{e9} &amp; t\u{e9}|6f6befbfbd266c743b|ok\u{e9}|\
+         &amp; &lt; &amp;bogus;|616263efbfbdefbfbd|e974e9|8140266c743b|it&apos;s"
+    );
+}
+
+/// `strtr()` returns its subject itself when nothing is replaced (no pair
+/// matches, no pairs, no `$from` byte occurs, an identity translation of
+/// several bytes) and a new string when a replacement is made, even an
+/// identical one; the array form looks keys up in the pairs array:
+/// longest match first, integer keys as their digits, empty keys warned
+/// about, keys longer than the subject, replacements converted
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn strtr_shares_unchanged_subjects() {
+    let out = run(r#"$a = ''; for ($i = 0; $i < 2; $i++) { $a .= 'Hello'; }
+        foreach ([['x' => 'y', 'zz' => 'w'], ['x' => 'y'], [], ['l' => 'l'], ['l' => 'l', 'q' => 'r']] as $p) { $r = strtr($a, $p); debug_zval_dump($r); }
+        foreach ([['xy', 'ab'], ['l', 'l'], ['lo', 'lo'], ['lo', 'ol'], ['', 'x']] as [$f, $t]) { $r = strtr($a, $f, $t); debug_zval_dump($r); }
+        echo strtr("  Hello World  ", ["Hello" => "Bye", "World" => "All"]), '|', strtr("a1b22c-3", [1 => 'one', 22 => 'X', 2 => 'two', -3 => 'm3']), '|', strtr("abc", ['' => 'x', 'b' => 'B']), '|', strtr("abc", ['' => 'x']), '|', strtr("hi all", ["hi" => 1, "all" => 2.5, "h" => true]), '|', strtr("aaa", ["a" => "b", "aa" => "c"]), '|', strtr("ab", ["abc" => "x", "b" => "y"]), '|', strtr("05", ["05" => "five", 5 => "x"]), '|', strtr("abcabc", ["bc" => ""]), '|', strtr("xyz", "xz", "ZXq");"#);
+    let unchanged = "string(10) \"HelloHello\" refcount(3)\n";
+    let new = "string(10) \"HelloHello\" refcount(2)\n";
+    let warning = "\nWarning: strtr(): Ignoring replacement of empty string in t.php on line 4\n";
+    assert_eq!(
+        out,
+        format!(
+            "{unchanged}{unchanged}{unchanged}{new}{new}{unchanged}{new}{unchanged}\
+             string(10) \"HeoolHeool\" refcount(2)\n{unchanged}  Bye All  |aonebXcm3|{warning}aBc|{warning}abc|1 2.5|cb|ay|five|aa|ZyX"
+        )
+    );
+}
+
+/// str_getcsv()'s `$enclosure` and `$escape` reflect their stub defaults
+/// (`"\""` and `"\\"`), while the handler still tells an omitted
+/// `$escape` (deprecated) from a passed one, as zpp's NULL does in C.
+#[test]
+fn str_getcsv_defaults_reflect_and_omitted_escape_is_deprecated() {
+    let out = run(r#"
+        set_error_handler(function ($n, $m) { echo "$n: $m\n"; return true; });
+        echo implode("|", str_getcsv("a,'b c',d\\\"e")), "\n";
+        echo implode("|", str_getcsv("a,'b c'", ",", "'")), "\n";
+        echo implode("|", str_getcsv("a;'b c'", ";", escape: "\\")), "\n";
+        echo implode("|", str_getcsv("a,'b c'", enclosure: "'", escape: "")), "\n";
+        $p = (new ReflectionFunction("str_getcsv"))->getParameters();
+        var_dump($p[2]->getDefaultValue(), $p[3]->getDefaultValue());
+        echo $p[2], "\n", $p[3], "\n";
+    "#);
+    assert_eq!(
+        out,
+        r#"8192: str_getcsv(): the $escape parameter must be provided as its default value will change
+a|'b c'|d\"e
+8192: str_getcsv(): the $escape parameter must be provided as its default value will change
+a|b c
+a|'b c'
+a|b c
+string(1) """
+string(1) "\"
+Parameter #2 [ <optional> string $enclosure = "\"" ]
+Parameter #3 [ <optional> string $escape = "\\" ]
+"#
     );
 }

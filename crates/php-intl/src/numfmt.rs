@@ -503,6 +503,19 @@ mod tests {
         NumberFormatter::new(loc, st, None).unwrap()
     }
 
+    /// `numfmt_create('en', 99999)`: php-src master builds the formatter
+    /// with ICU's C++ `NumberFormat::createInstance()`, which rejects an
+    /// out-of-range style with `U_ILLEGAL_ARGUMENT_ERROR` (1, measured
+    /// against the system ICU).  PHP 8.5 still called `unum_open()`,
+    /// whose answer is `U_UNSUPPORTED_ERROR` (16); master wins.
+    #[test]
+    fn unknown_style_is_an_illegal_argument() {
+        let Err(e) = NumberFormatter::new("en", 99999, None) else {
+            panic!("style 99999 must fail");
+        };
+        assert_eq!(e.intl_code(), UErrorCode::ILLEGAL_ARGUMENT_ERROR);
+    }
+
     #[test]
     fn basic_format() {
         let f = nf("en_US", style::DECIMAL);

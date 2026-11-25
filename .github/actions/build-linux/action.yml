@@ -1,0 +1,23 @@
+# php-src's actions/configure-x64, `make` and actions/install-linux, as one Cargo step:
+# the `php`, `php-cgi` and `php-fpm` binaries and phpt-runner, built in place (nothing
+# is installed; PHP_BIN_DIR names their directory for the later steps). `debug` is the
+# dev profile (debug assertions, overflow checks), the counterpart of --enable-debug;
+# otherwise the release profile.
+name: Build
+inputs:
+  debug:
+    default: 'false'
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -x
+        if [[ "${{ inputs.debug }}" == true ]]; then
+          cargo build -p php-cli -p phpt-runner
+          echo "PHP_BIN_DIR=$PWD/target/debug" >> "$GITHUB_ENV"
+        else
+          cargo build --release -p php-cli -p phpt-runner
+          echo "PHP_BIN_DIR=$PWD/target/release" >> "$GITHUB_ENV"
+        fi

@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/rfc1867.c. Similarity metric to original: 32%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Jani Taskinen <jani@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `multipart/form-data` request bodies: a port of `main/rfc1867.c`
 //! (`rfc1867_post_handler` and the libapreq-derived multipart buffer).
 //!
@@ -550,7 +554,34 @@ pub fn normalize_protected_variable(var: &[u8]) -> Vec<u8> {
     v
 }
 
-/// Creates `<dir>/phpXXXXXX` (`php_open_temporary_fd_ex()`).
+/// `php_do_open_temporary_file()`'s alphabet for the random part of the
+/// prefix (`main/php_open_temporary_file.c`).
+const BASE32: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+
+/// `php_do_open_temporary_file()`: the prefix `php` extended by 13 base32
+/// digits of a random 64-bit number ("to increase randomness"), as
+/// `<dir>/php<13 digits>XXXXXX` names an upload's file in C. The number
+/// comes from a randomly keyed `SipHash` (std's `RandomState`), which is
+/// safe and unpredictable enough: `mkstemp` guarantees uniqueness.
+#[allow(clippy::cast_possible_truncation)] // `random % 32` fits a usize
+fn random_prefix() -> [u8; 16] {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    let mut random = h.finish();
+    let mut out = *b"php0000000000000";
+    for c in &mut out[3..] {
+        *c = BASE32[(random % 32) as usize];
+        random /= 32;
+    }
+    out
+}
+
+/// Creates `<dir>/php<13 base32 digits>XXXXXX` (`php_open_temporary_fd_ex()`).
 pub(crate) fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
     use std::os::unix::io::FromRawFd;
     for dir in dirs {
@@ -561,7 +592,8 @@ pub(crate) fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf
         if template.last() != Some(&b'/') {
             template.push(b'/');
         }
-        template.extend_from_slice(b"phpXXXXXX\0");
+        template.extend_from_slice(&random_prefix());
+        template.extend_from_slice(b"XXXXXX\0");
         // SAFETY: `template` is a writable NUL-terminated buffer ending in
         // "XXXXXX" as mkstemp requires; it is not used concurrently.
         let fd = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
@@ -1093,6 +1125,26 @@ mod tests {
             settings,
             &mut read,
         )
+    }
+
+    /// An upload's file is `php` + 13 base32 digits + mkstemp's 6
+    /// characters, as `php_do_open_temporary_file()` names it.
+    #[test]
+    fn temporary_names_have_the_random_prefix() {
+        let s = tmp_settings();
+        let (_f, a) = open_temporary(&s.tmp_dirs).unwrap();
+        let (_g, b) = open_temporary(&s.tmp_dirs).unwrap();
+        for p in [&a, &b] {
+            let name = p.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name.len(), 22, "{name}");
+            assert!(name.starts_with("php"));
+            assert!(
+                name.as_bytes()[3..16].iter().all(|c| BASE32.contains(c)),
+                "{name}"
+            );
+            let _ = std::fs::remove_file(p);
+        }
+        assert_ne!(a, b);
     }
 
     fn tmp_settings() -> UploadSettings {

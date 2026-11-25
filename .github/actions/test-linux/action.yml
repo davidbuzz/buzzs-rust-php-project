@@ -1,0 +1,91 @@
+# php-src's actions/test-linux: one run of the PHPT suite, with upstream's environment
+# and INI settings. Varied:
+# - phpt-runner instead of run-tests.php, with run-tests.php's options (-P, -q, -g,
+#   --no-progress, --offline, --show-diff, --show-slow, --set-timeout) as upstream passes
+#   them; --php names the binary, and --srcdir the php-src root.
+# - the baseline (phpt-baseline.txt) and the environment and scope files apply, and each
+#   run keeps its JSON report and a summary on the run's page.
+# - `jit: off` turns our trace JIT off (BUZZS_JIT=0); upstream's `jitType: disable` does
+#   that for its JITs. `testPaths` lets OPCACHE_VARIATION leave out ext/opcache.
+# - the databases out of scope (PostgreSQL, Firebird, ODBC, DBLIB) are left out.
+name: Test
+inputs:
+  name:
+    required: true
+  runTestsParameters:
+    default: ''
+    required: false
+  enableOpcache:
+    default: 'false'
+    required: false
+  jitType:
+    default: 'disable'
+    required: false
+  jit:
+    default: 'default'
+    required: false
+  idleCpu:
+    default: 'false'
+    required: false
+  testPaths:
+    default: 'modules/php-src'
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -x
+        export MYSQL_TEST_HOST=127.0.0.1
+        export MYSQL_TEST_USER=root
+        export MYSQL_TEST_PASSWD=root
+        export MYSQL_TEST_DB=test
+        if [[ -z "$PDO_MYSQL_TEST_DSN" ]]; then
+          export PDO_MYSQL_TEST_DSN="mysql:host=127.0.0.1;dbname=test"
+        fi
+        export PDO_MYSQL_TEST_USER=root
+        export PDO_MYSQL_TEST_PASS=root
+        # Ours: ext/pdo_mysql's tests build DSNs from these too; their default host,
+        # localhost, is the unix socket, and the MySQL service here is reached over TCP.
+        export PDO_MYSQL_TEST_HOST=127.0.0.1
+        export PDO_MYSQL_TEST_DB=test
+        export SKIP_IO_CAPTURE_TESTS=1
+        export STACK_LIMIT_DEFAULTS_CHECK=1
+        export RUN_RESOURCE_HEAVY_TESTS=1
+        jit=()
+        if [[ "${{ inputs.jit }}" == off ]]; then
+          jit=(--env BUZZS_JIT=0)
+        fi
+        mkdir -p reports
+        report="reports/${{ inputs.name }}"
+        # `shell: bash` runs with -e and pipefail: a failing run must still write its
+        # summary and hand its own exit status back.
+        set +e
+        env -u LANGUAGE "$PHP_BIN_DIR/phpt-runner" --php "$PHP_BIN_DIR/php" -P -q ${{ inputs.runTestsParameters }} \
+          ${{ inputs.enableOpcache == 'true' && '-d opcache.enable_cli=1' || '' }} \
+          -d opcache.jit=${{ inputs.jitType }} \
+          -d opcache.protect_memory=1 \
+          -d opcache.jit_buffer_size=64M \
+          "${jit[@]}" \
+          ${{ inputs.idleCpu == 'true' && '-j$(($(/usr/bin/nproc) - 1))' || '-j$(/usr/bin/nproc)' }} \
+          -g FAIL,BORK,LEAK,XLEAK \
+          --no-progress \
+          --offline \
+          --show-diff \
+          --show-slow 1000 \
+          --set-timeout 120 \
+          --no-artifacts \
+          --baseline phpt-baseline.txt \
+          --summary-depth 1 \
+          --json "$report.json" \
+          --srcdir modules/php-src \
+          ${{ inputs.testPaths }} 2>&1 | tee "$report.txt"
+        rc=${PIPESTATUS[0]}
+        {
+          echo "### ${{ inputs.name }} (exit $rc)"
+          echo '```'
+          grep -aE '^Tests (skipped|failed|passed)|^Baseline:' "$report.txt"
+          grep -a '^NEW FAILURE' "$report.txt" | head -50
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$rc"

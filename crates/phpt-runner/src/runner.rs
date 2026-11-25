@@ -156,6 +156,39 @@ pub struct Config {
     /// `--repeat N`: run each test script N times in one process and check the output of the
     /// last run (run-tests.php `$num_repeats`; values below 2 mean a single run).
     pub repeat: u32,
+    /// `--file-cache-prime` / `--file-cache-use` (run-tests.php `$file_cache`).
+    pub file_cache: Option<FileCache>,
+}
+
+/// run-tests.php's opcache file-cache modes: every test runs with `opcache.file_cache` set to
+/// [`file_cache_dir`], first to fill the cache, then to be served from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileCache {
+    /// `--file-cache-prime`: fill the cache (the directory is emptied first).
+    Prime,
+    /// `--file-cache-use`: run from the cache a priming run filled.
+    Use,
+}
+
+/// run-tests.php `get_file_cache_dir()`: `sys_get_temp_dir() . '/php-run-tests-file-cache'`.
+#[must_use]
+pub fn file_cache_dir() -> PathBuf {
+    std::env::temp_dir().join("php-run-tests-file-cache")
+}
+
+/// The INI settings a file-cache mode adds to every test, after the `-d` overwrites and
+/// before the test's own `--INI--` section (run-tests.php `run_test()`).
+fn apply_file_cache_ini(ini: &mut IniSettings, mode: FileCache, dir: &Path) {
+    ini.set("opcache.file_cache", &dir.to_string_lossy());
+    // Make sure warnings still show up on the second run.
+    ini.set("opcache.record_warnings", "1");
+    // File cache is currently incompatible with JIT.
+    ini.set("opcache.jit", "0");
+    if mode == FileCache::Use {
+        // Disable timestamp validation in order to fetch from file cache,
+        // even though all the files are re-created.
+        ini.set("opcache.validate_timestamps", "0");
+    }
 }
 
 impl Config {
@@ -742,7 +775,9 @@ impl Runner {
             .map_err(|reason| a.skip(&reason))?;
         ini.apply_lines(cfg.ini_overwrites.iter().map(String::as_str));
         let orig_ini_args = ini.to_arguments();
-        if cfg.repeating() {
+        if let Some(mode) = cfg.file_cache {
+            apply_file_cache_ini(&mut ini, mode, &file_cache_dir());
+        } else if cfg.repeating() {
             // Make sure warnings still show up on the second run.
             ini.set("opcache.record_warnings", "1");
         }
@@ -1166,6 +1201,27 @@ mod tests {
             replace_placeholders("{ENV:}", "ENV", |_| "!".into()),
             "{ENV:}"
         );
+    }
+
+    /// run-tests.php `run_test()`: what `--file-cache-prime` and `--file-cache-use` add to a
+    /// test's INI settings, over a `-d opcache.jit=tracing` given on the command line.
+    #[test]
+    fn file_cache_modes_set_run_tests_phps_ini() {
+        let dir = Path::new("/tmp/php-run-tests-file-cache");
+        let mut ini = IniSettings::new();
+        ini.apply_lines(["opcache.jit=tracing"]);
+        apply_file_cache_ini(&mut ini, FileCache::Prime, dir);
+        assert_eq!(
+            ini.get("opcache.file_cache"),
+            Some("/tmp/php-run-tests-file-cache")
+        );
+        assert_eq!(ini.get("opcache.record_warnings"), Some("1"));
+        assert_eq!(ini.get("opcache.jit"), Some("0"));
+        assert_eq!(ini.get("opcache.validate_timestamps"), None);
+
+        apply_file_cache_ini(&mut ini, FileCache::Use, dir);
+        assert_eq!(ini.get("opcache.validate_timestamps"), Some("0"));
+        assert!(file_cache_dir().ends_with("php-run-tests-file-cache"));
     }
 
     #[test]

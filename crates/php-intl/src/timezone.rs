@@ -722,9 +722,12 @@ pub fn process_timezone_argument(arg: TimeZoneArg<'_>) -> Result<TimeZone> {
             };
             let tz = TimeZone::create_u16(&u);
             if tz.is_unknown() {
+                // timezone_throw_exception_with_call_location() formats the
+                // name with "%s": it ends at the first NUL byte.
+                let shown = s.split(|&b| b == 0).next().unwrap_or_default();
                 return Err(Error::IntlExceptionInFunction(format!(
                     "No such time zone: \"{}\"",
-                    String::from_utf8_lossy(s)
+                    String::from_utf8_lossy(shown)
                 )));
             }
             Ok(tz)
@@ -735,6 +738,16 @@ pub fn process_timezone_argument(arg: TimeZoneArg<'_>) -> Result<TimeZone> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unknown_zone_is_named_up_to_its_first_nul() {
+        // php8.5: intlcal_create_instance("a\0b") says `No such time zone: "a"`.
+        let e = process_timezone_argument(TimeZoneArg::Str(b"a\0b")).unwrap_err();
+        assert_eq!(
+            e,
+            Error::IntlExceptionInFunction("No such time zone: \"a\"".into())
+        );
+    }
 
     #[test]
     fn basics() {

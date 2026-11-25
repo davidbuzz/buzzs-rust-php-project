@@ -1,5 +1,12 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/random/gammasection.c. Similarity metric to original: 77%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Tim Düsterhus <timwolla@php.net>
+//            Based on code from: Frédéric Goualard
+//            Corrected to handled appropriately random integers larger than 2^53
+//            converted to double precision floats, and to avoid overflows for
+//            large gammas.
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The γ-section method for drawing floats from an interval
 //! (ext/random/gammasection.c, after F. Goualard, ACM TOMACS 32:3, 2022).
 //!

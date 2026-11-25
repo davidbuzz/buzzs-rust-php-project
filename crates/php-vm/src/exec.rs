@@ -627,14 +627,23 @@ impl Vm {
     ///
     /// Also the store of `RECV`: the slot is then undefined, and nothing
     /// is released.
+    ///
+    /// `v` moves into the slot (`ZEND_BIND_GLOBAL` / `ZEND_BIND_STATIC`
+    /// store the reference they took, `ZVAL_REF`): an attached symbol
+    /// table gets its copy first. A copy stored and `v` dropped after it
+    /// cost every bind a handle up and down, and the drop of a reference
+    /// handle is a possible-root check (`ref_roots::released`). The
+    /// variable's old value is still released last, after both stores.
     #[inline]
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
         let f = self.frame_mut();
         let idx = cv as usize;
-        if let Some(slot) = f.cvs.get_mut(idx) {
-            let old = slot.set(Some(v.clone()));
+        if idx < f.cvs.len() {
             f.sync_cv_to_symtab(cv, &v);
-            release_slot_value(old);
+            if let Some(slot) = f.cvs.get_mut(idx) {
+                let old = slot.set(Some(v));
+                release_slot_value(old);
+            }
         }
     }
 
@@ -782,8 +791,20 @@ impl Vm {
     }
 
     fn execute_inner(&mut self, base: usize) -> VmResult<Value> {
+        // The first run of the base frame may go straight to the tape; a
+        // run after an exception was caught resumes in `Vm::run`.
+        let mut first = true;
         loop {
-            match self.run(base) {
+            let direct = if std::mem::take(&mut first) {
+                self.run_base_on_tape(base)
+            } else {
+                None
+            };
+            let r = match direct {
+                Some(r) => r,
+                None => self.run(base),
+            };
+            match r {
                 Ok(v) => return Ok(v),
                 Err(Throw::Exception(e)) => {
                     if let Err(t) = self.handle_exception(e, base) {
@@ -804,6 +825,95 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// The start of a nested execution (`zend_call_function` calling
+    /// `execute_ex` for a callback, a magic method, ...) whose base frame
+    /// starts at an op the tape enters: the tape runs the body here, and
+    /// the base frame's `ZEND_RETURN`, which the tape leaves to `Vm::run`
+    /// (`Vm::return_simple` declines the frame an execution started with),
+    /// returns directly through [`Vm::return_at_base`]. The whole call then
+    /// never enters `Vm::run`, whose entry and exit (a large stack frame,
+    /// `LOAD_OPLINE`, the hot-op pre-check, the dispatch of `Return` in its
+    /// big match) were about 300 instructions of a 2,000-instruction
+    /// callback.
+    ///
+    /// `None` when `Vm::run` is to go on: the current frame's `ip` is then
+    /// stored where `Vm::run` would have gone on itself (it reloads it):
+    /// after a call or return the tape made (`hot::LEFT`, `hot::SWITCHED`:
+    /// the new current frame's `ip`), after the safe point the tape asked
+    /// for (run here, as `Vm::run` runs it), or at the op the tape stopped
+    /// at (an op it does not run, or whose fast path declined having
+    /// changed nothing: `Vm::run` offers it to the tape once more, which
+    /// declines it again, and then runs it as its generic op).
+    #[inline(never)]
+    fn run_base_on_tape(&mut self, base: usize) -> Option<VmResult<Value>> {
+        if self.frames.len() != base + 1 {
+            return None;
+        }
+        let top = self.frames.last()?;
+        let ip = top.ip;
+        // SAFETY: as in `Vm::run`'s `LOAD_OPLINE`: the op array is owned by
+        // `Rc`s, one held by the base frame, which stays on the stack until
+        // the base frame returns (below, after the last use of `code`) or
+        // the execution throws (`Vm::run_tape` does not pop it: it never
+        // returns from the frame `base`).
+        let code: &crate::opcode::OpArray = unsafe { &*Rc::as_ptr(&top.code) };
+        if !tape::worth_entering(code, ip) {
+            return None;
+        }
+        let (next, last) = tape::run_tape(self, base, code, ip);
+        if last == hot::LEFT {
+            // As `Vm::run` after a call or return on the tape whose safe
+            // point is due: the frame's `ip` is stored in it.
+            if let Err(t) = self.safe_point_after_leave() {
+                return Some(Err(t));
+            }
+            return None;
+        }
+        if last == hot::THREW {
+            return Some(Err(self.tape_throw.take().unwrap_or(Throw::Fatal)));
+        }
+        let switched = next & hot::SWITCHED != 0;
+        let next = next & !hot::SWITCHED;
+        // SAFETY: the current frame's op array, held by that frame, which
+        // stays current until `Vm::run` takes over (the safe point below
+        // runs nested executions above it only).
+        let code: &crate::opcode::OpArray = if switched {
+            unsafe { &*Rc::as_ptr(&self.frame().code) }
+        } else {
+            code
+        };
+        if last != hot::NO_SAFE_POINT {
+            // The safe point after the op at `last`, as `Vm::run` runs it.
+            let op = code.ops.get(last)?;
+            return match self.safe_point(next, op) {
+                Ok(ip) => {
+                    self.frame_mut().ip = ip;
+                    None
+                }
+                Err(t) => Some(Err(t)),
+            };
+        }
+        if !switched {
+            if let Some(Op::Return { val }) = code.ops.get(next) {
+                // `Vm::run`'s `Return` arm after the tape declined it.
+                if let Some(flow) = self.return_at_base(*val, base, next + 1) {
+                    let Flow::Done(v) = flow else {
+                        // `return_at_base` only ends the execution.
+                        return Some(Err(Throw::Fatal));
+                    };
+                    if Self::safe_point_due() {
+                        if let Err(t) = self.safe_point_after_leave() {
+                            return Some(Err(t));
+                        }
+                    }
+                    return Some(Ok(v));
+                }
+            }
+        }
+        self.frame_mut().ip = next;
+        None
     }
 
     /// Finds a handler for `exc` in the frames above `base`. Returns
@@ -1196,9 +1306,14 @@ impl Vm {
                                 break 'slow;
                             };
                             let lits: &[Value] = &code.literals;
-                            let next = hot::step(f, ops, lits, at);
+                            let mut next = hot::step(f, ops, lits, at);
                             if next == hot::DECLINED {
-                                break 'slow;
+                                // A variable holding a reference
+                                // (`exec/spec/refs.rs`), out of line.
+                                next = spec::step_ref(f, ops, lits, at);
+                                if next == hot::DECLINED {
+                                    break 'slow;
+                                }
                             }
                             ip = next;
                             if Self::safe_point_due() {
@@ -1850,9 +1965,11 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Global { cv, name } => {
-                        let n = self.lit_str(*name);
-                        let r = self.global_ref_lit(&n);
-                        self.cv_bind(*cv, Value::Reference(r));
+                        if !self.bind_global_cached(*cv, *name) {
+                            let n = self.lit_str(*name);
+                            let r = self.global_ref_lit(&n);
+                            self.cv_bind(*cv, Value::Reference(r));
+                        }
                         Flow::Next
                     }
                     Op::BindStatic { cv, idx, skip } => {
@@ -1945,6 +2062,22 @@ impl Vm {
                         } else {
                             Flow::Next
                         }
+                    }
+                    // `call_user_func[_array]()` written by name
+                    // (`ZEND_INIT_USER_CALL`, `ZEND_SEND_USER`,
+                    // `ZEND_SEND_ARRAY`): the callback is called by the
+                    // `DoCall` after them, in this loop.
+                    Op::InitUserCall { callee, array } => {
+                        self.op_init_user_call(*callee, *array)?;
+                        Flow::Next
+                    }
+                    Op::SendUser { src, n } => {
+                        self.op_send_user(*src, *n)?;
+                        Flow::Next
+                    }
+                    Op::SendArray { src, len, skip } => {
+                        self.op_send_array(*src, *len, *skip)?;
+                        Flow::Next
                     }
                     Op::SendPlaceholder { name } => {
                         let n = name.map(|n| self.lit_str(n));
@@ -2192,7 +2325,10 @@ impl Vm {
                     }
                     Op::FuncGetArgs { dst, skip } => {
                         let idx = self.frames.len() - 1;
-                        let mut args = self.frame_args(idx);
+                        let mut args = match crate::builtins::plain_frame_args(&self.frames[idx]) {
+                            Some(a) => a,
+                            None => self.frame_args(idx),
+                        };
                         if let Some(n) = *skip {
                             args = Vm::frame_args_after(&args, n as usize);
                         }
@@ -3238,7 +3374,7 @@ impl Vm {
     }
 
     pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
-        let v = v.unwrap_or_default();
+        let mut v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
         if self.frames[fidx].generator.is_some() {
@@ -3252,6 +3388,14 @@ impl Vm {
             }
             return Ok(Flow::Reload);
         }
+        // `ZEND_RETURN` with no `EX(return_value)` (the caller does not use
+        // the result): the value is released here, the callee still the
+        // current frame, before `zend_leave_helper` frees its variables.
+        let thrown = if fidx > base && self.frames[fidx].ret == RetTarget::Discard {
+            self.release_unused_result(std::mem::take(&mut v))
+        } else {
+            None
+        };
         let is_main = Rc::ptr_eq(&self.frames[fidx].vars, &self.globals)
             || self.frames[fidx].kind == crate::vm::FrameKind::Main;
         if is_main && fidx <= base {
@@ -3268,17 +3412,21 @@ impl Vm {
         }
         let (ret, by_ref) = {
             let frame = &self.frames[fidx];
-            let caller_this = fidx
-                .checked_sub(1)
-                .and_then(|i| self.frames[i].this.as_ref());
-            crate::gc::frame_released(frame, caller_this);
             let by_ref = frame
                 .ufunc
                 .as_ref()
                 .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
             (frame.ret, by_ref)
         };
-        self.frames.release_top(&self.empty_code);
+        // `zend_leave_helper`: the possible roots of the frame (the
+        // caller's `$this` from the frame below), then its release.
+        self.frames.release_top_returning(&self.empty_code);
+        // An exception from a destructor the release above ran is
+        // rethrown in the caller once the frame is left
+        // (`zend_leave_helper`'s `zend_rethrow_exception`).
+        if let Some(t) = thrown {
+            return Err(t);
+        }
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {
             return Ok(Flow::Done(v));
@@ -3287,6 +3435,31 @@ impl Vm {
             self.set_tmp(t, v);
         }
         Ok(Flow::Reload)
+    }
+
+    /// The release of a result the caller does not use, in the returning
+    /// frame (`ZEND_RETURN`'s `zval_ptr_dtor` of the returned temporary
+    /// when `EX(return_value)` is NULL; `ZEND_OBSERVER_FREE_RETVAL` with
+    /// an observer): a destructor it queues runs now, with the callee
+    /// still in its backtrace. A returned compiled variable arrives here
+    /// as a copy, so its value is released with the frame's variables, as
+    /// in php-src. Returns what such a destructor threw, for the caller of
+    /// the frame (ref: Zend/zend_vm_def.h `ZEND_RETURN`).
+    #[inline]
+    pub(crate) fn release_unused_result(&mut self, v: Value) -> Option<Throw> {
+        if matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            std::mem::forget(v);
+            return None;
+        }
+        drop(v);
+        if object::has_pending_destructors() {
+            self.run_pending_destructors().err()
+        } else {
+            None
+        }
     }
 
     /// `Fetching properties on non-enums in constant expressions is not
@@ -3534,8 +3707,11 @@ fn defers_oom(op: &Op) -> bool {
             | Op::InitDynCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
+            | Op::InitUserCall { .. }
             | Op::Send { .. }
             | Op::SendNamed { .. }
+            | Op::SendUser { .. }
+            | Op::SendArray { .. }
     )
 }
 

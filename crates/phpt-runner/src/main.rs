@@ -3,6 +3,7 @@
 //! `phpt-runner`: run php-src `.phpt` tests against a PHP binary.
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,7 +24,9 @@ use phpt_runner::report::{
     by_dir, detect_expect_section, dir_table, format_failure_diff, summary, totals, JsonReport,
 };
 use phpt_runner::result::{Status, TestResult};
-use phpt_runner::runner::{probe_e_all, probe_loads_ini_files, Config, Extensions, Runner};
+use phpt_runner::runner::{
+    file_cache_dir, probe_e_all, probe_loads_ini_files, Config, Extensions, FileCache, Runner,
+};
 use phpt_runner::schedule::{run_jobs, Job};
 use phpt_runner::scope::Scope;
 
@@ -72,8 +75,8 @@ struct Cli {
     /// Write a JSON report to this file.
     #[arg(long, value_name = "OUT")]
     json: Option<PathBuf>,
-    /// Per-process timeout in seconds.
-    #[arg(long, default_value_t = 60)]
+    /// Per-process timeout in seconds (run-tests.php `--set-timeout`).
+    #[arg(long, alias = "set-timeout", default_value_t = 60)]
     timeout: u64,
     /// php-src root (working directory of tests) [default: nearest ancestor of the first path
     /// containing run-tests.php].
@@ -91,9 +94,42 @@ struct Cli {
     /// Group the per-directory summary by the first N path components.
     #[arg(long, value_name = "N")]
     summary_depth: Option<usize>,
-    /// Set `SKIP_SLOW_TESTS` for the tests.
-    #[arg(long)]
+    /// Set `SKIP_SLOW_TESTS` for the tests (run-tests.php `-x`).
+    #[arg(short = 'x', long)]
     skip_slow: bool,
+    /// Set `SKIP_ONLINE_TESTS=1` for the tests (run-tests.php `--offline`; also the default
+    /// when the variable is not set).
+    #[arg(long, conflicts_with = "online")]
+    offline: bool,
+    /// Set `SKIP_ONLINE_TESTS=0` for the tests (run-tests.php `--online`).
+    #[arg(long)]
+    online: bool,
+    /// Only print results of these groups, e.g. `-g FAIL,BORK` (run-tests.php `-g`,
+    /// `$SHOW_ONLY_GROUPS`) [default: `$SHOW_ONLY_GROUPS` if set]. A timed-out test counts
+    /// as `FAIL`, as in run-tests.php.
+    #[arg(short = 'g', value_name = "GROUPS", value_delimiter = ',')]
+    show_only_groups: Vec<String>,
+    /// List the tests that took at least this many milliseconds (run-tests.php
+    /// `--show-slow`, its "SLOW TEST SUMMARY").
+    #[arg(long, value_name = "MS")]
+    show_slow: Option<u64>,
+    /// Fill the opcache file cache: every test runs with `opcache.file_cache` set to an
+    /// emptied `<tmp>/php-run-tests-file-cache`, `opcache.record_warnings=1` and
+    /// `opcache.jit=0`; tests under `ext/opcache` are left out (run-tests.php
+    /// `--file-cache-prime`).
+    #[arg(long, conflicts_with = "file_cache_use")]
+    file_cache_prime: bool,
+    /// Run from the file cache a `--file-cache-prime` run filled: its settings plus
+    /// `opcache.validate_timestamps=0` (run-tests.php `--file-cache-use`).
+    #[arg(long)]
+    file_cache_use: bool,
+    /// Accepted for run-tests.php command lines: there `-P` tests the binary that runs
+    /// run-tests.php; here `--php` (or its default) names the binary.
+    #[arg(short = 'P')]
+    php_binary_self: bool,
+    /// Accepted for run-tests.php command lines: progress is only shown on a terminal.
+    #[arg(long)]
+    no_progress: bool,
     /// Disable coloured output.
     #[arg(long)]
     no_color: bool,
@@ -146,6 +182,80 @@ struct Cli {
     /// Test files or directories.
     #[arg(required = true)]
     paths: Vec<PathBuf>,
+}
+
+impl Cli {
+    /// The file-cache mode asked for, if any.
+    fn file_cache(&self) -> Option<FileCache> {
+        if self.file_cache_prime {
+            Some(FileCache::Prime)
+        } else if self.file_cache_use {
+            Some(FileCache::Use)
+        } else {
+            None
+        }
+    }
+
+    /// run-tests.php `$online`: `Some(false)` for `--offline`, `Some(true)` for `--online`.
+    fn online(&self) -> Option<bool> {
+        if self.online {
+            Some(true)
+        } else if self.offline {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+/// run-tests.php `$SHOW_ONLY_GROUPS`: `-g`, else the environment variable of that name.
+fn show_only_groups(cli: &Cli) -> Vec<String> {
+    if !cli.show_only_groups.is_empty() {
+        return cli.show_only_groups.clone();
+    }
+    std::env::var("SHOW_ONLY_GROUPS")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|v| v.split(',').map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Whether a result of `status` is printed under `-g` (run-tests.php `show_result()`): all
+/// of them without the option, else those whose result type is listed. run-tests.php has no
+/// result type for a timeout (the test fails), so ours counts as `FAIL`.
+fn group_shown(groups: &[String], status: Status) -> bool {
+    if groups.is_empty() {
+        return true;
+    }
+    let group = match status {
+        Status::Timeout => "FAIL",
+        other => other.label(),
+    };
+    groups.iter().any(|g| g == group)
+}
+
+/// run-tests.php's "SLOW TEST SUMMARY" for `--show-slow <ms>`: the tests that took at
+/// least that long, slowest first; empty when there are none.
+fn slow_summary(results: &[TestResult], min_ms: u64) -> String {
+    let mut slow: Vec<&TestResult> = results
+        .iter()
+        .filter(|r| r.result != Status::OutOfScope && r.duration_ms >= min_ms)
+        .collect();
+    if slow.is_empty() {
+        return String::new();
+    }
+    slow.sort_by_key(|r| std::cmp::Reverse(r.duration_ms));
+    let rule = "=====================================================================\n";
+    let mut s = format!(
+        "\n{rule}SLOW TEST SUMMARY\n---------------------------------------------------------------------\n"
+    );
+    for r in slow {
+        #[allow(clippy::cast_precision_loss)] // a duration in ms, far below 2^52
+        let seconds = r.duration_ms as f64 / 1000.0;
+        let _ = writeln!(s, "({seconds:.3} s) {} [{}]", r.name, r.path);
+    }
+    s.push_str(rule);
+    s
 }
 
 fn default_php() -> Option<PathBuf> {
@@ -349,7 +459,13 @@ struct RunGuards {
     _fpm_layout: Option<BinarySnapshot>,
 }
 
-fn base_env(php: &Path, php_cgi: Option<&Path>, php_fpm: Option<&Path>, skip_slow: bool) -> Env {
+fn base_env(
+    php: &Path,
+    php_cgi: Option<&Path>,
+    php_fpm: Option<&Path>,
+    skip_slow: bool,
+    online: Option<bool>,
+) -> Env {
     let mut env: Env = std::env::vars_os().collect();
     normalize_env(&mut env);
     let mut set = |k: &str, v: OsString| {
@@ -382,8 +498,15 @@ fn base_env(php: &Path, php_cgi: Option<&Path>, php_fpm: Option<&Path>, skip_slo
     );
     set("TEST_PHPDBG_EXECUTABLE", OsString::new());
     set("TEST_PHPDBG_EXECUTABLE_ESCAPED", "''".into());
-    if std::env::var_os("SKIP_ONLINE_TESTS").is_none() {
-        set("SKIP_ONLINE_TESTS", "1".into());
+    // run-tests.php: offline unless `--online` or the variable says otherwise.
+    match online {
+        Some(true) => set("SKIP_ONLINE_TESTS", "0".into()),
+        Some(false) => set("SKIP_ONLINE_TESTS", "1".into()),
+        None => {
+            if std::env::var_os("SKIP_ONLINE_TESTS").is_none() {
+                set("SKIP_ONLINE_TESTS", "1".into());
+            }
+        }
     }
     if !(std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
@@ -417,12 +540,16 @@ fn colorize(status: Status, enabled: bool) -> String {
 fn print_result(
     r: &TestResult,
     cli: &Cli,
+    groups: &[String],
     color: bool,
     live: bool,
     show_diff: bool,
     srcdir: &Path,
 ) {
     if cli.quiet && matches!(r.result, Status::Pass | Status::Skip) {
+        return;
+    }
+    if !group_shown(groups, r.result) {
         return;
     }
     let mut out = std::io::stdout().lock();
@@ -466,17 +593,35 @@ fn select_tests(cli: &Cli) -> Result<(Vec<PathBuf>, PathBuf), String> {
     let mut tests = collect(&cli.paths)?;
     let srcdir = match &cli.srcdir {
         Some(s) => s.canonicalize().map_err(|e| format!("--srcdir: {e}"))?,
-        None => tests
-            .first()
-            .and_then(|t| find_srcdir(t))
-            .or_else(|| std::env::current_dir().ok())
-            .ok_or("cannot determine php-src root; pass --srcdir")?,
+        None => {
+            if let Some(dir) = tests.first().and_then(|t| find_srcdir(t)) {
+                dir
+            } else {
+                let cwd = std::env::current_dir()
+                    .map_err(|_| "cannot determine php-src root; pass --srcdir")?;
+                // The scope, baseline, environment and conflict lists are keyed by paths
+                // relative to the php-src root, and tests run with it as their working
+                // directory: a wrong root fails tests for no reason of theirs.
+                eprintln!(
+                    "warning: no run-tests.php above the tests, so the php-src root is unknown; \
+                     using the current directory {} (pass --srcdir <php-src root>)",
+                    cwd.display()
+                );
+                cwd
+            }
+        }
     };
     if !cli.filter.is_empty() {
         tests.retain(|t| {
             let s = shortname(t, &srcdir);
             cli.filter.iter().any(|f| s.contains(f.as_str()))
         });
+    }
+    if cli.file_cache().is_some() {
+        // run-tests.php: "Automatically skip opcache tests in --file-cache and --preload
+        // mode, because opcache generally expects these to run under a default
+        // configuration."
+        tests.retain(|t| !t.to_string_lossy().contains("ext/opcache"));
     }
     Ok((tests, srcdir))
 }
@@ -630,7 +775,13 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         None => None,
     };
 
-    let mut env = base_env(&php, php_cgi.as_deref(), php_fpm.as_deref(), cli.skip_slow);
+    let mut env = base_env(
+        &php,
+        php_cgi.as_deref(),
+        php_fpm.as_deref(),
+        cli.skip_slow,
+        cli.online(),
+    );
     if cli.repeat > 1 {
         env.insert("SKIP_REPEAT".into(), "1".into());
     }
@@ -675,6 +826,7 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         write_artifacts: !cli.no_artifacts,
         extensions,
         repeat: cli.repeat,
+        file_cache: cli.file_cache(),
     });
     Ok((
         runner,
@@ -726,6 +878,7 @@ fn execute(
     let live = std::io::stdout().is_terminal();
     let color = !cli.no_color && std::env::var_os("NO_COLOR").is_none() && live;
     let show_diff = cli.show_diff || tests.len() == 1;
+    let groups = show_only_groups(cli);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     println!(
         "Running {} test{} with {} using {} worker{}",
@@ -747,7 +900,15 @@ fn execute(
                         remove_failure_artifacts(&runner.config().srcdir, &r.path);
                     }
                 }
-                print_result(&r, cli, color, live, show_diff, &runner.config().srcdir);
+                print_result(
+                    &r,
+                    cli,
+                    &groups,
+                    color,
+                    live,
+                    show_diff,
+                    &runner.config().srcdir,
+                );
                 // Diffs can be large; they were printed (and written to .diff) already. A `JUnit`
                 // report embeds them, so they are kept for it.
                 if !keep_diffs {
@@ -814,6 +975,42 @@ fn check_baseline(cli: &Cli, results: &[TestResult]) -> Result<ExitCode, String>
     })
 }
 
+/// The `--json` and `--junit` reports of a finished run.
+fn write_reports(
+    cli: &Cli,
+    runner: &Runner,
+    srcdir: &Path,
+    results: &[TestResult],
+    junit_path: Option<&Path>,
+) -> Result<(), String> {
+    if let Some(path) = &cli.json {
+        let report = JsonReport::new(
+            runner.config().php.to_string_lossy().into_owned(),
+            srcdir.to_string_lossy().into_owned(),
+            results,
+        );
+        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
+    if let Some(path) = junit_path {
+        std::fs::write(path, junit_xml(results, srcdir))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// run-tests.php before a priming run: `rmdir_recursive($cache_dir); mkdir($cache_dir,
+/// recursive: true);`.
+fn empty_file_cache() -> Result<(), String> {
+    let dir = file_cache_dir();
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("cannot empty {}: {e}", dir.display())),
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))
+}
+
 fn run(cli: &Cli) -> Result<ExitCode, String> {
     let (mut tests, srcdir) = select_tests(cli)?;
     let scope = load_scope(cli, &srcdir)?;
@@ -841,6 +1038,9 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         }
     }
     let (runner, _guards) = make_runner(cli, &srcdir)?;
+    if cli.file_cache() == Some(FileCache::Prime) {
+        empty_file_cache()?;
+    }
 
     let mut previous = Vec::new();
     let mut log = None;
@@ -902,20 +1102,11 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         dir_table(&by_dir(&results, cli.summary_depth), &total)
     );
     print!("{}", summary(&total, elapsed));
+    if let Some(min_ms) = cli.show_slow {
+        print!("{}", slow_summary(&results, min_ms));
+    }
 
-    if let Some(path) = &cli.json {
-        let report = JsonReport::new(
-            runner.config().php.to_string_lossy().into_owned(),
-            srcdir.to_string_lossy().into_owned(),
-            &results,
-        );
-        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    }
-    if let Some(path) = &junit_path {
-        std::fs::write(path, junit_xml(&results, &srcdir))
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    }
+    write_reports(cli, &runner, &srcdir, &results, junit_path.as_deref())?;
     check_baseline(cli, &results)
 }
 
@@ -972,6 +1163,7 @@ mod tests {
             Some(Path::new("/x/php-cgi")),
             None,
             false,
+            None,
         );
         assert_eq!(
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")],
@@ -981,13 +1173,129 @@ mod tests {
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
             "'/x/php-cgi'"
         );
-        let env = base_env(Path::new("/x/php"), None, None, false);
+        let env = base_env(Path::new("/x/php"), None, None, false, None);
         assert_eq!(env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")], "");
         assert_eq!(
             env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
             "''"
         );
         assert_eq!(env[&OsString::from("TEST_PHP_FPM_EXECUTABLE")], "");
+    }
+
+    /// php-src's CI command line (`.github/actions/test-linux`) parses, option for option.
+    #[test]
+    fn run_tests_php_command_line_is_accepted() {
+        let cli = Cli::try_parse_from([
+            "phpt-runner",
+            "-P",
+            "-q",
+            "--repeat",
+            "2",
+            "-d",
+            "opcache.enable_cli=1",
+            "-d",
+            "opcache.jit=tracing",
+            "-j4",
+            "-g",
+            "FAIL,BORK,LEAK,XLEAK",
+            "--no-progress",
+            "--offline",
+            "--show-diff",
+            "--show-slow",
+            "1000",
+            "--set-timeout",
+            "120",
+            "-x",
+            "--file-cache-use",
+            "Zend/tests",
+        ])
+        .expect("parses");
+        assert!(cli.quiet && cli.show_diff && cli.skip_slow && cli.no_progress);
+        assert!(cli.php_binary_self);
+        assert_eq!(cli.repeat, 2);
+        assert_eq!(cli.jobs, Some(4));
+        assert_eq!(cli.timeout, 120);
+        assert_eq!(cli.show_slow, Some(1000));
+        assert_eq!(cli.show_only_groups, ["FAIL", "BORK", "LEAK", "XLEAK"]);
+        assert_eq!(cli.online(), Some(false));
+        assert_eq!(cli.file_cache(), Some(FileCache::Use));
+        assert_eq!(cli.ini, ["opcache.enable_cli=1", "opcache.jit=tracing"]);
+
+        let cli = Cli::try_parse_from(["phpt-runner", "--online", "--file-cache-prime", "t"])
+            .expect("parses");
+        assert_eq!(cli.online(), Some(true));
+        assert_eq!(cli.file_cache(), Some(FileCache::Prime));
+        assert_eq!(cli.timeout, 60);
+        // The two members of each pair exclude each other.
+        assert!(Cli::try_parse_from(["phpt-runner", "--online", "--offline", "t"]).is_err());
+        assert!(Cli::try_parse_from([
+            "phpt-runner",
+            "--file-cache-prime",
+            "--file-cache-use",
+            "t"
+        ])
+        .is_err());
+    }
+
+    /// run-tests.php: `--online` and `--offline` set `SKIP_ONLINE_TESTS` to 0 and 1 whatever
+    /// the environment says.
+    #[test]
+    fn online_and_offline_set_skip_online_tests() {
+        let env = base_env(Path::new("/x/php"), None, None, false, Some(true));
+        assert_eq!(env[&OsString::from("SKIP_ONLINE_TESTS")], "0");
+        let env = base_env(Path::new("/x/php"), None, None, false, Some(false));
+        assert_eq!(env[&OsString::from("SKIP_ONLINE_TESTS")], "1");
+        let env = base_env(Path::new("/x/php"), None, None, true, None);
+        assert_eq!(env[&OsString::from("SKIP_SLOW_TESTS")], "1");
+    }
+
+    /// run-tests.php `show_result()`: with `-g` only the listed result types are printed.
+    #[test]
+    fn show_only_groups_filters_result_lines() {
+        let groups: Vec<String> = ["FAIL", "BORK", "LEAK", "XLEAK"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert!(group_shown(&groups, Status::Fail));
+        assert!(group_shown(&groups, Status::Bork));
+        // A timeout is a failed test in run-tests.php.
+        assert!(group_shown(&groups, Status::Timeout));
+        for hidden in [Status::Pass, Status::Skip, Status::Xfail, Status::Warn] {
+            assert!(!group_shown(&groups, hidden), "{hidden:?}");
+        }
+        // Without the option everything is shown.
+        assert!(group_shown(&[], Status::Pass));
+    }
+
+    /// run-tests.php's summary: `(%.3f s) name [file]`, slowest first, between rules.
+    #[test]
+    fn slow_summary_lists_the_slow_tests_slowest_first() {
+        let result = |path: &str, name: &str, ms: u64, status: Status| TestResult {
+            path: path.to_string(),
+            name: name.to_string(),
+            result: status,
+            info: String::new(),
+            duration_ms: ms,
+            diff: None,
+            title: None,
+            junit_message: None,
+        };
+        let results = [
+            result("a/quick.phpt", "quick", 12, Status::Pass),
+            result("a/slow.phpt", "slow one", 1500, Status::Pass),
+            result("a/slower.phpt", "slower one", 2250, Status::Fail),
+            result("a/out.phpt", "not run", 0, Status::OutOfScope),
+        ];
+        let rule = "=====================================================================\n";
+        assert_eq!(
+            slow_summary(&results, 1000),
+            format!(
+                "\n{rule}SLOW TEST SUMMARY\n\
+                 ---------------------------------------------------------------------\n\
+                 (2.250 s) slower one [a/slower.phpt]\n(1.500 s) slow one [a/slow.phpt]\n{rule}"
+            )
+        );
+        assert_eq!(slow_summary(&results, 5000), "");
     }
 
     #[test]
@@ -1000,6 +1308,7 @@ mod tests {
             None,
             Some(Path::new("/s/fpm/php-fpm")),
             false,
+            None,
         );
         assert_eq!(
             env[&OsString::from("TEST_PHP_FPM_EXECUTABLE")],

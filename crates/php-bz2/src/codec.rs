@@ -44,10 +44,12 @@ fn buff_to_buff_compress(
 /// `false`, with `buf` unchanged, when the growth would exceed
 /// `memory_limit`. The violation stays recorded (`ZEND_HAS_OOM()`), so the
 /// VM raises "Allowed memory size of N bytes exhausted" once the builtin
-/// returns.
+/// returns. The growth is exact, as `zend_string_safe_frealloc` is: an
+/// amortized (doubling) reservation would make the peak of a 12 GiB
+/// result (ext/bz2/tests/gh20807.phpt) up to twice what php-src needs.
 fn fallible_resize(buf: &mut Vec<u8>, new_len: usize) -> bool {
     let additional = new_len.saturating_sub(buf.len());
-    if php_memlimit::fallible(|| buf.try_reserve(additional)).is_err() {
+    if php_memlimit::fallible(|| buf.try_reserve_exact(additional)).is_err() {
         return false;
     }
     buf.resize(new_len, 0);
@@ -155,6 +157,20 @@ mod tests {
         match o {
             Output::Data(d) => d,
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// bzdecompress() grows its output by the input length at a time
+    /// (`zend_string_safe_frealloc(dest, 1, source_len + 1, size, ...)`),
+    /// never by doubling.
+    #[test]
+    fn output_grows_exactly() {
+        let mut v = vec![0u8; 10];
+        v.shrink_to_fit();
+        for len in [15, 20, 25, 30] {
+            assert!(fallible_resize(&mut v, len));
+            assert_eq!(v.len(), len);
+            assert_eq!(v.capacity(), len);
         }
     }
 

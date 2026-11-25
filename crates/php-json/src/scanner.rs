@@ -48,6 +48,11 @@ pub(crate) enum Token {
     /// A string (or a big integer with `JSON_BIGINT_AS_STRING`). Empty when
     /// the scanner runs in validation mode.
     Str(Vec<u8>),
+    /// A valid string whose value is `len` bytes long, not built yet: the
+    /// parser turns it into [`Token::Str`] with [`Scanner::string_value`]
+    /// once the memory for it is reserved (php-src's scanner allocates the
+    /// string with `zend_string_falloc` between its two passes).
+    StrLen(usize),
     /// End of input (`PHP_JSON_T_EOI`).
     Eoi,
     /// A scanner error (`PHP_JSON_T_ERROR` with `errcode`).
@@ -71,6 +76,63 @@ pub(crate) struct Scanner<'a> {
     options: i64,
     /// Whether string contents are discarded (`json_validate`).
     validate: bool,
+    /// The string last returned as [`Token::StrLen`].
+    pending: PendingStr,
+}
+
+/// Where the string of a [`Token::StrLen`] is: `input[start..end]` between
+/// the quotes, and whether its value differs from those bytes.
+#[derive(Debug, Clone, Copy, Default)]
+struct PendingStr {
+    start: usize,
+    end: usize,
+    copy: bool,
+}
+
+/// The output of a pass over a string body: a byte count (the first pass,
+/// `STR_P1`) or the value itself (the second, `STR_P2`).
+trait StrOut {
+    /// Appends literal bytes.
+    fn bytes(&mut self, b: &[u8]);
+    /// Appends one byte.
+    fn byte(&mut self, b: u8);
+    /// Appends the UTF-8 encoding of a code point.
+    fn code_point(&mut self, cp: u32);
+}
+
+impl StrOut for usize {
+    #[inline]
+    fn bytes(&mut self, b: &[u8]) {
+        *self += b.len();
+    }
+    #[inline]
+    fn byte(&mut self, _: u8) {
+        *self += 1;
+    }
+    #[inline]
+    fn code_point(&mut self, cp: u32) {
+        *self += match cp {
+            0..0x80 => 1,
+            0x80..0x800 => 2,
+            0x800..0x10000 => 3,
+            _ => 4,
+        };
+    }
+}
+
+impl StrOut for Vec<u8> {
+    #[inline]
+    fn bytes(&mut self, b: &[u8]) {
+        self.extend_from_slice(b);
+    }
+    #[inline]
+    fn byte(&mut self, b: u8) {
+        self.push(b);
+    }
+    #[inline]
+    fn code_point(&mut self, cp: u32) {
+        push_utf8(self, cp);
+    }
 }
 
 #[inline]
@@ -144,6 +206,7 @@ impl<'a> Scanner<'a> {
             line_start: 0,
             options,
             validate,
+            pending: PendingStr::default(),
         }
     }
 
@@ -303,55 +366,104 @@ impl<'a> Scanner<'a> {
             return Some(Token::Int(if negative { v } else { -v }));
         }
         if self.options & BIGINT_AS_STRING != 0 {
-            Some(Token::Str(if self.validate {
-                Vec::new()
-            } else {
-                text.to_vec()
-            }))
+            if self.validate {
+                return Some(Token::Str(Vec::new()));
+            }
+            // `ZVAL_STRINGL`: a copy of the digits, reserved like a string.
+            self.pending = PendingStr {
+                start,
+                end: p,
+                copy: false,
+            };
+            Some(Token::StrLen(text.len()))
         } else {
             Some(Token::Double(parse_double(text)))
         }
     }
 
-    /// Scans a string body (the cursor is after the opening quote).
+    /// Scans a string body (the cursor is after the opening quote): the
+    /// first pass of php-src's scanner (`STR_P1`), which validates the
+    /// string and computes the exact length of its value.
+    ///
+    /// Returns [`Token::StrLen`]: the parser reserves that many bytes
+    /// against `memory_limit` and then calls [`Scanner::string_value`],
+    /// which builds the value in one exactly sized allocation (`STR_P2`).
+    /// In validation mode no value is built and the token is an empty
+    /// [`Token::Str`].
     fn string(&mut self) -> Token {
+        let start = self.cursor;
+        let mut len = 0usize;
+        match self.string_body(&mut len) {
+            Ok(copy) => {
+                if self.validate {
+                    return Token::Str(Vec::new());
+                }
+                self.pending = PendingStr {
+                    start,
+                    end: self.cursor - 1,
+                    copy,
+                };
+                Token::StrLen(len)
+            }
+            Err(code) => Token::Error(code),
+        }
+    }
+
+    /// The value of the string [`Scanner::string`] just measured as
+    /// `len` bytes (`STR_P2`): a copy of the input when it holds neither
+    /// escapes nor invalid UTF-8, otherwise the second pass over it.
+    pub(crate) fn string_value(&mut self, len: usize) -> Vec<u8> {
+        let PendingStr { start, end, copy } = self.pending;
+        if !copy {
+            return self.input[start..end].to_vec();
+        }
+        let mut out = Vec::with_capacity(len);
+        let resume = self.cursor;
+        self.cursor = start;
+        let second = self.string_body(&mut out);
+        debug_assert!(second.is_ok() && self.cursor == resume && out.len() == len);
+        self.cursor = resume;
+        out
+    }
+
+    /// One pass over a string body, from the cursor to just after the
+    /// closing quote, writing the value to `out`. Returns whether the value
+    /// differs from the input bytes (escapes or replaced/dropped invalid
+    /// UTF-8: php-src's `str_esc || utf8_invalid`), or the error.
+    fn string_body<O: StrOut>(&mut self, out: &mut O) -> Result<bool, ErrorCode> {
         let s = self.input;
-        let mut out = Vec::new();
         let ignore_or_subst = self.options & (INVALID_UTF8_IGNORE | INVALID_UTF8_SUBSTITUTE) != 0;
         let substitute = self.options & INVALID_UTF8_SUBSTITUTE != 0;
-        let keep = !self.validate;
+        let mut copy = false;
         // Start of the pending run of literal bytes.
         let mut run = self.cursor;
         loop {
             let p = self.cursor;
             let Some(c) = s.get(p).copied() else {
                 // EOI inside a string: unterminated.
-                return Token::Error(ErrorCode::Syntax);
+                return Err(ErrorCode::Syntax);
             };
             match c {
                 b'"' => {
-                    if keep {
-                        out.extend_from_slice(&s[run..p]);
-                    }
+                    out.bytes(&s[run..p]);
                     self.cursor = p + 1;
-                    return Token::Str(out);
+                    return Ok(copy);
                 }
                 0x00..=0x1F => {
                     self.cursor = p + 1;
-                    return Token::Error(ErrorCode::CtrlChar);
+                    return Err(ErrorCode::CtrlChar);
                 }
                 b'\\' => {
-                    if keep {
-                        out.extend_from_slice(&s[run..p]);
-                    }
-                    match self.escape(p, &mut out) {
+                    out.bytes(&s[run..p]);
+                    copy = true;
+                    match self.escape(p, out) {
                         Ok(next) => {
                             self.cursor = next;
                             run = next;
                         }
                         Err((code, next)) => {
                             self.cursor = next;
-                            return Token::Error(code);
+                            return Err(code);
                         }
                     }
                 }
@@ -360,17 +472,16 @@ impl<'a> Scanner<'a> {
                     if let Some(n) = utf8_sequence_len(&s[p..]) {
                         self.cursor = p + n;
                     } else if ignore_or_subst {
-                        if keep {
-                            out.extend_from_slice(&s[run..p]);
-                            if substitute {
-                                out.extend_from_slice("\u{FFFD}".as_bytes());
-                            }
+                        out.bytes(&s[run..p]);
+                        if substitute {
+                            out.bytes("\u{FFFD}".as_bytes());
                         }
+                        copy = true;
                         self.cursor = p + 1;
                         run = self.cursor;
                     } else {
                         self.cursor = p + 1;
-                        return Token::Error(ErrorCode::Utf8);
+                        return Err(ErrorCode::Utf8);
                     }
                 }
             }
@@ -379,9 +490,8 @@ impl<'a> Scanner<'a> {
 
     /// Handles an escape sequence starting with the backslash at `p`.
     /// Returns the position after it, or the error and the cursor position.
-    fn escape(&self, p: usize, out: &mut Vec<u8>) -> Result<usize, (ErrorCode, usize)> {
+    fn escape<O: StrOut>(&self, p: usize, out: &mut O) -> Result<usize, (ErrorCode, usize)> {
         let s = self.input;
-        let keep = !self.validate;
         let simple = match s.get(p + 1) {
             Some(b'"') => Some(b'"'),
             Some(b'\\') => Some(b'\\'),
@@ -394,9 +504,7 @@ impl<'a> Scanner<'a> {
             _ => None,
         };
         if let Some(b) = simple {
-            if keep {
-                out.push(b);
-            }
+            out.byte(b);
             return Ok(p + 2);
         }
         let ucs2 = |at: usize| -> Option<u32> {
@@ -414,9 +522,7 @@ impl<'a> Scanner<'a> {
         };
         if (0xD800..0xDC00).contains(&cp) {
             if let Some(lo) = ucs2(p + 6).filter(|lo| (0xDC00..0xE000).contains(lo)) {
-                if keep {
-                    push_utf8(out, ((cp & 0x3FF) << 10) + (lo & 0x3FF) + 0x10000);
-                }
+                out.code_point(((cp & 0x3FF) << 10) + (lo & 0x3FF) + 0x10000);
                 return Ok(p + 12);
             }
             return Err((ErrorCode::Utf16, p + 6));
@@ -424,9 +530,7 @@ impl<'a> Scanner<'a> {
         if (0xDC00..0xE000).contains(&cp) {
             return Err((ErrorCode::Utf16, p + 6));
         }
-        if keep {
-            push_utf8(out, cp);
-        }
+        out.code_point(cp);
         Ok(p + 6)
     }
 }
@@ -448,7 +552,10 @@ mod tests {
         let mut s = Scanner::new(input, options, false);
         let mut out = Vec::new();
         loop {
-            let t = s.scan();
+            let t = match s.scan() {
+                Token::StrLen(len) => Token::Str(s.string_value(len)),
+                t => t,
+            };
             let stop = matches!(t, Token::Eoi | Token::Error(_));
             out.push(t);
             if stop {
@@ -570,10 +677,46 @@ mod tests {
         let mut s = Scanner::new(b"\n  [\r\n  \"\xc3\xa9\" x", 0, false);
         assert_eq!(s.scan(), Token::LBracket);
         assert_eq!((s.line(), s.column()), (2, 3));
-        assert!(matches!(s.scan(), Token::Str(_)));
+        assert_eq!(s.scan(), Token::StrLen(2));
         assert_eq!((s.line(), s.column()), (3, 3));
         assert_eq!(s.scan(), Token::Error(ErrorCode::Syntax));
         assert_eq!((s.line(), s.column()), (3, 7));
+    }
+
+    /// The first pass measures exactly the value the second builds, so the
+    /// reservation and the allocation are one exactly sized block.
+    #[test]
+    fn string_length_is_exact() {
+        let cases: &[(&[u8], i64)] = &[
+            (&br#""plain""#[..], 0),
+            (&br#""a\"\\\/\b\f\n\r\tz""#[..], 0),
+            (&br#""\u0041\u00e9\u20ac\ud83d\ude00""#[..], 0),
+            ("\"\u{e9}\u{1F600}\"".as_bytes(), 0),
+            (&b"\"a\xffb\xe0\x80c\""[..], INVALID_UTF8_IGNORE),
+            (&b"\"a\xffb\xe0\x80c\""[..], INVALID_UTF8_SUBSTITUTE),
+            (&b"\"\x80\x80\x80\""[..], INVALID_UTF8_SUBSTITUTE),
+            (&b"\"\x80\\n\x80\""[..], INVALID_UTF8_SUBSTITUTE),
+        ];
+        for &(input, options) in cases {
+            let mut s = Scanner::new(input, options, false);
+            let Token::StrLen(len) = s.scan() else {
+                panic!("not a string: {input:?}");
+            };
+            let value = s.string_value(len);
+            assert_eq!(value.len(), len, "{input:?}");
+            assert_eq!(value.capacity(), len, "{input:?}");
+            // The cursor is after the closing quote either way.
+            assert_eq!(s.scan(), Token::Eoi, "{input:?}");
+        }
+        let mut s = Scanner::new(b"\"\x80\x80\"", INVALID_UTF8_SUBSTITUTE, false);
+        assert_eq!(s.scan(), Token::StrLen(6));
+        let mut s = Scanner::new(b"\"\x80\x80\"", INVALID_UTF8_IGNORE, false);
+        assert_eq!(s.scan(), Token::StrLen(0));
+        let mut s = Scanner::new(br#""\ud83d\ude00\u20ac\n""#, 0, false);
+        assert_eq!(s.scan(), Token::StrLen(4 + 3 + 1));
+        // Validation builds nothing.
+        let mut s = Scanner::new(br#""a\nb""#, 0, true);
+        assert_eq!(s.scan(), Token::Str(Vec::new()));
     }
 
     #[test]

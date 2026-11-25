@@ -674,6 +674,19 @@ impl Vm {
         for &i in &unit.hoisted_functions {
             let f = unit.decls.functions.borrow()[i as usize].clone();
             let lc = ZStr::from(f.name.to_ascii_lowercase());
+            // One probe of the table (`zend_hash_add_ptr`) for a function
+            // not declared yet; the observer, when there is one, is told
+            // before the function is in the table, as below.
+            if !self.observer.enabled {
+                if let std::collections::hash_map::Entry::Vacant(v) =
+                    self.functions.entry(lc.clone())
+                {
+                    crate::builtins::info::note_user_function(v.key());
+                    v.insert(crate::func::Func::User(f));
+                    crate::func::bump_func_table_version();
+                    continue;
+                }
+            }
             if let Some(existing) = self.functions.get(&lc) {
                 // A preloaded script included again: its preloaded
                 // functions are not declared again.
@@ -697,15 +710,28 @@ impl Vm {
             self.functions.insert(lc, crate::func::Func::User(f));
             crate::func::bump_func_table_version();
         }
-        let mut progress = true;
+        if unit.decls.classes.borrow().is_empty() {
+            return Ok(());
+        }
+        // The classes this file brings (not declared before it; an
+        // anonymous class is named when it is declared), and where its
+        // classes start in the declaration order.
+        let start = self.class_order.len();
+        let fresh = {
+            let decls = unit.decls.classes.borrow();
+            DeclSet::new(decls.len(), |i| {
+                decls.get(i).is_some_and(|d| {
+                    d.flags & crate::class::cflags::ANON == 0
+                        && !class_declared(&self.classes, d.name.as_bytes())
+                })
+            })
+        };
+        let mut progress = !unit.hoisted_classes.is_empty();
         while progress {
             progress = false;
             for &i in &unit.hoisted_classes {
                 let d = unit.decls.classes.borrow()[i as usize].clone();
-                if self
-                    .classes
-                    .contains_key(&ZStr::from(d.name.to_ascii_lowercase()))
-                {
+                if class_declared(&self.classes, d.name.as_bytes()) {
                     continue;
                 }
                 if self.can_early_bind(&d) {
@@ -725,7 +751,80 @@ impl Vm {
                 }
             }
         }
+        self.order_unit_classes(unit, start, &fresh);
         Ok(())
+    }
+
+    /// Puts the file's classes in the declaration order in the order the
+    /// file declares them, as php-src's class table has them:
+    /// `zend_compile_class_decl()` adds every class of a file when its
+    /// declaration has been compiled, one it does not bind there (a
+    /// parent declared later, interfaces, traits, a declaration inside a
+    /// condition or a function) under its runtime-definition key, whose
+    /// bucket the binding (`zend_bind_class_in_slot()`, at the statement
+    /// or in `zend_do_delayed_early_binding()`) renames in place. So
+    /// `get_declared_classes()` lists `class A implements I {}` before the
+    /// classes of a file required after it, whenever A is bound.
+    ///
+    /// A class not bound yet holds its place with its name until its
+    /// statement declares it ([`Vm::declare_class_stmt`]; a name that is
+    /// never bound is no class and is listed nowhere); what else was
+    /// declared meanwhile follows. `fresh` are the unit's declarations
+    /// this include brings, `start` is where the order stood before it.
+    fn order_unit_classes(&mut self, unit: &CompiledUnit, start: usize, fresh: &DeclSet) {
+        let decls = unit.decls.classes.borrow();
+        let sorted = compile_order(&decls);
+        let at = |k: usize| sorted.as_ref().map_or(k, |o| o[k]);
+        // The usual case of a file whose classes all bound before its
+        // code runs: the order already lists them, in the file's order.
+        let in_order = {
+            let mut order = self.class_order.get(start..).unwrap_or_default().iter();
+            let mut same = true;
+            for k in 0..decls.len() {
+                let i = at(k);
+                if !fresh.contains(i) {
+                    continue;
+                }
+                match order.next() {
+                    Some(n) if n.as_bytes().eq_ignore_ascii_case(decls[i].name.as_bytes()) => {}
+                    _ => {
+                        same = false;
+                        break;
+                    }
+                }
+            }
+            same && order.next().is_none()
+        };
+        if in_order {
+            return;
+        }
+        let bound = self
+            .class_order
+            .split_off(start.min(self.class_order.len()));
+        let mut used = vec![false; bound.len()];
+        for k in 0..decls.len() {
+            let i = at(k);
+            if !fresh.contains(i) {
+                continue;
+            }
+            let d = &decls[i];
+            let found = bound.iter().enumerate().position(|(j, n)| {
+                !used[j] && n.as_bytes().eq_ignore_ascii_case(d.name.as_bytes())
+            });
+            if let Some(j) = found {
+                used[j] = true;
+                self.class_order.push(bound[j].clone());
+            } else {
+                self.class_order
+                    .push(ZStr::from(d.name.as_bytes().to_ascii_lowercase()));
+                crate::classlink::note_order_placeholder(Rc::as_ptr(d) as usize);
+            }
+        }
+        for (j, n) in bound.into_iter().enumerate() {
+            if !used[j] {
+                self.class_order.push(n);
+            }
+        }
     }
 
     /// php-src's C stack at the start of a compilation, for the compiler's
@@ -1309,6 +1408,70 @@ fn declares_anything(unit: &CompiledUnit) -> bool {
         || !unit.decls.const_attributes.borrow().is_empty()
 }
 
+/// The unit's class declarations (indices of its table) in the order
+/// php-src compiles them, which is the order of its class table: a class
+/// is added when its declaration has been compiled, so one declared
+/// inside a function comes before the classes that follow the function.
+/// The unit's table lists the top-level code's declarations first and the
+/// nested ones after them: `None` when that is the compile order already
+/// (no declaration ends before the one listed before it), else the
+/// indices by the line each declaration ends on.
+fn compile_order(decls: &[Rc<crate::class::ClassDecl>]) -> Option<Vec<usize>> {
+    if decls.windows(2).all(|w| w[0].line_end <= w[1].line_end) {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..decls.len()).collect();
+    // A stable sort: declarations ending on one line keep the table's order.
+    order.sort_by_key(|&i| decls[i].line_end);
+    Some(order)
+}
+
+/// A set of indices into a unit's class declarations: a bit mask for the
+/// usual few, a vector past 64.
+enum DeclSet {
+    Mask(u64),
+    Wide(Vec<bool>),
+}
+
+impl DeclSet {
+    /// The indices `0..n` for which `pred` holds.
+    fn new(n: usize, mut pred: impl FnMut(usize) -> bool) -> Self {
+        if n <= 64 {
+            let mut m = 0u64;
+            for k in 0..n {
+                if pred(k) {
+                    m |= 1 << k;
+                }
+            }
+            DeclSet::Mask(m)
+        } else {
+            DeclSet::Wide((0..n).map(pred).collect())
+        }
+    }
+
+    fn contains(&self, k: usize) -> bool {
+        match self {
+            DeclSet::Mask(m) => k < 64 && m & (1 << k) != 0,
+            DeclSet::Wide(v) => v.get(k).copied().unwrap_or(false),
+        }
+    }
+}
+
+/// Whether the class table has `name` (any case), lower-casing it on the
+/// stack: the hoisted-class loop asks for every class of a unit, at least
+/// twice, and a fresh lower-case string per question cost an allocation.
+fn class_declared<V>(classes: &crate::class::NameMap<V>, name: &[u8]) -> bool {
+    let mut buf = [0u8; 64];
+    match buf.get_mut(..name.len()) {
+        Some(lc) => {
+            lc.copy_from_slice(name);
+            lc.make_ascii_lowercase();
+            classes.contains_key(&*lc)
+        }
+        None => classes.contains_key(name.to_ascii_lowercase().as_slice()),
+    }
+}
+
 impl CompiledUnit {
     /// Clears run-time caches on all op arrays in this unit so the unit
     /// carries no request state.
@@ -1333,6 +1496,135 @@ mod tests {
     use super::{is_normalized_absolute, is_uncacheable_stream_path, opened_path};
     use crate::vm::Vm;
     use std::path::{Path, PathBuf};
+
+    /// A `Write` sink shared with the test.
+    #[derive(Clone, Default)]
+    struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `get_declared_classes()` lists a file's hoisted classes in the
+    /// order the file declares them, also when one waited for a class
+    /// declared after it (php-src's class table keeps the place of a
+    /// class bound later, see `order_hoisted_classes`). Expected output
+    /// from `php8.5 -n` (the CLI without the opcache).
+    #[test]
+    fn hoisted_classes_keep_the_file_order() {
+        let dir = std::env::temp_dir().join(format!("php-vm-hoist-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write = |name: &str, src: &str| std::fs::write(dir.join(name), src).expect("write");
+        write("base.php", "<?php\nclass Base {}\nclass Ext {}\n");
+        write(
+            "decl.php",
+            "<?php\nclass Early {}\nclass Later extends Base {}\nclass Child extends Later2 {}\n\
+             class Later2 {}\ninterface I {}\nclass Impl implements I {}\n",
+        );
+        write(
+            "decl2.php",
+            "<?php\nclass Early2 {}\nclass Later3 extends Base3 {}\nclass Base3 {}\n\
+             class Child2 extends Ext {}\n",
+        );
+        let main = format!(
+            "<?php require '{0}/base.php';\n\
+             $n = count(get_declared_classes());\n\
+             require '{0}/decl.php';\n\
+             echo implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n\
+             $n = count(get_declared_classes());\n\
+             require '{0}/decl2.php';\n\
+             echo implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n",
+            dir.display()
+        );
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(main.as_bytes(), "main.php");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "Early,Later,Child,Later2,Impl\nEarly2,Later3,Base3,Child2\n"
+        );
+    }
+
+    /// Every class of a file holds its place in `get_declared_classes()`,
+    /// whenever it is bound: a class using a trait above its child, a
+    /// class implementing an interface of a file required after it, a
+    /// class in a condition, a class declared by a function called later
+    /// (in the function's place: php-src adds a class to its table when
+    /// the declaration is compiled), an enum, a class with `__toString`.
+    /// Expected output from `php8.5 -n`.
+    #[test]
+    fn every_class_of_a_file_keeps_its_place_in_the_declaration_order() {
+        let dir = std::env::temp_dir().join(format!("php-vm-decl-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write = |name: &str, src: &str| std::fs::write(dir.join(name), src).expect("write");
+        write("base.php", "<?php\ninterface I {}\nclass Base {}\n");
+        write(
+            "a.php",
+            "<?php\ntrait T3 { public function method() { static $x; echo \"x\\n\"; } }\n\
+             class C3 { use T3; }\nclass C4 extends C3 {}\n",
+        );
+        write(
+            "b.php",
+            "<?php\nclass P1 {}\nrequire __DIR__ . '/inner.php';\nclass Q1 implements J {}\n\
+             class R1 extends P1 {}\n",
+        );
+        write("inner.php", "<?php\ninterface J {}\nclass InnerA {}\n");
+        write(
+            "c.php",
+            "<?php\nclass First {}\nif (!class_exists('Poly')) { class Poly {} }\n\
+             function mk() { class Nested {} }\nclass Second implements I {}\nmk();\n\
+             class Third {}\n",
+        );
+        write(
+            "d.php",
+            "<?php\nclass D1 implements I {}\nclass D2 extends D3 {}\nclass D3 extends Base {}\n\
+             enum E1 { case A; }\n\
+             class D4 { public function __toString() { return ''; } }\nclass D5 {}\n",
+        );
+        let main = format!(
+            "<?php require '{0}/base.php';\n\
+             foreach (['a', 'b', 'c', 'd'] as $f) {{\n\
+               $n = count(get_declared_classes());\n\
+               require '{0}/' . $f . '.php';\n\
+               echo $f, ': ', implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n\
+             }}\n",
+            dir.display()
+        );
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(main.as_bytes(), "main.php");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "a: C3,C4\nb: P1,Q1,R1,InnerA\nc: First,Poly,Nested,Second,Third\n\
+             d: D1,D2,D3,E1,D4,D5\n"
+        );
+    }
+
+    #[test]
+    fn class_declared_ignores_case_at_any_length() {
+        let mut classes: crate::class::NameMap<()> = crate::class::NameMap::default();
+        let long = "a".repeat(100);
+        for name in ["foo", long.as_str()] {
+            classes.insert(php_runtime::ZStr::from(name), ());
+        }
+        assert!(super::class_declared(&classes, b"FOO"));
+        assert!(super::class_declared(&classes, b"foo"));
+        assert!(super::class_declared(&classes, "A".repeat(100).as_bytes()));
+        assert!(!super::class_declared(&classes, b"bar"));
+        assert!(!super::class_declared(&classes, "A".repeat(99).as_bytes()));
+    }
 
     #[test]
     fn only_normalized_absolute_names_are_their_own_cache_key() {

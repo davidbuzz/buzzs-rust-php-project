@@ -295,11 +295,18 @@ impl TlsOps {
                     }
                     if !poll_fd(fd, libc::POLLOUT, timeout) {
                         self.timed_out = true;
+                        // C falls through to the warning with the
+                        // transient errno.
+                        st.send_failed(write.len(), libc::EAGAIN);
                         return Err(OpFailed);
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(_) => return Err(OpFailed),
+                Err(e) => {
+                    // `php_sockop_write()`'s warning.
+                    st.send_failed(write.len(), e.raw_os_error().unwrap_or(0));
+                    return Err(OpFailed);
+                }
             }
         }
     }

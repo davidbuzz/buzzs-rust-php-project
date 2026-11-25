@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src Zend/zend_language_scanner.l. Similarity metric to original: 19%
+//   Copyright © Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc., and Contributors.
+//   Authors: Marcus Boerger <helly@php.net>
+//            Nuno Lopes <nlopess@php.net>
+//            Scott MacVicar <scottmac@php.net>
+//            Flex version authors:
+//            Andi Gutmans <andi@php.net>
+//            Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The scanner state machine, a hand-written port of
 //! `Zend/zend_language_scanner.l`.
 

@@ -10,7 +10,7 @@
 //! was originally on cannot be turned off at runtime.
 
 use php_phar::registry as reg;
-use php_support::ini::{parse_bool, Access, IniDirective, ModifyHandler};
+use php_support::ini::{parse_bool, Access, IniDirective, IniDisplayer, ModifyHandler};
 use php_vm::ext::{ModuleBuilder, VmResult};
 use php_vm::Vm;
 
@@ -19,13 +19,11 @@ const BOOL_DIRECTIVES: [&str; 2] = ["phar.readonly", "phar.require_hash"];
 /// Registers the directives and their modify handlers.
 pub fn register(m: &mut ModuleBuilder<'_>) {
     for name in BOOL_DIRECTIVES {
-        m.ini(IniDirective::new(
-            name,
-            Some("1"),
-            Access::ALL,
-            ModifyHandler::None,
-            "Phar",
-        ));
+        // STD_PHP_INI_BOOLEAN in ext/phar/phar.c.
+        m.ini(
+            IniDirective::new(name, Some("1"), Access::ALL, ModifyHandler::None, "Phar")
+                .with_displayer(IniDisplayer::Boolean),
+        );
     }
     m.ini(IniDirective::new(
         "phar.cache_list",

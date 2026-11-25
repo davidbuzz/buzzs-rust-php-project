@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/zend_test/object_handlers.c. Similarity metric to original: 22%
+//   Copyright © The PHP Group and Contributors. Authors: George Peter Banyard <girgias@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `object_handlers.c`: classes with custom `do_operation`, `cast_object`,
 //! `compare` and dimension handlers.
 

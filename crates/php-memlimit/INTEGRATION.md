@@ -26,8 +26,22 @@ The request thread's small blocks (up to 3072 bytes, alignment up to 16)
 come from a port of zend_mm's small-block heap (`src/heap.rs`): 30 size
 bins whose runs are carved out of 2 MiB chunks, unlocked free lists, a
 load and a store per allocation or free. Larger blocks, and every block of
-another thread, come from mimalloc. The accounting is identical either way
-(requested bytes, as before); the heap's chunks are not counted.
+another thread, come from mimalloc. The accounting is identical either way;
+the heap's chunks are not counted.
+
+## What a block is charged
+
+Like php-src's `heap->size`, usage counts each live block at its size
+class (`zend_size`, `charge`): a small request (up to 3072 bytes) the
+element size of its bin, a larger one whole 4 KiB pages, a huge one its
+size rounded up to the page. A value that changes size within its class
+leaves `memory_get_usage()` and the peak where they were; a realloc within
+a class moves nothing. The fast paths read the charge from the same table
+entry as the bin. The "tried to allocate" figure of the limit fatal is
+php-src's `add_size`: the page-rounded size for a huge block (or
+reservation), the 2 MiB chunk for any other request. In tracked mode
+(`USE_TRACKED_ALLOC`) the blocks are still charged their classes (php-src
+counts exact bytes there), but the figure is the request itself.
 
 The request thread is the *owner*: `request_start` binds the calling
 thread and `request_end` unbinds a thread that `request_start` bound.
@@ -66,7 +80,7 @@ closest equivalent here is:
 - `gc_mem_caches()` (below) collects and reports the bytes.
 
 Collecting never changes `memory_get_usage()`, the peak or the limits:
-they count live bytes.
+they count live blocks.
 
 ## 1. php-cli: install the allocator (once)
 
@@ -96,6 +110,21 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 }
 php_memlimit::set_hard_limit_handler(hard_limit);
 ```
+
+First thing in `main()`, decide on transparent huge pages as php-src does
+(`USE_ZEND_ALLOC_HUGE_PAGES`, off unless it is a non-zero number):
+
+```rust
+php_memlimit::set_huge_pages(php_memlimit::huge_pages_from_env(
+    std::env::var_os("USE_ZEND_ALLOC_HUGE_PAGES").as_deref().map(OsStrExt::as_bytes),
+));
+```
+
+mimalloc marks its arenas `MADV_HUGEPAGE` by default. In a process that
+forks workers (php-fpm, php-cgi with `PHP_FCGI_CHILDREN`) a worker that
+writes a few bytes of a shared 2 MiB page then gets a private copy of all
+of it: with 10 php-fpm workers 4.8 MB private per worker after a request
+instead of 2.9 MB. The CLI benchmarks run the same with and without.
 
 Only the binary may install the allocator. Library test binaries do not see
 it: there `usage()` stays at `PHP_BASELINE` and only `try_reserve` enforces
