@@ -109,6 +109,49 @@ fn ini_values_are_shared_with_the_vm() {
     assert_eq!(out, "string(1) \"1\"\n");
 }
 
+/// Runs `requests` one after another on one VM, resetting it in between
+/// as a persistent SAPI does; returns each request's output.
+fn run_requests(requests: &[&str]) -> Vec<String> {
+    let sink = Sink::default();
+    let ext = php_ext_session::Session;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    let mut outs = Vec::new();
+    for (i, code) in requests.iter().enumerate() {
+        if i > 0 {
+            vm.request_reset();
+        }
+        vm.run_script(code.as_bytes(), "test.php");
+        let out = std::mem::take(&mut *sink.0.borrow_mut());
+        outs.push(String::from_utf8_lossy(&out).into_owned());
+    }
+    drop(vm);
+    outs
+}
+
+/// A directive a request changed (with `ini_set()` and through a session
+/// function) is back at its configured value in the next request, on both
+/// sides: `ini_get()` (the VM registry) and the session's own value. The
+/// INI synchronisation skips its pass when neither side changed; this
+/// checks that the skip never keeps a value of the previous request.
+/// Expected values from php8.5.
+#[test]
+fn ini_changes_of_a_request_are_gone_in_the_next() {
+    let first = r#"<?php ob_start();
+        ini_set("session.gc_maxlifetime", "77");
+        session_name("first");
+        var_dump(ini_get("session.name"), session_name(), ini_get("session.gc_maxlifetime"));"#;
+    let second = r#"<?php ob_start();
+        var_dump(ini_get("session.name"), session_name(), ini_get("session.gc_maxlifetime"));
+        $all = ini_get_all("session");
+        var_dump($all["session.name"]["local_value"], $all["session.gc_maxlifetime"]["local_value"]);"#;
+    let outs = run_requests(&[first, second, first, second]);
+    let changed = "string(5) \"first\"\nstring(5) \"first\"\nstring(2) \"77\"\n";
+    let restored = "string(9) \"PHPSESSID\"\nstring(9) \"PHPSESSID\"\nstring(4) \"1440\"\n\
+                    string(9) \"PHPSESSID\"\nstring(4) \"1440\"\n";
+    assert_eq!(outs, [changed, restored, changed, restored]);
+}
+
 #[test]
 fn user_handler_object_reenters_the_module() {
     let out = run_with(

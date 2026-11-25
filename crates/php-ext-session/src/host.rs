@@ -252,6 +252,14 @@ pub(crate) fn with_host_unsynced<R>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>)
 }
 
 impl VmHost<'_> {
+    /// The state and the VM, borrowed apart.
+    pub(crate) fn state_and_vm(&mut self) -> (&SessionState, &mut Vm) {
+        let state: &SessionState = self
+            .state
+            .get_or_insert_with(|| Box::new(SessionState::new()));
+        (state, &mut *self.vm)
+    }
+
     /// The state (always present outside [`VmHost::parked`]).
     pub(crate) fn state(&mut self) -> &mut SessionState {
         self.state

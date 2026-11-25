@@ -350,6 +350,12 @@ impl IniRegistry {
             .map(|e| e.value.as_deref().unwrap_or_default())
     }
 
+    /// Whether a directive was modified since startup or the last
+    /// [`IniRegistry::deactivate`] (it is in `EG(modified_ini_directives)`).
+    pub fn is_modified(&self, name: &str) -> bool {
+        self.entries.get(name).is_some_and(|e| e.modified)
+    }
+
     /// The raw value (`None` when the directive has no value).
     pub fn raw(&self, name: &str) -> Option<&[u8]> {
         self.entries.get(name).and_then(|e| e.value.as_deref())
@@ -449,12 +455,13 @@ impl IniRegistry {
     }
 
     fn restore_entry(&mut self, name: &str, stage: Stage, diag: &mut dyn DiagnosticSink) -> bool {
-        let Some(entry) = self.entries.get(name).cloned() else {
+        let Some(entry) = self.entries.get(name) else {
             return false;
         };
         if !entry.modified {
             return true;
         }
+        let entry = entry.clone();
         self.generation = next_generation();
         let result = self.on_modify(&entry, entry.orig_value.as_deref(), stage, diag);
         if stage == Stage::Runtime && result.is_err() {
@@ -1073,6 +1080,25 @@ mod tests {
         r.deactivate(&mut d);
         assert_ne!(r.generation(), g3);
         assert_eq!(r.get("include_path"), Some(&b".:/usr/share/php"[..]));
+    }
+
+    #[test]
+    fn is_modified_follows_alter_restore_and_deactivate() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert!(!r.is_modified("precision"));
+        assert!(!r.is_modified("no.such.directive"));
+        let g = r.generation();
+        assert!(r.restore("precision", Stage::Deactivate, &mut d));
+        assert_eq!(r.generation(), g, "restoring an unmodified entry changes nothing");
+        r.ini_set("precision", b"6", &mut d);
+        assert!(r.is_modified("precision"));
+        r.ini_restore("precision", &mut d);
+        assert!(!r.is_modified("precision"));
+        r.ini_set("precision", b"7", &mut d);
+        r.deactivate(&mut d);
+        assert!(!r.is_modified("precision"));
+        assert_eq!(r.get("precision"), Some(&b"14"[..]));
     }
 
     #[test]

@@ -36,6 +36,9 @@ thread_local! {
     static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
     /// `ini_restore()` is running: the modify hooks restore.
     static RESTORING: Cell<bool> = const { Cell::new(false) };
+    /// The (VM registry generation, store revision) [`sync`] last left in
+    /// sync.
+    static LAST_SYNC: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
 }
 
 /// Whether the current modify-hook call comes from `ini_restore()`.
@@ -113,17 +116,26 @@ pub(crate) fn config_value(vm: &Vm, name: &str) -> Option<Vec<u8>> {
 }
 
 /// Copies the library's values into the VM registry.
+///
+/// Runs after every session entry point and at request start and end, so
+/// it first compares the two sides' stamps (the VM registry's generation
+/// and the store's revision) with those of the last pass: when neither
+/// side changed since a pass that left them in sync, there is nothing to
+/// copy. Otherwise each directive costs two registry probes, and only
+/// directives that differ are restored or altered.
 pub(crate) fn sync(h: &mut VmHost<'_>) {
+    let (state, vm) = h.state_and_vm();
+    let stamp = (vm.ini.generation(), state.ini.revision());
+    if LAST_SYNC.with(Cell::get) == Some(stamp) {
+        return;
+    }
     let mut sink: Vec<Diagnostic> = Vec::new();
-    for d in DIRECTIVES {
-        let Some(e) = h.state().ini.entry(d.name).cloned() else {
-            continue;
-        };
-        if !e.modified {
-            h.vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
+    for (d, e) in DIRECTIVES.iter().zip(state.ini.entries()) {
+        if !e.modified && vm.ini.is_modified(d.name) {
+            vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
         }
-        if h.vm.ini.raw(d.name) != Some(e.value.as_slice()) {
-            h.vm.ini.alter(
+        if vm.ini.raw(d.name) != Some(e.value.as_slice()) {
+            vm.ini.alter(
                 d.name,
                 &e.value,
                 Access::SYSTEM,
@@ -133,6 +145,8 @@ pub(crate) fn sync(h: &mut VmHost<'_>) {
             );
         }
     }
+    let stamp = (vm.ini.generation(), state.ini.revision());
+    LAST_SYNC.with(|c| c.set(Some(stamp)));
 }
 
 fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
