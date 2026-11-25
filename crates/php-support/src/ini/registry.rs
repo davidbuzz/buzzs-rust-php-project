@@ -555,8 +555,28 @@ impl IniRegistry {
     /// (case-insensitive).  `Err` carries the "Extension \"%s\" cannot be
     /// found" warning. The PHP binding calls [`Self::sort_entries`] first;
     /// this read-only query does not change the shared table order.
+    /// The rows are exactly the module's (`display_ini_entries()`); the
+    /// PHP function itself uses [`Self::ini_get_all_function`].
     pub fn ini_get_all(&self, extension: Option<&str>) -> Result<Vec<IniEntryInfo>, Diagnostic> {
         self.rows(extension, true)
+    }
+
+    /// The rows of the PHP function `ini_get_all($extension)`. The Core
+    /// module has module number 0, and `PHP_FUNCTION(ini_get_all)` filters
+    /// only on a non-zero number (ext/standard/basic_functions.c), so
+    /// `ini_get_all('core')` lists every extension's directives.
+    pub fn ini_get_all_function(
+        &self,
+        extension: Option<&str>,
+    ) -> Result<Vec<IniEntryInfo>, Diagnostic> {
+        match extension {
+            Some(ext) if ext.eq_ignore_ascii_case("core") => {
+                // The module lookup still runs (Core is always registered).
+                self.rows(Some(ext), true)?;
+                self.rows(None, true)
+            }
+            _ => self.rows(extension, true),
+        }
     }
 
     /// The same rows as [`Self::ini_get_all`] but in current table order
@@ -1309,6 +1329,40 @@ mod tests {
             .all(|e| ["user_agent", "from"].contains(&e.name.as_str())
                 || e.name.contains('_')
                 || e.name.contains('.')));
+    }
+
+    #[test]
+    fn get_all_core_lists_every_module() {
+        // php8.5 -n: ini_get_all('core') holds date.*, pcre.*, session.*, ...
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        r.register_module("other");
+        assert!(r.register(
+            IniDirective::new(
+                "other.x",
+                Some("1"),
+                Access::ALL,
+                ModifyHandler::Long,
+                "other"
+            ),
+            &mut d,
+        ));
+        let all = r.ini_get_all(None).unwrap();
+        for name in ["core", "Core", "CORE"] {
+            let c = r.ini_get_all_function(Some(name)).unwrap();
+            assert_eq!(c.len(), all.len());
+            assert!(c.iter().any(|e| e.name == "other.x"));
+        }
+        let o = r.ini_get_all_function(Some("other")).unwrap();
+        assert_eq!(o.len(), 1);
+        assert!(r.ini_get_all_function(Some("nope")).is_err());
+        // phpinfo(), --ri/--re and ReflectionExtension match the module
+        // exactly.
+        let info = r.ini_get_all(Some("Core")).unwrap();
+        assert!(info.iter().all(|e| e.name != "other.x"));
+        let reg = r.ini_entries_registered(Some("core")).unwrap();
+        assert!(reg.iter().all(|e| e.name != "other.x"));
+        assert!(reg.iter().any(|e| e.name == "precision"));
     }
 
     #[test]

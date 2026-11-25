@@ -80,3 +80,20 @@ fn ini_diff_unknown_argument_is_rejected() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stdout, b"Unknown argument for --ini\n");
 }
+
+#[test]
+fn ini_get_all_core_lists_every_extensions_directives() {
+    // Core is module number 0, which PHP_FUNCTION(ini_get_all) does not
+    // filter on (php8.5 -n: 'core' holds pcre.*, session.*, date.*).
+    let output = php(&[
+        "-r",
+        "$c = ini_get_all('core', false); $a = ini_get_all(null, false); \
+         var_dump(isset($c['pcre.jit'], $c['session.name'], $c['precision']), \
+         count($c) === count($a), isset(ini_get_all('pcre')['precision']));",
+    ]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "bool(true)\nbool(true)\nbool(false)\n"
+    );
+}
