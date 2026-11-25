@@ -233,3 +233,68 @@ set zz=gv
 "#
     );
 }
+
+/// `$obj->$name()` from one call site with the method's name in any case,
+/// objects of several classes in turn (the site's cache entry misses and
+/// is refilled), a static method, `__call`, private and protected methods
+/// through the calling scope (the private method of the scope taking
+/// precedence over a subclass's), and the errors: a private or protected
+/// method from outside, an undefined method, null, a name that is not a
+/// string, `__invoke` of an object and of a closure.
+#[test]
+fn dynamic_method_names() {
+    assert_eq!(
+        run(r#"<?php
+class A {
+    function m($x) { return "A::m$x"; }
+    static function s($x) { return "A::s$x"; }
+    private function p($x) { return "A::p$x"; }
+    protected function q($x) { return "A::q$x"; }
+    function callOwn($n, $x) { return $this->$n($x); }
+    function callOther($o, $n, $x) { return $o->$n($x); }
+}
+class B extends A { function m($x) { return "B::m$x"; } private function p($x) { return "B::p$x"; } }
+class C { function __call($n, $a) { return "C::__call $n " . implode(',', $a); } function m($x) { return "C::m$x"; } }
+function dyn($o, $n, $x) { return $o->$n($x); }
+function dyn2($o, $n) { $m = $n . ''; return $o->$m('t'); }
+$a = new A; $b = new B; $c = new C;
+for ($i = 0; $i < 3; $i++) {
+    echo dyn($a, 'm', $i), ' ', dyn($a, 'M', $i), ' ', dyn($b, 'm', $i), ' ', dyn($a, 's', $i), ' ', dyn($c, 'm', $i), ' ', dyn($c, 'zz', $i), "\n";
+    echo $a->callOwn('p', $i), ' ', $b->callOwn('p', $i), ' ', $a->callOther($b, 'p', $i), ' ', $a->callOwn('q', $i), ' ', dyn2($a, 'm'), ' ', dyn2($b, 'm'), "\n";
+    foreach ([[$a, 'p'], [$a, 'q'], [$a, 'nope'], [null, 'm'], [$a, 5], [$a, '__invoke']] as [$o, $n]) {
+        try { echo dyn($o, $n, $i), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    }
+    $f = function ($x) { return "closure$x"; };
+    echo dyn($f, '__invoke', $i), ' ', dyn($f, 'bindTo', null) === null ? 'null' : 'bound', "\n";
+}
+"#),
+        r#"A::m0 A::m0 B::m0 A::s0 C::m0 C::__call zz 0
+A::p0 A::p0 A::p0 A::q0 A::mt B::mt
+Error: Call to private method A::p() from global scope
+Error: Call to protected method A::q() from global scope
+Error: Call to undefined method A::nope()
+Error: Call to a member function m() on null
+Error: Method name must be a string
+Error: Call to undefined method A::__invoke()
+closure0 bound
+A::m1 A::m1 B::m1 A::s1 C::m1 C::__call zz 1
+A::p1 A::p1 A::p1 A::q1 A::mt B::mt
+Error: Call to private method A::p() from global scope
+Error: Call to protected method A::q() from global scope
+Error: Call to undefined method A::nope()
+Error: Call to a member function m() on null
+Error: Method name must be a string
+Error: Call to undefined method A::__invoke()
+closure1 bound
+A::m2 A::m2 B::m2 A::s2 C::m2 C::__call zz 2
+A::p2 A::p2 A::p2 A::q2 A::mt B::mt
+Error: Call to private method A::p() from global scope
+Error: Call to protected method A::q() from global scope
+Error: Call to undefined method A::nope()
+Error: Call to a member function m() on null
+Error: Method name must be a string
+Error: Call to undefined method A::__invoke()
+closure2 bound
+"#
+    );
+}

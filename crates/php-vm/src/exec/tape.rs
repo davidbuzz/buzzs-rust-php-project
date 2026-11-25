@@ -2423,6 +2423,19 @@ fn run_call(
                 DECLINED
             };
         }
+        // `$obj->$name()` (`calls::lower`): the site's method cache hit,
+        // pushed as the pending call; else the generic op in `Vm::run`.
+        Some(&Op::InitMethodCall { obj, name }) => {
+            flush(vm, prep);
+            let Some(f) = vm.frames.last_mut() else {
+                return DECLINED;
+            };
+            return if super::spec::init_dyn_method_call_in(f, obj, name, at) {
+                at + 1
+            } else {
+                DECLINED
+            };
+        }
         Some(&Op::New {
             class: ClassSpec::Named(lit),
             dst,

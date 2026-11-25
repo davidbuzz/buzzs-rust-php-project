@@ -43,6 +43,7 @@ use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
 mod casts;
 mod dims;
+mod dyncalls;
 mod props;
 mod refs;
 mod static_dims;
@@ -56,6 +57,7 @@ pub(super) use dims::{
     fetch_dims_is_miss_in, fetch_tmp_dims_in, in_array_in, incdec_dim_cv_in, isset_cv_dims_in,
     isset_dim_cv_in, isset_tmp_dims_in, key_exists_in,
 };
+pub(super) use dyncalls::init_dyn_method_call_in;
 pub(super) use props::{concat_prop_in, prop_op_in, read_hit};
 pub(super) use refs::step_ref;
 pub(super) use static_dims::{assign_static_dims_in, fetch_static_dims_in, isset_static_dims_in};

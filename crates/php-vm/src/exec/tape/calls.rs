@@ -107,6 +107,13 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..plain(TOp::CallInit)
         }),
         op if preparable(op) && stays_prepared(code, i) => Some(plain(TOp::CallInit)),
+        // `$obj->$name()`: started on the site's method cache hit
+        // (`spec::init_dyn_method_call_in`, from `run_call`) as a pending
+        // call, not left to `Vm::run`.
+        Op::InitMethodCall {
+            name: Operand::Cv(_) | Operand::Tmp(_),
+            ..
+        } => Some(plain(TOp::CallInit)),
         // `call_user_func[_array]()` written by name (`ZEND_INIT_USER_CALL`),
         // and the arguments it passes (`ZEND_SEND_USER`, `ZEND_SEND_ARRAY`):
         // prepared on the call site's cache hit ([`prepare_user_call`]).

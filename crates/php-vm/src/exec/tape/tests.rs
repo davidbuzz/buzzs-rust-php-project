@@ -1597,6 +1597,31 @@ fn property_concat() {
     assert_eq!(run(PROP_CONCAT), "a0x\na0x1x\na0x1x2x\n");
 }
 
+const DYN_METHODS: &str = r#"<?php
+class A { function m($x) { return "m$x"; } function n($x) { return "n$x"; } }
+function dyn($o, $name, $x) { return $o->$name($x); }
+$a = new A;
+for ($i = 0; $i < 3; $i++) { echo dyn($a, 'm', $i), dyn($a, $i == 1 ? 'n' : 'M', $i), "\n"; }
+"#;
+
+/// `$obj->$name()` starts as a call instruction (`run_call`:
+/// `spec::init_dyn_method_call_in`), its arguments the generic `Send`s.
+#[test]
+fn dynamic_method_calls() {
+    let arrays = op_arrays(DYN_METHODS);
+    let f = with_cv(&arrays, "name");
+    let tape = check(f);
+    let inits: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InitMethodCall { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(inits, [TOp::CallInit], "{inits:?}");
+    assert_eq!(run(DYN_METHODS), "m0m0\nm1n1\nm2m2\n");
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];
