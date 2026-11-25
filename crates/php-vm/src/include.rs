@@ -715,10 +715,7 @@ impl Vm {
             progress = false;
             for &i in &unit.hoisted_classes {
                 let d = unit.decls.classes.borrow()[i as usize].clone();
-                if self
-                    .classes
-                    .contains_key(&ZStr::from(d.name.to_ascii_lowercase()))
-                {
+                if class_declared(&self.classes, d.name.as_bytes()) {
                     continue;
                 }
                 if self.can_early_bind(&d) {
@@ -1322,6 +1319,21 @@ fn declares_anything(unit: &CompiledUnit) -> bool {
         || !unit.decls.const_attributes.borrow().is_empty()
 }
 
+/// Whether the class table has `name` (any case), lower-casing it on the
+/// stack: the hoisted-class loop asks for every class of a unit, at least
+/// twice, and a fresh lower-case string per question cost an allocation.
+fn class_declared<V>(classes: &crate::class::NameMap<V>, name: &[u8]) -> bool {
+    let mut buf = [0u8; 64];
+    match buf.get_mut(..name.len()) {
+        Some(lc) => {
+            lc.copy_from_slice(name);
+            lc.make_ascii_lowercase();
+            classes.contains_key(&*lc)
+        }
+        None => classes.contains_key(name.to_ascii_lowercase().as_slice()),
+    }
+}
+
 impl CompiledUnit {
     /// Clears run-time caches on all op arrays in this unit so the unit
     /// carries no request state.
@@ -1346,6 +1358,20 @@ mod tests {
     use super::{is_normalized_absolute, is_uncacheable_stream_path, opened_path};
     use crate::vm::Vm;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn class_declared_ignores_case_at_any_length() {
+        let mut classes: crate::class::NameMap<()> = crate::class::NameMap::default();
+        let long = "a".repeat(100);
+        for name in ["foo", long.as_str()] {
+            classes.insert(php_runtime::ZStr::from(name), ());
+        }
+        assert!(super::class_declared(&classes, b"FOO"));
+        assert!(super::class_declared(&classes, b"foo"));
+        assert!(super::class_declared(&classes, "A".repeat(100).as_bytes()));
+        assert!(!super::class_declared(&classes, b"bar"));
+        assert!(!super::class_declared(&classes, "A".repeat(99).as_bytes()));
+    }
 
     #[test]
     fn only_normalized_absolute_names_are_their_own_cache_key() {
