@@ -675,3 +675,46 @@ fn header_callback_exception_reaches_the_script() {
     );
     assert!(!body.contains("end"), "{body}");
 }
+
+/// A JIT `$_REQUEST` is merged when a script first names it, from the
+/// `$_GET`, `$_POST` and `$_COOKIE` that `filter.default` filtered
+/// (`php_auto_globals_create_request()`), each source once however often
+/// `request_order` names it. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn jit_request_merges_the_filtered_inputs_once() {
+    let files = [(
+        "r.php",
+        "<?php echo $_GET['a'], ' ', $_REQUEST['a'], ' ', $_REQUEST['p'] ?? '-', ' ', json_encode(array_keys($_REQUEST)), \"\\n\";\n",
+    )];
+    let body = "p=%22x%22&q=1";
+    let post = |port: u16| {
+        let r = request(
+            port,
+            &format!(
+                "POST /r.php?a=%3Cb%3E&p=g HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        split(&r).1.to_string()
+    };
+    let filtered = [
+        "-d",
+        "filter.default=special_chars",
+        "-d",
+        "error_reporting=24575",
+    ];
+    let srv = start_with("reqflt", &files, None, &filtered);
+    assert_eq!(
+        post(srv.port),
+        "&#60;b&#62; &#60;b&#62; &#34;x&#34; [\"a\",\"p\",\"q\"]\n"
+    );
+    drop(srv);
+    let mut pgp = filtered.to_vec();
+    pgp.extend(["-d", "request_order=PGP"]);
+    let srv = start_with("reqpgp", &files, None, &pgp);
+    assert_eq!(
+        post(srv.port),
+        "&#60;b&#62; &#60;b&#62; g [\"p\",\"q\",\"a\"]\n"
+    );
+}

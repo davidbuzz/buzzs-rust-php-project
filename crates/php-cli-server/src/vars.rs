@@ -176,22 +176,80 @@ const JIT_NAMES: [&str; 3] = ["_SERVER", "_ENV", "_REQUEST"];
 thread_local! {
     static ARMED: std::cell::RefCell<[Option<ZArray>; 3]> =
         const { std::cell::RefCell::new([None, None, None]) };
+    /// `variables_order` as the request started with it, for an armed
+    /// `$_REQUEST` (`PG(variables_order)`, the fallback of `request_order`).
+    static REQUEST_ORDER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Request shutdown: the arrays of JIT auto-globals no script named are
 /// freed with the request (php-src builds them only when asked).
 pub(crate) fn drop_armed() {
     ARMED.with(|a| *a.borrow_mut() = [None, None, None]);
+    REQUEST_ORDER.with(|o| o.borrow_mut().clear());
 }
 
 /// The armed auto-global's creation callback (`php_auto_globals_create_*`):
-/// the array request startup built for it.
+/// the array request startup built for it; `$_REQUEST` is merged now.
 fn create_armed(vm: &mut Vm, name: &[u8]) {
+    if name == b"_REQUEST" {
+        let order = REQUEST_ORDER.with(|o| std::mem::take(&mut *o.borrow_mut()));
+        let sources = [b"_GET".as_slice(), b"_POST", b"_COOKIE"].map(|n| global_array(vm, n));
+        let [get, post, cookie] = sources;
+        let arr = build_request(vm, &order, &get, &post, &cookie);
+        set_global_bytes(vm, name, arr);
+        return;
+    }
     let Some(i) = JIT_NAMES.iter().position(|n| n.as_bytes() == name) else {
         return;
     };
     let arr = ARMED.with(|a| a.borrow_mut()[i].take()).unwrap_or_default();
     set_global_bytes(vm, name, arr);
+}
+
+/// The array in the global symbol table under `name` (`$_GET` and kin as
+/// `PG(http_globals)` holds them), or an empty one.
+fn global_array(vm: &Vm, name: &[u8]) -> ZArray {
+    let mut g = vm.globals.borrow_mut();
+    let Some(i) = g.find(name) else {
+        return ZArray::new();
+    };
+    match g
+        .slots
+        .get(i as usize)
+        .and_then(Option::as_ref)
+        .map(Value::deref)
+    {
+        Some(Value::Array(a)) => a,
+        _ => ZArray::new(),
+    }
+}
+
+/// `php_auto_globals_create_request()`: `$_GET`, `$_POST` and `$_COOKIE`
+/// merged in `request_order` (else `variables_order`), each source once.
+///
+/// Under `auto_globals_jit` this runs when a script first names
+/// `$_REQUEST`, after `RINIT`: so ext/filter's `filter.default` (which
+/// php-src applies as each GET/POST/COOKIE variable is registered, and
+/// which ours applies to the registered arrays in its `RINIT`) shows in
+/// `$_REQUEST` too.
+fn build_request(vm: &Vm, order: &[u8], get: &ZArray, post: &ZArray, cookie: &ZArray) -> ZArray {
+    let ro = ini_bytes(vm, "request_order");
+    let ro = if ro.is_empty() { order.to_vec() } else { ro };
+    let mut request = ZArray::new();
+    let mut done = [false; 3];
+    let t = request.make_mut();
+    for c in ro {
+        let (i, src) = match c.to_ascii_lowercase() {
+            b'g' => (0, get),
+            b'p' => (1, post),
+            b'c' => (2, cookie),
+            _ => continue,
+        };
+        if !std::mem::replace(&mut done[i], true) {
+            merge(t, src);
+        }
+    }
+    request
 }
 
 /// `php_startup_auto_globals()` and `zend_activate_auto_globals()`: the
@@ -201,13 +259,27 @@ fn create_armed(vm: &mut Vm, name: &[u8]) {
 /// so absent from `$GLOBALS` and `get_defined_vars()` until a script names
 /// them); `$_SERVER` is not JIT with `register_argc_argv` (the request has
 /// no `argc`). `main/php_variables.c`, `Zend/zend_compile.c`.
-fn activate_auto_globals(vm: &mut Vm, [get, post, cookie, files]: [ZArray; 4], jit: [ZArray; 3]) {
+fn activate_auto_globals(
+    vm: &mut Vm,
+    [get, post, cookie, files]: [ZArray; 4],
+    [server, env]: [ZArray; 2],
+    order: &[u8],
+) {
+    let auto_jit = vm.ini_bool("auto_globals_jit");
+    let server_jit = auto_jit && !vm.ini_bool("register_argc_argv");
+    // A created `$_REQUEST` is merged at once; an armed one when a script
+    // first names it, from the arrays `$_GET`, `$_POST` and `$_COOKIE`
+    // hold by then.
+    let request = if auto_jit {
+        REQUEST_ORDER.with(|o| *o.borrow_mut() = order.to_vec());
+        ZArray::new()
+    } else {
+        build_request(vm, order, &get, &post, &cookie)
+    };
     set_global(vm, "_GET", get);
     set_global(vm, "_POST", post);
     set_global(vm, "_COOKIE", cookie);
-    let auto_jit = vm.ini_bool("auto_globals_jit");
-    let server_jit = auto_jit && !vm.ini_bool("register_argc_argv");
-    for (i, arr) in jit.into_iter().enumerate() {
+    for (i, arr) in [server, env, request].into_iter().enumerate() {
         let name = JIT_NAMES[i];
         if (i == 0 && server_jit) || (i > 0 && auto_jit) {
             ARMED.with(|a| a.borrow_mut()[i] = Some(arr));
@@ -866,23 +938,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         }
     }
 
-    // $_REQUEST
-    let mut request = ZArray::new();
-    {
-        let ro = ini_bytes(vm, "request_order");
-        let ro = if ro.is_empty() { order.clone() } else { ro };
-        let t = request.make_mut();
-        for c in ro {
-            match c.to_ascii_lowercase() {
-                b'g' => merge(t, &get),
-                b'p' => merge(t, &post),
-                b'c' => merge(t, &cookie),
-                _ => {}
-            }
-        }
-    }
-
-    activate_auto_globals(vm, [get, post, cookie, files], [server, env, request]);
+    activate_auto_globals(vm, [get, post, cookie, files], [server, env], &order);
 }
 
 /// The SAPI's part of `request_parse_body()` ([`php_vm::ext::ParseBodyFn`],
