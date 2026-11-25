@@ -1,0 +1,63 @@
+diff --git a/crates/php-cli/src/main.rs b/crates/php-cli/src/main.rs
+index 38166cf7..8de056bb 100644
+--- a/crates/php-cli/src/main.rs
++++ b/crates/php-cli/src/main.rs
+@@ -330,6 +330,7 @@ fn main() {
+ 
+ /// Flushes the standard streams and ends the process with `status`.
+ fn finish(status: i32) -> ! {
++    if std::env::var_os("DBG_OPS").is_some() { php_vm::dbg_dump(); } // TEMP-DEBUG
+     let _ = std::io::stdout().flush();
+     let _ = std::io::stderr().flush();
+     std::process::exit(status)
+diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
+index 06a3cf26..b07a5047 100644
+--- a/crates/php-vm/src/exec.rs
++++ b/crates/php-vm/src/exec.rs
+@@ -1775,6 +1775,13 @@ impl Vm {
+                 // `SAVE_OPLINE()`: the handler may report the current line,
+                 // throw, call out, or push a frame.
+                 self.frame_mut().ip = ip;
++                if std::env::var_os("DBG_OPS").is_some() { // TEMP-DEBUG
++                    let f = self.frame(); let lits = &f.code.literals;
++                    let d = format!("{op:?}"); let name: String = d.chars().take_while(|c| c.is_alphanumeric()).collect();
++                    let kinds = |o: &Operand| -> String { match *o { Operand::Cv(c) => f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get).map_or("undef".into(), |v| v.type_name().to_string()), Operand::Tmp(t) | Operand::TmpKeep(t) => format!("T:{}", f.tmps.get(t as usize).map_or("?".into(), |v| v.type_name().to_string())), Operand::Lit(l) => format!("L:{}", lits.get(l as usize).map_or("?".into(), |v| v.type_name().to_string())), Operand::Unused => "-".into() } };
++                    let extra = match op { Op::AssignCv { cv, val, .. } => format!("{} <- {}", kinds(&Operand::Cv(*cv)), kinds(val)), Op::Bin { op, a, b, .. } => format!("{op:?} {} {}", kinds(a), kinds(b)), Op::CmpJmp { op, a, b, .. } => format!("{op:?} {} {}", kinds(a), kinds(b)), Op::Coalesce { a, .. } => kinds(a), Op::Move { src, .. } => kinds(src), Op::Unary { op, a, .. } => format!("{op:?} {}", kinds(a)), Op::JmpZ(a, _) | Op::JmpNz(a, _) => kinds(a), Op::Return { val } => format!("{} fn={} gen={} rt={} cfi={} direct={} kind={:?} ret={:?}", kinds(val), f.ufunc.as_ref().map_or("-".into(), |u| format!("{}::{}", u.class_name.as_ref().map_or(String::new(), |c| c.to_string_lossy()), u.name.to_string_lossy())), f.ufunc.as_ref().is_some_and(|u| u.is_generator()), f.ufunc.as_ref().is_some_and(|u| u.return_type.is_some()), f.called_from_internal, f.direct, f.kind, f.ret), Op::AssignDimCv { cv, dim, val, .. } => format!("{} [{}] = {}", kinds(&Operand::Cv(*cv)), kinds(dim), kinds(val)), Op::AssignOpCv { cv, op, val, .. } => format!("{} {op:?}= {}", kinds(&Operand::Cv(*cv)), kinds(val)), Op::Send { src } => format!("{} -> {}", match src { crate::opcode::ArgSrc::Val(_) => "Val", crate::opcode::ArgSrc::CallResult(_) => "CallRes", crate::opcode::ArgSrc::Place(_) => "Place", _ => "other" }, f.calls.last().map_or("nocall".into(), |c| match &c.func { crate::func::Func::User(u) => format!("U {}::{} shape={}", u.class_name.as_ref().map_or(String::new(), |c| c.to_string_lossy()), u.name.to_string_lossy(), u.call_shape()), crate::func::Func::Builtin(b) => format!("B {}", b.name.to_string_lossy()) })), Op::RecvVariadic { .. } => f.ufunc.as_ref().map_or("?".into(), |u| format!("{}::{} args={}", u.class_name.as_ref().map_or(String::new(), |c| c.to_string_lossy()), u.name.to_string_lossy(), f.args.len())), Op::DoCall { .. } => f.calls.last().map_or("nocall".into(), |c| match &c.func { crate::func::Func::User(u) => format!("U {} {} shape={:?} args={}", u.class_name.as_ref().map_or(String::new(), |c| c.to_string_lossy()), u.name.to_string_lossy(), u.call_shape(), c.args.len() + c.inline_count as usize), crate::func::Func::Builtin(b) => format!("B {}", b.name.to_string_lossy()) }), Op::DoCall { .. } => f.calls.last().map_or("nocall".into(), |c| match &c.func { crate::func::Func::User(u) => format!("U {} {} shape={:?} args={}", u.class_name.as_ref().map_or(String::new(), |c| c.to_string_lossy()), u.name.to_string_lossy(), u.call_shape(), c.args.len() + c.inline_count as usize), crate::func::Func::Builtin(b) => format!("B {}", b.name.to_string_lossy()) }), Op::InitMethodCall { obj, name } => format!("{} {}", kinds(obj), match name { Operand::Lit(l) => lits.get(*l as usize).map_or("?".into(), |v| format!("{v:?}")), o => format!("{o:?}") }), Op::InitStaticCall { class, name } => format!("{class:?} {}", match name { Operand::Lit(l) => lits.get(*l as usize).map_or("?".into(), |v| format!("{v:?}")), o => format!("{o:?}") }), Op::Fetch { place, mode, .. } => { let pl = &f.code.places[*place as usize]; format!("{mode:?} {:?} segs={:?}", pl.base, pl.segs.iter().map(|s| match s { crate::opcode::Seg::Dim(_) => "D", crate::opcode::Seg::Append => "A", crate::opcode::Seg::Prop(_) => "P" }).collect::<String>()) } Op::InstanceOf { a, class, .. } => format!("{} {:?}", kinds(a), class), Op::Cast { kind, a, .. } => format!("{kind:?} {}", kinds(a)), Op::AssignObjProp { place, .. } | Op::FetchObjProp { place, .. } | Op::AssignObjPropDim { place, .. } => { let pl = &f.code.places[*place as usize]; let base = match &pl.base { crate::opcode::PlaceBase::Cv(c) => kinds(&Operand::Cv(*c)), crate::opcode::PlaceBase::This => f.this.as_ref().map_or("nothis".into(), |o| crate::object::class_of(o).name.to_string_lossy()), other => format!("{other:?}") }; let pname = match pl.segs.first() { Some(crate::opcode::Seg::Prop(Operand::Lit(l))) => lits.get(*l as usize).map_or("?".into(), |v| format!("{v:?}")), other => format!("{other:?}") }; let cls = match &pl.base { crate::opcode::PlaceBase::This => f.this.as_ref().map(|o| crate::object::class_of(o).clone()), crate::opcode::PlaceBase::Cv(c) => match f.cvs.get(*c as usize).and_then(crate::vm::CvSlot::get) { Some(Value::Object(o)) => Some(crate::object::class_of(o).clone()), _ => None }, _ => None }; let magic = cls.map_or("-".to_string(), |c| format!("get={} set={}", c.magic.get.is_some(), c.magic.set.is_some())); format!("{base} {pname} segs={} {magic}", pl.segs.len()) } _ => String::new() };
++                    crate::dbg_str(format!("{name} {extra}"));
++                }
+                 let flow = match op {
+                     Op::Nop => Flow::Next,
+                     Op::Move { src, dst } => {
+diff --git a/crates/php-vm/src/exec/tape.rs b/crates/php-vm/src/exec/tape.rs
+index 4e46e033..f3159f71 100644
+--- a/crates/php-vm/src/exec/tape.rs
++++ b/crates/php-vm/src/exec/tape.rs
+@@ -1881,6 +1881,13 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
+                 // SAFETY: both point into the tape.
+                 #[allow(clippy::cast_sign_loss)]
+                 let at = unsafe { out.ip.offset_from(tbase) } as usize;
++                if std::env::var_os("DBG_TAPE").is_some() { // TEMP-DEBUG
++                    let why = match out.why { WHY_CALL => "call", WHY_VM => "vm", WHY_EXT => "ext", WHY_EXIT => "exit", _ => "step/other" };
++                    let f = unsafe { &*fp };
++                    let kinds = |o: &Operand| -> String { match *o { Operand::Cv(c) => f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get).map_or("undef".into(), |v| v.type_name().to_string()), Operand::Tmp(t) | Operand::TmpKeep(t) => format!("T:{}", f.tmps.get(t as usize).map_or("?".into(), |v| v.type_name().to_string())), Operand::Lit(l) => format!("L:{}", lits.get(l as usize).map_or("?".into(), |v| v.type_name().to_string())), Operand::Unused => "-".into() } };
++                    let d = ops.get(at).map_or("-".to_string(), |o| { let d = format!("{o:?}"); let name: String = d.chars().take_while(|c| c.is_alphanumeric()).collect(); let extra = match o { Op::CmpJmp { op, a, b, .. } => format!("{op:?} {} {}", kinds(a), kinds(b)), Op::Bin { op, a, b, .. } => format!("{op:?} {} {}", kinds(a), kinds(b)), Op::AssignCv { cv, val, .. } => format!("{} <- {}", kinds(&Operand::Cv(*cv)), kinds(val)), Op::Move { src, .. } => kinds(src), Op::JmpZ(a, _) | Op::JmpNz(a, _) => kinds(a), _ => String::new() }; format!("{name} {extra}") });
++                    crate::dbg_str(format!("TAPE {why} {:?} {d}", unsafe { (*out.ip).op }));
++                }
+                 let next = match out.why {
+                     WHY_CALL => {
+                         // SAFETY: `out.ip` points into the tape (the
+diff --git a/crates/php-vm/src/lib.rs b/crates/php-vm/src/lib.rs
+index 5b97ede6..5bb96edb 100644
+--- a/crates/php-vm/src/lib.rs
++++ b/crates/php-vm/src/lib.rs
+@@ -738,3 +738,10 @@ mod cli_define_tests {
+         assert_eq!(one("ary[]=x"), ("ary[]".into(), "x".into()));
+     }
+ }
++
++// TEMP-DEBUG
++thread_local! { static DBG_OPS: std::cell::RefCell<std::collections::HashMap<String, u64>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
++#[allow(missing_docs)]
++pub fn dbg_str(k: String) { DBG_OPS.with(|m| *m.borrow_mut().entry(k).or_insert(0) += 1); }
++#[allow(missing_docs)]
++pub fn dbg_dump() { DBG_OPS.with(|m| { let m = m.borrow(); let mut v: Vec<_> = m.iter().collect(); v.sort_by(|a, b| b.1.cmp(a.1)); let t: u64 = v.iter().map(|x| *x.1).sum(); eprintln!("op total {t}"); for (k, c) in v.iter().take(400) { eprintln!("op {c} {k}"); } }); }

@@ -82,9 +82,10 @@ A census of the tape's exits from its core loop in one unit-test run
 14.4M. After them come ops the core loop does not run itself (class
 constants 5.5M, `instanceof` 3.8M, `foreach` start and end 7M, `$this`
 3.3M) and string comparisons on the slow step. The patch for that census
-is `slowcount-tape.diff` (run with `DBG_OPS=1 DBG_TAPE=1`); apply it to
-`crates/php-vm` and `php-cli`'s `main.rs` only, and revert it with the
-same patch.
+is `perf/census/op-census.diff`. Apply it with `git apply` and build
+release. Run with `DBG_OPS=1` for the ops reaching `Vm::run`'s generic
+dispatch, plus `DBG_TAPE=1` for the tape's exits; the counts print to
+stderr at exit. Revert it with `git apply -R` of the same file.
 
 So the gap is not one thing. The plan, in order of instructions at
 stake:
@@ -195,9 +196,10 @@ All of these are 1,000-element inputs unless noted.
 
 ## Method notes
 
-- **Slow-op census.** Apply the patch, run with `DBG_OPS=1`, revert.
-  This finds the ops that still reach the generic dispatch. The patch
-  lives outside the repo, in the session scratch directory.
+- **Slow-op census.** The patch `perf/census/op-census.diff` (see "Where
+  the remaining gap is"). It finds the ops that still reach the generic
+  dispatch and the tape's exits. It is temporary instrumentation: keep
+  it out of commits.
 - **Per-function profile.** A temporary observer in php-ext-zendtest
   reads a perf counter per call. It overstates call costs (~2.7k per
   observed call).
