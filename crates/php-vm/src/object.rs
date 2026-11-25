@@ -728,6 +728,15 @@ fn owns_nothing(v: &Option<Value>) -> bool {
     )
 }
 
+/// Whether releasing a slot value runs nothing and frees nothing but the
+/// value itself: [`owns_nothing`], or a string (no destructor, no
+/// possible root, no handle of anything else).
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test in the per-slot loop
+fn releases_quietly(v: &Option<Value>) -> bool {
+    owns_nothing(v) || matches!(v, Some(Value::Str(_)))
+}
+
 /// The free: `zend_object_std_dtor` and the tail of
 /// `zend_objects_store_del`, once the last handle is gone for good (no
 /// destructor left to run), from the payload's `Drop`. `slots` are the
@@ -896,7 +905,8 @@ fn block_layout(n: usize) -> Option<std::alloc::Layout> {
 /// - `o` is the last handle of an object of `C` (the caller's test: the
 ///   class is the object's own, `d.class`), with nothing
 ///   beside its declared slots (no dynamic properties, native state or
-///   lazy state), no slot unset or holding anything to release, no mark of
+///   lazy state), no slot unset or holding anything to release but a
+///   string ([`releases_quietly`]: it is released then), no mark of
 ///   a side table kept by its handle (`oflags`) other than a possible
 ///   root's, and no weak handle but the store's and that root's (a
 ///   `WeakReference` or a `WeakMap` key would see it die).
@@ -940,7 +950,7 @@ pub(crate) fn reuse_for_new(
         return None;
     }
     let mut slots = d.slots.try_borrow_mut().ok()?;
-    if !slots.iter().all(owns_nothing) {
+    if !slots.iter().all(releases_quietly) {
         return None;
     }
     let layout = block_layout(n)?;
@@ -971,7 +981,13 @@ pub(crate) fn reuse_for_new(
         .flatten()?;
     d.handle.set(new);
     for (slot, default) in slots.iter_mut().zip(defaults) {
-        if owns_nothing(default) {
+        if !owns_nothing(slot) {
+            // A string (`releases_quietly`): released here rather than when
+            // the old object would have been freed, after the new one was
+            // made. Nothing runs in between, and the peak is where the
+            // allocation of the new block would have put it (above).
+            drop(std::mem::replace(slot, default.clone()));
+        } else if owns_nothing(default) {
             // SAFETY: both are valid, aligned and distinct (the class's
             // table and the object's slot). A value that owns nothing is
             // its 16 bytes, so they are its copy; what the slot held owns
