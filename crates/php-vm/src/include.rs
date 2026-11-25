@@ -710,21 +710,23 @@ impl Vm {
             self.functions.insert(lc, crate::func::Func::User(f));
             crate::func::bump_func_table_version();
         }
-        if unit.hoisted_classes.is_empty() {
+        if unit.decls.classes.borrow().is_empty() {
             return Ok(());
         }
-        // The hoisted classes this file brings (not declared before it),
-        // and where its classes start in the declaration order.
+        // The classes this file brings (not declared before it; an
+        // anonymous class is named when it is declared), and where its
+        // classes start in the declaration order.
         let start = self.class_order.len();
         let fresh = {
             let decls = unit.decls.classes.borrow();
-            HoistedSet::new(unit.hoisted_classes.len(), |k| {
-                decls
-                    .get(unit.hoisted_classes[k] as usize)
-                    .is_some_and(|d| !class_declared(&self.classes, d.name.as_bytes()))
+            DeclSet::new(decls.len(), |i| {
+                decls.get(i).is_some_and(|d| {
+                    d.flags & crate::class::cflags::ANON == 0
+                        && !class_declared(&self.classes, d.name.as_bytes())
+                })
             })
         };
-        let mut progress = true;
+        let mut progress = !unit.hoisted_classes.is_empty();
         while progress {
             progress = false;
             for &i in &unit.hoisted_classes {
@@ -749,57 +751,63 @@ impl Vm {
                 }
             }
         }
-        if !self.hoisted_in_order(unit, start, &fresh) {
-            self.order_hoisted_classes(unit, start, &fresh);
-        }
+        self.order_unit_classes(unit, start, &fresh);
         Ok(())
     }
 
-    /// Whether the declaration order from `start` on lists exactly the
-    /// file's `fresh` hoisted classes, in the file's order: what binding
-    /// them gives unless one waited for a class declared after it, or
-    /// could not bind before the code runs.
-    fn hoisted_in_order(&self, unit: &CompiledUnit, start: usize, fresh: &HoistedSet) -> bool {
-        let decls = unit.decls.classes.borrow();
-        let mut order = self.class_order.get(start..).unwrap_or_default().iter();
-        for (k, &i) in unit.hoisted_classes.iter().enumerate() {
-            if !fresh.contains(k) {
-                continue;
-            }
-            let Some(d) = decls.get(i as usize) else {
-                continue;
-            };
-            match order.next() {
-                Some(n) if n.as_bytes().eq_ignore_ascii_case(d.name.as_bytes()) => {}
-                _ => return false,
-            }
-        }
-        order.next().is_none()
-    }
-
-    /// Puts the file's hoisted classes in the declaration order in the
-    /// order the file declares them, as php-src's class table has them:
-    /// `zend_compile_class_decl()` adds each class when it is compiled,
-    /// one it cannot bind yet under its runtime-definition key, whose
+    /// Puts the file's classes in the declaration order in the order the
+    /// file declares them, as php-src's class table has them:
+    /// `zend_compile_class_decl()` adds every class of a file when its
+    /// declaration has been compiled, one it does not bind there (a
+    /// parent declared later, interfaces, traits, a declaration inside a
+    /// condition or a function) under its runtime-definition key, whose
     /// bucket the binding (`zend_bind_class_in_slot()`, at the statement
-    /// or in `zend_do_delayed_early_binding()`) renames in place. A class
-    /// not bound yet holds its place with its name until its statement
-    /// declares it ([`Vm::declare_class_stmt`]); what else was declared
-    /// meanwhile follows.
-    #[cold]
-    fn order_hoisted_classes(&mut self, unit: &CompiledUnit, start: usize, fresh: &HoistedSet) {
+    /// or in `zend_do_delayed_early_binding()`) renames in place. So
+    /// `get_declared_classes()` lists `class A implements I {}` before the
+    /// classes of a file required after it, whenever A is bound.
+    ///
+    /// A class not bound yet holds its place with its name until its
+    /// statement declares it ([`Vm::declare_class_stmt`]; a name that is
+    /// never bound is no class and is listed nowhere); what else was
+    /// declared meanwhile follows. `fresh` are the unit's declarations
+    /// this include brings, `start` is where the order stood before it.
+    fn order_unit_classes(&mut self, unit: &CompiledUnit, start: usize, fresh: &DeclSet) {
+        let decls = unit.decls.classes.borrow();
+        let sorted = compile_order(&decls);
+        let at = |k: usize| sorted.as_ref().map_or(k, |o| o[k]);
+        // The usual case of a file whose classes all bound before its
+        // code runs: the order already lists them, in the file's order.
+        let in_order = {
+            let mut order = self.class_order.get(start..).unwrap_or_default().iter();
+            let mut same = true;
+            for k in 0..decls.len() {
+                let i = at(k);
+                if !fresh.contains(i) {
+                    continue;
+                }
+                match order.next() {
+                    Some(n) if n.as_bytes().eq_ignore_ascii_case(decls[i].name.as_bytes()) => {}
+                    _ => {
+                        same = false;
+                        break;
+                    }
+                }
+            }
+            same && order.next().is_none()
+        };
+        if in_order {
+            return;
+        }
         let bound = self
             .class_order
             .split_off(start.min(self.class_order.len()));
         let mut used = vec![false; bound.len()];
-        let decls = unit.decls.classes.borrow();
-        for (k, &i) in unit.hoisted_classes.iter().enumerate() {
-            if !fresh.contains(k) {
+        for k in 0..decls.len() {
+            let i = at(k);
+            if !fresh.contains(i) {
                 continue;
             }
-            let Some(d) = decls.get(i as usize) else {
-                continue;
-            };
+            let d = &decls[i];
             let found = bound.iter().enumerate().position(|(j, n)| {
                 !used[j] && n.as_bytes().eq_ignore_ascii_case(d.name.as_bytes())
             });
@@ -1400,14 +1408,32 @@ fn declares_anything(unit: &CompiledUnit) -> bool {
         || !unit.decls.const_attributes.borrow().is_empty()
 }
 
-/// A set of indices into a unit's hoisted classes: a bit mask for the
+/// The unit's class declarations (indices of its table) in the order
+/// php-src compiles them, which is the order of its class table: a class
+/// is added when its declaration has been compiled, so one declared
+/// inside a function comes before the classes that follow the function.
+/// The unit's table lists the top-level code's declarations first and the
+/// nested ones after them: `None` when that is the compile order already
+/// (no declaration ends before the one listed before it), else the
+/// indices by the line each declaration ends on.
+fn compile_order(decls: &[Rc<crate::class::ClassDecl>]) -> Option<Vec<usize>> {
+    if decls.windows(2).all(|w| w[0].line_end <= w[1].line_end) {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..decls.len()).collect();
+    // A stable sort: declarations ending on one line keep the table's order.
+    order.sort_by_key(|&i| decls[i].line_end);
+    Some(order)
+}
+
+/// A set of indices into a unit's class declarations: a bit mask for the
 /// usual few, a vector past 64.
-enum HoistedSet {
+enum DeclSet {
     Mask(u64),
     Wide(Vec<bool>),
 }
 
-impl HoistedSet {
+impl DeclSet {
     /// The indices `0..n` for which `pred` holds.
     fn new(n: usize, mut pred: impl FnMut(usize) -> bool) -> Self {
         if n <= 64 {
@@ -1417,16 +1443,16 @@ impl HoistedSet {
                     m |= 1 << k;
                 }
             }
-            HoistedSet::Mask(m)
+            DeclSet::Mask(m)
         } else {
-            HoistedSet::Wide((0..n).map(pred).collect())
+            DeclSet::Wide((0..n).map(pred).collect())
         }
     }
 
     fn contains(&self, k: usize) -> bool {
         match self {
-            HoistedSet::Mask(m) => k < 64 && m & (1 << k) != 0,
-            HoistedSet::Wide(v) => v.get(k).copied().unwrap_or(false),
+            DeclSet::Mask(m) => k < 64 && m & (1 << k) != 0,
+            DeclSet::Wide(v) => v.get(k).copied().unwrap_or(false),
         }
     }
 }
@@ -1525,6 +1551,64 @@ mod tests {
         assert_eq!(
             out,
             "Early,Later,Child,Later2,Impl\nEarly2,Later3,Base3,Child2\n"
+        );
+    }
+
+    /// Every class of a file holds its place in `get_declared_classes()`,
+    /// whenever it is bound: a class using a trait above its child, a
+    /// class implementing an interface of a file required after it, a
+    /// class in a condition, a class declared by a function called later
+    /// (in the function's place: php-src adds a class to its table when
+    /// the declaration is compiled), an enum, a class with `__toString`.
+    /// Expected output from `php8.5 -n`.
+    #[test]
+    fn every_class_of_a_file_keeps_its_place_in_the_declaration_order() {
+        let dir = std::env::temp_dir().join(format!("php-vm-decl-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write = |name: &str, src: &str| std::fs::write(dir.join(name), src).expect("write");
+        write("base.php", "<?php\ninterface I {}\nclass Base {}\n");
+        write(
+            "a.php",
+            "<?php\ntrait T3 { public function method() { static $x; echo \"x\\n\"; } }\n\
+             class C3 { use T3; }\nclass C4 extends C3 {}\n",
+        );
+        write(
+            "b.php",
+            "<?php\nclass P1 {}\nrequire __DIR__ . '/inner.php';\nclass Q1 implements J {}\n\
+             class R1 extends P1 {}\n",
+        );
+        write("inner.php", "<?php\ninterface J {}\nclass InnerA {}\n");
+        write(
+            "c.php",
+            "<?php\nclass First {}\nif (!class_exists('Poly')) { class Poly {} }\n\
+             function mk() { class Nested {} }\nclass Second implements I {}\nmk();\n\
+             class Third {}\n",
+        );
+        write(
+            "d.php",
+            "<?php\nclass D1 implements I {}\nclass D2 extends D3 {}\nclass D3 extends Base {}\n\
+             enum E1 { case A; }\n\
+             class D4 { public function __toString() { return ''; } }\nclass D5 {}\n",
+        );
+        let main = format!(
+            "<?php require '{0}/base.php';\n\
+             foreach (['a', 'b', 'c', 'd'] as $f) {{\n\
+               $n = count(get_declared_classes());\n\
+               require '{0}/' . $f . '.php';\n\
+               echo $f, ': ', implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n\
+             }}\n",
+            dir.display()
+        );
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(main.as_bytes(), "main.php");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "a: C3,C4\nb: P1,Q1,R1,InnerA\nc: First,Poly,Nested,Second,Third\n\
+             d: D1,D2,D3,E1,D4,D5\n"
         );
     }
 
