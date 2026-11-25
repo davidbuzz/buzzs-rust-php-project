@@ -2074,8 +2074,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
 /// undefined (the generic send warns): the caller then materializes the
 /// call and the generic `Send` runs.
 pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
-    let n = prep.n;
-    if n >= prep.limit {
+    if prep.n >= prep.limit {
         return false;
     }
     let live = vm.frames.live;
@@ -2086,6 +2085,57 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     if caller.calls.len() != prep.calls_len {
         return false;
     }
+    send_in(caller, frame, prep, src)
+}
+
+/// The `Send`s from `at` on of the prepared call, passed at once
+/// (`exec::tape::send_following`): the frame stack is split and the
+/// pending-call count tested once for the whole run, which nothing in it
+/// can change (a send moves or copies a value, runs no user code and
+/// starts no call), instead of once a `Send` (~12 instructions an
+/// argument). A plain variable for a by-reference parameter goes to
+/// [`send_ref`], and the run goes on after it. Returns the op after the
+/// last one passed: the `DoCall`, or a `Send` neither takes, which then
+/// runs as before.
+#[inline(never)]
+pub(super) fn send_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], at: usize) -> usize {
+    let mut next = at;
+    loop {
+        {
+            let live = vm.frames.live;
+            let (callers, pool) = vm.frames.vec.split_at_mut(live);
+            let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+                return next;
+            };
+            if caller.calls.len() != prep.calls_len {
+                return next;
+            }
+            while let Some(Op::Send { src }) = ops.get(next) {
+                if prep.n >= prep.limit || !send_in(caller, frame, prep, src) {
+                    break;
+                }
+                next += 1;
+            }
+        }
+        match ops.get(next) {
+            Some(Op::Send { src }) if send_ref(vm, prep, src) => next += 1,
+            _ => return next,
+        }
+    }
+}
+
+/// [`send`] of one argument once the calling frame and the prepared one
+/// are in hand and the call is known to be the newest pending one, with
+/// room for the argument (`prep.n < prep.limit`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `send` and of `send_run`'s loop
+fn send_in(
+    caller: &mut crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    prep: &mut Prepared,
+    src: &ArgSrc,
+) -> bool {
+    let n = prep.n;
     let v = match src {
         ArgSrc::Val(Operand::Lit(i)) => match caller.code.literals.get(*i as usize) {
             Some(v) => clone_value(v),

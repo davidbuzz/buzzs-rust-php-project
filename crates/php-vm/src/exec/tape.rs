@@ -2950,17 +2950,17 @@ fn enter_after_sends(
 /// between, so each loop round trip saved changes nothing else. Returns
 /// where the tape goes on: the op after the last one passed (the `DoCall`,
 /// or a `Send` `calls::send` declined, which then runs as before).
+///
+/// The run is [`calls::send_run`]'s, which splits the frame stack once for
+/// all of them; a call without arguments does not call it.
 #[inline]
 fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize) -> usize {
-    let mut next = at + 1;
-    while let Some(Op::Send { src }) = ops.get(next) {
-        // (A plain variable for a by-reference parameter: `send_ref`.)
-        if !calls::send(vm, call, src) && !calls::send_ref(vm, call, src) {
-            break;
-        }
-        next += 1;
+    let next = at + 1;
+    if matches!(ops.get(next), Some(Op::Send { .. })) {
+        calls::send_run(vm, call, ops, next)
+    } else {
+        next
     }
-    next
 }
 
 /// `ZEND_INIT_USER_CALL` of `callee` at `at` ([`run_call`]; `array`: of
