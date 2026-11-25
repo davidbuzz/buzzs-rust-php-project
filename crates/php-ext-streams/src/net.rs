@@ -473,7 +473,7 @@ fn xport_create_inner(
     }
     let asynchronous = flags & STREAM_CLIENT_ASYNC_CONNECT != 0;
     let r = bridge::run(vm, || {
-        transports::socket_client_ex(address.as_bytes(), timeout, asynchronous)
+        transports::socket_client_ex(address.as_bytes(), timeout, asynchronous, ctx.as_ref())
     })?;
     Ok(r.map(|mut s| {
         s.context = ctx;

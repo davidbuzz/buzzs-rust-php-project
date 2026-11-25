@@ -591,32 +591,12 @@ pub fn bind_ip_socket(
     Ok(owned)
 }
 
-/// Creates an IP socket of `ty` and starts connecting it to `addr` without
-/// waiting (`php_network_connect_socket()` with `asynchronous`): `connect()`
-/// on a non-blocking descriptor, where `EINPROGRESS` is success.
-///
-/// Returns the descriptor, still non-blocking, and whether the connection
-/// is pending (`EINPROGRESS`) rather than established.
-///
-/// # Errors
-/// The `errno` of the failed call (`ECONNREFUSED`, `ENETUNREACH`, ...).
-pub fn connect_ip_socket_async(
+/// Calls `f` with `addr` as a `sockaddr` pointer and its length.
+fn with_sockaddr<R>(
     addr: &std::net::SocketAddr,
-    ty: i32,
-) -> Result<(std::os::fd::OwnedFd, bool), i32> {
-    let domain = if addr.is_ipv6() {
-        libc::AF_INET6
-    } else {
-        libc::AF_INET
-    };
-    // SAFETY: plain socket(2) call.
-    let fd = unsafe { libc::socket(domain, ty | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
-    if fd < 0 {
-        return Err(last_errno());
-    }
-    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
-    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-    let rc = match addr {
+    f: impl FnOnce(*const libc::sockaddr, libc::socklen_t) -> R,
+) -> R {
+    match addr {
         std::net::SocketAddr::V4(a) => {
             let sin = libc::sockaddr_in {
                 sin_family: libc::sa_family_t::try_from(libc::AF_INET).unwrap_or(2),
@@ -628,8 +608,7 @@ pub fn connect_ip_socket_async(
             };
             let len =
                 libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(16);
-            // SAFETY: `sin` is a valid sockaddr_in of `len` bytes.
-            unsafe { libc::connect(fd, (&raw const sin).cast(), len) }
+            f((&raw const sin).cast(), len)
         }
         std::net::SocketAddr::V6(a) => {
             let sin6 = libc::sockaddr_in6 {
@@ -643,17 +622,85 @@ pub fn connect_ip_socket_async(
             };
             let len =
                 libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in6>()).unwrap_or(28);
-            // SAFETY: `sin6` is a valid sockaddr_in6 of `len` bytes.
-            unsafe { libc::connect(fd, (&raw const sin6).cast(), len) }
+            f((&raw const sin6).cast(), len)
         }
+    }
+}
+
+/// `socket(family of addr, ty, 0)`, close-on-exec.
+///
+/// # Errors
+/// The `errno` of `socket()`.
+pub fn ip_socket(addr: &std::net::SocketAddr, ty: i32) -> Result<std::os::fd::OwnedFd, i32> {
+    let domain = if addr.is_ipv6() {
+        libc::AF_INET6
+    } else {
+        libc::AF_INET
     };
+    // SAFETY: plain socket(2) call.
+    let fd = unsafe { libc::socket(domain, ty | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// `bind(fd, addr)`.
+///
+/// # Errors
+/// The `errno` of `bind()`.
+pub fn bind_addr(fd: RawFd, addr: &std::net::SocketAddr) -> Result<(), i32> {
+    // SAFETY: the pointer and length describe a sockaddr that lives for
+    // the duration of the call.
+    let rc = with_sockaddr(addr, |p, len| unsafe { libc::bind(fd, p, len) });
+    if rc < 0 {
+        Err(last_errno())
+    } else {
+        Ok(())
+    }
+}
+
+/// `connect(fd, addr)`: `Ok(false)` when connected, `Ok(true)` when a
+/// non-blocking descriptor's connection is pending (`EINPROGRESS`).
+///
+/// # Errors
+/// Any other `errno` of `connect()`.
+pub fn connect_addr(fd: RawFd, addr: &std::net::SocketAddr) -> Result<bool, i32> {
+    // SAFETY: the pointer and length describe a sockaddr that lives for
+    // the duration of the call.
+    let rc = with_sockaddr(addr, |p, len| unsafe { libc::connect(fd, p, len) });
     if rc == 0 {
-        return Ok((owned, false));
+        return Ok(false);
     }
     match last_errno() {
-        libc::EINPROGRESS => Ok((owned, true)),
+        libc::EINPROGRESS => Ok(true),
         e => Err(e),
     }
+}
+
+/// `getsockopt(fd, SOL_SOCKET, SO_ERROR)`: the pending error of a
+/// connection attempt, 0 when it succeeded.
+///
+/// # Errors
+/// The `errno` of `getsockopt()` itself.
+pub fn socket_error(fd: RawFd) -> Result<i32, i32> {
+    let mut err: libc::c_int = 0;
+    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>()).unwrap_or(4);
+    // SAFETY: `err`/`len` are a valid int out-parameter and its size.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&raw mut err).cast(),
+            &raw mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(last_errno());
+    }
+    Ok(err)
 }
 
 /// `sendto(fd, buf, flags, addr)`.

@@ -122,12 +122,16 @@ fn connect(req: &XportRequest) -> Result<(TcpStream, Option<i64>), XportError> {
     let target = format!("tcp://{rest}");
     // `STREAM_XPORT_OP_CONNECT_ASYNC`: the connection may still be pending.
     let asynchronous = req.flags & STREAM_CLIENT_ASYNC_CONNECT != 0;
-    let mut plain =
-        php_streams::transports::socket_client_ex(target.as_bytes(), req.timeout, asynchronous)
-            .map_err(|e| XportError {
-                errno: e.errno,
-                message: e.message,
-            })?;
+    let mut plain = php_streams::transports::socket_client_ex(
+        target.as_bytes(),
+        req.timeout,
+        asynchronous,
+        req.context.as_ref(),
+    )
+    .map_err(|e| XportError {
+        errno: e.errno,
+        message: e.message,
+    })?;
     let tcp = dup_socket(&mut plain).ok_or_else(|| XportError {
         errno: 0,
         message: String::new(),
