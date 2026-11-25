@@ -29,9 +29,17 @@ impl Drop for TempDir {
     }
 }
 
-/// Runs `script` as a GET request through `php-cgi -n <args>`; the output
+/// Runs `script` as a request through `php-cgi -n <args>`; the output
 /// without its `X-Powered-By` line.
 fn cgi(tag: &str, script: &str, args: &[&str], method: &str, body: &[u8]) -> String {
+    cgi_raw(tag, script, args, method, body)
+        .split_inclusive('\n')
+        .filter(|l| !l.starts_with("X-Powered-By:"))
+        .collect()
+}
+
+/// [`cgi`] with the whole output.
+fn cgi_raw(tag: &str, script: &str, args: &[&str], method: &str, body: &[u8]) -> String {
     let dir = TempDir::new(tag);
     let file = dir.0.join("s.php");
     std::fs::write(&file, script).unwrap();
@@ -53,10 +61,7 @@ fn cgi(tag: &str, script: &str, args: &[&str], method: &str, body: &[u8]) -> Str
         .expect("spawn php-cgi");
     child.stdin.take().unwrap().write_all(body).unwrap();
     let out = child.wait_with_output().unwrap();
-    String::from_utf8_lossy(&out.stdout)
-        .split_inclusive('\n')
-        .filter(|l| !l.starts_with("X-Powered-By:"))
-        .collect()
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 /// `flush()` under plain CGI is `sapi_cgi_flush()`: `fflush(stdout)` only.
@@ -107,4 +112,27 @@ fn core_error_from_ini_set_has_no_location() {
         body.ends_with("s.php(2): ini_set('zlib.output_com...', '1')\n#1 {main}\n"),
         "{body}"
     );
+}
+
+/// A POST body over `post_max_size` is refused at SAPI activation
+/// (`sapi_read_post_data()`), before `php_request_startup()` adds
+/// `X-Powered-By`: the warning sends the headers without it. `php://input`
+/// still has the body.
+#[test]
+fn post_max_size_warning_precedes_x_powered_by() {
+    let mut body = b"a=".to_vec();
+    body.extend(std::iter::repeat_n(b'x', 3000));
+    let out = cgi_raw(
+        "postmax",
+        "<?php var_dump($_POST, strlen(file_get_contents(\"php://input\")));\n",
+        &["-d", "post_max_size=2K"],
+        "POST",
+        &body,
+    );
+    assert_eq!(
+        out,
+        "Content-type: text/html; charset=UTF-8\r\n\r\n<br />\n<b>Warning</b>:  PHP Request Startup: POST Content-Length of 3002 bytes exceeds the limit of 2048 bytes in <b>Unknown</b> on line <b>0</b><br />\narray(0) {\n}\nint(3002)\n"
+    );
+    let out = cgi_raw("postok", "<?php echo 1;", &[], "POST", b"a=1");
+    assert!(out.starts_with("X-Powered-By: PHP/"), "{out}");
 }

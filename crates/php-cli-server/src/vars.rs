@@ -656,6 +656,28 @@ fn parse_cookie(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: b
 /// The size `$_SERVER` starts with.
 const SERVER_CAPACITY: usize = 64;
 
+/// `sapi_activate()` → `sapi_read_post_data()` (`main/SAPI.c`): a POST
+/// body is read at SAPI activation, before `php_request_startup()` adds
+/// `X-Powered-By` and long before the superglobals are built: the
+/// urlencoded reader, or `php_default_post_reader()` for a type no handler
+/// is registered for (a multipart body is read by its handler, later).
+/// Its `post_max_size` warning therefore sends the headers without
+/// `X-Powered-By`.
+pub fn read_post_data(vm: &mut Vm, ctx: &RequestCtx) {
+    let req = &ctx.request;
+    if !vm.ini_bool("enable_post_data_reading") || req.method != Method::Post {
+        return;
+    }
+    let Some(ct) = req.header(b"content-type") else {
+        return;
+    };
+    if content_type_key(ct).as_slice() == b"multipart/form-data" {
+        return;
+    }
+    let limits = Limits::new(vm, &ParseBodyOptions::default());
+    let _ = read_standard_form_data(vm, ctx, limits.post_max_size, Phase::Startup);
+}
+
 /// Populates every superglobal for the request.
 #[allow(clippy::too_many_lines)]
 pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &AuthData) {
@@ -684,8 +706,8 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
             let limits = Limits::new(vm, &ParseBodyOptions::default());
             // Startup problems are warnings only: the results are dropped.
             match content_type_key(ct).as_slice() {
+                // The body was read at activation (`read_post_data`).
                 b"application/x-www-form-urlencoded" => {
-                    let _ = read_standard_form_data(vm, ctx, limits.post_max_size, Phase::Startup);
                     if has(b'P') {
                         let _ = handle_urlencoded(vm, ctx, &limits, Phase::Startup, &mut post);
                     }
@@ -713,11 +735,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                         );
                     }
                 }
-                // php_default_post_reader(): a body no handler is
-                // registered for is still read.
-                _ => {
-                    let _ = read_standard_form_data(vm, ctx, limits.post_max_size, Phase::Startup);
-                }
+                _ => {}
             }
         }
     }

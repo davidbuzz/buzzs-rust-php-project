@@ -1375,7 +1375,8 @@ fn run_request_inner(
     // zend_activate() and zend_set_timeout(): the collector's clock and
     // the execution timer start with every request.
     vm.activate();
-    if vm.ini_bool("expose_php") {
+    crate::vars::read_post_data(vm, ctx);
+    if vm.ini_bool("expose_php") && !ctx.headers_sent() {
         let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
         let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
     }
