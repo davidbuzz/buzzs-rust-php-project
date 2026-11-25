@@ -656,7 +656,7 @@ fn array_search_positions_and_strings() {
         $l = [1, 2, 3, 4]; unset($l[1]); var_export([array_search(3, $l), array_search('4', $l), array_search('4', $l, true), in_array(2, $l)]);
         $x = 'q'; $r = ['a', &$x]; var_export([array_search('q', $r), array_search('q', $r, true), in_array(null, ['', 0]), array_search(0, ['a', 0]), array_search('', [null])]);"#);
     assert_eq!(
-        out.replace(['\n', ' '], ""),
+        out.replace(|c: char| c == '\n' || c == ' ', ""),
         "array(0=>3,1=>false,2=>0,3=>1,4=>0,5=>1,)array(0=>9,1=>'k',2=>false,)array(0=>2,1=>3,2=>false,3=>false,)array(0=>1,1=>1,2=>true,3=>1,4=>0,)"
     );
 }
