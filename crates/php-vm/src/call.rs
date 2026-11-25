@@ -2422,14 +2422,16 @@ impl Vm {
             // so it moves out (a literal is copied) without changing what
             // `gc::frame_released` records. With a declared return type,
             // only a value the type takes as it is (`return_accepts`).
-            let v = match val {
+            // The returned value: in place in the frame's variable or
+            // temporary (`Ok`, moved), or a literal's copy (`Err`).
+            let src: Result<&mut Value, Value> = match val {
                 Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
                     Some(slot)
                         if slot.get().is_some_and(|v| {
                             returns_directly(v) && (rt.is_none() || return_accepts(rt, v))
                         }) =>
                     {
-                        slot.as_mut().take()?
+                        Ok(slot.as_mut().as_mut()?)
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
@@ -2437,7 +2439,7 @@ impl Vm {
                     Some(slot)
                         if returns_directly(slot) && (rt.is_none() || return_accepts(rt, slot)) =>
                     {
-                        std::mem::take(slot)
+                        Ok(slot)
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
@@ -2445,7 +2447,7 @@ impl Vm {
                     Some(lit)
                         if returns_directly(lit) && (rt.is_none() || return_accepts(rt, lit)) =>
                     {
-                        clone_value(lit)
+                        Err(clone_value(lit))
                     }
                     _ => return self.return_generic::<false>(val, base, ip),
                 },
@@ -2455,12 +2457,27 @@ impl Vm {
             frame.ip = ip;
             // The store runs before the release: the value's register is
             // then dead across it (the possible-root walk only reads the
-            // frame and the caller's `$this`). The slot held a scalar:
-            // nothing to drop. A discarded string is released.
-            match dst {
-                Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
-                None if matches!(v, Value::Str(_)) => drop(v),
-                None => std::mem::forget(v),
+            // frame and the caller's `$this`). The caller's slot held a
+            // scalar, which owns nothing: a moved value trades places with
+            // it (one 16-byte swap, where the move out and the store in
+            // went through a stack temporary byte group by byte group),
+            // and the scalar left in the frame's slot is released with the
+            // frame (`release_cv` / `release_slot`: forgotten). A
+            // discarded string is released.
+            match (dst, src) {
+                (Some(slot), Ok(v)) => std::mem::swap(slot, v),
+                (Some(slot), Err(v)) => std::mem::forget(std::mem::replace(slot, v)),
+                (None, src) => {
+                    let v = match src {
+                        Ok(v) => std::mem::take(v),
+                        Err(v) => v,
+                    };
+                    if matches!(v, Value::Str(_)) {
+                        drop(v);
+                    } else {
+                        std::mem::forget(v);
+                    }
+                }
             }
             // `zend_leave_helper`: the possible roots of the frame's
             // variables and call handle, then `FrameStack::release_top` of

@@ -1783,13 +1783,17 @@ impl Frame {
                 release_cv(old);
             }
         }
-        // A direct frame's passed arguments are in its compiled variables:
-        // the buffer holds the `None` of each (`calls::enter`), so it is
-        // emptied here, as `clear_arg_buffer` would, without the call (the
-        // drop of any value it held runs as there).
+        // A direct frame's passed arguments are in its compiled variables
+        // and the buffer is empty (`calls::enter` keeps the count in
+        // `direct_argc`), except for a variadic call's extra arguments
+        // (`calls::variadic_extras`): it is emptied here, as
+        // `clear_arg_buffer` would, without the call (the drop of any value
+        // it held runs as there). Tested first: `clear` of the empty
+        // buffer still called the out-of-line slice drop glue (~12
+        // instructions a return).
         if self.args.capacity() > 256 {
             self.args = Vec::new();
-        } else {
+        } else if !self.args.is_empty() {
             self.args.clear();
         }
         // A method's `$this` and scopes, a closure, in

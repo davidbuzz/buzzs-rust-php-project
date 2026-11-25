@@ -432,3 +432,56 @@ end
 "#
     );
 }
+
+/// `return_simple`'s value shapes into a used and a discarded result:
+/// a variable (moved: it trades places with the caller's scalar), a
+/// temporary, a literal, strings and scalars, the caller's result slot
+/// reused round after round.
+#[test]
+fn direct_return_value_shapes() {
+    assert_eq!(
+        run(r#"<?php
+function cv($a) { return $a; }
+function tmp($a) { return $a . '!'; }
+function lit($a) { return 'lit'; }
+function num($a) { return $a + 1; }
+function f() {
+    $out = [];
+    $s = str_repeat('s', 3);
+    for ($i = 0; $i < 4; $i++) {
+        $r = cv($s);
+        $out[] = $r;
+        $r = cv($i);
+        $out[] = $r;
+        $r = tmp($s);
+        $out[] = $r;
+        $r = lit($s);
+        $out[] = $r;
+        $r = num($i);
+        $out[] = $r;
+        $r = cv(1.5);
+        $out[] = $r;
+        cv($s);
+        tmp($s);
+        lit($i);
+        $out[] = cv(null);
+        $out[] = cv(true);
+    }
+    var_dump(count($out), $out[0], $out[2], $out[3], $out[4], $out[5], $out[6], $out[7], $out[8], $s, $r);
+}
+f();
+"#),
+        r#"int(32)
+string(3) "sss"
+string(4) "sss!"
+string(3) "lit"
+int(1)
+float(1.5)
+NULL
+bool(true)
+string(3) "sss"
+string(3) "sss"
+float(1.5)
+"#
+    );
+}
