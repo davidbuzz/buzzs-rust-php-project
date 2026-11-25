@@ -2522,17 +2522,16 @@ pub(super) fn call_native(
     // parameters, not marked as passed.
     let mut values = vm.call_bufs.values.pop().unwrap_or_default();
     let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
-    values.reserve(n);
-    passed.reserve(n);
     // A `match`, not `map_or(Value::Null, ..)`: that builds the null
-    // first and drops it (an out-of-line drop call per argument).
-    for arg in &vm.frames.vec[live].args {
-        values.push(match arg {
-            Some(v) => clone_value(v),
-            None => Value::Null,
-        });
-        passed.push(true);
-    }
+    // first and drops it (an out-of-line drop call per argument). One
+    // `extend` of the frame's slice and one `resize` store each length
+    // once (a `push` per argument tested the capacity and stored the
+    // length every time).
+    values.extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
+        Some(v) => clone_value(v),
+        None => Value::Null,
+    }));
+    passed.resize(values.len(), true);
     let sig = b.signature();
     let nparams = sig.params.len();
     let upto = if b.flags & flags::VARIADIC != 0 {
@@ -2585,9 +2584,7 @@ pub(super) fn call_native(
             r = Err(e);
         }
     }
-    let Args { values, passed, .. } = args;
-    vm.put_val_vec(values);
-    vm.put_bool_vec(passed);
+    release_native_args(vm, args);
     // Released by the handler, destructed while its frame is current.
     if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
         if let Err(e) = vm.run_pending_destructors() {
@@ -2639,6 +2636,63 @@ pub(super) fn call_native(
             }
         }
     }))
+}
+
+/// The handler's [`Args`] of [`call_native`] after the call: the copies
+/// of the arguments released front to back (as `Vec::clear` releases
+/// them; scalars without the out-of-line drop of a `Value`), the two
+/// buffers back to their pools (as `Vm::put_val_vec` /
+/// `Vm::put_bool_vec` return them), and the fields a plain call leaves
+/// empty (no named arguments, no `$this` for a function) forgotten rather
+/// than run through their drop glue: `put_val_vec`'s call with a drop call
+/// per value and the drop of the empty named-argument vector cost ~130
+/// instructions of a two-argument call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per tape builtin call
+fn release_native_args(vm: &mut Vm, args: Args) {
+    let Args {
+        mut values,
+        mut passed,
+        named,
+        this,
+        called,
+        func,
+    } = args;
+    for v in values.drain(..) {
+        if matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            std::mem::forget(v);
+        } else {
+            drop(v);
+        }
+    }
+    passed.clear();
+    let bufs = &mut vm.call_bufs;
+    if values.capacity() > 0 && values.capacity() <= 256 && bufs.values.len() < 4 {
+        bufs.values.push(values);
+    }
+    if passed.capacity() > 0 && passed.capacity() <= 256 && bufs.passed.len() < 4 {
+        bufs.passed.push(passed);
+    }
+    // An empty vector that never allocated owns nothing.
+    if named.capacity() == 0 {
+        std::mem::forget(named);
+    } else {
+        drop(named);
+    }
+    if this.is_some() {
+        drop(this);
+    } else {
+        std::mem::forget(this);
+    }
+    if called.is_some() {
+        drop(called);
+    } else {
+        std::mem::forget(called);
+    }
+    drop(func);
 }
 
 /// After a builtin call [`send_ref`] sent a variable to by reference
