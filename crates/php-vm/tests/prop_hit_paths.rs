@@ -232,3 +232,54 @@ object(Pr)#3 (3) {
 "#
     );
 }
+
+/// `$v instanceof C` (`ZEND_INSTANCEOF`): an object of the class itself
+/// (the tape's exact-class hit), of a subclass, of another class, an
+/// interface, a variable holding a reference, null, a string, an enum
+/// case, an unknown class, a temporary, a parameter, a closure and an
+/// undefined variable (silenced, then warned).
+#[test]
+fn instanceof_matches_php() {
+    let out = run(r#"<?php
+interface I {}
+class C implements I {}
+class D extends C {}
+class E {}
+enum Suit { case Hearts; }
+function t($k) {
+    $c = new C; $d = new D; $e = new E; $n = null; $s = "C"; $suit = Suit::Hearts;
+    $r = &$c;
+    $out = [];
+    $out[] = $c instanceof C;
+    $out[] = $d instanceof C;
+    $out[] = $d instanceof D;
+    $out[] = $c instanceof D;
+    $out[] = $e instanceof C;
+    $out[] = $c instanceof I;
+    $out[] = $r instanceof C;
+    $out[] = $n instanceof C;
+    $out[] = $s instanceof C;
+    $out[] = $suit instanceof Suit;
+    $out[] = $suit instanceof UnitEnum;
+    $out[] = $c instanceof Missing;
+    $out[] = (new D) instanceof C;
+    $out[] = $k instanceof C;
+    $f = function () {};
+    $out[] = $f instanceof Closure;
+    $out[] = @$undef instanceof C;
+    return implode(",", array_map(fn($b) => $b ? "1" : "0", $out));
+}
+for ($k = 0; $k < 3; $k++) { echo t($k ? new C : 0), "\n"; }
+echo $undef2 instanceof C ? "y" : "n", "\n";
+"#);
+    assert_eq!(
+        out,
+        r#"1,1,1,0,0,1,1,0,0,1,1,0,1,0,1,0
+1,1,1,0,0,1,1,0,0,1,1,0,1,1,1,0
+1,1,1,0,0,1,1,0,0,1,1,0,1,1,1,0
+
+Warning: Undefined variable $undef2 in t.php on line 31
+n
+"#
+    );
+}

@@ -457,6 +457,56 @@ pub(super) unsafe fn count(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
+    // The commonest form, `$cv instanceof C` of an object of `C` itself
+    // (`instanceof_function`'s `instance_ce == ce`), without a handle on
+    // the op array or on the class. The operands are copied out of the op,
+    // so its borrow ends here.
+    let Some(&Op::InstanceOf {
+        a: Operand::Cv(cv),
+        class: ClassSpec::Named(lit),
+        dst,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        // SAFETY: the caller's contract.
+        return unsafe { instance_of_any(frame, inst) };
+    };
+    if !f.symtab_attached && is_cached_class(f, cv, lit) {
+        hot::set_tmp_in(f, dst, Value::Bool(true));
+        return true;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { instance_of_any(frame, inst) }
+}
+
+/// Whether compiled variable `cv` of frame `f` holds an object (directly)
+/// whose class is the one class literal `lit`'s cache entry names. A
+/// pointer compare, without upgrading the entry: the object's own handle
+/// keeps its class alive, and a live `Weak` keeps the class's block from
+/// being reused, so an equal address is that class (a dangling entry,
+/// `Weak::new()`, has an address no class has).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the hit of `instance_of`
+fn is_cached_class(f: &Frame, cv: u32, lit: u32) -> bool {
+    let Some(Value::Object(o)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+        return false;
+    };
+    let class = Rc::as_ptr(crate::object::class_of(o));
+    f.code.class_cache.try_borrow().is_ok_and(|cache| {
+        cache
+            .get(lit as usize)
+            .is_some_and(|named| std::ptr::eq(named.as_ptr(), class))
+    })
+}
+
+/// [`instance_of`] of any other operand or class (`hot::instanceof_in`):
+/// a subclass or an interface, a reference, a temporary or a literal.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+unsafe fn instance_of_any(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
     let code = Rc::clone(&f.code);
     let Some(&Op::InstanceOf {
         a,
