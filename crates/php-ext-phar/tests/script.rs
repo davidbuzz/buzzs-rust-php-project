@@ -188,3 +188,33 @@ echo "after include\n";"#,
     );
     assert_eq!(out, "index: index.php\nlib a\nsees globals\ndone\n");
 }
+
+/// A plain include follows the include path as it is at the time: a
+/// `phar://` include path sends it through the phar opener, a plain one
+/// past it (the opener's early test remembers the answer only for the
+/// INI values it was computed from). Oracle: php 8.5 with
+/// `-d extension=phar`.
+#[test]
+fn plain_includes_follow_the_include_path_into_and_out_of_a_phar() {
+    let out = run(
+        r#"$f = sys_get_temp_dir() . '/phpext-phar-ip-' . getmypid() . '.phar';
+@unlink($f);
+$p = new Phar($f);
+$p['lib/b.php'] = '<?php echo "phar b\n";';
+unset($p);
+$d = sys_get_temp_dir() . '/phpext-phar-ipdir-' . getmypid();
+@mkdir($d);
+file_put_contents("$d/b.php", '<?php echo "plain b\n";');
+set_include_path($d);
+include 'b.php';
+set_include_path("phar://$f/lib");
+include 'b.php';
+set_include_path($d);
+include 'b.php';
+ini_restore('include_path');
+var_dump(@include 'b.php');
+unlink("$d/b.php"); rmdir($d); @unlink($f);"#,
+        WRITABLE,
+    );
+    assert_eq!(out, "plain b\nphar b\nplain b\nbool(false)\n");
+}
