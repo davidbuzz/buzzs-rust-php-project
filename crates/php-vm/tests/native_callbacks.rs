@@ -588,7 +588,8 @@ get:foo|get:bar|set:baz=0|set:obj=obj|unset:gone|get:yes|get:foo|get:bar|set:baz
 /// output: `/usr/bin/php8.5` (8.5.13).
 #[test]
 fn dynamic_method_names_and_array_union() {
-    assert_eq!(run(r#"<?php
+    assert_eq!(
+        run(r#"<?php
 namespace App;
 class P { protected function prot($v) { return "prot$v"; } }
 class Col extends P {
@@ -617,12 +618,15 @@ function bench() {
   echo $c->log(), "\n";
 }
 bench();
-"#), r#"obj obj obj __call(priv,0) stat0 __call(prot,0) __call(missing,0) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m0 m0 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl0
+"#),
+        r#"obj obj obj __call(priv,0) stat0 __call(prot,0) __call(missing,0) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m0 m0 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl0
 obj obj obj __call(priv,1) stat1 __call(prot,1) __call(missing,1) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m1 m1 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl1
 obj obj obj __call(priv,2) stat2 __call(prot,2) __call(missing,2) obj obj obj obj priv1 stat1 prot1 __call(missing,1) obj m2 m2 Call to undefined method App\NoCall::nope() Error Call to a member function priv() on null Method name must be a string cl2
 A0,B0d,A0,B0d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A1,B1d,A2,B2d,A2,B2d,A1,B1d,A1,B1d
-"#);
-    assert_eq!(run(r#"<?php
+"#
+    );
+    assert_eq!(
+        run(r#"<?php
 namespace App;
 class D { function __destruct() { echo "D "; } }
 function tr($t) { $r = ['x' => $t]; if ($t < 3) { $r += tr($t + 1); } return $r; }
@@ -642,8 +646,10 @@ function run() {
   }
 }
 run();
-"#), r#"{"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
+"#),
+        r#"{"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
 {"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
 {"a":1,"b":2,"c":3} 34 4 4 [1,2,7] Unsupported operand types: string + array Unsupported operand types: null + array D D | 2 {"x":0}
-"#);
+"#
+    );
 }
