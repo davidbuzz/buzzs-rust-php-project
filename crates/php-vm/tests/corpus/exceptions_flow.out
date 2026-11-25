@@ -1,0 +1,115 @@
+array (
+  0 => 'try',
+)finally0
+'try0'array (
+  0 => 'second0',
+  1 => 5,
+  2 => 'first0',
+  3 => 6,
+  4 => 'LogicException',
+)fo
+'kept'
+gen finally
+early1
+dtor
+no throw
+1
+2
+3
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+3
+typedRet(): Return value must be of type int, string returned
+typedRet(): Return value must be of type int, null returned
+array (
+  0 => 'try',
+  1 => 'inner-finally',
+  2 => 'E2:e1',
+  3 => 'outer-finally',
+)finally1
+'try1'array (
+  0 => 'second1',
+  1 => 5,
+  2 => 'first1',
+  3 => 6,
+  4 => 'LogicException',
+)fo
+'kept'
+gen finally
+early1
+dtor
+caught with dtor
+1
+2
+3
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+3
+typedRet(): Return value must be of type int, string returned
+typedRet(): Return value must be of type int, null returned
+array (
+  0 => 'try',
+)finally2
+'try2'array (
+  0 => 'second2',
+  1 => 5,
+  2 => 'first2',
+  3 => 6,
+  4 => 'LogicException',
+)fo
+'kept'
+gen finally
+early1
+dtor
+no throw
+1
+2
+3
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+3
+typedRet(): Return value must be of type int, string returned
+typedRet(): Return value must be of type int, null returned
+array (
+  0 => 'try',
+  1 => 'inner-finally',
+  2 => 'E2:e3',
+  3 => 'outer-finally',
+)finally3
+'try3'array (
+  0 => 'second3',
+  1 => 5,
+  2 => 'first3',
+  3 => 6,
+  4 => 'LogicException',
+)fo
+'kept'
+gen finally
+early1
+dtor
+caught with dtor
+1
+2
+3
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+3
+typedRet(): Return value must be of type int, string returned
+typedRet(): Return value must be of type int, null returned
+array (
+  0 => 12115,
+  1 => 
+  array (
+    0 => 'r0',
+    1 => 'r17',
+    2 => 'r34',
+    3 => 'r51',
+    4 => 'r68',
+    5 => 'r85',
+    6 => 'r102',
+    7 => 'r119',
+    8 => 'r136',
+    9 => 'r153',
+  ),
+)
+E219
