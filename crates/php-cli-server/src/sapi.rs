@@ -1118,16 +1118,78 @@ fn install_input_hook(ctx: &Rc<RequestCtx>) {
 
 /// `php_execute_script()`: prepend file, the script, append file.
 fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> Result<(), Throw> {
+    execute_script_ex(vm, src, path, false)
+}
+
+/// [`execute_script`] for a script the built-in server names by file
+/// (`zend_stream_init_filename()` in `php_cli_server_dispatch_script()`
+/// and `php_cli_server_dispatch_router()`): compiling it opens it as a
+/// stream, which stays open until `zend_destroy_file_handle()` after the
+/// script, so `get_resources()` lists it and its path is in the realpath
+/// cache.
+fn execute_named_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> Result<(), Throw> {
+    execute_script_ex(vm, src, path, true)
+}
+
+fn execute_script_ex(vm: &mut Vm, src: &[u8], path: &[u8], named: bool) -> Result<(), Throw> {
     let ini_path = |vm: &Vm, n: &str| vm.ini_string(n).filter(|v| !v.is_empty());
     if let Some(p) = ini_path(vm, "auto_prepend_file") {
         vm.include_file(&String::from_utf8_lossy(&p))?;
     }
+    let handle = if named {
+        open_script_handle(vm, path)
+    } else {
+        None
+    };
     let p = ZStr::from(path);
-    vm.run_main(src, &p)?;
-    if let Some(p) = ini_path(vm, "auto_append_file") {
-        vm.include_file(&String::from_utf8_lossy(&p))?;
+    let r = vm.run_main(src, &p).and_then(|()| {
+        if let Some(p) = ini_path(vm, "auto_append_file") {
+            vm.include_file(&String::from_utf8_lossy(&p))?;
+        }
+        Ok(())
+    });
+    if let Some(h) = handle {
+        close_script_handle(&h);
     }
-    Ok(())
+    r
+}
+
+/// `php_stream_open_for_zend_ex()` on the script about to be compiled: a
+/// plain-file `stream` resource ("rb", the script's path as its URI),
+/// whose `expand_filepath()` leaves the path's directories in the
+/// realpath cache. The VM takes a resource number when it compiles a
+/// file it read itself, standing for this very stream: the stream gets
+/// that number, and the counter is put back for the compile to take.
+fn open_script_handle(vm: &mut Vm, path: &[u8]) -> Option<php_runtime::Resource> {
+    use php_streams::wrapper::STREAM_OPEN_FOR_INCLUDE;
+    let number = php_runtime::Resource::take_number();
+    php_runtime::Resource::set_next_handle(number);
+    let stream = php_ext_streams::bridge::run(vm, || {
+        // `_php_stream_fopen()`'s `expand_filepath()`, through the cache.
+        let cwd = php_streams::sys::getcwd().unwrap_or_default();
+        let _ =
+            php_streams::vcwd::virtual_file_ex(&cwd, path, php_streams::vcwd::Resolve::FilePath);
+        let mut opened = None;
+        php_streams::open::open_wrapper(path, "rb", STREAM_OPEN_FOR_INCLUDE, &mut opened, None)
+    })
+    .ok()
+    .flatten();
+    let handle = stream.map(|s| php_ext_streams::res::new_stream(s, None));
+    php_runtime::Resource::set_next_handle(number);
+    match handle {
+        Some(Value::Resource(r)) => Some(r),
+        _ => None,
+    }
+}
+
+/// `zend_destroy_file_handle()`: closes the script's stream.
+fn close_script_handle(r: &php_runtime::Resource) {
+    if let Some(cell) = php_ext_streams::res::cell_of(r) {
+        if let Some(mut s) = cell.take() {
+            s.close();
+        }
+    }
+    r.close();
 }
 
 /// `php_cli_server_log_response()`.
@@ -1306,7 +1368,7 @@ fn run_request_inner(
         // `php_cli_server_dispatch_router()`: the working directory the
         // router leaves is undone (requests share the process).
         let old_cwd = std::env::current_dir().ok();
-        r = execute_script(vm, &src, router);
+        r = execute_named_script(vm, &src, router);
         if let Some(dir) = old_cwd {
             let _ = std::env::set_current_dir(dir);
         }
@@ -1331,7 +1393,7 @@ fn run_request_inner(
         r = if let Ok(src) = std::fs::read(p) {
             // php_execute_script(): max_execution_time after max_input_time.
             vm.script_timer();
-            execute_script(vm, &src, &path)
+            execute_named_script(vm, &src, &path)
         } else {
             let msg = format!(
                 "Failed opening required '{}' (include_path='{}')",

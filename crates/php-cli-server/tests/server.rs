@@ -324,3 +324,25 @@ fn banner_on_pipes_and_log_survives_startup() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `php_cli_server_dispatch_script()` names the script by file, so
+/// compiling it opens it as resource #1 (mode "rb", the script's path as
+/// URI), open while it runs, and leaves its path in the realpath cache:
+/// php8.5 -S prints this body for every request.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn script_handle_and_realpath_cache() {
+    let srv = start(
+        "handle",
+        &[(
+            "b.php",
+            "<?php foreach (get_resources() as $k => $r) { echo $k, ' ', get_resource_type($r), ' ', stream_get_meta_data($r)['mode'], ' ', stream_get_meta_data($r)['uri'] === __FILE__ ? 'self' : 'other', \"\\n\"; } echo (int) fopen('php://memory', 'r'), \"\\n\"; var_dump(isset(realpath_cache_get()[__FILE__]), isset(realpath_cache_get()[__DIR__]));",
+        )],
+        None,
+    );
+    for _ in 0..2 {
+        let r = request(srv.port, "GET /b.php HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (_, body) = split(&r);
+        assert_eq!(body, "1 stream rb self\n3\nbool(true)\nbool(true)\n");
+    }
+}
