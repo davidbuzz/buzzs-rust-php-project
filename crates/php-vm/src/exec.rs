@@ -645,6 +645,54 @@ impl Vm {
     /// Fast path for reading places directly: direct auto-globals (`$_GET`)
     /// without breaking to the generic place fetcher.
     #[inline(always)]
+    /// `$cv += $array` (`ZEND_ASSIGN_OP` with `ZEND_ADD` of two arrays:
+    /// `add_function_array`) without the place walk: the variable's array
+    /// is taken out, separated only if shared, given the operand's keys it
+    /// lacks (`zend_hash_merge` without overwriting, as `array_union`
+    /// does) and put back; `$a += $a` leaves it as it is. The variable is a
+    /// plain array (no reference) of a frame without an attached symbol
+    /// table, the operand a literal, a variable or a temporary (consumed)
+    /// holding an array. The result, when used, is a copy in `dst`.
+    /// `false`, nothing changed, otherwise (the generic op).
+    fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        if f.symtab_attached {
+            return false;
+        }
+        let other = match val {
+            Operand::Lit(l) => f.code.literals.get(l as usize),
+            Operand::Cv(c) if c != cv => f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            _ => None,
+        };
+        let Some(Value::Array(other)) = other else {
+            return false;
+        };
+        let other = other.clone();
+        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+            return false;
+        };
+        let Some(Value::Array(mine)) = slot.as_mut().as_mut() else {
+            return false;
+        };
+        if !php_runtime::ZArray::ptr_eq(mine, &other) {
+            mine.make_mut().merge(&other, false);
+        }
+        let result = dst.map(|_| Value::Array(mine.clone()));
+        drop(other);
+        if let Operand::Tmp(t) = val {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        if let (Some(d), Some(r)) = (dst, result) {
+            self.set_tmp(d, r);
+        }
+        true
+    }
+
     /// `isset(A::$p[k])` (`isset` true) or the read of `A::$p[k]` without
     /// the place walk: the static property's cell from the member cache
     /// (`Vm::static_prop_cached`: the class resolved and the access checked
@@ -2799,12 +2847,16 @@ impl Vm {
                         Flow::Next
                     }
                     Op::AssignOpCv {
+                        cv,
                         op,
                         val,
                         dst,
                         place,
-                        ..
                     } => {
+                        if *op == php_runtime::BinaryOp::Add && self.array_union_cv(*cv, *val, *dst)
+                        {
+                            continue 'ops;
+                        }
                         let v = self.read(*val)?;
                         let r = self.place_assign_op(*place, *op, v)?;
                         self.set_dst(*dst, r);
