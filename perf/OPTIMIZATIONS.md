@@ -33,8 +33,8 @@ the same ground is not covered twice, and add a row when a change lands.
 
 | | start of PR #17 | now | C 8.4 |
 |---|---|---|---|
-| route:list | 4.796G | 4.301G (−10.3%) | 1.79G (≈1.1G of it compiling) |
-| unit tests | 208.45G | 183.17G (−12.1%) | — |
+| route:list | 4.796G | 4.300G (−10.3%) | 1.79G (≈1.1G of it compiling) |
+| unit tests | 208.45G | 182.46G (−12.5%) | — |
 
 Our front end (lex/parse/compile, ≈1.2G of route:list) is close to C's.
 The gap is execution.
@@ -60,6 +60,7 @@ functions.
 | `array_key_exists()`, `strtolower/upper()` frameless | 1d6dad71 | `array_key_exists` 1,743 → 663; `strtolower` 999 → 689 | 290 / 412 | rl −0.3%, ut −0.7% |
 | 2-/3-argument frameless calls read their args in place | 082036fd | `substr` 1,198 → 836; `array_key_exists` 664 → 504 | 368 / 290 | −0.2% |
 | `$this->name` arguments sent from the property cache (calls with them are prepared) | 23adafca | `ObjectArray::has()` 3,130 → 2,788 | | rl −0.35% |
+| `RECV_VARIADIC` on the tape (untyped/`mixed`); value-less returns in `return_simple` | 98a9e086 | variadic call 1,328 → 1,017; Doctrine `triggerIfCalledFromOutside` 3,022 → 2,766 | | ut −0.4% |
 
 ## Ops, compiler, tape
 
