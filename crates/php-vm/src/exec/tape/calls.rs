@@ -2792,8 +2792,14 @@ pub(super) fn call_native(
             }
         }
     }
-    let b = Rc::clone(b);
     let kind = *kind;
+    // The call is made from here on: the handle moves out of the prepared
+    // call (a clone, and the drop of `Prepared` with its release, cost
+    // ~15 instructions).
+    let Callee::Native(b, _) = prep.callee else {
+        // (Matched above.)
+        return Ok(Ok(()));
+    };
     // A by-reference argument was sent ([`send_ref`]).
     let sent_ref = b.sends_ref_within(n);
     // The handler's copies of the arguments (php-src's handler reads them
@@ -2887,7 +2893,10 @@ pub(super) fn call_native(
             r = Err(e);
         }
     }
-    release_native_args(vm, args);
+    release_native_args(vm, &mut args);
+    // Its fields are all empty now (`release_native_args`): nothing left
+    // for the drop glue, whose out-of-line call is skipped.
+    std::mem::forget(args);
     // Released by the handler, destructed while its frame is current.
     if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
         if let Err(e) = vm.run_pending_destructors() {
@@ -2944,43 +2953,34 @@ pub(super) fn call_native(
 /// The handler's [`Args`] of [`call_native`] after the call: the copies
 /// of the arguments released front to back (as `Vec::clear` releases
 /// them; scalars without the out-of-line drop of a `Value`), the two
-/// buffers back to their pools (as `Vm::put_val_vec` /
-/// `Vm::put_bool_vec` return them), and the fields a plain call leaves
-/// empty (no named arguments, no `$this` for a function) forgotten rather
-/// than run through their drop glue: `put_val_vec`'s call with a drop call
-/// per value and the drop of the empty named-argument vector cost ~130
-/// instructions of a two-argument call.
+/// buffers back home or to their pools (`CallBufs::put_values`), and the
+/// other fields emptied only when set, so that the caller can forget the
+/// husk rather than run it through its drop glue: `put_val_vec`'s call
+/// with a drop call per value and the drop of the empty named-argument
+/// vector cost ~130 instructions of a two-argument call.
 #[inline(always)]
 #[allow(clippy::inline_always)] // once per tape builtin call
-fn release_native_args(vm: &mut Vm, args: Args) {
-    let Args {
-        mut values,
-        mut passed,
-        named,
-        this,
-        called,
-        func,
-    } = args;
-    release_values(&mut values);
+fn release_native_args(vm: &mut Vm, args: &mut Args) {
+    // In place, through the borrow: destructuring the `Args` by value
+    // moved its fifteen words to another stack slot first.
+    release_values(&mut args.values);
+    let values = std::mem::take(&mut args.values);
     vm.call_bufs.put_values(values);
+    let passed = std::mem::take(&mut args.passed);
     vm.call_bufs.put_passed(passed);
     // An empty vector that never allocated owns nothing.
-    if named.capacity() == 0 {
-        std::mem::forget(named);
-    } else {
-        drop(named);
+    if args.named.capacity() != 0 {
+        drop(std::mem::take(&mut args.named));
     }
-    if this.is_some() {
-        drop(this);
-    } else {
-        std::mem::forget(this);
+    if args.this.is_some() {
+        args.this = None;
     }
-    if called.is_some() {
-        drop(called);
-    } else {
-        std::mem::forget(called);
+    if args.called.is_some() {
+        args.called = None;
     }
-    drop(func);
+    if args.func.is_some() {
+        args.func = None;
+    }
 }
 
 /// The handler's copy of a sent argument (`call_native`): a handle's
