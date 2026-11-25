@@ -115,6 +115,113 @@ pub enum ModifyHandler {
     AutoDetectLineEndings,
 }
 
+/// How `phpinfo()`, `php -i` and `--ri` show a directive's value (the
+/// `ZEND_INI_DISP` callback of its `zend_ini_entry_def`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IniDisplayer {
+    /// No displayer: `php_ini_displayer_cb()` prints the value (HTML
+    /// escaped outside text mode), or "no value".
+    Default,
+    /// `zend_ini_boolean_displayer_cb` (every `*_INI_BOOLEAN` entry, and
+    /// `zend_gc_enabled_displayer_cb`): "On" or "Off".
+    Boolean,
+    /// `php_ini_color_displayer_cb` (`highlight.*`).
+    Color,
+    /// main.c's `display_errors_mode` displayer: "On"/"Off"/"STDOUT"/
+    /// "STDERR".
+    DisplayErrors,
+}
+
+impl IniDisplayer {
+    /// The displayer C gives a directive with this modify handler: every
+    /// `OnUpdateBool` entry in php-src is declared with
+    /// `STD_PHP_INI_BOOLEAN`, and the `highlight.*` colours with
+    /// `php_ini_color_displayer_cb` (main/main.c).
+    #[must_use]
+    pub fn for_handler(name: &str, handler: ModifyHandler) -> IniDisplayer {
+        match handler {
+            ModifyHandler::Bool
+            | ModifyHandler::GcEnabled
+            | ModifyHandler::AutoDetectLineEndings => IniDisplayer::Boolean,
+            ModifyHandler::DisplayErrors => IniDisplayer::DisplayErrors,
+            _ if name.starts_with("highlight.") => IniDisplayer::Color,
+            _ => IniDisplayer::Default,
+        }
+    }
+
+    /// The text this displayer prints for `value` (the local or the
+    /// master value; `ZEND_INI_DISPLAY_ACTIVE`/`_ORIG`). `html` is false in
+    /// text mode (the CLI's `phpinfo_as_text`). The colour displayer tests `zend_uv.html_errors`,
+    /// which `php_module_startup()` sets to 1 and nothing changes, so it
+    /// always prints the `<span>`.
+    #[must_use]
+    pub fn display(self, value: Option<&[u8]>, html: bool) -> Vec<u8> {
+        // `ZSTR_VAL()`: the C displayers see the value up to its first NUL.
+        let c_str = value.map(|v| v.split(|&c| c == 0).next().unwrap_or_default());
+        match self {
+            // `zend_ini_parse_bool()` and `php_get_display_errors_mode()`
+            // compare the whole zend_string.
+            IniDisplayer::Boolean => {
+                if value.is_some_and(parse_bool) {
+                    b"On".to_vec()
+                } else {
+                    b"Off".to_vec()
+                }
+            }
+            IniDisplayer::DisplayErrors => display_errors_text(value).to_vec(),
+            IniDisplayer::Color => match c_str {
+                Some(v) => {
+                    let mut s = b"<span style=\"color: ".to_vec();
+                    s.extend_from_slice(v);
+                    s.extend_from_slice(b"\">");
+                    s.extend_from_slice(v);
+                    s.extend_from_slice(b"</span>");
+                    s
+                }
+                None => b"<i>no value</i>".to_vec(),
+            },
+            // php_ini_displayer_cb(): a value whose first byte is not NUL
+            // is written whole (`PHPWRITE` with its length).
+            IniDisplayer::Default => match value {
+                Some(v) if v.first().is_some_and(|&c| c != 0) => {
+                    if html {
+                        html_puts(v)
+                    } else {
+                        v.to_vec()
+                    }
+                }
+                _ if html => b"<i>no value</i>".to_vec(),
+                _ => b"no value".to_vec(),
+            },
+        }
+    }
+}
+
+/// `zend_html_puts()` as php-stdmisc's highlighter ports it.
+fn html_puts(v: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len());
+    for &c in v {
+        match c {
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'\t' => out.extend_from_slice(b"    "),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// main.c's `PHP_INI_DISP(display_errors_mode)`: the
+/// `php_get_display_errors_mode()` mode of the value, as a word.
+fn display_errors_text(value: Option<&[u8]>) -> &'static [u8] {
+    match display_errors_mode(value) {
+        0 => b"Off",
+        2 => b"STDERR",
+        _ => b"STDOUT",
+    }
+}
+
 /// Static description of a directive (`zend_ini_entry_def`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IniDirective {
@@ -128,6 +235,8 @@ pub struct IniDirective {
     pub handler: ModifyHandler,
     /// Owning extension (`"Core"`, `"standard"`, …) for `ini_get_all()`.
     pub module: String,
+    /// How phpinfo() shows the value.
+    pub displayer: IniDisplayer,
 }
 
 impl IniDirective {
@@ -145,7 +254,17 @@ impl IniDirective {
             access,
             handler,
             module: module.to_string(),
+            displayer: IniDisplayer::for_handler(name, handler),
         }
+    }
+
+    /// The same directive with another displayer (an entry whose modify
+    /// handler is its own but which C declares with `*_INI_BOOLEAN`, or
+    /// with a `PHP_INI_ENTRY_EX` displayer).
+    #[must_use]
+    pub fn with_displayer(mut self, displayer: IniDisplayer) -> Self {
+        self.displayer = displayer;
+        self
     }
 }
 
@@ -173,6 +292,20 @@ pub struct IniEntryInfo {
     pub builtin_default_value: Option<Vec<u8>>,
     /// `access` bitmask.
     pub access: u8,
+    /// How phpinfo() shows the values.
+    pub displayer: IniDisplayer,
+}
+
+impl IniEntryInfo {
+    /// The local and the master value as `display_ini_entries()` shows
+    /// them (`html` false in text mode).
+    #[must_use]
+    pub fn displayed(&self, html: bool) -> (Vec<u8>, Vec<u8>) {
+        (
+            self.displayer.display(self.local_value.as_deref(), html),
+            self.displayer.display(self.global_value.as_deref(), html),
+        )
+    }
 }
 
 /// The registry of INI directives.
@@ -623,6 +756,7 @@ impl IniRegistry {
                     local_value: e.value.clone(),
                     builtin_default_value: e.def.default.clone(),
                     access: e.modifiable.0,
+                    displayer: e.def.displayer,
                 }
             })
             .collect())
@@ -1336,6 +1470,70 @@ mod tests {
             .all(|e| ["user_agent", "from"].contains(&e.name.as_str())
                 || e.name.contains('_')
                 || e.name.contains('.')));
+    }
+
+    #[test]
+    fn displayers_follow_the_c_entry_definitions() {
+        // php8.5 -n -i: "html_errors => Off => Off", "display_errors =>
+        // STDOUT => STDOUT", highlight.* in <span>s even in text mode,
+        // "zend.enable_gc => On", "auto_detect_line_endings => Off".
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("html_errors", b"yes", &mut d),
+            Some(b"0".to_vec())
+        );
+        let all = r.ini_get_all(None).unwrap();
+        let shown = |name: &str, html: bool| {
+            let e = all.iter().find(|e| e.name == name).unwrap();
+            let (l, g) = e.displayed(html);
+            (String::from_utf8(l).unwrap(), String::from_utf8(g).unwrap())
+        };
+        let pair = |l: &str, g: &str| (l.to_string(), g.to_string());
+        assert_eq!(shown("html_errors", false), pair("On", "Off"));
+        assert_eq!(shown("display_errors", false), pair("STDOUT", "STDOUT"));
+        assert_eq!(shown("zend.enable_gc", false), pair("On", "On"));
+        assert_eq!(shown("auto_detect_line_endings", false), pair("Off", "Off"));
+        assert_eq!(shown("assert.active", false), pair("On", "On"));
+        assert_eq!(
+            shown("highlight.comment", false),
+            pair(
+                "<span style=\"color: #FF8000\">#FF8000</span>",
+                "<span style=\"color: #FF8000\">#FF8000</span>"
+            )
+        );
+        assert_eq!(shown("precision", false), pair("14", "14"));
+        assert_eq!(shown("error_log", false), pair("no value", "no value"));
+        assert_eq!(
+            shown("error_log", true),
+            pair("<i>no value</i>", "<i>no value</i>")
+        );
+        assert_eq!(
+            shown("session.trans_sid_tags", false).0,
+            "a=href,area=href,frame=src,form="
+        );
+        let disp = |v: &[u8]| {
+            String::from_utf8(IniDisplayer::DisplayErrors.display(Some(v), false)).unwrap()
+        };
+        assert_eq!(disp(b"stderr"), "STDERR");
+        assert_eq!(disp(b"0"), "Off");
+        assert_eq!(disp(b"258"), "STDERR");
+        assert_eq!(disp(b"garbage"), "Off");
+        assert_eq!(disp(b"yes"), "STDOUT");
+        assert_eq!(
+            IniDisplayer::Default.display(Some(b"a<b>&\tc"), true),
+            b"a&lt;b&gt;&amp;    c".to_vec()
+        );
+        assert_eq!(IniDisplayer::Boolean.display(None, false), b"Off".to_vec());
+        assert_eq!(disp(b"stderr\0tail"), "Off");
+        assert_eq!(
+            String::from_utf8(IniDisplayer::DisplayErrors.display(None, false)).unwrap(),
+            "STDOUT"
+        );
+        assert_eq!(
+            IniDisplayer::Color.display(Some(b"#123\0x"), false),
+            b"<span style=\"color: #123\">#123</span>".to_vec()
+        );
     }
 
     #[test]

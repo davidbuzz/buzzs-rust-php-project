@@ -1095,103 +1095,32 @@ fn show_ini_config(cfg: &Config) -> String {
 
 /// `display_ini_entries(NULL)` in the CLI's text mode. Only the core
 /// definitions belong to module number zero, not extension entries
-/// registered under `Core` by the VM.
+/// registered under `Core` by the VM. Values go through each entry's
+/// displayer ([`php_support::ini::IniDisplayer`]).
 fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
-    use php_support::ini::{core_directives, ModifyHandler};
+    use php_support::ini::core_directives;
     let definitions = core_directives();
     let entries = ini.ini_entries_registered(Some("Core")).unwrap_or_default();
     let mut s = Vec::new();
     for e in entries {
-        let Some(def) = definitions
+        if !definitions
             .iter()
-            .find(|d| d.module == "Core" && d.name == e.name)
-        else {
+            .any(|d| d.module == "Core" && d.name == e.name)
+        {
             continue;
-        };
+        }
         if s.is_empty() {
             s.extend_from_slice(b"\nDirective => Local Value => Master Value\n");
         }
         s.extend_from_slice(e.name.as_bytes());
-        for value in [e.local_value.as_deref(), e.global_value.as_deref()] {
+        let (local, master) = e.displayed(false);
+        for value in [local, master] {
             s.extend_from_slice(b" => ");
-            match def.handler {
-                ModifyHandler::Bool | ModifyHandler::GcEnabled => {
-                    s.extend_from_slice(
-                        if php_support::ini::parse_bool(value.unwrap_or_default()) {
-                            b"On"
-                        } else {
-                            b"Off"
-                        },
-                    );
-                }
-                ModifyHandler::DisplayErrors => {
-                    s.extend_from_slice(display_errors_value(value));
-                }
-                _ if e.name.starts_with("highlight.") => {
-                    if let Some(v) = value {
-                        let v = v.split(|&c| c == 0).next().unwrap_or_default();
-                        if ini.get_bool("html_errors") {
-                            s.extend_from_slice(b"<span style=\"color: ");
-                            s.extend_from_slice(v);
-                            s.extend_from_slice(b"\">");
-                            s.extend_from_slice(v);
-                            s.extend_from_slice(b"</span>");
-                        } else {
-                            s.extend_from_slice(v);
-                        }
-                    } else if ini.get_bool("html_errors") {
-                        s.extend_from_slice(b"<i>no value</i>");
-                    } else {
-                        s.extend_from_slice(b"no value");
-                    }
-                }
-                _ => s.extend_from_slice(
-                    value
-                        .filter(|v| v.first().is_some_and(|&c| c != 0))
-                        .unwrap_or(b"no value"),
-                ),
-            }
+            s.extend_from_slice(&value);
         }
         s.push(b'\n');
     }
     s
-}
-
-/// `php_get_display_errors_mode()` for the selected local or master value.
-fn display_errors_value(value: Option<&[u8]>) -> &'static [u8] {
-    let Some(value) = value else { return b"STDOUT" };
-    if [b"on".as_slice(), b"yes", b"true", b"stdout"]
-        .iter()
-        .any(|word| value.eq_ignore_ascii_case(word))
-    {
-        return b"STDOUT";
-    }
-    if value.eq_ignore_ascii_case(b"stderr") {
-        return b"STDERR";
-    }
-    let value = value.trim_ascii_start();
-    let negative = value.first() == Some(&b'-');
-    let digits = if matches!(value.first(), Some(b'-' | b'+')) {
-        &value[1..]
-    } else {
-        value
-    };
-    let number = digits
-        .iter()
-        .take_while(|c| c.is_ascii_digit())
-        .fold(0i64, |n, &c| {
-            let digit = i64::from(c - b'0');
-            if negative {
-                n.saturating_mul(10).saturating_sub(digit)
-            } else {
-                n.saturating_mul(10).saturating_add(digit)
-            }
-        });
-    match number.rem_euclid(256) {
-        0 => b"Off",
-        2 => b"STDERR",
-        _ => b"STDOUT",
-    }
 }
 
 /// `--ini=diff`: compare the effective registered value to the definition,
@@ -1549,8 +1478,9 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             &mut diagnostics,
         );
         let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        // zend_uv.html_errors is 1 whatever html_errors says (php8.5 -n --ri main).
         assert!(s.starts_with(
-            "\nDirective => Local Value => Master Value\nhighlight.comment => #FF8000 => #FF8000\n"
+            "\nDirective => Local Value => Master Value\nhighlight.comment => <span style=\"color: #FF8000\">#FF8000</span> => <span style=\"color: #FF8000\">#FF8000</span>\n"
         ));
         assert!(s.contains("display_errors => STDERR => STDERR\n"));
         assert!(s.contains("html_errors => Off => Off\n"));
@@ -1563,7 +1493,7 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
     }
 
     #[test]
-    fn main_ini_color_displayer_uses_html_errors() {
+    fn main_ini_color_displayer_prints_spans() {
         let ini = ini_registry(&[("html_errors", "1"), ("highlight.comment", "")]);
         let s = String::from_utf8(show_main_ini(&ini)).unwrap();
         assert!(s.contains(
@@ -1597,9 +1527,11 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             let s = String::from_utf8(show_main_ini(&ini)).unwrap();
             assert!(s.contains(&format!("display_errors => {shown} => {shown}\n")));
         }
-        assert_eq!(display_errors_value(None), b"STDOUT");
-        assert_eq!(display_errors_value(Some(b"")), b"Off");
-        assert_eq!(display_errors_value(Some(b"stderr\0tail")), b"Off");
+        let shown =
+            |v: Option<&[u8]>| php_support::ini::IniDisplayer::DisplayErrors.display(v, false);
+        assert_eq!(shown(None), b"STDOUT");
+        assert_eq!(shown(Some(b"")), b"Off");
+        assert_eq!(shown(Some(b"stderr\0tail")), b"Off");
     }
 
     #[test]
