@@ -1643,7 +1643,12 @@ impl<'a> Lower<'a> {
                 self.push(l);
             }
             Op::FetchClassName { class, dst, .. } => {
-                let c = self.class_z(class, "");
+                // `zend_compile_class_name`: `$obj::class` takes the
+                // expression itself as op1, with no FETCH_CLASS before it.
+                let c = match class {
+                    ClassSpec::Dyn(op) => self.copy_kept(op),
+                    other => self.class_z(other, ""),
+                };
                 self.push(ZLine::new("FETCH_CLASS_NAME").t(*dst).a(c));
             }
             Op::InstanceOf { a, class, dst } => {
