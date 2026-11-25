@@ -759,9 +759,13 @@ impl Builtin {
     #[inline]
     pub fn name_str(&self) -> &str {
         self.name_str.get_or_init(|| {
-            std::str::from_utf8(self.name.as_bytes())
-                .unwrap_or("")
-                .into()
+            // Persistent, like the parsed signature: the copy is not the
+            // memory of the request that calls the function first.
+            php_memlimit::persistent(|| {
+                std::str::from_utf8(self.name.as_bytes())
+                    .unwrap_or("")
+                    .into()
+            })
         })
     }
 
@@ -806,12 +810,19 @@ impl Builtin {
     #[cold]
     #[inline(never)]
     fn accepts_slow(&self) -> Box<[u32]> {
-        let table: Vec<u32> = self.signature().params.iter().map(param_accepts).collect();
-        if table.iter().all(|&m| m == u32::MAX) {
-            Box::default()
-        } else {
-            table.into_boxed_slice()
-        }
+        let sig = self.signature();
+        // A table of the function, like its parsed signature: persistent,
+        // not the memory of the request that happens to call the function
+        // first (`memory_get_usage()` around a builtin's first call:
+        // ext/standard/tests/serialize/bug81142.phpt).
+        php_memlimit::persistent(|| {
+            let table: Vec<u32> = sig.params.iter().map(param_accepts).collect();
+            if table.iter().all(|&m| m == u32::MAX) {
+                Box::default()
+            } else {
+                table.into_boxed_slice()
+            }
+        })
     }
 
     #[cold]
