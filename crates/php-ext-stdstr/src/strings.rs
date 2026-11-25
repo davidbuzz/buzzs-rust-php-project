@@ -169,9 +169,14 @@ fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
     }
     let known: usize = pieces
         .iter()
-        .map(|(_, v)| match v.deref() {
+        .map(|(_, v)| match v {
             Value::Str(s) => s.len(),
-            Value::Int(n) => php_runtime::string::long_str_len(n),
+            Value::Int(n) => php_runtime::string::long_str_len(*n),
+            Value::Reference(_) => match v.deref() {
+                Value::Str(s) => s.len(),
+                Value::Int(n) => php_runtime::string::long_str_len(n),
+                _ => 0,
+            },
             _ => 0,
         })
         .sum();
@@ -182,13 +187,22 @@ fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
         if i > 0 {
             out.push(glue);
         }
-        match v.deref() {
+        // The elements are read in place (a reference's value is taken
+        // out of it): no reference count changes per piece.
+        match v {
             Value::Str(s) => out.push(s.as_bytes()),
             Value::Int(n) => {
                 let mut buf = [0u8; LONG_MAX_LEN];
-                out.push(format_long(n, &mut buf));
+                out.push(format_long(*n, &mut buf));
             }
-            other => out.push(to_str(vm, &other)?.as_bytes()),
+            other => match other.deref() {
+                Value::Str(s) => out.push(s.as_bytes()),
+                Value::Int(n) => {
+                    let mut buf = [0u8; LONG_MAX_LEN];
+                    out.push(format_long(n, &mut buf));
+                }
+                other => out.push(to_str(vm, &other)?.as_bytes()),
+            },
         }
     }
     Ok(out.finish())
@@ -237,8 +251,13 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// ASCII; an object's or resource's string is not known here, so it
 /// counts as unflagged.
 fn implode_valid_utf8(glue: &ZStr, pieces: &ZArray) -> bool {
-    let piece = |v: &Value| match v.deref() {
+    let piece = |v: &Value| match v {
         Value::Str(s) => s.is_valid_utf8(),
+        Value::Reference(_) => match v.deref() {
+            Value::Str(s) => s.is_valid_utf8(),
+            Value::Object(_) | Value::Resource(_) => false,
+            _ => true,
+        },
         Value::Object(_) | Value::Resource(_) => false,
         _ => true,
     };

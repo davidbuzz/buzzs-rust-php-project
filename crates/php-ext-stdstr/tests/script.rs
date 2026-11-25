@@ -415,3 +415,58 @@ fn memory_limit_is_enforced_for_large_results() {
             .replace("PHP Fatal error:  ", "\nFatal error: ")
     );
 }
+
+/// `explode()` with every kind of limit, one- and two-byte separators
+/// (counted in one pass for the memory check), empty and unsplit input;
+/// `implode()` reading its pieces in place: strings, numbers, booleans,
+/// null, a `__toString()` object, references, an array piece, one and
+/// no pieces; lists from `str_split()` and appending after `explode()`.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn explode_and_implode_pieces() {
+    let out = run(
+        r#"foreach ([[',', 'a,b,,c,'], [',', ''], [',', 'abc'], ['::', 'a::b::::c'], ['ab', 'ab'], ['x', 'xxx']] as [$d, $s]) {
+    foreach ([PHP_INT_MAX, 2, 1, 0, -1, -2, -10] as $l) { $p = explode($d, $s, $l); $c = 0; foreach ($p as $_) { $c++; } echo $c, '[', implode('|', $p), '] '; } echo "\n";
+}
+class S { function __toString(): string { return 'S!'; } }
+$x = 'ref'; $n = 5; $arr = ['a', 1, 1.5, true, false, null, new S, &$x, &$n, -7];
+var_dump(implode(',', $arr), implode($arr), implode('', []), implode('-', ['only']), implode('-', [&$x]), implode(', ', [1, 2, 3]));
+echo @implode(',', [[1], 'b']), "\n";
+var_dump(str_split('abcdefg', 3));
+$e = explode(',', 'a,b'); $e[] = 'c'; var_dump($e);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"5[a|b||c|] 2[a|b,,c,] 1[a,b,,c,] 1[a,b,,c,] 4[a|b||c] 3[a|b|] 0[] 
+1[] 1[] 1[] 1[] 0[] 0[] 0[] 
+1[abc] 1[abc] 1[abc] 1[abc] 0[] 0[] 0[] 
+4[a|b||c] 2[a|b::::c] 1[a::b::::c] 1[a::b::::c] 3[a|b|] 2[a|b] 0[] 
+2[|] 2[|] 1[ab] 1[ab] 1[] 0[] 0[] 
+4[|||] 2[|xx] 1[xxx] 1[xxx] 3[||] 2[|] 0[] 
+string(23) "a,1,1.5,1,,,S!,ref,5,-7"
+string(14) "a11.51S!ref5-7"
+string(0) ""
+string(4) "only"
+string(3) "ref"
+string(7) "1, 2, 3"
+Array,b
+array(3) {
+  [0]=>
+  string(3) "abc"
+  [1]=>
+  string(3) "def"
+  [2]=>
+  string(1) "g"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+"#
+    );
+}

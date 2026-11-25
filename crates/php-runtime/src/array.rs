@@ -2104,17 +2104,12 @@ impl HashTable {
     }
 
     /// Appends every value of `vals` in order, as [`HashTable::push`] of
-    /// each would (`ZEND_HASH_FILL_PACKED`): a list without holes with
-    /// room for all of them takes them in one `Vec` extension; any other
-    /// table pushes one by one. Gives back the first value with no free
-    /// next key (left unpushed, with those after it).
-    pub fn push_all<I>(&mut self, vals: I) -> Result<(), Value>
-    where
-        I: IntoIterator<Item = Value>,
-        I::IntoIter: ExactSizeIterator,
-    {
-        let it = vals.into_iter();
-        let n = it.len();
+    /// each would (`ZEND_HASH_FILL_PACKED`): into a list without holes,
+    /// as many as it has room for in one `Vec` extension, the rest (and
+    /// all of them for any other table) one by one. Gives back the first
+    /// value with no free next key (left unpushed, with those after it).
+    pub fn push_all<I: IntoIterator<Item = Value>>(&mut self, vals: I) -> Result<(), Value> {
+        let mut it = vals.into_iter();
         let ts = self.table_size as usize;
         if let Store::Packed(v) = &mut self.store {
             let len = v.len();
@@ -2123,11 +2118,13 @@ impl HashTable {
             } else {
                 self.next_free
             };
-            if usize::try_from(next).is_ok_and(|x| x == len) && len + n <= ts {
-                v.extend(it.map(Some));
-                self.next_free = i64::try_from(len + n).unwrap_or(i64::MAX);
-                self.num_elements += to_u32(n);
-                return Ok(());
+            if usize::try_from(next).is_ok_and(|x| x == len) && len < ts {
+                v.extend(it.by_ref().take(ts - len).map(Some));
+                let added = v.len() - len;
+                if added > 0 {
+                    self.next_free = i64::try_from(v.len()).unwrap_or(i64::MAX);
+                    self.num_elements += to_u32(added);
+                }
             }
         }
         for val in it {
@@ -3657,10 +3654,13 @@ impl ZArray {
     /// Builds a list from values.
     pub fn from_values<I: IntoIterator<Item = Value>>(values: I) -> Self {
         let iter = values.into_iter();
-        let mut t = HashTable::with_capacity(iter.size_hint().0);
-        for v in iter {
-            let _ = t.push(v);
-        }
+        let n = iter.size_hint().0;
+        let mut t = if n > 0 {
+            HashTable::with_capacity_packed(n)
+        } else {
+            HashTable::new()
+        };
+        let _ = t.push_all(iter);
         ZArray::from_table(t)
     }
 

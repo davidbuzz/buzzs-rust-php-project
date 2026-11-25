@@ -153,6 +153,13 @@ pub(crate) mod mem {
             let (h, n) = (hay.to_ascii_lowercase(), needle.to_ascii_lowercase());
             return occurrences(&h, &n, false);
         }
+        if let [b] = needle {
+            // One byte (`explode(",", ...)`): counted in one vectorised
+            // pass rather than a search per occurrence (the `bytecount`
+            // crate clippy suggests is not a dependency).
+            #[allow(clippy::naive_bytecount)]
+            return hay.iter().filter(|&&c| c == *b).count();
+        }
         let mut count = 0;
         let mut p = 0;
         while let Some(r) = php_stdstr::search::memnstr(&hay[p..], needle) {
