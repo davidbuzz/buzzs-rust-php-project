@@ -482,3 +482,19 @@ fn str_replace_same_length_and_in_place() {
         "  HeLLo WorLd  3|bbbba2|xyxy_xy3|abc0|abc1|abcD1|heLLLLo2|heo1|bAnAnA,cherry,3|cc3|22232|aYaaXa"
     );
 }
+
+/// `ucfirst()`/`lcfirst()` return the argument itself when the first byte
+/// does not change (`zend_string_copy`: one more reference), a new string
+/// when it does, and the interned empty string for `''`
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn ucfirst_lcfirst_share_unchanged_strings() {
+    let out = run(r#"$a = ''; for ($i = 0; $i < 3; $i++) { $a .= 'Ab'; }
+        $b = ucfirst($a); debug_zval_dump($b); $c = lcfirst($a); debug_zval_dump($c);
+        debug_zval_dump(ucfirst(''), lcfirst(''));
+        echo ucfirst('hello'), lcfirst('HELLO'), ucfirst('1x'), ucfirst("\xe9t") === "\xe9t" ? 'same' : 'changed', lcfirst('a'), ucfirst('b');"#);
+    assert_eq!(
+        out,
+        "string(6) \"AbAbAb\" refcount(3)\nstring(6) \"abAbAb\" refcount(2)\nstring(0) \"\" interned\nstring(0) \"\" interned\nHellohELLO1xsameaB"
+    );
+}

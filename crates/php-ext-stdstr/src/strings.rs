@@ -582,12 +582,34 @@ fn chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(ZStr::from_byte(c)))
 }
 
+/// `php_ucfirst()` / `php_lcfirst()`: the interned empty string for an
+/// empty argument (`RETURN_EMPTY_STRING()`), the argument itself when its
+/// first byte does not change (`zend_string_copy`), else one copy with
+/// the first byte changed (`zend_string_init`). A new string was made
+/// every time (a copy into a vector and a second into the string).
+fn first_byte_mapped(s: Cow<'_, ZStr>, map: fn(&u8) -> u8) -> ZStr {
+    let Some(c) = s.as_bytes().first() else {
+        return ZStr::empty();
+    };
+    let r = map(c);
+    if r == *c {
+        return s.into_owned();
+    }
+    ZStr::from_slice_mapped(s.as_bytes(), |b| b[0] = r)
+}
+
 fn ucfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::ucfirst(a.zstr(0).as_bytes())))
+    Ok(Value::Str(first_byte_mapped(
+        a.zstr(0),
+        u8::to_ascii_uppercase,
+    )))
 }
 
 fn lcfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::lcfirst(a.zstr(0).as_bytes())))
+    Ok(Value::Str(first_byte_mapped(
+        a.zstr(0),
+        u8::to_ascii_lowercase,
+    )))
 }
 
 fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
