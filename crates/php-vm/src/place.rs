@@ -3563,7 +3563,7 @@ impl Vm {
                             if v.is_null() {
                                 self.take_pending_value_warning(segs)?;
                             }
-                            self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
+                            self.call_method_name_n(&obj, "offsetSet", [key, v.clone()])?;
                             Ok(v)
                         }
                         // `zend_binary_assign_op_obj_dim`: `$o[] op= v` reads
@@ -3571,7 +3571,7 @@ impl Vm {
                         // calls `offsetSet(null, ...)`.
                         WOp::FetchRw => {
                             let v =
-                                self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
+                                self.call_method_name_raw_n(&obj, "offsetGet", [key.clone()])?;
                             OVERLOADED_RW.with(|c| c.set(Some((obj, key))));
                             Ok(v)
                         }
@@ -3580,18 +3580,18 @@ impl Vm {
                             // `zend_std_read_dimension`/`write_dimension`
                             // (`$o[] op= v` passes a null offset to both).
                             let cur =
-                                self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
+                                self.call_method_name_raw_n(&obj, "offsetGet", [key.clone()])?;
                             let nv = self.assign_op_value(op, &cur.deref(), &rhs)?;
                             drop(cur);
-                            self.call_method_name(&obj, "offsetSet", vec![key, nv.clone()])?;
+                            self.call_method_name_n(&obj, "offsetSet", [key, nv.clone()])?;
                             Ok(nv)
                         }
                         WOp::Unset => {
-                            self.call_method_name(&obj, "offsetUnset", vec![key])?;
+                            self.call_method_name_n(&obj, "offsetUnset", [key])?;
                             Ok(Value::Null)
                         }
                         WOp::MakeRef | WOp::AssignRef(_) => {
-                            let r = self.call_method_name_raw(&obj, "offsetGet", vec![key])?;
+                            let r = self.call_method_name_raw_n(&obj, "offsetGet", [key])?;
                             let r = match r {
                                 Value::Reference(r) => r,
                                 other => {
@@ -3621,7 +3621,7 @@ impl Vm {
                         }
                     };
                 }
-                let r = self.call_method_name_raw(&obj, "offsetGet", vec![key])?;
+                let r = self.call_method_name_raw_n(&obj, "offsetGet", [key])?;
                 match r {
                     Value::Object(o2) => self.obj_walk(o2, segs, i + 1, wop),
                     Value::Reference(rf) => {
@@ -4968,12 +4968,12 @@ impl Vm {
                     ));
                 }
                 if mode == FetchMode::Is {
-                    let e = self.call_method_name(&o, "offsetExists", vec![k.clone()])?;
+                    let e = self.call_method_name_n(&o, "offsetExists", [k.clone()])?;
                     if !self.to_bool(&e)? {
                         return Ok(Value::Null);
                     }
                 }
-                self.call_method_name(&o, "offsetGet", vec![k.clone()])
+                self.call_method_name_n(&o, "offsetGet", [k.clone()])
             }
             Value::Null => {
                 if mode == FetchMode::Read {
@@ -5192,7 +5192,7 @@ impl Vm {
                                 ),
                             ));
                         }
-                        let e = self.call_method_name(&o, "offsetExists", vec![k.clone()])?;
+                        let e = self.call_method_name_n(&o, "offsetExists", [k.clone()])?;
                         let exists = self.to_bool(&e)?;
                         if !empty {
                             return Ok(exists);
@@ -5200,7 +5200,7 @@ impl Vm {
                         if !exists {
                             return Ok(true);
                         }
-                        let v = self.call_method_name(&o, "offsetGet", vec![k.clone()])?;
+                        let v = self.call_method_name_n(&o, "offsetGet", [k.clone()])?;
                         Ok(!self.to_bool(&v)?)
                     }
                     _ => Ok(empty),

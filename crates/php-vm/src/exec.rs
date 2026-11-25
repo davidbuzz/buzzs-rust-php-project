@@ -525,7 +525,7 @@ impl Vm {
         };
         // `ZVAL_COPY_DEREF(&tmp_offset, offset)`.
         let key = self.read(dim)?.deref();
-        self.call_method(&obj, &m, vec![key, v])?;
+        self.call_method_n(&obj, &m, [key, v])?;
         Ok(true)
     }
 
@@ -560,12 +560,12 @@ impl Vm {
         };
         let key = self.read(dim)?.deref();
         if let Some(m) = exists {
-            let r = self.call_method(&obj, &m, vec![key.clone()])?;
+            let r = self.call_method_n(&obj, &m, [key.clone()])?;
             if !self.to_bool(&r)? {
                 return Ok(Some(self.store_fetched(dst, to, Value::Null)));
             }
         }
-        let v = self.call_method(&obj, &get, vec![key])?.deref();
+        let v = self.call_method_n(&obj, &get, [key])?.deref();
         Ok(Some(self.store_fetched(dst, to, v)))
     }
 

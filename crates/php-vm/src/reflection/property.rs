@@ -791,7 +791,7 @@ fn magic_get_readable(
 ) -> VmResult<bool> {
     if ce.magic.get.is_some() {
         if let (Some(o), Some(isset)) = (obj, ce.magic.isset.clone()) {
-            let r = vm.call_method(o, &isset, vec![Value::Str(name.clone())])?;
+            let r = vm.call_method_n(o, &isset, [Value::Str(name.clone())])?;
             return vm.to_bool(&r);
         }
         return Ok(true);

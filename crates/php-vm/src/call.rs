@@ -3284,6 +3284,35 @@ pub(crate) fn fast_eval_id(name: &[u8]) -> u8 {
     }
 }
 
+/// Whether `n` arguments of a call made from native code go in `call`'s
+/// inline buffer ([`Vm::give_args`]): a user function with neither a
+/// by-reference nor a variadic parameter, so that `push_user_call` takes
+/// its plain branch (which only takes inline arguments).
+fn inline_args_fit(call: &PendingCall, n: usize) -> bool {
+    match &call.func {
+        Func::User(uf) => {
+            n <= call.inline_args.len()
+                && call.magic_name.is_none()
+                && !uf.params.iter().any(|p| p.by_ref || p.variadic)
+        }
+        Func::Builtin(_) => false,
+    }
+}
+
+/// Puts `args` into `call`'s inline buffer, dereferenced (as
+/// `call_pending_ex` dereferences them); [`inline_args_fit`] said they fit.
+fn fill_inline_args(call: &mut PendingCall, args: impl IntoIterator<Item = Value>) {
+    let mut n = 0u8;
+    for (slot, v) in call.inline_args.iter_mut().zip(args) {
+        *slot = Some(match v {
+            Value::Reference(r) => r.get(),
+            v => v,
+        });
+        n += 1;
+    }
+    call.inline_count = n;
+}
+
 #[cfg(test)]
 fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
     fast_eval(fast_eval_id(name), val)
@@ -4897,11 +4926,118 @@ impl Vm {
         &mut self,
         o: &Obj,
         m: &Rc<Method>,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
     ) -> VmResult<Value> {
+        if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
+            return r;
+        }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         self.give_args(&mut call, args);
         self.call_pending(call)
+    }
+
+    /// [`Vm::call_method`] with a fixed number of arguments (`__get()`,
+    /// `__set()`, `offsetGet()`, `offsetSet()`, ...): they go straight into
+    /// the call's inline buffer, without the vector a `vec![...]` of them
+    /// allocated and freed on every call; a callee that takes them by
+    /// reference or as variadics gets them in the argument buffer.
+    pub(crate) fn call_method_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        mut args: [Value; N],
+    ) -> VmResult<Value> {
+        if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
+            return r;
+        }
+        let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
+        if inline_args_fit(&call, N) {
+            fill_inline_args(&mut call, args);
+        } else {
+            self.give_args(&mut call, Vec::from(args));
+        }
+        self.call_pending(call)
+    }
+
+    /// [`Vm::call_method_n`] of a plain user method, made as
+    /// [`Vm::call_pending`] makes it but without building the pending call:
+    /// the interrupt check, then the frame as `push_user_call`'s plain
+    /// branch sets it up (`$this`, the method's scope and the object's
+    /// class, the arguments in their compiled variables, the `RECV`s of
+    /// passed parameters skipped), then the nested execution. `None`,
+    /// having changed nothing, for anything that branch does not take (a
+    /// static, deprecated or generator method, static variables, `finally`
+    /// slots, an observer, by-reference or variadic parameters, an
+    /// argument count outside the parameters, a reference argument, an
+    /// argument its declared type does not take as it is) or a frame stack
+    /// past the depth backstop: the generic call then runs.
+    fn call_user_method_direct(
+        &mut self,
+        obj: &Obj,
+        method: &Rc<Method>,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        let n = args.len();
+        let Func::User(uf) = &method.func else {
+            return None;
+        };
+        if method.is_static()
+            || uf.flags & flags::DEPRECATED != 0
+            || uf.is_generator()
+            || uf.code.num_statics != 0
+            || uf.code.num_finally != 0
+            || self.has_observers()
+            || n < uf.required as usize
+            || n > uf.params.len()
+            || self.frames.len() > 50_000
+            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return None;
+        }
+        for (p, v) in uf.params.iter().zip(args.iter()) {
+            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+                return None;
+            }
+        }
+        // `zend_call_function`: pending interrupts before the user code.
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let uf = Rc::clone(uf);
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+        let frame = &mut self.frames[idx];
+        frame.this = Some(obj.clone());
+        frame.scope = Some(method.scope());
+        frame.called = Some(object::class_of(obj).clone());
+        frame.ret = RetTarget::Discard;
+        frame.caller_strict = false;
+        frame.called_from_internal = true;
+        frame.is_ctor = false;
+        frame.args.clear();
+        frame.args.resize(n, None);
+        for (i, v) in args.iter_mut().enumerate() {
+            if let Some(slot) = frame.cvs.get_mut(i) {
+                slot.set(Some(std::mem::take(v)));
+            }
+        }
+        let mut first_op = 0;
+        for i in 0..n {
+            match uf.code.ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => break,
+            }
+        }
+        frame.ip = first_op;
+        frame.func = Some(Func::User(Rc::clone(&uf)));
+        frame.ufunc = Some(uf);
+        let base = self.frames.len() - 1;
+        Some(match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
     }
 
     /// Puts the arguments of a call made from native code (`offsetGet()`,
@@ -4911,23 +5047,9 @@ impl Vm {
     /// `push_user_call` takes its plain branch (which only takes inline
     /// arguments); in the argument buffer otherwise.
     fn give_args(&mut self, call: &mut PendingCall, args: Vec<Value>) {
-        if let Func::User(uf) = &call.func {
-            if args.len() <= call.inline_args.len()
-                && call.magic_name.is_none()
-                && !uf.params.iter().any(|p| p.by_ref || p.variadic)
-            {
-                #[allow(clippy::cast_possible_truncation)] // at most the inline buffer's 6
-                {
-                    call.inline_count = args.len() as u8;
-                }
-                for (slot, v) in call.inline_args.iter_mut().zip(args) {
-                    *slot = Some(match v {
-                        Value::Reference(r) => r.get(),
-                        v => v,
-                    });
-                }
-                return;
-            }
+        if inline_args_fit(call, args.len()) {
+            fill_inline_args(call, args);
+            return;
         }
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
@@ -4952,16 +5074,48 @@ impl Vm {
         &mut self,
         o: &Obj,
         name: &str,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
         let m = method_by_name(&cls, name);
+        if let Some(m) = &m {
+            if let Some(r) = self.call_user_method_direct(o, m, &mut args) {
+                return r;
+            }
+        }
         let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
         };
         self.give_args(&mut call, args);
         self.call_pending(call)
+    }
+
+    /// [`Vm::call_method_name`] with a fixed number of arguments: a method
+    /// the class has goes through [`Vm::call_method_n`] (no argument
+    /// vector, the direct path for a plain user method); `__call` takes the
+    /// generic call.
+    pub(crate) fn call_method_name_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: [Value; N],
+    ) -> VmResult<Value> {
+        Ok(self.call_method_name_raw_n(o, name, args)?.deref())
+    }
+
+    /// [`Vm::call_method_name_raw`] with a fixed number of arguments (see
+    /// [`Vm::call_method_name_n`]).
+    pub(crate) fn call_method_name_raw_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: [Value; N],
+    ) -> VmResult<Value> {
+        match method_by_name(object::class_of(o), name) {
+            Some(m) => self.call_method_n(o, &m, args),
+            None => self.call_method_name_raw(o, name, Vec::from(args)),
+        }
     }
 
     /// Calls a method by name with possibly undefined arguments (`None` is
