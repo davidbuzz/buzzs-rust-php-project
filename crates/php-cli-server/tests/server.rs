@@ -522,3 +522,36 @@ fn header_callback_and_runtime_default_charset() {
         ["text/html; charset=UTF-8"]
     );
 }
+
+/// A HEAD request to a script gets its headers, with the header callback's
+/// header, and no body: `php_header()` returns `!headers_only` and the
+/// output layer disables output (`main/output.c`). Expected from php8.5's
+/// own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn head_request_to_a_script_has_no_body() {
+    let srv = start(
+        "headreq",
+        &[(
+            "h.php",
+            "<?php\nheader_register_callback(function () { header('X-Cb: 1'); });\nheader('X-A: 1');\necho \"body\\n\";\nheader('X-B: 1');\n",
+        )],
+        None,
+    );
+    for _ in 0..2 {
+        let r = request(
+            srv.port,
+            "HEAD /h.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        let (head, body) = split(&r);
+        assert_eq!(header_values(head, "X-A"), ["1"]);
+        assert_eq!(header_values(head, "X-Cb"), ["1"]);
+        assert!(header_values(head, "X-B").is_empty());
+        assert_eq!(body, "");
+        let r = request(
+            srv.port,
+            "GET /h.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert!(split(&r).1.starts_with("body\n"));
+    }
+}

@@ -442,7 +442,9 @@ fn apply_fatal_status(vm: &Vm, ctx: &RequestCtx) {
 /// `default_charset` as they are now (a script may have changed them with
 /// `ini_set()`), runs the `header_register_callback()` callable once — its
 /// own output comes back here and sends the headers from inside it — and
-/// sends the headers (`main/SAPI.c`, `main/output.c`).
+/// sends the headers (`main/SAPI.c`, `main/output.c`). Returns whether
+/// output may follow: `SG(request_info).headers_only` denies it to a HEAD
+/// request, whose response then has no body.
 fn php_header(vm: &mut Vm) -> bool {
     let Some(ctx) = current() else {
         return true;
@@ -452,7 +454,7 @@ fn php_header(vm: &mut Vm) -> bool {
         call_header_callback(vm, &ctx);
         ctx.send_headers();
     }
-    true
+    !vm.request_info.headers_only
 }
 
 fn call_header_callback(vm: &mut Vm, ctx: &RequestCtx) {
