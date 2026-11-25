@@ -463,7 +463,14 @@ fn call_header_callback(vm: &mut Vm, ctx: &RequestCtx) {
     }
     let cb = ctx.header_callback.borrow_mut().take();
     if let Some(cb) = cb {
-        let _ = vm.call_value(&cb, Vec::new());
+        // `sapi_run_header_callback()`: an exception the callable throws
+        // is the running code's (it surfaces after the output that sent
+        // the headers, uncaught: a fatal error).
+        if let Err(t) = vm.call_value(&cb, Vec::new()) {
+            if vm.pending_throw.is_none() {
+                vm.pending_throw = Some(t);
+            }
+        }
     }
 }
 

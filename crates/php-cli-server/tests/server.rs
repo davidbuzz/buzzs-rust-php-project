@@ -643,3 +643,35 @@ fn jit_auto_globals_appear_when_named() {
     assert_eq!(get(srv.port, "a"), format!("{all}\n"));
     assert_eq!(get(srv.port, "b"), format!("{all} /b.php\n{all} env\n"));
 }
+
+/// An exception thrown by the `header_register_callback()` callable when
+/// output sends the headers is the script's: uncaught, it is a fatal
+/// error after that output, and the script ends. Expected from php8.5's
+/// own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn header_callback_exception_reaches_the_script() {
+    let srv = start(
+        "cbthrow",
+        &[(
+            "t.php",
+            "<?php\nheader_register_callback(function () { throw new Exception(\"cb\"); });\necho \"body\\n\";\necho \"end\\n\";\n",
+        )],
+        None,
+    );
+    let r = request(
+        srv.port,
+        "GET /t.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert!(r.starts_with("HTTP/1.1 200 OK\r\n"), "{r}");
+    let path = srv.root.join("t.php");
+    let body = split(&r).1;
+    assert!(
+        body.starts_with(&format!(
+            "body\n<br />\n<b>Fatal error</b>:  Uncaught Exception: cb in {}:2\nStack trace:\n",
+            path.display()
+        )),
+        "{body}"
+    );
+    assert!(!body.contains("end"), "{body}");
+}
