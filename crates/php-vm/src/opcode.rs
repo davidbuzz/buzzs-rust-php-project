@@ -1698,15 +1698,28 @@ impl OpArray {
 
     /// Clears run-time caches so this op array carries no request state.
     pub fn clear_runtime_caches(&self) {
+        // Most op arrays of a large script never ran since they were last
+        // cleared (a request calls few of the functions it declares): an
+        // empty cache is left alone instead of being borrowed and cleared.
+        //
         // A JIT trace that inlined a call resolved it through
-        // `fcall_cache`: clearing it means a later call at the same site
-        // can resolve to a different function (see `jit.rs`).
+        // `fcall_cache`, and one may pin a run-time cache entry (a static
+        // property cell, a folded constant): clearing them means a later
+        // run of the same site can resolve to something else, and the
+        // trace checks this version (see `jit.rs`).
         crate::func::bump_func_table_version();
-        self.fcall_cache.borrow_mut().clear();
-        self.class_cache.borrow_mut().clear();
+        clear_if_used(&self.fcall_cache);
+        clear_if_used(&self.class_cache);
         self.rt_cache.clear();
-        self.prop_cache.borrow_mut().clear();
-        self.method_cache.borrow_mut().clear();
+        clear_if_used(&self.prop_cache);
+        clear_if_used(&self.method_cache);
+    }
+}
+
+/// Empties a run-time cache unless it is empty already.
+fn clear_if_used<T>(cache: &RefCell<Vec<T>>) {
+    if !cache.borrow().is_empty() {
+        cache.borrow_mut().clear();
     }
 }
 
