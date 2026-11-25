@@ -207,6 +207,18 @@ impl OpenSsl {
         }
     }
 
+    /// The end of a request. `OPENSSL_G(errors)` and `errors_mark` are
+    /// thread globals (`PHP_GINIT(openssl)`; no RSHUTDOWN empties them):
+    /// what one request queued and did not read, the next request's
+    /// `openssl_error_string()` returns first. Only this request's
+    /// diagnostics and INI copies are forgotten.
+    pub fn request_shutdown(&mut self) {
+        self.diagnostics.clear();
+        self.ini_cafile.clear();
+        self.ini_capath.clear();
+        self.open_basedir = None;
+    }
+
     /// `openssl_error_string()`: the oldest queued OpenSSL error message.
     pub fn error_string(&mut self) -> Option<String> {
         self.store_errors();
@@ -245,6 +257,23 @@ mod tests {
             Some("error:10000080:BIO routines::no such file")
         );
         assert_eq!(o.error_string(), None);
+    }
+
+    /// php8.5 `--repeat 2` of `var_dump(openssl_error_string());
+    /// @openssl_pkey_get_private('junk');` prints `bool(false)`, then the
+    /// first run's unread error.
+    #[test]
+    fn unread_errors_outlive_the_request() {
+        let mut o = OpenSsl::new();
+        assert!(ffi::Bio::file(b"/nonexistent/dir/file", "r").is_none());
+        o.store_errors();
+        o.warn("w");
+        o.request_shutdown();
+        assert!(o.take_diagnostics().is_empty());
+        assert_eq!(
+            o.error_string().as_deref(),
+            Some("error:FFFFFFFF80000002:system library::No such file or directory")
+        );
     }
 
     #[test]

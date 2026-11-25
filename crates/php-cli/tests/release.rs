@@ -264,3 +264,29 @@ fn repeat_keeps_the_default_mbregex_options() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
+
+/// `OPENSSL_G(errors)` is a thread global no RSHUTDOWN empties: the error a
+/// run queued and did not read is the next run's first
+/// `openssl_error_string()` (php8.5 prints `bool(false)`, then
+/// `string(44) "error:1E08010C:DECODER routines::unsupported"` with
+/// OpenSSL 3).
+#[test]
+fn repeat_keeps_the_unread_openssl_errors() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "var_dump(openssl_error_string()); @openssl_pkey_get_private('junk');",
+    ]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (first, second) = text
+        .split_once("Finished execution, repeating...\n")
+        .expect("two runs");
+    assert_eq!(first, "Executing for the first time...\nbool(false)\n");
+    assert!(
+        second.starts_with("string(") && second.contains("\"error:"),
+        "{text}"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
