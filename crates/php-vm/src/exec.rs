@@ -3404,17 +3404,15 @@ impl Vm {
         }
         let (ret, by_ref) = {
             let frame = &self.frames[fidx];
-            let caller_this = fidx
-                .checked_sub(1)
-                .and_then(|i| self.frames[i].this.as_ref());
-            crate::gc::frame_released(frame, caller_this);
             let by_ref = frame
                 .ufunc
                 .as_ref()
                 .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
             (frame.ret, by_ref)
         };
-        self.frames.release_top(&self.empty_code);
+        // `zend_leave_helper`: the possible roots of the frame (the
+        // caller's `$this` from the frame below), then its release.
+        self.frames.release_top_returning(&self.empty_code);
         // An exception from a destructor the release above ran is
         // rethrown in the caller once the frame is left
         // (`zend_leave_helper`'s `zend_rethrow_exception`).

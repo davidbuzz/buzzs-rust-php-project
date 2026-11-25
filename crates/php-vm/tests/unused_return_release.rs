@@ -227,3 +227,34 @@ after x
 "#
     );
 }
+
+/// The possible cycle roots a returning frame leaves: its variables and
+/// its call's own `$this` or closure, counted by `gc_status()` (objects
+/// only), whether the result is used or not, for each kind of frame.
+#[test]
+fn returning_frames_buffer_the_same_possible_roots() {
+    assert_eq!(
+        run(r#"<?php
+function roots() { return gc_status()['roots']; }
+class O { public $p; function keep() { $local = $this; return 1; } function same() { return $this; } }
+function holdsObject() { $o = new O; $o2 = $o; return 1; }
+function returnsObject() { $o = new O; return $o; }
+function withClosure() { $o = new O; $f = function () use ($o) { return $o; }; $f(); return 2; }
+function byArg($x) { $y = $x; return 3; }
+$o = new O;
+$base = roots();
+holdsObject(); echo roots() - $base, "\n";
+returnsObject(); echo roots() - $base, "\n";
+$kept = returnsObject(); echo roots() - $base, "\n";
+withClosure(); echo roots() - $base, "\n";
+$o->keep(); echo roots() - $base, "\n";
+(new O)->keep(); echo roots() - $base, "\n";
+$o->same(); echo roots() - $base, "\n";
+byArg($o); echo roots() - $base, "\n";
+byArg(new O); echo roots() - $base, "\n";
+for ($i = 0; $i < 5; $i++) { holdsObject(); returnsObject(); $o->keep(); byArg($o); }
+echo roots() - $base, "\n";
+"#),
+        "0\n0\n1\n1\n2\n2\n2\n2\n2\n2\n"
+    );
+}

@@ -2355,7 +2355,7 @@ impl Vm {
     /// a reference, or a literal, and the value is accepted by the return
     /// type as it is (`verify_return`'s fast path). The result is then the
     /// one `op_return` gives: the same checks, the same release order
-    /// (`gc::frame_released`, then [`FrameStack::release_top`]) and a
+    /// ([`Frame::release_returning`]: the possible roots, then the release) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
     /// `ip` is the instruction after the `RETURN`, stored as the frame's
     /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
@@ -2453,23 +2453,21 @@ impl Vm {
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
-            // The store runs before the `gc` step: the value's register
-            // is then dead across the out-of-line `frame_released` call
-            // (it only reads the frame and the caller's `$this`, and the
-            // frame is released after both). The slot held a scalar:
+            // The store runs before the release: the value's register is
+            // then dead across it (the possible-root walk only reads the
+            // frame and the caller's `$this`). The slot held a scalar:
             // nothing to drop. A discarded string is released.
             match dst {
                 Some(slot) => std::mem::forget(std::mem::replace(slot, v)),
                 None if matches!(v, Value::Str(_)) => drop(v),
                 None => std::mem::forget(v),
             }
-            gc_on_release(frame, caller);
-            // `FrameStack::release_top` of the frame at hand: released in
-            // place, without the out-of-line call and the second lookup
-            // of the top frame; the stack is popped just below.
-            if !frame.release_direct() {
-                frame.clear_for_reuse(&self.empty_code);
-            }
+            // `zend_leave_helper`: the possible roots of the frame's
+            // variables and call handle, then `FrameStack::release_top` of
+            // the frame at hand, in one step and in place (no out-of-line
+            // call, no second lookup of the top frame); the stack is
+            // popped just below.
+            frame.release_returning(caller.this.as_ref(), &self.empty_code);
         };
         self.frames.pop_cleared_top();
         Some(crate::exec::Flow::Reload)
@@ -2617,13 +2615,14 @@ impl Vm {
                 }
                 _ => Some(v),
             };
-            gc_on_release(frame, caller);
             // `ZEND_RETURN` copies the value into the caller's result slot
             // (`EX(return_value)`) before `zend_leave_helper` releases the
             // frame: done here, through the caller already at hand, when
             // the slot holds a scalar (its release has no effect). Another
             // value in the slot is released after the frame, by `set_tmp`
-            // below, as before.
+            // below, as before. The possible-root walk of the release
+            // reads only the frame and the caller's `$this`, so it may
+            // follow the store.
             let v = match (ret, v) {
                 (_, None) => None,
                 // The execution's result: no caller slot.
@@ -2637,13 +2636,12 @@ impl Vm {
                 },
                 (RetTarget::Discard, v) => v,
             };
-            // `FrameStack::release_top` of the frame at hand: released in
-            // place, without the out-of-line call and the second lookup of
-            // the top frame; the stack is popped just below. Same release,
+            // `zend_leave_helper`: the possible roots, then
+            // `FrameStack::release_top` of the frame at hand, in one step
+            // and in place (no out-of-line call, no second lookup of the
+            // top frame); the stack is popped just below. Same release,
             // same order (the frame's values, then the result's slot).
-            if !frame.release_direct() {
-                frame.clear_for_reuse(&self.empty_code);
-            }
+            frame.release_returning(caller.this.as_ref(), &self.empty_code);
             (v, ret)
         };
         self.frames.pop_cleared_top();
@@ -5388,17 +5386,6 @@ pub(crate) fn clone_value(v: &Value) -> Value {
     }
 }
 
-/// The `gc::frame_released` step of a direct return: nothing to record
-/// for a frame without `$this`, a closure or a compiled variable holding
-/// an array, object or reference (no symbol table is attached).
-#[inline(always)]
-#[allow(clippy::inline_always)] // one test per return
-fn gc_on_release(frame: &crate::vm::Frame, caller: &crate::vm::Frame) {
-    if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
-        crate::gc::frame_released(frame, caller.this.as_ref());
-    }
-}
-
 /// The arguments of a returning native call, about to be dropped
 /// (`zend_vm_stack_free_args`, `zval_ptr_dtor_nogc`): an array or a
 /// reference whose last handle they hold releases its contents
@@ -5450,22 +5437,6 @@ fn is_scalar(v: &Value) -> bool {
         v,
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
     )
-}
-
-/// Whether a compiled variable of a returning frame holds a value
-/// [`crate::gc::possible_root`] may record: an array, an object or a
-/// reference (it ignores everything else).
-#[inline]
-fn cvs_may_hold_roots(cvs: &[crate::vm::CvSlot]) -> bool {
-    for slot in cvs {
-        if matches!(
-            slot.get(),
-            Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))
-        ) {
-            return true;
-        }
-    }
-    false
 }
 
 /// Stores `v` into an `Option` field of a frame being set up, releasing

@@ -942,7 +942,6 @@ impl FrameStack {
     /// [`crate::gc::frame_released`] records first, the calling frame's
     /// `$this` taken from the frame below ([`Frame::release_returning`]).
     #[inline]
-    #[allow(dead_code)] // until `Vm::return_generic`'s slow path calls it
     pub(crate) fn release_top_returning(&mut self, empty_code: &Rc<OpArray>) {
         if self.live > 0 {
             let (callers, rest) = self.vec.split_at_mut(self.live - 1);
@@ -1795,7 +1794,6 @@ impl Frame {
     /// `frame_released` itself (its table's values are walked too).
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every return
-    #[allow(dead_code)] // until the return paths (call.rs, exec.rs) call it
     pub(crate) fn release_returning(
         &mut self,
         caller_this: Option<&Obj>,
