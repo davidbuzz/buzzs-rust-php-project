@@ -285,7 +285,7 @@ foreach ([[1], new stdClass] as $bad) {
   $f = 'array_key_exists'; try { $f($bad, $a); } catch (TypeError $e) { echo "dyn: ", $e->getMessage(), "\n"; }
 }
 "#;
-    let expected = r#"plain: Cannot access offset of type array on array
+    let expected = r"plain: Cannot access offset of type array on array
 fq: Cannot access offset of type array on array
 named: array_key_exists(): Argument #1 ($key) must be a valid array offset type
 spread: array_key_exists(): Argument #1 ($key) must be a valid array offset type
@@ -297,7 +297,7 @@ named: array_key_exists(): Argument #1 ($key) must be a valid array offset type
 spread: array_key_exists(): Argument #1 ($key) must be a valid array offset type
 cuf: array_key_exists(): Argument #1 ($key) must be a valid array offset type
 dyn: array_key_exists(): Argument #1 ($key) must be a valid array offset type
-"#;
+";
     assert_eq!(run(src), expected);
 }
 
