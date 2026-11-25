@@ -1312,11 +1312,11 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     };
     let (target, limit) = match func {
         Func::User(uf) => {
-            if uf.call_shape() == CallShape::NOT_PLAIN {
+            if !prepares(&uf) {
                 return None;
             }
             ready_frame(frame, &uf);
-            let limit = uf.plain_params().min(MAX_ARGS);
+            let limit = uf.params.len().min(MAX_ARGS);
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
@@ -1420,6 +1420,54 @@ pub(super) fn quick_send(
     Some(at + 2)
 }
 
+/// Whether a call of `uf` by name or as a method may be prepared: a
+/// declaration that makes a plain call ([`UserFunction::call_shape`]), or
+/// one whose only difference from that is its static variables
+/// ([`statics_only`]). One load and compare for every plain function.
+#[inline(always)]
+#[allow(clippy::inline_always)] // every prepared call
+fn prepares(uf: &UserFunction) -> bool {
+    uf.call_shape() != CallShape::NOT_PLAIN || statics_only(uf)
+}
+
+/// A function or method that would make a plain call but for its `static`
+/// variables (`function f() { static $n = 0; return ++$n; }`): such calls
+/// took the generic `InitFCall`/`Send`/`DoCall` (`Vm::push_user_call`),
+/// about a thousand instructions more per call. php-src makes no
+/// difference between them at the call: the static variables live with
+/// the function (`ZEND_MAP_PTR(op_array->static_variables_ptr)`), and
+/// `ZEND_BIND_STATIC` binds them from there when the body runs.
+///
+/// The same holds here: a frame of such a function never holds the
+/// variables (`Frame::statics` is only set for a closure, whose variables
+/// are its object's, and closures are excluded); `Vm::static_slot` and
+/// `Vm::static_init` read the function's own store
+/// (`UserFunction::statics`) through `Frame::ufunc`, which the prepared
+/// frame holds as the generic call's does ([`ready_frame`]). At the
+/// return, `Frame::keeps_function` declines a function with statics, so
+/// the frame drops its handles as after a generic call. Typed parameters
+/// are left to the generic call: [`enter`] checks the arguments only for
+/// the shape that says so (`CallShape::TYPED`). The JIT and the tape's
+/// whole-function paths still see `CallShape::NOT_PLAIN` and keep away.
+#[cold]
+#[inline(never)]
+fn statics_only(uf: &UserFunction) -> bool {
+    uf.code.num_statics != 0
+        && uf.flags
+            & (flags::DEPRECATED
+                | flags::NODISCARD
+                | flags::NO_BODY
+                | flags::GENERATOR
+                | flags::CLOSURE)
+            == 0
+        && uf.code.num_finally == 0
+        && uf.params.len() <= uf.code.cv_names.len()
+        && uf
+            .params
+            .iter()
+            .all(|p| !p.variadic && !p.by_ref && p.ty.as_ref().is_none_or(|t| t.is_mixed()))
+}
+
 /// Readies the pooled frame `frame` for a call of `uf`, as
 /// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
@@ -1504,7 +1552,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
             return prepare_native_method(caller, frame, obj, b, scope, is_static, called_class);
         }
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
+    if !prepares(&uf) {
         return None;
     }
     let called_class = Rc::clone(cls);
@@ -1527,7 +1575,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len,
@@ -1568,14 +1616,14 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     let Func::User(uf) = func else {
         return None;
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
+    if !prepares(&uf) {
         return None;
     }
     ready_frame(frame, &uf);
     frame.scope = scope;
     frame.called = called_class;
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1693,7 +1741,7 @@ pub(super) fn prepare_relative_static(
             .and_then(std::rc::Weak::upgrade)?;
         (uf, scope, cached.is_static)
     };
-    if uf.call_shape() == CallShape::NOT_PLAIN {
+    if !prepares(&uf) {
         return None;
     }
     let (this, late_bound) = if is_static {
@@ -1774,7 +1822,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     frame.closure = if d.fake { None } else { Some(o.clone()) };
     drop(internal);
     Some(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1853,7 +1901,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     frame.called = Some(cls);
     crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
-        limit: uf.plain_params().min(MAX_ARGS),
+        limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
         n: 0,
         calls_len: caller.calls.len(),
@@ -1962,7 +2010,7 @@ pub(super) fn enter(
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
     };
-    if n < uf.required as usize || n > uf.plain_params() {
+    if n < uf.required as usize || n > uf.params.len() {
         return Err(prep);
     }
     let (callers, pool) = vm.frames.vec.split_at_mut(live);

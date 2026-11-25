@@ -178,3 +178,72 @@ int(5)
 "#
     );
 }
+
+/// Functions and methods with `static` variables, called from a loop (the
+/// tape prepares such calls): defaults, passed-argument counts, extra
+/// arguments, recursion, backtraces, an exception thrown from the body,
+/// statics shared by a method and its inheriting class, `self::`,
+/// `static::` and `parent::` calls, a missing argument, and a static
+/// object released at the end of the request.
+#[test]
+fn calls_of_functions_with_static_variables() {
+    assert_eq!(
+        run(r#"<?php
+function counter() { static $n = 0; return ++$n; }
+function withdef($a, $b = 10) { static $sum = 0; $sum += $a + $b; return $sum; }
+function args_seen($x) { static $calls = []; $calls[] = func_num_args() . ':' . implode(',', func_get_args()); return $calls; }
+function rec($d) { static $depth = 0; $depth++; $r = $d > 0 ? rec($d - 1) : $depth; $depth--; return $r; }
+function trace_it() { static $once; $once ??= (new Exception)->getTraceAsString(); return $once; }
+function thrower($v) { static $k = 0; if (++$k === 3) { throw new RuntimeException("third $v"); } return $k; }
+class P { function m($a) { static $c = 0; return $a . ++$c; } static function s() { static $c = 100; return ++$c; } function viaSelf() { return self::s() . static::s(); } }
+class Q extends P { function viaParent() { return parent::s(); } }
+for ($i = 0; $i < 3; $i++) { echo counter(), ' ', withdef($i), ' ', withdef($i, 1), "\n"; }
+$x = 'v';
+for ($i = 0; $i < 3; $i++) { $r = args_seen($x . $i); }
+print_r($r); print_r(args_seen("a", "b"));
+echo rec(4), ' ', rec(2), "\n";
+echo trace_it(), "\n", trace_it(), "\n";
+try { for ($i = 0; $i < 5; $i++) { echo thrower($i), "\n"; } } catch (RuntimeException $e) { echo get_class($e), ': ', $e->getMessage(), ' line ', $e->getLine(), "\n"; }
+$p = new P; $q = new Q;
+for ($i = 0; $i < 3; $i++) { echo $p->m('p'), $q->m('q'), ' ', P::s(), ' ', Q::s(), ' ', $p->viaSelf(), ' ', $q->viaParent(), "\n"; }
+function too_few($a) { static $z = 1; return $a; }
+try { too_few(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+class D { function __destruct() { echo "D gone\n"; } }
+function keeps() { static $d; $d ??= new D; return 1; }
+for ($i = 0; $i < 3; $i++) { echo keeps(); }
+echo "\nend\n";
+"#),
+        r#"1 10 11
+2 22 24
+3 36 39
+Array
+(
+    [0] => 1:v0
+    [1] => 1:v1
+    [2] => 1:v2
+)
+Array
+(
+    [0] => 1:v0
+    [1] => 1:v1
+    [2] => 1:v2
+    [3] => 2:a,b
+)
+5 3
+#0 t.php(15): trace_it()
+#1 {main}
+#0 t.php(15): trace_it()
+#1 {main}
+1
+2
+RuntimeException: third 2 line 7
+p1q2 101 102 103104 105
+p3q4 106 107 108109 110
+p5q6 111 112 113114 115
+Too few arguments to function too_few(), 0 passed in t.php on line 20 and exactly 1 expected
+111
+end
+D gone
+"#
+    );
+}
