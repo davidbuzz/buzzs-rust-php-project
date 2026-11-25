@@ -3,7 +3,8 @@
 //! PHP `memory_limit` accounting for phprust.
 //!
 //! [`CountingAlloc`] wraps a [`GlobalAlloc`](std::alloc::GlobalAlloc) and
-//! keeps live/peak byte counters; [`GLOBAL`] is the process-wide instance
+//! keeps live/peak byte counters, each block charged its php-src size
+//! class ([`zend_size`]: bin, pages or page-rounded huge block); [`GLOBAL`] is the process-wide instance
 //! that `php-cli` installs with [`install_global_allocator!`]. The free
 //! functions in this crate operate on [`GLOBAL`].
 //!
