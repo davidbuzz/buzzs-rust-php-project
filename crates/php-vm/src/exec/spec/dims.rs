@@ -498,7 +498,16 @@ fn assign_int_dim_other(tbl: &mut HashTable, i: i64, v: Value) -> bool {
 /// ([`release_elem`]); `false`, nothing changed, when it is a reference.
 #[inline(never)]
 fn assign_str_dim(tbl: &mut HashTable, s: &ZStr, v: Value) -> bool {
-    if let Some(slot) = tbl.get_sym_zstr_mut(s) {
+    // A key that is surely no integer in digits (`ZEND_HANDLE_NUMERIC_STR`
+    // leaves it alone) is found as it is with its stored hash and without
+    // a call (`zend_hash_find_known_hash`); the others are looked at for
+    // an integer first.
+    let found = if ArrayKey::surely_str(s.as_bytes()) {
+        tbl.lean_find_mut(s, s.hash_now())
+    } else {
+        tbl.get_sym_zstr_mut(s)
+    };
+    if let Some(slot) = found {
         if matches!(slot, Value::Reference(_)) {
             return false;
         }
@@ -532,6 +541,23 @@ pub(super) fn assign_write_dim(tbl: &mut HashTable, dim: WriteDim<'_>, v: Value)
         WriteDim::Int(i) => assign_int_dim(tbl, i, v),
         WriteDim::Str(s) => assign_str_dim(tbl, s, v),
         WriteDim::Append => tbl.push(v).is_ok(),
+    }
+}
+
+/// [`assign_write_dim`] into the table of `arr`, separated first when it
+/// is shared (`SEPARATE_ARRAY`): a table this handle holds alone is
+/// written in place without the call of `Rc::make_mut` (17 instructions
+/// and a call around every write).
+#[inline(always)]
+#[allow(clippy::inline_always)] // two loads and a compare before the write
+pub(super) fn assign_write_sep(arr: &mut ZArray, dim: WriteDim<'_>, v: Value) -> bool {
+    if arr.get_mut_unshared().is_none() {
+        return assign_write_dim(arr.make_mut(), dim, v);
+    }
+    match arr.get_mut_unshared() {
+        Some(tbl) => assign_write_dim(tbl, dim, v),
+        // (Not reached: the handle was just found alone.)
+        None => false,
     }
 }
 

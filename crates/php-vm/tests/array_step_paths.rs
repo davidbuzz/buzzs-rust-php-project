@@ -338,3 +338,192 @@ array(1) {
   NULL
 }
 "#;
+
+/// `$obj->arr['key'] = value` on property cache hits: new and existing
+/// string keys, integers in digits, an append, a typed property, a class
+/// default that keeps its value, a copy that keeps its values, an element
+/// that is a reference, a property that is a reference, an object element
+/// released with its destructor, null and string properties, dynamic and
+/// magic properties, float, bool and null keys.
+#[test]
+fn property_element_writes() {
+    assert_eq!(run(PROP_DIM_WRITE), PROP_DIM_WRITE_OUT);
+}
+
+const PROP_DIM_WRITE: &str = r#"<?php
+class D { public function __construct(public $n) {} public function __destruct() { echo "d{$this->n} "; } }
+class C {
+    public $arr = ['k' => 1];
+    public array $typed = [];
+    public ?array $maybe = null;
+    public $str = 'abc';
+    public $ref;
+    public function set($i) {
+        $this->arr['k'] = $i;
+        $this->arr['new'] = "v$i";
+        $this->arr['7'] = 'seven';
+        $this->arr[''] = 'empty';
+        $this->typed['t'] = $i * 2;
+        $this->arr[] = 'pushed';
+    }
+}
+#[AllowDynamicProperties]
+class Dyn {}
+class Magic {
+    private $data = [];
+    public function __get($n) { echo "get($n) "; return $this->data[$n] ?? []; }
+    public function __set($n, $v) { echo "set($n) "; $this->data[$n] = $v; }
+}
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $o = new C;
+        $o->set($round);
+        $o->arr['k'] = 'outside';
+        var_dump($o->arr, $o->typed);
+        // The class default keeps its value.
+        $p = new C;
+        echo json_encode($p->arr), "\n";
+        // A copy of the property's array keeps its values.
+        $copy = $o->arr;
+        $o->arr['k'] = 'again';
+        echo $copy['k'], ' ', $o->arr['k'], "\n";
+        // An element that is a reference is written through.
+        $t = 0;
+        $o->arr['r'] = &$t;
+        $o->arr['r'] = 99;
+        echo $t, "\n";
+        // A property that is a reference to an array.
+        $outer = ['x' => 1];
+        $o->ref = &$outer;
+        $o->ref['x'] = 2;
+        $o->ref['y'] = 3;
+        echo json_encode($outer), "\n";
+        // An object element released by the write: its destructor runs.
+        $o->arr['obj'] = new D($round);
+        echo "before ";
+        $o->arr['obj'] = 1;
+        echo "after\n";
+        // null becomes an array; a string property throws.
+        $o->maybe['m'] = 1;
+        echo json_encode($o->maybe), "\n";
+        try { $o->str['k'] = 'x'; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        // Dynamic and magic properties.
+        $d = new Dyn;
+        $d->list['a'] = 1;
+        $d->list['b'] = 2;
+        echo json_encode($d), "\n";
+        $m = new Magic;
+        $m->items['a'] = 1;
+        echo "\n";
+        // A typed property that would not accept the change.
+        try { $o->typed = null; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+        // A float key, a bool key, a null key.
+        $o->arr[1.5] = 'f';
+        $o->arr[true] = 'b';
+        $o->arr[null] = 'n';
+        echo json_encode($o->arr), "\n";
+    }
+}
+f();
+"#;
+
+const PROP_DIM_WRITE_OUT: &str = r#"array(5) {
+  ["k"]=>
+  string(7) "outside"
+  ["new"]=>
+  string(2) "v0"
+  [7]=>
+  string(5) "seven"
+  [""]=>
+  string(5) "empty"
+  [8]=>
+  string(6) "pushed"
+}
+array(1) {
+  ["t"]=>
+  int(0)
+}
+{"k":1}
+outside again
+99
+{"x":2,"y":3}
+before d0 after
+{"m":1}
+TypeError: Cannot access offset of type string on string
+{"list":{"a":1,"b":2}}
+get(items) 
+Notice: Indirect modification of overloaded property Magic::$items has no effect in t.php on line 64
+
+Cannot assign null to property C::$typed of type array
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 69
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 71
+{"k":"again","new":"v0","7":"seven","":"n","8":"pushed","r":99,"obj":1,"1":"b"}
+array(5) {
+  ["k"]=>
+  string(7) "outside"
+  ["new"]=>
+  string(2) "v1"
+  [7]=>
+  string(5) "seven"
+  [""]=>
+  string(5) "empty"
+  [8]=>
+  string(6) "pushed"
+}
+array(1) {
+  ["t"]=>
+  int(2)
+}
+{"k":1}
+outside again
+99
+{"x":2,"y":3}
+before d1 after
+{"m":1}
+TypeError: Cannot access offset of type string on string
+{"list":{"a":1,"b":2}}
+get(items) 
+Notice: Indirect modification of overloaded property Magic::$items has no effect in t.php on line 64
+
+Cannot assign null to property C::$typed of type array
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 69
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 71
+{"k":"again","new":"v1","7":"seven","":"n","8":"pushed","r":99,"obj":1,"1":"b"}
+array(5) {
+  ["k"]=>
+  string(7) "outside"
+  ["new"]=>
+  string(2) "v2"
+  [7]=>
+  string(5) "seven"
+  [""]=>
+  string(5) "empty"
+  [8]=>
+  string(6) "pushed"
+}
+array(1) {
+  ["t"]=>
+  int(4)
+}
+{"k":1}
+outside again
+99
+{"x":2,"y":3}
+before d2 after
+{"m":1}
+TypeError: Cannot access offset of type string on string
+{"list":{"a":1,"b":2}}
+get(items) 
+Notice: Indirect modification of overloaded property Magic::$items has no effect in t.php on line 64
+
+Cannot assign null to property C::$typed of type array
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 69
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 71
+{"k":"again","new":"v2","7":"seven","":"n","8":"pushed","r":99,"obj":1,"1":"b"}
+"#;

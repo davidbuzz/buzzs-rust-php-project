@@ -351,7 +351,7 @@ fn assign_dim_hit(
     val: Operand,
     dst: Option<u32>,
 ) -> bool {
-    use super::dims::{assign_write_dim, WriteDim};
+    use super::dims::{assign_write_sep, WriteDim};
     let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
         return false;
     };
@@ -375,10 +375,10 @@ fn assign_dim_hit(
         return false;
     };
     let ok = match slots.get_mut(hit.slot) {
-        Some(Some(Value::Array(arr))) => assign_write_dim(arr.make_mut(), wd, v),
+        Some(Some(Value::Array(arr))) => assign_write_sep(arr, wd, v),
         Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
             Some(mut inner) => match &mut *inner {
-                Value::Array(arr) => assign_write_dim(arr.make_mut(), wd, v),
+                Value::Array(arr) => assign_write_sep(arr, wd, v),
                 _ => false,
             },
             None => false,
