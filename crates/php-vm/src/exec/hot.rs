@@ -699,7 +699,8 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         Op::Count { a, dst, .. } => {
             let Some(n) = count_in(f, lits, a) else {
-                return DECLINED;
+                // `count()` of a variable holding a reference.
+                return spec::step_ref(f, ops, lits, at);
             };
             set_dst_in(f, dst, Value::Int(n));
         }
@@ -914,7 +915,8 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         Op::ConcatCv { cv, val, dst, .. } => {
             if !concat_cv_in(f, cv, val, dst) {
-                return DECLINED;
+                // `.=` on a variable holding a reference.
+                return spec::step_ref(f, ops, lits, at);
             }
         }
         // `(string)` of a string or an integer.

@@ -44,6 +44,7 @@ use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 mod casts;
 mod dims;
 mod props;
+mod refs;
 mod static_dims;
 mod statics;
 mod strings;
@@ -56,6 +57,7 @@ pub(super) use dims::{
     isset_dim_cv_in, isset_tmp_dims_in, key_exists_in,
 };
 pub(super) use props::{prop_op_in, read_hit};
+pub(super) use refs::step_ref;
 pub(super) use static_dims::{assign_static_dims_in, fetch_static_dims_in, isset_static_dims_in};
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,

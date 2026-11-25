@@ -1387,10 +1387,16 @@ tape_ops! {
     }
 }
 
-/// [`hot::step`] out of line: the core loop must not carry its code.
+/// [`hot::step`] out of line: the core loop must not carry its code. An
+/// op its lean path declined because a variable holds a reference goes on
+/// to [`super::spec::step_ref`] before the generic loop.
 #[inline(never)]
 fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
-    hot::step(f, ops, lits, at)
+    let next = hot::step(f, ops, lits, at);
+    if next != DECLINED {
+        return next;
+    }
+    super::spec::step_ref(f, ops, lits, at)
 }
 
 /// The kind and operand field of a numeric operand; `None` when it has no
