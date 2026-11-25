@@ -2230,8 +2230,13 @@ impl Vm {
             debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
             let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
-            // `FrameStack::push_in_place`.
-            if frame.cvs.len() == code.cv_names.len()
+            // `FrameStack::push_in_place`; nothing to ready in a frame the
+            // direct return of a call of this same function released
+            // (`calls::ready_frame`'s test).
+            if same_func && frame.released_direct {
+                debug_assert!(frame.is_released_for(uf));
+                frame.released_direct = false;
+            } else if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
                 && frame.iters.len() == code.num_iters as usize
                 && frame.fins.len() == code.num_finally as usize
@@ -2250,28 +2255,25 @@ impl Vm {
             // other): the frame only remembers it for unwinding
             // (`zend_object_store_ctor_failed`).
             frame.is_ctor = call.is_ctor;
-            // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
-            // entry per argument, each moved into its compiled variable.
-            // The recycled buffer is empty (`Frame::clear_for_reuse`).
+            // The passed-argument count (`ZEND_CALL_NUM_ARGS`): every
+            // argument moves into its compiled variable, and the count is
+            // kept in `direct_argc` with the buffer left empty, the layout
+            // of the tape's prepared call (`exec::tape::calls::enter`),
+            // whose readers (`Frame::num_args`) take both. The recycled
+            // buffer is empty (`Frame::clear_for_reuse`).
             if !frame.args.is_empty() {
                 frame.args.clear();
             }
-            // A `push` per argument (an inline capacity test and two
-            // stores; the buffer only grows on a first call this deep):
-            // `extend` of a mapped range compiled to an out-of-line
-            // `Vec::extend_trusted` call of ~30 instructions per call.
-            //
             // A variadic function's arguments past its declared parameters
-            // stay in the buffer for its `RECV_VARIADIC` (`push_user_call`'s
-            // layout); every other argument has its parameter (`simple_ucall`).
+            // go to the buffer for its `RECV_VARIADIC`, after an empty
+            // entry for each declared parameter bound into its variable
+            // (`push_user_call`'s layout, as `calls::enter` leaves it);
+            // every other argument has its parameter (`simple_ucall`).
             let bound = if uf.flags & flags::VARIADIC == 0 {
                 n
             } else {
                 n.min(uf.params.len().saturating_sub(1))
             };
-            for _ in 0..bound {
-                frame.args.push(None);
-            }
             for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..bound]) {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
@@ -2279,7 +2281,18 @@ impl Vm {
                 }
             }
             if bound < n {
+                // A `push` per entry (an inline capacity test and two
+                // stores): `extend` of a mapped range compiled to an
+                // out-of-line `Vec::extend_trusted` call of ~30
+                // instructions per call.
+                for _ in 0..bound {
+                    frame.args.push(None);
+                }
                 variadic_extras(&mut frame.args, &mut call.inline_args[bound..n]);
+            }
+            #[allow(clippy::cast_possible_truncation)] // at most the inline buffer's length
+            {
+                frame.direct_argc = n as u32;
             }
             // `RECV` of an argument that was passed and needs no coercion
             // has nothing left to do: start after it (after a `RECV_INIT`'s
@@ -2298,6 +2311,14 @@ impl Vm {
             }
             let closure = call.closure.take();
             caller.ip = caller_ip;
+            // Every field but the slots, the passed arguments, the handles
+            // set above and the resume state is as the release left it:
+            // the return releases the frame directly
+            // (`Frame::release_direct`) and leaves it ready for the next
+            // call of the same function at this depth
+            // (`Frame::released_direct`), as after a prepared call, instead
+            // of the full `Frame::clear_for_reuse` and a readying again.
+            frame.direct = true;
             // What is left of the call owns nothing but its function
             // handle: `this`, `scope`, `called`, `closure`, the argument
             // buffer and the named arguments were taken above, the inline

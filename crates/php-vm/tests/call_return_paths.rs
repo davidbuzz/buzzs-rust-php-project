@@ -776,3 +776,36 @@ for ($i = 0; $i < 3; $i++) {
 "#;
     assert_eq!(run(src), "[0,30719,\"\\n\",[1,2],\"ks!\",84][0,5,\"\\n\",[1,2],\"ks!\",84][0,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n[1,30719,\"\\n\",[1,2],\"ks!\",84][1,5,\"\\n\",[1,2],\"ks!\",84][1,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n[2,30719,\"\\n\",[1,2],\"ks!\",84][2,5,\"\\n\",[1,2],\"ks!\",84][2,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n");
 }
+
+/// Calls whose arguments make calls of their own (`f(g($x))`: the outer
+/// call is entered by `Vm::push_simple_ucall`, since the inner one used
+/// the prepared frame), with what reads the passed arguments
+/// (`func_num_args()`, `func_get_args()`, a backtrace's arguments,
+/// `get_defined_vars()`), defaults and a named argument, a variadic, a
+/// by-reference parameter left to its default, a closure, a method, a
+/// constructor, and an exception thrown out of such a frame before the
+/// next call reuses it (php8.5 -n).
+#[test]
+fn calls_with_calls_in_their_arguments() {
+    let src = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n} "; } }
+class K { public $a; function __construct($a, $b = 2) { $this->a = $a + $b; } function m($x, $y = 'y') { return func_num_args() . ":$x$y"; } }
+function one($x) { return $x + 1; }
+function args($a, $b = 'B', $c = null) { return func_num_args() . json_encode(func_get_args()); }
+function trace($a, $b) { return json_encode(debug_backtrace()[0]['args']); }
+function va($a, ...$rest) { return func_num_args() . json_encode([$a, $rest, func_get_args()]); }
+function rf($a, &$r = null) { $r = 'set'; return $a; }
+function th($a, $b) { $d = new D("th$a"); if ($b) { throw new Exception("x$a"); } return $a; }
+function vars($a, $b) { $c = $a . $b; return json_encode(get_defined_vars()); }
+$u = "U"; $cl = function ($a, $b) use ($u) { return "cl$a$b$u"; };
+$k = new K(1);
+for ($i = 0; $i < 3; $i++) {
+  echo args(one($i)), " ", args(one($i), one($i)), " ", args(one($i), c: 5), "\n";
+  echo trace(one($i), "t"), " ", va(one($i)), " ", va(one($i), 2, 3), "\n";
+  echo rf(one($i)), " ", $cl(one($i), 'q'), " ", $k->m(one($i)), " ", (new K(one($i)))->a, "\n";
+  try { echo th(one($i), 0), th(one($i), 1); } catch (Exception $e) { echo $e->getMessage(), " "; }
+  echo vars(one($i), "v"), " ", vars("w", one($i)), "\n";
+}
+"#;
+    assert_eq!(run(src), "1[1] 2[1,1] 3[1,\"B\",5]\n[1,\"t\"] 1[1,[],[1]] 3[1,[2,3],[1,2,3]]\n1 cl1qU 1:1y 3\n~th1 1~th1 x1 {\"a\":1,\"b\":\"v\",\"c\":\"1v\"} {\"a\":\"w\",\"b\":1,\"c\":\"w1\"}\n1[2] 2[2,2] 3[2,\"B\",5]\n[2,\"t\"] 1[2,[],[2]] 3[2,[2,3],[2,2,3]]\n2 cl2qU 1:2y 4\n~th2 2~th2 x2 {\"a\":2,\"b\":\"v\",\"c\":\"2v\"} {\"a\":\"w\",\"b\":2,\"c\":\"w2\"}\n1[3] 2[3,3] 3[3,\"B\",5]\n[3,\"t\"] 1[3,[],[3]] 3[3,[2,3],[3,2,3]]\n3 cl3qU 1:3y 5\n~th3 3~th3 x3 {\"a\":3,\"b\":\"v\",\"c\":\"3v\"} {\"a\":\"w\",\"b\":3,\"c\":\"w3\"}\n");
+}
