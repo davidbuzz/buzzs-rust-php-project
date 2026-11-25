@@ -490,10 +490,12 @@ impl<'a> Iterator for SplitAll<'a> {
     #[inline]
     fn next(&mut self) -> Option<&'a [u8]> {
         let rest = self.rest?;
-        let found = if self.delim.is_empty() {
-            None
-        } else {
-            memnstr(rest, self.delim)
+        // A one-byte separator (the usual `explode(',', ...)`) is looked
+        // for here, without a `memnstr` call per piece.
+        let found = match *self.delim {
+            [] => None,
+            [c] => rest.iter().position(|&b| b == c),
+            _ => memnstr(rest, self.delim),
         };
         match found {
             Some(r) => {
@@ -650,7 +652,7 @@ mod tests {
         let inputs: [&[u8]; 8] = [
             b"", b",", b"a", b"a,b,c", b",a,", b"a,,,b,,", b",,,,", b"abc",
         ];
-        for d in [&b","[..], b",,", b"ab", b"abcd"] {
+        for d in [&b","[..], b",,", b"ab", b"abcd", b"a", b"\0"] {
             for s in inputs {
                 let want = explode_slices(d, s, i64::MAX).unwrap_or_default();
                 let got: Vec<&[u8]> = split_all(d, s).collect();
