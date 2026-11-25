@@ -1270,6 +1270,7 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     call_header_callback(vm, ctx);
     ctx.send_headers();
     cleanup_uploads(vm);
+    crate::vars::drop_armed();
 }
 
 /// `destroy_uploaded_files_hash()`: deletes the uploads that were not
@@ -1464,6 +1465,7 @@ fn run_request_inner(
     vm.shutdown(r);
     ctx.send_headers();
     cleanup_uploads(vm);
+    crate::vars::drop_armed();
     Outcome::ServeStatic
 }
 

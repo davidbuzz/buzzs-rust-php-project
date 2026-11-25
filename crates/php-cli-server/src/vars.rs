@@ -178,6 +178,12 @@ thread_local! {
         const { std::cell::RefCell::new([None, None, None]) };
 }
 
+/// Request shutdown: the arrays of JIT auto-globals no script named are
+/// freed with the request (php-src builds them only when asked).
+pub(crate) fn drop_armed() {
+    ARMED.with(|a| *a.borrow_mut() = [None, None, None]);
+}
+
 /// The armed auto-global's creation callback (`php_auto_globals_create_*`):
 /// the array request startup built for it.
 fn create_armed(vm: &mut Vm, name: &[u8]) {
