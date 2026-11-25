@@ -128,3 +128,213 @@ string(1) "k"
 int(1)
 int(1)
 "#;
+
+/// `$a['key'] = value` with string literals for the key: new and existing
+/// keys, integers in digits and strings that only look like them, string
+/// values over strings, a copy that keeps its values, a list given a
+/// string key, a table growing, an element that is a reference or an
+/// object with a destructor, an array behind a reference, and containers
+/// that are no arrays (`ArrayAccess`, strings, null, undefined, false,
+/// an int), with an undefined value variable.
+#[test]
+fn dim_write_by_literal_key() {
+    assert_eq!(run(DIM_WRITE), DIM_WRITE_OUT);
+}
+
+const DIM_WRITE: &str = r#"<?php
+class D { public function __construct(public $n) {} public function __destruct() { echo "d{$this->n} "; } }
+class AA implements ArrayAccess {
+    public function offsetExists($o): bool { echo "exists($o) "; return true; }
+    public function offsetGet($o): mixed { echo "get($o) "; return 1; }
+    public function offsetSet($o, $v): void { echo "set($o,$v) "; }
+    public function offsetUnset($o): void { echo "unset($o) "; }
+}
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $a = ['x' => 0];
+        $s = "str$round";
+        $a['key'] = $round;
+        $a['key'] = 1.5;
+        $a['name'] = $s;
+        $a['name'] = 'lit';
+        $a['name'] = $s;
+        $a['5'] = 'five';
+        $a['-3'] = 'minus';
+        $a['05'] = 'zero-five';
+        $a[''] = 'empty';
+        $a['flag'] = true;
+        $a['nul'] = null;
+        var_dump($a);
+        // Copy on write: the copy keeps its values.
+        $b = $a;
+        $a['key'] = 'changed';
+        echo $b['key'], ' ', $a['key'], "\n";
+        // A list gets a string key.
+        $l = [1, 2];
+        $l['k'] = 3;
+        echo json_encode($l), "\n";
+        // Growth past the table's room.
+        $g = [];
+        $g['a'] = 1; $g['b'] = 2; $g['c'] = 3; $g['d'] = 4; $g['e'] = 5; $g['f'] = 6; $g['g'] = 7; $g['h'] = 8; $g['i'] = 9;
+        echo implode(',', array_keys($g)), "\n";
+        // An element that is a reference is written through.
+        $t = 1;
+        $r = ['ref' => 0];
+        $r['ref'] = &$t;
+        $r['ref'] = 42;
+        echo $t, "\n";
+        // An element that is an object: its destructor runs at the write.
+        $o = ['obj' => new D($round)];
+        echo "before ";
+        $o['obj'] = 7;
+        echo "after\n";
+        // Through a reference to the array.
+        $arr = ['p' => 1];
+        $ra = &$arr;
+        $arr['p'] = 2;
+        $arr['q'] = 3;
+        echo json_encode($ra), "\n";
+        unset($ra);
+        // Containers that are no arrays.
+        $obj = new AA;
+        $obj['key'] = 5;
+        $str = 'abc';
+        try { $str['key'] = 'x'; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        $u = null;
+        $u['key'] = 1;
+        echo json_encode($u), "\n";
+        unset($nv);
+        $nv['key'] = 2;
+        echo json_encode($nv), "\n";
+        $fl = false;
+        $fl['key'] = 3;
+        echo json_encode($fl), "\n";
+        $int = 5;
+        try { $int['key'] = 4; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        // An undefined value variable.
+        $w = [];
+        $w['k'] = $undefined;
+        var_dump($w);
+    }
+}
+f();
+"#;
+
+const DIM_WRITE_OUT: &str = r#"array(9) {
+  ["x"]=>
+  int(0)
+  ["key"]=>
+  float(1.5)
+  ["name"]=>
+  string(4) "str0"
+  [5]=>
+  string(4) "five"
+  [-3]=>
+  string(5) "minus"
+  ["05"]=>
+  string(9) "zero-five"
+  [""]=>
+  string(5) "empty"
+  ["flag"]=>
+  bool(true)
+  ["nul"]=>
+  NULL
+}
+1.5 changed
+{"0":1,"1":2,"k":3}
+a,b,c,d,e,f,g,h,i
+42
+before d0 after
+{"p":2,"q":3}
+set(key,5) TypeError: Cannot access offset of type string on string
+{"key":1}
+{"key":2}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 67
+{"key":3}
+Error: Cannot use a scalar value as an array
+
+Warning: Undefined variable $undefined in t.php on line 73
+array(1) {
+  ["k"]=>
+  NULL
+}
+array(9) {
+  ["x"]=>
+  int(0)
+  ["key"]=>
+  float(1.5)
+  ["name"]=>
+  string(4) "str1"
+  [5]=>
+  string(4) "five"
+  [-3]=>
+  string(5) "minus"
+  ["05"]=>
+  string(9) "zero-five"
+  [""]=>
+  string(5) "empty"
+  ["flag"]=>
+  bool(true)
+  ["nul"]=>
+  NULL
+}
+1.5 changed
+{"0":1,"1":2,"k":3}
+a,b,c,d,e,f,g,h,i
+42
+before d1 after
+{"p":2,"q":3}
+set(key,5) TypeError: Cannot access offset of type string on string
+{"key":1}
+{"key":2}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 67
+{"key":3}
+Error: Cannot use a scalar value as an array
+
+Warning: Undefined variable $undefined in t.php on line 73
+array(1) {
+  ["k"]=>
+  NULL
+}
+array(9) {
+  ["x"]=>
+  int(0)
+  ["key"]=>
+  float(1.5)
+  ["name"]=>
+  string(4) "str2"
+  [5]=>
+  string(4) "five"
+  [-3]=>
+  string(5) "minus"
+  ["05"]=>
+  string(9) "zero-five"
+  [""]=>
+  string(5) "empty"
+  ["flag"]=>
+  bool(true)
+  ["nul"]=>
+  NULL
+}
+1.5 changed
+{"0":1,"1":2,"k":3}
+a,b,c,d,e,f,g,h,i
+42
+before d2 after
+{"p":2,"q":3}
+set(key,5) TypeError: Cannot access offset of type string on string
+{"key":1}
+{"key":2}
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 67
+{"key":3}
+Error: Cannot use a scalar value as an array
+
+Warning: Undefined variable $undefined in t.php on line 73
+array(1) {
+  ["k"]=>
+  NULL
+}
+"#;

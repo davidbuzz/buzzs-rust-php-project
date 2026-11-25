@@ -1526,12 +1526,106 @@ fn assign_str_lean(f: &mut Frame, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 unsafe fn assign_dim_key_any(frame: *mut Frame, inst: &Inst) -> bool {
+    // A literal key has a step of its own (the operand's kind alone is
+    // looked at, before anything is touched).
+    if dim_kind(inst) == KIND_LIT {
+        // SAFETY: the caller's contract, passed on.
+        return unsafe { assign_dim_lit(frame, inst) };
+    }
+    // SAFETY: the caller's contract, passed on.
+    unsafe { assign_dim_key_general(frame, inst) }
+}
+
+/// [`assign_dim_key_any`]'s way on: a write with a string offset
+/// ([`assign_key`]), else the general write ([`assign_dim`]).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn assign_dim_key_general(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_key(unsafe { &mut *frame }, inst).is_some() {
         return true;
     }
     // SAFETY: as above; the path's borrow of the frame has ended.
     unsafe { assign_dim(frame, inst) }
+}
+
+/// `$cv['key'] = value` with a string literal for the key
+/// ([`assign_lit_lean`]), else [`assign_dim_key_general`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn assign_dim_lit(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if assign_lit_lean(unsafe { &mut *frame }, inst) {
+        return true;
+    }
+    // SAFETY: the caller's contract, passed on; the lean path's borrow of
+    // the frame has ended.
+    unsafe { assign_dim_key_general(frame, inst) }
+}
+
+/// `$cv['key'] = value` as `ZEND_ASSIGN_DIM` with a `CONST` string offset
+/// runs it: one lookup with the key's stored hash (`zend_hash_lookup`)
+/// and a copy of the value. Taken when the key is a string literal that
+/// is surely no integer in digits, the value a scalar or a string in a
+/// variable or a literal, the table the variable holds directly and
+/// alone, a hash, and the element a scalar or a string written over (an
+/// old string released: no destructor can run) or a new bucket in a table
+/// with room (it gets a handle of the literal, as `zend_hash_add_new`
+/// does). The general path ([`assign_key`]) took a handle of the key
+/// around the write, looked at its bytes for an integer every time, and
+/// probed through `HashTable::set_sym_plain`'s call. `false`, nothing
+/// changed, for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `assign_dim_lit`
+fn assign_lit_lean(f: &mut Frame, inst: &Inst) -> bool {
+    if f.symtab_attached {
+        return false;
+    }
+    let Some(Value::Str(key)) = f.code.literals.get(inst.b as usize) else {
+        return false;
+    };
+    if !ArrayKey::surely_str(key.as_bytes()) {
+        return false;
+    }
+    let v = match val_kind(inst) {
+        KIND_CV => f.cvs.get(inst.p).and_then(CvSlot::get),
+        KIND_LIT => f.code.literals.get(inst.p),
+        _ => return false,
+    };
+    let v = match v {
+        Some(Value::Int(i)) => Value::Int(*i),
+        Some(Value::Float(x)) => Value::Float(*x),
+        Some(Value::Bool(b)) => Value::Bool(*b),
+        Some(Value::Null) => Value::Null,
+        // (On a miss below its handle goes with `v`: no destructor.)
+        Some(Value::Str(s)) => Value::Str(s.clone()),
+        _ => return false,
+    };
+    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(inst.a as usize).map(CvSlot::as_mut) else {
+        return false;
+    };
+    let Some(table) = arr.get_mut_unshared() else {
+        return false;
+    };
+    let h = key.hash_now();
+    if let Some(el) = table.lean_find_mut(key, h) {
+        if !el.is_plain() {
+            return false;
+        }
+        match std::mem::replace(el, v) {
+            // An old string by its own drop (one handle fewer, or freed).
+            Value::Str(s) => drop(s),
+            // A scalar owns nothing.
+            old => std::mem::forget(old),
+        }
+        return true;
+    }
+    // A new key: the bucket gets a handle of the literal.
+    table.lean_append(key.clone(), h, v).is_ok()
 }
 
 /// `$cv[$key] = $v` with a string offset, as [`assign_int_wide`]: the key
