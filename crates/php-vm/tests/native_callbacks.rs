@@ -818,3 +818,38 @@ Cannot use "::class" on null App\U App\T
 "#
     );
 }
+
+/// `(string) $obj` on the tape (Lodata's `$this->array[(string) $key] =
+/// $value`): `__toString()` called from the tape's decline step, its
+/// exception and its line, an object without one, nested casts, and
+/// `__toString()` bodies that are one property read and their `return`
+/// entering the tape. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn object_string_casts() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class N { public function __construct(private $n) {} public function __toString(): string { return $this->n; } }
+class Bad { public function __toString(): string { throw new \RuntimeException('bad toString'); } }
+class Plain {}
+class Inner { public function __toString(): string { return 'in' . (string) new N('ner'); } }
+function run() {
+  $arr = [];
+  foreach ([new N('a'), new N('b'), 'str', 5, 1.5, true, null, new Inner] as $k) { $arr[(string) $k] = 1; }
+  echo implode(',', array_keys($arr)), "\n";
+  for ($i = 0; $i < 3; $i++) {
+    $x = new N("v$i"); $s = (string) $x; echo $s, ' ', strlen((string) $x), ' ';
+    try { $y = (string) new Bad; } catch (\RuntimeException $e) { echo $e->getMessage(), '@', $e->getLine(), ' '; }
+    try { $y = (string) new Plain; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $o = new N('t'); $t = (string) $o . '!'; echo $t, "\n";
+  }
+}
+run();
+"#),
+        r#"a,b,str,5,1.5,1,,inner
+v0 2 bad toString@4 Object of class App\Plain could not be converted to string t!
+v1 2 bad toString@4 Object of class App\Plain could not be converted to string t!
+v2 2 bad toString@4 Object of class App\Plain could not be converted to string t!
+"#
+    );
+}

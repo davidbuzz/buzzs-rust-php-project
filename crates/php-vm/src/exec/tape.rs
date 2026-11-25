@@ -1889,8 +1889,14 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     for i in 0..code.ops.len() {
         let follows = likely_next(code, i);
         tape[i].ext = !hot::is_core(&code.ops[i]);
+        // A `Return` after it counts as tape work too: the tape makes the
+        // return itself (`Vm::return_simple`), or, at the base of a nested
+        // execution, `Vm::run_base_on_tape` makes it right after the tape
+        // (`__toString()`'s `return $this->name;`, a property read and the
+        // return, called from native code).
         tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
-            && tape.get(follows).is_some_and(|next| next.op != TOp::Exit);
+            && (tape.get(follows).is_some_and(|next| next.op != TOp::Exit)
+                || matches!(code.ops.get(follows), Some(Op::Return { .. })));
     }
     tape.into_boxed_slice()
 }
@@ -2667,6 +2673,47 @@ fn declined_vm_step(
             at + 1
         } else {
             DECLINED
+        };
+    }
+    // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
+    // `$this->array[(string) $key] = $value`): `Vm::run`'s arm, here.
+    if let Some(&Op::Cast {
+        kind: crate::opcode::CastKind::String,
+        a,
+        dst,
+    }) = ops.get(at)
+    {
+        let is_object = {
+            let Some(f) = vm.frames.last() else {
+                return DECLINED;
+            };
+            !f.symtab_attached
+                && match a {
+                    Operand::Cv(cv) => matches!(
+                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        Some(Value::Object(_))
+                    ),
+                    Operand::Tmp(t) => matches!(f.tmps.get(t as usize), Some(Value::Object(_))),
+                    _ => false,
+                }
+        };
+        if !is_object {
+            return DECLINED;
+        }
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        let r = vm
+            .read(a)
+            .and_then(|x| vm.cast(crate::opcode::CastKind::String, a, x));
+        return match r {
+            Ok(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
         };
     }
     let cv = match ops.get(at) {

@@ -3289,7 +3289,7 @@ impl Vm {
         }
     }
 
-    fn cast(&mut self, kind: CastKind, source: Operand, raw: Value) -> VmResult<Value> {
+    pub(crate) fn cast(&mut self, kind: CastKind, source: Operand, raw: Value) -> VmResult<Value> {
         let (x, reference) = match raw {
             Value::Reference(r) => (r.get(), Some(r)),
             other => (other, None),
