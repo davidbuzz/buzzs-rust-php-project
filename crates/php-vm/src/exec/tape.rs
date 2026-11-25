@@ -2902,7 +2902,12 @@ fn send_and_enter(
     ops: &[Op],
     at: usize,
 ) -> usize {
-    let next = send_following(vm, &mut call, ops, at);
+    // A builtin's arguments in one pass (`calls::send_native_run`).
+    let next = if call.is_native() {
+        calls::send_native_run(vm, &mut call, ops, at + 1)
+    } else {
+        send_following(vm, &mut call, ops, at)
+    };
     enter_after_sends(vm, prep, call, ops, next)
 }
 

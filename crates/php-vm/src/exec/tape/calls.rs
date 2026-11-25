@@ -2190,6 +2190,71 @@ fn send_in(
     true
 }
 
+/// The run of `Send`s from `ops[start]` on, for a prepared builtin call
+/// (`ZEND_SEND_VAL` / `ZEND_SEND_VAR` into the call frame's argument
+/// slots): the caller and the call frame are looked up once and each
+/// argument is read as [`send`] reads it ([`native_arg`]) and pushed,
+/// where `send` per argument split the frame stack, tested the pending
+/// calls and dispatched on the callee again (~68 instructions an
+/// argument). Where the run meets a send it does not take (an argument
+/// past the declared ones, a by-reference one, an undefined variable, a
+/// place the specialised fetch does not read), the rest goes through
+/// `send` / [`send_ref`] one by one, as before. Returns the op after the
+/// last one passed.
+#[inline(never)]
+pub(super) fn send_native_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], start: usize) -> usize {
+    let mut next = start;
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    if let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) {
+        if matches!(prep.callee, Callee::Native(..)) && caller.calls.len() == prep.calls_len {
+            while let Some(Op::Send { src }) = ops.get(next) {
+                if prep.n >= prep.limit {
+                    break;
+                }
+                let Some(v) = native_arg(caller, src) else {
+                    break;
+                };
+                frame.args.push(Some(v));
+                prep.n += 1;
+                next += 1;
+            }
+        }
+    }
+    while let Some(Op::Send { src }) = ops.get(next) {
+        if !send(vm, prep, src) && !send_ref(vm, prep, src) {
+            break;
+        }
+        next += 1;
+    }
+    next
+}
+
+/// [`send`]'s read of argument `src` of a builtin call from `caller`: a
+/// literal copied, a temporary moved out (dereferenced), a variable or a
+/// place copied. `None`, having changed nothing, where `send` declines.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once, in `send_native_run`'s loop
+fn native_arg(caller: &mut crate::vm::Frame, src: &ArgSrc) -> Option<Value> {
+    match src {
+        ArgSrc::Val(Operand::Lit(i)) => caller.code.literals.get(*i as usize).map(clone_value),
+        ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
+            let slot = caller.tmps.get_mut(*t as usize)?;
+            Some(match std::mem::take(slot) {
+                Value::Reference(r) => r.get(),
+                v => v,
+            })
+        }
+        ArgSrc::Val(Operand::Cv(cv)) => cv_value(caller, *cv),
+        ArgSrc::Place(pid) => match place_cv(&caller.code, *pid) {
+            Some(cv) => cv_value(caller, cv),
+            None => caller.send_place_hit(*pid),
+        },
+        ArgSrc::TempPlace(pid) => caller.send_place_hit(*pid),
+        _ => None,
+    }
+}
+
 /// The value of place `pid` of `caller` (a property, an array element, a
 /// chain of them, or an element of a temporary) sent by value as argument
 /// `n` of the prepared call to `callee`, whose readied frame is `frame`:
