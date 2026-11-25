@@ -318,9 +318,27 @@ fn is_countable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }))
 }
 
+/// Whether `v` is the name of a defined function as the function table
+/// keys it (lower case, no leading `\`): what `is_callable('strlen')`
+/// mostly gets. `zend_is_callable` answers such a name from the table
+/// (`zend_hash_find_ptr(EG(function_table), lmname)`); here that is one
+/// lookup of the string's own bytes, without the lower-cased copy and the
+/// call a full resolution builds and drops (~250 instructions). Any other
+/// string is resolved in full.
+fn is_defined_function_name(vm: &Vm, v: &Value) -> bool {
+    let Value::Str(s) = v else {
+        return false;
+    };
+    let name = s.as_bytes();
+    !name.iter().any(u8::is_ascii_uppercase) && vm.functions.contains_key(name)
+}
+
 fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
     let syntax_only = b(a, 1);
+    if !syntax_only && !a.has(2) && is_defined_function_name(vm, &v) {
+        return Ok(Value::Bool(true));
+    }
     let r = if syntax_only {
         match &v {
             Value::Str(_) => true,
@@ -469,4 +487,50 @@ fn raise_after_dump(vm: &mut Vm) -> VmResult<()> {
     let deferred = dump::take_deferred_throw();
     vm.take_pending_throw()?;
     deferred
+}
+
+#[cfg(test)]
+mod is_callable_tests {
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Names the function table answers directly and those resolved in
+    /// full agree with `/usr/bin/php8.5 -n`.
+    #[test]
+    fn is_callable_of_function_names() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            br"<?php
+class C { static function m() {} }
+function myf() {}
+foreach (['strlen', 'STRLEN', '\strlen', 'nope', 'C::m', 'c::M', 'myf', 'MyF', ''] as $f) {
+    echo $f, '=', var_export(is_callable($f), true), ' ';
+}
+var_dump(is_callable('strlen', false, $n), $n);
+",
+            "is_callable.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "strlen=true STRLEN=true \\strlen=true nope=false C::m=true c::M=true myf=true MyF=true =false bool(true)\nstring(6) \"strlen\"\n"
+        );
+    }
 }
