@@ -1711,3 +1711,28 @@ fn limit_errors_report_what_php_src_tried_to_allocate() {
     drop(fill);
     b.request_end();
 }
+
+#[test]
+fn charge_is_zend_size_at_the_size_the_heap_serves() {
+    use crate::heap::{charge, size_info_bin, size_info_charge, small_layout_info};
+    for size in 1..=2 * PAGE_SIZE {
+        for align in [1, 2, 4, 8] {
+            assert_eq!(charge(size, align), zend_size(size), "{size}/{align}");
+        }
+        // 16-aligned requests are served (and charged) at their size
+        // rounded up to 16; over-aligned ones come from the inner
+        // allocator and are charged their size's class.
+        assert_eq!(charge(size, 16), zend_size(size.next_multiple_of(16)));
+        assert_eq!(charge(size, 64), zend_size(size));
+        let layout = Layout::from_size_align(size, 8).expect("layout");
+        match small_layout_info(layout) {
+            Some(info) => {
+                assert_eq!(Some(size_info_bin(info)), crate::heap::small_bin(layout));
+                assert_eq!(size_info_charge(info), zend_size(size));
+            }
+            None => assert!(size > MAX_SMALL_SIZE),
+        }
+    }
+    assert_eq!(charge(24, 16), 32);
+    assert_eq!(charge(5 * M + 25, 16), 5_246_976);
+}

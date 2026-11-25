@@ -139,20 +139,63 @@ pub const fn small_size_to_bin(size: usize) -> usize {
     }
 }
 
-/// [`small_size_to_bin`] for every multiple of 8 up to [`MAX_SMALL_SIZE`],
-/// indexed by `size.div_ceil(8)`: all bin sizes are multiples of 8, so a
-/// size and its next multiple of 8 share a bin.
-// Bins are below 30: the narrowing cannot truncate.
-#[allow(clippy::cast_possible_truncation)]
-static SIZE_TO_BIN: [u8; MAX_SMALL_SIZE / 8 + 1] = {
-    let mut t = [0u8; MAX_SMALL_SIZE / 8 + 1];
+/// For every multiple of 8 up to [`MAX_SMALL_SIZE`], indexed by
+/// `size.div_ceil(8)`: [`small_size_to_bin`] in the low 8 bits and that
+/// bin's element size (`bin_data_size[]`, `Zend/zend_alloc.c` lines
+/// 380-383) above them, so that one load gives a request both the bin
+/// that serves it and the bytes php-src charges for it. All bin sizes are
+/// multiples of 8, so a size and its next multiple of 8 share a bin.
+// Bins are below 30 and bin sizes below 2^16: the narrowing cannot
+// truncate (and `u32::from` is not usable in a constant).
+#[allow(clippy::cast_possible_truncation, clippy::cast_lossless)]
+static SIZE_INFO: [u32; MAX_SMALL_SIZE / 8 + 1] = {
+    let mut t = [0u32; MAX_SMALL_SIZE / 8 + 1];
     let mut i = 0;
     while i < t.len() {
-        t[i] = small_size_to_bin(i * 8) as u8;
+        let bin = small_size_to_bin(i * 8);
+        t[i] = bin as u32 | (BIN_SIZE[bin] as u32) << INFO_SIZE_SHIFT;
         i += 1;
     }
     t
 };
+
+/// Where the element size sits in a [`SIZE_INFO`] entry.
+const INFO_SIZE_SHIFT: u32 = 8;
+
+/// The [`SIZE_INFO`] entry of a request of `size` bytes aligned to
+/// `align` (a power of two), or `None` when the heap does not serve it
+/// (larger than [`MAX_SMALL_SIZE`] once rounded up to its alignment, or
+/// aligned to more than [`MAX_SMALL_ALIGN`]).
+#[inline]
+fn small_info(size: usize, align: usize) -> Option<u32> {
+    // A `Layout`'s size rounded up to its alignment does not overflow
+    // `isize`, so this cannot wrap.
+    let size = (size + (align - 1)) & !(align - 1);
+    if align <= MAX_SMALL_ALIGN && size <= MAX_SMALL_SIZE {
+        Some(SIZE_INFO[(size + 7) >> 3])
+    } else {
+        None
+    }
+}
+
+/// The bin of a [`SIZE_INFO`] entry.
+#[inline]
+pub fn size_info_bin(info: u32) -> usize {
+    (info & 0xff) as usize
+}
+
+/// The charged bytes ([`charge`]) of a [`SIZE_INFO`] entry.
+#[inline]
+pub fn size_info_charge(info: u32) -> usize {
+    (info >> INFO_SIZE_SHIFT) as usize
+}
+
+/// The [`SIZE_INFO`] entry of a layout the heap serves: its bin
+/// ([`size_info_bin`]) and charge ([`size_info_charge`]) in one load.
+#[inline]
+pub fn small_layout_info(layout: Layout) -> Option<u32> {
+    small_info(layout.size(), layout.align())
+}
 
 /// The bin serving `layout`, or `None` when the heap does not serve it
 /// (larger than [`MAX_SMALL_SIZE`] once rounded up to its alignment, or
@@ -162,37 +205,16 @@ static SIZE_TO_BIN: [u8; MAX_SMALL_SIZE / 8 + 1] = {
 /// or reallocated is the one it was allocated from.
 #[inline]
 pub fn small_bin(layout: Layout) -> Option<usize> {
-    let align = layout.align();
-    // `Layout` guarantees that its size rounded up to its alignment does
-    // not overflow `isize`, so this cannot wrap.
-    let size = (layout.size() + (align - 1)) & !(align - 1);
-    if align <= MAX_SMALL_ALIGN && size <= MAX_SMALL_SIZE {
-        Some(usize::from(SIZE_TO_BIN[(size + 7) >> 3]))
-    } else {
-        None
-    }
+    small_layout_info(layout).map(size_info_bin)
 }
-
-/// The element size of the bin serving a request of `i * 8` bytes, for
-/// every `i` up to `MAX_SMALL_SIZE / 8`: `bin_data_size[zend_mm_small_size_to_bin(size)]`
-/// (`Zend/zend_alloc.c`, lines 380-383 and 1451-1480). Bin sizes are
-/// multiples of 8, so a size and its next multiple of 8 share a bin.
-static SIZE_TO_CLASS: [u16; MAX_SMALL_SIZE / 8 + 1] = {
-    let mut t = [0u16; MAX_SMALL_SIZE / 8 + 1];
-    let mut i = 0;
-    while i < t.len() {
-        t[i] = BIN_SIZE[small_size_to_bin(i * 8)];
-        i += 1;
-    }
-    t
-};
 
 /// The bytes php-src's allocator charges to `heap->size` (what
 /// `memory_get_usage()` reports) for an `emalloc(size)`:
 ///
 /// * up to `ZEND_MM_MAX_SMALL_SIZE` (3072), the element size of the
 ///   request's bin (`zend_mm_alloc_small`: `heap->size +=
-///   bin_data_size[bin_num]`);
+///   bin_data_size[bin_num]`, the bin from `zend_mm_small_size_to_bin`,
+///   lines 1451-1480);
 /// * up to `ZEND_MM_MAX_LARGE_SIZE`, whole 4 KiB pages
 ///   (`zend_mm_alloc_large_ex`: `pages_count * ZEND_MM_PAGE_SIZE`);
 /// * above, the request rounded up to `REAL_PAGE_SIZE`, also 4 KiB here
@@ -210,9 +232,25 @@ static SIZE_TO_CLASS: [u16; MAX_SMALL_SIZE / 8 + 1] = {
 #[must_use]
 pub fn zend_size(size: usize) -> usize {
     if size <= MAX_SMALL_SIZE {
-        usize::from(SIZE_TO_CLASS[(size + 7) >> 3])
+        size_info_charge(SIZE_INFO[(size + 7) >> 3])
     } else {
         (size + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1)
+    }
+}
+
+/// The bytes a block of `size` bytes aligned to `align` (a `Layout`'s)
+/// is charged: [`zend_size`] of the size the heap serves it at (rounded
+/// up to its alignment) when the heap serves it, of `size` otherwise.
+/// The same for requests aligned to 8 bytes or less, which php-src's
+/// are; a pure function of the layout, so the bytes a block is charged
+/// when allocated are the bytes released when it is freed, and the fast
+/// paths read them from the entry that gives them the bin.
+#[inline]
+#[must_use]
+pub fn charge(size: usize, align: usize) -> usize {
+    match small_info(size, align) {
+        Some(info) => size_info_charge(info),
+        None => zend_size(size),
     }
 }
 
