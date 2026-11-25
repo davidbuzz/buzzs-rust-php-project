@@ -369,3 +369,66 @@ for ($i = 0; $i < 3; $i++) { eval('$x = $i * 2; echo bound(), reader(), "\n";');
 "#
     );
 }
+
+/// The `$this` and closure handles of prepared method and closure calls
+/// released at the return: the last handle of a temporary object (`(new
+/// D)->m()`) and of a closure made in the call's expression destroys the
+/// object at the return, before the result is used; a handle shared with
+/// a variable leaves it alive (`zend_leave_helper`'s `OBJ_RELEASE` of
+/// `This` and of the closure).
+#[test]
+fn this_and_closure_handles_released_at_return() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "destruct {$this->n}\n"; }
+  function m($a) { return $a . $this->n; }
+  function mk() { return function ($a) { return $a . $this->n; }; } }
+function f() {
+    for ($i = 0; $i < 3; $i++) {
+        echo (new D("t$i"))->m('m'), "\n";
+        $o = new D("v$i");
+        echo $o->m('k'), "\n";
+        $fn = $o->mk();
+        unset($o);
+        echo $fn('c'), "\n";
+        echo "drop fn\n";
+        $fn = null;
+        $g = function ($a) { return "plain $a"; };
+        echo $g($i), "\n";
+        echo (new D("w$i"))->mk()('x'), "\n";
+    }
+}
+f();
+echo "end\n";
+"#),
+        r#"destruct t0
+mt0
+kv0
+cv0
+drop fn
+destruct v0
+plain 0
+destruct w0
+xw0
+destruct t1
+mt1
+kv1
+cv1
+drop fn
+destruct v1
+plain 1
+destruct w1
+xw1
+destruct t2
+mt2
+kv2
+cv2
+drop fn
+destruct v2
+plain 2
+destruct w2
+xw2
+end
+"#
+    );
+}

@@ -1568,6 +1568,21 @@ fn near_limit(uf: &UserFunction) -> Option<usize> {
     Some(most.min(MAX_ARGS).min(uf.code.cv_names.len()))
 }
 
+/// Stores `v` into a handle field (`$this`, a scope, the closure) of the
+/// pooled frame a call is being readied in: the field is empty there
+/// (`Frame::clear_for_reuse`), so the old value is tested, not dropped
+/// blind. A plain assignment called `Option<Obj>`'s out-of-line drop glue
+/// on the `None` it overwrote (~8 instructions and the call, twice per
+/// closure call).
+#[inline(always)]
+#[allow(clippy::inline_always)] // up to four per prepared call
+fn fill<T>(slot: &mut Option<T>, v: Option<T>) {
+    debug_assert!(slot.is_none());
+    if let Some(old) = std::mem::replace(slot, v) {
+        drop(old);
+    }
+}
+
 /// Readies the pooled frame `frame` for a call of `uf`, as
 /// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
@@ -1667,9 +1682,9 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
         _ => (Some(o.clone()), None),
     };
     ready_frame(frame, &uf);
-    frame.this = this;
-    frame.scope = scope;
-    frame.called = Some(called_class);
+    fill(&mut frame.this, this);
+    fill(&mut frame.scope, scope);
+    fill(&mut frame.called, Some(called_class));
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
@@ -1716,8 +1731,8 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     };
     let limit = prepares(&uf)?;
     ready_frame(frame, &uf);
-    frame.scope = scope;
-    frame.called = called_class;
+    fill(&mut frame.scope, scope);
+    fill(&mut frame.called, called_class);
     Some(Prepared {
         limit,
         callee: Callee::User(uf),
@@ -1853,9 +1868,9 @@ pub(super) fn prepare_relative_static(
         (Some(this.clone()), Rc::clone(late_bound))
     };
     ready_frame(frame, &uf);
-    frame.this = this;
-    frame.scope = Some(scope);
-    frame.called = Some(late_bound);
+    fill(&mut frame.this, this);
+    fill(&mut frame.scope, Some(scope));
+    fill(&mut frame.called, Some(late_bound));
     Some(Prepared {
         limit,
         callee: Callee::User(uf),
@@ -1911,10 +1926,13 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     let limit = prepares(uf)?;
     let uf = Rc::clone(uf);
     ready_frame(frame, &uf);
-    frame.this = d.this.clone();
-    frame.scope = d.scope.clone();
-    frame.called = d.called.clone();
-    frame.closure = if d.fake { None } else { Some(o.clone()) };
+    fill(&mut frame.this, d.this.clone());
+    fill(&mut frame.scope, d.scope.clone());
+    fill(&mut frame.called, d.called.clone());
+    fill(
+        &mut frame.closure,
+        if d.fake { None } else { Some(o.clone()) },
+    );
     drop(internal);
     Some(Prepared {
         limit,
@@ -1991,9 +2009,9 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     };
     let o = crate::props::new_for_ctor(&cls)?;
     ready_frame(frame, &uf);
-    frame.this = Some(o.clone());
-    frame.scope = Some(scope);
-    frame.called = Some(cls);
+    fill(&mut frame.this, Some(o.clone()));
+    fill(&mut frame.scope, Some(scope));
+    fill(&mut frame.called, Some(cls));
     crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
         limit: uf.params.len().min(MAX_ARGS),

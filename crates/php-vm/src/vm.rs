@@ -1271,6 +1271,34 @@ fn clear_opt<T>(slot: &mut Option<T>) {
     }
 }
 
+/// Empties an object-handle field (`$this`, the closure) of a frame
+/// being recycled: a handle that is not the object's last is released
+/// inline (`GC_DELREF`), without the call into `Option<Obj>`'s
+/// out-of-line drop glue (~18 instructions a method or closure return);
+/// the last one, whose release may run a destructor, is left to that glue
+/// in place, as [`clear_opt`] leaves it (the field still holds the handle
+/// while it is released).
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice per direct return
+fn release_obj_field(slot: &mut Option<Obj>) {
+    let last = match slot.as_ref() {
+        None => return,
+        Some(o) => o.refcount() <= 1,
+    };
+    if last {
+        release_last_obj_field(slot);
+    } else if let Some(o) = slot.take() {
+        drop(o);
+    }
+}
+
+/// [`release_obj_field`] of an object's last handle, out of line.
+#[cold]
+#[inline(never)]
+fn release_last_obj_field(slot: &mut Option<Obj>) {
+    *slot = None;
+}
+
 /// Releases a value taken out of a compiled variable of a frame being
 /// released (`i_free_compiled_variables`): like [`release_slot`], and a
 /// string, or a handle of an object, array or reference that is not the
@@ -1766,8 +1794,8 @@ impl Frame {
         }
         // A method's `$this` and scopes, a closure, in
         // `clear_rest_for_reuse`'s order.
-        clear_opt(&mut self.this);
-        clear_opt(&mut self.closure);
+        release_obj_field(&mut self.this);
+        release_obj_field(&mut self.closure);
         self.ip = 0;
         clear_opt(&mut self.scope);
         clear_opt(&mut self.called);
