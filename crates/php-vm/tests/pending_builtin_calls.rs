@@ -167,3 +167,31 @@ t();
         "int(2)\nint(12)\nstring(2) \"ab\"\nint(2)\nint(34)\nstring(2) \"cd\"\n"
     );
 }
+
+/// Spread lists into a builtin (`ZEND_SEND_UNPACK`): the call's argument
+/// vector is the arguments, references in the list are sent as their
+/// values, more than the inline buffer's six arguments are taken too, and
+/// a wrong type is still the `TypeError` of the general call.
+#[test]
+fn spread_lists_into_builtins() {
+    let (status, out) = run(r#"<?php
+function t() {
+    $lists = [[1, 2], [3], [], [4, 5]];
+    echo implode(',', array_merge(...$lists)), "\n";
+    $x = [9];
+    $refs = [&$x, [8]];
+    echo implode(',', array_merge(...$refs)), "\n";
+    $parts = ['a', 'b'];
+    echo sprintf('%s-%s', ...$parts), "\n";
+    $many = array_fill(0, 9, [1]);
+    echo count(array_merge(...$many)), "\n";
+    try { array_merge(...[[1], 2]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+t();
+"#);
+    assert_eq!(status, 0, "{out}");
+    assert_eq!(
+        out,
+        "1,2,3,4,5\n9,8\na-b\n9\narray_merge(): Argument #2 must be of type array, int given\n"
+    );
+}

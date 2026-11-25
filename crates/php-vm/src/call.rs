@@ -3172,7 +3172,7 @@ impl Vm {
     /// arguments are all by value and of the declared types as they are:
     /// the call the tape's prepared native call makes
     /// (`exec::tape::calls::call_native`), from the pending call's inline
-    /// arguments. A call whose arguments include another call's result, an
+    /// arguments or its argument vector (a spread list). A call whose arguments include another call's result, an
     /// array or closure literal, `$this` or a static property is not
     /// prepared by the tape (`stays_prepared`) and comes here; the general
     /// [`Vm::call_builtin_impl`] it took instead moves the call twice,
@@ -3205,8 +3205,7 @@ impl Vm {
         call: &mut PendingCall,
         dst: Option<u32>,
     ) -> Option<VmResult<Value>> {
-        if !call.args.is_empty()
-            || call.has_named
+        if call.has_named
             || call.dynamic
             || call.is_ctor
             || !call.named.is_empty()
@@ -3219,7 +3218,17 @@ impl Vm {
         {
             return None;
         }
-        let n = usize::from(call.inline_count);
+        // The arguments are in the inline buffer, or all in the argument
+        // vector (`ZEND_SEND_UNPACK` of a list: `array_merge(...$lists)`).
+        let from_vec = call.inline_count == 0 && !call.args.is_empty();
+        if call.inline_count > 0 && !call.args.is_empty() {
+            return None;
+        }
+        let n = if from_vec {
+            call.args.len()
+        } else {
+            usize::from(call.inline_count)
+        };
         let (kind, upto) = b.plain_call_upto();
         if kind != crate::func::PlainCall::Named {
             return None;
@@ -3230,7 +3239,11 @@ impl Vm {
         if n < sig.required as usize || (!variadic && n > nparams) {
             return None;
         }
-        let sent = call.inline_args.get(..n)?;
+        let sent: &[Option<Value>] = if from_vec {
+            &call.args
+        } else {
+            call.inline_args.get(..n)?
+        };
         let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
         if class != 0 && crate::special::frameless_args(class, sent) {
             return None;
@@ -3265,14 +3278,24 @@ impl Vm {
         let mut values = self.call_bufs.values.pop().unwrap_or_default();
         let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
         let live = self.frames.live;
-        {
+        let spare = {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
             if !frame.args.is_empty() {
                 frame.args.clear();
             }
-            for arg in call.inline_args.iter_mut().take(n) {
-                frame.args.push(arg.take());
-            }
+            // The frame takes an argument vector as it is (as
+            // `call_builtin_impl` does), and the inline arguments one by one.
+            let spare = if from_vec {
+                Some(std::mem::replace(
+                    &mut frame.args,
+                    std::mem::take(&mut call.args),
+                ))
+            } else {
+                for arg in call.inline_args.iter_mut().take(n) {
+                    frame.args.push(arg.take());
+                }
+                None
+            };
             // The handler's copies (php-src's handler reads them in the
             // frame).
             values.extend(frame.args.iter().map(|arg| match arg {
@@ -3290,8 +3313,12 @@ impl Vm {
             set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
             set_opt(&mut frame.builtin_name, Some(b.name.clone()));
             frame.observer_hidden = false;
-        }
+            spare
+        };
         call.inline_count = 0;
+        if let Some(buf) = spare.filter(|v| v.capacity() > 0) {
+            self.put_arg_vec(buf);
+        }
         passed.resize(values.len(), true);
         // The declared defaults of the omitted trailing parameters, not
         // marked as passed.
