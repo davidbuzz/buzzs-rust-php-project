@@ -3087,7 +3087,7 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
     }
     let at = prep.calls_len.min(caller.calls.len());
     caller.calls.insert(at, call);
-    frame.clear_for_reuse(&vm.empty_code);
+    frame.release_unentered(&vm.empty_code);
 }
 
 // ----------------------------------------------------------------------

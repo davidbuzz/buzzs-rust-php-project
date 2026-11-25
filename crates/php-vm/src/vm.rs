@@ -1537,6 +1537,49 @@ impl Frame {
         self.clear_rest_for_reuse(empty_code, shared);
     }
 
+    /// [`Frame::clear_for_reuse`] of a frame a prepared call readied and
+    /// never entered (`exec::tape::calls::materialize`, the call turned
+    /// back into a pending one, which took the arguments sent into its
+    /// compiled variables and the `$this`, scopes and closure readied
+    /// with it): such a frame holds nothing, and when it still holds the
+    /// function as a released frame keeps it (`keeps_function`), it is in
+    /// exactly the state [`Frame::release_direct`] leaves, so it is marked
+    /// so ([`Frame::released_direct`]) and the next call of that function
+    /// in this slot readies nothing. The fields readying and sending could
+    /// have set are tested; anything else (a frame that was entered, a
+    /// function not kept) takes the full release. The full release of
+    /// such an empty frame walked every slot and field again (~100
+    /// instructions for each call whose argument started another call:
+    /// `f(g($x))`).
+    #[inline]
+    pub(crate) fn release_unentered(&mut self, empty_code: &Rc<OpArray>) {
+        if self.kind == FrameKind::Function
+            && !self.direct
+            && self.ip == 0
+            && !self.symtab_attached
+            && self.this.is_none()
+            && self.closure.is_none()
+            && self.scope.is_none()
+            && self.called.is_none()
+            && self.args.is_empty()
+            && self.named.is_empty()
+            && self.calls.is_empty()
+            && self.silence_saved.is_empty()
+            && matches!(self.ret, RetTarget::Discard)
+            && !self.is_ctor
+            && self.keeps_function()
+        {
+            debug_assert!(self.slots_released());
+            debug_assert!(self
+                .ufunc
+                .as_ref()
+                .is_some_and(|uf| self.is_released_for(uf)));
+            self.released_direct = true;
+            return;
+        }
+        self.clear_for_reuse(empty_code);
+    }
+
     /// [`Frame::clear_for_reuse`] of a builtin frame (the one
     /// [`FrameStack::push_builtin`] readied), whose variable store is
     /// either its own (kept from a pooled user frame, and emptied here) or
@@ -3343,6 +3386,48 @@ mod tests {
         assert!(f.release_direct());
         f.reinit_for_builtin(&empty);
         assert!(!f.released_direct);
+    }
+
+    /// A frame a prepared call readied and never entered (the call turned
+    /// back into a pending one) is marked released for that function when
+    /// it keeps the function; with anything the readying left behind, or a
+    /// function nothing else holds, it is released in full.
+    #[test]
+    fn release_unentered_marks_a_readied_frame_released_for_its_function() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a"), ZStr::from("b")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let uf = user_function(code.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        // An argument sent, then taken back by the turned-back call.
+        f.cvs[0].set(Some(Value::Int(1)));
+        drop(f.cvs[0].as_mut().take());
+        f.release_unentered(&empty);
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        // A frame that went further than readying (a result target set):
+        // the full release.
+        f.reinit_same_call(&code, FrameKind::Function);
+        f.ret = super::RetTarget::Tmp(1);
+        let s = ZStr::from("held");
+        f.tmps[1] = Value::Str(s.clone());
+        f.release_unentered(&empty);
+        assert!(!f.released_direct);
+        assert_eq!(f.ret, super::RetTarget::Discard);
+        assert_eq!(s.refcount(), 1);
+        // A function only the frame holds is let go.
+        f.reinit_same_call(&code, FrameKind::Function);
+        drop(uf);
+        f.release_unentered(&empty);
+        assert!(!f.released_direct);
+        assert!(f.ufunc.is_none() && f.func.is_none());
+        assert!(Rc::ptr_eq(&f.code, &empty));
     }
 
     #[test]
