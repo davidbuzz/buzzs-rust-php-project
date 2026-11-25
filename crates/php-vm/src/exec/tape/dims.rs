@@ -581,6 +581,10 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             let (e, b) = match key {
                 None => (ADD_NEXT, 0),
                 Some(Operand::Lit(l)) => match code.literals.get(l as usize)? {
+                    // A key as it is: no integer in digits.
+                    Value::Str(s) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_)) => {
+                        (ADD_STR, l)
+                    }
                     Value::Str(_) | Value::Int(_) => (ADD_KEYED, l),
                     _ => return None,
                 },
@@ -2120,8 +2124,13 @@ const KEYS_OTHER: u8 = 2;
 /// The low half of [`Inst::e`] of a [`TOp::ArrayAddT`]: the element takes
 /// the next index.
 const ADD_NEXT: u8 = 0;
-/// The element has a string or int literal key.
+/// The element has an int literal key or a string literal key that is an
+/// integer in digits (the key it stands for is made per add).
 const ADD_KEYED: u8 = 1;
+/// The element has a string literal key that is no integer in digits: the
+/// key as it is, hashed once and kept on the literal (php-src's literal
+/// keys are interned, their hash stored on them).
+const ADD_STR: u8 = 2;
 
 /// How far [`literal_shape`] looks for the elements of a literal.
 const LITERAL_SCAN: usize = 4096;
@@ -2206,92 +2215,233 @@ pub(super) unsafe fn init_array(frame: *mut Frame, inst: &Inst) -> bool {
 /// variable (the generic op warns), a reference, and a next index that is
 /// taken (the generic op throws).
 ///
+/// Each kind of key that lowering told apart (the low half of `e`) has a
+/// handler of its own, reached from here by a tail call: the next index
+/// ([`array_add_next`]), a string key as it is ([`array_add_str`]), and
+/// any other literal key ([`array_add_keyed`]).
+///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
 pub(super) unsafe fn array_add(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract, passed on.
+    unsafe {
+        match inst.e & ((1 << KEYS_SHIFT) - 1) {
+            ADD_NEXT => array_add_next(frame, inst),
+            ADD_STR => array_add_str(frame, inst),
+            _ => array_add_keyed(frame, inst),
+        }
+    }
+}
+
+/// Whether the literal's temporary `arr` holds the untouched shared table
+/// `InitArray` left (`Some(true)`: this element makes the literal's own) or
+/// a table of its own (`Some(false)`); `None` for anything else, which the
+/// generic op takes.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a few tests in each element's handler
+fn literal_first(f: &mut Frame, arr: u32) -> Option<bool> {
+    match f.tmps.get_mut(arr as usize) {
+        Some(Value::Array(a)) => {
+            if a.get_mut_unshared().is_some() {
+                Some(false)
+            } else if a.is_untouched() {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A copy of `v`: a scalar's bits without a call into `Value::clone`.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test in each element's handler
+fn copied(v: &Value) -> Value {
+    match v {
+        Value::Null => Value::Null,
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(x) => Value::Float(*x),
+        _ => v.clone(),
+    }
+}
+
+/// The element's value (operand kind in `k`, index in `p`): a variable's
+/// or a literal's copied, a temporary's moved out of it. `None`, nothing
+/// changed, for an undefined variable, a reference or an operand out of
+/// range: the generic op's.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the operand read of each element's handler
+fn literal_value(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<Value> {
+    match val_kind(inst) {
+        KIND_CV => match f.cvs.get(inst.p).and_then(CvSlot::get) {
+            None | Some(Value::Reference(_)) => None,
+            Some(v) => Some(copied(v)),
+        },
+        KIND_TMP => match f.tmps.get_mut(inst.p) {
+            None | Some(Value::Reference(_)) => None,
+            Some(slot) => Some(std::mem::take(slot)),
+        },
+        KIND_TMPKEEP => match f.tmps.get(inst.p) {
+            None | Some(Value::Reference(_)) => None,
+            Some(v) => Some(copied(v)),
+        },
+        KIND_LIT => lits.get(inst.p).map(copied),
+        _ => None,
+    }
+}
+
+/// The literal's table in the temporary `arr`, made first when this is its
+/// first element ([`literal_first`]: `first`). `None` only for a temporary
+/// that no longer holds what [`literal_first`] found, which nothing
+/// between the two changes.
+#[inline(always)]
+#[allow(clippy::inline_always)] // see above
+fn literal_table<'f>(f: &'f mut Frame, inst: &Inst, first: bool) -> Option<&'f mut HashTable> {
+    let Some(Value::Array(arr)) = f.tmps.get_mut(inst.a as usize) else {
+        return None;
+    };
+    if first {
+        new_literal_table(arr, inst);
+    }
+    arr.get_mut_unshared()
+}
+
+/// The table of an array literal in place of the shared empty one,
+/// sized for all its elements (`d`) with the storage its keys (the high
+/// half of `e`) give it in php-src's `zend_compile_array`: a list's when no
+/// element has a key, a hash's when a key is a string that is no integer
+/// in digits (`ZEND_ARRAY_NOT_PACKED`), else none yet (the first element
+/// decides). Once per literal.
+#[inline(never)]
+fn new_literal_table(arr: &mut ZArray, inst: &Inst) {
+    let size = inst.d as usize;
+    *arr = match inst.e >> KEYS_SHIFT {
+        KEYS_NONE => ZArray::packed_sized(size),
+        KEYS_STRING => ZArray::mixed_sized(size),
+        _ => ZArray::with_capacity(size),
+    };
+}
+
+/// An element that was not added: a value taken from its temporary goes
+/// back there for the generic op (a copy is released).
+#[cold]
+#[inline(never)]
+fn literal_decline(f: &mut Frame, inst: &Inst, v: Value) -> bool {
+    if val_kind(inst) == KIND_TMP {
+        if let Some(slot) = f.tmps.get_mut(inst.p) {
+            *slot = v;
+        }
+    }
+    false
+}
+
+/// [`array_add`] of an element with no key: `zend_hash_next_index_insert`,
+/// the list's append without a call while it has room
+/// ([`HashTable::lean_push`]), else the general push. Declines a next
+/// index that is taken (the generic op throws).
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn array_add_next(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     let code = unsafe { &(*frame).code };
     // SAFETY: as in `rope_tmp`.
     let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    let first = match f.tmps.get_mut(inst.a as usize) {
-        Some(Value::Array(arr)) => {
-            if arr.get_mut_unshared().is_some() {
-                false
-            } else if arr.is_untouched() {
-                true
-            } else {
-                return false;
-            }
-        }
-        _ => return false,
+    let Some(first) = literal_first(f, inst.a) else {
+        return false;
     };
-    let key = if inst.e & ((1 << KEYS_SHIFT) - 1) == ADD_NEXT {
-        None
-    } else {
-        Some(match lits.get(inst.b as usize) {
-            Some(Value::Str(s)) => ArrayKey::from_zstr(s),
-            Some(Value::Int(i)) => ArrayKey::Int(*i),
-            _ => return false,
-        })
+    let Some(v) = literal_value(f, lits, inst) else {
+        return false;
     };
-    let kind = val_kind(inst);
-    let v = match kind {
-        KIND_CV => match f.cvs.get(inst.p).and_then(CvSlot::get) {
-            None | Some(Value::Reference(_)) => return false,
-            Some(v) => v.clone(),
-        },
-        KIND_TMP => match f.tmps.get_mut(inst.p) {
-            None | Some(Value::Reference(_)) => return false,
-            Some(slot) => std::mem::take(slot),
-        },
-        KIND_TMPKEEP => match f.tmps.get(inst.p) {
-            None | Some(Value::Reference(_)) => return false,
-            Some(v) => v.clone(),
-        },
-        KIND_LIT => match lits.get(inst.p) {
-            Some(v) => v.clone(),
-            None => return false,
-        },
-        _ => return false,
+    let Some(table) = literal_table(f, inst, first) else {
+        return literal_decline(f, inst, v);
     };
-    let added = match f.tmps.get_mut(inst.a as usize) {
-        Some(Value::Array(arr)) => {
-            if first {
-                let size = inst.d as usize;
-                let table = match inst.e >> KEYS_SHIFT {
-                    KEYS_NONE => HashTable::with_capacity_packed(size),
-                    KEYS_STRING => HashTable::with_capacity_mixed(size),
-                    _ => HashTable::with_capacity(size),
-                };
-                *arr = ZArray::from_table(table);
-            }
-            match (arr.get_mut_unshared(), key) {
-                (Some(table), None) => table.push(v).map(|_| ()),
-                (Some(table), Some(key)) => {
-                    drop(table.insert(key, v));
-                    Ok(())
-                }
-                (None, _) => Err(v),
-            }
-        }
-        _ => Err(v),
+    let Err(v) = table.lean_push(v) else {
+        return true;
     };
-    match added {
-        Ok(()) => true,
-        // Not added: a value taken from its temporary goes back there for
-        // the generic op.
-        Err(v) => {
-            if kind == KIND_TMP {
-                if let Some(slot) = f.tmps.get_mut(inst.p) {
-                    *slot = v;
-                }
-            }
-            false
-        }
+    match table.push(v) {
+        Ok(_) => true,
+        Err(v) => literal_decline(f, inst, v),
     }
+}
+
+/// [`array_add`] of an element whose key is a string literal that is no
+/// integer in digits (`zend_hash_update` with the interned key): its hash
+/// read from the literal, the key probed and appended without a call in a
+/// hash with room ([`HashTable::lean_find_mut`],
+/// [`HashTable::lean_append`]), else the general insert. A key given twice
+/// keeps its first position and takes the later value; the replaced value
+/// is released.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn array_add_str(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let Some(Value::Str(key)) = lits.get(inst.b as usize) else {
+        return false;
+    };
+    let Some(first) = literal_first(f, inst.a) else {
+        return false;
+    };
+    let Some(v) = literal_value(f, lits, inst) else {
+        return false;
+    };
+    let Some(table) = literal_table(f, inst, first) else {
+        return literal_decline(f, inst, v);
+    };
+    let h = key.hash_value();
+    if let Some(slot) = table.lean_find_mut(key, h) {
+        drop(std::mem::replace(slot, v));
+        return true;
+    }
+    if let Err((key, v)) = table.lean_append(key.clone(), h, v) {
+        drop(table.insert(ArrayKey::Str(key), v));
+    }
+    true
+}
+
+/// [`array_add`] of an element with an int literal key or a string
+/// literal key that is an integer in digits (symbol-table semantics: the
+/// int key it stands for): the general insert.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+unsafe fn array_add_keyed(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let code = unsafe { &(*frame).code };
+    // SAFETY: as in `rope_tmp`.
+    let lits: &[Value] = unsafe { &*std::ptr::from_ref::<[Value]>(&code.literals) };
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
+    let key = match lits.get(inst.b as usize) {
+        Some(Value::Str(s)) => ArrayKey::from_zstr(s),
+        Some(Value::Int(i)) => ArrayKey::Int(*i),
+        _ => return false,
+    };
+    let Some(first) = literal_first(f, inst.a) else {
+        return false;
+    };
+    let Some(v) = literal_value(f, lits, inst) else {
+        return false;
+    };
+    let Some(table) = literal_table(f, inst, first) else {
+        return literal_decline(f, inst, v);
+    };
+    drop(table.insert(key, v));
+    true
 }
 
 /// `Op::FeFetch` of a by-value `foreach` over an array (`ZEND_FE_FETCH_R`

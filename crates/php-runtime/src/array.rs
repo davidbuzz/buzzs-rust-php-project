@@ -1010,6 +1010,20 @@ impl HashTable {
         }
     }
 
+    /// An empty table of `table_size` (already [`check_size`]d) whose
+    /// storage is `store` (empty, with room for `table_size` elements):
+    /// [`HashTable::with_capacity`]'s fields with the storage set up front.
+    fn sized(table_size: u32, store: Store) -> Self {
+        HashTable {
+            store,
+            num_elements: 0,
+            table_size,
+            internal_ptr: 0,
+            next_free: i64::MIN,
+            iterators: IterList::default(),
+        }
+    }
+
     // ------------------------------------------------------------------
     // Basic properties
     // ------------------------------------------------------------------
@@ -1987,6 +2001,39 @@ impl HashTable {
         d.buckets.push(Bucket::new(ArrayKey::Int(i), val, head));
         self.num_elements += 1;
         self.note_int_key(i);
+        Ok(())
+    }
+
+    /// Appends `val` under the next index to a list with room for it,
+    /// without a call: the packed append of `zend_hash_next_index_insert`
+    /// (`ZEND_ADD_ARRAY_ELEMENT` with no key) for a table that neither
+    /// grows nor changes its kind. The same table as [`HashTable::push`]
+    /// makes.
+    ///
+    /// # Errors
+    /// Gives the value back, nothing changed, for a table that is no list,
+    /// is full, or whose next index is not its end (a hole before it): the
+    /// general [`HashTable::push`]'s.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_push(&mut self, val: Value) -> Result<(), Value> {
+        let ts = self.table_size as usize;
+        let next = if self.next_free == i64::MIN {
+            0
+        } else {
+            self.next_free
+        };
+        let Store::Packed(v) = &mut self.store else {
+            return Err(val);
+        };
+        let len = v.len();
+        if len >= ts || len == v.capacity() || next != idx_key(len) {
+            return Err(val);
+        }
+        v.push(Some(val));
+        // `next < nTableSize`, so no overflow.
+        self.next_free = next + 1;
+        self.num_elements += 1;
         Ok(())
     }
 
@@ -3635,6 +3682,34 @@ impl ZArray {
     #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         ZArray(Rc::new(HashTable::with_capacity(n)))
+    }
+
+    /// A new array whose list storage is in place for `n` elements: the
+    /// table of an array literal whose elements have no keys
+    /// (`zend_new_array(n)` + `zend_hash_real_init_packed`, as
+    /// `ZEND_INIT_ARRAY` with a first element and no key makes it). The
+    /// same table and allocations, in the same order (the storage, then the
+    /// handle), as `ZArray::from_table(HashTable::with_capacity_packed(n))`,
+    /// built without the intermediate table's moves and the release of its
+    /// placeholder storage.
+    #[must_use]
+    pub fn packed_sized(n: usize) -> Self {
+        let table_size = check_size(to_u32(n));
+        let store = Store::Packed(Vec::with_capacity(table_size as usize));
+        ZArray(Rc::new(HashTable::sized(table_size, store)))
+    }
+
+    /// A new array whose hash storage (buckets and index) is in place for
+    /// `n` elements: the table of an array literal with a string key
+    /// (`zend_new_array(n)` + `zend_hash_real_init_mixed`, for
+    /// `ZEND_INIT_ARRAY` with `ZEND_ARRAY_NOT_PACKED`). As
+    /// [`ZArray::packed_sized`], the same as
+    /// `ZArray::from_table(HashTable::with_capacity_mixed(n))`.
+    #[must_use]
+    pub fn mixed_sized(n: usize) -> Self {
+        let table_size = check_size(to_u32(n));
+        let store = Store::Hash(HashData::new(table_size));
+        ZArray(Rc::new(HashTable::sized(table_size, store)))
     }
 
     /// Wraps a table (also accepts a boxed table, such as an object's
@@ -5540,5 +5615,105 @@ mod tests {
         let t = table_of(&r);
         assert_eq!(render(&t), "y=1,x=3,z=2,new=9");
         assert!(matches!(t.get(&ArrayKey::from("x")), Some(Value::Int(3))));
+    }
+
+    /// The literal tables built in one step are the tables the general
+    /// constructors make: kind, table size, room, next index, and the same
+    /// tables after the same appends (sizes 0, 1, 8 and 9: below, at and
+    /// past the smallest table size).
+    #[test]
+    fn sized_literal_tables_match_the_general_ones() {
+        for n in [0usize, 1, 8, 9] {
+            let packed = ZArray::packed_sized(n);
+            let general = HashTable::with_capacity_packed(n);
+            assert_eq!(packed.kind(), Kind::Packed, "{n}");
+            assert_eq!(packed.table_size(), general.table_size(), "{n}");
+            assert_eq!(packed.packed_capacity(), general.packed_capacity(), "{n}");
+            assert_eq!(packed.next_free_element(), i64::MIN, "{n}");
+            assert!(packed.is_empty() && !packed.is_untouched(), "{n}");
+            let mixed = ZArray::mixed_sized(n);
+            let general_mixed = HashTable::with_capacity_mixed(n);
+            assert_eq!(mixed.kind(), Kind::Hash, "{n}");
+            assert_eq!(mixed.table_size(), general_mixed.table_size(), "{n}");
+            match (&mixed.store, &general_mixed.store) {
+                (Store::Hash(a), Store::Hash(b)) => {
+                    assert_eq!(a.index.len(), b.index.len(), "{n}");
+                    assert_eq!(a.buckets.capacity(), b.buckets.capacity(), "{n}");
+                    assert!(a.index.iter().all(|&i| i == INVALID), "{n}");
+                }
+                _ => panic!("not hashes: {n}"),
+            }
+            assert_eq!(mixed.next_free_element(), i64::MIN, "{n}");
+            // The same appends make the same tables.
+            let (mut a, mut b) = (packed, ZArray::from_table(general));
+            let (mut c, mut d) = (mixed, ZArray::from_table(general_mixed));
+            for i in 0..n {
+                let i = i64::try_from(i).unwrap_or(0);
+                let _ = a.make_mut().push(Value::Int(i));
+                let _ = b.make_mut().push(Value::Int(i));
+                c.make_mut().insert(format!("k{i}").as_str(), Value::Int(i));
+                d.make_mut().insert(format!("k{i}").as_str(), Value::Int(i));
+            }
+            assert_eq!(render(&a), render(&b), "{n}");
+            assert_eq!(a.table_size(), b.table_size(), "{n}");
+            assert_eq!(a.next_index(), b.next_index(), "{n}");
+            assert_eq!(render(&c), render(&d), "{n}");
+            assert_eq!(c.table_size(), d.table_size(), "{n}");
+            assert_eq!(c.next_index(), d.next_index(), "{n}");
+        }
+    }
+
+    /// `lean_push` makes the table `push` makes while the list has room,
+    /// with counted (strings, arrays) and plain elements, and gives the
+    /// value back for a full list, a hash, an empty table with no storage
+    /// and a list whose next index is past its end.
+    #[test]
+    fn lean_push_agrees_with_push() {
+        for n in [0usize, 1, 8, 9] {
+            let mut lean = HashTable::with_capacity_packed(n);
+            let mut general = HashTable::with_capacity_packed(n);
+            let ts = lean.table_size() as usize;
+            for i in 0..ts + 2 {
+                let k = i64::try_from(i).unwrap_or(0);
+                let v = match i % 3 {
+                    0 => Value::Int(k),
+                    1 => Value::Str(ZStr::from(format!("s{i}"))),
+                    _ => Value::Array(ZArray::from_values([Value::Int(k)])),
+                };
+                let _ = general.push(v.clone());
+                match lean.lean_push(v) {
+                    Ok(()) => assert!(i < ts, "{n}: {i}"),
+                    Err(v) => {
+                        assert!(i >= ts, "{n}: {i}");
+                        let _ = lean.push(v);
+                    }
+                }
+            }
+            assert_eq!(lean.len(), general.len(), "{n}");
+            assert_eq!(lean.table_size(), general.table_size(), "{n}");
+            assert_eq!(lean.next_index(), general.next_index(), "{n}");
+            assert_eq!(
+                lean.keys().cloned().collect::<Vec<_>>(),
+                general.keys().cloned().collect::<Vec<_>>(),
+                "{n}"
+            );
+            for (a, b) in lean.values().zip(general.values()) {
+                assert_eq!(std::mem::discriminant(a), std::mem::discriminant(b), "{n}");
+            }
+        }
+        // Not a list with room at its end: the general push's.
+        let mut hash = HashTable::with_capacity_mixed(8);
+        assert!(hash.lean_push(Value::Int(1)).is_err());
+        assert!(hash.is_empty());
+        let mut uninit = HashTable::new();
+        assert!(uninit.lean_push(Value::Int(1)).is_err());
+        assert!(uninit.is_untouched());
+        let mut gap = HashTable::with_capacity_packed(8);
+        assert!(gap.lean_push(Value::Int(0)).is_ok());
+        gap.set_next_free_element(5);
+        assert!(gap.lean_push(Value::Int(5)).is_err());
+        assert_eq!(gap.len(), 1);
+        assert!(matches!(gap.push(Value::Int(5)), Ok(5)));
+        assert_eq!(render(&gap), "0=0,5=5");
     }
 }
