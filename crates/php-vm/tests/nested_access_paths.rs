@@ -43,6 +43,185 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// Reads, `isset()`/`empty()`, assignments and appends of `$this->p[$k]` (the frame-local hits of the `*ObjPropDim` ops).
+#[test]
+fn prop_dim1() {
+    assert_eq!(
+        run(r#"<?php
+class AA implements ArrayAccess {
+  public function offsetExists($o): bool { echo "offsetExists $o\n"; return true; }
+  public function offsetGet($o): mixed { echo "offsetGet $o\n"; return 7; }
+  public function offsetSet($o, $v): void { echo "offsetSet ", var_export($o, true), "\n"; }
+  public function offsetUnset($o): void {}
+}
+class P {
+  public $a = ['k' => 1, 5 => 'five', 'z' => null, 'e' => '', 'arr' => []];
+  public $n = null;
+  public $list = [];
+  public $full = [PHP_INT_MAX => 1];
+  public array $typed = [];
+  public ?array $nt = null;
+  public int $ti;
+  public $obj;
+  public $prio = [3, 4];
+  public $iter = [];
+  public $s = 'str';
+  function __construct() { $this->obj = new AA; }
+  function __isset($n) { echo "__isset $n\n"; return true; }
+  function __get($n) { echo "__get $n\n"; return [1, 2]; }
+  function run() {
+    $k = 'k'; $five = '5'; $i = 5; $m = 'missing';
+    var_dump($this->a[$k], $this->a[$five], $this->a[$i], $this->a['z'], $this->a[$k . '']);
+    var_dump(isset($this->a[$k]), isset($this->a['z']), isset($this->a[$m]), empty($this->a['e']), empty($this->a['arr']), empty($this->a[$m]), isset($this->n['x']), empty($this->n['x']));
+    var_dump($this->a[$m]);
+    var_dump($this->n['x']);
+    var_dump($this->s[0], isset($this->s[1]), isset($this->s['x']));
+    var_dump(isset($this->ti[0]), $this->obj[3], isset($this->obj[4]));
+    $this->obj[5] = 1; $this->obj[] = 2;
+    $x = $this->a['new'] = 'v'; var_dump($x);
+    $this->a[$k . 'x'] = [1]; $this->a[$five] = 'FIVE';
+    for ($j = 0; $j < 3; $j++) { $this->list[] = $j; $this->iter[$j] = $this->prio; }
+    $this->prio[] = 9;
+    var_dump($this->a, $this->list, $this->iter);
+    try { $this->full[] = 2; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $this->typed['t'] = 1; $this->nt['q'] = 2; var_dump($this->typed, $this->nt);
+    try { $this->ti[0] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $this->s[0] = 'X'; var_dump($this->s); $this->s[] = 'y'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $copy = $this->a; $this->a['k'] = 2; var_dump($copy['k'], $this->a['k']);
+    $r = &$this->list; $this->list[] = 'viaref'; var_dump(count($r)); unset($r);
+    $v = 1; $this->a['refd'] = &$v; $this->a['refd'] = 2; var_dump($v, $this->a['refd'], isset($this->a['refd']));
+    $o = new stdClass; $this->a['o'] = $o; $this->a['o'] = 1; var_dump($o);
+    $this->a[1.5] = 'f'; $this->a[true] = 't'; $this->a[null] = 'n'; var_dump($this->a[1], $this->a['']);
+  }
+}
+(new P)->run();
+$p = new P; $q = &$p; var_dump($q->a['k'], isset($q->a['k'])); $q->a['k'] = 3; $q->list[] = 1; var_dump($p->a['k'], $p->list);
+function inner(P $p) { return $p->a['k']; } var_dump(inner($p));
+class Q extends P {} $qq = new Q; var_dump($qq->a['k']); $qq->a['k'] = 9; var_dump($qq->a['k'], inner($qq), inner($p));
+"#),
+        r#"int(1)
+string(4) "five"
+string(4) "five"
+NULL
+int(1)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+
+Warning: Undefined array key "missing" in t.php on line 27
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 28
+NULL
+string(1) "s"
+bool(true)
+bool(false)
+offsetGet 3
+offsetExists 4
+bool(false)
+int(7)
+bool(true)
+offsetSet 5
+offsetSet NULL
+string(1) "v"
+array(7) {
+  ["k"]=>
+  int(1)
+  [5]=>
+  string(4) "FIVE"
+  ["z"]=>
+  NULL
+  ["e"]=>
+  string(0) ""
+  ["arr"]=>
+  array(0) {
+  }
+  ["new"]=>
+  string(1) "v"
+  ["kx"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(4)
+  }
+}
+Cannot add element to the array as the next element is already occupied
+array(1) {
+  ["t"]=>
+  int(1)
+}
+array(1) {
+  ["q"]=>
+  int(2)
+}
+Cannot auto-initialize an array inside property P::$ti of type int
+string(3) "Xtr"
+[] operator not supported for strings
+int(1)
+int(2)
+int(4)
+int(2)
+int(2)
+bool(true)
+object(stdClass)#4 (0) {
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 45
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 45
+string(1) "t"
+string(1) "n"
+int(1)
+bool(true)
+int(3)
+array(1) {
+  [0]=>
+  int(1)
+}
+int(3)
+int(1)
+int(9)
+int(9)
+int(3)
+"#
+    );
+}
+
 /// Reads, `isset()`/`empty()` and assignments of `$this->p[$a][$b]`.
 #[test]
 fn prop_dims() {

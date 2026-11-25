@@ -37,7 +37,7 @@ use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
-use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZStr};
+use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// The plain data of a property cache entry that a hit needs, copied out
@@ -272,6 +272,137 @@ fn isset_deref(v: &Value, empty: bool) -> Option<bool> {
         }
         v => isset_of(v, empty),
     }
+}
+
+/// The array a declared property slot holds, directly or through a
+/// reference (left by `&$this->a`, a by-reference argument or `foreach` by
+/// reference), for reading.
+#[inline(always)]
+fn slot_array<R>(slot: Option<&Value>, read: impl FnOnce(&ZArray) -> Option<R>) -> Option<R> {
+    match slot? {
+        Value::Array(a) => read(a),
+        Value::Reference(r) => match &*r.try_borrow()? {
+            Value::Array(a) => read(a),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_OBJ_R` + `ZEND_FETCH_DIM_R` (or the `_IS` pair) of
+/// `$this->name[dim]` / `$cv->name[dim]` on a property cache hit, read in
+/// frame `f` alone: the base holds the object directly (a reference base
+/// takes [`Vm::prop_cache_read_elem`]), the declared slot holds an array
+/// with the int or string offset `dim` peeks as. The element,
+/// dereferenced and copied; `None` otherwise.
+#[inline(always)]
+fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ, PC_DYN)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = hit_data(f, &hit)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let v = slot_array(slots.get(hit.slot)?.as_ref(), |a| {
+        Some(match super::table_dim(a, key)? {
+            Value::Reference(r) => copy_value(&*r.try_borrow()?),
+            v => copy_value(v),
+        })
+    });
+    drop(slots);
+    v
+}
+
+/// `isset($this->name[dim])` / `empty(...)` (`ZEND_FETCH_OBJ_IS`, then
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ`) on a property cache hit in frame `f`
+/// alone, as [`read_dim_hit`]: a missing key or a null property answers
+/// without conversions. `None` for the slower paths.
+#[inline(always)]
+fn isset_dim_hit(f: &Frame, pid: PlaceId, dim: Operand, empty: bool) -> Option<bool> {
+    let hit = hit_key(f, pid, PC_ISSET, PC_DYN)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = hit_data(f, &hit)?;
+    let slots = od.slots.try_borrow().ok()?;
+    let r = match slots.get(hit.slot)?.as_ref()? {
+        Value::Null => Some(empty),
+        v => slot_array(Some(v), |a| match super::table_dim(a, key) {
+            Some(el) => isset_deref(el, empty),
+            None => Some(empty),
+        }),
+    };
+    drop(slots);
+    r
+}
+
+/// `$this->name[dim] = val` / `$this->name[] = val` (`dim`
+/// [`Operand::Unused`]) on a property cache hit for writing in frame `f`
+/// alone (`ZEND_FETCH_OBJ_W` + `ZEND_ASSIGN_DIM` + `OP_DATA`): the base
+/// holds the object directly, the declared slot holds an array (also
+/// through a reference), the offset is an int or a string and the value
+/// is plain, an array or an object; the store is
+/// [`super::dims::assign_write_dim`]'s (separation, an existing element
+/// overwritten unless it is a reference, a missing one added). The
+/// offset's string temporary and the value's temporary are consumed and
+/// the value written to `dst` when used. `false`, nothing changed but a
+/// separation, otherwise.
+#[inline(never)]
+fn assign_dim_hit(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    use super::dims::{assign_write_dim, WriteDim};
+    let Some(hit) = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN) else {
+        return false;
+    };
+    let Some(v) = super::dim_value_in(f, val) else {
+        return false;
+    };
+    let wd = if dim == Operand::Unused {
+        WriteDim::Append
+    } else {
+        match super::dim_ref_in(f, dim) {
+            Some(super::DimRef::Int(i)) => WriteDim::Int(i),
+            Some(super::DimRef::Str(s)) => WriteDim::Str(s),
+            None => return false,
+        }
+    };
+    let Some(od) = hit_data(f, &hit) else {
+        return false;
+    };
+    let ret = dst.map(|_| copy_value(&v));
+    let Ok(mut slots) = od.slots.try_borrow_mut() else {
+        return false;
+    };
+    let ok = match slots.get_mut(hit.slot) {
+        Some(Some(Value::Array(arr))) => assign_write_dim(arr.make_mut(), wd, v),
+        Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
+            Some(mut inner) => match &mut *inner {
+                Value::Array(arr) => assign_write_dim(arr.make_mut(), wd, v),
+                _ => false,
+            },
+            None => false,
+        },
+        _ => false,
+    };
+    drop(slots);
+    if !ok {
+        return false;
+    }
+    if matches!(wd, WriteDim::Str(_)) {
+        super::release_str_tmp_in(f, dim);
+    }
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    if let (Some(d), Some(r)) = (dst, ret) {
+        if let Some(slot) = f.tmps.get_mut(d as usize) {
+            put_tmp(slot, r);
+        }
+    }
+    true
 }
 
 /// `isset()`/`empty()` of the property `hit` describes in `od` when it is
@@ -760,6 +891,12 @@ impl Vm {
         if mode == FetchMode::List {
             return None;
         }
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(v) = read_dim_hit(f, pid, dim) {
+                super::release_str_tmp_in(f, dim);
+                return Some(store_fetched_in(f, dst, to, v));
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let v = self.prop_cache_read_elem(pid, &key)?;
         self.release_tmp_str(dim);
@@ -808,6 +945,11 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
+        if let Some(f) = self.frames.last_mut() {
+            if assign_dim_hit(f, pid, dim, val, dst) {
+                return true;
+            }
+        }
         let key = match dim {
             Operand::Unused => None,
             other => Some(match self.peek_dim_key(other) {
@@ -967,6 +1109,12 @@ impl Vm {
         dim: Operand,
         empty: bool,
     ) -> Option<bool> {
+        if let Some(f) = self.frames.last_mut() {
+            if let Some(r) = isset_dim_hit(f, pid, dim, empty) {
+                super::release_str_tmp_in(f, dim);
+                return Some(r);
+            }
+        }
         let key = self.peek_dim_key(dim)?;
         let r = self.prop_cache_isset_elem_pure(pid, &key, empty)?;
         self.release_tmp_str(dim);

@@ -515,7 +515,7 @@ fn assign_str_dim(tbl: &mut HashTable, s: &ZStr, v: Value) -> bool {
 
 /// The offset of an [`Op::AssignDimCv`](crate::opcode::Op::AssignDimCv).
 #[derive(Clone, Copy)]
-enum WriteDim<'a> {
+pub(super) enum WriteDim<'a> {
     /// `$cv[] = val`.
     Append,
     Int(i64),
@@ -527,7 +527,7 @@ enum WriteDim<'a> {
 /// is taken: the generic op throws).
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn assign_write_dim(tbl: &mut HashTable, dim: WriteDim<'_>, v: Value) -> bool {
+pub(super) fn assign_write_dim(tbl: &mut HashTable, dim: WriteDim<'_>, v: Value) -> bool {
     match dim {
         WriteDim::Int(i) => assign_int_dim(tbl, i, v),
         WriteDim::Str(s) => assign_str_dim(tbl, s, v),
