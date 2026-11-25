@@ -1092,3 +1092,99 @@ sx ta
         assert_eq!(run(src), expected);
     }
 }
+
+/// The value an `Is`-mode read of `cur[d1]...[dn]` gives along the
+/// dimension segments `segs` of frame `f` (`cur` `None`: an undefined
+/// variable), when no step can warn, convert, throw or run user code:
+/// php-src's `ZEND_FETCH_DIM_IS` chain (`zend_fetch_dimension_address_read`
+/// with `BP_VAR_IS`), where a missing key, an undefined variable, `null`
+/// and a `bool`/`int`/`float` container give `null` silently and further
+/// offsets are not looked at. Every offset must peek as an int or a
+/// string (checked before the walk, so a float or `null` key keeps its
+/// deprecation on the generic path); a string or object container
+/// (string offsets, `ArrayAccess`) gives `None`, as does a borrowed
+/// reference.
+fn is_dims_value(f: &Frame, cur: Option<&Value>, segs: &[Seg]) -> Option<Value> {
+    let Some((Seg::Dim(dim), rest)) = segs.split_first() else {
+        return match (segs, cur) {
+            ([], None) => Some(Value::Null),
+            ([], Some(Value::Reference(r))) => Some(r.get()),
+            ([], Some(v)) => Some(copy_value(v)),
+            _ => None,
+        };
+    };
+    match cur {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            Some(Value::Null)
+        }
+        Some(Value::Reference(r)) => {
+            let inner = r.try_borrow()?;
+            if matches!(&*inner, Value::Reference(_)) {
+                return None;
+            }
+            is_dims_value(f, Some(&*inner), segs)
+        }
+        Some(Value::Array(a)) => is_dims_value(f, table_dim(a, dim_ref_in(f, *dim)?), rest),
+        Some(_) => None,
+    }
+}
+
+/// Whether every segment of `segs` is a dimension whose offset operand
+/// peeks as an int or a string in frame `f` ([`dim_ref_in`]).
+fn plain_dims(f: &Frame, segs: &[Seg]) -> bool {
+    segs.iter()
+        .all(|s| matches!(s, Seg::Dim(d) if dim_ref_in(f, *d).is_some()))
+}
+
+/// The `Is`-mode `$cv[dim]` read ([`Op::FetchDimCv`](crate::opcode::Op::FetchDimCv)
+/// in [`FetchMode::Is`](crate::opcode::FetchMode::Is): `$a['k'] ?? d`)
+/// that [`fetch_dim_cv_in`] did not take: the key missing from the array,
+/// the variable undefined or holding `null` or a `bool`/`int`/`float`
+/// (`ZEND_FETCH_DIM_IS`: `null`, no diagnostic). Stored and released as
+/// in [`fetch_dim_cv_in`]; `None`, nothing changed, for anything else
+/// (a string or object container, an offset of another type).
+#[inline(never)]
+pub(in crate::exec) fn fetch_dim_is_miss_in(
+    f: &mut Frame,
+    cv: u32,
+    dim: Operand,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let segs = [Seg::Dim(dim)];
+    if !plain_dims(f, &segs) {
+        return None;
+    }
+    let cur = f.cvs.get(cv as usize)?.get();
+    if cur.is_none() && f.symtab_attached {
+        return None;
+    }
+    let v = is_dims_value(f, cur, &segs)?;
+    release_str_tmp_in(f, dim);
+    Some(store_fetched_in(f, dst, to, v))
+}
+
+/// The `Is`-mode `$cv[d1][d2]...` read ([`Op::FetchDimsCv`](crate::opcode::Op::FetchDimsCv)
+/// in [`FetchMode::Is`](crate::opcode::FetchMode::Is): `$a['k']['j'] ?? d`,
+/// `isset`'s neighbour `??`) that [`fetch_dims_cv_in`] did not take: as
+/// [`fetch_dim_is_miss_in`], along every offset of `place`.
+#[inline(never)]
+pub(in crate::exec) fn fetch_dims_is_miss_in(
+    f: &mut Frame,
+    cv: u32,
+    place: PlaceId,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let segs = &f.code.places.get(place as usize)?.segs;
+    if !plain_dims(f, segs) {
+        return None;
+    }
+    let cur = f.cvs.get(cv as usize)?.get();
+    if cur.is_none() && f.symtab_attached {
+        return None;
+    }
+    let v = is_dims_value(f, cur, segs)?;
+    release_place_str_tmps(f, place);
+    Some(store_fetched_in(f, dst, to, v))
+}

@@ -46,13 +46,14 @@
 use super::spec::{
     self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in,
     cast_string_in, cmp_simple_in, concat_cv_in, concat_in, fe_assign_in, fe_fetch_array_in,
-    fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in,
-    num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
+    fetch_dim_cv_in, fetch_dim_is_miss_in, fetch_dims_cv_in, fetch_dims_is_miss_in,
+    incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp, rope_in,
+    slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{
-    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, NullChain, Op, Operand,
-    UnKind,
+    cmp_outcome, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, NullChain, Op,
+    Operand, UnKind,
 };
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
@@ -786,15 +787,33 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         // (`exec/spec/dims.rs`). With `to`, the `AssignCv` after a
         // dimension fetch is done too (`Some(true)`: skip it).
         Op::FetchDimCv {
-            cv, dim, dst, to, ..
-        } => match fetch_dim_cv_in(f, cv, dim, dst, to) {
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
+        } => match fetch_dim_cv_in(f, cv, dim, dst, to).or_else(|| {
+            // `$a['k'] ?? d` whose key is not there (`ZEND_FETCH_DIM_IS`).
+            (mode == FetchMode::Is)
+                .then(|| fetch_dim_is_miss_in(f, cv, dim, dst, to))
+                .flatten()
+        }) {
             Some(true) => ip += 1,
             Some(false) => {}
             None => return DECLINED,
         },
         Op::FetchDimsCv {
-            cv, place, dst, to, ..
-        } => match fetch_dims_cv_in(f, cv, place, dst, to) {
+            cv,
+            place,
+            dst,
+            to,
+            mode,
+        } => match fetch_dims_cv_in(f, cv, place, dst, to).or_else(|| {
+            (mode == FetchMode::Is)
+                .then(|| fetch_dims_is_miss_in(f, cv, place, dst, to))
+                .flatten()
+        }) {
             Some(true) => ip += 1,
             Some(false) => {}
             None => return DECLINED,

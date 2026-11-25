@@ -24,10 +24,10 @@
 use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
-    concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in,
-    incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
+    concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in,
+    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp, rope_in,
 };
-use crate::opcode::{BinKind, CastKind, IncDecKind, Op, OpArray, Operand, Seg};
+use crate::opcode::{BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Seg};
 use crate::vm::{CvSlot, ForeachIter, Frame};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
@@ -306,7 +306,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         Op::FetchDimCv {
-            cv, dim, dst, to, ..
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
         } => {
             let (dk, di) = dim_operand(code, dim)?;
             dst_off(code, dst)?;
@@ -317,12 +322,17 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 c,
                 d: to,
                 k: dk,
+                e: u8::from(mode == FetchMode::Is),
                 p: dst as usize,
                 ..plain(fetch_op(code, dk, di, to, made_str(code, i, dim)))
             }
         }
         Op::FetchDimsCv {
-            cv, place, dst, to, ..
+            cv,
+            place,
+            dst,
+            to,
+            mode,
         } => {
             dst_off(code, dst)?;
             let (to, c) = folded_assign(code, i, to)?;
@@ -331,6 +341,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 b: to,
                 c,
                 d: place_idx(code, place)?,
+                e: u8::from(mode == FetchMode::Is),
                 p: dst as usize,
                 ..plain(TOp::FetchDimsC)
             }
@@ -598,7 +609,13 @@ pub(super) unsafe fn fetch_dim(frame: *mut Frame, inst: &Inst) -> Br {
     let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let to = (inst.d != NO_TO).then_some(inst.d);
-    fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
+    match fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to) {
+        Some(r) => fetched(Some(r)),
+        // `$a['k'] ?? d` whose key is not there: `ZEND_FETCH_DIM_IS`'s
+        // silent null, out of line.
+        None if inst.e != 0 => fetched(fetch_dim_is_miss_in(f, inst.a, dim, inst.p as u32, to)),
+        None => Br::Decline,
+    }
 }
 
 /// `TOp::FetchDimIC`: the offset, then [`fetch_packed_into_cv`], else
@@ -1266,7 +1283,12 @@ pub(super) unsafe fn fetch_dims_general(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `frame` is the current frame.
     let f = unsafe { &mut *frame };
     let to = (inst.b != NO_TO).then_some(inst.b);
-    fetched(fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to))
+    match fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to) {
+        Some(r) => fetched(Some(r)),
+        // `$a['k']['j'] ?? d` with a key missing on the way (`Is` mode).
+        None if inst.e != 0 => fetched(fetch_dims_is_miss_in(f, inst.a, inst.d, inst.p as u32, to)),
+        None => Br::Decline,
+    }
 }
 
 /// `Op::IssetDimCv`: `isset` / `empty` of `$cv[dim]` (`isset_dim_cv_in`).
