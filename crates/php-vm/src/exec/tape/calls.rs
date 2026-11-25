@@ -2545,6 +2545,7 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
 /// nothing readied, for anything else (a `__call` trampoline, a callee
 /// that makes no plain call, an observer): the caller pushes it as the
 /// pending call, as the generic op would have.
+#[allow(clippy::result_large_err)] // the call given back is pushed as it is
 pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared, PendingCall> {
     if vm.observer.enabled
         || call.magic_name.is_some()
