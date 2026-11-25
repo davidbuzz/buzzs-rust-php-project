@@ -3199,6 +3199,7 @@ impl Vm {
     ///
     /// Out of line, as [`Vm::push_simple_ucall`] is.
     #[inline(never)]
+    #[allow(clippy::too_many_lines)] // the builtin call protocol, as `call_builtin_impl`
     fn call_builtin_pooled(
         &mut self,
         b: &Rc<Builtin>,
