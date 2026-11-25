@@ -5914,6 +5914,28 @@ impl Vm {
         Ok(())
     }
 
+    /// [`Vm::op_init_user_call`] run by the tape (`exec/tape.rs`), the op
+    /// at `at` in the current frame: the call it would push, returned
+    /// instead, for the tape to prepare (or push). The frame's resume point
+    /// is stored first (`SAVE_OPLINE()`: the "Use of "self" in callables"
+    /// deprecation, an undefined variable's warning and the `TypeError`
+    /// report this op's line, and an exception unwinds from it).
+    pub(crate) fn user_call_pending(
+        &mut self,
+        callee: Operand,
+        array: bool,
+        at: usize,
+    ) -> VmResult<PendingCall> {
+        self.frame_mut().ip = at + 1;
+        let cb = self.read(callee)?;
+        if let Some(call) = self.user_call_cached(&cb) {
+            return Ok(call);
+        }
+        let mut call = self.user_call_resolve(&cb, array)?;
+        call.dynamic = true;
+        Ok(call)
+    }
+
     /// The call site's remembered resolution of `cb` ([`Vm::op_init_user_call`]),
     /// as the pending call `zend_is_callable` would make of it: a plain
     /// function named by a string (any case, one leading `\`), or the

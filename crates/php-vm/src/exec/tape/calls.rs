@@ -2537,6 +2537,93 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
     Some(prepared)
 }
 
+/// The call `Vm::user_call_pending` resolved for an `InitUserCall` the
+/// call site's cache did not hold, prepared as [`prepare_user_call`]
+/// prepares a hit: a user function, method or closure whose declaration
+/// makes a plain call, with the call's `$this`, scopes and closure on the
+/// readied frame, or a plain builtin function. `Err` gives the call back,
+/// nothing readied, for anything else (a `__call` trampoline, a callee
+/// that makes no plain call, an observer): the caller pushes it as the
+/// pending call, as the generic op would have.
+pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared, PendingCall> {
+    if vm.observer.enabled
+        || call.magic_name.is_some()
+        || call.pfa.is_some()
+        || call.is_ctor
+        || call.has_named
+        || call.inline_count != 0
+        || !call.args.is_empty()
+        || !call.named.is_empty()
+    {
+        return Err(call);
+    }
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return Err(call);
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return Err(call);
+    };
+    let (callee, limit) = match &call.func {
+        Func::User(uf) => {
+            // A closure's static variables are its own (as for `$f()`,
+            // [`prepare_closure`]).
+            let plain = if call.closure.is_some() {
+                uf.call_shape() != CallShape::NOT_PLAIN
+            } else {
+                prepares(uf)
+            };
+            if !plain {
+                return Err(call);
+            }
+            (Callee::User(Rc::clone(uf)), uf.params.len().min(MAX_ARGS))
+        }
+        Func::Builtin(b) => {
+            if call.this.is_some()
+                || call.scope.is_some()
+                || call.called.is_some()
+                || call.closure.is_some()
+                || b.plain_call() != PlainCall::Named
+                || forbids_dynamic_call(b)
+                || !frame.args.is_empty()
+            {
+                return Err(call);
+            }
+            let limit = if b.flags & flags::VARIADIC != 0 {
+                MAX_ARGS
+            } else {
+                b.signature().params.len().min(MAX_ARGS)
+            };
+            (Callee::Native(Rc::clone(b), PlainCall::Named), limit)
+        }
+    };
+    if let Callee::User(uf) = &callee {
+        ready_frame(frame, uf);
+        let PendingCall {
+            this,
+            scope,
+            called,
+            closure,
+            ..
+        } = call;
+        frame.this = this;
+        frame.scope = scope;
+        frame.called = called;
+        frame.closure = closure;
+    }
+    Ok(Prepared {
+        callee,
+        limit,
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        ctor: false,
+    })
+}
+
 /// The builtins `zend_forbid_dynamic_call()` refuses to run as a dynamic
 /// call (`Vm::forbidden_dynamic_call`): left to the generic call, which
 /// raises the error.

@@ -2341,9 +2341,9 @@ fn run_call(
         }
         // `call_user_func[_array]()` written by name: not hot ops, so a
         // call not prepared here is the generic op's in `Vm::run`.
-        Some(&Op::InitUserCall { callee, .. }) => {
+        Some(&Op::InitUserCall { callee, array }) => {
             flush(vm, prep);
-            return init_user_call(vm, prep, callee, ops, at);
+            return init_user_call(vm, prep, callee, array, ops, at);
         }
         Some(&Op::SendUser { src, n }) => {
             if let Some(call) = prep.as_mut() {
@@ -2758,22 +2758,32 @@ fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize
     next
 }
 
-/// `ZEND_INIT_USER_CALL` of `callee` at `at` ([`run_call`]): the call
-/// prepared on the call site's cache hit ([`calls::prepare_user_call`]),
-/// its `SendUser`s / `SendArray` right after it passed and the call made
-/// at its `DoCall` as [`send_and_enter`] makes other calls; [`DECLINED`],
-/// nothing changed, on a miss (the generic op in `Vm::run`). Out of line:
-/// `run_call`'s other arms keep their frame.
+/// `ZEND_INIT_USER_CALL` of `callee` at `at` ([`run_call`]; `array`: of
+/// `call_user_func_array()`): the call prepared on the call site's cache
+/// hit ([`calls::prepare_user_call`]); on a miss, the callback resolved
+/// as the generic op resolves it (`Vm::user_call_pending`: the
+/// deprecations, the `TypeError`, the cache filled) and the call it makes
+/// prepared ([`calls::prepare_pending`]), or pushed as the pending call
+/// when it is not one the tape makes. Then its `SendUser`s / `SendArray`
+/// right after it are passed and the call is made at its `DoCall` as
+/// [`send_and_enter`] makes other calls. A throw of the resolution is the
+/// op's ([`CALL_THREW`]). Out of line: `run_call`'s other arms keep their
+/// frame.
 #[inline(never)]
 fn init_user_call(
     vm: &mut Vm,
     prep: &mut Option<calls::Prepared>,
     callee: Operand,
+    array: bool,
     ops: &[Op],
     at: usize,
 ) -> usize {
-    let Some(mut call) = calls::prepare_user_call(vm, callee, at) else {
-        return DECLINED;
+    let mut call = match calls::prepare_user_call(vm, callee, at) {
+        Some(call) => call,
+        None => match user_call_miss(vm, callee, array, at) {
+            Ok(call) => call,
+            Err(next) => return next,
+        },
     };
     let mut next = at + 1;
     loop {
@@ -2792,6 +2802,37 @@ fn init_user_call(
         next += 1;
     }
     enter_after_sends(vm, prep, call, ops, next)
+}
+
+/// [`init_user_call`] on a miss of the call site's cache: the call the
+/// generic op would push, prepared; `Err` with where the tape goes on
+/// when it is not (pushed as the pending call: the op after this one), or
+/// when the resolution threw (the op's index with [`CALL_THREW`], the
+/// throw in `Vm::tape_throw`). Cold: the cached path is the common one.
+#[cold]
+#[inline(never)]
+fn user_call_miss(
+    vm: &mut Vm,
+    callee: Operand,
+    array: bool,
+    at: usize,
+) -> Result<calls::Prepared, usize> {
+    let pending = match vm.user_call_pending(callee, array, at) {
+        Ok(pending) => pending,
+        Err(t) => {
+            vm.tape_throw = Some(t);
+            return Err(at | CALL_THREW);
+        }
+    };
+    match calls::prepare_pending(vm, pending) {
+        Ok(call) => Ok(call),
+        Err(pending) => {
+            if let Some(f) = vm.frames.last_mut() {
+                f.calls.push(pending);
+            }
+            Err(at + 1)
+        }
+    }
 }
 
 mod calls;

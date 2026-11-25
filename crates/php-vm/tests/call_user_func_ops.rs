@@ -831,3 +831,85 @@ A
     );
     assert_eq!(status, 0);
 }
+
+/// One call site that sees a different callable each time (a hook
+/// dispatcher: its cache misses every call), resolved and called on the
+/// tape: functions, methods, static methods, a private method through
+/// `__call` from outside, closures, `__call`, builtins, invokable
+/// objects, typed and generator callees; the deprecation of `self::` in a
+/// callable and the `TypeError`s of invalid callbacks with the call's
+/// line, a class autoloaded by the resolution, an undefined variable.
+#[test]
+fn polymorphic_call_sites_resolve_on_every_call() {
+    let (status, out) = run(r#"<?php
+class H {
+    private $n = 0;
+    function a($x) { return "a$x"; }
+    static function s($x) { return "s$x"; }
+    function gen($x) { yield $x; }
+    function __call($m, $args) { return "__call $m " . implode(',', $args); }
+    private function priv($x) { return "priv$x"; }
+    function viaSelf($i) { return call_user_func('self::s', $i); }
+    function dispatch($cbs) {
+        $r = [];
+        foreach ($cbs as $cb) { $r[] = call_user_func_array($cb, [$this->n++]); }
+        return implode(' ', $r);
+    }
+}
+function f($x) { return "f$x"; }
+function typed(int $x) { return "t$x"; }
+$h = new H;
+$k = 'K';
+$cbs = ['f', [$h, 'a'], 'H::s', [$h, 'priv'], function ($x) use ($k) { return "$k$x"; }, [$h, 'zz'], 'strtoupper', new class { function __invoke($x) { return "inv$x"; } }, 'typed', fn($x) => "arrow$x"];
+for ($i = 0; $i < 2; $i++) echo $h->dispatch($cbs), "\n";
+for ($i = 0; $i < 3; $i++) {
+    $cb = $cbs[$i % 3];
+    echo call_user_func($cb, $i), call_user_func($cbs[($i + 1) % 3], $i), ' ';
+}
+echo "\n";
+for ($i = 0; $i < 2; $i++) echo $h->viaSelf($i), "\n";
+function loop($cbs) {
+    foreach ($cbs as $cb) {
+        try { echo call_user_func($cb, 1), "\n"; } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+    }
+}
+loop(['nope', [new H, 'priv'], 'Nope::x', 5, null, [new H, 'gen'], 'typed', 'H::nope', ['H', 'a']]);
+spl_autoload_register(function ($c) { echo "autoload $c\n"; if ($c === 'Late') { eval('class Late { static function m($x) { return "late$x"; } }'); }  });
+loop(['Late::m', 'Late::m', ['Late', 'm']]);
+function undef2() { for ($i = 0; $i < 2; $i++) { try { call_user_func_array($nope, []); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; } } }
+undef2();
+"#);
+    assert_eq!(
+        out,
+        r#"f0 a1 s2 priv3 K4 __call zz 5 6 inv7 t8 arrow9
+f10 a11 s12 priv13 K14 __call zz 15 16 inv17 t18 arrow19
+f0a0 a1s1 s2f2 
+
+Deprecated: Use of "self" in callables is deprecated in t.php on line 9
+s0
+
+Deprecated: Use of "self" in callables is deprecated in t.php on line 9
+s1
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, function "nope" not found or invalid function name @30
+__call priv 1
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class "Nope" not found @30
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given @30
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given @30
+Error: Object of class Generator could not be converted to string @30
+t1
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nope" @30
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method H::a() cannot be called statically @30
+autoload Late
+late1
+late1
+late1
+
+Warning: Undefined variable $nope in t.php on line 36
+TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given @36
+
+Warning: Undefined variable $nope in t.php on line 36
+TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given @36
+"#
+    );
+    assert_eq!(status, 0);
+}
