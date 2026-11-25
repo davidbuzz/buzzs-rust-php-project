@@ -385,7 +385,8 @@ pub(super) struct NewSite {
     /// The class (none yet: `Weak::new()`). The handle pins the class's
     /// address, so an equal address is this class.
     class: std::rc::Weak<crate::class::Class>,
-    /// The arguments passed, which are the constructor's parameters.
+    /// The constructor's parameters: the arguments passed, then those
+    /// left to their literal defaults (`dflt`, [`literal_defaults`]).
     n: u8,
     /// The stores (`steps[..len]`).
     len: u8,
@@ -403,6 +404,9 @@ pub(super) struct NewSite {
     /// be the old object). `u32::MAX`: none.
     over: u32,
     steps: [SiteStep; FOLD_STEPS],
+    /// The defaults of the parameters the `new` leaves out
+    /// ([`Src::ParamDefault`]): scalars, which own nothing.
+    dflt: [Value; MAX_ARGS],
 }
 
 /// Where an argument of a `new` comes from: what the `Send`s after the
@@ -417,6 +421,9 @@ enum Src {
     Cv(u32),
     /// `a + b`, `a - b` or `a * b` of literals and compiled variables.
     Sum(BinaryOp, Operand, Operand),
+    /// A parameter no argument is passed for: its literal default, kept in
+    /// the site ([`NewSite::dflt`], by parameter).
+    ParamDefault(u8),
 }
 
 /// An argument of a `new`, read where it is: a value the frame or the op
@@ -615,13 +622,13 @@ fn site_srcs(code: &OpArray, inst: &Inst) -> Option<([Src; MAX_ARGS], usize)> {
     sums.iter().all(|s| s.0 == u32::MAX).then_some((srcs, n))
 }
 
-/// The argument `src` names, read in frame `f`. `None` for what
-/// [`sent_args`] declines (an undefined variable, a sum of anything but
-/// ints, an overflow) and for a variable held by reference, whose value
-/// [`sent_args`] copies out.
+/// The argument `src` names, read in frame `f` (a parameter's default in
+/// `site`). `None` for what [`sent_args`] declines (an undefined variable,
+/// a sum of anything but ints, an overflow) and for a variable held by
+/// reference, whose value [`sent_args`] copies out.
 #[inline(always)]
 #[allow(clippy::inline_always)] // once per argument
-fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
+fn arg_view<'a>(f: &'a crate::vm::Frame, site: &'a NewSite, src: Src) -> Option<Arg<'a>> {
     // A compiled variable first: the commonest argument.
     if let Src::Cv(cv) = src {
         return match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
@@ -640,6 +647,7 @@ fn arg_view(f: &crate::vm::Frame, src: Src) -> Option<Arg<'_>> {
                 _ => return None,
             })
         }
+        Src::ParamDefault(k) => Arg::Held(site.dflt.get(usize::from(k))?),
         Src::Cv(_) | Src::None => return None,
     })
 }
@@ -827,7 +835,7 @@ fn site_over(
     let mut args = [Arg::Int(0); MAX_ARGS];
     let n = usize::from(site.n);
     for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
-        let Some(view) = arg_view(f, *src) else {
+        let Some(view) = arg_view(f, site, *src) else {
             return false;
         };
         *arg = view;
@@ -899,8 +907,10 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 /// filled without the call, as the call would have left it.
 ///
 /// - The arguments are what the `Send`s after the op would pass
-///   ([`sent_args`]). Every declared parameter is passed, and no more; each
-///   has a type that takes its argument as it is (`enter`'s test).
+///   ([`sent_args`]), then the scalar literal defaults of the parameters
+///   left out ([`literal_defaults`]): every declared parameter has a
+///   value, and no more are passed; each has a type that takes its value
+///   as it is (`enter`'s test, `Vm::op_recv_default`'s for a default).
 /// - Every store is checked before the object exists, as
 ///   `spec::props::assign_hit` checks it: the constructor's own property
 ///   cache entry for the place is filled for this class and the
@@ -918,7 +928,8 @@ fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
 ///
 /// `None`, nothing done, for anything else: an observer, another
 /// constructor (not public, static, with other statements, with a
-/// parameter left to its default), a class `props::ctor_ref` refuses.
+/// parameter left to a default that is not a scalar literal:
+/// [`literal_defaults`]), a class `props::ctor_ref` refuses.
 #[inline(never)]
 fn new_stored(f: &crate::vm::Frame, inst: &Inst, cls: &Rc<crate::class::Class>) -> Option<Obj> {
     if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
@@ -952,7 +963,7 @@ fn site_made(
     let mut args = [Arg::Int(0); MAX_ARGS];
     let n = usize::from(site.n);
     for (arg, src) in args.iter_mut().zip(&site.srcs).take(n) {
-        *arg = arg_view(f, *src)?;
+        *arg = arg_view(f, site, *src)?;
     }
     let args = args.get(..n)?;
     if site.typed && !site.takes(args) {
@@ -989,6 +1000,12 @@ fn new_checked(
     let mut args = NewArgs::new();
     if inst.e != 0 {
         sent_args(f, inst, &mut args)?;
+    }
+    // The parameters left out get their literal defaults, as their
+    // `RECV_INIT`s would bind them.
+    let given = args.given().len();
+    if given < uf.params.len() {
+        literal_defaults(uf, given, &mut args)?;
     }
     let args = args.given();
     if args.len() != uf.params.len() {
@@ -1075,8 +1092,19 @@ fn new_checked(
     if !by_class && site_no(inst) < NEW_SITES {
         if let Some((srcs, n)) = site_srcs(&f.code, inst) {
             if let Ok(mut sites) = f.code.tape.new_sites.try_borrow_mut() {
-                if n == args.len() {
+                if n == given {
                     site.srcs = srcs;
+                    // (The object is made: nothing here may decline. `k`
+                    // is below `MAX_ARGS`, the room `NewArgs` has.)
+                    for (k, v) in args.iter().enumerate().skip(given) {
+                        if let (Some(src), Some(dflt), Ok(no)) =
+                            (site.srcs.get_mut(k), site.dflt.get_mut(k), u8::try_from(k))
+                        {
+                            *src = Src::ParamDefault(no);
+                            // (A default is a scalar: `literal_defaults`.)
+                            *dflt = clone_value(v);
+                        }
+                    }
                     // (An argument read from the assigned variable would be
                     // the old object.)
                     site.over = new_target(inst)
@@ -1086,7 +1114,7 @@ fn new_checked(
                                 Src::Sum(_, a, b) => {
                                     *a == Operand::Cv(*cv) || *b == Operand::Cv(*cv)
                                 }
-                                Src::Lit(_) | Src::None => false,
+                                Src::Lit(_) | Src::ParamDefault(_) | Src::None => false,
                             })
                         })
                         .unwrap_or(u32::MAX);
@@ -1151,6 +1179,50 @@ fn sent_args(f: &crate::vm::Frame, inst: &Inst, args: &mut NewArgs) -> Option<()
         }
     }
     Some(())
+}
+
+/// The defaults of the parameters `given..` of `uf`, a constructor a
+/// `new` passes `given` arguments to, into `args`, when each is a scalar
+/// literal its `RECV_INIT` binds and nothing else runs before the body:
+/// from the op a call with `given` arguments starts at, every parameter
+/// left out has a `RecvInit` of its own variable followed by the
+/// `RecvDefault` of a literal (`Vm::op_recv_default` checks its type;
+/// [`new_checked`] checks it against the parameter's as for an argument)
+/// that the `RecvInit`'s `skip` jumps over, and the ops end where a call
+/// passing every parameter starts (where the fold's stores begin). A
+/// string or array default (it owns something, and the call's return
+/// would release it), a constant expression or a required parameter
+/// declines.
+fn literal_defaults(uf: &UserFunction, given: usize, args: &mut NewArgs) -> Option<()> {
+    let code = &uf.code;
+    let mut at = uf.plain_first_op(given);
+    for k in given..uf.params.len() {
+        let n = u32::try_from(k).ok()?;
+        let (
+            Some(&Op::RecvInit { n: rn, cv, skip }),
+            Some(&Op::RecvDefault {
+                n: dn,
+                cv: dcv,
+                val: Operand::Lit(lit),
+            }),
+        ) = (code.ops.get(at), code.ops.get(at + 1))
+        else {
+            return None;
+        };
+        if rn != n || dn != n || cv != n || dcv != n || skip as usize != at + 2 {
+            return None;
+        }
+        let v = code.literals.get(lit as usize)?;
+        if !matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            return None;
+        }
+        args.push(clone_value(v))?;
+        at += 2;
+    }
+    (at == uf.plain_first_op(uf.params.len())).then_some(())
 }
 
 /// The arguments [`new_stored`] collects: at most [`MAX_ARGS`] values, of

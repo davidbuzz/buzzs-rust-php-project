@@ -149,3 +149,86 @@ int(2)
 "#
     );
 }
+
+/// `new C(...)` of a constructor that only stores its parameters, with
+/// some or all of them left to their defaults: scalar literals (folded
+/// without the call), a typed one whose default would coerce (`float $f =
+/// 1`), a string and an array default (the call), promoted parameters, a
+/// required parameter left out (`ArgumentCountError`) and a TypeError,
+/// and `$r = new K(...)` over `$r`'s last object (the handle reused).
+#[test]
+fn constructor_defaults_match_php() {
+    let out = run(r#"<?php
+class K { public $a; public $b; public function __construct($a, $b = 2) { $this->a = $a; $this->b = $b; } }
+class T { public int $i; public ?string $s = "d"; public float $f;
+    public function __construct(int $i = 5, ?string $s = null, float $f = 1) { $this->i = $i; $this->s = $s; $this->f = $f; } }
+class Pr { public function __construct(public int $x = 3, public ?array $y = null, public bool $z = false) {} }
+class S { public $s; public function __construct($s = "str") { $this->s = $s; } }
+class A { public $a; public function __construct($a = []) { $this->a = $a; } }
+class R { public $a; public function __construct($a, $b) { $this->a = $a; } }
+class F { public float $f; public function __construct(float $f = 1.5) { $this->f = $f; } }
+function make($x) {
+    $out = [];
+    for ($k = 0; $k < 3; $k++) {
+        $r = new K($x + $k);
+        $out[] = [$r->a, $r->b, spl_object_id($r)];
+        $q = new K($k, 9);
+        $out[] = [$q->a, $q->b];
+        $t = new T;
+        $out[] = [$t->i, $t->s, $t->f];
+        $t = new T($k);
+        $out[] = [$t->i, $t->s, $t->f];
+        $t = new T($k, "x");
+        $out[] = [$t->i, $t->s, $t->f];
+        $p = new Pr;
+        $out[] = [$p->x, $p->y, $p->z];
+        $p = new Pr($k);
+        $out[] = [$p->x, $p->y, $p->z];
+        $s = new S;
+        $out[] = $s->s;
+        $a = new A;
+        $out[] = $a->a;
+        $f = new F;
+        $out[] = $f->f;
+        try { new R($k); } catch (ArgumentCountError $e) { $out[] = strstr($e->getMessage(), " passed in", true); }
+        try { new T("no"); } catch (TypeError $e) { $out[] = strstr($e->getMessage(), ", called in", true); }
+    }
+    return $out;
+}
+for ($j = 0; $j < 3; $j++) { echo json_encode(make($j * 10)), "\n"; }
+$r = new K(1);
+for ($k = 0; $k < 3; $k++) { $r = new K($k); echo spl_object_id($r), " ", $r->a, " ", $r->b, "\n"; }
+$st = gc_status(); echo $st['runs'], " ", $st['roots'], "\n";
+var_dump(new T(1), new Pr(2, [1]));
+"#);
+    assert_eq!(
+        out,
+        r#"[[0,2,1],[0,9],[5,null,1],[0,null,1],[0,"x",1],[3,null,false],[0,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[1,2,9],[1,9],[5,null,1],[1,null,1],[1,"x",1],[3,null,false],[1,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[2,2,8],[2,9],[5,null,1],[2,null,1],[2,"x",1],[3,null,false],[2,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given"]
+[[10,2,6],[0,9],[5,null,1],[0,null,1],[0,"x",1],[3,null,false],[0,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[11,2,10],[1,9],[5,null,1],[1,null,1],[1,"x",1],[3,null,false],[1,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[12,2,8],[2,9],[5,null,1],[2,null,1],[2,"x",1],[3,null,false],[2,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given"]
+[[20,2,1],[0,9],[5,null,1],[0,null,1],[0,"x",1],[3,null,false],[0,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[21,2,7],[1,9],[5,null,1],[1,null,1],[1,"x",1],[3,null,false],[1,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given",[22,2,8],[2,9],[5,null,1],[2,null,1],[2,"x",1],[3,null,false],[2,null,false],"str",[],1.5,"Too few arguments to function R::__construct(), 1","T::__construct(): Argument #1 ($i) must be of type int, string given"]
+4 0 2
+6 1 2
+4 2 2
+0 1
+object(T)#6 (3) {
+  ["i"]=>
+  int(1)
+  ["s"]=>
+  NULL
+  ["f"]=>
+  float(1)
+}
+object(Pr)#3 (3) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["z"]=>
+  bool(false)
+}
+"#
+    );
+}
