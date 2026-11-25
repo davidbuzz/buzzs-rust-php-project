@@ -147,3 +147,57 @@ f();
         "AbCdefgHijKlmNoq 0110 0011xYp\naBcDEFghiJKLmnOQ 0011 0100xyp\naBCdefGHijKlmNoq 0100 0001xYp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\naBCdefgHijklmnoq 0111 0001xYp\naBcDefgHijKLmnoq 0011 0001xyp\naBcDeFghijKLmnoq 0011 1100xyp\naBcDeFghIJKLmnoq 1011 0000XyP\naBcDeFghijKLmnOq 0011 0000xyp\naBcDeFghijKLmnOq 0011 0000xyp\naBCdefgHijKLMNoq 0110 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghiJKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\nAbCdefgHijKlmNoq 0110 0011xYp\naBcDEFghiJKLmnOQ 0011 0100xyp\naBCdefGHijKlmNoq 0100 0001xYp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBCdefgHijKLmnoq 0111 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\naBCdefgHijklmnoq 0111 0001xYp\naBcDefgHijKLmnoq 0011 0001xyp\naBcDeFghijKLmnoq 0011 1100xyp\naBcDeFghIJKLmnoq 1011 0000XyP\naBcDeFghijKLmnOq 0011 0000xyp\naBcDeFghijKLmnOq 0011 0000xyp\naBCdefgHijKLMNoq 0110 0001xyp\naBcDeFghijKLmnoq 0011 0000xyp\naBcDeFghiJKLmnoq 0011 0000xyp\naBcDeFghijKLmnoQ 0011 0000xyp\nsame eq\nu\n\nWarning: Undefined variable $undef2 in t.php on line 36\nV\nrN\n2\ns2\n"
     );
 }
+
+/// The truth of a temporary holding a string, an array or an object (an
+/// element, a call's result) in a jump, `!`, `(bool)` and `?:`, and an
+/// unused element read (`ZEND_FREE`): a shared or empty array and an
+/// object another handle keeps are answered on the tape; an array or
+/// object the temporary alone holds is released as in php-src, its
+/// destructor running before the branch it decides.
+#[test]
+fn truth_of_temporaries() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~{$this->n} "; } }
+function id($x) { return $x; }
+function mk($n) { return new D($n); }
+function arr($n) { return $n ? [$n] : []; }
+function f() {
+  $o = new D('kept');
+  $vals = ['k' => [], 'a' => [1], 's' => 'x', 'e' => '', 'z' => '0', 'o' => $o, 'n' => null, 'f' => 0.0];
+  for ($round = 0; $round < 3; $round++) {
+    $out = '';
+    foreach (['k', 'a', 's', 'e', 'z', 'o', 'n', 'f'] as $key) {
+      $out .= $vals[$key] ? 'T' : 'f';
+      if ($vals[$key]) { $out .= '1'; } else { $out .= '0'; }
+      if (!$vals[$key]) { $out .= '!'; }
+      $neg = !$vals[$key];
+      $out .= $neg ? 'n' : 'p';
+      $out .= (bool) id($vals[$key]) ? 'B' : 'b';
+      $r = id($vals[$key]) ?: 'dflt';
+      $out .= is_string($r) ? $r : gettype($r);
+      $vals[$key];
+      id($vals[$key]);
+      $out .= ' ';
+    }
+    echo $out, "\n";
+    if (arr($round)) { echo 'arr '; }
+    if (!arr($round)) { echo 'empty '; }
+    if (mk("m$round")) { echo 'obj '; }
+    echo "| ";
+    $m = mk("j$round") ?: 0;
+    echo "kept ";
+    $m = null;
+    echo "| ";
+    $x = arr(0) ?: 'none';
+    echo $x, " ";
+    $y = !mk("u$round");
+    echo var_export($y, true), "\n";
+  }
+}
+f();
+echo "end\n";
+"#),
+        "f0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \nempty ~m0 obj | kept ~j0 | none ~u0 false\nf0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \narr ~m1 obj | kept ~j1 | none ~u1 false\nf0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \narr ~m2 obj | kept ~j2 | none ~u2 false\n~kept end\n"
+    );
+}

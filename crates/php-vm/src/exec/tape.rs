@@ -469,10 +469,12 @@ struct Out {
 
 /// The truth of the temporary a jump tests, which the jump consumes
 /// (`ZEND_JMPZ` / `ZEND_JMPNZ` of a `TMP`: `i_zend_is_true`, then the
-/// operand's release): a bool, an int, a null, a float that is no NaN, or a
-/// string (released out of line). `None`, nothing changed, for anything
-/// else: a NaN (the generic op reports it), an array or an object (their
-/// release may queue a destructor), a reference.
+/// operand's release): a bool, an int, a null, a float that is no NaN, a
+/// string (released out of line), or an array or object whose release
+/// frees nothing it holds (`scalar::rc_tmp_truth`). `None`, nothing
+/// changed, for anything else: a NaN (the generic op reports it), an array
+/// or an object the temporary alone holds (its release may queue a
+/// destructor), a reference.
 #[inline(always)]
 // The test of the tape's jumps on a temporary; a float's truth is its
 // comparison with zero.
@@ -484,6 +486,7 @@ fn tmp_truth(slot: &mut Value) -> Option<bool> {
         Value::Null => false,
         Value::Float(x) if !x.is_nan() => x != 0.0,
         Value::Str(_) => return Some(str_truth(slot)),
+        Value::Array(_) | Value::Object(_) => return scalar::rc_tmp_truth(slot),
         _ => return None,
     };
     // A scalar owns nothing: overwritten without the drop glue.
@@ -1329,6 +1332,8 @@ tape_ops! {
         EqLitCvC = (scalar::eq_lit_cv::<0>, 2, plain_f),
         EqLitCvT = (scalar::eq_lit_cv::<1>, 2, plain_f),
         EqLitCvK = (scalar::eq_lit_cv::<2>, 2, plain_f),
+        JmpSetT = (scalar::jmp_set_tmp, 1, branch_poll_f),
+        FreeT = (scalar::free_tmp, 1, plain_f),
 
         // ---- end of scalar ----
         //

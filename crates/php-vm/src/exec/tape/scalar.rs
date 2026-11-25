@@ -211,6 +211,24 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         // `$cv ?: ...` and `$cv ?? ...`: the result temporary is in `b`.
+        // `TMP ?: ...` (`ZEND_JMP_SET_SPEC_TMP`: a call's result, an
+        // element): the result temporary in `b`.
+        Op::JmpSet {
+            a: Operand::Tmp(t),
+            dst,
+            target,
+        } => Inst {
+            a: tmp_off(code, t)?,
+            b: tmp_off(code, dst)?,
+            c: rel(code, i, target)?,
+            ..plain(TOp::JmpSetT)
+        },
+        // `ZEND_FREE` of a temporary (an expression statement's unused
+        // value: `$a['k'];`).
+        Op::Free(Operand::Tmp(t)) => Inst {
+            a: tmp_off(code, t)?,
+            ..plain(TOp::FreeT)
+        },
         Op::JmpSet {
             a: Operand::Cv(cv),
             dst,
@@ -706,6 +724,122 @@ pub(super) unsafe fn jmp_set_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> Br
             Br::Jump
         }
     }
+}
+
+/// `Op::JmpSet` of a temporary (`ZEND_JMP_SET_SPEC_TMP`, `TMP ?: ...`):
+/// a truthy value moves into the result temporary (`b`) and the jump is
+/// taken; a falsy one (a scalar, `""`, `"0"`, an empty array: nothing
+/// whose release runs user code) is released and execution falls
+/// through, as `FREE_OP1` does. Declines a reference, a value whose truth
+/// needs a conversion (an object whose class casts itself, a NaN) and a
+/// result temporary holding a value to release, nothing changed.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn jmp_set_tmp(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointers: the result may be the tested temporary itself.
+    // SAFETY: `a` and `b` are validated temporary offsets.
+    let (from, dst) = unsafe {
+        (
+            st.tmps.add(inst.a as usize).cast::<Value>(),
+            st.tmps.add(inst.b as usize).cast::<Value>(),
+        )
+    };
+    // SAFETY: `from` points at a live temporary.
+    let Some(truth) = plain_truth(unsafe { &*from }) else {
+        return Br::Decline;
+    };
+    if truth {
+        if from != dst {
+            // SAFETY: `dst` points at a live temporary, another slot.
+            if !is_scalar(unsafe { &*dst }) {
+                return Br::Decline;
+            }
+            // SAFETY: the value moves from one live slot to another, which
+            // holds a scalar (nothing to drop); the source is left null,
+            // consumed.
+            unsafe { std::ptr::write(dst, std::ptr::replace(from, Value::Null)) };
+        }
+        Br::Jump
+    } else {
+        // SAFETY: `from` points at a live temporary; a falsy value's
+        // release frees at most a string or an empty array.
+        unsafe { *from = Value::Null };
+        Br::Fall
+    }
+}
+
+/// `Op::Free` of a temporary (`ZEND_FREE`: `zval_ptr_dtor_nogc`), as
+/// `hot::step_ext` runs it: a scalar or a string is released, and so is
+/// an array another handle shares (the release drops a count). Declines
+/// anything whose release could free an array or object or run a
+/// destructor (the generic op's).
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+pub(super) unsafe fn free_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `a` is a validated temporary offset.
+    let slot = unsafe { tmp_slot(st, inst.a) };
+    let plain = match &*slot {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) => true,
+        Value::Array(a) => a.refcount() >= 2,
+        _ => false,
+    };
+    if plain {
+        *slot = Value::Null;
+    }
+    plain
+}
+
+/// The truth of a consumed temporary holding a string, an array or an
+/// object, which is released (`i_zend_is_true`, then `FREE_OP1`), for the
+/// jumps on a temporary ([`super::tmp_truth`]) and `!` of one
+/// ([`unary_rc_tmp`]): a string; an array that is shared or empty and an
+/// object another handle keeps (their release runs no destructor) whose
+/// class does not cast it. `None`, nothing changed, for anything else.
+#[inline(never)]
+pub(super) fn rc_tmp_truth(slot: &mut Value) -> Option<bool> {
+    match &*slot {
+        Value::Str(_) => {}
+        Value::Array(a) if a.refcount() > 1 || a.is_empty() => {}
+        Value::Object(o) if o.refcount() > 1 => {}
+        _ => return None,
+    }
+    let truth = plain_truth(slot)?;
+    *slot = Value::Null;
+    Some(truth)
+}
+
+/// `!a` / `(bool) a` of a temporary holding a string, an array or an
+/// object ([`unary_bool_tmp`]'s miss): its truth by [`rc_tmp_truth`],
+/// which consumes it, into the temporary at `d`. Declines, nothing
+/// changed, what that declines and a destination (other than the operand)
+/// holding a value to release.
+///
+/// # Safety
+/// As [`move_tmp`]; `inst` is a [`TOp::UnaryT`] row.
+#[inline(never)]
+pub(super) unsafe fn unary_rc_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `d` is a validated temporary offset.
+    if inst.d != inst.a && !is_scalar(unsafe { tmp_slot(st, inst.d) }) {
+        return false;
+    }
+    // SAFETY: `a` is a validated temporary offset.
+    let Some(b) = rc_tmp_truth(unsafe { tmp_slot(st, inst.a) }) else {
+        return false;
+    };
+    // SAFETY: the caller's contract; the destination holds a scalar (the
+    // operand, if it is the destination, was released to null).
+    unsafe { store_bool(st, inst, b) }
 }
 
 /// `Op::Coalesce` (`ZEND_COALESCE_SPEC_CV`, `$cv ?? ...`), as
@@ -1498,7 +1632,9 @@ pub(super) unsafe fn unary_bool_tmp(st: St, inst: &Inst) -> bool {
         Value::Bool(b) => b,
         Value::Int(i) => i != 0,
         Value::Float(x) if !x.is_nan() => x != 0.0,
-        _ => return false,
+        // A string, an array, an object: out of line.
+        // SAFETY: the caller's contract.
+        _ => return unsafe { unary_rc_tmp(st.f, inst) },
     };
     // Tested before the operand is consumed: a decline changes nothing.
     // SAFETY: the caller's contract.

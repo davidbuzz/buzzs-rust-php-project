@@ -1803,3 +1803,34 @@ fn equality_with_literals_is_a_row() {
     );
     assert_eq!(run(EQUALITY_ROWS), "rq-rq-rq-9\n---------9\n");
 }
+
+const TEMPORARY_TRUTH: &str = r#"<?php
+function id($x) { return $x; }
+function f($a) {
+  $out = '';
+  for ($i = 0; $i < 3; $i++) {
+    $r = id($a) ?: 'none';
+    $a['k'];
+    $out .= ($r === 'none' ? 'n' : 'y') . (!$a['k'] ? '!' : '.');
+    if ($a['k']) { $out .= 'T'; }
+  }
+  return $out;
+}
+echo f(['k' => [1]]), ' ', f(['k' => '']), "\n";
+"#;
+
+/// `TMP ?: ...` and `ZEND_FREE` of a temporary are rows
+/// ([`TOp::JmpSetT`], [`TOp::FreeT`]).
+#[test]
+fn temporary_truth_and_free_rows() {
+    let arrays = op_arrays(TEMPORARY_TRUTH);
+    for code in &arrays {
+        check(code);
+    }
+    let code = with_cv(&arrays, "r");
+    let tape = check(code);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert_eq!(count(TOp::JmpSetT), 1, "{:?}", code.ops);
+    assert!(count(TOp::FreeT) >= 1, "{:?}", code.ops);
+    assert_eq!(run(TEMPORARY_TRUTH), "y.Ty.Ty.T y!y!y!\n");
+}
