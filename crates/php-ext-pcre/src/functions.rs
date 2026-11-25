@@ -266,8 +266,8 @@ enum Replaced {
     /// (`zend_string_copy`, which `debug_zval_dump()` shows in its
     /// refcount).
     Subject,
-    /// The new bytes.
-    New(Vec<u8>),
+    /// The new string.
+    New(ZStr),
 }
 
 impl Replaced {
@@ -275,7 +275,7 @@ impl Replaced {
     fn bytes<'a>(&'a self, subject: &'a [u8]) -> &'a [u8] {
         match self {
             Self::Subject => subject,
-            Self::New(v) => v,
+            Self::New(v) => v.as_bytes(),
         }
     }
 }
@@ -284,7 +284,7 @@ impl Replaced {
 fn result_str(r: Replaced, subject: &ZStr) -> ZStr {
     match r {
         Replaced::Subject => subject.clone(),
-        Replaced::New(v) => exact(v),
+        Replaced::New(v) => v,
     }
 }
 
@@ -360,36 +360,36 @@ fn replace_one(
     let cfg = config().with_known_valid_utf8(valid_utf8);
     let replacement = Replacement::parse(replacement);
     memory::precheck_replace(vm, &re, &cfg, subject, &replacement, limit)?;
-    let out = php_pcre::replace(&re, &cfg, subject, &replacement, limit);
+    let out = php_pcre::replace_split(&re, &cfg, subject, &replacement, limit);
     *count += out.count;
     state::set_last_error(out.last_error());
-    replaced(vm, out.count, out.result.ok())
+    replaced(vm, out, subject)
 }
 
-/// The [`Replaced`] of a replacement call that made `n` replacements and
-/// gave `result` (`None`: PHP's `NULL`): with none, the subject itself
-/// (`result == NULL` → `zend_string_copy(subject_str)`), which needs no
-/// memory; otherwise the new string, checked against the memory limit.
-fn replaced(vm: &mut Vm, n: usize, result: Option<Vec<u8>>) -> VmResult<Option<Replaced>> {
-    if n == 0 {
-        return Ok(result.map(|_| Replaced::Subject));
+/// The [`Replaced`] of a replacement call of `subject` (`None`: PHP's
+/// `NULL`): with no replacement, the subject itself (`result == NULL` →
+/// `zend_string_copy(subject_str)`), which needs no memory; otherwise the
+/// new string, checked against the memory limit and then made in one
+/// allocation of its exact size from the bytes built so far and the
+/// subject's tail (`not_matched:`'s `zend_string_realloc(result,
+/// alloc_len)` + `memcpy`). The result was built in a buffer with spare
+/// room, then cut to size (a `realloc`) and copied into a new string block:
+/// two allocator calls and a copy more than this.
+fn replaced(
+    vm: &mut Vm,
+    out: php_pcre::ReplaceSplit,
+    subject: &[u8],
+) -> VmResult<Option<Replaced>> {
+    let len = out.result_len(subject);
+    match out.result {
+        Err(_) => Ok(None),
+        Ok(None) => Ok(Some(Replaced::Subject)),
+        Ok(Some((head, rest))) => {
+            memory::check(vm, memory::string_size(len.unwrap_or(0)))?;
+            let tail = subject.get(rest..).unwrap_or_default();
+            Ok(Some(Replaced::New(ZStr::concat(&head, tail))))
+        }
     }
-    Ok(checked(vm, result)?.map(Replaced::New))
-}
-
-/// A PHP string from a result buffer, without its spare capacity (PHP
-/// strings are allocated at their exact size; `memory_get_usage()` sees it).
-fn exact(mut r: Vec<u8>) -> ZStr {
-    r.shrink_to_fit();
-    ZStr::from(r)
-}
-
-/// Applies the memory limit to a replacement result.
-fn checked(vm: &mut Vm, result: Option<Vec<u8>>) -> VmResult<Option<Vec<u8>>> {
-    if let Some(r) = &result {
-        memory::check(vm, memory::string_size(r.len()))?;
-    }
-    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +557,7 @@ fn replace_func(
     let cfg = config().with_known_valid_utf8(valid_utf8);
     state::set_last_error(PregError::NoError);
     let mut thrown = None;
-    let out = php_pcre::replace_callback(&re, &cfg, subject, limit, flags, |m| {
+    let out = php_pcre::replace_callback_split(&re, &cfg, subject, limit, flags, |m| {
         if thrown.is_some() {
             return None;
         }
@@ -574,7 +574,7 @@ fn replace_func(
     if let Some(t) = thrown {
         return Err(t);
     }
-    replaced(vm, out.count, out.result.ok())
+    replaced(vm, out, subject)
 }
 
 /// `preg_do_repl_func()`: calls the resolved user callback with the match

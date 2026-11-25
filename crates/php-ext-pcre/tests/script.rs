@@ -259,3 +259,30 @@ fn constants_are_defined() {
     );
     assert_eq!(out, "2512 10 boolean");
 }
+
+/// The replacement result made from its parts in one string: matches at
+/// the start, the end and everywhere, no match (the subject itself), an
+/// empty subject, an empty result, a result longer than 1 KiB, the
+/// callback form, `preg_filter()` with nothing replaced, and an invalid
+/// pattern (`/usr/bin/php8.5 -n`).
+#[test]
+fn replace_result_from_parts() {
+    let out = run(
+        r"echo preg_replace('/o/', '0', '  Hello World  ', -1, $c), $c, '|';
+        echo preg_replace('/z/', '0', 'abc', -1, $c), $c, '|';
+        echo preg_replace('/c$/', 'XY', 'abc'), '|';
+        echo preg_replace('/^a/', 'XY', 'abc'), '|';
+        echo preg_replace('/^/', '>', ''), '|';
+        echo preg_replace('/a/', '', 'aaa'), '|';
+        $big = ''; for ($i = 0; $i < 700; $i++) { $big .= 'ab'; }
+        $r = preg_replace('/b/', 'cc', $big); echo strlen($r), $r[0], $r[-1], $r[-3], '|';
+        echo preg_replace_callback('/b/', fn($m) => 'Q', 'abcb'), '|';
+        echo preg_replace_callback('/z/', fn($m) => 'Q', 'abcb'), '|';
+        var_dump(preg_filter('/z/', 'A', 'abc'));
+        var_dump(@preg_replace('/(', 'x', 'abc'));",
+    );
+    assert_eq!(
+        out,
+        "  Hell0 W0rld  2|abc0|abXY|XYbc|>||2100aca|aQcQ|abcb|NULL\nNULL\n"
+    );
+}

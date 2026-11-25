@@ -54,8 +54,8 @@ pub use matching::{
 };
 pub use regex::{parse_pattern, ParsedPattern, Regex};
 pub use replace::{
-    limit_from_php, replace, replace_array, replace_callback, ReplaceOutcome, Replacement,
-    ReplacementPiece, Replacements,
+    limit_from_php, replace, replace_array, replace_callback, replace_callback_split,
+    replace_split, ReplaceOutcome, ReplaceSplit, Replacement, ReplacementPiece, Replacements,
 };
 pub use split::{grep, quote, quote_if_needed, split, split_with_tail};
 pub use value::{Key, MatchArray, Value};
