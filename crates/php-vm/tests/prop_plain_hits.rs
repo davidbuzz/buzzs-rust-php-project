@@ -114,6 +114,7 @@ function incs($o) {
     var_dump($o->i);
     $o->i = 5; $o->i++; var_dump($o->i);
     $r = &$o->p; $o->p = 1; $o->p++; echo $r, "\n"; unset($r);
+    $al = &$o; $al->p = 1; $al->p++; ++$al->p; echo $al->p, "\n"; unset($al);
 }
 for ($k = 0; $k < 3; $k++) incs($o);
 $g = (new ReflectionClass(C::class))->newLazyGhost(function ($c) { echo "init\n"; $c->p = 42; });
@@ -187,6 +188,7 @@ Cannot increment property C::$i of type int past its maximal value
 int(9223372036854775807)
 int(6)
 2
+3
 5 5 7 7 5
 float(2.5)
 float(9.223372036854776E+18)
@@ -203,6 +205,7 @@ Cannot increment property C::$i of type int past its maximal value
 int(9223372036854775807)
 int(6)
 2
+3
 5 5 7 7 5
 float(2.5)
 float(9.223372036854776E+18)
@@ -219,6 +222,7 @@ Cannot increment property C::$i of type int past its maximal value
 int(9223372036854775807)
 int(6)
 2
+3
 init
 0
 1

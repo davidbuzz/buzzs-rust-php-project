@@ -813,13 +813,24 @@ fn incdec_in(od: &ObjectData, slot: usize, kind: IncDecKind) -> Option<Value> {
     }
 }
 
-/// [`incdec_in`] on a cache hit of place `pid` in frame `f`.
+/// [`incdec_in`] on a cache hit of place `pid` in frame `f`: the entry
+/// and the object as the plain hits take them ([`plain_key`],
+/// [`plain_obj`]); a base holding the object through a reference out of
+/// line ([`incdec_ref_base`]).
 #[inline(always)]
 fn incdec_hit(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
-    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
-    if let Some(od) = hit_data(f, &hit) {
-        return incdec_in(od, hit.slot, kind);
+    let (class, slot, base, _) = plain_key(f, pid, PC_READ | PC_WRITE)?;
+    if let Some(od) = plain_obj(f, base, class) {
+        return incdec_in(od, slot, kind);
     }
+    incdec_ref_base(f, pid, kind)
+}
+
+/// [`incdec_hit`] when the base is a compiled variable holding the object
+/// through a reference (`$o = &$x; $o->p++`).
+#[inline(never)]
+fn incdec_ref_base(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
     if !base_is_ref(f, &hit) {
         return None;
     }
