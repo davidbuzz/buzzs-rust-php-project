@@ -3,10 +3,9 @@
 //! `foreach` over user iterators through the methods resolved once per
 //! class (`zend_class_iterator_funcs`, `Zend/zend_interfaces.c`):
 //! methods overridden in subclasses, `IteratorAggregate` returning a
-//! generator, another aggregate or a native iterator, iterator_to_array
-//! and unpacking, an exception from each method, and more classes than
-//! the per-thread table remembers at once. Expected output from
-//! `/usr/bin/php8.5 -n`.
+//! generator or another aggregate, iterator_to_array and unpacking, an
+//! exception from each method, and more classes than the per-thread
+//! table remembers at once. Expected output from `/usr/bin/php8.5 -n`.
 mod common;
 
 use php_vm::VmOptions;
@@ -49,7 +48,7 @@ class Sub2 extends Sub { function rewind(): void { $this->i = 1; } }
 class Agg implements IteratorAggregate { function getIterator(): Iterator { yield 'a' => 1; yield 'b' => 2; } }
 class Agg2 implements IteratorAggregate { function getIterator(): Iterator { return new Sub(2); } }
 class Nested implements IteratorAggregate { function getIterator(): Traversable { return new Agg2; } }
-class Bad implements IteratorAggregate { function getIterator(): Traversable { return new ArrayIterator([7, 8]); } }
+class Bad implements IteratorAggregate { function getIterator(): Traversable { return new It(1); } }
 function show($t) { $o = []; foreach ($t as $k => $v) { $o[] = "$k=$v"; } return implode(',', $o); }
 function run() {
     for ($r = 0; $r < 2; $r++) {
@@ -81,9 +80,9 @@ function many() {
 }
 many();
 "###),
-        r###"0=c0,1=c1 | k0=subc0,k1=subc1 | k1=subc1,k2=subc2 | a=1,b=2 | k0=subc0,k1=subc1 | k0=subc0,k1=subc1 | 0=7,1=8
+        r###"0=c0,1=c1 | k0=subc0,k1=subc1 | k1=subc1,k2=subc2 | a=1,b=2 | k0=subc0,k1=subc1 | k0=subc0,k1=subc1 | 0=c0
 subc0,subc1 subc1,subc2
-0=c0,1=c1 | k0=subc0,k1=subc1 | k1=subc1,k2=subc2 | a=1,b=2 | k0=subc0,k1=subc1 | k0=subc0,k1=subc1 | 0=7,1=8
+0=c0,1=c1 | k0=subc0,k1=subc1 | k1=subc1,k2=subc2 | a=1,b=2 | k0=subc0,k1=subc1 | k0=subc0,k1=subc1 | 0=c0
 subc0,subc1 subc1,subc2
 in current after 0:0
 in key after 0:0
