@@ -1054,6 +1054,9 @@ fn spread_frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, us
             return None;
         }
     }
+    if !crate::special::frameless_arity(lc.as_bytes(), argc) {
+        return None;
+    }
     let back = |from: usize| u32::try_from(end - from).ok();
     let fc = FramelessCall {
         name,
@@ -1119,6 +1122,9 @@ fn frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
                 argc += 1;
             }
             Op::DoCall { dst } if argc > 0 => {
+                if !crate::special::frameless_arity(lc.as_bytes(), argc) {
+                    return None;
+                }
                 let fc = FramelessCall {
                     name,
                     ns,

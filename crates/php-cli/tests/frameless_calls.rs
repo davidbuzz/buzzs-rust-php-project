@@ -155,3 +155,79 @@ bool(true)
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// The type tests, `strlen()` and `count()` from namespaced code, answered
+/// in place where nothing can see the call: every type of value, a
+/// reference, a closed resource, a `Countable` object and recursive
+/// counts (the handler), a non-countable value (the handler's frame in the
+/// trace), `strlen()` of numbers, booleans and `null` (coerced and
+/// deprecated), temporaries, a namespace's own `strlen()`, and
+/// `strict_types`. Expected output: php-src's (PHP 8.4 CLI; the trace's
+/// file paths are those of standard input).
+#[test]
+#[allow(clippy::too_many_lines)] // the scripts and their expected output
+fn type_tests_strlen_and_count() {
+    let src = r#"<?php
+namespace App {
+    class C implements \Countable { function count(): int { echo "[count]"; return 7; } }
+    function t() {
+        $f = fopen('php://memory', 'r'); $closed = fopen('php://memory', 'r'); fclose($closed);
+        $vals = [null, true, 0, 1.5, 'a', '12', [], [1], new \stdClass, $f, $closed];
+        foreach ($vals as $v) {
+            $r = &$v;
+            echo json_encode([is_int($v), is_string($v), is_array($v), is_bool($v), is_null($v), is_float($v), is_object($v), is_resource($v), is_scalar($v), is_numeric($v), is_int($r)]), "\n";
+            unset($r);
+        }
+        var_dump(count([1, 2]), count([[1, 2], 3], COUNT_RECURSIVE), sizeof([1]), count(new C), strlen('abc'), strlen(''), strlen(42), strlen(1.5), strlen(true));
+        try { count(new \stdClass); } catch (\TypeError $e) { echo $e->getMessage(), ' @', $e->getTrace()[0]['function'], "\n"; }
+        try { count('str'); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+        echo strlen(null), "\n";
+        $t = 'tmp'; var_dump(strlen($t . 'x'), count(array_keys([1, 2, 3])), is_array(array_keys([])));
+    }
+}
+namespace Shadow { function strlen($s) { return "shadow"; } function check() { return strlen('abc'); } }
+namespace { App\t(); var_dump(Shadow\check()); }
+"#;
+    let expected = r#"[false,false,false,false,true,false,false,false,false,false,false]
+[false,false,false,true,false,false,false,false,true,false,false]
+[true,false,false,false,false,false,false,false,true,true,true]
+[false,false,false,false,false,true,false,false,true,true,false]
+[false,true,false,false,false,false,false,false,true,false,false]
+[false,true,false,false,false,false,false,false,true,true,false]
+[false,false,true,false,false,false,false,false,false,false,false]
+[false,false,true,false,false,false,false,false,false,false,false]
+[false,false,false,false,false,false,true,false,false,false,false]
+[false,false,false,false,false,false,false,true,false,false,false]
+[false,false,false,false,false,false,false,false,false,false,false]
+[count]int(2)
+int(4)
+int(1)
+int(7)
+int(3)
+int(0)
+int(2)
+int(3)
+int(1)
+count(): Argument #1 ($value) must be of type Countable|array, stdClass given @count
+count(): Argument #1 ($value) must be of type Countable|array, string given
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in tt.php on line 15
+0
+int(4)
+int(3)
+bool(true)
+string(6) "shadow"
+"#;
+    assert_eq!(run(src).replace("Standard input code", "tt.php"), expected);
+    let src = r#"<?php
+declare(strict_types=1);
+namespace S;
+try { var_dump(strlen(42)); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(is_string('x'), count([1]));
+"#;
+    let expected = r"strlen(): Argument #1 ($string) must be of type string, int given
+bool(true)
+int(1)
+";
+    assert_eq!(run(src), expected);
+}

@@ -267,14 +267,16 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
     assert!(with
         .iter()
         .any(|o| matches!(o, Op::GetCalledClass { dst: Some(_) })));
-    // `count($y, 1)`, the `is_integer` alias and two-argument `get_class`
-    // remain calls.
+    // `count($y, 1)` and two-argument `get_class` remain calls; the
+    // `is_integer` alias is a frameless call (its own ops run while it is
+    // deprecated).
     assert_eq!(
         with.iter()
             .filter(|o| matches!(o, Op::DoCall { .. }))
             .count(),
-        3
+        2
     );
+    assert!(with.iter().any(|o| matches!(o, Op::FramelessICall(_))));
     let without = ops(src, 0);
     assert!(!without.iter().any(|o| matches!(
         o,
@@ -285,10 +287,13 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
             | Op::GetClass { .. }
             | Op::GetCalledClass { .. }
     )));
+    // Every one remains a call (the one-argument type tests, `strlen()` and
+    // `count()` as frameless calls, which run their own ops unless the
+    // builtin is there).
     assert_eq!(
         without
             .iter()
-            .filter(|o| matches!(o, Op::DoCall { .. }))
+            .filter(|o| matches!(o, Op::DoCall { .. } | Op::FramelessICall(_)))
             .count(),
         11
     );

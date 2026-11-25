@@ -3321,7 +3321,7 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
 /// What the builtin with [`fe`] id `id` returns for `val`, when its handler
 /// reports nothing for it; `None` otherwise (the handler runs).
 #[inline]
-fn fast_eval(id: u8, val: &Value) -> Option<Value> {
+pub(crate) fn fast_eval(id: u8, val: &Value) -> Option<Value> {
     match id {
         fe::IS_INT => Some(Value::Bool(matches!(val, Value::Int(_)))),
         fe::IS_STRING => Some(Value::Bool(matches!(val, Value::Str(_)))),
