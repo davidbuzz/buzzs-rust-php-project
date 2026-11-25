@@ -39,8 +39,10 @@ impl Buf {
         self.compact_at = self.entries.len() * 2;
     }
 
-    /// Empties the buffer, clearing every entry's buffered bit.
+    /// Empties the buffer, clearing every entry's buffered bit; the slots
+    /// of the dead entries are gone with them.
     fn drain(&mut self) -> Vec<WeakRef> {
+        forget_freed_slots();
         let entries = std::mem::take(&mut self.entries);
         for w in &entries {
             w.set_buffered(false);
@@ -49,10 +51,51 @@ impl Buf {
     }
 }
 
+/// The buffer lets go of its entries at thread exit: their bits go first.
+impl Drop for Buf {
+    fn drop(&mut self) {
+        for w in &self.entries {
+            w.set_buffered(false);
+        }
+    }
+}
+
 thread_local! {
     static RECORDING: Cell<bool> = const { Cell::new(false) };
     static NOTIFY: Cell<Option<fn()>> = const { Cell::new(None) };
     static BUF: RefCell<Buf> = RefCell::new(Buf::default());
+    /// Slots of references freed while buffered since the buffer was last
+    /// emptied: php-src takes a freed root out of the buffer
+    /// (`GC_REMOVE_FROM_BUFFER`) and the next root reuses its slot
+    /// (`GC_FETCH_UNUSED`), which hands out no new slot, so it neither
+    /// moves nor checks the threshold. Each one lets the next reference
+    /// be buffered without [`NOTIFY`].
+    static FREED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A buffered reference was freed (from `release_last`, once per
+/// reference): its slot is free for the next root.
+#[cold]
+pub(crate) fn buffered_freed() {
+    let _ = FREED.try_with(|n| n.set(n.get() + 1));
+}
+
+/// Takes one freed slot, if there is one (see [`FREED`]).
+fn reuse_freed_slot() -> bool {
+    FREED
+        .try_with(|n| {
+            let k = n.get();
+            if k > 0 {
+                n.set(k - 1);
+            }
+            k > 0
+        })
+        .unwrap_or(false)
+}
+
+/// The buffer was emptied: no freed slot is left to reuse.
+fn forget_freed_slots() {
+    let _ = FREED.try_with(|n| n.set(0));
 }
 
 /// Called by `PhpRef::drop` when a handle is released and others remain.
@@ -76,13 +119,17 @@ fn buffer(r: &PhpRef) {
     {
         return;
     }
-    // The collector may run (and empty the buffer) before the new root is
-    // added, like `gc_possible_root_when_full`.
-    if let Some(f) = NOTIFY.try_with(Cell::get).ok().flatten() {
-        f();
-    }
-    if r.is_buffered() {
-        return;
+    // A slot freed by a reference that died while buffered is reused:
+    // nothing new is handed out. Otherwise the collector may run (and
+    // empty the buffer) before the new root is added, like
+    // `gc_possible_root_when_full`.
+    if !reuse_freed_slot() {
+        if let Some(f) = NOTIFY.try_with(Cell::get).ok().flatten() {
+            f();
+        }
+        if r.is_buffered() {
+            return;
+        }
     }
     let w = r.downgrade();
     let _ = BUF.try_with(|b| {
@@ -180,6 +227,9 @@ pub fn stash() -> Stash {
 /// were buffered first). References freed in the meantime are dropped,
 /// and one buffered again is kept once.
 pub fn unstash(s: Stash) {
+    // The collector counts the buffer afresh after this ([`len`]): a slot
+    // freed before is no longer one to reuse.
+    forget_freed_slots();
     if s.0.is_empty() {
         return;
     }
@@ -296,9 +346,12 @@ mod tests {
         // Dropping the taken root (a handle while `r` remains) buffers again.
         assert!(r.is_buffered());
         assert_eq!(len(), 1);
-        drop(take());
+        // Taken and kept: the bit is clear until the taken handle goes.
+        let roots = take();
         assert!(!r.is_buffered());
         set_recording(false);
+        drop(roots);
+        assert!(!r.is_buffered());
     }
 
     /// A reference freed while buffered leaves a dead entry: not counted,
@@ -382,6 +435,61 @@ mod tests {
         drop(roots);
         drop(take());
         set_recording(false);
+    }
+
+    thread_local! {
+        static NOTIFIED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn count_notify() {
+        NOTIFIED.with(|n| n.set(n.get() + 1));
+    }
+
+    /// A reference freed while buffered frees its slot: the next reference
+    /// buffered takes it without a new slot (no notify, so no threshold
+    /// check), as php-src's root buffer reuses a removed root's slot. The
+    /// buffer emptied, no freed slot is left.
+    #[test]
+    fn a_freed_buffered_reference_frees_its_slot() {
+        set_recording(true);
+        drop(take());
+        set_notify(Some(count_notify));
+        NOTIFIED.with(|n| n.set(0));
+        let a = PhpRef::new(Value::empty_array());
+        drop(a.clone());
+        assert_eq!(NOTIFIED.with(Cell::get), 1);
+        drop(a);
+        assert_eq!(len(), 0);
+        // Reuses the slot of `a`.
+        let b = PhpRef::new(Value::empty_array());
+        drop(b.clone());
+        assert_eq!(NOTIFIED.with(Cell::get), 1);
+        assert_eq!(len(), 1);
+        // No freed slot left: a new one.
+        let c = PhpRef::new(Value::empty_array());
+        drop(c.clone());
+        assert_eq!(NOTIFIED.with(Cell::get), 2);
+        // Freed slots go with the buffer.
+        drop(c);
+        // (The taken handle of `b` is kept: releasing it would buffer `b`
+        // again, with a notify of its own.)
+        let taken = take();
+        let d = PhpRef::new(Value::empty_array());
+        drop(d.clone());
+        assert_eq!(NOTIFIED.with(Cell::get), 3);
+        // A reference never buffered frees no slot.
+        let e = PhpRef::new(Value::empty_array());
+        drop(e);
+        let f = PhpRef::new(Value::empty_array());
+        drop(f.clone());
+        assert_eq!(NOTIFIED.with(Cell::get), 4);
+        set_notify(None);
+        set_recording(false);
+        drop(taken);
+        set_notify(None);
+        set_recording(false);
+        drop(take());
+        drop((b, d, f));
     }
 
     #[test]

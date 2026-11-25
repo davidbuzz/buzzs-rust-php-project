@@ -368,6 +368,13 @@ fn inc_weak(word: &Cell<u32>) {
 /// whose value has not been dropped yet (this runs once per allocation).
 #[inline(never)]
 unsafe fn release_last(ptr: NonNull<RefBox>) {
+    // SAFETY: the allocation is alive (the strong handles' collective weak
+    // count); a reference to the count word only.
+    if unsafe { &(*ptr.as_ptr()).weak }.get() & BUFFERED != 0 {
+        // `GC_REMOVE_FROM_BUFFER`: its root buffer slot is free again (the
+        // dead entry itself goes when the buffer is next emptied).
+        crate::ref_roots::buffered_freed();
+    }
     /// Finishes the release after the value's drop, also when that drop
     /// panics (as `Rc` still frees its allocation then).
     struct Rest(NonNull<RefBox>);
