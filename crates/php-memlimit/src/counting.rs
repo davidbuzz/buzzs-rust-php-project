@@ -85,6 +85,22 @@ fn is_big(size: usize) -> bool {
     size > 255 * crate::limit::PAGE_SIZE && size <= MAX_LARGE_SIZE
 }
 
+/// The "tried to allocate %zu bytes" figure of a limit error for a request
+/// charged `size` bytes ([`heap::zend_size`]): `zend_mm_check_limit`'s
+/// `add_size`, which is the huge block's page-rounded size (or, for a huge
+/// block growing in place, the growth: `zend_mm_realloc_huge`) and, for
+/// every small or large request, the new chunk it would need
+/// (`zend_mm_alloc_pages`: `ZEND_MM_CHUNK_SIZE`); a request served from a
+/// chunk the heap already has never checks the limit.
+#[inline]
+fn zend_tried(size: usize, huge: bool) -> usize {
+    if huge {
+        size
+    } else {
+        crate::limit::CHUNK_SIZE
+    }
+}
+
 /// Increments a statistics counter with a plain load/store instead of a
 /// locked read-modify-write: concurrent bumps from several threads may be
 /// lost (the counts are informational), but the operation stays sound and
@@ -1093,7 +1109,7 @@ impl<A> CountingAlloc<A> {
         let new = self
             .owned
             .load(Relaxed)
-            .wrapping_add(layout.size())
+            .wrapping_add(heap::zend_size(layout.size()))
             .wrapping_add(self.shared.load(Relaxed));
         if new > self.soft_raw.load(Relaxed) {
             return false;
@@ -1135,7 +1151,7 @@ impl<A> CountingAlloc<A> {
                     let hard_limit = self.hard_limit().unwrap_or(LIMIT_MAX);
                     handler(HardLimitExceeded {
                         hard_limit,
-                        tried: size,
+                        tried: zend_tried(size, huge),
                     });
                 }
             }
@@ -1152,7 +1168,10 @@ impl<A> CountingAlloc<A> {
         if self.limit_allows(before, size, huge, big, limit) {
             return true;
         }
-        let recorded = self.record(OverLimit { limit, tried: size });
+        let recorded = self.record(OverLimit {
+            limit,
+            tried: zend_tried(size, huge),
+        });
         let granted = !in_fallible_scope();
         if recorded && granted {
             // Zend's failing allocation never happens; ours does, so leave
@@ -1522,7 +1541,7 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                 } else {
                     // `dealloc` only consults the registry for huge sizes.
                     self.free_uncounted_slot(slot);
-                    self.count_granted(new_size);
+                    self.count_granted(heap::zend_size(new_size));
                     if is_big(new_size) {
                         self.big_change(1, 0);
                     }
@@ -1537,10 +1556,11 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                 let p = unsafe { self.raw_realloc(ptr, layout, new_size, self.is_owner()) };
                 self.register_uncounted(slot, p, new_size);
                 if !p.is_null() {
-                    self.release(old_size);
+                    let old_charged = heap::zend_size(old_size);
+                    self.release(old_charged);
                     bump(&self.reallocs);
                     if old_size > MAX_LARGE_SIZE {
-                        self.huge_change(0, old_size);
+                        self.huge_change(0, old_charged);
                     }
                     if is_big(old_size) {
                         self.big_change(0, 1);
@@ -1567,11 +1587,15 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         new_size: usize,
         owner: bool,
     ) -> *mut u8 {
-        let old_size = layout.size();
-        if new_size > old_size {
-            let grow = new_size - old_size;
-            let becomes_big = is_big(new_size) && !is_big(old_size);
-            match self.admit(grow, new_size > MAX_LARGE_SIZE, becomes_big, owner) {
+        // What php-src's heap charges for each size: a resize within one
+        // size class changes no count (`zend_mm_realloc_heap` keeps the
+        // block), one across classes moves the count by the difference.
+        let old_size = heap::zend_size(layout.size());
+        let charged = heap::zend_size(new_size);
+        if charged > old_size {
+            let grow = charged - old_size;
+            let becomes_big = is_big(charged) && !is_big(old_size);
+            match self.admit(grow, charged > MAX_LARGE_SIZE, becomes_big, owner) {
                 Admit::Counted => {}
                 Admit::Refused => return ptr::null_mut(),
                 Admit::Observed => {
@@ -1591,23 +1615,24 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                 self.release(grow);
             } else {
                 bump(&self.reallocs);
-                self.huge_realloc(old_size, new_size);
+                self.huge_realloc(old_size, charged);
             }
             p
         } else {
             // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
             let p = unsafe { self.raw_realloc(ptr, layout, new_size, owner) };
             if !p.is_null() {
-                self.release(old_size - new_size);
+                self.release(old_size - charged);
                 bump(&self.reallocs);
-                self.huge_realloc(old_size, new_size);
+                self.huge_realloc(old_size, charged);
             }
             p
         }
     }
 
-    /// Huge- and big-block bookkeeping after a counted realloc from
-    /// `old_size` to `new_size` bytes.
+    /// Huge- and big-block bookkeeping after a counted realloc from a block
+    /// charged `old_size` bytes to one charged `new_size` bytes (see
+    /// [`heap::zend_size`]).
     #[inline]
     fn huge_realloc(&self, old_size: usize, new_size: usize) {
         let old_huge = old_size > MAX_LARGE_SIZE;
@@ -1668,12 +1693,13 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
                 self.raw_alloc(layout, owner)
             }
         };
+        let charged = heap::zend_size(layout.size());
         if p.is_null() {
-            self.release(layout.size());
+            self.release(charged);
         } else {
             bump(&self.allocs);
             if layout.size() > MAX_LARGE_SIZE {
-                self.huge_change(layout.size(), 0);
+                self.huge_change(charged, 0);
             }
         }
         self.notify(HeapEvent::Alloc {
@@ -1695,11 +1721,12 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         let old_size = layout.size();
         // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
         let p = unsafe { self.raw_realloc(ptr, layout, new_size, self.is_owner()) };
+        let (old_charged, charged) = (heap::zend_size(old_size), heap::zend_size(new_size));
         if p.is_null() {
-            self.release(new_size - old_size);
+            self.release(charged - old_charged);
         } else {
             bump(&self.reallocs);
-            self.huge_realloc(old_size, new_size);
+            self.huge_realloc(old_charged, charged);
         }
         self.notify(HeapEvent::Realloc {
             size: new_size,
@@ -1819,7 +1846,7 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         if p.is_null() {
             return p;
         }
-        if !self.count_fast(layout.size()) {
+        if !self.count_fast(heap::zend_size(layout.size())) {
             // Over the soft threshold: the general path decides (and pops
             // this block again).
             // SAFETY: popped just above, not handed out.
@@ -1845,10 +1872,11 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     #[cold]
     #[inline(never)]
     unsafe fn alloc_general(&self, layout: Layout, zeroed: bool) -> *mut u8 {
-        let huge = layout.size() > MAX_LARGE_SIZE;
-        let big = is_big(layout.size());
+        let size = heap::zend_size(layout.size());
+        let huge = size > MAX_LARGE_SIZE;
+        let big = is_big(size);
         let owner = self.is_owner();
-        match self.admit(layout.size(), huge, big, owner) {
+        match self.admit(size, huge, big, owner) {
             Admit::Counted => {}
             Admit::Refused => return ptr::null_mut(),
             // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
@@ -1865,11 +1893,11 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             }
         };
         if p.is_null() {
-            self.release(layout.size());
+            self.release(size);
         } else {
             bump(&self.allocs);
             if huge {
-                self.huge_change(layout.size(), 0);
+                self.huge_change(size, 0);
             }
             if big {
                 self.big_change(1, 0);
@@ -1888,10 +1916,13 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     #[cold]
     #[inline(never)]
     unsafe fn dealloc_general(&self, ptr: *mut u8, layout: Layout) {
-        let size = layout.size();
+        // Uncounted blocks are registered with their exact size, counted
+        // ones are charged their size class.
+        let raw = layout.size();
+        let size = heap::zend_size(raw);
         let owner = self.is_owner();
         // Unregister before the block can be reused by another thread.
-        let uncounted = size > MAX_LARGE_SIZE && self.forget_uncounted(ptr, size);
+        let uncounted = raw > MAX_LARGE_SIZE && self.forget_uncounted(ptr, raw);
         // SAFETY: caller guarantees `ptr` was allocated by this allocator
         // with `layout`.
         unsafe { self.raw_dealloc(ptr, layout, owner) };
@@ -1967,7 +1998,9 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
                 // maps to; the calling thread owns the heap.
                 unsafe { self.heap.push(ptr, bin) };
                 self.owned.store(
-                    self.owned.load(Relaxed).wrapping_sub(layout.size()),
+                    self.owned
+                        .load(Relaxed)
+                        .wrapping_sub(heap::zend_size(layout.size())),
                     Relaxed,
                 );
                 bump(&self.frees);

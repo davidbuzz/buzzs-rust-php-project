@@ -48,7 +48,7 @@ pub use counting::{
     fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
     Stats,
 };
-pub use heap::{MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
+pub use heap::{zend_size, MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,

@@ -173,6 +173,49 @@ pub fn small_bin(layout: Layout) -> Option<usize> {
     }
 }
 
+/// The element size of the bin serving a request of `i * 8` bytes, for
+/// every `i` up to `MAX_SMALL_SIZE / 8`: `bin_data_size[zend_mm_small_size_to_bin(size)]`
+/// (`Zend/zend_alloc.c`, lines 380-383 and 1451-1480). Bin sizes are
+/// multiples of 8, so a size and its next multiple of 8 share a bin.
+static SIZE_TO_CLASS: [u16; MAX_SMALL_SIZE / 8 + 1] = {
+    let mut t = [0u16; MAX_SMALL_SIZE / 8 + 1];
+    let mut i = 0;
+    while i < t.len() {
+        t[i] = BIN_SIZE[small_size_to_bin(i * 8)];
+        i += 1;
+    }
+    t
+};
+
+/// The bytes php-src's allocator charges to `heap->size` (what
+/// `memory_get_usage()` reports) for an `emalloc(size)`:
+///
+/// * up to `ZEND_MM_MAX_SMALL_SIZE` (3072), the element size of the
+///   request's bin (`zend_mm_alloc_small`: `heap->size +=
+///   bin_data_size[bin_num]`);
+/// * up to `ZEND_MM_MAX_LARGE_SIZE`, whole 4 KiB pages
+///   (`zend_mm_alloc_large_ex`: `pages_count * ZEND_MM_PAGE_SIZE`);
+/// * above, the request rounded up to `REAL_PAGE_SIZE`, also 4 KiB here
+///   (`zend_mm_alloc_huge`: `ZEND_MM_ALIGNED_SIZE_EX(size, REAL_PAGE_SIZE)`).
+///
+/// Large and huge blocks round the same way, so the function has one
+/// branch: a table load below 3072 bytes, an add and a mask above. Every
+/// threshold the accounting tests a size against (`MAX_SMALL_SIZE`,
+/// `MAX_LARGE_SIZE`, the big-block bound) is a fixed point of it, so a
+/// size and its class fall on the same side of each.
+///
+/// `size` is at most `isize::MAX` (a `Layout` size), so the rounding
+/// cannot overflow.
+#[inline]
+#[must_use]
+pub fn zend_size(size: usize) -> usize {
+    if size <= MAX_SMALL_SIZE {
+        usize::from(SIZE_TO_CLASS[(size + 7) >> 3])
+    } else {
+        (size + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1)
+    }
+}
+
 // ---- chunk map --------------------------------------------------------
 
 /// `log2(CHUNK_SIZE)`.
