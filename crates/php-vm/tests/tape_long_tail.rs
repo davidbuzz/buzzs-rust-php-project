@@ -342,3 +342,83 @@ true
 "#
     );
 }
+
+/// `$c::name()` with the class named by a variable (any case, a leading
+/// `\`), by a temporary and by an object, inherited and overridden static
+/// methods (late static binding), a private method (`__callStatic` from
+/// outside, the method from its class), a non-static method with and
+/// without a compatible `$this`, an abstract method, an undeclared class
+/// (the `Error`, then autoloading); `$f()` of a function's name in any
+/// case, a builtin, a `Class::name` string, an undefined function and
+/// values that are not callable.
+#[test]
+fn dynamic_static_and_function_names() {
+    assert_eq!(
+        run(r#"<?php
+class S {
+    static function s($x) { return "S::s$x"; }
+    function i($x) { return "S::i$x" . (isset($this) ? '+this' : ''); }
+    private static function p($x) { return "S::p$x"; }
+    static function __callStatic($n, $a) { return "S::__callStatic $n"; }
+    static function viaSelf($c, $x) { return $c::p($x); }
+    function inst($c, $x) { return $c::i($x); }
+}
+class T extends S { static function s($x) { return "T::s$x " . static::class; } }
+abstract class Ab { abstract static function a(); }
+function st($c, $x) { return $c::s($x); }
+function sp($c, $x) { return $c::p($x); }
+function si($c, $x) { return $c::i($x); }
+function stt($c, $x) { return ($c . '')::s($x); }
+function fn_($f, $x) { return $f($x); }
+function lower($x) { return "lower$x"; }
+$t = new T;
+for ($i = 0; $i < 3; $i++) {
+    echo st('S', $i), ' ', st('s', $i), ' ', st('\S', $i), ' ', st('T', $i), ' ', st($t, $i), ' ', stt('T', $i), "\n";
+    echo sp('S', $i), ' ', S::viaSelf('S', $i), ' ', $t->inst('S', $i), "\n";
+    foreach ([['Nope', 's'], ['Ab', 'a'], ['S', 'i']] as [$c, $m]) {
+        try { echo $m === 's' ? st($c, $i) : ($m === 'a' ? $c::a() : si($c, $i)), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    }
+    echo fn_('lower', $i), ' ', fn_('LOWER', $i), ' ', fn_('\lower', $i), ' ', fn_('strtoupper', "a$i"), ' ', fn_('S::s', $i), "\n";
+    foreach (['nofn', 5, null, 'Nope::x'] as $f) {
+        try { echo fn_($f, $i), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    }
+}
+spl_autoload_register(function ($c) { echo "autoload $c\n"; if ($c === 'Late') { eval('class Late { static function s($x) { return "Late::s$x"; } }'); } });
+for ($i = 0; $i < 2; $i++) { echo st('Late', $i), "\n"; }
+"#),
+        r#"S::s0 S::s0 S::s0 T::s0 T T::s0 T T::s0 T
+S::__callStatic p S::p0 S::i0+this
+Error: Class "Nope" not found
+Error: Cannot call abstract method Ab::a()
+Error: Non-static method S::i() cannot be called statically
+lower0 lower0 lower0 A0 S::s0
+Error: Call to undefined function nofn()
+Error: Value of type int is not callable
+Error: Value of type null is not callable
+Error: Class "Nope" not found
+S::s1 S::s1 S::s1 T::s1 T T::s1 T T::s1 T
+S::__callStatic p S::p1 S::i1+this
+Error: Class "Nope" not found
+Error: Cannot call abstract method Ab::a()
+Error: Non-static method S::i() cannot be called statically
+lower1 lower1 lower1 A1 S::s1
+Error: Call to undefined function nofn()
+Error: Value of type int is not callable
+Error: Value of type null is not callable
+Error: Class "Nope" not found
+S::s2 S::s2 S::s2 T::s2 T T::s2 T T::s2 T
+S::__callStatic p S::p2 S::i2+this
+Error: Class "Nope" not found
+Error: Cannot call abstract method Ab::a()
+Error: Non-static method S::i() cannot be called statically
+lower2 lower2 lower2 A2 S::s2
+Error: Call to undefined function nofn()
+Error: Value of type int is not callable
+Error: Value of type null is not callable
+Error: Class "Nope" not found
+autoload Late
+Late::s0
+Late::s1
+"#
+    );
+}

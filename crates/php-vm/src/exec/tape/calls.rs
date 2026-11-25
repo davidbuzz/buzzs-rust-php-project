@@ -114,6 +114,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             name: Operand::Cv(_) | Operand::Tmp(_),
             ..
         } => Some(plain(TOp::CallInit)),
+        // `$c::name()`: a declared class's public static method
+        // (`init_dyn_static_call`, from `run_call`).
+        Op::InitStaticCall {
+            class: ClassSpec::Dyn(Operand::Cv(_) | Operand::Tmp(_)),
+            name: Operand::Lit(_),
+        } => Some(plain(TOp::CallInit)),
         // `call_user_func[_array]()` written by name (`ZEND_INIT_USER_CALL`),
         // and the arguments it passes (`ZEND_SEND_USER`, `ZEND_SEND_ARRAY`):
         // prepared on the call site's cache hit ([`prepare_user_call`]).
@@ -3904,4 +3910,101 @@ fn slice_range(count: usize, len: Option<&Value>, skip: u32) -> Option<(usize, u
         return Some((skip, 0));
     }
     Some((skip, usize::try_from(len.min(rest)).unwrap_or(usize::MAX)))
+}
+
+// ----------------------------------------------------------------------
+// Calls by a name known only at run time
+// ----------------------------------------------------------------------
+
+/// `ZEND_INIT_DYNAMIC_CALL` of `$f()` for a compiled variable holding a
+/// function's name (`zend_init_dynamic_call_string`): the function found
+/// by one lookup of its lowercase name (one leading `\` dropped), pushed
+/// as the pending call the generic op pushes (`ZEND_CALL_DYNAMIC`).
+/// `false`, having changed nothing, for anything else: a `Class::name`
+/// string, a name not found (the generic op's `Error`), another value, a
+/// reference, an undefined variable, a frame with an attached symbol
+/// table.
+pub(super) fn init_dyn_call_named(vm: &mut Vm, cv: u32) -> bool {
+    let call = {
+        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+            return false;
+        };
+        if f.symtab_attached {
+            return false;
+        }
+        let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+            return false;
+        };
+        match quick_function(&vm.functions, s.as_bytes()) {
+            Some(call) => call,
+            None => return false,
+        }
+    };
+    vm.frame_mut().calls.push(call);
+    true
+}
+
+/// `ZEND_INIT_STATIC_METHOD_CALL` of `$c::name()` (`class` the operand
+/// of a dynamic class: a compiled variable or a temporary holding a
+/// class's name, or a compiled variable holding an object; `lit` the
+/// method name literal) for a class already declared, found by one
+/// lookup of its name (`Vm::find_class`: no autoload), and a public,
+/// static, concrete method of it: pushed as the pending call with the
+/// method's declaring scope and the class as the called scope, no
+/// `$this` (php-src: `ce` the fetched class, `zend_std_get_static_method`
+/// finding a public method). A temporary name is released (`FREE_OP1`).
+/// `false`, having changed nothing, for anything else: an object in a
+/// temporary, a class not declared yet (the autoload, the `Error`), a
+/// method that is not public, not static (the `$this` rules), abstract,
+/// missing (`__callStatic`, the `Error`), a reference, an undefined
+/// variable, a frame with an attached symbol table.
+pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> bool {
+    let (cls, m) = {
+        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+            return false;
+        };
+        let v = match class {
+            Operand::Cv(cv) if !f.symtab_attached => {
+                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+            }
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            _ => None,
+        };
+        let cls = match v {
+            Some(Value::Str(name)) => match vm.find_class(name.as_bytes()) {
+                Some(c) => c,
+                None => return false,
+            },
+            Some(Value::Object(o)) if matches!(class, Operand::Cv(_)) => {
+                Rc::clone(crate::object::class_of(o))
+            }
+            _ => return false,
+        };
+        let Some(Value::Str(mname)) = f.code.literals.get(lit as usize) else {
+            return false;
+        };
+        let mut buf = [0u8; 64];
+        let Some(lc) = lower_into(&mut buf, mname.as_bytes()) else {
+            return false;
+        };
+        let Some(m) = cls.methods.get(lc) else {
+            return false;
+        };
+        if m.visibility() != flags::PUBLIC || !m.is_static() || m.is_abstract() {
+            return false;
+        }
+        let m = Rc::clone(m);
+        (cls, m)
+    };
+    if let Operand::Tmp(t) = class {
+        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    vm.frame_mut().calls.push(PendingCall {
+        scope: Some(m.scope()),
+        called: Some(cls),
+        ..PendingCall::new(m.func.clone())
+    });
+    true
 }

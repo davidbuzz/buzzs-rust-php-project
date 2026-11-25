@@ -2459,6 +2459,15 @@ fn run_call(
             // `Class::name()` by the call site's cache; `self::`,
             // `parent::` and `static::` by the op's slot of the method
             // cache. Not a hot op: else the generic op in `Vm::run`.
+            // `$c::name()`: a declared class's public static method
+            // (`calls::init_dyn_static_call`), pushed as the pending call.
+            if let (&ClassSpec::Dyn(c), &Operand::Lit(lit)) = (class, name) {
+                return if calls::init_dyn_static_call(vm, c, lit) {
+                    at + 1
+                } else {
+                    DECLINED
+                };
+            }
             let call = match (class, name) {
                 (ClassSpec::Named(_), _) => calls::prepare_static(vm, at),
                 (_, &Operand::Lit(lit)) => calls::prepare_relative_static(vm, class, lit, at),
@@ -2478,7 +2487,8 @@ fn run_call(
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
-            return if vm.init_closure_call_fast(cv) {
+            // `$f()` of a function's name (`calls::init_dyn_call_named`).
+            return if vm.init_closure_call_fast(cv) || calls::init_dyn_call_named(vm, cv) {
                 at + 1
             } else {
                 DECLINED

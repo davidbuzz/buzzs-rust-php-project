@@ -1646,6 +1646,31 @@ fn in_array_and_func_num_args() {
     assert_eq!(run(IN_ARRAY_AND_ARGS), "y1n2\ny1n2\ny1n2\n");
 }
 
+const DYN_STATICS: &str = r#"<?php
+class S { static function s($x) { return "s$x"; } }
+function lower($x) { return "l$x"; }
+function st($cls, $fname, $x) { return $cls::s($x) . $fname($x); }
+for ($i = 0; $i < 3; $i++) { echo st('S', 'lower', $i), "\n"; }
+"#;
+
+/// `$c::name()` and `$f()` start as call instructions (`run_call`:
+/// `calls::init_dyn_static_call`, `calls::init_dyn_call_named`).
+#[test]
+fn dynamic_static_and_function_calls() {
+    let arrays = op_arrays(DYN_STATICS);
+    let f = with_cv(&arrays, "cls");
+    let tape = check(f);
+    let inits: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InitStaticCall { .. } | Op::InitDynCall { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(inits, [TOp::CallInit, TOp::CallInit], "{inits:?}");
+    assert_eq!(run(DYN_STATICS), "s0l0\ns1l1\ns2l2\n");
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];
