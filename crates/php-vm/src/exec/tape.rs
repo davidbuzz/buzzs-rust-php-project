@@ -2215,7 +2215,7 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             // trace. Built once per frame entry (two relaxed loads off the
             // op array); dead when the JIT is off or this tape's tracing
             // was killed.
-            let jctx = jit::JitCtx::maybe_for_tape(&c.tape, tape);
+            let mut jctx = jit::JitCtx::maybe_for_tape(&c.tape, tape);
             // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, a
             // frame's stored resume point, or what a hot op continued at),
             // at most `ops.len()`: inside the tape, whose last element is
@@ -2318,6 +2318,32 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             switched = SWITCHED;
                             if crate::interrupt::safe_point_due() {
                                 return (0, LEFT);
+                            }
+                            if incore {
+                                // In place: the callee's op array, tape,
+                                // JIT context and first instruction, with
+                                // no restart of the outer loop.
+                                debug_assert!(prep.is_none());
+                                let Some(nf) = vm.frames.last_mut() else {
+                                    return (0, LEFT);
+                                };
+                                fresh = false;
+                                code = Rc::as_ptr(&nf.code);
+                                let nip = nf.ip;
+                                fp = nf;
+                                // SAFETY: as for `c` above, of the callee's
+                                // frame, which holds its op array.
+                                c = unsafe { &*code };
+                                ops = &c.ops;
+                                lits = &c.literals;
+                                let tape: &[Inst] = c.tape.get(c);
+                                debug_assert_eq!(tape.len(), ops.len() + 1);
+                                tbase = tape.as_ptr();
+                                jctx = jit::JitCtx::maybe_for_tape(&c.tape, tape);
+                                // SAFETY: as for the first `p`: the callee's
+                                // first op, at most `ops.len()`.
+                                p = unsafe { tbase.add(nip.min(ops.len())) };
+                                continue;
                             }
                             reload = true;
                             continue 'frames;
