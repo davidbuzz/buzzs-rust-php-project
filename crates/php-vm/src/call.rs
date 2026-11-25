@@ -3863,7 +3863,7 @@ impl Vm {
     /// [`Vm::builtin_default`] of a parameter whose default is not a
     /// literal: a constant's value, or `None`.
     ///
-    /// `UNKNOWN` is no constant: it is gen_stub's marker of a parameter
+    /// `UNKNOWN` is no constant: it is `gen_stub`'s marker of a parameter
     /// whose default the function works out itself (`array_keys()`'s
     /// `$filter_value`, `mt_rand()`'s bounds), which php-src never looks
     /// up. It is answered before anything else: looking it up as a
@@ -6299,7 +6299,7 @@ mod buffer_tests {
     use super::*;
     use crate::VmOptions;
 
-    /// A literal default is the stub's value; `UNKNOWN` (gen_stub's "the
+    /// A literal default is the stub's value; `UNKNOWN` (`gen_stub`'s "the
     /// function works it out") is no default, also when a script defined
     /// a constant of that name (php-src never looks it up).
     #[test]
