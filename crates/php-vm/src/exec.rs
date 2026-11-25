@@ -642,9 +642,6 @@ impl Vm {
         None
     }
 
-    /// Fast path for reading places directly: direct auto-globals (`$_GET`)
-    /// without breaking to the generic place fetcher.
-    #[inline(always)]
     /// `$cv += $array` (`ZEND_ASSIGN_OP` with `ZEND_ADD` of two arrays:
     /// `add_function_array`) without the place walk: the variable's array
     /// is taken out, separated only if shared, given the operand's keys it
@@ -765,6 +762,9 @@ impl Vm {
         Some(v)
     }
 
+    /// Fast path for reading places directly: direct auto-globals (`$_GET`)
+    /// without breaking to the generic place fetcher.
+    #[inline(always)]
     fn fetch_place_fast(&mut self, place: PlaceId) -> Option<Value> {
         enum FastKind {
             Get,
@@ -774,13 +774,11 @@ impl Vm {
         let kind = {
             let f = self.frames.last()?;
             let p = f.code.places.get(place as usize)?;
-            if !p.segs.is_empty() {
-                // `A::$p[k]` (`ZEND_FETCH_STATIC_PROP_R` + `ZEND_FETCH_DIM_R`).
-                if matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. }) {
-                    return self.static_dim_fast(place, false);
-                }
-                FastKind::None
-            } else {
+            // `A::$p[k]` (`ZEND_FETCH_STATIC_PROP_R` + `ZEND_FETCH_DIM_R`).
+            if !p.segs.is_empty() && matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. }) {
+                return self.static_dim_fast(place, false);
+            }
+            if p.segs.is_empty() {
                 match &p.base {
                     crate::opcode::PlaceBase::Global(crate::opcode::Operand::Lit(lit)) => {
                         let val = f.code.literals.get(*lit as usize)?;
@@ -802,6 +800,8 @@ impl Vm {
                     }
                     _ => FastKind::None,
                 }
+            } else {
+                FastKind::None
             }
         };
         let (idx, val) = match kind {
