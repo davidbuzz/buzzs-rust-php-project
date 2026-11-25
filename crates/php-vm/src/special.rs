@@ -744,14 +744,26 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
         (QUICK_TRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Both))),
         (QUICK_LTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Left))),
         (QUICK_RTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Right))),
-        (QUICK_LOWER, Value::Str(s)) => Some(Value::Str(s.to_ascii_lowercase())),
-        (QUICK_UPPER, Value::Str(s)) => Some(Value::Str(s.to_ascii_uppercase())),
+        (QUICK_LOWER, Value::Str(s)) => Some(Value::Str(case_quick(s, false))),
+        (QUICK_UPPER, Value::Str(s)) => Some(Value::Str(case_quick(s, true))),
         (
             QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX | QUICK_TRIM | QUICK_LTRIM
             | QUICK_RTRIM | QUICK_LOWER | QUICK_UPPER,
             _,
         ) => None,
         (id, v) => crate::call::float_fn_eval(id, v),
+    }
+}
+
+/// `strtoupper()` (`upper`) or `strtolower()` of `s`, as the handlers
+/// return it (`zend_string_toupper` / `zend_string_tolower`: the string
+/// itself when no byte changes). Out of line, as [`trim_default`].
+#[inline(never)]
+fn case_quick(s: &ZStr, upper: bool) -> ZStr {
+    if upper {
+        s.to_ascii_uppercase()
+    } else {
+        s.to_ascii_lowercase()
     }
 }
 
