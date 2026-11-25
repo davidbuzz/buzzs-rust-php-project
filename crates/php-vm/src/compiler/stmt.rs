@@ -1419,6 +1419,9 @@ impl Compiler<'_> {
             if !super::expr::is_superglobal(&id.name) {
                 self.note_cv_write(&id.name);
                 let cv = self.cv(&id.name);
+                // zend_compile_assign moves to the variable's line before
+                // ZEND_ASSIGN, and the next list element is fetched there.
+                self.f().line = target.span.line;
                 self.emit(Op::AssignCv { cv, val, dst });
                 return Ok(());
             }

@@ -1644,7 +1644,7 @@ impl Compiler<'_> {
                 }
                 if !need && !has_ref {
                     if let Some(values) = list_from_array_values(items, value) {
-                        self.compile_list_from_array(items, values, line)?;
+                        self.compile_list_from_array(items, values)?;
                         return Ok(None);
                     }
                 }
@@ -1667,6 +1667,10 @@ impl Compiler<'_> {
                         return Ok(None);
                     }
                 }
+                // A variable source is copied (ZEND_QM_ASSIGN) without moving
+                // the line; any other source leaves the line where compiling
+                // it ended, and the first element is fetched there.
+                let rhs_cv = matches!(v, Operand::Cv(_));
                 let v = match v {
                     Operand::Cv(_) => {
                         let t = self.tmp();
@@ -1675,8 +1679,10 @@ impl Compiler<'_> {
                     }
                     o => o,
                 };
-                self.f().line = line;
-                self.compile_destructure_keep(items, v, line)?;
+                if rhs_cv {
+                    self.f().line = line;
+                }
+                self.compile_destructure_keep(items, v, line, !rhs_cv)?;
                 if need {
                     Ok(Some(v))
                 } else {
@@ -1712,17 +1718,22 @@ impl Compiler<'_> {
     }
 
     /// Destructures `src` (read without consuming); the caller frees it.
+    /// `after_rhs`: the first element is fetched on the line compiling the
+    /// source left (see [`Self::destructure_items`]).
     fn compile_destructure_keep(
         &mut self,
         items: &[Option<ArrayItem>],
         src: Operand,
         line: u32,
+        after_rhs: bool,
     ) -> CResult<()> {
         let keep = Compiler::keep(src);
-        self.destructure_items(items, keep, line)
+        self.destructure_items(items, keep, line, after_rhs)
     }
 
-    /// Destructures `src` and consumes it.
+    /// Destructures `src` and consumes it: a `foreach` target or a nested
+    /// list, whose first element php-src fetches on the line the
+    /// `FE_FETCH` or the enclosing element's fetch is on.
     pub(crate) fn compile_destructure(
         &mut self,
         items: &[Option<ArrayItem>],
@@ -1730,16 +1741,21 @@ impl Compiler<'_> {
         line: u32,
     ) -> CResult<()> {
         let keep = Compiler::keep(src);
-        self.destructure_items(items, keep, line)?;
+        self.destructure_items(items, keep, line, true)?;
         self.free(src);
         Ok(())
     }
 
+    /// The elements of a list assignment from `src`. The first element is
+    /// fetched on the line of the list (`zend_ast_create_list` takes the
+    /// line of its first child, down to the first variable), or with
+    /// `after_rhs` on the line compiling the source left.
     fn destructure_items(
         &mut self,
         items: &[Option<ArrayItem>],
         src: Operand,
         line: u32,
+        after_rhs: bool,
     ) -> CResult<()> {
         if items.iter().all(Option::is_none) {
             return self.err("Cannot use empty list", line);
@@ -1753,6 +1769,7 @@ impl Compiler<'_> {
             );
         }
         let mut idx = 0i64;
+        let mut first = true;
         for it in items {
             let Some(it) = it else {
                 idx += 1;
@@ -1761,7 +1778,17 @@ impl Compiler<'_> {
             if it.unpack {
                 return self.err("Spread operator is not supported in assignments", line);
             }
-            self.f().line = it.span.line;
+            // `zend_compile_list_assign` emits each ZEND_FETCH_LIST_R before
+            // compiling that element's target, so an unkeyed element after
+            // the first is fetched on the line the previous target left
+            // (`[\n$a,\n$b\n] = [];` reports key 1 on the line of `$a`); a
+            // key moves the line to its own when it is compiled.
+            if first {
+                if !after_rhs {
+                    self.f().line = first_leaf_line(it);
+                }
+                first = false;
+            }
             let key = match &it.key {
                 Some(k) => self.compile_expr(k)?,
                 None => {
@@ -1778,6 +1805,8 @@ impl Compiler<'_> {
                 FetchMode::List,
             );
             if let ExprKind::Array { items: sub, .. } = &it.value.kind {
+                // A nested list's first element is fetched on the line its
+                // own fetch from the parent is on.
                 self.compile_destructure(sub, elem, it.span.line)?;
             } else {
                 self.assign_to(&it.value, elem, None)?;
@@ -1790,13 +1819,14 @@ impl Compiler<'_> {
     /// a statement compiles the values in order (copying variables), then
     /// assigns each target its value directly, without building the
     /// array. A pending value is released if an exception interrupts the
-    /// assignments (see [`crate::opcode::LiveTmp`]).
-    #[allow(clippy::similar_names)] // `line` and the `live` ranges
+    /// assignments (see [`crate::opcode::LiveTmp`]). Each target is
+    /// assigned on the line the values (then the previous target) left, as
+    /// `zend_emit_assign_znode` does: a nested list's first element is
+    /// fetched there.
     fn compile_list_from_array(
         &mut self,
         targets: &[Option<ArrayItem>],
         values: &[Option<ArrayItem>],
-        line: u32,
     ) -> CResult<()> {
         let mut ops = Vec::with_capacity(values.len());
         for v in values.iter().flatten() {
@@ -1812,7 +1842,6 @@ impl Compiler<'_> {
         }
         let mut live = Vec::new();
         for (t, (op, start)) in targets.iter().flatten().zip(ops) {
-            self.f().line = line;
             self.assign_to(&t.value, op, None)?;
             if let Operand::Tmp(tmp) = op {
                 let end = self.here();
@@ -3988,6 +4017,20 @@ pub(crate) fn keep_place(p: &mut Place) {
 /// `zend_list_assign_from_array_applies` (`Zend/zend_compile.c)`: a flat,
 /// unkeyed list without references and an unkeyed array literal without
 /// references or spread, one value per target. Returns the values.
+/// The line of a list element's value down to its first variable: the line
+/// php-src gives a list node (`zend_ast_create_list` takes its first
+/// child's line).
+fn first_leaf_line(it: &ArrayItem) -> u32 {
+    match &it.value.kind {
+        ExprKind::Array { items, .. } => items
+            .iter()
+            .flatten()
+            .next()
+            .map_or(it.span.line, first_leaf_line),
+        _ => it.value.span.line,
+    }
+}
+
 fn list_from_array_values<'a>(
     targets: &[Option<ArrayItem>],
     value: &'a Expr,
