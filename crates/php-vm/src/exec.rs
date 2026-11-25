@@ -463,7 +463,7 @@ impl Vm {
         &self,
         cv: u32,
         dim: Operand,
-        lc: &[u8],
+        which: AaFn,
     ) -> Option<(Obj, Rc<crate::func::Method>)> {
         let f = self.frame();
         let obj = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
@@ -471,22 +471,13 @@ impl Vm {
             _ => return None,
         };
         let m = {
-            let cls = crate::object::class_of(&obj);
-            let mut c = Some(cls);
-            while let Some(k) = c {
-                if k.flags & crate::class::cflags::INTERNAL != 0 {
-                    return None;
-                }
-                c = k.parent.as_ref();
-            }
-            if !cls.instance_of_name(b"arrayaccess") {
-                return None;
-            }
-            let m = cls.methods.get(lc)?;
-            if !matches!(m.func, Func::User(_)) {
-                return None;
-            }
-            m.clone()
+            let fns = crate::object::class_of(&obj).user_array_access()?;
+            match which {
+                AaFn::Get => fns.get.as_ref(),
+                AaFn::Set => fns.set.as_ref(),
+                AaFn::Exists => fns.exists.as_ref(),
+            }?
+            .clone()
         };
         let dim_ok = match dim {
             Operand::Cv(d) => f
@@ -510,7 +501,7 @@ impl Vm {
     /// `Ok(false)`, nothing changed, leaves every other case to the walk.
     #[inline(never)]
     fn assign_dim_array_access(&mut self, cv: u32, dim: Operand, val: Operand) -> VmResult<bool> {
-        let Some((obj, m)) = self.array_access_target(cv, dim, b"offsetset") else {
+        let Some((obj, m)) = self.array_access_target(cv, dim, AaFn::Set) else {
             return Ok(false);
         };
         let v = match val {
@@ -547,11 +538,11 @@ impl Vm {
         if !matches!(mode, FetchMode::Read | FetchMode::Is) {
             return Ok(None);
         }
-        let Some((obj, get)) = self.array_access_target(cv, dim, b"offsetget") else {
+        let Some((obj, get)) = self.array_access_target(cv, dim, AaFn::Get) else {
             return Ok(None);
         };
         let exists = if mode == FetchMode::Is {
-            match self.array_access_target(cv, dim, b"offsetexists") {
+            match self.array_access_target(cv, dim, AaFn::Exists) {
                 Some((_, m)) => Some(m),
                 None => return Ok(None),
             }
@@ -4212,4 +4203,12 @@ mod leave_tests {
         // Plain data instructions do defer it (`oom_after_main_script.phpt`).
         assert!(defers_oom(&Op::Nop));
     }
+}
+
+/// Which `ArrayAccess` method [`Vm::array_access_target`] looks for.
+#[derive(Clone, Copy)]
+enum AaFn {
+    Get,
+    Set,
+    Exists,
 }

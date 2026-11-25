@@ -296,22 +296,16 @@ impl UserFunction {
     /// declared parameter bound into its compiled variable, as the generic
     /// call leaves them); a by-reference parameter that the call does not
     /// reach (fewer arguments than its position, the limit) is bound from
-    /// its default by its `RECV_INIT` like any other. Every parameter must
-    /// be untyped (or `mixed`): the plain paths check argument types only
-    /// for [`CallShape::TYPED`]. A closure with static variables is left
-    /// out (its variables are its object's, `Frame::statics`).
+    /// its default by its `RECV_INIT` like any other. The declared
+    /// parameters' types are checked by the plain paths themselves when
+    /// any is typed ([`UserFunction::near_typed`]), as the `RECV`s they
+    /// skip would; a typed variadic parameter by its own
+    /// `RECV_VARIADIC`. A closure with static variables is left out (its
+    /// variables are its object's, `Frame::statics`).
     ///
     /// The JIT and the tape's whole-function paths read only
     /// [`UserFunction::call_shape`] and keep away from these.
     #[inline]
-    /// Whether a near-plain call ([`UserFunction::near_plain_limit`], asked
-    /// first) must check its arguments against declared types: a parameter
-    /// other than a trailing variadic one has a type other than `mixed`.
-    #[inline]
-    pub(crate) fn near_typed(&self) -> bool {
-        self.call_shape.near_typed.get()
-    }
-
     pub(crate) fn near_plain_limit(&self) -> Option<usize> {
         let mut s = self.call_shape.near.get();
         if s == 0 {
@@ -323,6 +317,14 @@ impl UserFunction {
         } else {
             Some(usize::from(s - 1))
         }
+    }
+
+    /// Whether a near-plain call ([`UserFunction::near_plain_limit`], asked
+    /// first) must check its arguments against declared types: a parameter
+    /// other than a trailing variadic one has a type other than `mixed`.
+    #[inline]
+    pub(crate) fn near_typed(&self) -> bool {
+        self.call_shape.near_typed.get()
     }
 
     #[cold]

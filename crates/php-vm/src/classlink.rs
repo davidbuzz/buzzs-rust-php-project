@@ -68,6 +68,7 @@ pub(crate) fn build_magic(methods: &NameMap<Rc<Method>>) -> Magic {
         unserialize: g("__unserialize"),
         sleep: g("__sleep"),
         wakeup: g("__wakeup"),
+        array_access: crate::class::ArrayAccessCache::default(),
     }
 }
 
