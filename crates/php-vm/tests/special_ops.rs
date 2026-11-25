@@ -362,8 +362,10 @@ echo $f(1), "\n";
     assert_eq!(status, 0, "{output}");
     // Coerced arguments and dynamic calls push the builtin frame. `abs()`
     // of an int or a float is answered without the handler (and without a
-    // frame: `frameless_inline`), so it shows its real result, not "F".
-    assert_eq!(output, "12.5BB\n1B\nF:falseF:trueB:false\nB\n");
+    // frame: `frameless_inline`), so it shows its real result, not "F";
+    // so does `substr()` once its name is in the run-time cache (`x`: the
+    // first call fills the cache, its handler run frameless).
+    assert_eq!(output, "12.5BB\n1B\nF:falsexB:false\nB\n");
 }
 
 #[test]

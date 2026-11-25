@@ -533,6 +533,38 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
     }
 }
 
+/// [`frameless_args`] of two or three arguments read in place: the same
+/// shapes, without the arguments copied into slots first.
+fn frameless_args_ref(class: u32, args: &[&Value]) -> bool {
+    use Value::{Array, Bool, Float, Int, Null, Str};
+    match (class, args) {
+        (fl::FLOAT2, [Int(_) | Float(_), Int(_) | Float(_)])
+        | (fl::ROUND, [Int(_) | Float(_), Int(_)])
+        | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Str(_), Str(_)])
+        | (fl::STRSTR, [Str(_), Str(_), Bool(_)])
+        | (fl::SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
+        | (fl::STRTR, [Str(_), Str(_), Str(_)])
+        | (fl::KEY_EXISTS, [Str(_) | Int(_), Array(_)]) => true,
+        (fl::TRIM, [Str(_), Str(chars)]) => !has_char_range(chars.as_bytes()),
+        (fl::DIRNAME, [Str(_), Int(levels)]) => *levels >= 1,
+        (fl::STRPOS, [Str(haystack), Str(_), Int(offset)]) => {
+            offset_within(haystack.len(), *offset)
+        }
+        (fl::MIN_MAX, [a, b]) => is_scalar(a) && is_scalar(b),
+        (fl::IN_ARRAY, [needle, Array(haystack)]) => {
+            is_scalar(needle) && loose_comparisons_silent(haystack)
+        }
+        (fl::IN_ARRAY, [needle, Array(haystack), Bool(strict)]) => {
+            is_scalar(needle) && (*strict || loose_comparisons_silent(haystack))
+        }
+        (fl::STR_REPLACE, [Str(search), Str(replace), Str(_)]) => replace.len() <= search.len(),
+        (fl::INTDIV, [Int(dividend), Int(divisor)]) => {
+            *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
+        }
+        _ => false,
+    }
+}
+
 /// The frameless classes whose one-argument call [`frameless_inline`]
 /// answers without a handler.
 #[inline]
@@ -1388,6 +1420,109 @@ impl Vm {
         }
     }
 
+    /// [`Vm::frameless_icall_op`] of a two- or three-argument call of
+    /// builtin `b` (frameless class `class`) answered without a handler,
+    /// the arguments read in place (literals, variables or temporaries that
+    /// are no references, of a shape [`frameless_args_ref`] accepts): the
+    /// `str_*` tests and `array_key_exists()` ([`Vm::frameless_two`]'s
+    /// lookups), `strpos()`, `substr()`, `max()`, `min()` and strict
+    /// `in_array()` (`quick_eval_2`/`_3`), and loose `in_array()` (with
+    /// copies of its two arguments: it compares with the VM at hand). The
+    /// result is computed before anything changes; then the temporaries
+    /// are released, the resume point saved, the interrupt checked and the
+    /// result stored. `None`, nothing changed, otherwise.
+    #[inline]
+    fn frameless_many(
+        &mut self,
+        b: &Builtin,
+        class: u32,
+        fc: &FramelessCall,
+        ip: usize,
+    ) -> Option<VmResult<()>> {
+        enum Got {
+            Done(Value),
+            InArray(Value, Value, bool),
+        }
+        let n = usize::from(fc.argc).min(3);
+        let name = b.name.as_bytes();
+        let got = {
+            let frame = self.frames.last()?;
+            let mut refs: [&Value; 3] = [&Value::Null; 3];
+            for (slot, operand) in refs.iter_mut().zip(&fc.vals[..n]) {
+                let v = match *operand {
+                    Operand::Lit(l) => frame.code.literals.get(l as usize)?,
+                    Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
+                    Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                    _ => return None,
+                };
+                if matches!(v, Value::Reference(_)) {
+                    return None;
+                }
+                *slot = v;
+            }
+            let args = &refs[..n];
+            if !frameless_args_ref(class, args) {
+                return None;
+            }
+            match (class, args) {
+                (fl::STR_TEST, [Value::Str(h), Value::Str(nd)]) => {
+                    let (h, nd) = (h.as_bytes(), nd.as_bytes());
+                    Got::Done(Value::Bool(match name {
+                        b"str_contains" => php_stdstr::search::str_contains(h, nd),
+                        b"str_starts_with" => php_stdstr::search::str_starts_with(h, nd),
+                        b"str_ends_with" => php_stdstr::search::str_ends_with(h, nd),
+                        _ => return None,
+                    }))
+                }
+                (fl::KEY_EXISTS, [Value::Str(k), Value::Array(a)]) => {
+                    Got::Done(Value::Bool(a.get_sym_zstr(k).is_some()))
+                }
+                (fl::KEY_EXISTS, [Value::Int(k), Value::Array(a)]) => {
+                    Got::Done(Value::Bool(a.get_int(*k).is_some()))
+                }
+                (fl::IN_ARRAY, [needle, haystack] | [needle, haystack, Value::Bool(false)]) => {
+                    Got::InArray((*needle).clone(), (*haystack).clone(), false)
+                }
+                _ => {
+                    let (id, _) = quick_id_n(name, n)?;
+                    Got::Done(match args {
+                        [a, b2] => quick_eval_2(id, a, b2)?,
+                        [a, b2, c] => quick_eval_3(id, a, b2, c)?,
+                        _ => return None,
+                    })
+                }
+            }
+        };
+        let v = match got {
+            Got::Done(v) => v,
+            Got::InArray(needle, Value::Array(h), strict) => {
+                match php_stdarr::basic::in_array(self, &needle, &h, strict) {
+                    Ok(found) => Value::Bool(found),
+                    Err(e) => return Some(Err(self.rt_throw(e))),
+                }
+            }
+            Got::InArray(..) => return None,
+        };
+        let frame = self.frames.last_mut()?;
+        // Temporary arguments are consumed (their `Send`s would have moved
+        // them).
+        for operand in &fc.vals[..n] {
+            if let Operand::Tmp(t) = *operand {
+                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                    drop(std::mem::take(slot));
+                }
+            }
+        }
+        frame.ip = ip;
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        if let Some(d) = fc.dst {
+            self.set_tmp(d, v);
+        }
+        Some(Ok(()))
+    }
+
     /// [`Vm::frameless_icall_op`] of a one-argument call of builtin `b`
     /// (frameless class `class`, one [`inline_class`] names) answered
     /// without a handler ([`frameless_inline`]: the type tests, `strlen()`,
@@ -1538,6 +1673,11 @@ impl Vm {
                 return Some(r);
             }
         }
+        if fc.argc >= 2 {
+            if let Some(r) = self.frameless_many(&b, class, fc, ip) {
+                return Some(r);
+            }
+        }
         let frame = self.frames.last_mut()?;
         let n = usize::from(fc.argc).min(3);
         // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`):
@@ -1577,7 +1717,21 @@ impl Vm {
         frame.ip = ip;
         let quick = match n {
             1 => frameless_inline(b.name.as_bytes(), class, sent[0].as_ref()).map(Ok),
-            2 | 3 => self.frameless_two(b.name.as_bytes(), class, &sent[..n]),
+            // `in_array()`, `array_key_exists()` and the `str_*` tests,
+            // then what the tape's quick rows answer for global names
+            // (`strpos()`, `substr()`, `max()`, `min()`, strict `in_array()`:
+            // `quick_eval_2`/`_3`, `None` for shapes they do not take).
+            2 | 3 => self
+                .frameless_two(b.name.as_bytes(), class, &sent[..n])
+                .or_else(|| {
+                    let (id, _) = quick_id_n(b.name.as_bytes(), n)?;
+                    let v = match &sent[..n] {
+                        [Some(a), Some(b)] => quick_eval_2(id, a, b),
+                        [Some(a), Some(b), Some(c)] => quick_eval_3(id, a, b, c),
+                        _ => None,
+                    }?;
+                    Some(Ok(v))
+                }),
             _ => None,
         };
         if let Some(v) = quick {
@@ -1662,8 +1816,52 @@ impl Vm {
 #[cfg(test)]
 mod tests {
     use super::{
-        fl, frameless_arg1, frameless_args, frameless_call, frameless_flags, frameless_inline,
+        fl, frameless_arg1, frameless_args, frameless_args_ref, frameless_call, frameless_flags,
+        frameless_inline,
     };
+
+    /// The two- and three-argument shape test read in place accepts
+    /// exactly what `frameless_args` accepts, for every class.
+    #[test]
+    fn frameless_args_ref_is_frameless_args() {
+        use php_runtime::{ZArray, ZStr};
+        let values = [
+            Value::Null,
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(2),
+            Value::Int(i64::MIN),
+            Value::Float(1.5),
+            Value::Str(ZStr::from("")),
+            Value::Str(ZStr::from("ab")),
+            Value::Str(ZStr::from("a..z")),
+            Value::Array(ZArray::new()),
+            Value::Array(ZArray::from_values([Value::Int(1)])),
+        ];
+        for class in 0..32 {
+            for a in &values {
+                for b in &values {
+                    assert_eq!(
+                        frameless_args_ref(class, &[a, b]),
+                        frameless_args(class, &[Some(a.clone()), Some(b.clone())]),
+                        "class {class}: {a:?}, {b:?}"
+                    );
+                    for c in &values {
+                        assert_eq!(
+                            frameless_args_ref(class, &[a, b, c]),
+                            frameless_args(
+                                class,
+                                &[Some(a.clone()), Some(b.clone()), Some(c.clone())]
+                            ),
+                            "class {class}: {a:?}, {b:?}, {c:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// The one-argument shape test read in place accepts exactly what
     /// `frameless_args` accepts of one argument, for every class.

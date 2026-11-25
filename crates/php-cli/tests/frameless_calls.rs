@@ -333,3 +333,66 @@ string(1) "1"
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Two- and three-argument frameless calls from namespaced code answered
+/// with their arguments read in place: `substr()` with every kind of
+/// offset and length, `strpos()` with offsets inside and outside the
+/// subject (the `ValueError` from the handler's frame), `max()`/`min()`
+/// of mixed types, `strstr()`, `strtr()`, `str_replace()`, `trim()`,
+/// `dirname()`, `intdiv()`, temporaries, coerced arguments and a spread.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // the script and its expected output
+fn string_and_number_frameless_calls() {
+    let src = r#"<?php
+namespace App;
+$s = 'hello world'; $e = '';
+foreach ([[0], [3], [-3], [20], [-20], [3, 2], [3, -2], [3, null], [3, 0], [-5, 3], [0, 100]] as $a) { echo json_encode(substr($s, ...$a)), ' ', json_encode(count($a) == 1 ? substr($s, $a[0]) : substr($s, $a[0], $a[1])), ' '; } echo "\n";
+var_dump(substr($e, 0), substr($e, 1, 1), substr('abc', 1, 1));
+foreach ([['o'], ['o', 5], ['o', -3], ['z'], ['', 0], ['hello'], ['o', 11]] as $a) { echo json_encode(count($a) == 1 ? strpos($s, $a[0]) : strpos($s, $a[0], $a[1])), ' '; } echo "\n";
+try { strpos($s, 'o', 12); } catch (\ValueError $e2) { echo $e2->getMessage(), ' @', $e2->getTrace()[0]['function'], "\n"; }
+try { strpos($s, 'o', -12); } catch (\ValueError $e2) { echo $e2->getMessage(), "\n"; }
+var_dump(max(1, 2), max('a', 'b'), max(1.5, 1), max(true, 2), min(null, 0), min('10', 9), max('abc', 0), max([1], 2), min(-0.0, 0));
+var_dump(strstr('user@example.com', '@'), strstr('user@example.com', '@', true), strtr('abc', 'ab', 'xy'), str_replace('l', 'L', $s), trim(' x ', ' '), dirname('/a/b/c', 2), intdiv(7, 2), str_contains($s, ''), str_ends_with($s, 'world'));
+$t1 = 'hel'; var_dump(strpos($t1 . 'lo', 'l'), substr($t1 . 'xyz', 2, 2), max($t1 . 'a', 'help'));
+try { intdiv(1, 0); } catch (\DivisionByZeroError $e3) { echo $e3->getMessage(), "\n"; }
+var_dump(substr($s, '1'), strpos($s, 111), max(...[3, 4]));
+"#;
+    let expected = r#""hello world" "hello world" "lo world" "lo world" "rld" "rld" "" "" "hello world" "hello world" "lo" "lo" "lo wor" "lo wor" "lo world" "lo world" "" "" "wor" "wor" "hello world" "hello world" 
+string(0) ""
+string(0) ""
+string(1) "b"
+4 7 false false 0 0 false 
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack) @strpos
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+int(2)
+string(1) "b"
+float(1.5)
+bool(true)
+int(0)
+int(9)
+string(3) "abc"
+array(1) {
+  [0]=>
+  int(1)
+}
+int(0)
+string(12) "@example.com"
+string(4) "user"
+string(3) "xyc"
+string(11) "heLLo worLd"
+string(1) "x"
+string(2) "/a"
+int(3)
+bool(true)
+bool(true)
+int(2)
+string(2) "lx"
+string(4) "help"
+Division by zero
+string(10) "ello world"
+bool(false)
+int(4)
+"#;
+    assert_eq!(run(src), expected);
+}
