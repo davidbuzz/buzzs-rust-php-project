@@ -170,3 +170,64 @@ spl_object_hash(): Argument #1 ($object) must be of type object, string given
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// An SPL iterator or array object asks whether its class overrides a
+/// method with a user one (answered at once for the internal class
+/// itself): `ArrayIterator` and `ArrayObject` and user subclasses
+/// overriding `current()`, `key()`, `offsetGet()`. Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+fn spl_user_overrides() {
+    let src = r#"<?php
+class MyIt extends ArrayIterator { function current(): mixed { return 'c' . parent::current(); } function key(): string|int|null { return 'k' . parent::key(); } }
+class MyAO extends ArrayObject { function offsetGet($k): mixed { return "got $k"; } }
+foreach ([new ArrayIterator([1, 2]), new MyIt([1, 2]), new ArrayIterator(['a' => 1])] as $it) { var_dump(iterator_to_array($it), iterator_to_array($it, false), iterator_count($it)); }
+$ao = new MyAO(['x' => 1]); var_dump($ao['x'], isset($ao['x']), count($ao));
+$ao2 = new ArrayObject(['y' => 2]); var_dump($ao2['y'], iterator_to_array($ao2->getIterator()));
+"#;
+    let expected = r#"array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+int(2)
+array(2) {
+  ["k0"]=>
+  string(2) "c1"
+  ["k1"]=>
+  string(2) "c2"
+}
+array(2) {
+  [0]=>
+  string(2) "c1"
+  [1]=>
+  string(2) "c2"
+}
+int(2)
+array(1) {
+  ["a"]=>
+  int(1)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+int(1)
+string(5) "got x"
+bool(true)
+int(1)
+int(2)
+array(1) {
+  ["y"]=>
+  int(2)
+}
+"#;
+    assert_eq!(run(src), expected);
+}
