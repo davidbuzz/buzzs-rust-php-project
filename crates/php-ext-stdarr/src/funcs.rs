@@ -71,9 +71,12 @@ pub fn array_keys(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
         ));
     }
-    let h = a.array(0);
-    let f = a.get(1);
-    let r = sa::basic::array_keys(vm, &h, f.as_ref(), a.bool(2));
+    // The table and the filter read in place (`Z_PARAM_ARRAY` and
+    // `Z_PARAM_ZVAL` take no reference): copying them out cost two
+    // out-of-line clones and their drops on every call.
+    let h = a.array_ref(0);
+    let f = if a.has(1) { Some(a.at_ref(1)) } else { None };
+    let r = sa::basic::array_keys(vm, &h, f.as_deref(), a.bool(2));
     Ok(Value::Array(rt(vm, r)?))
 }
 

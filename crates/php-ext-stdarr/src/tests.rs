@@ -520,3 +520,27 @@ fn compact_and_extract_use_the_functions_slots() {
         "31,2,m!,a,b,i,c,made,"
     );
 }
+
+/// `array_keys()` reads its table and filter in place: a reference inside
+/// the array and a reference passed as the filter compare by their values,
+/// `null` is a filter, and a missing filter with `strict` throws
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_keys_reads_table_and_filter_in_place() {
+    let pre = "$x = 1; $a = ['a' => &$x, '5' => 1, 2 => '1', 'z' => null];";
+    let cases = [
+        ("echo implode(',', array_keys($a));", "a,5,2,z"),
+        ("echo implode(',', array_keys($a, 1));", "a,5,2"),
+        ("echo implode(',', array_keys($a, '1', true));", "2"),
+        ("echo implode(',', array_keys($a, null));", "z"),
+        ("$f = 1; $r = &$f; echo implode(',', array_keys($a, $r, true));", "a,5"),
+        ("echo count(array_keys([])), count($a);", "04"),
+        (
+            "try { array_keys($a, strict: true); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(); }",
+            "ArgumentCountError: array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
+        ),
+    ];
+    for (code, want) in cases {
+        assert_eq!(run(&format!("{pre} {code}")), want, "{code}");
+    }
+}
