@@ -139,6 +139,9 @@ thread_local! {
     static PERMANENT_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
     static REQUEST_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
     static SCOPE: Cell<InternScope> = const { Cell::new(InternScope::Request) };
+    /// The hash of the bytes a [`PreHashedKey`] lookup is for, set just
+    /// before it ([`ZStr::existing_interned`]).
+    static PRE_HASH: Cell<u64> = const { Cell::new(0) };
 }
 
 /// An intern table entry: the header of a live interned string. It does
@@ -212,6 +215,43 @@ impl PartialEq for InternKey {
 }
 
 impl Eq for InternKey {}
+
+/// [`InternKey`] whose hash was computed once for several lookups (the
+/// permanent table, then the request table): it hashes as [`PRE_HASH`],
+/// which the caller sets to `zend_hash_bytes` of the bytes first, so the
+/// bytes are not hashed again for each table.
+#[repr(transparent)]
+struct PreHashedKey([u8]);
+
+impl PreHashedKey {
+    fn new(bytes: &[u8]) -> &PreHashedKey {
+        // SAFETY: `PreHashedKey` is a `repr(transparent)` wrapper of `[u8]`:
+        // same layout and slice metadata, and the lifetime is kept.
+        unsafe { &*(ptr::from_ref(bytes) as *const PreHashedKey) }
+    }
+}
+
+impl Hash for PreHashedKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let h = PRE_HASH.with(Cell::get);
+        debug_assert_eq!(h, zend_hash_bytes(&self.0));
+        state.write_u64(h);
+    }
+}
+
+impl PartialEq for PreHashedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for PreHashedKey {}
+
+impl Borrow<PreHashedKey> for InternEntry {
+    fn borrow(&self) -> &PreHashedKey {
+        PreHashedKey::new(self.bytes())
+    }
+}
 
 /// The intern table's hasher: entries and keys feed it their PHP hash
 /// (`zend_inline_hash_func`, which keys php-src's interned table too), so
@@ -1095,7 +1135,9 @@ impl ZStr {
             &[c] => return Some(Self::from_byte(c)),
             _ => {}
         }
-        let key = InternKey::new(bytes);
+        // Hashed once for both tables.
+        PRE_HASH.with(|c| c.set(zend_hash_bytes(bytes)));
+        let key = PreHashedKey::new(bytes);
         if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
             let found = ManuallyDrop::new(ZStr(entry.0));
             return Some(ZStr::clone(&found));
