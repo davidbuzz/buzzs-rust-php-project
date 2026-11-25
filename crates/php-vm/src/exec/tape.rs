@@ -1597,6 +1597,10 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
             dst < code.num_tmps && (nested_place(p, false, true) || static_dims_place(p))
         }
         Op::Unset { place } => nested_place(place_of(place)?, true, false),
+        // `defined('NAME')`: the op's run-time cache hit (`run_vm_op`).
+        Op::Defined { name, dst } => {
+            (name as usize) < code.literals.len() && dst.is_none_or(|d| d < code.num_tmps)
+        }
         Op::Assign { place, val, dst } => {
             let p = place_of(place)?;
             in_range(val)
@@ -2526,6 +2530,15 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         {
             Some(r) => {
                 vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `defined('NAME')` (`ZEND_DEFINED`) on a hit of its run-time
+        // cache slot; a miss is the generic op, which fills it.
+        Some(&Op::Defined { name, dst }) => match vm.defined_hit(name) {
+            Some(r) => {
+                vm.set_dst(dst, Value::Bool(r));
                 at + 1
             }
             None => DECLINED,

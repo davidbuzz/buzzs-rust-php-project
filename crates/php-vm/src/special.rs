@@ -155,12 +155,45 @@ impl Vm {
     /// Like `zend_quick_check_constant`, only the exact name is looked up:
     /// `true`/`false`/`null` were resolved at compile time, and
     /// `__COMPILER_HALT_OFFSET__` is registered under a mangled name.
+    /// The answer is kept in the op array's run-time cache
+    /// ([`Vm::defined_hit`], as php-src's `CACHED_PTR`), which the tape's
+    /// row for the op reads without coming here.
     #[inline]
     pub(crate) fn op_defined(&mut self, name: u32) -> VmResult<bool> {
+        if let Some(r) = self.defined_hit(name) {
+            return Ok(r);
+        }
         if let Value::Str(n) = &self.frame().code.literals[name as usize] {
-            return Ok(self.constants.contains_key(n));
+            let r = self.constants.contains_key(n) || self.defined_ns_ci(n.as_bytes());
+            self.defined_fill(name, n, r);
+            return Ok(r);
         }
         self.op_defined_slow(name)
+    }
+
+    /// Whether a constant whose name differs from the namespaced name `n`
+    /// only in the case of its namespace part exists: php-src registers a
+    /// namespaced constant under its name with the namespace lowercased
+    /// (`zend_register_constant`), and `ZEND_DEFINED` looks up the
+    /// literal's lowercased-namespace form too (`zend_quick_check_constant`
+    /// on the second literal), so `defined('ns\C')` finds `NS\C`. The
+    /// constant table here keeps the declared spelling, so the keys with a
+    /// namespace are compared; only a miss of a namespaced name comes here,
+    /// and its answer is cached.
+    #[cold]
+    #[inline(never)]
+    fn defined_ns_ci(&self, n: &[u8]) -> bool {
+        let Some(p) = n.iter().rposition(|&c| c == b'\\') else {
+            return false;
+        };
+        let (ns, c) = n.split_at(p);
+        self.constants.keys().any(|k| {
+            let k = k.as_bytes();
+            k.len() == n.len()
+                && k.get(p) == Some(&b'\\')
+                && k[p..] == *c
+                && k[..p].eq_ignore_ascii_case(ns)
+        })
     }
 
     /// `defined()` of a number literal (`defined(1.5)`): the name is

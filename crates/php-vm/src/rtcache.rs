@@ -107,6 +107,24 @@ pub struct RuntimeCache {
     static_calls: RefCell<Vec<Vec<MemberSlot>>>,
     /// Global variable resolutions, by place id.
     pub(crate) globals: RefCell<Vec<GlobalSlot>>,
+    /// `Defined` results, by name literal ([`DefinedSlot`]).
+    defined: RefCell<Vec<DefinedSlot>>,
+}
+
+/// A cached `ZEND_DEFINED` result, php-src's `CACHED_PTR(extended_value)`
+/// of that op: the constant found (`CACHE_PTR` of the constant), or not
+/// found while the constant table had a given number of entries
+/// (`ENCODE_SPECIAL_CACHE_NUM(zend_hash_num_elements(EG(zend_constants)))`:
+/// any `define()` since makes the slot a miss).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DefinedSlot {
+    /// Not resolved yet.
+    #[default]
+    Empty,
+    /// The constant exists.
+    Found,
+    /// Not defined while the constant table had this many entries.
+    Absent(usize),
 }
 
 impl RuntimeCache {
@@ -118,6 +136,7 @@ impl RuntimeCache {
         self.static_prop_entries.borrow_mut().clear();
         self.static_calls.borrow_mut().clear();
         self.globals.borrow_mut().clear();
+        self.defined.borrow_mut().clear();
     }
 }
 
@@ -833,6 +852,44 @@ impl Vm {
             // sees a namespaced constant defined later.
             _ => ConstSlot::Never,
         }
+    }
+
+    // ------------------------------------------------------------------
+    // defined() (ZEND_DEFINED)
+    // ------------------------------------------------------------------
+
+    /// `ZEND_DEFINED`'s `CACHED_PTR` hit for the name literal `name` of
+    /// the running frame's op array: `Some(true)` once the constant was
+    /// found, `Some(false)` while it was not found and no constant has
+    /// been defined since, `None` (look it up: [`Vm::defined_fill`])
+    /// otherwise.
+    #[inline]
+    pub(crate) fn defined_hit(&self, name: u32) -> Option<bool> {
+        let cache = self.frame().code.rt_cache.defined.try_borrow().ok()?;
+        match *cache.get(name as usize)? {
+            DefinedSlot::Found => Some(true),
+            DefinedSlot::Absent(n) if n == self.constants.len() => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Fills the `ZEND_DEFINED` slot of name literal `name` with the
+    /// answer of a lookup of the constant `n`, as php-src does
+    /// (`zend_quick_check_constant` caches a found constant; a miss
+    /// caches the table's size). `SID` is left uncached: the session
+    /// extension removes and redefines it during a request.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn defined_fill(&self, name: u32, n: &ZStr, found: bool) {
+        if n.as_bytes() == b"SID" {
+            return;
+        }
+        let slot = if found {
+            DefinedSlot::Found
+        } else {
+            DefinedSlot::Absent(self.constants.len())
+        };
+        put(&self.frame().code.rt_cache.defined, name as usize, slot);
     }
 
     // ------------------------------------------------------------------
