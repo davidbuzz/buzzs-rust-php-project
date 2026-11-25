@@ -128,8 +128,27 @@ enum DefinedSlot {
 }
 
 impl RuntimeCache {
+    /// Whether no lookup is cached: the op array did not run since the
+    /// last [`clear`](Self::clear) (or never resolved anything).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.consts.borrow().is_empty()
+            && self.class_consts.borrow().is_empty()
+            && self.static_props.borrow().is_empty()
+            && self.static_prop_entries.borrow().is_empty()
+            && self.static_calls.borrow().is_empty()
+            && self.globals.borrow().is_empty()
+            && self.defined.borrow().is_empty()
+    }
+
     /// Clears all cached lookups so an op array carries no request state.
+    /// The op arrays of a cached script are cleared at every request that
+    /// includes it, most of them never ran since: an empty cache is only
+    /// looked at.
     pub fn clear(&self) {
+        if self.is_empty() {
+            return;
+        }
         self.consts.borrow_mut().clear();
         self.class_consts.borrow_mut().clear();
         self.static_props.borrow_mut().clear();
