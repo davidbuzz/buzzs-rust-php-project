@@ -163,6 +163,27 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     }
 }
 
+/// The specialised instruction of a function-entry op that binds a
+/// variable with the VM at hand (`run_vm_op`): `global $name`
+/// (`ZEND_BIND_GLOBAL`), `static $x` (`ZEND_BIND_STATIC`) and a variadic
+/// parameter's `ZEND_RECV_VARIADIC`. Each left the tape for the generic
+/// loop and came back, once per name; a large framework application's
+/// page runs 51,000 `global` binds a request.
+pub(super) fn lower_entry(code: &OpArray, i: usize) -> Option<Inst> {
+    let ncv = code.cv_names.len();
+    match *code.ops.get(i)? {
+        Op::Global { cv, .. } | Op::RecvVariadic { cv, .. } if (cv as usize) < ncv => {
+            Some(Inst::plain(TOp::VmOp))
+        }
+        Op::BindStatic { cv, skip, .. }
+            if (cv as usize) < ncv && (skip as usize) < code.ops.len() =>
+        {
+            Some(Inst::plain(TOp::VmOp))
+        }
+        _ => None,
+    }
+}
+
 /// Whether the call started at `start` can be made from its preparation
 /// to its `DoCall` without the tape giving it up: the ops in between are
 /// argument sends it makes itself and hot ops, and none starts a call of

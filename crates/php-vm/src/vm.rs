@@ -2769,6 +2769,43 @@ impl Vm {
         }
     }
 
+    /// `ZEND_BIND_STATIC` of static variable `idx` into variable `cv` of
+    /// the current frame once the variable was initialised (the op's
+    /// branch that binds the stored reference and jumps over the
+    /// initialiser: `Op::BindStatic`'s `skip`), without the generic arm's
+    /// handle copies: the reference from the function's store
+    /// (`UserFunction::statics`, or a closure's own, `Frame::statics`),
+    /// bound as `Vm::cv_bind` binds it. The tape runs it in place
+    /// (`exec/tape.rs`, `run_vm_op`). `false`, having changed nothing,
+    /// when the slot is not initialised yet (or its store is in use): the
+    /// generic op runs.
+    #[inline(never)]
+    pub(crate) fn bind_static_cached(&mut self, cv: u32, idx: u32) -> bool {
+        let r = {
+            let Some(f) = self.frames.last() else {
+                return false;
+            };
+            let found = match (&f.statics, &f.ufunc) {
+                (Some(s), _) => s
+                    .try_borrow()
+                    .ok()
+                    .and_then(|b| b.get(idx as usize).cloned().flatten()),
+                (None, Some(uf)) => uf
+                    .statics
+                    .try_borrow()
+                    .ok()
+                    .and_then(|b| b.get(idx as usize).cloned().flatten()),
+                (None, None) => None,
+            };
+            let Some(r) = found else {
+                return false;
+            };
+            r
+        };
+        self.cv_bind(cv, Value::Reference(r));
+        true
+    }
+
     /// `ZEND_BIND_GLOBAL` of `global $name` (`lit`, the name's literal in
     /// the running code) into compiled variable `cv` of a function frame,
     /// when its run-time cache slot is warm: the global slot the literal

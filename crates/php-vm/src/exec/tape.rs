@@ -1491,6 +1491,7 @@ fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
         .or_else(|| family("strs", strs::lower))
         .or_else(|| family("calls", calls::lower))
         .or_else(|| family("places", lower_place))
+        .or_else(|| family("calls", calls::lower_entry))
 }
 
 /// Whether `p` is a place one of the frame-local nested-access paths can
@@ -2605,6 +2606,31 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
             None => DECLINED,
         },
+        // `global $name` on a warm run-time cache (`Vm::bind_global_cached`),
+        // `static $x` once initialised (`Vm::bind_static_cached`: then on
+        // past the initialiser), `...$args` of an untyped variadic
+        // parameter (`Vm::recv_variadic_plain`).
+        Some(&Op::Global { cv, name }) => {
+            if vm.bind_global_cached(cv, name) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::BindStatic { cv, idx, skip }) => {
+            if vm.bind_static_cached(cv, idx) {
+                skip as usize
+            } else {
+                DECLINED
+            }
+        }
+        Some(&Op::RecvVariadic { n, cv }) => {
+            if vm.recv_variadic_plain(n, cv) {
+                at + 1
+            } else {
+                DECLINED
+            }
+        }
         // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`),
         // past the `Nop`s of the call ops it replaced.
         Some(Op::FramelessICall(fc)) => match vm.frameless_icall_op(fc, at + 1) {

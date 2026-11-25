@@ -285,3 +285,79 @@ Error: first(): Argument #1 ($a) could not be passed by reference
 "##
     );
 }
+
+/// `global` and `static` at the top of functions, methods, a closure, a
+/// generator and a recursive function, called in a loop (so the tape's
+/// rows bind them on a warm cache): a global defined later, a variable
+/// overwritten by its `global`, several statics in one statement.
+#[test]
+fn global_and_static_entry_binds() {
+    assert_eq!(
+        run(r##"<?php
+$cfg = ['a' => 1];
+$count = 0;
+function bump() { global $count, $cfg; $count++; return $count . json_encode($cfg); }
+function rec($n) { global $count; static $depth = 0; $depth++; $count += $n; if ($n > 0) rec($n - 1); return "$count/$depth"; }
+function late() { global $later; $later = ($later ?? 0) + 1; return $later; }
+function overwrite() { $x = new stdClass; global $x; return gettype($x); }
+class M {
+    function m() { global $count; static $calls = 0; return ++$calls . ':' . $count; }
+    static function s() { static $s = []; $s[] = count($s); return json_encode($s); }
+}
+function gen() { global $count; static $g = 0; for ($i = 0; $i < 2; $i++) { $g++; yield "$count-$g"; } }
+function counter() { static $n = 0, $m = 10; return ++$n + $m--; }
+function main() {
+    $out = [];
+    $o = new M;
+    $cl = function () { global $cfg; static $k = 0; $cfg['k'] = ++$k; return json_encode($cfg); };
+    for ($i = 0; $i < 3; $i++) {
+        $out[] = bump();
+        $out[] = rec(2);
+        $out[] = late();
+        $out[] = overwrite();
+        $out[] = $o->m();
+        $out[] = M::s();
+        $out[] = implode(',', iterator_to_array(gen(), false));
+        $out[] = counter();
+        $out[] = $cl();
+        $out[] = (new M)->m();
+    }
+    return $out;
+}
+foreach (main() as $l) echo $l, "\n";
+echo $count, json_encode($cfg), $later, "\n";
+"##),
+        r##"1{"a":1}
+4/3
+1
+NULL
+1:4
+[0]
+4-1,4-2
+11
+{"a":1,"k":1}
+2:4
+5{"a":1,"k":1}
+8/6
+2
+NULL
+3:8
+[0,1]
+8-3,8-4
+11
+{"a":1,"k":2}
+4:8
+9{"a":1,"k":2}
+12/9
+3
+NULL
+5:12
+[0,1,2]
+12-5,12-6
+11
+{"a":1,"k":3}
+6:12
+12{"a":1,"k":3}3
+"##
+    );
+}

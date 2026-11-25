@@ -4334,6 +4334,37 @@ impl Vm {
         Ok(())
     }
 
+    /// [`Vm::op_recv_variadic`] of an untyped (or `mixed`) variadic
+    /// parameter `n` without named arguments (`ZEND_RECV_VARIADIC`, its
+    /// loop over the extra arguments without the type check): the
+    /// arguments past the declared parameters, as they are, into a list in
+    /// variable `cv` (an empty array when there are none). The tape runs
+    /// it in place (`exec/tape.rs`, `run_vm_op`). `false`, having changed
+    /// nothing, for any other parameter: the generic op runs.
+    #[inline(never)]
+    pub(crate) fn recv_variadic_plain(&mut self, n: u32, cv: u32) -> bool {
+        let Some(f) = self.frames.last() else {
+            return false;
+        };
+        let Some(uf) = f.ufunc.as_ref() else {
+            return false;
+        };
+        if !f.named.is_empty()
+            || uf
+                .params
+                .get(n as usize)
+                .is_none_or(|p| !p.variadic || p.ty.as_ref().is_some_and(|t| !t.is_mixed()))
+        {
+            return false;
+        }
+        let mut arr = HashTable::new();
+        for v in f.args.iter().skip(n as usize).flatten() {
+            let _ = arr.push(v.clone());
+        }
+        self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
+        true
+    }
+
     /// Verifies the return value of the current frame.
     pub(crate) fn verify_return(&mut self, v: Option<Value>) -> VmResult<Value> {
         // Fast path: no return type, or a returned value accepted as-is
