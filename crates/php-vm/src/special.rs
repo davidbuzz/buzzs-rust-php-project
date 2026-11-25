@@ -164,36 +164,15 @@ impl Vm {
             return Ok(r);
         }
         if let Value::Str(n) = &self.frame().code.literals[name as usize] {
-            let r = self.constants.contains_key(n) || self.defined_ns_ci(n.as_bytes());
+            // `zend_quick_check_constant()`: the name as written, then the
+            // literal with its namespace part lowercased; the table keeps
+            // a `const`'s declared spelling, so a namespaced miss compares
+            // the namespace ignoring case (one lookup with `constant()`).
+            let r = self.find_global_constant(n.as_bytes()).is_some();
             self.defined_fill(name, n, r);
             return Ok(r);
         }
         self.op_defined_slow(name)
-    }
-
-    /// Whether a constant whose name differs from the namespaced name `n`
-    /// only in the case of its namespace part exists: php-src registers a
-    /// namespaced constant under its name with the namespace lowercased
-    /// (`zend_register_constant`), and `ZEND_DEFINED` looks up the
-    /// literal's lowercased-namespace form too (`zend_quick_check_constant`
-    /// on the second literal), so `defined('ns\C')` finds `NS\C`. The
-    /// constant table here keeps the declared spelling, so the keys with a
-    /// namespace are compared; only a miss of a namespaced name comes here,
-    /// and its answer is cached.
-    #[cold]
-    #[inline(never)]
-    fn defined_ns_ci(&self, n: &[u8]) -> bool {
-        let Some(p) = n.iter().rposition(|&c| c == b'\\') else {
-            return false;
-        };
-        let (ns, c) = n.split_at(p);
-        self.constants.keys().any(|k| {
-            let k = k.as_bytes();
-            k.len() == n.len()
-                && k.get(p) == Some(&b'\\')
-                && k[p..] == *c
-                && k[..p].eq_ignore_ascii_case(ns)
-        })
     }
 
     /// `defined()` of a number literal (`defined(1.5)`): the name is

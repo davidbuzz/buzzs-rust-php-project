@@ -87,3 +87,30 @@ Undefined constant "NS\nc"
 "###
     );
 }
+
+/// `ReflectionConstant` names a `define()`d namespaced constant as it was
+/// spelled (`zend_constant.name`), not by its table key with the namespace
+/// lowercased, and `TRUE`/`FALSE`/`NULL` in upper case
+/// (`zend_get_special_const`); `$name` keeps the constructor's argument.
+#[test]
+fn reflection_constant_reports_the_declared_spelling() {
+    let once = "NS\\X|NS|X|ns\\X|Constant [ int NS\\X ] { 1 }\n\
+                NS\\X|NS|X|NS\\X|Constant [ int NS\\X ] { 1 }\n\
+                Foo\\Bar\\Y|Foo\\Bar|Y|foo\\bar\\Y|Constant [ int Foo\\Bar\\Y ] { 2 }\n\
+                NULL||NULL|null|Constant [ <persistent> null NULL ] {  }\n\
+                yyn\n";
+    assert_eq!(
+        run(r###"<?php
+namespace Foo\Bar { const Y = 2; }
+namespace {
+define('NS\X', 1);
+function show($n) {
+    $r = new ReflectionConstant($n);
+    echo $r->getName(), '|', $r->getNamespaceName(), '|', $r->getShortName(), '|', $r->name, '|', $r;
+}
+for ($i = 0; $i < 3; $i++) { show('ns\X'); show('NS\X'); show('foo\bar\Y'); show('null'); echo defined('ns\X') ? 'y' : 'n', defined('Foo\BAR\Y') ? 'y' : 'n', defined('foo\bar\y') ? 'y' : 'n', "\n"; }
+}
+"###),
+        once.repeat(3)
+    );
+}
