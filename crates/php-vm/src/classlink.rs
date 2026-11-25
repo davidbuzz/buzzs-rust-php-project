@@ -960,10 +960,36 @@ impl Vm {
             if self.is_preloaded_class(decl) {
                 return Ok(());
             }
+            let placed = take_order_placeholder(key);
             self.declare_class(decl, false)?;
             self.bound_decls.remove(&key);
+            if placed {
+                self.drop_placeholder_duplicate(&decl.name);
+            }
         }
         Ok(())
+    }
+
+    /// A hoisted class bound by its statement keeps the place in the
+    /// declaration order its file gave it ([`Vm::order_hoisted_classes`]):
+    /// the name [`Vm::register_class`] just appended goes again when the
+    /// placeholder is still there before it.
+    fn drop_placeholder_duplicate(&mut self, name: &ZStr) {
+        let n = self.class_order.len();
+        if n < 2
+            || !self.class_order[n - 1]
+                .as_bytes()
+                .eq_ignore_ascii_case(name.as_bytes())
+        {
+            return;
+        }
+        let earlier = self.class_order[..n - 1]
+            .iter()
+            .rev()
+            .any(|c| c.as_bytes().eq_ignore_ascii_case(name.as_bytes()));
+        if earlier {
+            self.class_order.pop();
+        }
     }
 
     /// Registers a linked class.
@@ -3806,11 +3832,39 @@ fn note_lookup_slow(lc: &[u8], found: Option<&Rc<Class>>) {
     });
 }
 
+thread_local! {
+    /// Hoisted class declarations (by `Rc` pointer) that did not bind when
+    /// their file was included and hold their place in
+    /// [`Vm::class_order`] until their statement declares them.
+    static ORDER_PLACEHOLDERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Notes that the hoisted declaration `key` has a placeholder in the
+/// declaration order.
+pub(crate) fn note_order_placeholder(key: usize) {
+    ORDER_PLACEHOLDERS.with(|p| p.borrow_mut().push(key));
+}
+
+/// Whether the declaration `key` had a placeholder (which is forgotten).
+fn take_order_placeholder(key: usize) -> bool {
+    ORDER_PLACEHOLDERS.with(|p| {
+        let mut p = p.borrow_mut();
+        match p.iter().position(|&k| k == key) {
+            Some(i) => {
+                p.swap_remove(i);
+                true
+            }
+            None => false,
+        }
+    })
+}
+
 /// Ends the request for the kept links ([`Vm::request_reset`]): every
 /// kept class may be handed out again, and the links of declarations no
 /// script holds any more (a script compiled again, the opcache reset) are
 /// dropped.
 pub(crate) fn end_request() {
+    ORDER_PLACEHOLDERS.with(|p| p.borrow_mut().clear());
     EPOCH.with(|e| e.set(e.get() + 1));
     LINKED.with(|l| {
         l.borrow_mut().retain(|_, e| {

@@ -710,6 +710,20 @@ impl Vm {
             self.functions.insert(lc, crate::func::Func::User(f));
             crate::func::bump_func_table_version();
         }
+        if unit.hoisted_classes.is_empty() {
+            return Ok(());
+        }
+        // The hoisted classes this file brings (not declared before it),
+        // and where its classes start in the declaration order.
+        let start = self.class_order.len();
+        let fresh = {
+            let decls = unit.decls.classes.borrow();
+            HoistedSet::new(unit.hoisted_classes.len(), |k| {
+                decls
+                    .get(unit.hoisted_classes[k] as usize)
+                    .is_some_and(|d| !class_declared(&self.classes, d.name.as_bytes()))
+            })
+        };
         let mut progress = true;
         while progress {
             progress = false;
@@ -735,7 +749,74 @@ impl Vm {
                 }
             }
         }
+        if !self.hoisted_in_order(unit, start, &fresh) {
+            self.order_hoisted_classes(unit, start, &fresh);
+        }
         Ok(())
+    }
+
+    /// Whether the declaration order from `start` on lists exactly the
+    /// file's `fresh` hoisted classes, in the file's order: what binding
+    /// them gives unless one waited for a class declared after it, or
+    /// could not bind before the code runs.
+    fn hoisted_in_order(&self, unit: &CompiledUnit, start: usize, fresh: &HoistedSet) -> bool {
+        let decls = unit.decls.classes.borrow();
+        let mut order = self.class_order.get(start..).unwrap_or_default().iter();
+        for (k, &i) in unit.hoisted_classes.iter().enumerate() {
+            if !fresh.contains(k) {
+                continue;
+            }
+            let Some(d) = decls.get(i as usize) else {
+                continue;
+            };
+            match order.next() {
+                Some(n) if n.as_bytes().eq_ignore_ascii_case(d.name.as_bytes()) => {}
+                _ => return false,
+            }
+        }
+        order.next().is_none()
+    }
+
+    /// Puts the file's hoisted classes in the declaration order in the
+    /// order the file declares them, as php-src's class table has them:
+    /// `zend_compile_class_decl()` adds each class when it is compiled,
+    /// one it cannot bind yet under its runtime-definition key, whose
+    /// bucket the binding (`zend_bind_class_in_slot()`, at the statement
+    /// or in `zend_do_delayed_early_binding()`) renames in place. A class
+    /// not bound yet holds its place with its name until its statement
+    /// declares it ([`Vm::declare_class_stmt`]); what else was declared
+    /// meanwhile follows.
+    #[cold]
+    fn order_hoisted_classes(&mut self, unit: &CompiledUnit, start: usize, fresh: &HoistedSet) {
+        let bound = self
+            .class_order
+            .split_off(start.min(self.class_order.len()));
+        let mut used = vec![false; bound.len()];
+        let decls = unit.decls.classes.borrow();
+        for (k, &i) in unit.hoisted_classes.iter().enumerate() {
+            if !fresh.contains(k) {
+                continue;
+            }
+            let Some(d) = decls.get(i as usize) else {
+                continue;
+            };
+            let found = bound.iter().enumerate().position(|(j, n)| {
+                !used[j] && n.as_bytes().eq_ignore_ascii_case(d.name.as_bytes())
+            });
+            if let Some(j) = found {
+                used[j] = true;
+                self.class_order.push(bound[j].clone());
+            } else {
+                self.class_order
+                    .push(ZStr::from(d.name.as_bytes().to_ascii_lowercase()));
+                crate::classlink::note_order_placeholder(Rc::as_ptr(d) as usize);
+            }
+        }
+        for (j, n) in bound.into_iter().enumerate() {
+            if !used[j] {
+                self.class_order.push(n);
+            }
+        }
     }
 
     /// php-src's C stack at the start of a compilation, for the compiler's
@@ -1319,6 +1400,37 @@ fn declares_anything(unit: &CompiledUnit) -> bool {
         || !unit.decls.const_attributes.borrow().is_empty()
 }
 
+/// A set of indices into a unit's hoisted classes: a bit mask for the
+/// usual few, a vector past 64.
+enum HoistedSet {
+    Mask(u64),
+    Wide(Vec<bool>),
+}
+
+impl HoistedSet {
+    /// The indices `0..n` for which `pred` holds.
+    fn new(n: usize, mut pred: impl FnMut(usize) -> bool) -> Self {
+        if n <= 64 {
+            let mut m = 0u64;
+            for k in 0..n {
+                if pred(k) {
+                    m |= 1 << k;
+                }
+            }
+            HoistedSet::Mask(m)
+        } else {
+            HoistedSet::Wide((0..n).map(pred).collect())
+        }
+    }
+
+    fn contains(&self, k: usize) -> bool {
+        match self {
+            HoistedSet::Mask(m) => k < 64 && m & (1 << k) != 0,
+            HoistedSet::Wide(v) => v.get(k).copied().unwrap_or(false),
+        }
+    }
+}
+
 /// Whether the class table has `name` (any case), lower-casing it on the
 /// stack: the hoisted-class loop asks for every class of a unit, at least
 /// twice, and a fresh lower-case string per question cost an allocation.
@@ -1358,6 +1470,63 @@ mod tests {
     use super::{is_normalized_absolute, is_uncacheable_stream_path, opened_path};
     use crate::vm::Vm;
     use std::path::{Path, PathBuf};
+
+    /// A `Write` sink shared with the test.
+    #[derive(Clone, Default)]
+    struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `get_declared_classes()` lists a file's hoisted classes in the
+    /// order the file declares them, also when one waited for a class
+    /// declared after it (php-src's class table keeps the place of a
+    /// class bound later, see `order_hoisted_classes`). Expected output
+    /// from `php8.5 -n` (the CLI without the opcache).
+    #[test]
+    fn hoisted_classes_keep_the_file_order() {
+        let dir = std::env::temp_dir().join(format!("php-vm-hoist-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write = |name: &str, src: &str| std::fs::write(dir.join(name), src).expect("write");
+        write("base.php", "<?php\nclass Base {}\nclass Ext {}\n");
+        write(
+            "decl.php",
+            "<?php\nclass Early {}\nclass Later extends Base {}\nclass Child extends Later2 {}\n\
+             class Later2 {}\ninterface I {}\nclass Impl implements I {}\n",
+        );
+        write(
+            "decl2.php",
+            "<?php\nclass Early2 {}\nclass Later3 extends Base3 {}\nclass Base3 {}\n\
+             class Child2 extends Ext {}\n",
+        );
+        let main = format!(
+            "<?php require '{0}/base.php';\n\
+             $n = count(get_declared_classes());\n\
+             require '{0}/decl.php';\n\
+             echo implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n\
+             $n = count(get_declared_classes());\n\
+             require '{0}/decl2.php';\n\
+             echo implode(',', array_slice(get_declared_classes(), $n)), \"\\n\";\n",
+            dir.display()
+        );
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(main.as_bytes(), "main.php");
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "Early,Later,Child,Later2,Impl\nEarly2,Later3,Base3,Child2\n"
+        );
+    }
 
     #[test]
     fn class_declared_ignores_case_at_any_length() {
