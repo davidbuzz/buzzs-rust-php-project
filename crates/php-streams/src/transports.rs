@@ -3,9 +3,9 @@
 //! Socket transports (`main/streams/transports.c`, `xp_socket.c`).
 //!
 //! A minimal client side: `stream_socket_client()` for `tcp://`, `udp://`
-//! and `unix://` using `std::net` / `std::os::unix::net`. Servers, `udg://`,
-//! crypto (`ssl://`, `tls://`) and asynchronous connects are not
-//! implemented.
+//! and `unix://` using `std::net` / `std::os::unix::net`, with TCP's
+//! asynchronous connect (`STREAM_CLIENT_ASYNC_CONNECT`). Servers and crypto
+//! (`ssl://`, `tls://`) live in the extension crates.
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
@@ -301,6 +301,46 @@ fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
 /// `stream_socket_client($remote, ..., $timeout)`: connects and returns a
 /// socket stream. `timeout` defaults to `default_socket_timeout`.
 pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream, ConnectError> {
+    socket_client_ex(remote, timeout, false)
+}
+
+/// Starts a TCP connection to the first of `addrs` that accepts one
+/// without waiting (`php_network_connect_socket_to_host()` with
+/// `asynchronous`): the stream is returned while the connection is still
+/// pending (`EINPROGRESS`), and the caller learns the outcome by waiting
+/// for the socket to become writable, as with C's
+/// `STREAM_CLIENT_ASYNC_CONNECT`. Each address whose `connect()` fails at
+/// once is skipped, like C's loop over `php_network_getaddresses()`.
+fn connect_tcp_async(addrs: Vec<std::net::SocketAddr>) -> io::Result<TcpStream> {
+    let mut last = io::Error::from_raw_os_error(libc::ECONNREFUSED);
+    for a in addrs {
+        match sys::connect_ip_socket_async(&a, libc::SOCK_STREAM) {
+            Ok((fd, _pending)) => {
+                let s = TcpStream::from(fd);
+                // C leaves the descriptor non-blocking but the stream
+                // blocking (`is_blocked`), and its reads and writes wait
+                // with poll() for a blocking stream. Our socket ops rely on
+                // the descriptor's mode instead, so it goes back to
+                // blocking: the connection carries on in the background
+                // and a blocking send() waits for it, as C's poll() would.
+                s.set_nonblocking(false)?;
+                return Ok(s);
+            }
+            Err(e) => last = io::Error::from_raw_os_error(e),
+        }
+    }
+    Err(last)
+}
+
+/// [`socket_client`]; `asynchronous` is `STREAM_CLIENT_ASYNC_CONNECT`
+/// (`STREAM_XPORT_OP_CONNECT_ASYNC`, `main/streams/xp_socket.c`): a TCP
+/// connection is started but not waited for, and `timeout` does not apply
+/// to it.
+pub fn socket_client_ex(
+    remote: &[u8],
+    timeout: Option<Duration>,
+    asynchronous: bool,
+) -> Result<Stream, ConnectError> {
     let remote_s = String::from_utf8_lossy(remote).into_owned();
     let n = crate::wrapper::scheme_len(remote);
     let (proto, name) = if remote.get(n..n + 3) == Some(b"://") && n > 1 {
@@ -331,7 +371,12 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
                     ConnectError { errno: 0, message }
                 })?
                 .collect();
-            if proto == "tcp" {
+            if proto == "tcp" && asynchronous {
+                (
+                    Sock::Tcp(connect_tcp_async(addrs).map_err(|e| io_err(&e))?),
+                    "tcp_socket",
+                )
+            } else if proto == "tcp" {
                 let mut last = io::Error::from_raw_os_error(libc::ECONNREFUSED);
                 let mut found = None;
                 for a in addrs {
@@ -445,6 +490,59 @@ mod tests {
         );
         let e = socket_client(b"tcp://localhost", None).unwrap_err();
         assert_eq!(e.message, "Failed to parse address \"localhost\"");
+    }
+
+    /// `STREAM_CLIENT_ASYNC_CONNECT` alone still connects (C's
+    /// `php_stream_xport_create()` connects for `STREAM_XPORT_CONNECT` or
+    /// `STREAM_XPORT_CONNECT_ASYNC`); the socket becomes writable once the
+    /// connection is up, and then carries data both ways.
+    #[test]
+    fn async_connect_connects() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut s = socket_client_ex(
+            format!("tcp://127.0.0.1:{port}").as_bytes(),
+            Some(Duration::from_secs(5)),
+            true,
+        )
+        .unwrap();
+        assert_eq!(s.ops_label(), "tcp_socket");
+        let fd = s.cast(CastAs::FdForSelect, false).unwrap();
+        let ready = sys::poll_fds(&[(fd, libc::POLLOUT)], 5000).unwrap();
+        assert_ne!(ready[0] & libc::POLLOUT, 0);
+        let (mut c, _) = l.accept().unwrap();
+        assert_eq!(s.write(b"ping").unwrap(), 4);
+        let mut b = [0u8; 4];
+        c.read_exact(&mut b).unwrap();
+        assert_eq!(&b, b"ping");
+        c.write_all(b"pong").unwrap();
+        let got = s.read_vec(100).unwrap();
+        assert!(!got.is_empty() && b"pong".starts_with(&got));
+        // The stream is a blocking one, as in C (`"blocked" => true`).
+        let meta = s.meta_data();
+        assert_eq!(meta[1], ("blocked".to_string(), Value::Bool(true)));
+    }
+
+    /// A refused asynchronous connect is reported by the socket (readable
+    /// and writable, with the error pending), not by the connect.
+    #[test]
+    fn async_connect_refused_later() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        match socket_client_ex(format!("tcp://127.0.0.1:{port}").as_bytes(), None, true) {
+            Ok(mut s) => {
+                let fd = s.cast(CastAs::FdForSelect, false).unwrap();
+                let ready = sys::poll_fds(&[(fd, libc::POLLOUT)], 5000).unwrap();
+                assert_ne!(
+                    ready[0] & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP),
+                    0
+                );
+            }
+            // Loopback may refuse at once, as C's connect() would see.
+            Err(e) => assert_eq!(e.errno, libc::ECONNREFUSED),
+        }
     }
 
     #[test]

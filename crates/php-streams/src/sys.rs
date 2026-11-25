@@ -591,6 +591,71 @@ pub fn bind_ip_socket(
     Ok(owned)
 }
 
+/// Creates an IP socket of `ty` and starts connecting it to `addr` without
+/// waiting (`php_network_connect_socket()` with `asynchronous`): `connect()`
+/// on a non-blocking descriptor, where `EINPROGRESS` is success.
+///
+/// Returns the descriptor, still non-blocking, and whether the connection
+/// is pending (`EINPROGRESS`) rather than established.
+///
+/// # Errors
+/// The `errno` of the failed call (`ECONNREFUSED`, `ENETUNREACH`, ...).
+pub fn connect_ip_socket_async(
+    addr: &std::net::SocketAddr,
+    ty: i32,
+) -> Result<(std::os::fd::OwnedFd, bool), i32> {
+    let domain = if addr.is_ipv6() {
+        libc::AF_INET6
+    } else {
+        libc::AF_INET
+    };
+    // SAFETY: plain socket(2) call.
+    let fd = unsafe { libc::socket(domain, ty | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    let rc = match addr {
+        std::net::SocketAddr::V4(a) => {
+            let sin = libc::sockaddr_in {
+                sin_family: libc::sa_family_t::try_from(libc::AF_INET).unwrap_or(2),
+                sin_port: a.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(a.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(16);
+            // SAFETY: `sin` is a valid sockaddr_in of `len` bytes.
+            unsafe { libc::connect(fd, (&raw const sin).cast(), len) }
+        }
+        std::net::SocketAddr::V6(a) => {
+            let sin6 = libc::sockaddr_in6 {
+                sin6_family: libc::sa_family_t::try_from(libc::AF_INET6).unwrap_or(10),
+                sin6_port: a.port().to_be(),
+                sin6_flowinfo: a.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: a.ip().octets(),
+                },
+                sin6_scope_id: a.scope_id(),
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in6>()).unwrap_or(28);
+            // SAFETY: `sin6` is a valid sockaddr_in6 of `len` bytes.
+            unsafe { libc::connect(fd, (&raw const sin6).cast(), len) }
+        }
+    };
+    if rc == 0 {
+        return Ok((owned, false));
+    }
+    match last_errno() {
+        libc::EINPROGRESS => Ok((owned, true)),
+        e => Err(e),
+    }
+}
+
 /// `sendto(fd, buf, flags, addr)`.
 ///
 /// # Errors

@@ -382,6 +382,11 @@ fn xport_open(
     Ok((r, hook))
 }
 
+/// `STREAM_CLIENT_ASYNC_CONNECT` (`PHP_STREAM_CLIENT_ASYNC_CONNECT`).
+const STREAM_CLIENT_ASYNC_CONNECT: i64 = 2;
+/// `STREAM_CLIENT_CONNECT` (`PHP_STREAM_CLIENT_CONNECT`).
+const STREAM_CLIENT_CONNECT: i64 = 4;
+
 /// [`xport_create`] after the `socket` context options were validated.
 #[allow(clippy::too_many_arguments)]
 fn xport_create_inner(
@@ -427,9 +432,13 @@ fn xport_create_inner(
             s
         }));
     }
-    if !server && flags & 4 == 0 && matches!(scheme.as_str(), "tcp" | "udp" | "unix") {
-        // No STREAM_CLIENT_CONNECT: an unconnected socket (xp_socket parses
-        // the address only when connecting).
+    if !server
+        && flags & (STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT) == 0
+        && matches!(scheme.as_str(), "tcp" | "udp" | "unix")
+    {
+        // Neither STREAM_CLIENT_CONNECT nor STREAM_CLIENT_ASYNC_CONNECT: an
+        // unconnected socket (xp_socket parses the address only when
+        // connecting; `php_stream_xport_create()` connects for either flag).
         let domain = if scheme == "unix" {
             libc::AF_UNIX
         } else {
@@ -462,8 +471,9 @@ fn xport_create_inner(
             s
         }));
     }
+    let asynchronous = flags & STREAM_CLIENT_ASYNC_CONNECT != 0;
     let r = bridge::run(vm, || {
-        transports::socket_client(address.as_bytes(), timeout)
+        transports::socket_client_ex(address.as_bytes(), timeout, asynchronous)
     })?;
     Ok(r.map(|mut s| {
         s.context = ctx;

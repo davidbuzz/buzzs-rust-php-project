@@ -54,6 +54,8 @@ use sock::{handle_ssl_error, poll_fd, warn, Conn, TlsOps};
 
 /// `STREAM_CLIENT_CONNECT`.
 const STREAM_CLIENT_CONNECT: i64 = 4;
+/// `STREAM_CLIENT_ASYNC_CONNECT`.
+const STREAM_CLIENT_ASYNC_CONNECT: i64 = 2;
 /// `STREAM_CRYPTO_IS_CLIENT`.
 const IS_CLIENT: i64 = 1;
 /// `STREAM_CRYPTO_METHOD_TLS_ANY_CLIENT`.
@@ -118,11 +120,14 @@ fn crypto_method(vm: &mut Vm, opts: &SslOpts, default: i64) -> VmResult<i64> {
 fn connect(req: &XportRequest) -> Result<(TcpStream, Option<i64>), XportError> {
     let (_, rest) = xport::split_scheme(&req.address);
     let target = format!("tcp://{rest}");
-    let mut plain = php_streams::transports::socket_client(target.as_bytes(), req.timeout)
-        .map_err(|e| XportError {
-            errno: e.errno,
-            message: e.message,
-        })?;
+    // `STREAM_XPORT_OP_CONNECT_ASYNC`: the connection may still be pending.
+    let asynchronous = req.flags & STREAM_CLIENT_ASYNC_CONNECT != 0;
+    let mut plain =
+        php_streams::transports::socket_client_ex(target.as_bytes(), req.timeout, asynchronous)
+            .map_err(|e| XportError {
+                errno: e.errno,
+                message: e.message,
+            })?;
     let tcp = dup_socket(&mut plain).ok_or_else(|| XportError {
         errno: 0,
         message: String::new(),
@@ -237,8 +242,10 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
         s.context.clone_from(&req.context);
         return Ok(Ok(s));
     }
-    if req.flags & STREAM_CLIENT_CONNECT == 0 {
-        // No STREAM_CLIENT_CONNECT: an unconnected socket.
+    if req.flags & (STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT) == 0 {
+        // Neither STREAM_CLIENT_CONNECT nor STREAM_CLIENT_ASYNC_CONNECT: an
+        // unconnected socket (`php_stream_xport_create()` connects for
+        // either flag).
         let Some(tcp) = unconnected_socket() else {
             return Ok(Err(io_error(&std::io::Error::last_os_error())));
         };
