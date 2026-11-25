@@ -53,10 +53,27 @@ fn register(vm: &mut Vm) {
                 .map_err(|e| vm.throw_runtime_error(e))
         },
     );
+    // `mysqli_stmt_bind_param()`'s pattern: the reference is kept after
+    // the call, and written through by a later one.
+    vm.register_function("keep_ref(mixed &$var): void", |_, a| {
+        KEPT.with(|k| *k.borrow_mut() = a.reference(0));
+        Ok(Value::Null)
+    });
+    vm.register_function("kept_set(mixed $value): void", |_, a| {
+        if let Some(r) = KEPT.with(|k| k.borrow().clone()) {
+            r.set(a.at(0));
+        }
+        Ok(Value::Null)
+    });
     vm.register_function("prefer_probe(@prefer-ref array &$array): string", |_, a| {
         let mark = if a.reference(0).is_some() { "R" } else { "V" };
         Ok(Value::Str(ZStr::from(mark)))
     });
+}
+
+thread_local! {
+    /// The reference [`register`]'s `keep_ref()` kept.
+    static KEPT: RefCell<Option<php_runtime::PhpRef>> = const { RefCell::new(None) };
 }
 
 fn run(source: &str) -> String {
@@ -329,5 +346,66 @@ function f() {
 f();
 "#),
         "3000 2265000 2999 1501\n"
+    );
+}
+
+/// What the variable is after the call when something else holds its
+/// reference: a closure's by-reference `use`, another variable, an
+/// element, a later `&`, a handler that keeps it; and a `foreach` by
+/// reference and a copy after the call.
+#[test]
+fn variables_shared_before_or_after_the_call() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+    $a = [1, 2, 3];
+    $c = function () use (&$a) { return count($a); };
+    array_pop($a);
+    echo $c(), count($a), "\n";
+    $b = [1, 2];
+    $alias = &$b;
+    array_pop($b);
+    $alias[] = 7;
+    echo implode(",", $b), "\n";
+    $arr = ['k' => [1, 2]];
+    $e = &$arr['k'];
+    array_pop($e);
+    var_dump($arr);
+    $s = [3, 4];
+    array_pop($s);
+    foreach ($s as &$v) { $v *= 10; }
+    unset($v);
+    $t = $s; $t[] = 1;
+    echo implode(",", $s), " ", implode(",", $t), "\n";
+    $u = [5, 6];
+    array_pop($u);
+    $u2 = &$u;
+    array_pop($u2);
+    var_dump($u);
+}
+f();
+"#),
+        "22\n1,7\narray(1) {\n  [\"k\"]=>\n  &array(1) {\n    [0]=>\n    int(1)\n  }\n}\n30 30,1\narray(0) {\n}\n"
+    );
+}
+
+/// A reference the handler keeps is still the variable's after the call
+/// (`mysqli_stmt_bind_param()` then `mysqli_stmt_execute()`).
+#[test]
+fn a_kept_reference_still_writes_the_variable() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+    keep_ref($v);
+    kept_set(5);
+    var_dump($v);
+    $w = 1;
+    keep_ref($w);
+    kept_set("x");
+    echo $w, "\n";
+}
+f();
+"#),
+        "int(5)\nx\n"
     );
 }

@@ -2509,6 +2509,8 @@ pub(super) fn call_native(
     }
     let b = Rc::clone(b);
     let kind = *kind;
+    // A by-reference argument was sent ([`send_ref`]).
+    let sent_ref = b.plain_call_upto().1 < n;
     // The handler's copies of the arguments (php-src's handler reads them
     // in the frame), then the declared defaults of the omitted trailing
     // parameters, not marked as passed.
@@ -2593,6 +2595,9 @@ pub(super) fn call_native(
             };
         }
     }
+    if sent_ref && vm.frames.live == live + 1 {
+        unwrap_sent_refs(vm, live);
+    }
     // Popped off the VM stack, frames left above it (none, normally)
     // first. Released in place (`release_native`), its argument buffer
     // stays with the pooled frame for the next call at this depth.
@@ -2628,6 +2633,54 @@ pub(super) fn call_native(
             }
         }
     }))
+}
+
+/// After a builtin call [`send_ref`] sent a variable to by reference
+/// (`live` the index of the builtin's frame, still current): each such
+/// variable whose reference nobody else holds (two handles: the
+/// variable's and the call frame's argument, about to be released) gets
+/// the referenced value back as a plain value. php-src leaves it a
+/// reference counted once, which no program can tell from the value: a
+/// read, a write, `count()`, `foreach`, `get_defined_vars()` (whose copy
+/// of the table derefs it, `zend_array_dup_element`) and a later `&` all
+/// behave the same, and a variable bound by `global`, `static`, a
+/// by-reference closure `use`, another variable or an element, or kept by
+/// the handler (`mysqli_stmt_bind_param()`) has more handles and is left
+/// alone, as is a reference with type sources (a typed property's). Our
+/// fast paths for reads, writes and `count()` of a variable mostly decline
+/// a reference: `$m[1]` after `preg_match($re, $s, $m)` cost ~95
+/// instructions more, `count($stack)` after `array_pop($stack)` ~440 and
+/// assigning the variable ~420.
+#[inline(never)]
+fn unwrap_sent_refs(vm: &mut Vm, live: usize) {
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first()) else {
+        return;
+    };
+    // A handler that attached the caller's symbol table (`extract()`)
+    // leaves the variables to it.
+    if caller.symtab_attached {
+        return;
+    }
+    for arg in &frame.args {
+        let Some(Value::Reference(r)) = arg else {
+            continue;
+        };
+        if r.refcount() != 2 || r.meta().is_some() {
+            continue;
+        }
+        let Some(slot) = caller.cvs.iter_mut().find(
+            |s| matches!(s.get(), Some(Value::Reference(c)) if php_runtime::PhpRef::ptr_eq(c, r)),
+        ) else {
+            continue;
+        };
+        let Some(v) = r.try_borrow_mut().map(|mut v| std::mem::take(&mut *v)) else {
+            continue;
+        };
+        // The variable's handle: the argument's still holds the
+        // reference, so nothing is released here.
+        drop(slot.set(Some(v)));
+    }
 }
 
 /// The bound variables of the frame's closure (`use`), copied into their
