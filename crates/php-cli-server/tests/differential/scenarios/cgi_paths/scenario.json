@@ -1,0 +1,52 @@
+{
+ "modes": [
+  "cgi",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/i.php"
+  },
+  {
+   "path": "/i.php/a/b?x=1"
+  },
+  {
+   "path": "/sub/i.php/x%20y"
+  },
+  {
+   "path": "/missing.php"
+  },
+  {
+   "path": "/missing.php/pi"
+  },
+  {
+   "path": "/sub"
+  },
+  {
+   "path": "/t.txt"
+  },
+  {
+   "path": "/i.php",
+   "env": {
+    "REDIRECT_STATUS": ""
+   }
+  },
+  {
+   "path": "/i.php",
+   "env": {
+    "SCRIPT_FILENAME": "/nonexistent/x.php"
+   }
+  },
+  {
+   "path": "/i.php",
+   "env": {
+    "PATH_INFO": "/given",
+    "SCRIPT_NAME": "/i.php"
+   }
+  },
+  {
+   "path": "/i.php?a=b&c",
+   "method": "HEAD"
+  }
+ ]
+}
