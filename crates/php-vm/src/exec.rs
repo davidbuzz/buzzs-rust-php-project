@@ -2325,7 +2325,10 @@ impl Vm {
                     }
                     Op::FuncGetArgs { dst, skip } => {
                         let idx = self.frames.len() - 1;
-                        let mut args = self.frame_args(idx);
+                        let mut args = match crate::builtins::plain_frame_args(&self.frames[idx]) {
+                            Some(a) => a,
+                            None => self.frame_args(idx),
+                        };
                         if let Some(n) = *skip {
                             args = Vm::frame_args_after(&args, n as usize);
                         }

@@ -3130,4 +3130,35 @@ show(v(1, 2, 3));
             "[0=changed ][0=changed 1=2 ][0=changed 1=2 2=3 3=4 ][0=N 1=9 ][0=1 1=2 ][0=1 1=2 ][0=1 1=2 2=3 ]"
         );
     }
+
+    /// `func_get_args()` written in a function body compiles to
+    /// `Op::FuncGetArgs` (zend_compile_func_get_args), whose handler reads
+    /// a plain frame directly: methods, static methods with a reference
+    /// parameter, closures, generators and an unset parameter give what
+    /// `/usr/bin/php8.5 -n` prints.
+    #[test]
+    fn func_get_args_op_of_methods_closures_generators() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            br#"<?php
+class C { function m($a) { $a = 7; return func_get_args(); } static function s(&$r, $z = 3) { $r++; return func_get_args(); } }
+$c = function ($p) use (&$c) { return func_get_args(); };
+function show($l) { echo '['; foreach ($l as $i => $e) { echo $i, '=', $e === null ? 'N' : $e, ' '; } echo ']'; }
+$q = 1;
+show((new C)->m(1, 2, 3)); show(C::s($q)); show(C::s($q, 9, 10)); show($c('a', 'b'));
+function gen($a) { yield func_get_args(); }
+foreach (gen(4, 5) as $v) show($v);
+function d($a) { unset($a); return func_get_args(); }
+show(d(1, 2));
+"#,
+            "fga2.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "[0=7 1=2 2=3 ][0=2 ][0=3 1=9 2=10 ][0=a 1=b ][0=4 1=5 ][0=N 1=2 ]"
+        );
+    }
 }

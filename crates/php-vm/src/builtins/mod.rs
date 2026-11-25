@@ -10,6 +10,7 @@ pub(crate) mod headers;
 pub(crate) mod info;
 mod serial;
 pub(crate) use self::core::enum_methods;
+pub(crate) use self::core::plain_frame_args;
 mod array;
 mod classes;
 mod math;
