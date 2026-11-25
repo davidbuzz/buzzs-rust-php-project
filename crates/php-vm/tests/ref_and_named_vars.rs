@@ -240,3 +240,170 @@ array(1) {
 "#
     );
 }
+
+/// `compact()` and `extract()` in functions, methods and the main script:
+/// every flag, references (`EXTR_REFS`, typed property references),
+/// destructors of overwritten values, `$this`, invalid and numeric names,
+/// undefined names, nested and recursive name arrays, the variables
+/// `get_defined_vars()` sees afterwards.
+#[test]
+fn compact_and_extract() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~D{$this->n}\n"; } }
+class T { public int $p = 1; function m() { $a = 1; var_dump(compact('this', 'a')); try { extract(['this' => 1]); } catch (Error $e) { echo $e->getMessage(), "\n"; } } }
+function ce() {
+  $a = 1; $b = 'two'; $r = [1]; $ref = &$r;
+  var_dump(compact('a', ['b', ['ref']], 'nope', 'this'));
+  var_dump(compact('a', 5));
+  $n = extract(['a' => 10, 'c' => 30, 'b' => 20, 'not valid' => 1, 5 => 'num']); var_dump($n, $a, $b, $c);
+  var_dump(extract(['a' => 'skip', 'd' => 'new'], EXTR_SKIP), $a, $d);
+  var_dump(extract(['a' => 'p', 'e' => 'q'], EXTR_PREFIX_SAME, 'x'), $a, $x_a, $e);
+  var_dump(extract(['a' => 'all', 7 => 'seven'], EXTR_PREFIX_ALL, 'pa'), $pa_a, $pa_7);
+  var_dump(extract(['1bad' => 'inv', 'ok' => 'fine'], EXTR_PREFIX_INVALID, 'iv'), $iv_1bad, $ok);
+  var_dump(extract(['a' => 'exists', 'zz' => 'no'], EXTR_IF_EXISTS), $a, isset($zz));
+  var_dump(extract(['a' => 'pie', 'zz' => 'no'], EXTR_PREFIX_IF_EXISTS, 'pi'), $pi_a, isset($pi_zz));
+  $src = ['ra' => 1, 'rb' => 2]; extract($src, EXTR_REFS); $ra = 100; var_dump($src);
+  $obj = new D(1); extract(['obj' => 'gone']); echo "after\n";
+  $o2 = new D(2); $keep = &$o2; extract(['keep' => 'x']); var_dump($o2); unset($keep, $o2);
+  $t = new T; $tr = &$t->p; try { extract(['tr' => 'str']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; } extract(['tr' => '42']); var_dump($t->p);
+  var_dump(array_keys(get_defined_vars()));
+  $u = 1; unset($u); var_dump(extract(['u' => 'back'], EXTR_PREFIX_SAME, 'w'), $u);
+  try { extract(['a' => 1], 99); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+  $cyc = ['a']; $cyc[] = &$cyc; try { compact($cyc); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  extract(['fresh' => 'F']); var_dump(compact('fresh', 'a'));
+  $gk = 'GLOBALS'; var_dump(extract([$gk => 1]));
+}
+function loop() { $a = 1; $b = 2; for ($i = 0; $i < 3; $i++) { $c = compact('a', 'b'); $c['a']++; extract($c); } var_dump($a, $b); }
+ce(); (new T)->m(); loop();
+$top = 't'; var_dump(compact('top')); extract(['top2' => 'T2']); var_dump($top2);
+"#),
+        r#"
+Warning: compact(): Undefined variable $nope in t.php on line 6
+array(3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  string(3) "two"
+  ["ref"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+
+Warning: compact(): Argument #2 must be string or array of strings, int given in t.php on line 7
+array(1) {
+  ["a"]=>
+  int(1)
+}
+int(3)
+int(10)
+int(20)
+int(30)
+int(1)
+int(10)
+string(3) "new"
+int(2)
+int(10)
+string(1) "p"
+string(1) "q"
+int(2)
+string(3) "all"
+string(5) "seven"
+int(2)
+string(3) "inv"
+string(4) "fine"
+int(1)
+string(6) "exists"
+bool(false)
+int(2)
+string(3) "pie"
+bool(false)
+array(2) {
+  ["ra"]=>
+  &int(100)
+  ["rb"]=>
+  &int(2)
+}
+~D1
+after
+~D2
+string(1) "x"
+Cannot assign string to reference held by property T::$p of type int
+int(42)
+array(21) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "r"
+  [3]=>
+  string(3) "ref"
+  [4]=>
+  string(1) "n"
+  [5]=>
+  string(1) "c"
+  [6]=>
+  string(1) "d"
+  [7]=>
+  string(3) "x_a"
+  [8]=>
+  string(1) "e"
+  [9]=>
+  string(4) "pa_a"
+  [10]=>
+  string(4) "pa_7"
+  [11]=>
+  string(7) "iv_1bad"
+  [12]=>
+  string(2) "ok"
+  [13]=>
+  string(2) "zz"
+  [14]=>
+  string(4) "pi_a"
+  [15]=>
+  string(3) "src"
+  [16]=>
+  string(2) "ra"
+  [17]=>
+  string(3) "obj"
+  [18]=>
+  string(1) "t"
+  [19]=>
+  string(2) "tr"
+  [20]=>
+  string(2) "rb"
+}
+int(1)
+string(4) "back"
+extract(): Argument #2 ($flags) must be a valid extract type
+Recursion detected
+array(2) {
+  ["fresh"]=>
+  string(1) "F"
+  ["a"]=>
+  string(6) "exists"
+}
+int(1)
+array(2) {
+  ["this"]=>
+  object(T)#1 (1) {
+    ["p"]=>
+    int(1)
+  }
+  ["a"]=>
+  int(1)
+}
+Cannot re-assign $this
+int(4)
+int(2)
+array(1) {
+  ["top"]=>
+  string(1) "t"
+}
+string(2) "T2"
+"#
+    );
+}

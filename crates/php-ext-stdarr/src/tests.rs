@@ -324,6 +324,28 @@ fn globals_prefer_ref_uses_a_snapshot() {
     );
 }
 
+/// `extract()` meeting a name the function does not compile (most of
+/// `$GLOBALS`' names; `not_compiled` below) attaches the function's
+/// variable table in the middle of the walk: the variables written
+/// afterwards still reach the function (ext/standard/tests/array/bug25708.phpt).
+#[test]
+fn extract_keeps_writing_after_a_name_the_function_does_not_compile() {
+    assert_eq!(
+        run("$a = 1; $b = 2;
+            function by_ref() { $a = null; $b = null; extract($GLOBALS, EXTR_REFS); echo $a, $b, '|'; }
+            function fresh() { extract($GLOBALS, EXTR_REFS); echo $a, $b, '|'; }
+            function by_value() { $a = null; extract($GLOBALS); echo $a, $b, '|'; }
+            function mixed() { $x = 0; extract(['not_compiled' => 9, 'x' => 5, 'y' => 6]); echo $x, $y, '|'; }
+            function later() {
+                $x = 0;
+                extract(['x' => 5, 'not_compiled' => 9, 'y' => 6], EXTR_PREFIX_ALL, 'p');
+                echo $x, isset($p_x) ? $p_x : '-', $p_y;
+            }
+            by_ref(); fresh(); by_value(); mixed(); later();"),
+        "12|12|12|56|056"
+    );
+}
+
 #[test]
 fn extract_checks_typed_references_before_later_entries() {
     assert_eq!(

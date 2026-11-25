@@ -764,6 +764,11 @@ pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     for v in vals.iter().filter(|v| stack::may_nest(v)) {
         stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
     }
-    let r = sa::symbols::compact(vm, &mut sym, &vals);
+    // A function's variables are read from their slots, the table left
+    // alone (see `CallerSymbols`).
+    let r = match sym.snapshot(vm, &vals) {
+        Some(mut snap) => sa::symbols::compact(vm, &mut snap, &vals),
+        None => sa::symbols::compact(vm, &mut sym, &vals),
+    };
     Ok(Value::Array(rt(vm, r)?))
 }
