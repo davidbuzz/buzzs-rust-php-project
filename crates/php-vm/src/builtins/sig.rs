@@ -295,14 +295,103 @@ fn quoted_default(s: &str) -> Option<Value> {
     if find_byte(inner, b'\\').is_none() {
         return Some(Value::Str(ZStr::from(inner)));
     }
-    let unescaped = inner
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-        .replace("\\r", "\r")
-        .replace("\\0", "\0")
-        .replace("\\x0B", "\x0B")
-        .replace("\\\\", "\\");
-    Some(Value::Str(ZStr::from(unescaped)))
+    Some(Value::Str(ZStr::from(unescape_literal(
+        inner.as_bytes(),
+        first == b'"',
+    ))))
+}
+
+/// The bytes of a PHP string literal's body, as the scanner reads them
+/// (ref: Zend/zend_language_scanner.l, `zend_scan_escape_string` for double
+/// quotes; a single-quoted body knows only `\\` and `\'`). An unknown escape
+/// keeps its backslash.
+pub(crate) fn unescape_literal(inner: &[u8], double: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(inner.len());
+    let mut i = 0;
+    while i < inner.len() {
+        let c = inner[i];
+        if c != b'\\' || i + 1 == inner.len() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let e = inner[i + 1];
+        if !double {
+            if e == b'\\' || e == b'\'' {
+                out.push(e);
+            } else {
+                out.extend_from_slice(&[c, e]);
+            }
+            i += 2;
+            continue;
+        }
+        let simple = match e {
+            b'n' => Some(b'\n'),
+            b't' => Some(b'\t'),
+            b'r' => Some(b'\r'),
+            b'v' => Some(0x0B),
+            b'e' => Some(0x1B),
+            b'f' => Some(0x0C),
+            b'\\' | b'$' | b'"' => Some(e),
+            _ => None,
+        };
+        if let Some(v) = simple {
+            out.push(v);
+            i += 2;
+            continue;
+        }
+        match e {
+            b'0'..=b'7' => {
+                // Up to three octal digits; the byte keeps the low 8 bits.
+                let mut v: u8 = 0;
+                let mut j = i + 1;
+                while j < inner.len() && j < i + 4 && matches!(inner[j], b'0'..=b'7') {
+                    v = v.wrapping_mul(8).wrapping_add(inner[j] - b'0');
+                    j += 1;
+                }
+                out.push(v);
+                i = j;
+            }
+            b'x' if inner.get(i + 2).is_some_and(u8::is_ascii_hexdigit) => {
+                // One or two hex digits: at most 0xFF.
+                let mut v: u8 = 0;
+                let mut j = i + 2;
+                while j < inner.len() && j < i + 4 && inner[j].is_ascii_hexdigit() {
+                    let d = match inner[j] {
+                        d @ b'0'..=b'9' => d - b'0',
+                        d => (d | 0x20) - b'a' + 10,
+                    };
+                    v = v.wrapping_mul(16).wrapping_add(d);
+                    j += 1;
+                }
+                out.push(v);
+                i = j;
+            }
+            b'u' if inner.get(i + 2) == Some(&b'{') => {
+                let close = inner[i + 3..].iter().position(|&b| b == b'}');
+                let cp = close.and_then(|n| {
+                    std::str::from_utf8(&inner[i + 3..i + 3 + n])
+                        .ok()
+                        .and_then(|h| u32::from_str_radix(h, 16).ok())
+                        .and_then(char::from_u32)
+                        .map(|ch| (ch, n))
+                });
+                if let Some((ch, n)) = cp {
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                    i += 3 + n + 1;
+                } else {
+                    out.extend_from_slice(&[c, e]);
+                    i += 2;
+                }
+            }
+            _ => {
+                out.extend_from_slice(&[c, e]);
+                i += 2;
+            }
+        }
+    }
+    out
 }
 
 fn parse_default(s: &str) -> Option<Value> {
@@ -333,9 +422,15 @@ fn parse_default(s: &str) -> Option<Value> {
 fn depth0_comma(b: &[u8]) -> Option<usize> {
     let mut depth = 0i32;
     let mut quote: Option<u8> = None;
+    let mut escaped = false;
     for (i, &c) in b.iter().enumerate() {
         if let Some(q) = quote {
-            if c == q {
+            // A backslash escapes the next byte, so `"\""` is one literal.
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
                 quote = None;
             }
             continue;
@@ -628,10 +723,15 @@ pub fn sig_head(sig: &str) -> SigHead<'_> {
 /// sees them).
 fn has_variadic_marker(params: &[u8]) -> bool {
     let mut quote: Option<u8> = None;
+    let mut escaped = false;
     let mut dots = 0u8;
     for &c in params {
         if let Some(q) = quote {
-            if c == q {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
                 quote = None;
             }
             continue;
@@ -748,10 +848,15 @@ mod reference {
         let mut depth = 0i32;
         let mut cur = String::new();
         let mut quote: Option<char> = None;
+        let mut escaped = false;
         for c in s.chars() {
             if let Some(q) = quote {
                 cur.push(c);
-                if c == q {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
                     quote = None;
                 }
                 continue;
@@ -833,13 +938,7 @@ mod reference {
             && s.len() >= 2
         {
             let inner = &s[1..s.len() - 1];
-            let unescaped = inner
-                .replace("\\n", "\n")
-                .replace("\\t", "\t")
-                .replace("\\r", "\r")
-                .replace("\\0", "\0")
-                .replace("\\x0B", "\x0B")
-                .replace("\\\\", "\\");
+            let unescaped = super::unescape_literal(inner.as_bytes(), s.starts_with('"'));
             return Some(Value::Str(ZStr::from(unescaped)));
         }
         None
@@ -1155,6 +1254,37 @@ mod equivalence_tests {
             s.ret.as_ref().map(|t| t.mask),
             Some(mask::LONG | mask::NULL)
         );
+    }
+
+    fn default_bytes(s: &str) -> Vec<u8> {
+        match parse_default(s) {
+            Some(php_runtime::Value::Str(z)) => z.as_bytes().to_vec(),
+            other => panic!("{s:?} gave {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quoted_defaults_read_escapes_as_the_scanner_does() {
+        // php-src master's trim(), ucwords() and str_getcsv() stubs; the
+        // values are what ReflectionParameter::getDefaultValue() gives.
+        assert_eq!(default_bytes(r#"" \f\n\r\t\v\0""#), b" \x0C\n\r\t\x0B\0");
+        assert_eq!(default_bytes(r#"" \t\r\n\f\v""#), b" \t\r\n\x0C\x0B");
+        assert_eq!(default_bytes(r#""\"""#), b"\"");
+        assert_eq!(default_bytes(r#""\\""#), b"\\");
+        assert_eq!(
+            default_bytes(r#""\$\e\x41\x4g\101\777\u{e9}\q""#),
+            b"$\x1BA\x04g\x41\xFF\xC3\xA9\\q"
+        );
+        assert_eq!(default_bytes(r"'a\'b\\c\n'"), b"a'b\\c\\n");
+        // A quoted comma or `"` does not end the parameter.
+        let s = parse_sig(
+            r#"str_getcsv(string $string, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array"#,
+        );
+        assert_eq!(s.params.len(), 4);
+        assert_eq!(s.required, 1);
+        assert_eq!(s.params[2].default_text.as_deref(), Some(r#""\"""#));
+        assert_eq!(s.params[3].default_text.as_deref(), Some(r#""\\""#));
+        assert!(!super::sig_head(r#"f(string $a = "\"...", $b)"#).variadic);
     }
 
     #[test]
