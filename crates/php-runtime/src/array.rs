@@ -756,6 +756,23 @@ impl HashData {
         self.index.get(hash_slot(ts, h)).copied().unwrap_or(INVALID)
     }
 
+    /// Whether the index links the buckets as they stand, as far as one
+    /// probe tells: the last-placed bucket heads its chain in every linked
+    /// table (appends link at the head, unlinks keep the order, re-links
+    /// build it that way), and in no table whose index was reset while its
+    /// buckets stay ([`HashTable::live_sort_begin`]: a sort with a PHP
+    /// comparator, which may copy the table half-sorted). An empty table
+    /// is linked.
+    fn last_is_linked(&self, ts: u32) -> bool {
+        match self.buckets.len().checked_sub(1) {
+            None => true,
+            Some(last) => self
+                .buckets
+                .get(last)
+                .is_some_and(|b| self.head(ts, b.key.hash()) == to_u32(last)),
+        }
+    }
+
     /// The bucket after `idx` in its chain (`Z_NEXT`).
     #[inline]
     #[allow(dead_code)]
@@ -3459,6 +3476,30 @@ impl Clone for HashTable {
                 vals.extend(v.iter().map(|s| s.as_ref().map(&dup_val)));
                 out.store = Store::Packed(vals);
             }
+            Store::Hash(d)
+                if self.is_without_holes()
+                    && d.index.len() == index_len(out.table_size)
+                    && d.last_is_linked(out.table_size) =>
+            {
+                // No holes: every bucket keeps its position in the copy, so
+                // the source's chains and index are the copy's as they
+                // stand (they are what re-linking the copy would build: a
+                // chain lists its live buckets last-placed first, which
+                // appends, unlinks and re-links all keep), copied instead
+                // of rebuilt bucket by bucket. Not while an in-place sort
+                // has the index reset ([`HashData::last_is_linked`]): such
+                // a copy is re-linked below, so lookups in it work.
+                let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
+                buckets.extend(d.buckets.iter().map(|b| Bucket {
+                    val: b.val.as_ref().map(&dup_val),
+                    key: b.key.clone(),
+                    next: b.next,
+                }));
+                out.store = Store::Hash(HashData {
+                    buckets,
+                    index: d.index.clone(),
+                });
+            }
             Store::Hash(d) => {
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
@@ -5715,5 +5756,82 @@ mod tests {
         assert_eq!(gap.len(), 1);
         assert!(matches!(gap.push(Value::Int(5)), Ok(5)));
         assert_eq!(render(&gap), "0=0,5=5");
+    }
+
+    /// A copy of a hash without holes takes the source's chains and index
+    /// as they stand: they equal what re-linking the copy builds, every
+    /// key is found, and the copy grows and takes new keys as a table of
+    /// its own. A hash with holes is still compacted (sizes 1, 8, 9 and
+    /// 40; int and string keys, counted and plain values).
+    #[test]
+    fn clone_of_a_hash_keeps_its_chains() {
+        for n in [1i64, 8, 9, 40] {
+            let mut t = HashTable::with_capacity_mixed(0);
+            for i in 0..n {
+                if i % 2 == 0 {
+                    t.insert(ArrayKey::Int(i * 7 - 9), Value::Int(i));
+                } else {
+                    t.insert(
+                        format!("k{i}").as_str(),
+                        Value::Str(ZStr::from(format!("v{i}"))),
+                    );
+                }
+            }
+            let copy = t.clone();
+            let (Store::Hash(a), Store::Hash(b)) = (&t.store, &copy.store) else {
+                panic!("not hashes: {n}");
+            };
+            assert_eq!(a.index, b.index, "{n}");
+            let nexts = |d: &HashData| d.buckets.iter().map(|b| b.next).collect::<Vec<_>>();
+            assert_eq!(nexts(a), nexts(b), "{n}");
+            let mut relinked = copy.clone();
+            relinked.rehash_without_compaction();
+            let Store::Hash(r) = &relinked.store else {
+                panic!("not a hash: {n}");
+            };
+            assert_eq!(r.index, b.index, "{n}");
+            assert_eq!(nexts(r), nexts(b), "{n}");
+            for (k, _) in t.iter() {
+                assert!(copy.contains_key(k), "{n}: {k:?}");
+            }
+            assert_eq!(copy.len(), t.len(), "{n}");
+            assert_eq!(copy.next_index(), t.next_index(), "{n}");
+            let mut grown = copy;
+            for i in 0..20 {
+                grown.insert(format!("new{i}").as_str(), Value::Int(i));
+            }
+            assert_eq!(grown.len(), t.len() + 20, "{n}");
+            for (k, _) in t.iter() {
+                assert!(grown.contains_key(k), "{n}: {k:?}");
+            }
+            assert!(matches!(
+                grown.get(&ArrayKey::from("new19")),
+                Some(Value::Int(19))
+            ));
+            // With a hole: the copy is compacted and every key found.
+            let first = t.first().map(|(k, _)| k.clone());
+            if let Some(k) = first {
+                drop(t.remove(&k));
+            }
+            let compacted = t.clone();
+            assert_eq!(compacted.used() as usize, compacted.len(), "{n}");
+            for (k, _) in t.iter() {
+                assert!(compacted.contains_key(k), "{n}: {k:?}");
+            }
+            // Half-way through an in-place sort (the index reset, the
+            // buckets kept): the copy is re-linked, every key found.
+            if t.len() > 1 {
+                let keys: Vec<ArrayKey> = t.keys().cloned().collect();
+                assert!(t.live_sort_begin(false).is_some(), "{n}");
+                let mid = t.clone();
+                for k in &keys {
+                    assert!(mid.contains_key(k), "{n}: {k:?}");
+                }
+                t.live_sort_finish(false);
+                for k in &keys {
+                    assert!(t.contains_key(k), "{n}: {k:?}");
+                }
+            }
+        }
     }
 }
