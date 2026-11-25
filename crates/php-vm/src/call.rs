@@ -2394,13 +2394,14 @@ impl Vm {
     /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
-    /// Every value a user function returns into a caller temporary
-    /// holding a scalar (or discards) runs here, arrays, objects and
-    /// referenced variables included: they went to [`Vm::return_generic`],
-    /// which repeated every test (~300 instructions a return of an
-    /// array). What is left to it is a caller's result slot holding a
-    /// counted value, a value the return type must coerce, and the
-    /// operand shapes dispatched before this function's prologue.
+    /// Every value a user function returns runs here, arrays, objects
+    /// and referenced variables included, and into a caller's result slot
+    /// holding anything: they went to [`Vm::return_generic`], which
+    /// repeated every test (~300 instructions a return of an array). What
+    /// is left to it is a value the return type must coerce or refuses, a
+    /// temporary holding a reference, an unused result whose release may
+    /// run a destructor, and the operand shapes dispatched before this
+    /// function's prologue.
     #[inline(never)]
     pub(crate) fn return_simple(
         &mut self,
@@ -2421,7 +2422,7 @@ impl Vm {
         if fidx <= base {
             return None;
         }
-        {
+        let old = {
             let (callers, rest) = self.frames.vec.split_at_mut(fidx);
             let caller = callers.last_mut()?;
             let frame = rest.first_mut()?;
@@ -2440,16 +2441,14 @@ impl Vm {
             // A value its declared return type does not take as it is
             // (`return_accepts`) is left to `return_generic`: coercion
             // rules may rewrite it (int 3 returned from a `: string`
-            // function gives "3"), or it fails. So is a caller's result
-            // slot that holds anything but a scalar (released after the
-            // frame), a temporary holding a reference, and an unused
-            // result whose release may run a destructor.
-            // Every test comes before the value moves out of its slot:
-            // `return_generic` reads it there again.
+            // function gives "3"), or it fails. So is a temporary holding
+            // a reference, and an unused result whose release may run a
+            // destructor. Every test comes before the value moves out of
+            // its slot: `return_generic` reads it there again.
             let dst = match frame.ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
-                    Some(slot) if is_scalar(slot) => Some(slot),
-                    _ => return self.return_generic::<false>(val, base, ip),
+                    Some(slot) => Some(slot),
+                    None => return self.return_generic::<false>(val, base, ip),
                 },
                 RetTarget::Discard => None,
             };
@@ -2549,9 +2548,30 @@ impl Vm {
             // and the scalar left in the frame's slot is released with the
             // frame (`release_cv` / `release_slot`: forgotten). A
             // discarded string is released.
+            //
+            // A caller's slot holding anything else (a result its
+            // consumer copied instead of moving) gives its value up here
+            // and keeps it in `old`, released after the frame, as
+            // `set_tmp` released it after `return_generic`'s pop: the same
+            // order, and nothing reads the caller's temporaries meanwhile
+            // (the release queues destructors; no user code runs in it).
+            let mut old = None;
             match (dst, src) {
-                (Some(slot), Ok(v)) => std::mem::swap(slot, v),
-                (Some(slot), Err(v)) => std::mem::forget(std::mem::replace(slot, v)),
+                (Some(slot), Ok(v)) => {
+                    if is_scalar(slot) {
+                        std::mem::swap(slot, v);
+                    } else {
+                        old = Some(std::mem::replace(slot, std::mem::take(v)));
+                    }
+                }
+                (Some(slot), Err(v)) => {
+                    let prev = std::mem::replace(slot, v);
+                    if is_scalar(&prev) {
+                        std::mem::forget(prev);
+                    } else {
+                        old = Some(prev);
+                    }
+                }
                 // `ZEND_RETURN` releases an unused result before the frame
                 // is left. A scalar owns nothing; anything else loses one
                 // count (a value whose release may run a destructor stayed
@@ -2574,8 +2594,12 @@ impl Vm {
             // call, no second lookup of the top frame); the stack is
             // popped just below.
             frame.release_returning(caller.this.as_ref(), &self.empty_code);
+            old
         };
         self.frames.pop_cleared_top();
+        if let Some(v) = old {
+            release_result_slot(v);
+        }
         Some(crate::exec::Flow::Reload)
     }
 
@@ -5718,6 +5742,16 @@ fn root_released_args(args: &[Option<Value>]) {
             crate::gc::possible_root(v);
         }
     }
+}
+
+/// Releases the value a caller's result slot held before
+/// [`Vm::return_simple`] stored the returned value into it (`set_tmp`'s
+/// release of the old value, after the frame). Out of line: the slot
+/// almost always held a scalar, which needs no release.
+#[cold]
+#[inline(never)]
+fn release_result_slot(v: Value) {
+    drop(v);
 }
 
 /// A value [`Vm::return_simple`] returns as it is: a scalar, null or a

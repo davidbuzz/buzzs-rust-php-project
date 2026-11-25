@@ -970,3 +970,43 @@ destruct kept
 "#
     );
 }
+
+/// Returned objects stored, passed on and dereferenced: each is destructed
+/// when its last handle goes, the result slot's earlier value after the
+/// returning frame (`set_tmp`'s order, kept by `Vm::return_simple`).
+#[test]
+fn returned_objects_are_released_when_their_last_handle_goes() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "destruct {$this->n}\n"; } }
+function mk($n) { $o = new D($n); return $o; }
+function ident($v) { return $v; }
+$list = [];
+for ($i = 0; $i < 3; $i++) { $list[] = mk("m$i"); echo "made $i\n"; }
+unset($list);
+echo "unset\n";
+for ($i = 0; $i < 3; $i++) { echo ident(mk("e$i"))->n, "\n"; }
+$x = [ident([1]), ident('two'), ident(mk('in array'))];
+echo count($x), "\n";
+$x = null;
+echo "end\n";
+"#),
+        r#"made 0
+made 1
+made 2
+destruct m0
+destruct m1
+destruct m2
+unset
+destruct e0
+e0
+destruct e1
+e1
+destruct e2
+e2
+3
+destruct in array
+end
+"#
+    );
+}
