@@ -111,3 +111,34 @@ fn number_parameters_reflect_their_stub_type() {
          gmp_add(): Argument #1 ($num1) must be of type GMP|string|int, array given\n"
     );
 }
+
+#[test]
+fn numbers_are_parsed_before_the_int_arguments_after_them() {
+    // GMP_Z_PARAM_INTO_MPZ_PTR runs inside ZEND_PARSE_PARAMETERS_START, so a
+    // bad number throws before a later Z_PARAM_LONG is coerced or deprecated
+    // (expected output from php8.5).
+    let out = run(
+        r#"set_error_handler(function ($n, $m) { echo "[$n] $m\n"; return true; });
+foreach ([fn() => gmp_root("abc", null), fn() => gmp_testbit("x", 1.5), fn() => gmp_strval([], "z"),
+          fn() => gmp_strval(5, null), fn() => gmp_root(27, 1.5), fn() => gmp_div_q(7, "q", []),
+          fn() => gmp_div_q(7, 2, []), fn() => gmp_scan0(5, "x"), fn() => gmp_export(1, 1, null)] as $f) {
+    try { $r = $f(); echo is_object($r) ? gmp_strval($r) : var_export($r, true), "\n"; }
+    catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: gmp_root(): Argument #1 ($num) is not an integer string\n\
+         ValueError: gmp_testbit(): Argument #1 ($num) is not an integer string\n\
+         TypeError: gmp_strval(): Argument #1 ($num) must be of type GMP|string|int, array given\n\
+         [8192] gmp_strval(): Passing null to parameter #2 ($base) of type int is deprecated\n\
+         ValueError: gmp_strval(): Argument #2 ($base) must be between 2 and 62, or -2 and -36\n\
+         [8192] Implicit conversion from float 1.5 to int loses precision\n\
+         27\n\
+         ValueError: gmp_div_q(): Argument #2 ($num2) is not an integer string\n\
+         TypeError: gmp_div_q(): Argument #3 ($rounding_mode) must be of type int, array given\n\
+         TypeError: gmp_scan0(): Argument #2 ($start) must be of type int, string given\n\
+         [8192] gmp_export(): Passing null to parameter #3 ($flags) of type int is deprecated\n\
+         ''\n"
+    );
+}
