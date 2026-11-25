@@ -101,3 +101,31 @@ fn ini_restore_cannot_unset_open_basedir() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn rejected_startup_timezone_keeps_the_default() {
+    let d = temp_dir("timezone");
+    for value in ["Nope/Zone", ""] {
+        let out = php_in(
+            &d,
+            &[
+                "-d",
+                &format!("date.timezone={value}"),
+                "-r",
+                "var_dump(ini_get('date.timezone'), date_default_timezone_get(), \
+                 ini_get_all('date')['date.timezone']['global_value'], get_cfg_var('date.timezone'));",
+            ],
+        );
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            format!(
+                "\nWarning: PHP Startup: Invalid date.timezone value '{value}', using 'UTC' instead \
+                 in Unknown on line 0\nstring(3) \"UTC\"\nstring(3) \"UTC\"\nstring(3) \"UTC\"\n\
+                 string({}) \"{value}\"\n",
+                value.len()
+            )
+        );
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

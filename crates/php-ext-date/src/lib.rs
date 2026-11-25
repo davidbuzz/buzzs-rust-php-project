@@ -74,7 +74,11 @@ fn on_update_timezone(vm: &mut Vm, v: &[u8]) -> VmResult<bool> {
     Ok(false)
 }
 
-/// The same check for the startup value (`-d`/php.ini).
+/// The same check for the startup value (`-d`/php.ini). A value
+/// `OnUpdate_date_timezone` rejects at startup is not stored: the
+/// directive keeps its default, "UTC" (`zend_register_ini_entries()`
+/// falls back to the default value; php8.5 -d date.timezone=Nope/Zone
+/// reads back "UTC").
 fn check_startup_timezone(vm: &mut Vm) {
     let Some(v) = vm.ini_string("date.timezone") else {
         return;
@@ -85,6 +89,7 @@ fn check_startup_timezone(vm: &mut Vm) {
             common::E_WARNING,
             &format!("PHP Startup: Invalid date.timezone value '{name}', using 'UTC' instead"),
         );
+        vm.ini.reset_to_default("date.timezone");
     }
 }
 
