@@ -946,10 +946,7 @@ impl ConnData {
             return match std::fs::read(&f) {
                 Ok(pem) => auth::parse_public_key(&pem),
                 Err(e) => {
-                    diag::warn(format!(
-                        "failed to open stream: {}",
-                        crate::net::strerror(&e)
-                    ));
+                    diag::warn(open_stream_failure(&e));
                     None
                 }
             };
@@ -2686,9 +2683,30 @@ impl ConnData {
     }
 }
 
+/// The warning `php_stream_open_wrapper(..., REPORT_ERRORS, ...)` raises
+/// for a key file that cannot be opened (`php_stream_display_wrapper_errors`
+/// in main/streams/streams.c: the caption is "Failed to open stream").
+fn open_stream_failure(e: &std::io::Error) -> String {
+    format!("Failed to open stream: {}", crate::net::strerror(e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ext/mysqli/tests/mysqli_pam_sha256_public_key_option_invalid.phpt:
+    /// "mysqli::real_connect(): Failed to open stream: No such file or
+    /// directory".
+    #[test]
+    fn missing_public_key_file_warning() {
+        let Err(e) = std::fs::read("/nonexistent/mysqlnd/public_key.pem") else {
+            panic!("the file must not exist");
+        };
+        assert_eq!(
+            open_stream_failure(&e),
+            "Failed to open stream: No such file or directory"
+        );
+    }
 
     #[test]
     fn scheme_building() {
