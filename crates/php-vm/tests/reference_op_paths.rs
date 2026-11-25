@@ -40,6 +40,107 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// Edge cases of the reference paths: `$r .= $r`, concatenation of ints, compound assignments with the reference on both sides, int overflow into floats in `+`, `*`, `-`, `++`, `--`, `-=`, identity and loose comparisons that convert, NaN and empty-string truth, division and modulo by zero, assignments of arrays and scalars over the referenced value, `static` counters, a `global` written by a function and read by the main script, `foreach` by reference with a key over a by-reference parameter.
+#[test]
+fn edge_cases_through_references() {
+    assert_eq!(
+        run(r#"<?php
+function edges() {
+    $a = 'ab'; $r = &$a; $r .= $r; $r .= 7; var_dump($a);
+    $n = 5; $m = &$n; $x = $m . 5; $y = 5 . $m; $z = $m . $m; var_dump($x, $y, $z);
+    $m += $m; $m *= $m; var_dump($n);
+    $big = PHP_INT_MAX; $b = &$big; var_dump($b + 1, $b * 2, $b - -1); $b += 1; var_dump($big);
+    $min = PHP_INT_MIN; $q = &$min; $q--; var_dump($min); $q = PHP_INT_MIN; $q -= 1; var_dump($min);
+    $f = 1.0; $g = &$f; var_dump($g === 1.0, $g === 1, $g == 1, $g == '1', $g . '', $g != 2);
+    $s = '10'; $t = &$s; var_dump($t == '1e1', $t === '10', $t !== 10, $t + 5, $t < 11);
+    $nan = NAN; $p = &$nan; if ($p) { echo "nan truthy\n"; }
+    $e = ''; $h = &$e; if (!$h) { echo "empty falsy\n"; } if ($h === '') { echo "identical empty\n"; }
+    $z0 = '0'; $k = &$z0; echo $k ? "t\n" : "f\n";
+    $arr = []; $ar = &$arr; echo $ar ? "t\n" : "f\n"; echo count($ar), "\n"; $ar[] = 1; echo count($arr), "\n";
+    $obj = new stdClass; $or = &$obj; echo $or ? "obj t\n" : "obj f\n";
+    $d = 7; $dr = &$d; var_dump($dr / 2, $dr % 3, $dr | 8, $dr << 2, $dr <=> 3, $dr ** 2);
+    try { var_dump($dr % 0); } catch (DivisionByZeroError $ex) { echo $ex->getMessage(), "\n"; }
+    try { $dr /= 0; } catch (DivisionByZeroError $ex) { echo $ex->getMessage(), "\n"; }
+    var_dump($d);
+    $u = null; $ur = &$u; var_dump($ur === null, $ur == false, null === $ur); $ur = 'x'; var_dump($u);
+    $str = 'abc'; $sr = &$str; $sr = [1, 2]; var_dump($str); 
+    $o2 = new stdClass; $orr = &$o2; $orr = 3; var_dump($o2);
+}
+edges();
+function counter() { static $n = 0; $n++; return $n; }
+function counter2() { static $n = 0; return ++$n; }
+for ($i = 0; $i < 3; $i++) { counter(); counter2(); }
+var_dump(counter(), counter2());
+function g_assign() { global $gv; $gv = 'set in function'; $gv .= '!'; }
+g_assign(); var_dump($gv);
+function by_ref_loop(array &$list) { foreach ($list as $k => &$v) { $v = $k . ':' . $v; } }
+$l = ['a' => 1, 'b' => 2]; by_ref_loop($l); var_dump($l);
+"#),
+        r#"string(5) "abab7"
+string(2) "55"
+string(2) "55"
+string(2) "55"
+int(100)
+float(9.223372036854776E+18)
+float(1.8446744073709552E+19)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(-9.223372036854776E+18)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+string(1) "1"
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+int(15)
+bool(true)
+
+Warning: unexpected NAN value was coerced to bool in t.php on line 10
+nan truthy
+empty falsy
+identical empty
+f
+f
+0
+1
+obj t
+float(3.5)
+int(1)
+int(15)
+int(28)
+int(1)
+int(49)
+Modulo by zero
+Division by zero
+int(7)
+bool(true)
+bool(true)
+bool(true)
+string(1) "x"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+int(3)
+int(4)
+int(4)
+string(16) "set in function!"
+array(2) {
+  ["a"]=>
+  string(3) "a:1"
+  ["b"]=>
+  string(3) "b:2"
+}
+"#
+    );
+}
+
 /// `++`, `--`, `op=`, `.=`, arithmetic, concatenation, comparison and truthiness on a `global`, a `static`, a by-reference parameter and an `&` alias: ints overflowing to float, floats, string increment, undefined and null variables.
 #[test]
 fn scalar_ops_through_references() {
