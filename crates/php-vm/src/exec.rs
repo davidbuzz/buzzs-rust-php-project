@@ -627,14 +627,23 @@ impl Vm {
     ///
     /// Also the store of `RECV`: the slot is then undefined, and nothing
     /// is released.
+    ///
+    /// `v` moves into the slot (`ZEND_BIND_GLOBAL` / `ZEND_BIND_STATIC`
+    /// store the reference they took, `ZVAL_REF`): an attached symbol
+    /// table gets its copy first. A copy stored and `v` dropped after it
+    /// cost every bind a handle up and down, and the drop of a reference
+    /// handle is a possible-root check (`ref_roots::released`). The
+    /// variable's old value is still released last, after both stores.
     #[inline]
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
         let f = self.frame_mut();
         let idx = cv as usize;
-        if let Some(slot) = f.cvs.get_mut(idx) {
-            let old = slot.set(Some(v.clone()));
+        if idx < f.cvs.len() {
             f.sync_cv_to_symtab(cv, &v);
-            release_slot_value(old);
+            if let Some(slot) = f.cvs.get_mut(idx) {
+                let old = slot.set(Some(v));
+                release_slot_value(old);
+            }
         }
     }
 
