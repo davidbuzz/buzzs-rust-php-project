@@ -123,13 +123,17 @@ impl Extension for Date {
             ("date.sunset_zenith", "90.833333"),
             ("date.sunrise_zenith", "90.833333"),
         ] {
-            m.ini(IniDirective::new(
-                name,
-                Some(default),
-                Access::ALL,
-                ModifyHandler::None,
-                "date",
-            ));
+            // PHP_INI_ENTRY(..., NULL) in ext/date/php_date.c.
+            m.ini(
+                IniDirective::new(
+                    name,
+                    Some(default),
+                    Access::ALL,
+                    ModifyHandler::None,
+                    "date",
+                )
+                .without_on_modify(),
+            );
         }
         for (name, v) in [
             ("SUNFUNCS_RET_TIMESTAMP", api::SUNFUNCS_RET_TIMESTAMP),

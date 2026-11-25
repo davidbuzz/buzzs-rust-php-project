@@ -129,3 +129,26 @@ fn rejected_startup_timezone_keeps_the_default() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn ini_restore_keeps_entries_without_on_modify() {
+    // zend_restore_ini_entry_cb() fails at runtime for entries C declares
+    // with a NULL on_modify (php8.5).
+    let d = temp_dir("restore-null");
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "foreach (['SMTP', 'highlight.string', 'date.default_latitude', \
+             'precision', 'gd.jpeg_ignore_warning'] as $n) { ini_set($n, '7'); \
+             ini_restore($n); echo $n, '=', ini_get($n), \"\\n\"; }",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "SMTP=7\nhighlight.string=7\ndate.default_latitude=7\nprecision=14\n\
+         gd.jpeg_ignore_warning=7\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}

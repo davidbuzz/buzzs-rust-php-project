@@ -237,6 +237,11 @@ pub struct IniDirective {
     pub module: String,
     /// How phpinfo() shows the value.
     pub displayer: IniDisplayer,
+    /// Whether C gives the entry an `on_modify` handler. Entries declared
+    /// with a NULL one (`PHP_INI_ENTRY("SMTP", ..., NULL)`) cannot be
+    /// restored at runtime: `zend_restore_ini_entry_cb()` starts from
+    /// `FAILURE` and only an `on_modify` call changes that.
+    pub has_on_modify: bool,
 }
 
 impl IniDirective {
@@ -255,7 +260,16 @@ impl IniDirective {
             handler,
             module: module.to_string(),
             displayer: IniDisplayer::for_handler(name, handler),
+            has_on_modify: true,
         }
+    }
+
+    /// The same directive declared with a NULL `on_modify` in C (see
+    /// [`IniDirective::has_on_modify`]).
+    #[must_use]
+    pub fn without_on_modify(mut self) -> Self {
+        self.has_on_modify = false;
+        self
     }
 
     /// The same directive with another displayer (an entry whose modify
@@ -597,7 +611,9 @@ impl IniRegistry {
         let entry = entry.clone();
         self.generation = next_generation();
         let result = self.on_modify(&entry, entry.orig_value.as_deref(), stage, diag);
-        if stage == Stage::Runtime && result.is_err() {
+        // "runtime failure is OK": the entry stays modified; without an
+        // on_modify the result stays FAILURE.
+        if stage == Stage::Runtime && (result.is_err() || !entry.def.has_on_modify) {
             return false;
         }
         let mut e = entry;
@@ -1020,11 +1036,11 @@ pub fn core_directives() -> Vec<IniDirective> {
         IniDirective::new(n, d, a, h, "standard")
     };
     vec![
-        c("highlight.comment", Some("#FF8000"), A::ALL, H::None),
-        c("highlight.default", Some("#0000BB"), A::ALL, H::None),
-        c("highlight.html", Some("#000000"), A::ALL, H::None),
-        c("highlight.keyword", Some("#007700"), A::ALL, H::None),
-        c("highlight.string", Some("#DD0000"), A::ALL, H::None),
+        c("highlight.comment", Some("#FF8000"), A::ALL, H::None).without_on_modify(),
+        c("highlight.default", Some("#0000BB"), A::ALL, H::None).without_on_modify(),
+        c("highlight.html", Some("#000000"), A::ALL, H::None).without_on_modify(),
+        c("highlight.keyword", Some("#007700"), A::ALL, H::None).without_on_modify(),
+        c("highlight.string", Some("#DD0000"), A::ALL, H::None).without_on_modify(),
         c("display_errors", Some("1"), A::ALL, H::DisplayErrors),
         c("display_startup_errors", Some("1"), A::ALL, H::Bool),
         c("enable_dl", Some("1"), A::SYSTEM, H::Bool),
@@ -1093,8 +1109,8 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("request_order", None, pd_sys, H::String),
         c("error_append_string", None, A::ALL, H::String),
         c("error_prepend_string", None, A::ALL, H::String),
-        c("SMTP", Some("localhost"), A::ALL, H::None),
-        c("smtp_port", Some("25"), A::ALL, H::None),
+        c("SMTP", Some("localhost"), A::ALL, H::None).without_on_modify(),
+        c("smtp_port", Some("25"), A::ALL, H::None).without_on_modify(),
         c("mail.add_x_header", Some("0"), pd_sys, H::Bool),
         c("mail.mixed_lf_and_crlf", Some("0"), pd_sys, H::Bool),
         c("mail.cr_lf_mode", Some("crlf"), pd_sys, H::MailCrLfMode),
@@ -1104,17 +1120,18 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("memory_limit", Some("128M"), A::ALL, H::MemoryLimit),
         c("memory_hard_limit_percent", None, A::ALL, H::None),
         c("precision", Some("14"), A::ALL, H::Precision),
-        c("sendmail_from", None, A::ALL, H::None),
+        c("sendmail_from", None, A::ALL, H::None).without_on_modify(),
         c(
             "sendmail_path",
             Some("/usr/sbin/sendmail -t -i"),
             A::SYSTEM,
             H::None,
-        ),
+        )
+        .without_on_modify(),
         c("mail.force_extra_parameters", None, pd_sys, H::None),
-        c("disable_functions", Some(""), A::SYSTEM, H::None),
-        c("max_file_uploads", Some("20"), pd_sys, H::None),
-        c("max_multipart_body_parts", Some("-1"), pd_sys, H::None),
+        c("disable_functions", Some(""), A::SYSTEM, H::None).without_on_modify(),
+        c("max_file_uploads", Some("20"), pd_sys, H::None).without_on_modify(),
+        c("max_multipart_body_parts", Some("-1"), pd_sys, H::None).without_on_modify(),
         c("allow_url_fopen", Some("1"), A::SYSTEM, H::Bool),
         c("allow_url_include", Some("0"), A::SYSTEM, H::Bool),
         c("enable_post_data_reading", Some("1"), pd_sys, H::Bool),
@@ -1536,6 +1553,28 @@ mod tests {
             IniDisplayer::Color.display(Some(b"#123\0x"), false),
             b"<span style=\"color: #123\">#123</span>".to_vec()
         );
+    }
+
+    #[test]
+    fn entries_without_on_modify_are_not_restored_at_runtime() {
+        // php8.5: ini_set('SMTP', 'x'); ini_restore('SMTP'); ini_get('SMTP')
+        // is "x"; precision (OnSetPrecision) is restored.
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        for (name, old) in [("SMTP", "localhost"), ("highlight.string", "#DD0000")] {
+            assert_eq!(r.ini_set(name, b"x", &mut d), Some(old.as_bytes().to_vec()));
+            r.ini_restore(name, &mut d);
+            assert_eq!(r.get(name), Some(&b"x"[..]));
+            assert!(r.is_modified(name));
+        }
+        r.ini_set("precision", b"3", &mut d);
+        r.ini_restore("precision", &mut d);
+        assert_eq!(r.get("precision"), Some(&b"14"[..]));
+        // The request end restores them all.
+        r.deactivate(&mut d);
+        assert_eq!(r.get("SMTP"), Some(&b"localhost"[..]));
+        assert_eq!(r.get("highlight.string"), Some(&b"#DD0000"[..]));
+        assert!(d.is_empty());
     }
 
     #[test]
