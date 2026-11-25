@@ -688,14 +688,14 @@ mod tests {
     #[test]
     fn string_length_is_exact() {
         let cases: &[(&[u8], i64)] = &[
-            (br#""plain""#, 0),
-            (br#""a\"\\\/\b\f\n\r\tz""#, 0),
-            (br#""\u0041\u00e9\u20ac\ud83d\ude00""#, 0),
+            (&br#""plain""#[..], 0),
+            (&br#""a\"\\\/\b\f\n\r\tz""#[..], 0),
+            (&br#""\u0041\u00e9\u20ac\ud83d\ude00""#[..], 0),
             ("\"\u{e9}\u{1F600}\"".as_bytes(), 0),
-            (b"\"a\xffb\xe0\x80c\"", INVALID_UTF8_IGNORE),
-            (b"\"a\xffb\xe0\x80c\"", INVALID_UTF8_SUBSTITUTE),
-            (b"\"\x80\x80\x80\"", INVALID_UTF8_SUBSTITUTE),
-            (b"\"\x80\\n\x80\"", INVALID_UTF8_SUBSTITUTE),
+            (&b"\"a\xffb\xe0\x80c\""[..], INVALID_UTF8_IGNORE),
+            (&b"\"a\xffb\xe0\x80c\""[..], INVALID_UTF8_SUBSTITUTE),
+            (&b"\"\x80\x80\x80\""[..], INVALID_UTF8_SUBSTITUTE),
+            (&b"\"\x80\\n\x80\""[..], INVALID_UTF8_SUBSTITUTE),
         ];
         for &(input, options) in cases {
             let mut s = Scanner::new(input, options, false);
