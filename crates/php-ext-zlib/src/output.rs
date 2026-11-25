@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 
 use php_runtime::{ArrayKey, Value, ZStr};
-use php_support::ini::{parse_quantity, Access, IniDirective, ModifyHandler};
+use php_support::ini::{parse_quantity, Access, IniDirective, IniDisplayer, ModifyHandler};
 use php_support::output::{self, StartHandler};
 use php_vm::ext::{Args, IniStage, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -135,9 +135,12 @@ fn parse_compression(vm: &mut Vm, value: &[u8]) -> VmResult<i64> {
     }
     let (value, error) = parse_quantity(value);
     if let Some(error) = error {
-        vm.php_warning(&format!(
-            "Invalid \"zlib.output_compression\" setting. {error}"
-        ))?;
+        // zend_ini_parse_quantity_warn(): a plain zend_error(), without
+        // the "ini_set(): " origin a docref would add.
+        vm.error(
+            2,
+            &format!("Invalid \"zlib.output_compression\" setting. {error}"),
+        )?;
     }
     Ok(value)
 }
@@ -173,7 +176,7 @@ fn start(vm: &mut Vm, s: CompressionStart) -> VmResult<()> {
 fn update_compression(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     let value = parse_compression(vm, value)?;
     let update = IniUpdate {
-        runtime: vm.ini_modify_stage() == IniStage::Runtime,
+        runtime: at_runtime(vm),
         output_handler_ini_set: vm
             .ini_string("output_handler")
             .is_some_and(|h| !h.is_empty()),
@@ -210,8 +213,15 @@ fn update_compression(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     Ok(true)
 }
 
+/// `stage == PHP_INI_STAGE_RUNTIME`: `ini_set()` and `ini_restore()`
+/// (zend_restore_ini_entry() runs the handler at the runtime stage, so a
+/// restore after output has started is refused with the same warning).
+fn at_runtime(vm: &Vm) -> bool {
+    matches!(vm.ini_modify_stage(), IniStage::Runtime | IniStage::Restore)
+}
+
 fn update_handler(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
-    let runtime = vm.ini_modify_stage() == IniStage::Runtime;
+    let runtime = at_runtime(vm);
     let sent = vm.output.status() & output::status::SENT != 0;
     let result = STATE.with(|st| {
         st.borrow_mut()
@@ -345,13 +355,18 @@ fn zlib_get_coding_type(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers the INI entries, functions and the startup hook.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.ini(IniDirective::new(
-        "zlib.output_compression",
-        Some("0"),
-        Access::ALL,
-        ModifyHandler::None,
-        "zlib",
-    ))
+    // STD_PHP_INI_BOOLEAN in ext/zlib/zlib.c (its handler also takes a
+    // buffer size).
+    m.ini(
+        IniDirective::new(
+            "zlib.output_compression",
+            Some("0"),
+            Access::ALL,
+            ModifyHandler::None,
+            "zlib",
+        )
+        .with_displayer(IniDisplayer::Boolean),
+    )
     .ini(IniDirective::new(
         "zlib.output_compression_level",
         Some("-1"),

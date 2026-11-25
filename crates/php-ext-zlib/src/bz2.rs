@@ -2,8 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/bz2`: `bzcompress()`/`bzdecompress()`, `bzopen()` and the bz2
 //! stream functions, the `compress.bzip2://` wrapper and the `bzip2.*`
-//! filters. Registered by [`crate::Zlib`], which also reports `bz2` as a
-//! loaded extension.
+//! filters. Registered by [`crate::Bz2`].
 
 use std::rc::Rc;
 
@@ -146,23 +145,14 @@ fn bzerror(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })
 }
 
-/// Registers `ext/bz2`.
+/// Registers `ext/bz2`, its functions in the order of bz2.stub.php
+/// (`get_extension_funcs()`, the function table): `bzopen`, `bzread`, the
+/// stream aliases `bzwrite`, `bzflush`, `bzclose`, then the rest.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     php_streams::wrapper::register_global(b"compress.bzip2", Rc::new(Bz2Wrapper));
     php_streams::wrapper::register_filter_global("bzip2.*", Rc::new(Bz2FilterFactory));
     m.function_static("bzopen($file, string $mode)", bzopen)
-        .function_static("bzread($bz, int $length = 1024): string|false", bzread)
-        .function_static("bzerrno($bz): int", bzerrno)
-        .function_static("bzerrstr($bz): string", bzerrstr)
-        .function_static("bzerror($bz): array", bzerror)
-        .function_static(
-            "bzcompress(string $data, int $block_size = 4, int $work_factor = 0): string|int",
-            bzcompress,
-        )
-        .function_static(
-            "bzdecompress(string $data, bool $use_less_memory = false): string|int|false",
-            bzdecompress,
-        );
+        .function_static("bzread($bz, int $length = 1024): string|false", bzread);
     for (sig, target) in [
         (
             "bzwrite($bz, string $data, ?int $length = null): int|false",
@@ -173,5 +163,15 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     ] {
         crate::falias(m, sig, target);
     }
-    m.vm().loaded_extensions.push("bz2".to_string());
+    m.function_static("bzerrno($bz): int", bzerrno)
+        .function_static("bzerrstr($bz): string", bzerrstr)
+        .function_static("bzerror($bz): array", bzerror)
+        .function_static(
+            "bzcompress(string $data, int $block_size = 4, int $work_factor = 0): string|int",
+            bzcompress,
+        )
+        .function_static(
+            "bzdecompress(string $data, bool $use_less_memory = false): string|int|false",
+            bzdecompress,
+        );
 }

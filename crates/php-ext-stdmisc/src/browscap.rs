@@ -116,6 +116,11 @@ fn get_browser(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.php_warning("browscap ini directive not set")?;
         return Ok(Value::Bool(false));
     };
+    if agent.is_none() {
+        // `php_get_browser()`: `zend_is_auto_global()` creates a
+        // still-armed JIT `$_SERVER` first.
+        vm.is_auto_global(b"_SERVER");
+    }
     let agent = match agent {
         Some(v) => vm.value_to_string(&v)?,
         None => match server_user_agent(vm) {

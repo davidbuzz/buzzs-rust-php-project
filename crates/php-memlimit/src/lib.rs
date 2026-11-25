@@ -3,7 +3,8 @@
 //! PHP `memory_limit` accounting for phprust.
 //!
 //! [`CountingAlloc`] wraps a [`GlobalAlloc`](std::alloc::GlobalAlloc) and
-//! keeps live/peak byte counters; [`GLOBAL`] is the process-wide instance
+//! keeps live/peak byte counters, each block charged its php-src size
+//! class ([`zend_size`]: bin, pages or page-rounded huge block); [`GLOBAL`] is the process-wide instance
 //! that `php-cli` installs with [`install_global_allocator!`]. The free
 //! functions in this crate operate on [`GLOBAL`].
 //!
@@ -40,15 +41,17 @@
 
 mod counting;
 mod heap;
+mod huge_pages;
 mod limit;
 
+pub use huge_pages::{huge_pages_from_env, set_huge_pages};
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
     fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
     Stats,
 };
-pub use heap::{MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
+pub use heap::{zend_size, MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
@@ -108,7 +111,7 @@ pub fn tracked_from_env(use_zend_alloc: Option<&[u8]>, use_tracked_alloc: Option
 
 /// `ZEND_ATOL`/`strtol(s, NULL, 10)`: leading whitespace, optional sign,
 /// decimal digits; anything unparsable is 0.
-fn atol(s: &[u8]) -> i64 {
+pub(crate) fn atol(s: &[u8]) -> i64 {
     let s = s.trim_ascii_start();
     let (neg, digits) = match s.split_first() {
         Some((b'-', rest)) => (true, rest),

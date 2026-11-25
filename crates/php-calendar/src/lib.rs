@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/calendar/calendar.c. Similarity metric to original: 41%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Shane Caraveo <shane@caraveo.com>
+//            Colin Viebrock <colin@easydns.com>
+//            Hartmut Holzgraefe <hholzgra@php.net>
+//            Wez Furlong <wez@thebrainroom.com>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Port of PHP's `ext/calendar`.
 //!
 //! The low-level modules ([`gregor`], [`julian`], [`jewish`], [`french`]) are

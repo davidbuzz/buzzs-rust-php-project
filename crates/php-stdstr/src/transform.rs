@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/string.c. Similarity metric to original: 17%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Stig Sæther Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! String transformations from `ext/standard/string.c`: case mapping,
 //! trimming, padding, wrapping, splitting, translation and replacement,
 //! plus the path helpers `basename()`/`dirname()`/`pathinfo()`.
@@ -419,41 +424,107 @@ pub fn strtr_pairs_with<'a, K: AsRef<[u8]>, V, R: AsRef<[u8]>, E>(
         }
         return Ok(replace_all(s, k, v.as_ref(), false).0);
     }
-    let mut minlen = usize::MAX;
-    let mut maxlen = 0;
+    let mut keys = StrtrKeys::new();
     let mut map: std::collections::HashMap<&[u8], &V> = std::collections::HashMap::new();
-    let mut first = [false; 256];
     for (k, v) in pairs {
         let k = k.as_ref();
-        if k.is_empty() {
-            notices.push(Notice::warning(
-                "strtr",
-                "Ignoring replacement of empty string",
-            ));
+        if !keys.add(k, s.len()) {
+            if k.is_empty() {
+                notices.push(Notice::warning(
+                    "strtr",
+                    "Ignoring replacement of empty string",
+                ));
+            }
             continue;
         }
-        if k.len() > s.len() {
-            continue;
-        }
-        minlen = minlen.min(k.len());
-        maxlen = maxlen.max(k.len());
-        first[usize::from(k[0])] = true;
         map.insert(k, v);
     }
-    if minlen > maxlen {
-        return Ok(s.to_vec());
+    let out = strtr_scan_with(
+        s,
+        &keys,
+        |k| map.get(k).copied(),
+        |k, v, capacity| convert(k, v, notices, capacity),
+    )?;
+    Ok(out.unwrap_or_else(|| s.to_vec()))
+}
+
+/// The keys of a `strtr()` array, as `php_strtr_array_ex()` sums them up
+/// before its scan: the shortest and longest key and which bytes start
+/// one (keys longer than the subject are left out).
+#[derive(Debug, Clone)]
+pub struct StrtrKeys {
+    minlen: usize,
+    maxlen: usize,
+    first: [bool; 256],
+}
+
+impl Default for StrtrKeys {
+    fn default() -> Self {
+        Self::new()
     }
-    let mut out = Vec::with_capacity(s.len());
+}
+
+impl StrtrKeys {
+    /// No keys yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            minlen: usize::MAX,
+            maxlen: 0,
+            first: [false; 256],
+        }
+    }
+
+    /// Takes `key` into account for a subject of `slen` bytes; `false`
+    /// when it is left out: empty (the caller warns `Ignoring replacement
+    /// of empty string`) or longer than the subject.
+    pub fn add(&mut self, key: &[u8], slen: usize) -> bool {
+        let Some(&c) = key.first() else {
+            return false;
+        };
+        if key.len() > slen {
+            return false;
+        }
+        self.minlen = self.minlen.min(key.len());
+        self.maxlen = self.maxlen.max(key.len());
+        self.first[usize::from(c)] = true;
+        true
+    }
+}
+
+/// `php_strtr_array_ex()`'s scan of `s` with the keys summed up in `keys`:
+/// at each position whose byte starts a key, the longest candidate
+/// `lookup` finds is replaced by what `convert` makes of its value (called
+/// with the key, the value and the output's capacity so far), and
+/// replaced text is never rescanned. `Ok(None)` when nothing was replaced
+/// (php-src then returns the subject itself, `RETURN_STR_COPY`).
+///
+/// # Errors
+///
+/// Propagates replacement conversion errors.
+pub fn strtr_scan_with<'a, V: ?Sized + 'a, R: AsRef<[u8]>, E>(
+    s: &[u8],
+    keys: &StrtrKeys,
+    mut lookup: impl FnMut(&[u8]) -> Option<&'a V>,
+    mut convert: impl FnMut(&[u8], &'a V, usize) -> Result<R, E>,
+) -> Result<Option<Vec<u8>>, E> {
+    let (minlen, maxlen) = (keys.minlen, keys.maxlen);
+    if minlen > maxlen {
+        return Ok(None);
+    }
+    let mut out: Option<Vec<u8>> = None;
     let mut pos = 0;
     let mut old_pos = 0;
     while pos + minlen <= s.len() {
-        if first[usize::from(s[pos])] {
+        if keys.first[usize::from(s[pos])] {
             let mut len = maxlen.min(s.len() - pos);
             while len >= minlen {
-                if let Some(rep) = map.get(&s[pos..pos + len]) {
-                    let rep = convert(&s[pos..pos + len], *rep, notices, out.capacity())?;
-                    out.extend_from_slice(&s[old_pos..pos]);
-                    out.extend_from_slice(rep.as_ref());
+                let key = &s[pos..pos + len];
+                if let Some(v) = lookup(key) {
+                    let buf = out.get_or_insert_with(|| Vec::with_capacity(s.len()));
+                    let rep = convert(key, v, buf.capacity())?;
+                    buf.extend_from_slice(&s[old_pos..pos]);
+                    buf.extend_from_slice(rep.as_ref());
                     old_pos = pos + len;
                     pos = old_pos - 1;
                     break;
@@ -463,7 +534,9 @@ pub fn strtr_pairs_with<'a, K: AsRef<[u8]>, V, R: AsRef<[u8]>, E>(
         }
         pos += 1;
     }
-    out.extend_from_slice(&s[old_pos..]);
+    if let Some(buf) = &mut out {
+        buf.extend_from_slice(&s[old_pos..]);
+    }
     Ok(out)
 }
 

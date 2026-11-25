@@ -1,0 +1,10 @@
+{
+  "modes": ["server", "fcgi"],
+  "requests": [
+    {"path": "/probe.php"},
+    {"path": "/set.php"},
+    {"path": "/probe.php"},
+    {"path": "/set.php"},
+    {"path": "/probe.php"}
+  ]
+}

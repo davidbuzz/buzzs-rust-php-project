@@ -1,10 +1,18 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src sapi/cli/php_cli.c. Similarity metric to original: 23%
+//   Copyright © The PHP Group and Contributors.
+//   Author: Edin Kadribasic <edink@php.net>
+//           Marcus Boerger <helly@php.net>
+//           Johannes Schlueter <johannes@php.net>
+//           Parts based on CGI SAPI Module by
+//           Rasmus Lerdorf, Stig Bakken and Zeev Suraski
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `php` command line interface (`sapi/cli/php_cli.c`).
 
 mod config;
 mod extensions;
 mod getopt;
+mod main_stack;
 mod memcap;
 mod preload;
 mod proctitle;
@@ -17,13 +25,11 @@ use php_runtime::{Value, ZStr};
 use php_vm::{Throw, Vm, VmOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::process::CommandExt;
 
 /// `php_build_date` (`__DATE__ " " __TIME__` of the build).
 pub(crate) const BUILD_DATE: &str = env!("PHP_CLI_BUILD_DATE");
 
-/// Stack the VM needs for deep recursion in user code.
-const VM_STACK: u64 = 256 << 20;
+use main_stack::VM_STACK;
 
 /// `php_cli_usage()`.
 fn usage(argv0: &[u8]) -> Vec<u8> {
@@ -85,12 +91,17 @@ fn usage(argv0: &[u8]) -> Vec<u8> {
     .into_bytes()
 }
 
-/// `php_get_version()`.
+/// `php_get_version()`: the PHP line, then `get_zend_version()`, the
+/// engine line followed by one `zend_append_version_info()` line per
+/// started zend_extension. opcache is always built in and its
+/// `accel_startup` always succeeds (ext/opcache/ZendAccelerator.c
+/// `opcache_extension_entry`), so its line is always there.
 fn version_banner() -> String {
     format!(
-        "PHP {} (cli) (built: {BUILD_DATE}) (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v{}, Copyright \u{a9} Zend by Perforce\n",
+        "PHP {} (cli) (built: {BUILD_DATE}) (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v{}, Copyright \u{a9} Zend by Perforce\n    with Zend OPcache v{}, Copyright \u{a9}, by Zend by Perforce\n",
         php_vm::PHP_VERSION,
-        php_vm::ZEND_VERSION
+        php_vm::ZEND_VERSION,
+        php_vm::PHP_VERSION
     )
 }
 
@@ -123,158 +134,6 @@ extern "C" {
     ) -> *mut std::ffi::c_char;
 }
 
-/// Makes sure the main thread may grow its stack to [`VM_STACK`], so the
-/// VM runs on the main thread: process-directed signals then reach it
-/// (pcntl), the process stays single-threaded (`unshare()`, `fork()`
-/// children exit with the script's status) — as in PHP.
-///
-/// A too small `RLIMIT_STACK` is raised. Linux checks the limit each
-/// time the stack grows, so raising it is enough when the addresses
-/// below the stack are still free. The kernel only keeps the old limit's
-/// worth of room free when it loads the program, but with address-space
-/// randomisation the gap is almost always much larger (see
-/// [`main_stack_room`]). If the room is too small, the binary is
-/// re-executed once. That costs a second dynamic link and runtime
-/// start-up, about a fifth of `php -r 'echo 1;'`. The raised limit is
-/// inherited, which ends the recursion, and the kernel then reserves room
-/// for it. Returns false when neither works; the VM then runs on a
-/// dedicated thread with a large stack instead.
-fn ensure_main_stack(argv: &[Vec<u8>]) -> bool {
-    let mut rl = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes into the struct we own.
-    if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &raw mut rl) } != 0 {
-        return false;
-    }
-    if rl.rlim_cur == libc::RLIM_INFINITY || rl.rlim_cur >= VM_STACK {
-        return true;
-    }
-    if rl.rlim_max != libc::RLIM_INFINITY && rl.rlim_max < VM_STACK {
-        return false;
-    }
-    let raised = libc::rlimit {
-        rlim_cur: VM_STACK,
-        rlim_max: rl.rlim_max,
-    };
-    // SAFETY: setrlimit only reads the struct we pass.
-    if unsafe { libc::setrlimit(libc::RLIMIT_STACK, &raw const raised) } != 0 {
-        return false;
-    }
-    let sp = approx_stack_pointer();
-    let roomy = std::fs::read("/proc/self/maps")
-        .ok()
-        .and_then(|maps| main_stack_room(&maps, sp))
-        .filter(|&(_, room)| room >= VM_STACK + STACK_GUARD_ALLOWANCE);
-    if let Some((top, _)) = roomy {
-        hand_stack_to_parser(top);
-        return true;
-    }
-    let mut cmd = std::process::Command::new("/proc/self/exe");
-    if let Some(a0) = argv.first() {
-        cmd.arg0(std::ffi::OsStr::from_bytes(a0));
-    }
-    cmd.args(argv.iter().skip(1).map(|a| std::ffi::OsStr::from_bytes(a)));
-    // Only returns on failure.
-    let _ = cmd.exec();
-    // SAFETY: as above; restores the original limit.
-    unsafe {
-        libc::setrlimit(libc::RLIMIT_STACK, &raw const rl);
-    }
-    false
-}
-
-/// Room kept free below a stack grown to [`VM_STACK`]. The kernel will
-/// not grow a stack to within `stack_guard_gap` (1 MiB by default) of the
-/// mapping below it.
-const STACK_GUARD_ALLOWANCE: u64 = 16 << 20;
-
-/// An address inside the calling thread's stack.
-#[inline(never)]
-fn approx_stack_pointer() -> u64 {
-    let marker = 0u8;
-    let addr = std::hint::black_box(std::ptr::addr_of!(marker)) as usize;
-    u64::try_from(addr).unwrap_or(0)
-}
-
-/// Hands the main stack's bounds to the parser, which would otherwise probe
-/// them itself on the first parse (`pthread_getattr_np` reads and parses
-/// `/proc/self/maps` again: about 0.9 M instructions per `php` run). `top`
-/// is the end of the stack mapping; with the limit raised to [`VM_STACK`]
-/// the stack may grow down to `top - VM_STACK`, which is what the probe
-/// computes from the limit.
-fn hand_stack_to_parser(top: u64) {
-    if let (Ok(low), Ok(high)) = (
-        usize::try_from(top.saturating_sub(VM_STACK)),
-        usize::try_from(top),
-    ) {
-        // False only when the bounds do not contain the stack pointer,
-        // which the mapping that contains it rules out.
-        let _ = php_parser::set_thread_stack(low, high);
-    }
-}
-
-/// The top of the stack mapping that contains `sp` in the
-/// `/proc/self/maps` listing `maps`, and how far that stack may grow
-/// down: from its top to the end of the next lower mapping. `None` when
-/// no mapping contains `sp` or the listing does not parse.
-///
-/// The kernel places shared libraries and anonymous mappings below
-/// `mmap_base`. When it loads the program, it keeps only the stack limit
-/// of that moment (at least 128 MiB) plus the stack's random offset free
-/// below `mmap_base`, so this is checked rather than assumed. With
-/// address-space randomisation `mmap_base` itself sits a random amount of
-/// up to terabytes lower, so the room is almost always far larger than
-/// [`VM_STACK`].
-fn main_stack_room(maps: &[u8], sp: u64) -> Option<(u64, u64)> {
-    let (top, below) = stack_mapping(maps, sp)?;
-    Some((top, top.checked_sub(below)?))
-}
-
-/// The stack mapping that contains `sp` in the `/proc/self/maps` listing
-/// `maps`: its end, and the end of the next lower mapping (0 without one).
-/// `None` when no mapping contains `sp` or the listing does not parse.
-///
-/// The listing is read from its end: the stack is the last of the
-/// process's own mappings, followed only by `[vvar]`, `[vdso]` and
-/// `[vsyscall]`, so a few lines are parsed instead of the four hundred a
-/// `php` process has.
-fn stack_mapping(maps: &[u8], sp: u64) -> Option<(u64, u64)> {
-    let mut ranges = maps
-        .rsplit(|&c| c == b'\n')
-        .map(|line| line.split(|&c| c == b' ').next().unwrap_or_default())
-        .filter(|range| !range.is_empty());
-    let bounds = |range: &[u8]| -> Option<(u64, u64)> {
-        let dash = range.iter().position(|&c| c == b'-')?;
-        Some((parse_hex(&range[..dash])?, parse_hex(&range[dash + 1..])?))
-    };
-    loop {
-        let (start, end) = bounds(ranges.next()?)?;
-        if start <= sp && sp < end {
-            let below = match ranges.next() {
-                Some(range) => bounds(range)?.1,
-                None => 0,
-            };
-            return Some((end, below));
-        }
-    }
-}
-
-/// A hexadecimal number without prefix, as `/proc/self/maps` prints
-/// addresses.
-fn parse_hex(digits: &[u8]) -> Option<u64> {
-    if digits.is_empty() {
-        return None;
-    }
-    let mut v = 0u64;
-    for &c in digits {
-        let d = char::from(c).to_digit(16)?;
-        v = v.checked_mul(16)?.checked_add(u64::from(d))?;
-    }
-    Some(v)
-}
-
 php_memlimit::install_global_allocator!();
 
 /// An allocation crossed the hard ceiling above `memory_limit`: PHP's
@@ -288,7 +147,14 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
-    let on_main_thread = ensure_main_stack(&argv);
+    // php-src's huge pages: only with USE_ZEND_ALLOC_HUGE_PAGES set (first,
+    // before the heap grows).
+    php_memlimit::set_huge_pages(php_memlimit::huge_pages_from_env(
+        std::env::var_os("USE_ZEND_ALLOC_HUGE_PAGES")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+    ));
+    let on_main_thread = main_stack::ensure(&argv);
     memcap::limit_memory();
     php_memlimit::set_hard_limit_handler(hard_limit);
     php_memlimit::set_tracked(php_memlimit::tracked_from_env(
@@ -390,6 +256,7 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
         binary: std::env::current_exe().ok(),
         ..config::Options::default()
     };
+    let mut define_args: Vec<Vec<u8>> = Vec::new();
     let mut g = GetOpt::new(argv, OPTIONS, true);
     while let Some((c, v)) = g.next_opt() {
         match c {
@@ -400,9 +267,7 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
             _ => match u8::try_from(c).unwrap_or(0) {
                 b'c' => opts.path_override = v,
                 b'n' => opts.ignore = true,
-                b'd' => opts
-                    .defines
-                    .extend(php_vm::parse_cli_define(&v.unwrap_or_default())),
+                b'd' => define_args.push(v.unwrap_or_default()),
                 b'h' | b'?' => {
                     out(&usage(&argv0));
                     return 0;
@@ -412,7 +277,15 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
             },
         }
     }
-    let cfg = Config::load(&opts);
+    let define_error = config::defines_syntax_error(&define_args, false);
+    let applied = define_error.as_ref().map_or(define_args.len(), |(n, _)| *n);
+    for arg in &define_args[..applied] {
+        opts.defines.extend(php_vm::parse_cli_define(arg));
+    }
+    let mut cfg = Config::load(&opts);
+    if let Some((_, warning)) = define_error {
+        cfg.warnings.push(warning);
+    }
     for w in &cfg.warnings {
         err(format!("PHP:  {w}\n").as_bytes());
     }
@@ -422,7 +295,14 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     if let Err(status) = preload::startup(&cfg) {
         return status;
     }
-    do_cli(argv, &cfg)
+    let status = startup::final_status(do_cli(argv, &cfg));
+    // A failed write to standard output set EG(exit_status) to 255
+    // (sapi_cli_ub_write()), also when it happened in the final flush.
+    if status == 0 && sapi::stdout_failed() {
+        255
+    } else {
+        status
+    }
 }
 
 /// `context.mode` (`php_cli.h`; the order matters).
@@ -624,9 +504,42 @@ fn parse_request(argv: &[Vec<u8>]) -> (Request, usize, Option<&'static str>) {
     (r, g.optind, param_error)
 }
 
+thread_local! {
+    /// The VM [`start_modules`] made, until the first request takes it
+    /// ([`new_request_vm`]).
+    static FIRST_VM: std::cell::RefCell<Option<Vm>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The modules' part of `php_module_startup()`: php-src starts its
+/// modules once, before `do_cli()` looks at its arguments, so what they
+/// report at startup (an INI value a module refuses, ...) comes ahead of
+/// everything a run prints: `-v`'s banner, "Could not open input file",
+/// `--repeat`'s "Executing for the first time...". Here the modules start
+/// with a VM, so the first request's VM is made now and kept for it.
+fn start_modules(cfg: &Config) {
+    let mut vm = new_vm(cfg);
+    // What a module reported while starting sits in the VM's output buffer:
+    // it goes out now, ahead of whatever the CLI itself prints next.
+    vm.flush_stdout();
+    FIRST_VM.with(|v| *v.borrow_mut() = Some(vm));
+}
+
+/// `do_cli()`, after the modules' startup; the VM made for that is let go
+/// here when no request took it (`-v`, a script that cannot be opened).
+fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
+    start_modules(cfg);
+    let status = do_cli_requests(argv, cfg);
+    if let Some(vm) = FIRST_VM.with(|v| v.borrow_mut().take()) {
+        // No request ran on it: nothing to shut down, and the process
+        // exits next.
+        vm.discard();
+    }
+    status
+}
+
 /// `do_cli()`.
 #[allow(clippy::too_many_lines)]
-fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
+fn do_cli_requests(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     // First pass: -i, -v and -m end processing right away.
     let mut g = GetOpt::new(argv, OPTIONS, false);
     while let Some((c, _)) = g.next_opt() {
@@ -658,6 +571,26 @@ fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     }
     if req.hide_argv {
         proctitle::hide_args();
+        // php_cli.c zeroes argv[1..] in place once the options are parsed,
+        // and the code of -r/-B/-R/-E and the file of -F point into argv:
+        // they run as empty code, and -F names an empty file (php8.5 -H -r
+        // 'echo 1;' prints nothing; -H -F f.php fails to open "").
+        for code in [
+            &mut req.exec_direct,
+            &mut req.exec_begin,
+            &mut req.exec_run,
+            &mut req.exec_end,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            code.clear();
+        }
+        if req.mode() == Mode::ProcessStdin {
+            if let Some(f) = &mut req.script_file {
+                f.clear();
+            }
+        }
     }
     let mut repeats = req.repeats;
     if repeats > 1 {
@@ -736,7 +669,11 @@ fn new_vm(cfg: &Config) -> Vm {
 }
 
 fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
-    let mut vm = new_vm(cfg);
+    // The first request runs on the VM the modules started with.
+    let mut vm = match FIRST_VM.with(|v| v.borrow_mut().take()) {
+        Some(vm) => vm,
+        None => new_vm(cfg),
+    };
     if let Err(error) = preload::install(&mut vm) {
         let status = vm.shutdown(Err(error)).max(1);
         release(vm, Release::Discard);
@@ -760,7 +697,12 @@ enum Release {
 /// Releases `vm` after its request.
 fn release(vm: Vm, how: Release) {
     match how {
-        Release::Drop => drop(vm),
+        Release::Drop => {
+            drop(vm);
+            // The next request on this thread starts with a fresh objects
+            // store and collector, as php-src's `init_executor()` gives it.
+            php_vm::reset::release_dropped_vm_objects();
+        }
         Release::Discard => {
             // Clean and fast process exit: ensure all output buffers and streams
             // are flushed, then perform bulk VM teardown via fast discard
@@ -920,11 +862,23 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
                 argv: request_argv.clone(),
                 ..php_sapi::RequestInfo::default()
             };
+            // Under -H the script names in $_SERVER point into the zeroed
+            // argv (php8.5: PHP_SELF, SCRIPT_NAME, SCRIPT_FILENAME and
+            // PATH_TRANSLATED are ""); $argv is a copy and keeps them.
+            let hidden = req.hide_argv && req.script_file.is_some();
             sapi::register_variables(
                 &mut vm,
                 &sapi::Request {
-                    php_self: &php_self,
-                    script_filename: &script_filename,
+                    php_self: if hidden {
+                        b"".as_slice()
+                    } else {
+                        php_self.as_slice()
+                    },
+                    script_filename: if hidden {
+                        b"".as_slice()
+                    } else {
+                        script_filename.as_slice()
+                    },
                     argv: &request_argv,
                 },
             );
@@ -1041,103 +995,32 @@ fn show_ini_config(cfg: &Config) -> String {
 
 /// `display_ini_entries(NULL)` in the CLI's text mode. Only the core
 /// definitions belong to module number zero, not extension entries
-/// registered under `Core` by the VM.
+/// registered under `Core` by the VM. Values go through each entry's
+/// displayer ([`php_support::ini::IniDisplayer`]).
 fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
-    use php_support::ini::{core_directives, ModifyHandler};
+    use php_support::ini::core_directives;
     let definitions = core_directives();
     let entries = ini.ini_entries_registered(Some("Core")).unwrap_or_default();
     let mut s = Vec::new();
     for e in entries {
-        let Some(def) = definitions
+        if !definitions
             .iter()
-            .find(|d| d.module == "Core" && d.name == e.name)
-        else {
+            .any(|d| d.module == "Core" && d.name == e.name)
+        {
             continue;
-        };
+        }
         if s.is_empty() {
             s.extend_from_slice(b"\nDirective => Local Value => Master Value\n");
         }
         s.extend_from_slice(e.name.as_bytes());
-        for value in [e.local_value.as_deref(), e.global_value.as_deref()] {
+        let (local, master) = e.displayed(false);
+        for value in [local, master] {
             s.extend_from_slice(b" => ");
-            match def.handler {
-                ModifyHandler::Bool | ModifyHandler::GcEnabled => {
-                    s.extend_from_slice(
-                        if php_support::ini::parse_bool(value.unwrap_or_default()) {
-                            b"On"
-                        } else {
-                            b"Off"
-                        },
-                    );
-                }
-                ModifyHandler::DisplayErrors => {
-                    s.extend_from_slice(display_errors_value(value));
-                }
-                _ if e.name.starts_with("highlight.") => {
-                    if let Some(v) = value {
-                        let v = v.split(|&c| c == 0).next().unwrap_or_default();
-                        if ini.get_bool("html_errors") {
-                            s.extend_from_slice(b"<span style=\"color: ");
-                            s.extend_from_slice(v);
-                            s.extend_from_slice(b"\">");
-                            s.extend_from_slice(v);
-                            s.extend_from_slice(b"</span>");
-                        } else {
-                            s.extend_from_slice(v);
-                        }
-                    } else if ini.get_bool("html_errors") {
-                        s.extend_from_slice(b"<i>no value</i>");
-                    } else {
-                        s.extend_from_slice(b"no value");
-                    }
-                }
-                _ => s.extend_from_slice(
-                    value
-                        .filter(|v| v.first().is_some_and(|&c| c != 0))
-                        .unwrap_or(b"no value"),
-                ),
-            }
+            s.extend_from_slice(&value);
         }
         s.push(b'\n');
     }
     s
-}
-
-/// `php_get_display_errors_mode()` for the selected local or master value.
-fn display_errors_value(value: Option<&[u8]>) -> &'static [u8] {
-    let Some(value) = value else { return b"STDOUT" };
-    if [b"on".as_slice(), b"yes", b"true", b"stdout"]
-        .iter()
-        .any(|word| value.eq_ignore_ascii_case(word))
-    {
-        return b"STDOUT";
-    }
-    if value.eq_ignore_ascii_case(b"stderr") {
-        return b"STDERR";
-    }
-    let value = value.trim_ascii_start();
-    let negative = value.first() == Some(&b'-');
-    let digits = if matches!(value.first(), Some(b'-' | b'+')) {
-        &value[1..]
-    } else {
-        value
-    };
-    let number = digits
-        .iter()
-        .take_while(|c| c.is_ascii_digit())
-        .fold(0i64, |n, &c| {
-            let digit = i64::from(c - b'0');
-            if negative {
-                n.saturating_mul(10).saturating_sub(digit)
-            } else {
-                n.saturating_mul(10).saturating_add(digit)
-            }
-        });
-    match number.rem_euclid(256) {
-        0 => b"Off",
-        2 => b"STDERR",
-        _ => b"STDOUT",
-    }
 }
 
 /// `--ini=diff`: compare the effective registered value to the definition,
@@ -1203,7 +1086,7 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
             return Ok(());
         }
         let Some(full) = resolve_path(vm, &name) else {
-            return Ok(());
+            return missing_required_file(vm, &name);
         };
         // Recorded like any `require`d file (`get_included_files()`,
         // `*_once`).
@@ -1221,6 +1104,35 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
         r = extra(vm, "auto_append_file");
     }
     vm.shutdown(r)
+}
+
+/// `zend_execute_script(ZEND_REQUIRE, ...)` of an `auto_prepend_file` or
+/// `auto_append_file` that cannot be opened: the plain wrapper's warning,
+/// then `ZMSG_FAILED_REQUIRE_FOPEN`, whose `zend_throw_error()` is a plain
+/// `E_ERROR` while no code is executing (Zend/zend.c), both reported at
+/// "Unknown" line 0 (php8.5: exit status 255).
+fn missing_required_file(vm: &mut Vm, name: &[u8]) -> Result<(), Throw> {
+    let errno = std::fs::File::open(std::ffi::OsStr::from_bytes(name))
+        .err()
+        .and_then(|e| e.raw_os_error())
+        .unwrap_or(libc::ENOENT);
+    vm.error(
+        2,
+        &format!(
+            "Unknown: Failed to open stream: {}",
+            php_streams::sys::strerror(errno)
+        ),
+    )?;
+    let include_path = vm.ini_string("include_path").unwrap_or_default();
+    vm.error(
+        1,
+        &format!(
+            "Failed opening required '{}' (include_path='{}')",
+            lossy(name),
+            lossy(&include_path)
+        ),
+    )?;
+    Err(Throw::Fatal)
 }
 
 /// `zend_eval_string_ex(code, NULL, name, 1)`.
@@ -1305,85 +1217,6 @@ mod tests {
     use super::memcap::{address_space_cap, meminfo_kb};
     use super::*;
 
-    const MAPS: &[u8] = b"\
-5a0000000000-5a0000001000 r--p 00000000 08:01 1234 /usr/bin/php
-7f0000000000-7f0000010000 r-xp 00000000 08:01 99 /usr/lib/libc.so.6
-7f0000010000-7f0000020000 rw-p 00000000 00:00 0
-7ffff0000000-7ffff0021000 rw-p 00000000 00:00 0                          [stack]
-ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
-";
-
-    #[test]
-    fn stack_room_reaches_the_next_lower_mapping() {
-        let (top, room) = main_stack_room(MAPS, 0x7fff_f001_0000).unwrap();
-        assert_eq!(top, 0x7fff_f002_1000);
-        assert_eq!(room, 0x7fff_f002_1000 - 0x7f00_0002_0000);
-        assert!(room >= VM_STACK + STACK_GUARD_ALLOWANCE);
-    }
-
-    #[test]
-    fn stack_room_is_small_when_a_mapping_sits_close_below() {
-        let maps = b"\
-7ffff0000000-7ffff0001000 rw-p 00000000 00:00 0
-7ffff8000000-7ffff8021000 rw-p 00000000 00:00 0 [stack]
-";
-        let (top, room) = main_stack_room(maps, 0x7fff_f801_0000).unwrap();
-        assert_eq!(top, 0x7fff_f802_1000);
-        assert_eq!(room, 0x7fff_f802_1000 - 0x7fff_f000_1000);
-        assert!(room < VM_STACK + STACK_GUARD_ALLOWANCE);
-    }
-
-    #[test]
-    fn stack_room_needs_a_mapping_that_contains_sp() {
-        assert_eq!(main_stack_room(MAPS, 0x1000), None);
-        assert_eq!(main_stack_room(b"garbage line\n", 0x1000), None);
-        assert_eq!(main_stack_room(b"", 0x1000), None);
-    }
-
-    #[test]
-    fn stack_mapping_reports_the_top_and_the_mapping_below() {
-        assert_eq!(
-            stack_mapping(MAPS, 0x7fff_f001_0000),
-            Some((0x7fff_f002_1000, 0x7f00_0002_0000))
-        );
-        // The lowest mapping has nothing below it.
-        assert_eq!(
-            stack_mapping(MAPS, 0x5a00_0000_0800),
-            Some((0x5a00_0000_1000, 0))
-        );
-        // Without a trailing newline, and with the stack line last.
-        let maps = b"7f0000000000-7f0000010000 r-xp 00000000 08:01 99 /usr/lib/libc.so.6\n\
-7ffff0000000-7ffff0021000 rw-p 00000000 00:00 0 [stack]";
-        assert_eq!(
-            stack_mapping(maps, 0x7fff_f000_0000),
-            Some((0x7fff_f002_1000, 0x7f00_0001_0000))
-        );
-        assert_eq!(stack_mapping(maps, 0x7fff_f002_1000), None);
-        assert_eq!(
-            stack_mapping(b"7ffff0000000+7ffff0021000 rw-p\n", 0x7fff_f000_0000),
-            None
-        );
-    }
-
-    #[test]
-    fn hex_addresses_parse() {
-        assert_eq!(parse_hex(b"0"), Some(0));
-        assert_eq!(parse_hex(b"7ffff0021000"), Some(0x7fff_f002_1000));
-        assert_eq!(parse_hex(b"ffffffffff600000"), Some(0xffff_ffff_ff60_0000));
-        assert_eq!(parse_hex(b"ABCdef"), Some(0xabc_def));
-        assert_eq!(parse_hex(b""), None);
-        assert_eq!(parse_hex(b"0x10"), None);
-        assert_eq!(parse_hex(b"12g"), None);
-        assert_eq!(parse_hex(b"10000000000000000"), None);
-    }
-
-    #[test]
-    fn stack_room_of_this_process_parses() {
-        let maps = std::fs::read("/proc/self/maps").unwrap();
-        // Test threads run on their own stacks, which are mappings too.
-        assert!(main_stack_room(&maps, approx_stack_pointer()).is_some());
-    }
-
     #[test]
     fn usage_uses_program_basename() {
         let u = String::from_utf8(usage(b"/usr/bin/php8")).unwrap();
@@ -1400,6 +1233,11 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         assert!(
             v.contains(") (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v")
         );
+        // zend_append_version_info(): "    with %s v%s, %s, by %s\n".
+        assert!(v.ends_with(&format!(
+            ", Copyright \u{a9} Zend by Perforce\n    with Zend OPcache v{}, Copyright \u{a9}, by Zend by Perforce\n",
+            php_vm::PHP_VERSION
+        )));
     }
 
     fn args(a: &[&str]) -> Vec<Vec<u8>> {
@@ -1490,8 +1328,9 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             &mut diagnostics,
         );
         let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        // zend_uv.html_errors is 1 whatever html_errors says (php8.5 -n --ri main).
         assert!(s.starts_with(
-            "\nDirective => Local Value => Master Value\nhighlight.comment => #FF8000 => #FF8000\n"
+            "\nDirective => Local Value => Master Value\nhighlight.comment => <span style=\"color: #FF8000\">#FF8000</span> => <span style=\"color: #FF8000\">#FF8000</span>\n"
         ));
         assert!(s.contains("display_errors => STDERR => STDERR\n"));
         assert!(s.contains("html_errors => Off => Off\n"));
@@ -1504,7 +1343,7 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
     }
 
     #[test]
-    fn main_ini_color_displayer_uses_html_errors() {
+    fn main_ini_color_displayer_prints_spans() {
         let ini = ini_registry(&[("html_errors", "1"), ("highlight.comment", "")]);
         let s = String::from_utf8(show_main_ini(&ini)).unwrap();
         assert!(s.contains(
@@ -1538,9 +1377,11 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             let s = String::from_utf8(show_main_ini(&ini)).unwrap();
             assert!(s.contains(&format!("display_errors => {shown} => {shown}\n")));
         }
-        assert_eq!(display_errors_value(None), b"STDOUT");
-        assert_eq!(display_errors_value(Some(b"")), b"Off");
-        assert_eq!(display_errors_value(Some(b"stderr\0tail")), b"Off");
+        let shown =
+            |v: Option<&[u8]>| php_support::ini::IniDisplayer::DisplayErrors.display(v, false);
+        assert_eq!(shown(None), b"STDOUT");
+        assert_eq!(shown(Some(b"")), b"Off");
+        assert_eq!(shown(Some(b"stderr\0tail")), b"Off");
     }
 
     #[test]

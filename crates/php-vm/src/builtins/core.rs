@@ -37,7 +37,51 @@ fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
             "func_get_args() cannot be called from the global scope",
         ));
     }
+    if let Some(args) = plain_frame_args(&vm.frames[idx]) {
+        return Ok(Value::Array(args));
+    }
     Ok(Value::Array(vm.frame_args(idx)))
+}
+
+/// `func_get_args()` of a user function's frame whose variables are only
+/// its compiled variables (no symbol table, no variadic parameter): what
+/// [`Vm::frame_args`] returns for it, read straight from the frame. As
+/// `ZEND_FUNC_GET_ARGS`'s handler does, the list is sized for the
+/// arguments (`array_init_size` + `ZEND_HASH_FILL_PACKED`): each declared
+/// parameter's current value (an unset one is null), then the extra
+/// arguments, references dereferenced. `None` for every other frame.
+///
+/// The general list goes through `debug_backtrace`'s triples (a vector of
+/// (name, value, sensitive) grown per argument, a name lookup per
+/// parameter, then an insert of each): ~940 instructions for two
+/// arguments, C's whole call ~500.
+pub(crate) fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
+    if f.symtab_attached || f.kind != FrameKind::Function {
+        return None;
+    }
+    let uf = f.ufunc.as_ref()?;
+    if uf.params.iter().any(|p| p.variadic) {
+        return None;
+    }
+    if !f.vars.try_borrow().ok()?.slots.is_empty() {
+        return None;
+    }
+    let nparams = uf.params.len();
+    let passed = f.num_args();
+    let declared = (0..passed.min(nparams)).map(|i| {
+        // Not yet received (RECV pending): the passed value.
+        match f.cvs.get(i).and_then(crate::vm::CvSlot::get) {
+            Some(v) => v.deref(),
+            None => f
+                .args
+                .get(i)
+                .and_then(Option::as_ref)
+                .map(Value::deref)
+                .unwrap_or_default(),
+        }
+    });
+    let extra = f.args.iter().skip(nparams).flatten().map(Value::deref);
+    Some(ZArray::from_list_sized(passed, declared.chain(extra)))
 }
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -129,14 +173,9 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `zend_register_constant()`: the namespace part is case-insensitive
     // in the key; the constant keeps the name as given.
     let given = name.clone();
-    let bytes = name.as_bytes();
-    let name = match bytes.iter().rposition(|&c| c == b'\\') {
-        Some(p) => {
-            let mut n = bytes[..p].to_ascii_lowercase();
-            n.extend_from_slice(&bytes[p..]);
-            ZStr::from(n)
-        }
-        None => name,
+    let name = match crate::classlink::constant_key(given.as_bytes()) {
+        std::borrow::Cow::Owned(k) => ZStr::from(k),
+        std::borrow::Cow::Borrowed(_) => name,
     };
     let special = name.as_bytes() == b"__COMPILER_HALT_OFFSET__"
         || [&b"true"[..], b"false", b"null"]
@@ -242,7 +281,8 @@ fn defined(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .strip_prefix(b"\\")
         .unwrap_or(name.as_bytes());
-    Ok(Value::Bool(vm.constants.contains_key(n)))
+    // `zend_get_constant_ex()`: the namespace part is case-insensitive.
+    Ok(Value::Bool(vm.find_global_constant(n).is_some()))
 }
 
 fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -277,9 +317,13 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .strip_prefix(b"\\")
         .unwrap_or(name.as_bytes());
-    match vm.constants.get(n).cloned() {
-        Some(v) => {
-            vm.constant_deprecation(&ZStr::from(n))?;
+    // `zend_get_constant_ex()`: the namespace part is case-insensitive.
+    let found = vm
+        .find_global_constant(n)
+        .map(|(k, v)| (k.clone(), v.clone()));
+    match found {
+        Some((key, v)) => {
+            vm.constant_deprecation(&key)?;
             Ok(v)
         }
         None => Err(vm.make_throw(
@@ -1298,6 +1342,14 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if n == "memory_limit" || n == "max_memory_limit" {
         vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
     }
+    // The value a refused restore keeps (`zend_restore_ini_entry_cb()`
+    // leaves the entry alone when its on_modify fails, e.g.
+    // `OnUpdateBaseDir` refusing to unset open_basedir at runtime).
+    let before = if vm.ini.is_modified(&n) {
+        vm.ini.raw(&n).map(<[u8]>::to_vec)
+    } else {
+        None
+    };
     vm.ini.ini_restore(&n, &mut sink);
     vm.sync_ini(&n);
     if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
@@ -1305,7 +1357,19 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.ini_stage = crate::ext::IniStage::Restore;
         let r = h(vm, &v);
         vm.ini_stage = crate::ext::IniStage::Runtime;
-        r?;
+        if !r? {
+            if let Some(before) = before {
+                vm.ini.alter(
+                    &n,
+                    &before,
+                    php_support::ini::Access::SYSTEM,
+                    php_support::ini::Stage::Runtime,
+                    true,
+                    &mut sink,
+                );
+                vm.sync_ini(&n);
+            }
+        }
     }
     Ok(Value::Null)
 }
@@ -1698,13 +1762,13 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     let named = std::mem::take(&mut a.named);
-    cuf_call(vm, &cb, args, named, "call_user_func")
+    cuf_call(vm, &cb, args, named)
 }
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let (args, named) = cufa_args(vm, &arr(a, 1))?;
-    cuf_call(vm, &cb, args, named, "call_user_func_array")
+    cuf_call(vm, &cb, args, named)
 }
 
 /// Splits a `call_user_func_array()` argument array into positional and
@@ -1806,24 +1870,17 @@ fn fsc_forward_called_scope(vm: &Vm, mut call: PendingCall) -> PendingCall {
     call
 }
 
-/// Calls the callback of `call_user_func[_array]()`. A direct call compiles
-/// to `ZEND_INIT_USER_CALL` (`zend_compile_func_cuf`, `Zend/zend_compile.c`):
-/// when an error handler throws on the "Use of "self" in callables"
-/// deprecation, `zend_is_callable_check_class` (`Zend/zend_API.c`) fails
-/// with "cannot use "self"/"parent"/"static" in callables" and the opcode
-/// throws that `TypeError` chained to the pending exception. Through zpp
-/// (a dynamic call) the pending exception propagates alone.
+/// Calls the callback of `call_user_func[_array]()` through the builtin:
+/// a call the compiler did not lower to `ZEND_INIT_USER_CALL` (named
+/// arguments, unpacking, a namespaced unqualified name, or a variable
+/// function name; see `Op::InitUserCall`), made as `zend_call_function`
+/// makes it, from the builtin's frame.
 fn cuf_call(
     vm: &mut Vm,
     cb: &Value,
     args: Vec<Value>,
     named: Vec<(ZStr, Value)>,
-    fname: &str,
 ) -> VmResult<Value> {
-    // A direct call compiles to `ZEND_INIT_USER_CALL` + `ZEND_DO_FCALL`
-    // (frameless here), whose unused result triggers `#[\NoDiscard]`.
-    let discarded =
-        vm.pending_call_dst.is_none() && vm.frames.last().is_some_and(|f| f.builtin_name.is_none());
     // The resolution the callable argument's check made (see
     // `coerce_builtin_arg`), when it was this callable's.
     let checked = vm
@@ -1834,52 +1891,9 @@ fn cuf_call(
     let call = match checked.map_or_else(|| vm.zend_is_callable(cb, false), |c| Ok(Ok(c))) {
         Ok(Ok(call)) => call,
         Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
-        Err(Throw::Exception(prev))
-            if vm.frames.last().is_some_and(|f| f.builtin_name.is_none())
-                && names_callable_keyword(cb) =>
-        {
-            return Err(cuf_keyword_error(vm, fname, &prev));
-        }
         Err(t) => return Err(t),
     };
-    if discarded && call.func.flags() & flags::NODISCARD != 0 {
-        vm.check_nodiscard_call(&call)?;
-    }
     vm.call_resolved_named(call, args, named)
-}
-
-/// Whether the callable's class part is `self`, `parent` or `static`.
-fn names_callable_keyword(cb: &Value) -> bool {
-    let class = match cb.deref() {
-        Value::Str(s) => {
-            let b = s.as_bytes();
-            match b.windows(2).rposition(|w| w == b"::") {
-                Some(p) => b[..p].to_ascii_lowercase(),
-                None => return false,
-            }
-        }
-        Value::Array(a) => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
-            Some(Value::Str(c)) => c.as_bytes().to_ascii_lowercase(),
-            _ => return false,
-        },
-        _ => return false,
-    };
-    matches!(class.as_slice(), b"self" | b"parent" | b"static")
-}
-
-#[cold]
-fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &php_runtime::Obj) -> Throw {
-    let e = vm.make_throw(
-        "TypeError",
-        &format!(
-            "{fname}(): Argument #1 ($callback) must be a valid callback, \
-             cannot use \"self\"/\"parent\"/\"static\" in callables"
-        ),
-    );
-    if let Throw::Exception(o) = &e {
-        crate::exceptions::chain_previous(o, prev);
-    }
-    e
 }
 
 fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -2510,20 +2524,35 @@ pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
     0
 }
 
-fn get_resource_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+/// `Z_PARAM_RESOURCE` of an untyped stub parameter: anything but a
+/// resource (closed or not) is a `TypeError`, in either mode
+/// (ref: Zend/zend_builtin_functions.c `get_resource_type`,
+/// `get_resource_id`; Zend/zend_API.c `zend_wrong_parameter_type_error`).
+fn resource_arg(vm: &mut Vm, a: &Args) -> VmResult<php_runtime::Resource> {
     match a.at(0) {
-        Value::Resource(r) => Ok(sv(r
-            .type_name()
-            .map_or_else(|| "Unknown".to_string(), |t| t.to_string_lossy()))),
-        _ => Ok(Value::Bool(false)),
+        Value::Resource(r) => Ok(r),
+        other => {
+            let given = crate::typecheck::given_type(&other);
+            Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be of type resource, {given} given"),
+            ))
+        }
     }
 }
 
-fn get_resource_id(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    match a.at(0) {
-        Value::Resource(r) => Ok(Value::Int(r.handle())),
-        _ => Ok(Value::Int(0)),
-    }
+fn get_resource_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = resource_arg(vm, a)?;
+    Ok(sv(r.type_name().map_or_else(
+        || "Unknown".to_string(),
+        |t| t.to_string_lossy(),
+    )))
+}
+
+fn get_resource_id(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(resource_arg(vm, a)?.handle()))
 }
 
 fn enum_cases(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -3084,5 +3113,87 @@ mod ini_get_tests {
         };
         assert!(!long.is_interned());
         assert_eq!(long.len(), INI_SHARED_MAX + 1);
+    }
+}
+
+#[cfg(test)]
+mod func_get_args_tests {
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The direct list (`plain_frame_args`) and the general one (a frame
+    /// with a symbol table, a variadic) agree with `/usr/bin/php8.5 -n`:
+    /// `[["changed"],["changed",2],["changed",2,3,4],[null,9],[1,2],[1,2]]`
+    /// for the first six, plus the variadic's.
+    #[test]
+    fn func_get_args_of_plain_and_other_frames() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            br#"<?php
+function f($a, $b = 5) { $a = 'changed'; return func_get_args(); }
+function g($a, &$r) { $r = 9; unset($a); return func_get_args(); }
+function h($a) { return func_get_args(); }
+function k($a, $b) { $x = 'x'; $$x = 1; return func_get_args(); }
+function v($a, ...$rest) { return func_get_args(); }
+function show($l) { echo '['; foreach ($l as $i => $e) { echo $i, '=', $e === null ? 'N' : $e, ' '; } echo ']'; }
+$v = 1;
+show(f(1)); show(f(1, 2)); show(f(1, 2, 3, 4)); show(g(1, $v)); show(h(...[1, 2])); show(k(1, 2));
+show(v(1, 2, 3));
+"#,
+            "fga.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "[0=changed ][0=changed 1=2 ][0=changed 1=2 2=3 3=4 ][0=N 1=9 ][0=1 1=2 ][0=1 1=2 ][0=1 1=2 2=3 ]"
+        );
+    }
+
+    /// `func_get_args()` written in a function body compiles to
+    /// `Op::FuncGetArgs` (zend_compile_func_get_args), whose handler reads
+    /// a plain frame directly: methods, static methods with a reference
+    /// parameter, closures, generators and an unset parameter give what
+    /// `/usr/bin/php8.5 -n` prints.
+    #[test]
+    fn func_get_args_op_of_methods_closures_generators() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            br#"<?php
+class C { function m($a) { $a = 7; return func_get_args(); } static function s(&$r, $z = 3) { $r++; return func_get_args(); } }
+$c = function ($p) use (&$c) { return func_get_args(); };
+function show($l) { echo '['; foreach ($l as $i => $e) { echo $i, '=', $e === null ? 'N' : $e, ' '; } echo ']'; }
+$q = 1;
+show((new C)->m(1, 2, 3)); show(C::s($q)); show(C::s($q, 9, 10)); show($c('a', 'b'));
+function gen($a) { yield func_get_args(); }
+foreach (gen(4, 5) as $v) show($v);
+function d($a) { unset($a); return func_get_args(); }
+show(d(1, 2));
+"#,
+            "fga2.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "[0=7 1=2 2=3 ][0=2 ][0=3 1=9 2=10 ][0=a 1=b ][0=4 1=5 ][0=N 1=2 ]"
+        );
     }
 }

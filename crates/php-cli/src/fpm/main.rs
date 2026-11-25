@@ -26,6 +26,8 @@ mod fastcgi;
 #[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
+#[path = "../main_stack.rs"]
+mod main_stack;
 #[allow(dead_code)]
 #[path = "../memcap.rs"]
 mod memcap;
@@ -211,6 +213,14 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    // php-src's huge pages: only with USE_ZEND_ALLOC_HUGE_PAGES set (first,
+    // before the heap grows).
+    php_memlimit::set_huge_pages(php_memlimit::huge_pages_from_env(
+        std::env::var_os("USE_ZEND_ALLOC_HUGE_PAGES")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+    ));
+    let on_main_thread = main_stack::ensure(&argv);
     // `memory_limit` accounting and the address-space cap, as in the
     // `php` and `php-cgi` binaries.
     memcap::limit_memory();
@@ -231,9 +241,14 @@ fn main() {
     // `fpm_signals_init_mask()`, `fpm_signals_block()`: until the master's
     // handlers are in place (the VM thread inherits this mask).
     os::block_signals(&os::BLOCK_SIGNALS);
-    // Every process (the master and each worker it forks from this thread)
-    // ends inside `run` with `finish`: a forked worker has no main thread
-    // to return to.
+    // The VM runs on the main thread, as in C: the master is
+    // single-threaded when it forks its workers. Every process (the
+    // master and each worker) ends inside `run` with `finish`.
+    if on_main_thread {
+        finish(run(&argv));
+    }
+    // Fallback: a thread with a large stack. A worker forked from it has
+    // no main thread to return to, so it ends inside `run` as well.
     let _ = std::thread::Builder::new()
         .stack_size(usize::try_from(request::VM_STACK).unwrap_or(usize::MAX))
         .spawn(move || finish(run(&argv)))
@@ -1042,6 +1057,7 @@ fn fpm_main(cfg: &Config, a: &Args) -> i32 {
     );
     report_to_caller(pipe, true);
     let mut m = master::Master::new(conf, pools, signals);
+    prepare_pools(cfg, &m);
     match m.run() {
         master::Role::Exit(status) => {
             // `fpm_pctl_exit()`: `fpm_conf_unlink_pid()`, then the cleanups.
@@ -1220,25 +1236,30 @@ fn worker(cfg: &Config, m: &master::Master, pi: usize, slot: usize, id: &Ident) 
     }
     // `fpm_php_init_child()`: the pool's INI values become the worker's
     // master values (`php_admin_value`s locked), then the allowed clients.
-    let mut ini = WorkerIni::new(cfg);
-    for (k, v) in &pool.php_values {
-        if !ini.apply(k, v, false) {
-            log::error(
-                "fpm_php_apply_defines",
-                0,
-                &format!("Unable to set php_value '{k}'"),
-            );
-        }
-    }
-    for (k, v) in &pool.php_admin_values {
-        if !ini.apply(k, v, true) {
-            log::error(
-                "fpm_php_apply_defines",
-                0,
-                &format!("Unable to set php_admin_value '{k}'"),
-            );
-        }
-    }
+    // The master made this pool's INI and VM before it forked
+    // (`PoolStart`); a worker of a pool it has none for makes them here.
+    let start = POOL_START.with(|s| {
+        let mut all = s.borrow_mut();
+        let mine = all.get_mut(pi).and_then(Option::take);
+        // The other pools' VMs stay untouched in this worker: freeing them
+        // would write to the pages it shares with the master.
+        std::mem::forget(std::mem::take(&mut *all));
+        mine
+    });
+    let mut ini = if let Some(start) = start {
+        report_rejected(&start.rejected);
+        request::adopt_worker_vm(start.vm);
+        let mut ini = start.ini;
+        // What applying the values reports (a warning from an INI
+        // handler, opcache's "can't be temporarily enabled") comes from
+        // the worker, as in C.
+        ini.replay_pool(pool);
+        ini
+    } else {
+        let mut ini = WorkerIni::new(cfg);
+        report_rejected(&ini.apply_pool(pool));
+        ini
+    };
     // `php_child_init()`: each extension's `child_init_func`.
     for e in extensions::all() {
         e.child_init();
@@ -1445,7 +1466,7 @@ fn worker(cfg: &Config, m: &master::Master, pi: usize, slot: usize, id: &Ident) 
             executing: Some(&executing),
             done: Some(&done_hook),
             request_info: Some(request_info::init_request_info),
-            vm_setup: Some(|vm| vm.register_interrupt_handler(slowlog_interrupt)),
+            vm_setup: Some(worker_vm_setup),
             open_failure_log: Some(|msg| log::error("fpm_main", 0, msg)),
             locked: ini.locked.clone(),
             log: Some(log_message),
@@ -1527,6 +1548,63 @@ fn fail_child(pool: &conf::Pool) -> i32 {
     master::EXIT_SOFTWARE
 }
 
+/// The VM setup of every worker: the slowlog's interrupt handler.
+fn worker_vm_setup(vm: &mut php_vm::Vm) {
+    vm.register_interrupt_handler(slowlog_interrupt);
+}
+
+/// What a pool's workers start from, made by the master before it forks
+/// them (`fpm_php_init_main()` and the module startup before
+/// `fpm_run()`): the INI with the pool's values and the request VM. Each
+/// worker takes its pool's instead of making its own, so module startup
+/// runs once per pool and the workers share its pages copy-on-write.
+struct PoolStart {
+    ini: WorkerIni,
+    /// The pool's values that do not exist (`true` for `php_admin_value`):
+    /// each worker reports them, as `fpm_php_apply_defines()` does in the
+    /// child.
+    rejected: Vec<(bool, String)>,
+    vm: request::KeptVm,
+}
+
+thread_local! {
+    /// The master's [`PoolStart`]s, by pool index.
+    static POOL_START: std::cell::RefCell<Vec<Option<PoolStart>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Makes every pool's [`PoolStart`] (the master, before the first fork).
+fn prepare_pools(cfg: &Config, m: &master::Master) {
+    let starts = m
+        .pools
+        .iter()
+        .map(|p| {
+            let mut ini = WorkerIni::new(cfg);
+            let rejected = ini.apply_pool_quietly(&p.conf);
+            let vm = request::prepare_worker_vm(&ini.cfg, &[], Some(worker_vm_setup));
+            Some(PoolStart { ini, rejected, vm })
+        })
+        .collect();
+    POOL_START.with(|s| *s.borrow_mut() = starts);
+}
+
+/// `fpm_php_apply_defines()`'s errors for the values [`WorkerIni::apply_pool`]
+/// rejected.
+fn report_rejected(rejected: &[(bool, String)]) {
+    for (admin, k) in rejected {
+        let what = if *admin {
+            "php_admin_value"
+        } else {
+            "php_value"
+        };
+        log::error(
+            "fpm_php_apply_defines",
+            0,
+            &format!("Unable to set {what} '{k}'"),
+        );
+    }
+}
+
 /// A worker's INI master values: the configuration with the pool's
 /// `php_value`s and `php_admin_value`s and the requests' `PHP_VALUE`s and
 /// `PHP_ADMIN_VALUE`s (`fpm_php_zend_ini_alter_master()`).
@@ -1558,6 +1636,60 @@ impl WorkerIni {
             locked: Vec::new(),
             known,
             probe,
+        }
+    }
+
+    /// The pool's `php_value`s, then its `php_admin_value`s; returns the
+    /// ones that do not exist (`true` for `php_admin_value`).
+    fn apply_pool(&mut self, pool: &conf::Pool) -> Vec<(bool, String)> {
+        let mut rejected = Vec::new();
+        for (k, v) in &pool.php_values {
+            if !self.apply(k, v, false) {
+                rejected.push((false, k.clone()));
+            }
+        }
+        for (k, v) in &pool.php_admin_values {
+            if !self.apply(k, v, true) {
+                rejected.push((true, k.clone()));
+            }
+        }
+        rejected
+    }
+
+    /// [`apply_pool`](Self::apply_pool) in the master, before it forks:
+    /// what the handlers report is not shown here (standard error and the
+    /// probe's log are silenced) but by each worker, which runs them again
+    /// with [`replay_pool`](Self::replay_pool), as C applies the values in
+    /// the child (`fpm_php_init_child()`).
+    fn apply_pool_quietly(&mut self, pool: &conf::Pool) -> Vec<(bool, String)> {
+        let hook = self.probe.log_hook.take();
+        let saved = os::dup(libc::STDERR_FILENO);
+        let null = std::fs::OpenOptions::new().write(true).open("/dev/null");
+        if let Ok(null) = &null {
+            use std::os::fd::AsRawFd;
+            os::dup2(null.as_raw_fd(), libc::STDERR_FILENO);
+        }
+        let rejected = self.apply_pool(pool);
+        if saved >= 0 {
+            os::dup2(saved, libc::STDERR_FILENO);
+            os::close(saved);
+        }
+        self.probe.log_hook = hook;
+        rejected
+    }
+
+    /// Runs the INI handlers of the pool's values again for what they
+    /// report, without changing the values (the worker's half of
+    /// [`apply_pool_quietly`](Self::apply_pool_quietly)).
+    fn replay_pool(&mut self, pool: &conf::Pool) {
+        for (k, v) in pool.php_values.iter().chain(&pool.php_admin_values) {
+            if k != "extension" && self.known.contains(k.as_str()) {
+                let _ = self.probe.run_ini_modify_hook(
+                    k,
+                    v.as_bytes(),
+                    php_vm::ext::IniStage::Activate,
+                );
+            }
         }
     }
 

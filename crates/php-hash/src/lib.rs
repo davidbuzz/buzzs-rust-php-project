@@ -1133,12 +1133,16 @@ pub fn hash_equals(known: &[u8], user: &[u8]) -> bool {
 /// Lowercase hex encoding (`bin2hex`).
 pub fn bin2hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(char::from(HEX[usize::from(b >> 4)]));
-        s.push(char::from(HEX[usize::from(b & 15)]));
+    // The digits written as bytes into a buffer of the final size
+    // (`make_digest_ex`): `String::push` of each digit as a `char` cost
+    // ~27 instructions a byte of an `md5()`.
+    let mut out = vec![0u8; bytes.len() * 2];
+    for (pair, &b) in out.chunks_exact_mut(2).zip(bytes) {
+        pair[0] = HEX[usize::from(b >> 4)];
+        pair[1] = HEX[usize::from(b & 15)];
     }
-    s
+    // Hex digits are ASCII, so the check always passes.
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// `md5($data, true)`.

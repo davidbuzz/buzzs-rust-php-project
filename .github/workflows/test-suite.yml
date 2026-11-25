@@ -1,0 +1,670 @@
+# php-src's .github/workflows/test-suite.yml for this repository (see CI_PLAN.md): the
+# jobs that .github/matrix.php selects, with upstream's names, steps, INI settings,
+# environment and services. Varied where the difference is real:
+# - Cargo instead of configure/make/make install (actions/build-linux), a pinned Rust
+#   compiler (config.rust_toolchain), and the Cargo cache instead of ccache;
+# - phpt-runner instead of run-tests.php (actions/test-linux), with our baseline; every
+#   PHPT step is informational (continue-on-error) until the runner has a baseline of its
+#   own, and keeps its JSON report;
+# - no ZTS, ASAN, MSAN, X32, Windows, macOS, FreeBSD, Solaris, PPC64 or libmysqlclient
+#   jobs; LINUX_ARM64 and LATEST_STABLE_RUST are ours;
+# - our trace JIT stands in for php-src's tracing JIT, and the configuration users get
+#   (opcache off, our JIT on) takes the function JIT's slot;
+# - the databases out of scope (PostgreSQL, Firebird, MSSQL) and their setup are left out.
+name: Test suite
+on:
+  workflow_call:
+    inputs:
+      all_variations:
+        required: true
+        type: boolean
+      branch:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  LINUX_X64:
+    if: ${{ fromJson(inputs.branch).jobs.LINUX_X64 }}
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_DATABASE: test
+          MYSQL_ROOT_PASSWORD: root
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(inputs.branch).jobs.LINUX_X64.matrix }}
+    name: "LINUX_X64${{ matrix.name }}_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
+    # Upstream: 180. Ours runs up to four full PHPT runs of a debug build.
+    timeout-minutes: 360
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: System info
+        run: |
+          echo "::group::Show host CPU info"
+          lscpu
+          echo "::endgroup::"
+          echo "::group::Show installed package versions"
+          dpkg -l
+          echo "::endgroup::"
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ fromJson(inputs.branch).config.rust_toolchain }}
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: "LINUX_X64${{ matrix.name }}_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+      - name: build
+        uses: ./.github/actions/build-linux
+        with:
+          debug: ${{ matrix.debug && 'true' || 'false' }}
+      # Ours: the build runs at all.
+      - name: Smoke test
+        run: $PHP_BIN_DIR/php -r 'echo 1 + 2, "\n";'
+      # Ours: an empty script makes about 200 mmap calls (209 on x86-64, most of them the
+      # dynamic loader mapping the shared libraries); with the request heap's chunk map
+      # rejecting every chunk (PR #2) it made over 30,000.
+      - name: The request heap keeps its chunks
+        run: |
+          n=$(strace -f -e trace=mmap -o /dev/stdout $PHP_BIN_DIR/php -r '' | grep -c 'mmap(')
+          echo "mmap calls for php -r '': $n"
+          test "$n" -lt 2000
+      # Ours: the unit tests that gate (the rest are UNIT_TESTS_LINUX_X64's).
+      - name: Unit tests (heap, values, streams)
+        run: cargo test ${{ !matrix.debug && '--release' || '' }} --no-fail-fast -p php-memlimit -p php-runtime -p php-streams
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+      - name: Setup Caddy server
+        uses: ./.github/actions/setup-caddy
+      - name: Setup
+        uses: ./.github/actions/setup-x64
+      - name: Test
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: test
+          jit: 'off'
+          runTestsParameters: >-
+            ${{ matrix.repeat && '--repeat 2' || '' }}
+            ${{ matrix.variation && '-d zend_test.observer.enabled=1 -d zend_test.observer.show_output=0' || '' }}
+      - name: Test Tracing JIT
+        if: ${{ inputs.all_variations }}
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: tracing-jit
+          enableOpcache: true
+          jitType: tracing
+          runTestsParameters: >-
+            ${{ matrix.repeat && '--repeat 2' || '' }}
+            ${{ matrix.variation && '-d zend_test.observer.enabled=1 -d zend_test.observer.show_output=0' || '' }}
+      - name: Test OpCache
+        if: ${{ inputs.all_variations }}
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: opcache
+          enableOpcache: true
+          jit: 'off'
+          runTestsParameters: >-
+            ${{ matrix.repeat && '--repeat 2' || '' }}
+            ${{ matrix.variation && '-d zend_test.observer.enabled=1 -d zend_test.observer.show_output=0' || '' }}
+      # Upstream's "Test Function JIT" slot. We have no function JIT: this is the
+      # configuration users get, opcache off and our trace JIT on.
+      - name: Test (default JIT)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: default-jit
+          runTestsParameters: >-
+            ${{ matrix.repeat && '--repeat 2' || '' }}
+            ${{ matrix.variation && '-d zend_test.observer.enabled=1 -d zend_test.observer.show_output=0' || '' }}
+      - name: Keep the reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: "phpt-LINUX_X64${{ matrix.name }}_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+          path: reports/
+          retention-days: 14
+  # Ours alone (upstream has no AArch64 Linux job): the steps of LINUX_X64 on the AArch64
+  # runner.
+  LINUX_ARM64:
+    if: ${{ fromJson(inputs.branch).jobs.LINUX_ARM64 }}
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_DATABASE: test
+          MYSQL_ROOT_PASSWORD: root
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(inputs.branch).jobs.LINUX_ARM64.matrix }}
+    name: "LINUX_ARM64_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}-arm
+    timeout-minutes: 360
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: System info
+        run: |
+          echo "::group::Show host CPU info"
+          lscpu
+          echo "::endgroup::"
+          echo "::group::Show installed package versions"
+          dpkg -l
+          echo "::endgroup::"
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ fromJson(inputs.branch).config.rust_toolchain }}
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: "LINUX_ARM64_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+      - name: build
+        uses: ./.github/actions/build-linux
+        with:
+          debug: ${{ matrix.debug && 'true' || 'false' }}
+      - name: Smoke test
+        run: $PHP_BIN_DIR/php -r 'echo 1 + 2, "\n";'
+      # AArch64 Linux maps user memory above 2^47, where the chunk map once rejected every
+      # chunk, and every small allocation became an mmap (PR #2).
+      - name: The request heap keeps its chunks
+        run: |
+          n=$(strace -f -e trace=mmap -o /dev/stdout $PHP_BIN_DIR/php -r '' | grep -c 'mmap(')
+          echo "mmap calls for php -r '': $n"
+          test "$n" -lt 2000
+      - name: Unit tests (heap, values, streams)
+        run: cargo test ${{ !matrix.debug && '--release' || '' }} --no-fail-fast -p php-memlimit -p php-runtime -p php-streams
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+      - name: Setup Caddy server
+        uses: ./.github/actions/setup-caddy
+      - name: Setup
+        uses: ./.github/actions/setup-x64
+      - name: Test
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: test
+          jit: 'off'
+      - name: Test Tracing JIT
+        if: ${{ inputs.all_variations }}
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: tracing-jit
+          enableOpcache: true
+          jitType: tracing
+      - name: Test OpCache
+        if: ${{ inputs.all_variations }}
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: opcache
+          enableOpcache: true
+          jit: 'off'
+      - name: Test (default JIT)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: default-jit
+      - name: Keep the reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: "phpt-LINUX_ARM64_${{ matrix.debug && 'DEBUG' || 'RELEASE' }}"
+          path: reports/
+          retention-days: 14
+  OPCACHE_VARIATION:
+    if: ${{ fromJson(inputs.branch).jobs.OPCACHE_VARIATION }}
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_DATABASE: test
+          MYSQL_ROOT_PASSWORD: root
+    name: OPCACHE_VARIATION
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
+    timeout-minutes: 240
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ fromJson(inputs.branch).config.rust_toolchain }}
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: OPCACHE_VARIATION
+      - name: build
+        uses: ./.github/actions/build-linux
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+      - name: Setup Caddy server
+        uses: ./.github/actions/setup-caddy
+      - name: Setup
+        uses: ./.github/actions/setup-x64
+      - name: Test File Cache (prime shm)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: file-cache-prime-shm
+          enableOpcache: true
+          runTestsParameters: >-
+            --file-cache-prime
+      - name: Test File Cache (prime shm, use shm)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: file-cache-use-shm
+          enableOpcache: true
+          runTestsParameters: >-
+            --file-cache-use
+      - name: Test File Cache (prime shm, use file)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: file-cache-use-file
+          enableOpcache: true
+          runTestsParameters: >-
+            --file-cache-use
+            -d opcache.file_cache_only=1
+      - name: Test File Cache Only (prime)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: file-cache-only-prime
+          enableOpcache: true
+          runTestsParameters: >-
+            --file-cache-prime
+            -d opcache.file_cache_only=1
+      - name: Test File Cache Only (use)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: file-cache-only-use
+          enableOpcache: true
+          runTestsParameters: >-
+            --file-cache-use
+            -d opcache.file_cache_only=1
+      - name: Keep the reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpt-OPCACHE_VARIATION
+          path: reports/
+          retention-days: 14
+  COMMUNITY:
+    if: ${{ fromJson(inputs.branch).jobs.COMMUNITY }}
+    name: COMMUNITY
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
+    timeout-minutes: 360
+    # Upstream also sets ASAN_OPTIONS, UBSAN_OPTIONS, USE_ZEND_ALLOC=0 and
+    # USE_TRACKED_ALLOC=1 for its sanitizer builds; we have none. Our `php` reads its
+    # ini files from PHP_INI_SCAN_DIR (upstream: --with-config-file-scan-dir).
+    # Ours: each project's suite runs under `timeout -s KILL $PROJECT_TIMEOUT`, so a
+    # hang (amphp/dns's suite never finished, 24 and 25 Nov) is killed, exits 137 and
+    # counts as a crash by upstream's "exit status above 128" rule, instead of using up
+    # the job's 6 hours and leaving the other projects unrun.
+    env:
+      PHP_INI_SCAN_DIR: /etc/php.d
+      PROJECT_TIMEOUT: 45m
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ fromJson(inputs.branch).config.rust_toolchain }}
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: COMMUNITY
+      - name: build
+        uses: ./.github/actions/build-linux
+      # Upstream's `make install`: our binaries first on the PATH.
+      - name: make install
+        run: |
+          set -x
+          sudo cp "$PHP_BIN_DIR/php" "$PHP_BIN_DIR/php-cgi" /usr/local/bin/
+          sudo mkdir -p /etc/php.d
+          sudo chmod 777 /etc/php.d
+      - name: Setup
+        run: |
+          sudo service mysql start
+          mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS test"
+          mysql -uroot -proot -e "SET GLOBAL local_infile = true"
+      - name: Enable Opcache
+        run: |
+          echo memory_limit=-1 >> /etc/php.d/opcache.ini
+          echo opcache.enable_cli=1 >> /etc/php.d/opcache.ini
+          echo opcache.enable=1 >> /etc/php.d/opcache.ini
+          echo opcache.protect_memory=1 >> /etc/php.d/opcache.ini
+          echo opcache.memory_consumption=256M >> /etc/php.d/opcache.ini
+          echo opcache.file_update_protection=0 >> /etc/php.d/opcache.ini
+          echo opcache.interned_strings_buffer=64 >> /etc/php.d/opcache.ini
+          echo opcache.max_accelerated_files=130987 >> /etc/php.d/opcache.ini
+      - name: Enable JIT
+        run: |
+          echo opcache.jit=tracing >> /etc/php.d/opcache.ini
+          echo opcache.jit_buffer_size=1G >> /etc/php.d/opcache.ini
+          echo opcache.jit_max_root_traces=100000 >> /etc/php.d/opcache.ini
+          echo opcache.jit_max_side_traces=100000 >> /etc/php.d/opcache.ini
+          echo opcache.jit_max_exit_counters=100000 >> /etc/php.d/opcache.ini
+          echo opcache.jit_hot_loop=1 >> /etc/php.d/opcache.ini
+          echo opcache.jit_hot_func=1 >> /etc/php.d/opcache.ini
+          echo opcache.jit_hot_return=1 >> /etc/php.d/opcache.ini
+          echo opcache.jit_hot_side_exit=1 >> /etc/php.d/opcache.ini
+          php -v
+      # As upstream: a project's failing tests are reported, and only a crash (an exit
+      # status above 128) fails the step.
+      - name: Test AMPHP
+        if: ${{ !cancelled() }}
+        run: |
+          repositories="amp cache dns file http parallel parser pipeline process serialization socket sync websocket-client websocket-server"
+          X=0
+          for repository in $repositories; do
+            echo "::group::$repository"
+            git clone "https://github.com/amphp/$repository.git" "amphp-$repository" --depth 1
+            cd "amphp-$repository"
+            git rev-parse HEAD
+            php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+            EXIT_CODE=0
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
+            echo -e "\n::endgroup::"
+            if [ ${EXIT_CODE:-0} -gt 128 ]; then
+              X=1;
+              echo "Failed"
+            fi
+            cd ..
+          done
+          exit $X
+      - name: Test Laravel
+        if: ${{ !cancelled() }}
+        run: |
+          git clone https://github.com/laravel/framework.git --depth=1
+          cd framework
+          git rev-parse HEAD
+          php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+          # Hack to disable a test that hangs
+          php -r '$c = file_get_contents("tests/Filesystem/FilesystemTest.php"); $c = str_replace("public function testSharedGet()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testSharedGet()", $c); file_put_contents("tests/Filesystem/FilesystemTest.php", $c);'
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          if [ ${EXIT_CODE:-0} -gt 128 ]; then
+            exit 1
+          fi
+      - name: Test ReactPHP
+        if: ${{ !cancelled() }}
+        run: |
+          repositories="async cache child-process datagram dns event-loop promise promise-stream promise-timer stream"
+          X=0
+          for repository in $repositories; do
+            echo "::group::$repository"
+            git clone "https://github.com/reactphp/$repository.git" "reactphp-$repository" --depth 1
+            cd "reactphp-$repository"
+            git rev-parse HEAD
+            php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+            EXIT_CODE=0
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
+            echo -e "\n::endgroup::"
+            # (Upstream has `$[EXIT_CODE:-0}` here, a typo for the expansion below.)
+            if [ ${EXIT_CODE:-0} -gt 128 ]; then
+              X=1;
+              echo "Failed"
+            fi
+            cd ..
+          done
+          exit $X
+      - name: Test Revolt PHP
+        if: ${{ !cancelled() }}
+        run: |
+          git clone https://github.com/revoltphp/event-loop.git --depth=1
+          cd event-loop
+          git rev-parse HEAD
+          php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+          # Broken since https://github.com/php/php-src/pull/14452.
+          php -r '$c = file_get_contents("test/Driver/StreamSelectDriverTest.php"); $c = str_replace("public function testTooLargeFileDescriptorSet(): void", "/** @group skip */\n    #[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testTooLargeFileDescriptorSet(): void", $c); file_put_contents("test/Driver/StreamSelectDriverTest.php", $c);'
+          timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          if [ ${EXIT_CODE:-0} -gt 128 ]; then
+            exit 1
+          fi
+      - name: Test Symfony
+        if: ${{ !cancelled() }}
+        run: |
+          git clone https://github.com/symfony/symfony.git --depth=1
+          cd symfony
+          git rev-parse HEAD
+          php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+          php ./phpunit install
+          # Test causes a heap-buffer-overflow but I cannot reproduce it locally...
+          php -r '$c = file_get_contents("src/Symfony/Component/HtmlSanitizer/Tests/HtmlSanitizerCustomTest.php"); $c = str_replace("public function testSanitizeDeepNestedString()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testSanitizeDeepNestedString()", $c); file_put_contents("src/Symfony/Component/HtmlSanitizer/Tests/HtmlSanitizerCustomTest.php", $c);'
+          # Buggy FFI test in Symfony, see https://github.com/symfony/symfony/issues/47668
+          php -r '$c = file_get_contents("src/Symfony/Component/VarDumper/Tests/Caster/FFICasterTest.php"); $c = str_replace("public function testCastNonTrailingCharPointer()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testCastNonTrailingCharPointer()", $c); file_put_contents("src/Symfony/Component/VarDumper/Tests/Caster/FFICasterTest.php", $c);'
+          # Causes massive amounts of system calls with USE_ZEND_ALLOC=0, exceeding the timeout
+          if [ -e 'src/Symfony/Component/Console/Tests/Helper/FileInputHelperTest.php' ]; then
+            php -r '$c = file_get_contents("src/Symfony/Component/Console/Tests/Helper/FileInputHelperTest.php"); $c = str_replace("public function testReadWithPasteDetectionAbortsBeyondMaxBytes()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testReadWithPasteDetectionAbortsBeyondMaxBytes()", $c); file_put_contents("src/Symfony/Component/Console/Tests/Helper/FileInputHelperTest.php", $c);'
+          fi
+          export SYMFONY_DEPRECATIONS_HELPER=max[total]=999
+          X=0
+          for component in $(find src/Symfony -mindepth 2 -type f -name phpunit.xml.dist -printf '%h\n'); do
+            echo "::group::$component"
+            EXIT_CODE=0
+            timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit $component --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group transient --exclude-group skip || EXIT_CODE=$?
+            echo -e "\n::endgroup::"
+            if [ ${EXIT_CODE:-0} -gt 128 ]; then
+              X=1;
+              echo "Failed"
+            fi
+          done
+          exit $X
+      - name: Test PHPUnit
+        if: ${{ !cancelled() }}
+        run: |
+          git clone https://github.com/sebastianbergmann/phpunit.git --branch=main --depth=1
+          cd phpunit
+          git rev-parse HEAD
+          php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+          timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit || EXIT_CODE=$?
+          if [ ${EXIT_CODE:-0} -gt 128 ]; then
+            exit 1
+          fi
+      - name: 'Symfony Preloading'
+        # composer create-project will automatically pick the right Symfony version for us.
+        if: ${{ !cancelled() }}
+        run: |
+          php /usr/bin/composer create-project symfony/symfony-demo symfony_demo --no-progress --ignore-platform-req=php+
+          cd symfony_demo
+          git rev-parse HEAD
+          sed -i 's/PHP_SAPI/"cli-server"/g' var/cache/dev/App_KernelDevDebugContainer.preload.php
+          timeout -s KILL "$PROJECT_TIMEOUT" php -d opcache.preload=var/cache/dev/App_KernelDevDebugContainer.preload.php public/index.php
+      - name: Test Wordpress
+        if: ${{ !cancelled() }}
+        run: |
+          git clone https://github.com/WordPress/wordpress-develop.git wordpress --depth=1
+          cd wordpress
+          git rev-parse HEAD
+          php /usr/bin/composer install --no-progress --ignore-platform-req=php+
+          cp wp-tests-config-sample.php wp-tests-config.php
+          sed -i 's/youremptytestdbnamehere/test/g' wp-tests-config.php
+          sed -i 's/yourusernamehere/root/g' wp-tests-config.php
+          sed -i 's/yourpasswordhere/root/g' wp-tests-config.php
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit || EXIT_CODE=$?
+          if [ ${EXIT_CODE:-0} -gt 128 ]; then
+            exit 1
+          fi
+  BENCHMARKING:
+    name: BENCHMARKING
+    if: ${{ fromJson(inputs.branch).jobs.BENCHMARKING }}
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
+    # Upstream: 50. Ours also builds and measures the base commit (upstream reads the
+    # base's numbers from php/benchmarking-data, which we have no counterpart of).
+    timeout-minutes: 150
+    env:
+      PHP_INI_SCAN_DIR: /etc/php.d
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+          fetch-depth: 0
+          filter: blob:none
+      # ASLR can cause a lot of noise due to missed sse opportunities for memcpy
+      # and other operations, so we disable it during benchmarking.
+      - name: Disable ASLR
+        run: echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ fromJson(inputs.branch).config.rust_toolchain }}
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: BENCHMARKING
+      - name: build
+        uses: ./.github/actions/build-linux
+      # upstream's benchmark/ is not among the php-src paths the tests need.
+      - name: Fetch the php-src tests and benchmarks (pinned)
+        run: |
+          scripts/fetch-phpt-tests.sh
+          # The fetch's sparse checkout is non-cone (.git/info/sparse-checkout written
+          # directly), so its pattern list is extended the same way.
+          echo '/benchmark/' >> modules/php-src/.git/info/sparse-checkout
+          git -C modules/php-src read-tree -mu HEAD
+      - name: make install
+        run: |
+          set -x
+          sudo mkdir -p /etc/php.d
+          sudo chmod 777 /etc/php.d
+          echo mysqli.default_socket=/var/run/mysqld/mysqld.sock > /etc/php.d/mysqli.ini
+          echo opcache.enable=1 >> /etc/php.d/opcache.ini
+          echo opcache.enable_cli=1 >> /etc/php.d/opcache.ini
+      - name: Setup
+        run: |
+          git config --global user.name "Benchmark"
+          git config --global user.email "benchmark@php.net"
+          sudo service mysql start
+          mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS wordpress"
+          mysql -uroot -proot -e "CREATE USER 'wordpress'@'localhost' IDENTIFIED BY 'wordpress'; FLUSH PRIVILEGES;"
+          mysql -uroot -proot -e "GRANT ALL PRIVILEGES ON *.* TO 'wordpress'@'localhost' WITH GRANT OPTION;"
+      - name: Benchmark
+        continue-on-error: true
+        run: |
+          set -x
+          "$PHP_BIN_DIR/php" modules/php-src/benchmark/benchmark.php false "$PHP_BIN_DIR/php-cgi" > head.json
+          cat head.json
+      # Ours: the base commit, built and measured the same way, in place of its numbers
+      # in php/benchmarking-data.
+      - name: Benchmark the base commit
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        run: |
+          set -x
+          mkdir base
+          git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C base
+          cargo build --release --manifest-path base/Cargo.toml --target-dir base/target -p php-cli
+          base/target/release/php modules/php-src/benchmark/benchmark.php false base/target/release/php-cgi > base.json
+          cat base.json
+      - name: Show diff
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        run: |-
+          set -x
+          data=modules/php-src/benchmark/repos/data
+          for pair in "${{ github.sha }}:head.json" "${{ github.event.pull_request.base.sha }}:base.json"; do
+            sha=${pair%%:*}
+            mkdir -p "$data/${sha:0:2}/$sha"
+            cp "${pair#*:}" "$data/${sha:0:2}/$sha/summary.json"
+          done
+          "$PHP_BIN_DIR/php" modules/php-src/benchmark/generate_diff.php \
+            ${{ github.sha }} \
+            ${{ github.event.pull_request.base.sha }} \
+            > $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: profiles
+          path: ${{ github.workspace }}/modules/php-src/benchmark/profiles
+          retention-days: 30
+  # Ours alone: LINUX_X64's release build and default test on the latest stable Rust
+  # instead of the pinned one, so that a compiler change shows up in a run of its own.
+  LATEST_STABLE_RUST:
+    if: ${{ fromJson(inputs.branch).jobs.LATEST_STABLE_RUST }}
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_DATABASE: test
+          MYSQL_ROOT_PASSWORD: root
+    name: LATEST_STABLE_RUST
+    runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
+    timeout-minutes: 180
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(inputs.branch).ref }}
+      - name: apt
+        uses: ./.github/actions/apt-x64
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: LATEST_STABLE_RUST
+      - name: System info
+        run: rustc --version
+      - name: build
+        uses: ./.github/actions/build-linux
+      - name: Smoke test
+        run: $PHP_BIN_DIR/php -r 'echo 1 + 2, "\n";'
+      - name: Unit tests (heap, values, streams)
+        run: cargo test --release --no-fail-fast -p php-memlimit -p php-runtime -p php-streams
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+      - name: Setup Caddy server
+        uses: ./.github/actions/setup-caddy
+      - name: Setup
+        uses: ./.github/actions/setup-x64
+      - name: Test (default JIT)
+        continue-on-error: true
+        uses: ./.github/actions/test-linux
+        with:
+          name: default-jit
+      - name: Keep the reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpt-LATEST_STABLE_RUST
+          path: reports/
+          retention-days: 14

@@ -581,6 +581,23 @@ thread_local! {
     /// Set when an automatic run is due; setting it also raises the
     /// executor's safe-point flag (`crate::interrupt::raise_safe_point`).
     static WANT_RUN: Cell<bool> = const { Cell::new(false) };
+    /// [`GcState::protected`], readable without borrowing the state: the
+    /// release of an unshared array tests it before walking its elements
+    /// (`zend_array_destroy` of every local array of a returning frame).
+    /// Written with the state's field, by [`mirror_protected`].
+    static PROTECTED: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Sets [`PROTECTED`] as [`GcState::protected`] is set.
+#[inline]
+fn mirror_protected(on: bool) {
+    let _ = PROTECTED.try_with(|p| p.set(on));
+}
+
+/// Whether the root buffer is protected (no roots recorded).
+#[inline]
+fn is_protected() -> bool {
+    PROTECTED.try_with(Cell::get).unwrap_or(true)
 }
 
 fn with_state<R>(f: impl FnOnce(&mut GcState) -> R) -> Option<R> {
@@ -610,6 +627,7 @@ pub fn set_enabled(on: bool) -> bool {
         if on && s.protected && !s.active {
             s.protected = false;
             s.full = false;
+            mirror_protected(false);
         }
         old
     });
@@ -626,7 +644,11 @@ pub fn enabled() -> bool {
 /// `gc_protect()`: stops (or resumes) recording roots, e.g. after a fatal
 /// error. Returns the old setting.
 pub fn set_protected(on: bool) -> bool {
-    let old = with_state(|s| std::mem::replace(&mut s.protected, on)).unwrap_or(true);
+    let old = with_state(|s| {
+        mirror_protected(on);
+        std::mem::replace(&mut s.protected, on)
+    })
+    .unwrap_or(true);
     sync_recording();
     old
 }
@@ -656,22 +678,32 @@ pub fn add_root_provider(p: RootProvider) {
 ///
 /// Call it with the old value at the engine's release sites (assignment
 /// overwrite, `unset`, scope exit, element/property overwrite or removal)
-/// *before* dropping it. Only objects are buffered here; references are
-/// recorded by a `php-runtime` [`RootProvider`], and arrays never close a
-/// cycle on their own (in this value model every cycle passes through an
-/// object or a reference). Releasing the last handle of an array releases
-/// its elements (`zend_array_destroy`), which buffers the objects among
-/// them that are still referenced elsewhere. Cheap when the value is not
-/// an object or an unshared non-empty array: inline, the release of an
-/// object's last handle (the common case of an overwritten variable) is a
-/// count test.
+/// *before* dropping it; the `_nogc` sites of php-src (temporaries) do not
+/// call it. Objects are buffered here; references by a `php-runtime`
+/// [`RootProvider`], as are arrays: an array that stays held elsewhere is
+/// buffered unless its header mark says it is buffered already or
+/// immutable (`GC_MAY_LEAK`; [`php_runtime::ref_roots::array_released`]).
+/// Releasing the last handle of an array releases its elements
+/// (`zend_array_destroy`), which buffers those still held elsewhere.
+/// Cheap when the value is not an object or an unshared non-empty array:
+/// inline, the release of an object's last handle (the common case of an
+/// overwritten variable) is a count test, and that of a shared array
+/// already buffered a count test and a test of its mark.
 #[inline]
 pub fn possible_root(v: &Value) {
     match v {
         Value::Object(o) => root_obj(o),
         // Releasing the last handle of a reference releases its value.
         Value::Reference(r) if r.refcount() == 1 => released_ref(r),
-        Value::Array(a) if a.refcount() == 1 && !a.is_empty() => released_array(a),
+        Value::Array(a) => {
+            if a.refcount() == 1 {
+                if !a.is_empty() {
+                    released_array(a);
+                }
+            } else if a.gc_root_mark() == 0 {
+                php_runtime::ref_roots::array_released(a);
+            }
+        }
         _ => {}
     }
 }
@@ -686,18 +718,25 @@ pub(crate) fn possible_root_obj(o: &Obj) {
 #[inline(never)]
 fn released_ref(r: &php_runtime::PhpRef) {
     if let Some(inner) = r.try_borrow() {
-        if let Value::Object(o) = &*inner {
-            root_obj(o);
+        match &*inner {
+            Value::Object(o) => root_obj(o),
+            // `zend_reference` freed: `i_zval_ptr_dtor` of its array.
+            Value::Array(a) if a.refcount() >= 2 && a.gc_root_mark() == 0 => {
+                php_runtime::ref_roots::array_released(a);
+            }
+            _ => {}
         }
     }
 }
 
 /// `zend_array_destroy` → `i_zval_ptr_dtor` on every element of an array
-/// whose last handle is being released: objects that stay referenced become
-/// possible roots; unshared nested arrays are released in turn.
+/// whose last handle is being released: objects and arrays that stay
+/// referenced become possible roots; unshared nested arrays are released
+/// in turn.
 #[inline(never)]
 fn released_array(a: &php_runtime::ZArray) {
-    if !with_state(|s| !s.protected).unwrap_or(false) {
+    // One load: the state is borrowed only to buffer a root.
+    if is_protected() {
         return;
     }
     // The unshared arrays found inside that are still to walk: none in a
@@ -708,10 +747,12 @@ fn released_array(a: &php_runtime::ZArray) {
         // Only the elements that can be or hold a root: a table of scalars
         // and strings costs a tag test an element.
         arr.for_each_counted(|v| match v {
-            Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
-                pending.push(inner);
+            Value::Array(inner) if inner.refcount() == 1 => {
+                if !inner.is_empty() {
+                    pending.push(inner);
+                }
             }
-            Value::Object(_) | Value::Reference(_) => possible_root(v),
+            Value::Array(_) | Value::Object(_) | Value::Reference(_) => possible_root(v),
             _ => {}
         });
         let Some(next) = pending.pop() else {
@@ -752,6 +793,7 @@ pub(crate) fn release_duplicate(v: Value) {
 pub(crate) fn root_live_value(v: &Value) {
     match v {
         Value::Object(o) => root_live_obj(o),
+        Value::Array(a) => root_live_array(a),
         Value::Reference(r) => match r.try_borrow().as_deref() {
             Some(Value::Object(o)) => root_live_obj(o),
             // A reference to an array is the root in this model.
@@ -759,6 +801,16 @@ pub(crate) fn root_live_value(v: &Value) {
             _ => {}
         },
         _ => {}
+    }
+}
+
+/// [`root_live_value`] for an array held by a live temporary or a
+/// `foreach` loop (`ZEND_LIVE_LOOP`): buffered whatever its count, as
+/// `gc_check_possible_root` does, unless it is buffered already or
+/// immutable.
+pub(crate) fn root_live_array(a: &php_runtime::ZArray) {
+    if a.gc_root_mark() == 0 {
+        php_runtime::ref_roots::array_released(a);
     }
 }
 
@@ -832,9 +884,18 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
         return None;
     }
     if !s.roots.has_unused() {
-        // May set the buffered roots aside (the new root then starts an
-        // empty buffer).
-        note_new_slot(s);
+        if php_runtime::ref_roots::take_freed_slot() {
+            // `GC_FETCH_UNUSED()`: the slot a buffered array or reference
+            // left when it was freed (a `foreach` loop's array, buffered
+            // again after a run, then freed with the loop): no new slot,
+            // no threshold check. That root is still counted in
+            // `ref_pending`; the object takes its place.
+            s.ref_pending = s.ref_pending.saturating_sub(1);
+        } else {
+            // May set the buffered roots aside (the new root then starts
+            // an empty buffer).
+            note_new_slot(s);
+        }
     }
     let i = s.roots.insert_new(o, d.handle.get());
     d.flags
@@ -997,11 +1058,7 @@ pub(crate) fn forget_root(addr: usize, handle: u32) {
 /// `$this` without a reference of their own, so releasing it is no
 /// possible root. Call it just before dropping a returning frame.
 pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
-    for slot in &f.cvs {
-        if let Some(v) = slot.get() {
-            possible_root(v);
-        }
-    }
+    cvs_released(&f.cvs);
     if f.symtab_attached && Rc::strong_count(&f.vars) == 1 {
         if let Ok(vars) = f.vars.try_borrow() {
             for v in vars.slots.iter().flatten() {
@@ -1009,6 +1066,32 @@ pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
             }
         }
     }
+    call_handle_released(f, caller_this);
+}
+
+/// The compiled variables' part of [`frame_released`]
+/// (`i_free_compiled_variables`'s `gc_check_possible_root`, which php-src
+/// reaches only for a refcounted value). Inline: a tag test per variable;
+/// only an object, an array or a reference calls out ([`possible_root`]).
+/// `possible_root` is not inlined, and calling it for every defined
+/// variable cost a return ~10 instructions for each integer, float,
+/// boolean, null or string it held (7.5 calls a return of a function of
+/// eight variables).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the loop of every returning frame with roots
+pub(crate) fn cvs_released(cvs: &[crate::vm::CvSlot]) {
+    for slot in cvs {
+        if let Some(v @ (Value::Object(_) | Value::Array(_) | Value::Reference(_))) = slot.get() {
+            possible_root(v);
+        }
+    }
+}
+
+/// The call's own handle part of [`frame_released`]: a closure's object,
+/// or `$this` unless the caller passed it without a reference of its own.
+#[inline(always)]
+#[allow(clippy::inline_always)] // two tests on every returning frame
+pub(crate) fn call_handle_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
     if let Some(c) = &f.closure {
         root_obj(c);
     } else if let Some(this) = &f.this {
@@ -1083,6 +1166,12 @@ fn thaw(s: &mut GcState) {
         php_runtime::ref_roots::unstash(f.refs);
         s.ref_pending = php_runtime::ref_roots::len();
     }
+}
+
+/// Runs `f`, the growth of a `php-runtime` root buffer, outside
+/// `memory_get_usage()` (see [`RootBuffer`]).
+fn persistent_scope(f: &mut dyn FnMut()) {
+    php_memlimit::persistent(f);
 }
 
 /// `gc_grow_root_buffer`.
@@ -1162,12 +1251,15 @@ pub fn wants_run() -> bool {
 /// Resets the collector for a new request (`gc_reset`), with
 /// `zend.enable_gc` as given.
 pub(crate) fn request_startup(enable: bool) {
+    // No array stays marked as buffered into the next request.
+    php_runtime::ref_roots::clear_arrays();
     with_state(|s| {
         let providers = std::mem::take(&mut s.providers);
         forget_last_root();
         // The buffer and the base threshold outlive the request; the run
         // cost depends on the live graph of the request.
         let (base, buf_size) = (s.base_threshold, s.buf_size);
+        mirror_protected(true);
         *s = GcState {
             providers,
             threshold: base,
@@ -1253,6 +1345,7 @@ pub fn status() -> GcStatus {
 /// Registers the `gc_*` builtins, the `zend.enable_gc` modify handler and
 /// the traversal of the engine's native object states.
 pub(crate) fn register(vm: &mut Vm) {
+    php_runtime::ref_roots::set_persistent_scope(Some(persistent_scope));
     builtins::register(vm);
     traverse::register_engine_traversals();
     let on = vm.ini.get_bool("zend.enable_gc");

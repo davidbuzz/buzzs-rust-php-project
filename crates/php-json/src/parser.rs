@@ -19,11 +19,18 @@
 //!   nesting to 4998 arrays or 2499 objects regardless of `$depth`.
 
 use crate::error::{ErrorCode, JsonError};
+use crate::memory::zend_string_size;
 use crate::scanner::{Scanner, Token};
 use php_runtime::{RuntimeError, ZStr};
 
 /// bison's `YYMAXDEPTH`.
 const YYMAXDEPTH: usize = 10_000;
+
+/// Strings shorter than this are not reserved first: the allocator records
+/// a `memory_limit` violation of a small allocation itself, and the parser
+/// stops at the next value ([`Sink::aborted`]). Only a large allocation can
+/// jump from under the limit to over the hard ceiling at once.
+const RESERVE_MIN: usize = 4096;
 
 /// A failure inside a semantic action.
 #[derive(Debug)]
@@ -85,6 +92,16 @@ pub(crate) trait Sink {
     ) -> Result<(), ActionError>;
     /// The object's value once complete.
     fn object_finish(&mut self, object: Self::Object) -> Self::Value;
+    /// Reserves the `bytes` a string value of `len` bytes takes
+    /// (`zend_string_falloc(len, 0, /* fallible */ true)` in php-src's
+    /// scanner) against the host's `memory_limit`, before the value is
+    /// built. `false` (the limit would be exceeded; the host has recorded
+    /// the out-of-memory fatal it raises once the decoder returns) fails the
+    /// parse.
+    fn reserve_string(&mut self, bytes: usize) -> bool {
+        let _ = bytes;
+        true
+    }
     /// Whether to stop before the next value: the host has a delayed
     /// out-of-memory fatal pending (`ZEND_HAS_OOM()`), which it raises once
     /// the decoder returns. The parse then fails as a syntax error.
@@ -175,10 +192,27 @@ impl<'a, S: Sink> Parser<'a, S> {
         Ok(())
     }
 
+    /// The next token (`php_json_yylex`). A string is measured by the
+    /// scanner's first pass, its memory reserved through the sink, and only
+    /// then built, in one exactly sized allocation; a failed reservation is
+    /// a scanner error (php-src returns `PHP_JSON_T_ERROR` with the
+    /// out-of-memory error pending).
+    fn scan(&mut self) -> Token {
+        match self.scanner.scan() {
+            Token::StrLen(len) => {
+                if len >= RESERVE_MIN && !self.sink.reserve_string(zend_string_size(len)) {
+                    return Token::Error(ErrorCode::Syntax);
+                }
+                Token::Str(self.scanner.string_value(len))
+            }
+            tok => tok,
+        }
+    }
+
     /// Runs `php_json_yyparse` and returns the parsed value.
     pub(crate) fn parse(mut self) -> Result<S::Value, ParseError> {
         let mut stack: Vec<Frame<S>> = Vec::new();
-        let mut tok = self.scanner.scan();
+        let mut tok = self.scan();
         loop {
             if self.sink.aborted() {
                 return Err(self.error(ErrorCode::Syntax));
@@ -244,7 +278,7 @@ impl<'a, S: Sink> Parser<'a, S> {
         self.push(1)?; // shift '['
         self.depth_inc()?; // $@ action
         self.push(1)?; // $@ goto
-        let tok = self.scanner.scan();
+        let tok = self.scan();
         if !matches!(tok, Token::RBracket | Token::RBrace) {
             stack.push(Frame::Array(None));
             return Ok(Started::Opened(tok));
@@ -263,7 +297,7 @@ impl<'a, S: Sink> Parser<'a, S> {
         self.push(1)?; // shift '{'
         self.depth_inc()?; // $@ action
         self.push(1)?; // $@ goto
-        match self.scanner.scan() {
+        match self.scan() {
             tok @ (Token::RBrace | Token::RBracket) => {
                 // members: %empty (creates the object); shift object_end.
                 self.push(1)?;
@@ -279,7 +313,7 @@ impl<'a, S: Sink> Parser<'a, S> {
                 self.push(1)?; // shift key (reduced in place)
                 self.colon()?;
                 stack.push(Frame::Object(None, ZStr::from(key)));
-                Ok(Started::Opened(self.scanner.scan()))
+                Ok(Started::Opened(self.scan()))
             }
             other => Err(self.unexpected(&other)),
         }
@@ -287,7 +321,7 @@ impl<'a, S: Sink> Parser<'a, S> {
 
     /// Expects and shifts the `':'` after a key.
     fn colon(&mut self) -> Result<(), ParseError> {
-        let tok = self.scanner.scan();
+        let tok = self.scan();
         if tok != Token::Colon {
             return Err(self.unexpected(&tok));
         }
@@ -303,7 +337,7 @@ impl<'a, S: Sink> Parser<'a, S> {
 
     /// `start: value PHP_JSON_T_EOI`.
     fn finish(&mut self, value: S::Value) -> Result<S::Value, ParseError> {
-        let tok = self.scanner.scan();
+        let tok = self.scan();
         if tok != Token::Eoi {
             return Err(self.unexpected(&tok));
         }
@@ -327,10 +361,10 @@ impl<'a, S: Sink> Parser<'a, S> {
             self.sink.array_append(&mut a, value);
             *arr = Some(a);
         }
-        match self.scanner.scan() {
+        match self.scan() {
             Token::Comma => {
                 self.push(1)?;
-                Ok(Attached::Next(self.scanner.scan()))
+                Ok(Attached::Next(self.scan()))
             }
             tok @ (Token::RBracket | Token::RBrace) => {
                 // elements: element; shift array_end.
@@ -369,17 +403,17 @@ impl<'a, S: Sink> Parser<'a, S> {
         if let Err(e) = self.sink.object_update(o, std::mem::take(key), value) {
             return Err(self.action_error(e));
         }
-        match self.scanner.scan() {
+        match self.scan() {
             Token::Comma => {
                 self.push(1)?;
-                let tok = self.scanner.scan();
+                let tok = self.scan();
                 let Token::Str(k) = tok else {
                     return Err(self.unexpected(&tok));
                 };
                 self.push(1)?;
                 self.colon()?;
                 *key = ZStr::from(k);
-                Ok(Attached::Next(self.scanner.scan()))
+                Ok(Attached::Next(self.scan()))
             }
             tok @ (Token::RBrace | Token::RBracket) => {
                 // members: member; shift object_end.

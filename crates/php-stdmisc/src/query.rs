@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/php_variables.c. Similarity metric to original: 22%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Query strings: `http_build_query()` (`ext/standard/http.c`), and the
 //! request-variable registration of `main/php_variables.c`
 //! (`php_register_variable_ex`, `php_default_treat_data`) behind

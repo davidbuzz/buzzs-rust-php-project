@@ -161,7 +161,20 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let input = a.at(0);
     let to = a.str(1);
     let from = match a.opt(2) {
-        Some(v) => Some(OwnedList::from_value(vm, &v)?),
+        Some(v) => {
+            // PHP_FUNCTION(mb_convert_encoding) looks up $to_encoding before
+            // it reads the $from_encoding array, whose elements convert to
+            // strings with their warnings: an invalid target throws first.
+            // The lookup is cached (`last_used_encoding`), so the call below
+            // neither repeats it nor its deprecation.
+            if matches!(v, Value::Array(_)) {
+                call(vm, a, |st| {
+                    st.get_encoding(Some(to.as_bytes()), 2, "to_encoding")
+                        .map(|_| ())
+                })?;
+            }
+            Some(OwnedList::from_value(vm, &v)?)
+        }
         None => None,
     };
     let (to_enc, from_list) = call(vm, a, |st| {
@@ -601,6 +614,52 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 mod tests {
     use super::check_str;
     use php_runtime::ZStr;
+    use php_vm::Vm;
+
+    #[derive(Clone, Default)]
+    struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(body: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(sink.clone()),
+            &[&crate::Mbstring],
+        );
+        let src = format!("<?php\n{body}");
+        vm.run_script(src.as_bytes(), "arrays.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// An invalid `$to_encoding` throws before the `$from_encoding` array
+    /// is read (php8.5: no "Array to string conversion" for the first call).
+    #[test]
+    fn convert_encoding_checks_the_target_before_the_source_list() {
+        let out = run(
+            r#"set_error_handler(function ($n, $m) { echo "[$n] $m\n"; return true; });
+try { mb_convert_encoding("abc", "nope", [[1]]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { mb_convert_encoding("abc", "UTF-8", [[1]]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }"#,
+        );
+        assert_eq!(
+            out,
+            "mb_convert_encoding(): Argument #2 ($to_encoding) must be a valid encoding, \"nope\" given\n\
+             [2] Array to string conversion\n\
+             mb_convert_encoding(): Argument #3 ($from_encoding) contains invalid encoding \"Array\"\n"
+        );
+    }
 
     /// `mb_check_str_encoding`: a UTF-8 check is answered by and recorded
     /// in the string's `IS_STR_VALID_UTF8` flag; other encodings are

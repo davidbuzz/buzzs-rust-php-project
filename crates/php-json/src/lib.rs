@@ -40,6 +40,7 @@ pub mod error;
 pub mod flags;
 pub mod functions;
 pub mod host;
+pub mod memory;
 mod parser;
 mod scanner;
 

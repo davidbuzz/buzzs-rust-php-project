@@ -70,8 +70,12 @@ def count(binary, args, timeout=None):
     cmd = [binary] + COMMON + args
     timeout_cmd = ['timeout', '--kill-after=0.5s', f'{timeout:.1f}s']
     if BACKEND == 'perf':
+        # sudo resets the environment: BUZZS_JIT* (the JIT-off run, the hot
+        # threshold) are handed on by env(1), inside.
+        keep = [f'{k}={v}' for k, v in os.environ.items() if k.startswith('BUZZS_')]
         full = ['sudo', '-n', 'perf', 'stat', '-x', ',', '-e', 'instructions:u', '--',
-                'setpriv', f'--reuid={os.getuid()}', f'--regid={os.getgid()}', '--init-groups'] + timeout_cmd + cmd
+                'setpriv', f'--reuid={os.getuid()}', f'--regid={os.getgid()}', '--init-groups',
+                'env'] + keep + timeout_cmd + cmd
         try:
             p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND,
                                timeout=timeout + 1.0)

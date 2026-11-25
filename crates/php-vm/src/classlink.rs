@@ -78,7 +78,11 @@ impl Vm {
             .as_bytes()
             .strip_prefix(b"\\")
             .unwrap_or(name.as_bytes());
-        if let Some(c) = with_lc(bytes, |lc| self.classes.get(lc).cloned()) {
+        if let Some(c) = with_lc(bytes, |lc| {
+            let c = self.classes.get(lc).cloned();
+            note_lookup(lc, c.as_ref());
+            c
+        }) {
             return Ok(Some(c));
         }
         let lc = ZStr::from(bytes.to_ascii_lowercase());
@@ -88,13 +92,19 @@ impl Vm {
             return Ok(None);
         }
         self.autoload(&ZStr::from(bytes), &lc)?;
-        Ok(self.classes.get(&lc).cloned())
+        let c = self.classes.get(&lc).cloned();
+        note_lookup(&lc, c.as_ref());
+        Ok(c)
     }
 
     /// Looks up a class without autoloading.
     pub fn find_class(&self, name: &[u8]) -> Option<Rc<Class>> {
         let bytes = name.strip_prefix(b"\\").unwrap_or(name);
-        with_lc(bytes, |lc| self.classes.get(lc).cloned())
+        with_lc(bytes, |lc| {
+            let c = self.classes.get(lc).cloned();
+            note_lookup(lc, c.as_ref());
+            c
+        })
     }
 
     fn autoload(&mut self, name: &ZStr, lc: &ZStr) -> VmResult<()> {
@@ -115,6 +125,8 @@ impl Vm {
     /// registered or unregistered by a running loader: one added at the
     /// end is still called for this class, a removed one is skipped.
     fn run_class_loaders(&mut self, name: &ZStr, lc: &ZStr) -> VmResult<()> {
+        // A link that ran a loader depended on what the loader did.
+        LINK_IMPURE.with(|i| i.set(true));
         let mut pos = 0;
         while let Some(loader) = self.autoloaders.get(pos).cloned() {
             let arg = Value::Str(name.clone());
@@ -542,10 +554,15 @@ impl Vm {
         Ok(v)
     }
 
-    /// Defines a global constant (`const X = ...;` / `define`).
+    /// Defines a global constant (`const X = ...;` / `define`), as
+    /// `zend_register_constant()` (Zend/zend_constants.c) does. php-src
+    /// keys the table by the name with its namespace part lowercased; here
+    /// the key keeps the spelling the caller gives (`define()` passes the
+    /// lowercased form, `const` the declared one), and a constant whose
+    /// name differs only in the case of its namespace counts as the same
+    /// one ([`Vm::find_global_constant`]). The "already defined" warning
+    /// names the lowercased form, as php-src's key.
     pub(crate) fn declare_constant(&mut self, name: ZStr, v: Value) -> VmResult<bool> {
-        // `zend_register_constant()` identifier deprecations (the namespace
-        // part is already lowercased by the callers).
         let short = name
             .as_bytes()
             .rsplit(|&c| c == b'\\')
@@ -558,10 +575,10 @@ impl Vm {
         } else if short.eq_ignore_ascii_case(b"is") {
             self.deprecated("Calling a constant \"is\" is deprecated since 8.6")?;
         }
-        if self.constants.contains_key(&name) {
+        if self.find_global_constant(name.as_bytes()).is_some() {
             self.warning(&format!(
                 "Constant {} already defined, this will be an error in PHP 9",
-                name.to_string_lossy()
+                String::from_utf8_lossy(&constant_key(name.as_bytes()))
             ))?;
             return Ok(false);
         }
@@ -572,12 +589,56 @@ impl Vm {
         Ok(true)
     }
 
-    /// Reads a global constant.
+    /// Finds a global constant by name the way `zend_get_constant_ex()`
+    /// (Zend/zend_constants.c) does for a non-class name: the namespace
+    /// part of a namespaced name is case-insensitive, the constant's own
+    /// name is not (`defined('NS\\nc')` does not find `NS\\NC`). Returns
+    /// the table's key and the value.
+    pub(crate) fn find_global_constant(&self, name: &[u8]) -> Option<(&ZStr, &Value)> {
+        if let Some(kv) = self.constants.get_key_value(name) {
+            return Some(kv);
+        }
+        let p = name.iter().rposition(|&c| c == b'\\')?;
+        if let std::borrow::Cow::Owned(k) = constant_key(name) {
+            if let Some(kv) = self.constants.get_key_value(k.as_slice()) {
+                return Some(kv);
+            }
+        }
+        self.find_constant_ns_ci(name, p)
+    }
+
+    /// The slow end of [`Vm::find_global_constant`]: a constant declared
+    /// with `const` keeps its namespace's spelling in the key, so the keys
+    /// are compared with the namespace part (`name[..p]`) ignoring case.
+    /// Only a namespaced name found neither as written nor lowercased gets
+    /// here.
+    #[cold]
+    #[inline(never)]
+    fn find_constant_ns_ci(&self, name: &[u8], p: usize) -> Option<(&ZStr, &Value)> {
+        let (ns, c) = name.split_at(p);
+        self.constants.iter().find(|(k, _)| {
+            let k = k.as_bytes();
+            k.len() == name.len() && k[p..] == *c && k[..p].eq_ignore_ascii_case(ns)
+        })
+    }
+
+    /// Reads a global constant (`ZEND_FETCH_CONSTANT`,
+    /// `zend_quick_get_constant()`, Zend/zend_execute.c): the name, its
+    /// namespace part case-insensitive (php-src looks up the literal with
+    /// the namespace lowercased that `zend_add_const_name_literal()` adds),
+    /// then the unqualified fallback of a name compiled inside a namespace.
     pub(crate) fn fetch_constant(&mut self, name: u32, fallback: Option<u32>) -> VmResult<Value> {
         let n = self.lit_str(name);
         if let Some(v) = self.constants.get(&n).cloned() {
             self.constant_deprecation(&n)?;
             return Ok(v);
+        }
+        if let std::borrow::Cow::Owned(k) = constant_key(n.as_bytes()) {
+            if let Some((key, v)) = self.constants.get_key_value(k.as_slice()) {
+                let (key, v) = (key.clone(), v.clone());
+                self.constant_deprecation(&key)?;
+                return Ok(v);
+            }
         }
         if let Some(v) = self.special_constant(n.as_bytes()) {
             return Ok(v);
@@ -592,13 +653,17 @@ impl Vm {
                 return Ok(v);
             }
         }
-        // Namespaced constant names are case-insensitive in the namespace part.
+        // A key that differs in the case of its namespace part (a `const`
+        // declared as `NS\\X`, read as `ns\\X`). The scan comes last so that
+        // an unqualified name inside a namespace, whose global fallback is
+        // the common case, never pays for it; only a namespace spelled
+        // differently from its declaration with a global constant of the
+        // same short name would see the order differ from php-src's.
         if let Some(p) = n.as_bytes().iter().rposition(|&c| c == b'\\') {
-            let (ns, c) = n.as_bytes().split_at(p);
-            let mut k = ns.to_ascii_lowercase();
-            k.extend_from_slice(c);
-            if let Some(v) = self.constants.get(&ZStr::from(k)) {
-                return Ok(v.clone());
+            if let Some((key, v)) = self.find_constant_ns_ci(n.as_bytes(), p) {
+                let (key, v) = (key.clone(), v.clone());
+                self.constant_deprecation(&key)?;
+                return Ok(v);
             }
         }
         Err(self.make_throw(
@@ -864,7 +929,10 @@ impl Vm {
             self.report_compile_error(&msg, &file, decl.line_start, false);
             return Err(Throw::Fatal);
         }
-        let (cls, recorded) = self.link_class(decl, is_anon)?;
+        let (cls, recorded) = match self.reuse_linked_class(decl, is_anon)? {
+            Some(cls) => (cls, Vec::new()),
+            None => self.link_class_cached(decl, is_anon)?,
+        };
         self.bound_decls.insert(key, cls.clone());
         // (Already declared if it waited for variance dependencies.)
         if !self.classes.get(&lc).is_some_and(|c| Rc::ptr_eq(c, &cls)) {
@@ -892,10 +960,36 @@ impl Vm {
             if self.is_preloaded_class(decl) {
                 return Ok(());
             }
+            let placed = take_order_placeholder(key);
             self.declare_class(decl, false)?;
             self.bound_decls.remove(&key);
+            if placed {
+                self.drop_placeholder_duplicate(&decl.name);
+            }
         }
         Ok(())
+    }
+
+    /// A hoisted class bound by its statement keeps the place in the
+    /// declaration order its file gave it ([`Vm::order_hoisted_classes`]):
+    /// the name [`Vm::register_class`] just appended goes again when the
+    /// placeholder is still there before it.
+    fn drop_placeholder_duplicate(&mut self, name: &ZStr) {
+        let n = self.class_order.len();
+        if n < 2
+            || !self.class_order[n - 1]
+                .as_bytes()
+                .eq_ignore_ascii_case(name.as_bytes())
+        {
+            return;
+        }
+        let earlier = self.class_order[..n - 1]
+            .iter()
+            .rev()
+            .any(|c| c.as_bytes().eq_ignore_ascii_case(name.as_bytes()));
+        if earlier {
+            self.class_order.pop();
+        }
     }
 
     /// Registers a linked class.
@@ -1607,6 +1701,7 @@ impl Vm {
                 .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
             {
                 // `zend_use_of_deprecated_trait`.
+                LINK_IMPURE.with(|i| i.set(true));
                 let suffix = self.deprecation_suffix(&tc.attributes, Some(&tc))?;
                 let code = if tc.flags & cflags::INTERNAL != 0 {
                     crate::errors::level::DEPRECATED
@@ -1683,6 +1778,9 @@ impl Vm {
                 .map(|w| (crate::errors::level::COMPILE_WARNING, w.clone(), line))
                 .collect(),
         );
+        if !link_out.value_checks.is_empty() {
+            LINK_IMPURE.with(|i| i.set(true));
+        }
         for (a, b, msg) in &link_out.value_checks {
             // A failed evaluation makes the values incompatible.
             let mut eval = |e: &ConstExpr| match self.eval_const_expr(e, Some(&cls)) {
@@ -1871,6 +1969,7 @@ impl Vm {
         {
             // Nearly linked: declared, so that the classes the pending
             // checks need can be autoloaded and refer back to it.
+            LINK_IMPURE.with(|i| i.set(true));
             guard.declared();
             if !self
                 .classes
@@ -3568,5 +3667,328 @@ fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
         f(lc)
     } else {
         f(&name.to_ascii_lowercase())
+    }
+}
+
+// ---------------------------------------------------------------------
+// Linked classes kept across requests (php-src's inheritance cache,
+// `zend_inheritance_cache_get` / `zend_inheritance_cache_add` in
+// Zend/zend_inheritance.c, and the early binding of a cached script's
+// classes in `zend_accel_load_script`).
+//
+// A class declaration of a script the opcache holds is the same
+// `ClassDecl` in every request, and linking it gives the same class
+// whenever every class the link looked up is the same one again: the
+// parent, the interfaces and traits, and whatever the variance checks
+// consulted. A link is kept only when it did nothing else a program can
+// see: no autoloader ran, nothing was reported, no value was evaluated, no
+// class waited for another. The next request
+// that declares the same declaration with the same classes behind every
+// looked-up name gets the kept class back, with what linking leaves in it
+// (its own static properties' and constants' values, its defaults) put
+// back, and the interfaces' `interface_gets_implemented` hooks run again
+// as linking runs them. A class is handed out once per request: while it
+// is in use, its declaration is linked afresh.
+// ---------------------------------------------------------------------
+
+/// A kept link.
+struct LinkedEntry {
+    /// The declaration (held, so its address keys only it).
+    decl: Rc<ClassDecl>,
+    cls: Rc<Class>,
+    /// Every class name the link looked up (lower case) with the class it
+    /// found (its address; 0 when none).
+    lookups: Box<[(ZStr, usize)]>,
+    /// What linking left in the class's own mutable state.
+    fresh: FreshState,
+    /// The request the class was last handed out in.
+    epoch: u64,
+}
+
+/// The values a freshly linked class starts a request with, in the state
+/// it owns (shared cells of a parent or trait belong to that class).
+struct FreshState {
+    statics: Vec<FreshStatic>,
+    consts: Vec<(Rc<ClassConst>, Option<Value>)>,
+    defaults: Option<Vec<Option<Value>>>,
+}
+
+/// An own static property as linking left it.
+struct FreshStatic {
+    cell: Rc<RefCell<Value>>,
+    value: Value,
+    initialized: Rc<Cell<bool>>,
+    was_initialized: bool,
+}
+
+impl FreshState {
+    /// The state of `cls` right after its link; `None` when it holds a
+    /// value that cannot be put back as it was (an object, a reference).
+    fn take(cls: &Rc<Class>) -> Option<FreshState> {
+        fn plain(v: &Value) -> bool {
+            !matches!(
+                v,
+                Value::Object(_) | Value::Reference(_) | Value::Resource(_)
+            )
+        }
+        let shared_cell = |cell: &Rc<RefCell<Value>>| {
+            cls.parent
+                .iter()
+                .chain(cls.traits.iter())
+                .any(|p| p.static_props.iter().any(|sp| Rc::ptr_eq(&sp.cell, cell)))
+        };
+        let mut statics = Vec::new();
+        for sp in &cls.static_props {
+            if shared_cell(&sp.cell) {
+                continue;
+            }
+            let v = sp.cell.borrow().clone();
+            if !plain(&v) {
+                return None;
+            }
+            statics.push(FreshStatic {
+                cell: sp.cell.clone(),
+                value: v,
+                initialized: sp.initialized.clone(),
+                was_initialized: sp.initialized.get(),
+            });
+        }
+        let shared_const = |k: &Rc<ClassConst>| {
+            cls.parent
+                .iter()
+                .chain(cls.interfaces.iter())
+                .chain(cls.traits.iter())
+                .any(|p| p.consts.iter().any(|c| Rc::ptr_eq(c, k)))
+        };
+        let mut consts = Vec::new();
+        for k in &cls.consts {
+            if shared_const(k) {
+                continue;
+            }
+            let v = k.value.borrow().clone();
+            if v.as_ref().is_some_and(|v| !plain(v)) || k.evaluating.get() {
+                return None;
+            }
+            consts.push((k.clone(), v));
+        }
+        let defaults = cls.defaults.borrow().clone();
+        if defaults.iter().flatten().flatten().any(|v| !plain(v))
+            || !cls.enum_cases.borrow().is_empty()
+        {
+            return None;
+        }
+        Some(FreshState {
+            statics,
+            consts,
+            defaults,
+        })
+    }
+
+    fn restore(&self, cls: &Class) {
+        for st in &self.statics {
+            *st.cell.borrow_mut() = st.value.clone();
+            st.initialized.set(st.was_initialized);
+        }
+        for (k, v) in &self.consts {
+            *k.value.borrow_mut() = v.clone();
+            k.evaluating.set(false);
+        }
+        *cls.defaults.borrow_mut() = self.defaults.clone();
+        cls.enum_cases.borrow_mut().clear();
+    }
+}
+
+thread_local! {
+    /// Kept links by declaration address.
+    static LINKED: RefCell<crate::builtins::fasthash::FastMap<usize, LinkedEntry>> =
+        RefCell::new(crate::builtins::fasthash::FastMap::default());
+    /// The lookups of the link being recorded, when one is.
+    static LOOKUP_LOG: RefCell<Option<Vec<(ZStr, usize)>>> = const { RefCell::new(None) };
+    /// Whether [`LOOKUP_LOG`] records (read on every class lookup).
+    static LOGGING: Cell<bool> = const { Cell::new(false) };
+    /// Set by whatever makes the link being recorded unfit to keep.
+    static LINK_IMPURE: Cell<bool> = const { Cell::new(false) };
+    /// The current request's number ([`end_request`]).
+    static EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+/// Records a class lookup of the link being recorded.
+#[inline]
+fn note_lookup(lc: &[u8], found: Option<&Rc<Class>>) {
+    if LOGGING.with(Cell::get) {
+        note_lookup_slow(lc, found);
+    }
+}
+
+#[cold]
+fn note_lookup_slow(lc: &[u8], found: Option<&Rc<Class>>) {
+    let addr = found.map_or(0, |c| Rc::as_ptr(c) as usize);
+    LOOKUP_LOG.with(|l| {
+        if let Some(log) = l.borrow_mut().as_mut() {
+            if !log.iter().any(|(n, _)| n.as_bytes() == lc) {
+                log.push((ZStr::from(lc), addr));
+            }
+        }
+    });
+}
+
+thread_local! {
+    /// Hoisted class declarations (by `Rc` pointer) that did not bind when
+    /// their file was included and hold their place in
+    /// [`Vm::class_order`] until their statement declares them.
+    static ORDER_PLACEHOLDERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Notes that the hoisted declaration `key` has a placeholder in the
+/// declaration order.
+pub(crate) fn note_order_placeholder(key: usize) {
+    ORDER_PLACEHOLDERS.with(|p| p.borrow_mut().push(key));
+}
+
+/// Whether the declaration `key` had a placeholder (which is forgotten).
+fn take_order_placeholder(key: usize) -> bool {
+    ORDER_PLACEHOLDERS.with(|p| {
+        let mut p = p.borrow_mut();
+        match p.iter().position(|&k| k == key) {
+            Some(i) => {
+                p.swap_remove(i);
+                true
+            }
+            None => false,
+        }
+    })
+}
+
+/// Ends the request for the kept links ([`Vm::request_reset`]): every
+/// kept class may be handed out again, and the links of declarations no
+/// script holds any more (a script compiled again, the opcache reset) are
+/// dropped.
+pub(crate) fn end_request() {
+    ORDER_PLACEHOLDERS.with(|p| p.borrow_mut().clear());
+    EPOCH.with(|e| e.set(e.get() + 1));
+    LINKED.with(|l| {
+        l.borrow_mut().retain(|_, e| {
+            let own = usize::from(e.cls.decl.as_ref().is_some_and(|d| Rc::ptr_eq(d, &e.decl)));
+            Rc::strong_count(&e.decl) > 1 + own
+        });
+    });
+}
+
+/// Stops recording lookups however the link ends.
+struct RecordingGuard;
+
+impl Drop for RecordingGuard {
+    fn drop(&mut self) {
+        LOGGING.with(|g| g.set(false));
+    }
+}
+
+impl Vm {
+    /// The kept link of `decl`, when every class it looked up is the same
+    /// one now and the class is not in use (see the section comment).
+    fn reuse_linked_class(
+        &mut self,
+        decl: &Rc<ClassDecl>,
+        is_anon: bool,
+    ) -> VmResult<Option<Rc<Class>>> {
+        if is_anon || LINK_STATE.with(|st| st.borrow().depth) != 0 {
+            return Ok(None);
+        }
+        let key = Rc::as_ptr(decl) as usize;
+        let epoch = EPOCH.with(Cell::get);
+        let classes = &self.classes;
+        let Some(cls) = LINKED.with(|l| {
+            let mut l = l.borrow_mut();
+            let e = l.get_mut(&key)?;
+            if e.epoch == epoch || !Rc::ptr_eq(&e.decl, decl) {
+                return None;
+            }
+            let same = e
+                .lookups
+                .iter()
+                .all(|(lc, addr)| classes.get(lc).map_or(0, |c| Rc::as_ptr(c) as usize) == *addr);
+            if !same {
+                return None;
+            }
+            e.epoch = epoch;
+            e.fresh.restore(&e.cls);
+            Some(e.cls.clone())
+        }) else {
+            return Ok(None);
+        };
+        // `do_implement_interface`'s hooks, as linking runs them: with the
+        // class unlinked (not found by name, not autoloaded).
+        if !cls.is_interface() {
+            let _guard = LinkingGuard::enter(decl);
+            for iface in cls.interfaces.clone() {
+                if let Some(f) = iface
+                    .hooks
+                    .as_ref()
+                    .and_then(|h| h.interface_gets_implemented)
+                {
+                    f(self, &cls)?;
+                }
+            }
+        }
+        Ok(Some(cls))
+    }
+
+    /// [`Vm::link_class`], keeping the result for the next requests when
+    /// the link may be reused (see the section comment).
+    fn link_class_cached(
+        &mut self,
+        decl: &Rc<ClassDecl>,
+        is_anon: bool,
+    ) -> VmResult<(Rc<Class>, Recorded)> {
+        let eligible = !is_anon
+            && decl.kind != ClassKind::Enum
+            && LINK_STATE.with(|st| st.borrow().depth) == 0
+            && !LOGGING.with(Cell::get);
+        if !eligible {
+            return self.link_class(decl, is_anon);
+        }
+        LINK_IMPURE.with(|i| i.set(false));
+        LOOKUP_LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
+        LOGGING.with(|g| g.set(true));
+        let guard = RecordingGuard;
+        let r = self.link_class(decl, is_anon);
+        drop(guard);
+        let lookups = LOOKUP_LOG
+            .with(|l| l.borrow_mut().take())
+            .unwrap_or_default();
+        let (cls, recorded) = r?;
+        let keep = recorded.is_empty()
+            && !LINK_IMPURE.with(Cell::get)
+            && cls.flags & cflags::ANON == 0
+            && !self.classes.contains_key(&cls.lc_name)
+            && cls.decl.as_ref().is_some_and(|d| Rc::ptr_eq(d, decl));
+        if keep {
+            if let Some(fresh) = FreshState::take(&cls) {
+                let entry = LinkedEntry {
+                    decl: decl.clone(),
+                    cls: cls.clone(),
+                    lookups: lookups.into_boxed_slice(),
+                    fresh,
+                    epoch: EPOCH.with(Cell::get),
+                };
+                LINKED.with(|l| l.borrow_mut().insert(Rc::as_ptr(decl) as usize, entry));
+            }
+        }
+        Ok((cls, recorded))
+    }
+}
+
+/// The constant table's key for the global constant `name`
+/// (`zend_register_constant()`, Zend/zend_constants.c): the namespace
+/// part, everything before the last backslash, lowercased; the constant's
+/// own name keeps its case. Borrowed when `name` is already its own key.
+pub(crate) fn constant_key(name: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match name.iter().rposition(|&c| c == b'\\') {
+        Some(p) if name[..p].iter().any(u8::is_ascii_uppercase) => {
+            let mut k = name[..p].to_ascii_lowercase();
+            k.extend_from_slice(&name[p..]);
+            std::borrow::Cow::Owned(k)
+        }
+        _ => std::borrow::Cow::Borrowed(name),
     }
 }

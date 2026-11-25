@@ -71,9 +71,12 @@ pub fn array_keys(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
         ));
     }
-    let h = a.array(0);
-    let f = a.get(1);
-    let r = sa::basic::array_keys(vm, &h, f.as_ref(), a.bool(2));
+    // The table and the filter read in place (`Z_PARAM_ARRAY` and
+    // `Z_PARAM_ZVAL` take no reference): copying them out cost two
+    // out-of-line clones and their drops on every call.
+    let h = a.array_ref(0);
+    let f = if a.has(1) { Some(a.at_ref(1)) } else { None };
+    let r = sa::basic::array_keys(vm, &h, f.as_deref(), a.bool(2));
     Ok(Value::Array(rt(vm, r)?))
 }
 
@@ -123,15 +126,13 @@ pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let key = a.at(0);
     let h = a.array(1);
     let f = a.func_name_str();
-    // A direct call to `array_key_exists()` is compiled to the
-    // ZEND_ARRAY_KEY_EXISTS opcode, whose error for illegal keys differs.
-    if f == "array_key_exists"
-        && matches!(key, Value::Array(_) | Value::Object(_))
-        && called_from_code(vm)
-    {
-        let msg = format!("Cannot access offset of type {} on array", key.value_name());
-        return Err(vm.throw("TypeError", &msg));
-    }
+    // A call by its literal name compiles to ZEND_ARRAY_KEY_EXISTS, whose
+    // error for an illegal key ("Cannot access offset of type array on
+    // array") the VM raises without calling this handler. The handler is
+    // what every other call reaches (`$f()`, `call_user_func()`, an
+    // unqualified call in a namespace, unpacked or named arguments), and
+    // its `zend_argument_type_error` names the parameter (ref:
+    // ext/standard/array.c `PHP_FUNCTION(array_key_exists)`).
     let r = sa::basic::array_key_exists(vm, f, &key, &h);
     Ok(Value::Bool(rt(vm, r)?))
 }
@@ -185,9 +186,11 @@ pub fn array_reverse(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_slice(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let len = a.opt(2).map(|_| a.int(2));
+    // Read in place (`Z_PARAM_ARRAY`, `Z_PARAM_LONG_OR_NULL`): no copy of
+    // the array or of the length.
+    let len = a.opt_int(2);
     Ok(Value::Array(sa::basic::array_slice(
-        &a.array(0),
+        &a.array_ref(0),
         a.int(1),
         len,
         a.bool(3),
@@ -376,7 +379,7 @@ pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_push(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
     let vals = rest(a, 1);
-    let r = sa::stack::array_push(&arr, &vals);
+    let r = sa::stack::array_push_owned(&arr, vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -393,7 +396,7 @@ pub fn array_shift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_unshift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
     let vals = rest(a, 1);
-    let r = sa::stack::array_unshift(&arr, &vals);
+    let r = sa::stack::array_unshift_owned(&arr, vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -449,8 +452,16 @@ pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 macro_rules! args_fn {
     ($name:ident, $f:path) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            let vals = rest(a, 0);
-            let r = $f(vm, &vals);
+            // The arguments as they are when none is a reference (a
+            // by-value variadic's never is): `rest` copied them into a
+            // vector of their own, then released it (~120 instructions
+            // of a two-array `array_merge()`).
+            let r = if a.values.iter().any(|v| matches!(v, Value::Reference(_))) {
+                let vals = rest(a, 0);
+                $f(vm, &vals)
+            } else {
+                $f(vm, &a.values)
+            };
             Ok(Value::Array(rt(vm, r)?))
         }
     };
@@ -551,7 +562,7 @@ uucb_fn!(array_udiff_uassoc, sa::setops::array_udiff_uassoc);
 uucb_fn!(array_uintersect_uassoc, sa::setops::array_uintersect_uassoc);
 
 pub fn array_unique(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = a.array(0);
+    let h = a.array_ref(0);
     let r = sa::setops::array_unique(vm, &h, int_or(a, 1, sa::SORT_STRING));
     Ok(Value::Array(rt(vm, r)?))
 }
@@ -614,7 +625,7 @@ pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_filter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = a.array(0);
+    let h = a.array_ref(0);
     let cbv = a.at(1);
     let mode = int_or(a, 2, sa::ARRAY_FILTER_USE_VALUE);
     let r = if cbv.is_null() {
@@ -663,7 +674,13 @@ macro_rules! ptr_fn {
     ($name:ident, $f:path, $op:ident) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let arr = by_ref(a, 0);
-            if let Value::Object(o) = arr.get() {
+            // The type is tested in place: copying the array out only to
+            // see it is no object cost a clone and a drop a call.
+            let obj = match &*arr.borrow() {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            };
+            if let Some(o) = obj {
                 return objptr::run(vm, &a.func_name(), &o, objptr::Op::$op);
             }
             let r = $f(vm, &arr);
@@ -677,9 +694,10 @@ ptr_fn!(next, sa::pointer::next, Next);
 ptr_fn!(reset, sa::pointer::reset, Reset);
 
 pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = a.at(0);
+    // Read in place (`Z_PARAM_ARRAY_OR_OBJECT_HT` takes no reference).
+    let v = a.at_ref(0);
     let f = a.func_name_str();
-    if let Value::Object(o) = &v {
+    if let Value::Object(o) = &*v {
         return objptr::run(vm, f, o, objptr::Op::Current);
     }
     let r = sa::pointer::current(vm, f, &v);
@@ -687,8 +705,8 @@ pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = a.at(0);
-    if let Value::Object(o) = &v {
+    let v = a.at_ref(0);
+    if let Value::Object(o) = &*v {
         return objptr::run(vm, "key", o, objptr::Op::Key);
     }
     let r = sa::pointer::key(vm, &v);
@@ -750,9 +768,17 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut sym = forbid_dynamic_call(vm, a)?;
     let vals = rest(a, 0);
-    for v in &vals {
+    // Only an array of names nests: a name (the usual argument) has depth
+    // 0, which every stack budget allows, so the two INI reads of the
+    // budget are skipped for it (~340 instructions a name).
+    for v in vals.iter().filter(|v| stack::may_nest(v)) {
         stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
     }
-    let r = sa::symbols::compact(vm, &mut sym, &vals);
+    // A function's variables are read from their slots, the table left
+    // alone (see `CallerSymbols`).
+    let r = match sym.snapshot(vm, &vals) {
+        Some(mut snap) => sa::symbols::compact(vm, &mut snap, &vals),
+        None => sa::symbols::compact(vm, &mut sym, &vals),
+    };
     Ok(Value::Array(rt(vm, r)?))
 }

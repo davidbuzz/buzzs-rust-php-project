@@ -293,6 +293,86 @@ impl Config {
     }
 }
 
+/// The line `php_ini_builder_define()` appends for one `-d` argument: a
+/// value starting with a character that is neither alphanumeric nor a
+/// quote is quoted, a bare name gets `=1` (as `php_vm::parse_cli_define`
+/// builds it).
+fn define_line(arg: &[u8]) -> Vec<u8> {
+    let mut line = Vec::with_capacity(arg.len() + 4);
+    match arg.iter().position(|&c| c == b'=') {
+        Some(p) => {
+            let val = &arg[p + 1..];
+            match val.first() {
+                Some(&c) if !c.is_ascii_alphanumeric() && c != b'"' && c != b'\'' => {
+                    line.extend_from_slice(&arg[..=p]);
+                    line.push(b'"');
+                    line.extend_from_slice(val);
+                    line.push(b'"');
+                }
+                _ => line.extend_from_slice(arg),
+            }
+        }
+        None => {
+            line.extend_from_slice(arg);
+            line.extend_from_slice(b"=1");
+        }
+    }
+    line.push(b'\n');
+    line
+}
+
+/// Ignores what the syntax check parses.
+struct NoEntries;
+
+impl php_support::ini::IniParserCallback for NoEntries {
+    fn section(&mut self, _name: &[u8]) {}
+    fn entry(&mut self, _key: &[u8], _value: Option<IniScalar>) {}
+    fn pop_entry(&mut self, _key: &[u8], _value: IniScalar, _offset: &[u8]) {}
+}
+
+/// php_cli.c joins `HARDCODED_INI` and every `-d` line into one buffer
+/// (`sapi_module.ini_entries`), which `php_init_config()` parses after
+/// the ini files. A syntax error stops that parse: it is reported as a
+/// warning naming the buffer's line ("syntax error, unexpected '=' in
+/// Unknown on line 6" for the first `-d`), and the defines after the one
+/// that holds it are not applied. Returns how many defines apply (the
+/// failing one keeps what precedes its error) and the warning.
+#[must_use]
+pub fn defines_syntax_error(args: &[Vec<u8>], cgi: bool) -> Option<(usize, String)> {
+    let hardcoded = if cgi { &[][..] } else { HARDCODED_INI };
+    let mut buf = Vec::new();
+    for (k, v) in hardcoded {
+        buf.extend_from_slice(k.as_bytes());
+        buf.push(b'=');
+        buf.extend_from_slice(v.as_bytes());
+        buf.push(b'\n');
+    }
+    let mut first_line = hardcoded.len() + 1;
+    let mut starts = Vec::with_capacity(args.len());
+    for arg in args {
+        let line = define_line(arg);
+        starts.push(first_line);
+        first_line += line.iter().filter(|&&c| c == b'\n').count();
+        buf.extend_from_slice(&line);
+    }
+    let err = php_support::ini::parse_ini(
+        &buf,
+        "Unknown",
+        php_support::ini::ScannerMode::Normal,
+        &mut Hooks,
+        &mut NoEntries,
+    )
+    .err()?;
+    let line = err
+        .message
+        .trim_end()
+        .rsplit_once(" on line ")
+        .and_then(|(_, n)| n.parse::<usize>().ok())
+        .unwrap_or(first_line);
+    let failing = starts.iter().rposition(|&s| s <= line).unwrap_or(0);
+    Some((failing + 1, err.message.trim_end().to_string()))
+}
+
 /// Splits a `-d` define name `base[offset]` (see `php_vm::parse_cli_define`).
 fn array_define(name: &str) -> Option<(&str, &str)> {
     let (base, offset) = name.strip_suffix(']')?.split_once('[')?;
@@ -671,6 +751,38 @@ mod tests {
         );
         let long = "./".repeat(MAXPATHLEN);
         assert_eq!(absolute(Path::new(&long)), None);
+    }
+
+    #[test]
+    fn define_syntax_errors_name_the_buffer_line() {
+        // php8.5 -n -d =x: "syntax error, unexpected '=' in Unknown on
+        // line 6" (five HARDCODED_INI lines come first).
+        let args = |a: &[&str]| a.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(
+            defines_syntax_error(&args(&["=x"]), false),
+            Some((
+                1,
+                "syntax error, unexpected '=' in Unknown on line 6".to_string()
+            ))
+        );
+        // php8.5 -d precision=3 -d =x -d serialize_precision=4: line 7;
+        // precision applies, serialize_precision does not.
+        assert_eq!(
+            defines_syntax_error(
+                &args(&["precision=3", "=x", "serialize_precision=4"]),
+                false
+            ),
+            Some((
+                2,
+                "syntax error, unexpected '=' in Unknown on line 7".to_string()
+            ))
+        );
+        assert_eq!(
+            defines_syntax_error(&args(&["precision=3", "a", "b=\"c d\""]), false),
+            None
+        );
+        assert_eq!(define_line(b"x=/tmp"), b"x=\"/tmp\"\n");
+        assert_eq!(define_line(b"flag"), b"flag=1\n");
     }
 
     #[test]

@@ -1180,6 +1180,81 @@ impl Vm {
         self.error(level, message)
     }
 
+    /// Coerces argument `n` in place to its parameter's declared type, as
+    /// the generic argument handling does for a checked parameter: the
+    /// caller's `strict_types`, the "Passing null to parameter" and
+    /// "Implicit conversion" deprecations, and the "must be of type T, U
+    /// given" `TypeError`.
+    ///
+    /// For a parameter marked `@unchecked` in a signature whose function
+    /// parses an earlier argument itself: php-src's
+    /// `ZEND_PARSE_PARAMETERS_START` parses the arguments in order and
+    /// stops at the first failure (Zend/zend_API.h), so a later argument's
+    /// deprecation must not come before an earlier argument's error. The
+    /// handler checks the earlier argument, then calls this for each later
+    /// one, in order. An argument not passed, or a parameter without a type,
+    /// is left as it is.
+    pub fn coerce_unchecked_arg(&mut self, a: &mut Args, n: usize) -> VmResult<()> {
+        let Some(b) = a.func.clone() else {
+            return Ok(());
+        };
+        if !a.has(n) {
+            return Ok(());
+        }
+        let Some(p) = b.params.get(n).or_else(|| {
+            b.params
+                .last()
+                .filter(|p| p.variadic && n >= b.params.len())
+        }) else {
+            return Ok(());
+        };
+        let Some(ty) = p.ty.as_ref() else {
+            return Ok(());
+        };
+        // `ZEND_ARG_USES_STRICT_TYPES()`: the frame below the builtin's own.
+        let depth = self.frames.len();
+        let strict = depth >= 2
+            && self
+                .frames
+                .get(depth - 2)
+                .is_some_and(|f| f.kind != crate::vm::FrameKind::Builtin && f.code.strict_types);
+        let scope = self.frames.last().and_then(|f| f.scope.clone());
+        let mut v = a.at(n);
+        let ok = {
+            let ctx = crate::typecheck::TypeCtx {
+                scope: scope.as_ref(),
+                called: None,
+                strict,
+                internal_arg: Some(crate::typecheck::InternalArg {
+                    func: &b,
+                    argn: n + 1,
+                    param: &p.name,
+                }),
+            };
+            self.verify_type(ty, &mut v, &ctx)?
+        };
+        if !ok {
+            let fname = self.func_display(&Func::Builtin(b.clone()), scope.as_ref());
+            let msg = format!(
+                "{fname}(): Argument #{} (${}) must be of type {}, {} given",
+                n + 1,
+                p.name.to_string_lossy(),
+                ty.to_php_string(),
+                crate::typecheck::given_type(&v)
+            );
+            return Err(self.make_throw("TypeError", &msg));
+        }
+        if let Some(slot) = a.values.get_mut(n) {
+            match slot {
+                Value::Reference(r) => {
+                    r.set(v);
+                }
+                other => *other = v,
+            }
+        }
+        Ok(())
+    }
+
     /// `zval_get_string` (may call `__toString`, warns for arrays).
     pub fn value_to_string(&mut self, v: &Value) -> VmResult<ZStr> {
         self.to_zstr(v)

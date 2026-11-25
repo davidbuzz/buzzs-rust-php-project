@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/streams/plain_wrapper.c. Similarity metric to original: 20%
+//   Copyright © The PHP Group and Contributors. Authors: Wez Furlong <wez@thebrainroom.com>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The plain files wrapper and STDIO stream ops (`plain_wrapper.c`).
 
 use std::fs::{File, OpenOptions};

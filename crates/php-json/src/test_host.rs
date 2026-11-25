@@ -54,6 +54,11 @@ pub(crate) struct TestHost {
     pub(crate) log: Vec<String>,
     /// What [`JsonHost::json_oom_pending`] reports.
     pub(crate) oom_pending: bool,
+    /// The largest [`JsonHost::json_try_reserve`] that succeeds (`None`:
+    /// any); a larger one sets `oom_pending`, like a real accountant.
+    pub(crate) reserve_limit: Option<usize>,
+    /// Every [`JsonHost::json_try_reserve`] request, in order.
+    pub(crate) reserved: Vec<usize>,
 }
 
 impl std::fmt::Debug for TestHost {
@@ -189,6 +194,15 @@ impl RuntimeContext for TestHost {
 impl JsonHost for TestHost {
     fn json_oom_pending(&mut self) -> bool {
         self.oom_pending
+    }
+
+    fn json_try_reserve(&mut self, bytes: usize) -> bool {
+        self.reserved.push(bytes);
+        if self.reserve_limit.is_some_and(|limit| bytes > limit) {
+            self.oom_pending = true;
+            return false;
+        }
+        true
     }
 
     fn json_native_properties(&mut self, obj: &Obj) -> RtResult<Option<(ZArray, GuardKey)>> {

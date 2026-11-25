@@ -5,6 +5,8 @@
 //! directive and a small store implementing `zend_alter_ini_entry_ex`,
 //! `ini_get`, `ini_restore` and request deactivation for them.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::host::SessionHost;
 use crate::serializer::Serializer;
 use crate::state::{already_started_error, headers_sent_error, warn, SessionStatus};
@@ -312,6 +314,15 @@ pub struct IniEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IniStore {
     entries: Vec<IniEntry>,
+    /// Changes on every change of an entry (see [`IniStore::revision`]).
+    revision: u64,
+}
+
+/// Source of process-unique [`IniStore`] revisions.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Default for IniStore {
@@ -325,11 +336,33 @@ impl Default for IniStore {
                     modified: false,
                 })
                 .collect(),
+            revision: next_revision(),
         }
     }
 }
 
 impl IniStore {
+    /// A process-unique stamp of the entries: it changes whenever an entry
+    /// changes, and two stores share one only when one is an unmodified
+    /// clone of the other. Mirrors of the values (the VM's INI registry)
+    /// compare it to skip re-reading unchanged values.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The entries, indexed like [`DIRECTIVES`].
+    #[must_use]
+    pub fn entries(&self) -> &[IniEntry] {
+        &self.entries
+    }
+
+    /// The entry `idx`, for a change: takes a new revision.
+    fn entry_mut(&mut self, idx: usize) -> &mut IniEntry {
+        self.revision = next_revision();
+        &mut self.entries[idx]
+    }
+
     /// The current value of a directive.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&[u8]> {
@@ -876,14 +909,14 @@ pub fn alter(
         return Some(false);
     }
     {
-        let e = &mut h.session().ini.entries[idx];
+        let e = h.session().ini.entry_mut(idx);
         if !e.modified {
             e.orig = Some(e.value.clone());
             e.modified = true;
         }
     }
     if on_modify(h, idx, value, stage) {
-        h.session().ini.entries[idx].value = value.to_vec();
+        h.session().ini.entry_mut(idx).value = value.to_vec();
         Some(true)
     } else {
         Some(false)
@@ -939,16 +972,16 @@ pub fn ini_restore(h: &mut dyn SessionHost, name: &str) -> Option<()> {
 }
 
 fn restore_entry(h: &mut dyn SessionHost, idx: usize, stage: IniStage) {
-    let e = h.session().ini.entries[idx].clone();
+    let e = &h.session().ini.entries[idx];
     if !e.modified {
         return;
     }
-    let orig = e.orig.unwrap_or_default();
+    let orig = e.orig.clone().unwrap_or_default();
     let ok = on_modify(h, idx, &orig, stage);
     if stage == IniStage::Runtime && !ok {
         return;
     }
-    let e = &mut h.session().ini.entries[idx];
+    let e = h.session().ini.entry_mut(idx);
     e.value = orig;
     e.orig = None;
     e.modified = false;
@@ -975,7 +1008,7 @@ pub fn register(h: &mut dyn SessionHost, config: &dyn Fn(&str) -> Option<Vec<u8>
                 v
             }
         };
-        let e = &mut h.session().ini.entries[idx];
+        let e = h.session().ini.entry_mut(idx);
         e.value = value;
         e.orig = None;
         e.modified = false;

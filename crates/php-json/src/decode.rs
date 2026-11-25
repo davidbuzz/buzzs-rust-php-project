@@ -105,6 +105,10 @@ impl Sink for DecodeSink<'_> {
         }
     }
 
+    fn reserve_string(&mut self, bytes: usize) -> bool {
+        self.host.json_try_reserve(bytes)
+    }
+
     fn aborted(&mut self) -> bool {
         self.host.json_oom_pending()
     }

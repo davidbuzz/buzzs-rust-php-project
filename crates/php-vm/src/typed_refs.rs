@@ -402,6 +402,32 @@ fn coercion_possible(m: u32, v: &Value, strict: bool) -> Assignable {
     Assignable::Coerce
 }
 
+/// The value the UNDEF result of a failed binary operation takes when it
+/// is checked in weak mode against a property type of mask `m`
+/// (`zend_verify_weak_scalar_type_hint()`, Zend/zend_execute.c): int 0
+/// when the type takes an int (`zend_parse_arg_long_weak()` reads a type
+/// below `IS_TRUE` other than null as 0), else float 0.0 when it takes a
+/// float (`zend_parse_arg_double_weak()`); a conversion to string or bool
+/// fails on the exception the operation left pending, and a type without
+/// a scalar has none: `None`, the property keeps its value.
+pub(crate) fn failed_op_coercion(m: u32) -> Option<Value> {
+    if m & mask::LONG != 0 {
+        Some(Value::Int(0))
+    } else if m & mask::DOUBLE != 0 {
+        Some(Value::Float(0.0))
+    } else {
+        None
+    }
+}
+
+/// `zend_exception_set_previous()` of a new exception `t` onto `prev`.
+fn chain_onto(t: Throw, prev: &Obj) -> Throw {
+    if let Throw::Exception(o) = &t {
+        crate::exceptions::chain_previous(o, prev);
+    }
+    t
+}
+
 impl Vm {
     /// Strictness of the code performing the current assignment
     /// (`EX_USES_STRICT_TYPES` of the innermost user frame).
@@ -548,6 +574,156 @@ impl Vm {
     /// variables).
     pub(crate) fn assign_ref_strict(&mut self, r: &PhpRef, v: Value) -> VmResult<Value> {
         self.assign_ref_ex(r, v, Some(true))
+    }
+
+    /// `zend_binary_assign_op_typed_ref()` (Zend/zend_execute.c) when the
+    /// operation of `$ref op= v` threw `err`: the operation's temporary
+    /// result is UNDEF, and `zend_verify_ref_assignable_zval()` checks that
+    /// against every property the reference belongs to (see
+    /// [`failed_op_coercion`]). When each converts it alike, the reference
+    /// takes the converted value; otherwise the reference's `TypeError`
+    /// ("Cannot assign null to reference held by ...", UNDEF named as
+    /// null, or the inconsistent-conversion error) is thrown with `err`
+    /// as its previous exception (`zend_throw_ref_type_error_zval()` does
+    /// not check for a pending exception). An untyped reference stays as
+    /// it was (`zend_binary_op(var_ptr, var_ptr, value)` leaves `op1`).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn failed_assign_op_ref(&mut self, r: &PhpRef, err: Throw) -> Throw {
+        let Throw::Exception(prev) = &err else {
+            return err;
+        };
+        let sources = type_sources(r);
+        if sources.is_empty() {
+            return err;
+        }
+        let strict = self.uses_strict_types();
+        let mut first: Option<(&SourceProp, Value)> = None;
+        for src in &sources {
+            let m = src.mask();
+            // `i_zend_verify_type_assignable_zval()`: strict mode takes no
+            // UNDEF; weak mode tries a conversion when the type has a
+            // scalar to convert to.
+            let coercible = !strict
+                && (m & (mask::LONG | mask::DOUBLE | mask::STRING) != 0
+                    || m & mask::BOOL == mask::BOOL);
+            let Some(c) = failed_op_coercion(m).filter(|_| coercible) else {
+                let t = self.ref_type_error(src, &Value::Null);
+                return chain_onto(t, prev);
+            };
+            if let Some((f, fc)) = &first {
+                if !php_runtime::ops::is_identical(fc, &c).unwrap_or(false) {
+                    let f: &SourceProp = f;
+                    let t = self.conflicting_coercion_error(f, src, &Value::Null);
+                    return chain_onto(t, prev);
+                }
+                continue;
+            }
+            first = Some((src, c));
+        }
+        if let Some((_, c)) = first {
+            drop(set_ref_value(r, c));
+        }
+        err
+    }
+
+    /// `zend_binary_assign_op_typed_prop()` (Zend/zend_execute.c) when the
+    /// operation of `$obj->name op= v` threw `err`: a typed declared
+    /// property takes the weak-mode conversion of the UNDEF result (see
+    /// [`failed_op_coercion`]); `zend_verify_property_type_error()` adds
+    /// nothing while `err` is pending. A property holding a typed reference
+    /// follows [`Vm::failed_assign_op_ref`]; an untyped, dynamic or hooked
+    /// property (`zend_binary_op(zptr, zptr, value)`, or the overloaded
+    /// path, which writes only on success) stays as it was. Returns the
+    /// exception to throw.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn failed_assign_op_prop(&mut self, obj: &Obj, name: &ZStr, err: Throw) -> Throw {
+        if !matches!(err, Throw::Exception(_)) {
+            return err;
+        }
+        let cls = object::class_of(obj).clone();
+        let scope = self.scope();
+        let pi = match self.lookup_prop(&cls, name, scope.as_ref()) {
+            crate::props::PropLookup::Found(pi) => pi,
+            // A dynamic property may hold a typed reference.
+            crate::props::PropLookup::NotFound => {
+                let held = object::data(obj)
+                    .dynamic
+                    .borrow()
+                    .as_ref()
+                    .and_then(|t| t.get(&ArrayKey::Str(name.clone())).cloned());
+                return match held {
+                    Some(Value::Reference(r)) => self.failed_assign_op_ref(&r, err),
+                    _ => err,
+                };
+            }
+            crate::props::PropLookup::Inaccessible(_) => return err,
+        };
+        if pi.hooks.is_some() || pi.is_virtual() {
+            return err;
+        }
+        let slot = pi.slot as usize;
+        let held = object::data(obj)
+            .slots
+            .borrow()
+            .get(slot)
+            .cloned()
+            .flatten();
+        match held {
+            Some(Value::Reference(r)) => self.failed_assign_op_ref(&r, err),
+            Some(_) if !self.uses_strict_types() => {
+                if let Some(v) = pi.ty.as_ref().and_then(|t| failed_op_coercion(t.mask)) {
+                    let old = object::data(obj)
+                        .slots
+                        .borrow_mut()
+                        .get_mut(slot)
+                        .and_then(|s| s.replace(v));
+                    drop(old);
+                }
+                err
+            }
+            _ => err,
+        }
+    }
+
+    /// `zend_binary_assign_op_typed_prop()` for a static property
+    /// (`ZEND_ASSIGN_STATIC_PROP_OP`) whose operation threw `err`: as
+    /// [`Vm::failed_assign_op_prop`], for the property's cell.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn failed_assign_op_static(
+        &mut self,
+        cell: &Rc<RefCell<Value>>,
+        err: Throw,
+    ) -> Throw {
+        if !matches!(err, Throw::Exception(_)) {
+            return err;
+        }
+        if let Some(r) = cell_typed_ref(cell) {
+            return self.failed_assign_op_ref(&r, err);
+        }
+        let Some(info) = static_info(cell) else {
+            return err;
+        };
+        if self.uses_strict_types() {
+            return err;
+        }
+        if let Some(v) = info
+            .prop
+            .ty
+            .as_ref()
+            .and_then(|t| failed_op_coercion(t.mask))
+        {
+            if let Ok(mut c) = cell.try_borrow_mut() {
+                if !matches!(&*c, Value::Reference(_)) {
+                    let old = std::mem::replace(&mut *c, v);
+                    drop(c);
+                    drop(old);
+                }
+            }
+        }
+        err
     }
 
     /// Performs the writes internal functions made to typed by-reference

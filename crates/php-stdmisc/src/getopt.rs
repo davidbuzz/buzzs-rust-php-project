@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/getopt.c. Similarity metric to original: 38%
+//   Copyright © The PHP Group and Contributors. Author: Marcus Boerger <helly@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `getopt()` (`ext/standard/basic_functions.c` over `main/getopt.c`'s
 //! `php_getopt`), including its quirks: options parsed from the leading
 //! alphanumeric run of `$short_options`, `::` optional values (only in the

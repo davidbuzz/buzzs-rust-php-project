@@ -265,8 +265,12 @@ pub(crate) struct AttrRef {
 /// A reflected global constant (`ReflectionConstant`).
 #[derive(Clone)]
 pub(crate) struct ConstRef {
-    /// The constant name as registered.
+    /// The constant table's key (namespace part lowercased for a
+    /// `define()`d constant), which the side tables are keyed by.
     pub name: ZStr,
+    /// The name as given to `define()` or `const` (`zend_constant.name`),
+    /// which `getName()` and the other name accessors report.
+    pub shown: ZStr,
     /// Its value.
     pub value: Value,
 }

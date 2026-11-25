@@ -72,6 +72,7 @@ impl Extension for Session {
 fn module_startup(vm: &mut Vm) {
     vm.constants.remove(&php_runtime::ZStr::from("SID"));
     set_phase(Phase::Startup);
+    host::note_module_startup();
     let config: Vec<(&str, Option<Vec<u8>>)> = php_session::ini::DIRECTIVES
         .iter()
         .map(|d| (d.name, ini::config_value(vm, d.name)))

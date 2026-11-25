@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/iconv/iconv.c. Similarity metric to original: 17%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rui Hirokawa <rui_hirokawa@ybb.ne.jp>
+//            Stig Bakken <ssb@php.net>
+//            Moriyoshi Koizumi <moriyoshi@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Ports of the conversion primitives of `ext/iconv/iconv.c`:
 //! `php_iconv_string`, `_php_iconv_appendl`, `_php_iconv_strlen`,
 //! `_php_iconv_substr` and `_php_iconv_strpos`.

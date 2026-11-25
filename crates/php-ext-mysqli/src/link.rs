@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqli/mysqli_nonapi.c. Similarity metric to original: 22%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Georg Richter <georg@php.net>
+//            Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `mysqli` connection functions (ref: `mysqli_nonapi.c`
 //! `mysqli_common_connect`, `mysqli_api.c`).
 

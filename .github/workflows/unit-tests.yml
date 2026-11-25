@@ -1,0 +1,39 @@
+# php-src's .github/workflows/unit-tests.yml (UNIT_TESTS_LINUX_X64) for this repository:
+# upstream's C unit tests become the workspace's Rust tests. Varied: it runs for every
+# push and pull request (upstream limits pushes to php/php-src), and it is informational
+# until the runner has a baseline of its own. Some tests compare against
+# /usr/bin/php8.5, which the runner image does not have. The unit tests that gate are
+# test-suite.yml's "Unit tests (heap, values, streams)".
+name: Unit Tests
+on:
+  push:
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.url || github.run_id }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  UNIT_TESTS_LINUX_X64:
+    name: UNIT_TESTS_LINUX_X64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+      - name: Install dependencies
+        uses: ./.github/actions/apt-x64
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95.0'
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: UNIT_TESTS_LINUX_X64
+      # Some engine tests (frame_reuse) read php-src's .phpt files.
+      - name: Fetch the php-src tests (pinned)
+        run: scripts/fetch-phpt-tests.sh
+      - name: Unit tests
+        continue-on-error: true
+        run: cargo test --workspace --no-fail-fast

@@ -223,6 +223,32 @@ fn select_fd(cell: &res::StreamCell) -> Option<i32> {
 }
 
 #[allow(clippy::too_many_lines)]
+/// `stream_select()`'s timeout as select() gets it: `tv_sec = sec + usec /
+/// 1000000`, `tv_usec = usec % 1000000` (ext/standard/streamsfuncs.c),
+/// for ppoll(). Both arguments are non-negative.
+fn select_timespec(sec: i64, usec: i64) -> libc::timespec {
+    let secs = sec.saturating_add(usec / 1_000_000);
+    // `time_t` and `c_long` are `i64` on the 64-bit Linux targets, as C's
+    // `(long)` casts assume; the nanoseconds are below 1e9 either way.
+    libc::timespec {
+        tv_sec: secs as libc::time_t,
+        tv_nsec: ((usec % 1_000_000) * 1000) as libc::c_long,
+    }
+}
+
+/// Whether poll()'s `revents` puts a descriptor in select()'s read (0),
+/// write (1) or except (2) set, as Linux's select() maps them
+/// (`POLLIN_SET`, `POLLOUT_SET`, `POLLEX_SET` in fs/select.c): a hang-up
+/// is readable but not writable.
+fn select_hit(set: usize, revents: i16) -> bool {
+    let mask = match set {
+        0 => libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+        1 => libc::POLLOUT | libc::POLLERR,
+        _ => libc::POLLPRI,
+    };
+    revents & mask != 0
+}
+
 fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arrays: Vec<Option<ZArray>> = (0..3)
         .map(|i| match a.at(i) {
@@ -250,8 +276,12 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if sec.is_none() && usec.is_some_and(|u| u != 0) {
         return Err(a.value_error(vm, 5, "must be null when argument #4 ($seconds) is null"));
     }
-    let timeout_ms: i32 = match sec {
-        None => -1,
+    // C builds a `struct timeval` (`tv_sec = sec + usec / 1000000`,
+    // `tv_usec = usec % 1000000`) for select(); ppoll() takes the same
+    // microseconds, where poll()'s milliseconds would turn a wait under
+    // 1ms into none (an event loop's timer then spins until it is due).
+    let timeout: Option<libc::timespec> = match sec {
+        None => None,
         Some(s) if s < 0 => {
             return Err(a.value_error(vm, 4, "must be greater than or equal to 0"));
         }
@@ -260,8 +290,7 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if u < 0 {
                 return Err(a.value_error(vm, 5, "must be greater than or equal to 0"));
             }
-            let ms = s.saturating_mul(1000).saturating_add(u / 1000);
-            i32::try_from(ms).unwrap_or(i32::MAX)
+            Some(select_timespec(s, u))
         }
     };
     // Buffered data counts as readable.
@@ -300,9 +329,14 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     let nfds = libc::nfds_t::try_from(pfds.len()).unwrap_or(0);
+    let ts_ptr = timeout
+        .as_ref()
+        .map_or(std::ptr::null(), std::ptr::from_ref::<libc::timespec>);
     // SAFETY: `pfds` is a valid, initialised array of `nfds` pollfd
-    // structures that outlives the call.
-    let rc = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
+    // structures that outlives the call; `ts_ptr` is null or points to
+    // `timeout`, which outlives it too; a null signal mask keeps the
+    // thread's mask, as poll() does.
+    let rc = unsafe { libc::ppoll(pfds.as_mut_ptr(), nfds, ts_ptr, std::ptr::null()) };
     if rc < 0 {
         let e = std::io::Error::last_os_error();
         let errno = e.raw_os_error().unwrap_or(0);
@@ -313,26 +347,28 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ))?;
         return Ok(Value::Bool(false));
     }
+    // select() counts each ready descriptor once per set, however many
+    // entries of the array share it, and returns every such entry
+    // (`stream_array_from_fd_set()`).
     let mut total = 0;
+    let mut counted: Vec<i32> = Vec::new();
     for set in 0..3 {
         if arrays[set].is_none() {
             continue;
         }
+        counted.clear();
         let mut out = ZArray::new();
         for &(s, i, p) in &index {
             if s != set {
                 continue;
             }
-            let re = pfds[p].revents;
-            let hit = match set {
-                0 => re & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0,
-                1 => re & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0,
-                _ => re & libc::POLLPRI != 0,
-            };
-            if hit {
+            if select_hit(set, pfds[p].revents) {
                 let (k, v, _) = &entries[set][i];
                 out.make_mut().insert(k.clone(), v.clone());
-                total += 1;
+                if !counted.contains(&pfds[p].fd) {
+                    counted.push(pfds[p].fd);
+                    total += 1;
+                }
             }
         }
         a.set_ref(set, Value::Array(out));
@@ -705,4 +741,35 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     .function_static("stream_context_get_options($stream_or_context): array", stream_context_get_options)
     .function_static("stream_context_get_default(?array $options = null)", stream_context_get_default)
     .function_static("stream_context_set_default(array $options)", stream_context_set_default);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_timeout_keeps_microseconds() {
+        // Revolt's stream_select() loop passes the time to the next timer,
+        // often below a millisecond.
+        let t = select_timespec(0, 500);
+        assert_eq!((t.tv_sec, t.tv_nsec), (0, 500_000));
+        // C: tv_sec = sec + usec / 1000000, tv_usec = usec % 1000000.
+        let t = select_timespec(1, 2_500_000);
+        assert_eq!((t.tv_sec, t.tv_nsec), (3, 500_000_000));
+        let t = select_timespec(0, 0);
+        assert_eq!((t.tv_sec, t.tv_nsec), (0, 0));
+    }
+
+    #[test]
+    fn select_sets_follow_linux_select() {
+        assert!(select_hit(0, libc::POLLIN));
+        assert!(select_hit(0, libc::POLLHUP));
+        assert!(select_hit(0, libc::POLLERR));
+        assert!(!select_hit(0, libc::POLLOUT));
+        assert!(select_hit(1, libc::POLLOUT));
+        assert!(select_hit(1, libc::POLLERR | libc::POLLHUP));
+        assert!(!select_hit(1, libc::POLLHUP));
+        assert!(select_hit(2, libc::POLLPRI));
+        assert!(!select_hit(2, libc::POLLIN));
+    }
 }

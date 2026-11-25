@@ -1,0 +1,34 @@
+# php-src's actions/apt-x64: the system packages a build and its tests need. Ours: the C
+# libraries the extension crates link (none of the out-of-scope ones: PostgreSQL,
+# Firebird, ODBC, FreeTDS, LDAP, SNMP, tidy, enchant, ...), the de_DE language pack for
+# setup-x64's locale, strace for the request heap check and valgrind for BENCHMARKING.
+# Also used on the AArch64 runner: the package names are the same.
+name: apt
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -x
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends \
+          pkg-config \
+          strace \
+          valgrind \
+          language-pack-de \
+          apache2-dev \
+          libssl-dev \
+          libxml2-dev \
+          libxslt1-dev \
+          libicu-dev \
+          libgd-dev \
+          libzip-dev \
+          libsqlite3-dev \
+          libsodium-dev \
+          libmagic-dev \
+          libcurl4-openssl-dev \
+          libonig-dev \
+          libbz2-dev \
+          zlib1g-dev \
+          libpcre2-dev

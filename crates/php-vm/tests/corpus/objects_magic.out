@@ -1,0 +1,176 @@
+-- 0
+get(a) isset(a) get(zz) isset(zz) set(q) E[8192] Creation of dynamic property M::$q is deprecated @5
+isset(a) isset(a) get(a) unset(a) isset(a) set(data) isset(a) 
+E[8192] Creation of dynamic property Plain::$undecl is deprecated @20
+E[2] Undefined property: Plain::$nope2 @20
+E[2] Attempt to read property "x" on null @22
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 0,
+  3 => true,
+  4 => true,
+  5 => false,
+  6 => false,
+  7 => 'w',
+  8 => 'dd',
+  9 => 0,
+  10 => 'n',
+  11 => NULL,
+  12 => 
+  \Dyn::__set_state(array(
+     'x' => '0y',
+  )),
+  13 => NULL,
+  14 => NULL,
+  15 => 'Attempt to assign property "x" on null',
+  16 => 'Call to a member function m() on null',
+  17 => 'Cannot modify readonly property RO::$n',
+  18 => 'Cannot indirectly modify readonly property RO::$a',
+  19 => 
+  \RO::__set_state(array(
+     'a' => 
+    array (
+      0 => 0,
+    ),
+     'n' => 1,
+  )),
+  20 => 'Cannot modify readonly property RO::$n',
+  21 => true,
+  22 => false,
+  23 => 1,
+  24 => 9,
+  25 => 'virt9',
+)
+-- 1
+get(a) isset(a) get(zz) isset(zz) set(q) E[8192] Creation of dynamic property M::$q is deprecated @5
+isset(a) isset(a) get(a) unset(a) isset(a) set(data) isset(a) 
+E[8192] Creation of dynamic property Plain::$undecl is deprecated @20
+E[2] Undefined property: Plain::$nope2 @20
+E[2] Attempt to read property "x" on null @22
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 1,
+  3 => true,
+  4 => true,
+  5 => false,
+  6 => false,
+  7 => 'w',
+  8 => 'dd',
+  9 => 1,
+  10 => 'n',
+  11 => NULL,
+  12 => 
+  \Dyn::__set_state(array(
+     'x' => '1y',
+  )),
+  13 => NULL,
+  14 => NULL,
+  15 => 'Attempt to assign property "x" on null',
+  16 => 'Call to a member function m() on null',
+  17 => 'Cannot modify readonly property RO::$n',
+  18 => 'Cannot indirectly modify readonly property RO::$a',
+  19 => 
+  \RO::__set_state(array(
+     'a' => 
+    array (
+      0 => 1,
+    ),
+     'n' => 1,
+  )),
+  20 => 'Cannot modify readonly property RO::$n',
+  21 => true,
+  22 => false,
+  23 => 3,
+  24 => 13,
+  25 => 'virt13',
+)
+-- 2
+get(a) isset(a) get(zz) isset(zz) set(q) E[8192] Creation of dynamic property M::$q is deprecated @5
+isset(a) isset(a) get(a) unset(a) isset(a) set(data) isset(a) 
+E[8192] Creation of dynamic property Plain::$undecl is deprecated @20
+E[2] Undefined property: Plain::$nope2 @20
+E[2] Attempt to read property "x" on null @22
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 2,
+  3 => true,
+  4 => true,
+  5 => false,
+  6 => false,
+  7 => 'w',
+  8 => 'dd',
+  9 => 2,
+  10 => 'n',
+  11 => NULL,
+  12 => 
+  \Dyn::__set_state(array(
+     'x' => '2y',
+  )),
+  13 => NULL,
+  14 => NULL,
+  15 => 'Attempt to assign property "x" on null',
+  16 => 'Call to a member function m() on null',
+  17 => 'Cannot modify readonly property RO::$n',
+  18 => 'Cannot indirectly modify readonly property RO::$a',
+  19 => 
+  \RO::__set_state(array(
+     'a' => 
+    array (
+      0 => 2,
+    ),
+     'n' => 1,
+  )),
+  20 => 'Cannot modify readonly property RO::$n',
+  21 => true,
+  22 => false,
+  23 => 5,
+  24 => 17,
+  25 => 'virt17',
+)
+-- 3
+get(a) isset(a) get(zz) isset(zz) set(q) E[8192] Creation of dynamic property M::$q is deprecated @5
+isset(a) isset(a) get(a) unset(a) isset(a) set(data) isset(a) 
+E[8192] Creation of dynamic property Plain::$undecl is deprecated @20
+E[2] Undefined property: Plain::$nope2 @20
+E[2] Attempt to read property "x" on null @22
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 3,
+  3 => true,
+  4 => true,
+  5 => false,
+  6 => false,
+  7 => 'w',
+  8 => 'dd',
+  9 => 3,
+  10 => 'n',
+  11 => NULL,
+  12 => 
+  \Dyn::__set_state(array(
+     'x' => '3y',
+  )),
+  13 => NULL,
+  14 => NULL,
+  15 => 'Attempt to assign property "x" on null',
+  16 => 'Call to a member function m() on null',
+  17 => 'Cannot modify readonly property RO::$n',
+  18 => 'Cannot indirectly modify readonly property RO::$a',
+  19 => 
+  \RO::__set_state(array(
+     'a' => 
+    array (
+      0 => 3,
+    ),
+     'n' => 1,
+  )),
+  20 => 'Cannot modify readonly property RO::$n',
+  21 => true,
+  22 => false,
+  23 => 7,
+  24 => 21,
+  25 => 'virt21',
+)

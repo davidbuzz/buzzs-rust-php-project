@@ -9,7 +9,7 @@ use php_vm::ext::Extension;
 
 /// Runs a closure with borrowed references to all linked extensions, avoiding heap allocations.
 pub fn with_all_extensions<R>(f: impl FnOnce(&[&dyn Extension]) -> R) -> R {
-    let refs: [&dyn Extension; 52] = [
+    let refs: [&dyn Extension; 53] = [
         &php_ext_stdstr::StdStr,
         &php_ext_streams::Streams,
         &php_ext_date::Date,
@@ -34,6 +34,7 @@ pub fn with_all_extensions<R>(f: impl FnOnce(&[&dyn Extension]) -> R) -> R {
         &php_ext_exif::Exif,
         &php_ext_uri::Uri,
         &php_ext_zlib::Zlib,
+        &php_ext_zlib::Bz2,
         &php_ext_zip::Zip,
         &php_ext_phar::Phar,
         &php_ext_gettext::Gettext,
@@ -93,6 +94,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_exif::Exif),
         Box::new(php_ext_uri::Uri),
         Box::new(php_ext_zlib::Zlib),
+        Box::new(php_ext_zlib::Bz2),
         Box::new(php_ext_zip::Zip),
         Box::new(php_ext_phar::Phar),
         Box::new(php_ext_gettext::Gettext),

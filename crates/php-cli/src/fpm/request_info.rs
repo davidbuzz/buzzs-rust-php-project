@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src sapi/fpm/fpm/fpm_main.c. Similarity metric to original: 29%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Stig Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            FastCGI: Ben Mansell <php@slimyhorror.com>
+//            Shane Caraveo <shane@caraveo.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `init_request_info()` of `sapi/fpm/fpm/fpm_main.c`.
 //!
 //! It differs from php-cgi's (`cgi/env.rs`): the request method is read

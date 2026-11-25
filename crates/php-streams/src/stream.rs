@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/streams/streams.c. Similarity metric to original: 24%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Wez Furlong <wez@thebrainroom.com>
+//            Borrowed code from:
+//            Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Jim Winstead <jimw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The core stream object (`php_stream`, `main/streams/streams.c`).
 //!
 //! A [`Stream`] owns a [`StreamOps`] implementation (the C `php_stream_ops`
@@ -180,6 +186,21 @@ impl StreamState {
     /// `php_stream_notice`.
     pub fn notice(&self, code: StreamErrorCode, msg: impl Into<Vec<u8>>) {
         self.error(Severity::Notice, code, false, msg);
+    }
+
+    /// A socket write's failure (`php_sockop_write()` in
+    /// main/streams/xp_socket.c): "Send of %zu bytes failed with errno=%d
+    /// %s", unless the stream suppresses errors.
+    pub fn send_failed(&self, count: usize, errno: i32) {
+        if self.flags & flags::SUPPRESS_ERRORS == 0 {
+            self.warn(
+                StreamErrorCode::NetworkSendFailed,
+                format!(
+                    "Send of {count} bytes failed with errno={errno} {}",
+                    crate::sys::strerror(errno)
+                ),
+            );
+        }
     }
 }
 

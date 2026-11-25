@@ -400,6 +400,12 @@ impl<'a> Eval<'a> {
                 _ => None,
             }
         };
+        let zstr = |v: Option<&Value>| -> Option<php_runtime::ZStr> {
+            match v {
+                Some(Value::Str(s)) => Some(s.clone()),
+                _ => None,
+            }
+        };
         match class.to_ascii_lowercase().as_str() {
             "soapvar" => {
                 let enc = match args.get(1) {
@@ -411,10 +417,10 @@ impl<'a> Eval<'a> {
                     &o,
                     args.first().unwrap_or(&Value::Null),
                     enc,
-                    bytes(args.get(2)).as_deref(),
-                    bytes(args.get(3)).as_deref(),
-                    bytes(args.get(4)).as_deref(),
-                    bytes(args.get(5)).as_deref(),
+                    zstr(args.get(2)).as_ref(),
+                    zstr(args.get(3)).as_ref(),
+                    zstr(args.get(4)).as_ref(),
+                    zstr(args.get(5)).as_ref(),
                 )?;
             }
             "soapparam" => {

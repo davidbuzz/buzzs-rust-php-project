@@ -115,6 +115,25 @@ impl Reporter {
         let _ = out.flush();
     }
 
+    /// The `{main}` backtrace `fatal_error_backtraces` adds after a fatal
+    /// error raised once the engine is up (a module's `MINIT`; php8.5 -d
+    /// openssl.libctx=x prints it).
+    fn startup_backtrace(&self, cfg: &Config) {
+        let on = cfg
+            .get("fatal_error_backtraces")
+            .is_none_or(|v| parse_bool(v.as_bytes()));
+        if !on || self.display == Display::Off || !self.display_startup || self.html {
+            return;
+        }
+        if self.display == Display::Stderr {
+            let _ = write!(std::io::stderr(), "Stack trace:\n#0 {{main}}\n");
+        } else {
+            let mut out = std::io::stdout();
+            let _ = write!(out, "Stack trace:\n#0 {{main}}\n");
+            let _ = out.flush();
+        }
+    }
+
     fn diagnostic(&self, d: &Diagnostic) {
         let msg = d.message.trim_end();
         if d.docref {
@@ -295,6 +314,31 @@ pub fn report_module_diagnostics(cfg: &Config, diagnostics: &[Diagnostic]) {
     let r = Reporter::new(cfg);
     for d in diagnostics {
         r.diagnostic(d);
+        if d.level.is_fatal() {
+            r.startup_backtrace(cfg);
+            STARTUP_FATAL.with(|f| f.set(true));
+        }
+    }
+}
+
+thread_local! {
+    /// A fatal error was raised while the core directives registered.
+    static STARTUP_FATAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The exit status of a run whose module startup raised a fatal error
+/// that did not stop it (`OnUpdateMailCrLfMode`'s `E_ERROR`):
+/// `php_error_cb` set `EG(exit_status)` to 255, which a script ending
+/// normally leaves (php8.5 -d mail.cr_lf_mode=abc runs the script and
+/// exits with 255). An explicit `exit(0)` in C would reset it; the
+/// status this sees cannot tell that apart from a normal end.
+#[must_use]
+#[allow(dead_code)] // the `php` binary's exit; php-cgi and php-fpm include this file too
+pub fn final_status(status: i32) -> i32 {
+    if status == 0 && STARTUP_FATAL.with(std::cell::Cell::get) {
+        255
+    } else {
+        status
     }
 }
 
@@ -319,6 +363,9 @@ pub fn module_startup(cfg: &Config) -> Result<(), i32> {
     );
     for d in &sink {
         r.diagnostic(d);
+    }
+    if sink.iter().any(|d| d.level.is_fatal()) {
+        STARTUP_FATAL.with(|f| f.set(true));
     }
     if cfg
         .get("report_memleaks")
@@ -347,11 +394,15 @@ pub fn module_startup(cfg: &Config) -> Result<(), i32> {
     }
     for d in REMOVED {
         if cfg_long(cfg, d) != 0 {
+            // E_CORE_ERROR once module_initialized is set: the error is
+            // displayed (with the {main} backtrace), zend_bailout() fails
+            // php_module_startup() and php_cli.c exits with 1 (php8.5).
             r.report(
                 16,
                 &format!("Directive '{d}' is no longer available in PHP"),
             );
-            return Err(254);
+            r.startup_backtrace(cfg);
+            return Err(1);
         }
     }
     Ok(())

@@ -1,0 +1,21 @@
+# php-src's actions/setup-caddy: the Caddy server ext/curl's tests talk to, started with
+# their Caddyfile. Varied: the Caddyfile is in the fetched php-src tests
+# (modules/php-src), so this runs after scripts/fetch-phpt-tests.sh, and the release is
+# chosen by the runner's architecture (upstream: amd64 only).
+name: Setup Caddy server
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -x
+        case "$(uname -m)" in
+          aarch64) arch=arm64 ;;
+          *) arch=amd64 ;;
+        esac
+        gh release -R caddyserver/caddy download --pattern "caddy_*_linux_${arch}.tar.gz" -O - | sudo tar -xz -C /usr/bin caddy
+        sudo chmod +x /usr/bin/caddy
+        sudo caddy start --config modules/php-src/ext/curl/tests/Caddyfile
+      continue-on-error: true

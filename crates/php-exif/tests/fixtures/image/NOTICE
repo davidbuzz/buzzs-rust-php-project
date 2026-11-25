@@ -1,0 +1,6 @@
+Files in this directory are copied unchanged from php-src
+ext/standard/tests/image (commit cb90f9a237757209ecd2e67a7e0c950f36ba6ea1).
+Copyright © The PHP Group and Contributors. BSD-3-Clause; see
+LICENSES/php-src-BSD-3-Clause.txt. test.gif is the PHP logo (identical to
+php-src ext/gd/tests/php.gif); this notice covers the file as php-src
+distributes it and says nothing about the use of the logo.

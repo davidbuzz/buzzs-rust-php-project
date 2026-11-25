@@ -504,3 +504,39 @@ impl NativeIterator for ResultIter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `php_add_field_properties()` (ext/mysqli/mysqli_api.c) copies
+    /// `field->type` from the column definition unchanged: a JSON column
+    /// is 245 from MySQL and 252 (LONGTEXT) from MariaDB, and a long
+    /// VARCHAR named `id` in table `test` stays 253, whatever its length.
+    #[test]
+    fn field_type_is_the_servers() {
+        let mut vm = Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()));
+        for (ty, length) in [
+            (253u8, 131_072u32),
+            (252, 4_294_967_295),
+            (245, 4_294_967_295),
+        ] {
+            let f = Field {
+                name: b"id".to_vec(),
+                org_name: b"id".to_vec(),
+                table: b"test".to_vec(),
+                org_table: b"test".to_vec(),
+                length,
+                type_: ty,
+                ..Field::default()
+            };
+            let Ok(Value::Object(o)) = field_object(&mut vm, &f) else {
+                panic!("field_object must give an object");
+            };
+            let Ok(Value::Int(t)) = vm.get_property(&o, "type") else {
+                panic!("type must be an int");
+            };
+            assert_eq!(t, i64::from(ty));
+        }
+    }
+}

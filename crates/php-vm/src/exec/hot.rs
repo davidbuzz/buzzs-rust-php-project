@@ -46,16 +46,17 @@
 use super::spec::{
     self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in,
     cast_string_in, cmp_simple_in, concat_cv_in, concat_in, fe_assign_in, fe_fetch_array_in,
-    fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in,
-    num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
+    fetch_dim_cv_in, fetch_dim_is_miss_in, fetch_dims_cv_in, fetch_dims_is_miss_in,
+    incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp, rope_in,
+    slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{
-    cmp_outcome, BinKind, CastKind, ClassSpec, ForeachKind, IncDecKind, NullChain, Op, Operand,
-    UnKind,
+    cmp_outcome, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, NullChain, Op,
+    Operand, PlaceBase, PlaceId, UnKind,
 };
-use crate::vm::{CvSlot, Frame};
-use php_runtime::{BinaryOp, Value, ZStr};
+use crate::vm::{CvSlot, Frame, FrameKind};
+use php_runtime::{BinaryOp, PhpRef, Value, ZStr};
 
 /// The second half of [`super::tape::run_tape`]'s result when no safe
 /// point is due: the op at the returned `ip` stopped the loop.
@@ -141,7 +142,11 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::ConcatCv { .. }
             | Op::Rope { .. }
             | Op::Cast {
-                kind: CastKind::String,
+                kind: CastKind::String
+                    | CastKind::Int
+                    | CastKind::Float
+                    | CastKind::Bool
+                    | CastKind::Array,
                 ..
             }
             | Op::FeFetch { .. }
@@ -150,9 +155,23 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFree { .. }
+            | Op::KeyExists { .. }
+            | Op::InArray { .. }
+            | Op::FeFreeOnReturn { .. }
             | Op::RecvInit { .. }
+            | Op::RecvDefault {
+                val: Operand::Tmp(_),
+                ..
+            }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
+                ..
+            }
+            // `&$cv` and `$cv =& <reference>` of a plain variable
+            // (`ref_cv_in`, `assign_ref_cv_in`).
+            | Op::MakeRef { .. }
+            | Op::AssignRef {
+                src: Operand::Tmp(_),
                 ..
             }
     )
@@ -684,7 +703,8 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         Op::Count { a, dst, .. } => {
             let Some(n) = count_in(f, lits, a) else {
-                return DECLINED;
+                // `count()` of a variable holding a reference.
+                return spec::step_ref(f, ops, lits, at);
             };
             set_dst_in(f, dst, Value::Int(n));
         }
@@ -710,13 +730,15 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         // `ZEND_ISSET_ISEMPTY_CV`.
         Op::Isset { place, dst } => {
-            let Some(r) = isset_cv_in(f, place, false) else {
+            let Some(r) = isset_cv_in(f, place, false).or_else(|| isset_place_in(f, place, false))
+            else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
         }
         Op::Empty { place, dst } => {
-            let Some(r) = isset_cv_in(f, place, true) else {
+            let Some(r) = isset_cv_in(f, place, true).or_else(|| isset_place_in(f, place, true))
+            else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
@@ -773,12 +795,36 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             }
         }
         // `ZEND_FREE` of a temporary whose release has no side effect.
+        // `ZEND_MAKE_REF` of a plain variable: it becomes (or already
+        // is) a reference, in its slot.
+        Op::MakeRef { place, dst } => {
+            let Some(r) = ref_cv_in(f, place) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Reference(r));
+        }
+        // `ZEND_ASSIGN_REF` to a plain variable from a reference (`$a =
+        // &$b`, the binding of `foreach (... as &$v)`).
+        Op::AssignRef {
+            place,
+            src: Operand::Tmp(src),
+            dst,
+        } => {
+            if !assign_ref_cv_in(f, place, src, dst) {
+                return DECLINED;
+            }
+        }
         Op::Free(Operand::Tmp(t)) => {
             let Some(slot) = f.tmps.get_mut(t as usize) else {
                 return DECLINED;
             };
             if !is_plain_slot(Some(&*slot)) {
-                return DECLINED;
+                // An array another handle shares (the source of
+                // `[$a, $b] = $x`, a constant's array): the release only
+                // drops a count (`zval_ptr_dtor_nogc`).
+                if !matches!(slot, Value::Array(a) if a.refcount() >= 2) {
+                    return DECLINED;
+                }
             }
             discard_unrooted(Some(std::mem::take(slot)));
         }
@@ -786,15 +832,33 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         // (`exec/spec/dims.rs`). With `to`, the `AssignCv` after a
         // dimension fetch is done too (`Some(true)`: skip it).
         Op::FetchDimCv {
-            cv, dim, dst, to, ..
-        } => match fetch_dim_cv_in(f, cv, dim, dst, to) {
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
+        } => match fetch_dim_cv_in(f, cv, dim, dst, to).or_else(|| {
+            // `$a['k'] ?? d` whose key is not there (`ZEND_FETCH_DIM_IS`).
+            (mode == FetchMode::Is)
+                .then(|| fetch_dim_is_miss_in(f, cv, dim, dst, to))
+                .flatten()
+        }) {
             Some(true) => ip += 1,
             Some(false) => {}
             None => return DECLINED,
         },
         Op::FetchDimsCv {
-            cv, place, dst, to, ..
-        } => match fetch_dims_cv_in(f, cv, place, dst, to) {
+            cv,
+            place,
+            dst,
+            to,
+            mode,
+        } => match fetch_dims_cv_in(f, cv, place, dst, to).or_else(|| {
+            (mode == FetchMode::Is)
+                .then(|| fetch_dims_is_miss_in(f, cv, place, dst, to))
+                .flatten()
+        }) {
             Some(true) => ip += 1,
             Some(false) => {}
             None => return DECLINED,
@@ -855,7 +919,8 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         Op::ConcatCv { cv, val, dst, .. } => {
             if !concat_cv_in(f, cv, val, dst) {
-                return DECLINED;
+                // `.=` on a variable holding a reference.
+                return spec::step_ref(f, ops, lits, at);
             }
         }
         // `(string)` of a string or an integer.
@@ -871,6 +936,13 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Str(s));
+        }
+        // `(int)`, `(float)`, `(bool)`, `(array)` of the operand types
+        // that convert silently (`exec/spec/casts.rs`).
+        Op::Cast { kind, a, dst } => {
+            if !spec::cast_in(f, kind, a, dst) {
+                return DECLINED;
+            }
         }
         // `ZEND_ROPE_END` of strings and integers.
         Op::Rope { ref parts, dst } => {
@@ -903,7 +975,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 }
             }
             Some(false) => ip = end as usize,
-            None => return DECLINED,
+            // `foreach` by reference over an array (`ZEND_FE_FETCH_RW`).
+            None => match crate::iter::fe_fetch_ref_in(f, iter, val, key) {
+                Some(true) => {}
+                Some(false) => ip = end as usize,
+                None => return DECLINED,
+            },
         },
         // `FE_RESET_R` of an array, and `FE_FREE` of its iterator.
         Op::FeReset {
@@ -922,12 +999,55 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             }
         }
+        // `ZEND_IN_ARRAY` settled by one key lookup.
+        Op::InArray {
+            a,
+            set,
+            strict,
+            dst,
+        } => {
+            if !spec::in_array_in(f, a, set, strict, dst) {
+                return DECLINED;
+            }
+        }
+        // `ZEND_ARRAY_KEY_EXISTS` of an int or string key in an array.
+        Op::KeyExists { key, array, dst } => {
+            if !spec::key_exists_in(f, key, array, dst) {
+                return DECLINED;
+            }
+        }
+        // The `FE_FREE` before a `return` inside a `foreach` of an array
+        // by value. The generic op then runs the destructors the release
+        // queued, at once: when it queued any, it is declined with the
+        // iterator gone (the generic op's free finds nothing and runs
+        // them), and when some were pending already, nothing is done.
+        Op::FeFreeOnReturn { iter, .. } => {
+            if crate::object::has_pending_destructors() || !fe_free_array_in(f, iter) {
+                return DECLINED;
+            }
+            if crate::object::has_pending_destructors() {
+                return DECLINED;
+            }
+        }
         // `RECV_INIT` of a parameter the call did not pass, whose default
-        // is a literal (the `RecvDefault` right after it).
+        // is a literal (the `RecvDefault` right after it); one computed by
+        // code (a constant, a class constant, an expression) is computed
+        // by the ops that follow, so the `RecvInit` only goes on to them.
         Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
             Some(next) => ip = next,
+            None if (n as usize) >= f.num_args() => {}
             None => return DECLINED,
         },
+        // The default those ops computed into a temporary, bound.
+        Op::RecvDefault {
+            n,
+            cv,
+            val: Operand::Tmp(t),
+        } => {
+            if !recv_computed_default_in(f, n, cv, t) {
+                return DECLINED;
+            }
+        }
         _ => return DECLINED,
     }
     ip
@@ -941,7 +1061,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
 /// anything else (objects, the warning of a non-iterable value or of an
 /// undefined variable, an occupied iterator slot: the generic op).
 #[inline]
-fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32) -> Option<bool> {
+pub(super) fn fe_reset_array_in(
+    f: &mut Frame,
+    lits: &[Value],
+    subject: Operand,
+    iter: u32,
+) -> Option<bool> {
     if f.iters.get(iter as usize)?.is_some() {
         return None;
     }
@@ -989,9 +1114,9 @@ fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32)
 /// against the declared type): the variable gets a copy of the literal and
 /// the `ip` after the `RecvDefault` is returned. `None`, having changed
 /// nothing, when the argument was passed (or left a named-argument gap),
-/// the default is computed by code, the parameter is by reference, its
-/// type would coerce or reject the literal, or the variable is not the
-/// undefined slot of a frame without a symbol table.
+/// the default is computed by code, its type would coerce or reject the
+/// literal, or the variable is not the undefined slot of a frame without a
+/// symbol table.
 #[inline]
 fn recv_literal_default_in(
     f: &mut Frame,
@@ -1016,10 +1141,9 @@ fn recv_literal_default_in(
     if matches!(value, Value::Reference(_)) {
         return None;
     }
+    // A by-reference parameter the call did not reach gets a copy of the
+    // default as any other (`ZEND_RECV_INIT`'s `ZVAL_COPY`: no reference).
     let param = f.ufunc.as_ref()?.params.get(n as usize)?;
-    if param.by_ref {
-        return None;
-    }
     if let Some(ty) = &param.ty {
         if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
             return None;
@@ -1036,10 +1160,55 @@ fn recv_literal_default_in(
     Some(at + 2)
 }
 
+/// `ZEND_RECV_INIT`'s binding of a default computed by code (the
+/// `RecvDefault` of temporary `t` after a constant, a class constant or an
+/// expression was evaluated into it) to parameter `n`'s compiled variable
+/// `cv`, as `Vm::op_recv_default` binds it: the value moves out of the
+/// temporary (`Vm::read`) into the variable. `false`, having changed
+/// nothing, when the declared type would coerce or reject it (the
+/// generic op converts it or throws the `TypeError`), the temporary holds
+/// a reference, a symbol table is attached, or the variable is not
+/// undefined. Before, each such default left the tape twice (19,036
+/// times a request of a large framework application: the `RecvInit`,
+/// then this op, to `Vm::run`).
+#[inline]
+fn recv_computed_default_in(f: &mut Frame, n: u32, cv: u32, t: u32) -> bool {
+    if f.symtab_attached {
+        return false;
+    }
+    let Some(value) = f.tmps.get(t as usize) else {
+        return false;
+    };
+    if matches!(value, Value::Reference(_)) {
+        return false;
+    }
+    let Some(uf) = f.ufunc.as_ref() else {
+        return false;
+    };
+    let Some(param) = uf.params.get(n as usize) else {
+        return false;
+    };
+    if let Some(ty) = &param.ty {
+        if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
+            return false;
+        }
+    }
+    if f.cvs.get(cv as usize).is_none_or(CvSlot::is_some) {
+        return false;
+    }
+    let value = std::mem::take(&mut f.tmps[t as usize]);
+    if let Some(slot) = f.cvs.get_mut(cv as usize) {
+        let old = slot.set(Some(value));
+        debug_assert!(old.is_none());
+        drop(old);
+    }
+    true
+}
+
 /// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`
 /// releases nothing else for it); `false` for any other iterator.
 #[inline]
-fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
+pub(super) fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
     let Some(slot) = f.iters.get_mut(iter as usize) else {
         return false;
     };
@@ -1066,7 +1235,7 @@ fn concat_ext(f: &mut Frame, lits: &[Value], a: Operand, b: Operand) -> Option<Z
 /// the result is used ([`set_tmp_in`]); an unused int or bool owns nothing.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
+pub(super) fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
     if let Some(t) = dst {
         set_tmp_in(f, t, v);
     }
@@ -1111,7 +1280,7 @@ fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
 /// as `Vm::op_count_slow` releases it). `None` for anything else.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
+pub(super) fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
     let n = match a {
         Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
             Value::Array(arr) => arr.len(),
@@ -1146,7 +1315,7 @@ fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
 /// `None` for an undefined variable (the generic op warns).
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
+pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
     use crate::opcode::type_mask::matches;
     match a {
         Operand::Cv(cv) if !f.symtab_attached => {
@@ -1172,7 +1341,7 @@ fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<
 /// undefined (the generic op warns) or attached to a symbol table.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
     let cls = f
         .code
         .class_cache
@@ -1247,6 +1416,29 @@ fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<
     }
 }
 
+/// `isset()` / `empty()` of a place [`isset_cv_in`] does not cover, on
+/// the frame-local paths of `exec/spec`: an element of a temporary
+/// (`isset(self::MAP[$k])`, `empty(f()['k'])`: `spec::isset_tmp_dims_in`)
+/// and the dimensions of a variable (`isset($a['k'][$j])`:
+/// `spec::isset_cv_dims_in`).
+/// `None`, nothing changed, for the generic op. Out of line, so that the
+/// plain variable's test stays small.
+#[inline(never)]
+fn isset_place_in(f: &mut Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<bool> {
+    // The base, copied out before the frame is borrowed mutably: `None`
+    // for a temporary's element, the variable's index for a variable.
+    let cv = match f.code.places.get(place as usize)?.base {
+        crate::opcode::PlaceBase::Value(_) => None,
+        crate::opcode::PlaceBase::Cv(cv) => Some(cv),
+        _ => return None,
+    };
+    match cv {
+        None => spec::isset_tmp_dims_in(f, place, empty),
+        // `isset($a['k'][$j])`: the dimensions of a variable.
+        Some(cv) => spec::isset_cv_dims_in(f, cv, place, empty),
+    }
+}
+
 /// Copies compiled variable `cv`'s new value into the attached symbol
 /// table (`Frame::sync_cv_to_symtab`), out of line: callers test
 /// `f.symtab_attached` first, so the hot path builds no `Value` for it.
@@ -1276,7 +1468,7 @@ fn scalar_copy(v: &Value) -> Value {
 /// slot is ignored, as the pre-match did.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
+pub(super) fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
     if let Some(slot) = f.tmps.get_mut(t as usize) {
         put_tmp(slot, v);
     }
@@ -1322,6 +1514,72 @@ fn take_truth_other(slot: &mut Value) -> Option<bool> {
     };
     *slot = Value::Null;
     Some(b)
+}
+
+/// The compiled variable a bare-variable place of `f` names, when `f`'s
+/// slots are its variables: a function's or the main script's frame
+/// without an attached symbol table (`Vm::cv_make_ref_fast`).
+#[inline]
+fn bare_cv_in(f: &Frame, place: PlaceId) -> Option<usize> {
+    if f.symtab_attached || !matches!(f.kind, FrameKind::Main | FrameKind::Function) {
+        return None;
+    }
+    let p = f.code.places.get(place as usize)?;
+    match (&p.base, p.segs.is_empty()) {
+        (PlaceBase::Cv(cv), true) => Some(*cv as usize),
+        _ => None,
+    }
+}
+
+/// `&$cv` (`ZEND_MAKE_REF`, `Vm::cv_make_ref_fast`): the variable becomes
+/// a reference in its slot, an undefined one a reference to null without
+/// a notice (`BP_VAR_W`). Nothing is released. `None`, having changed
+/// nothing, for any other place or frame.
+fn ref_cv_in(f: &mut Frame, place: PlaceId) -> Option<PhpRef> {
+    let cv = bare_cv_in(f, place)?;
+    let slot = f.cvs.get_mut(cv)?.as_mut();
+    Some(slot.get_or_insert(Value::Null).make_ref())
+}
+
+/// `$cv =& <reference>` (`ZEND_ASSIGN_REF`,
+/// `zend_assign_to_variable_reference`) in a function, where temporary
+/// `src` holds the reference: the variable's slot takes it and the old value is released
+/// (a possible cycle root; a destructor it queues runs at the safe point
+/// after the op, as `AssignCv`'s), as `Vm::place_assign_ref` does. The
+/// result goes to `dst`, or is dropped as the duplicate handle it is.
+/// `false`, having changed nothing, for any other place, frame or source
+/// (a value: "Only variables should be assigned by reference").
+fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -> bool {
+    // A function's frame only: the main script's global table may still
+    // hold its own handle of the old value (`Vm::bare_cv_slot`).
+    if f.kind != FrameKind::Function {
+        return false;
+    }
+    let Some(cv) = bare_cv_in(f, place) else {
+        return false;
+    };
+    if cv >= f.cvs.len() {
+        return false;
+    }
+    let Some(tmp) = f.tmps.get_mut(src as usize) else {
+        return false;
+    };
+    if !matches!(tmp, Value::Reference(_)) {
+        return false;
+    }
+    let Value::Reference(r) = std::mem::take(tmp) else {
+        return false;
+    };
+    let Some(slot) = f.cvs.get_mut(cv) else {
+        return false;
+    };
+    let old = slot.set(Some(Value::Reference(r.clone())));
+    release_rooted(old);
+    match dst {
+        Some(d) => set_tmp_in(f, d, Value::Reference(r)),
+        None => crate::gc::release_duplicate(Value::Reference(r)),
+    }
+    true
 }
 
 /// The truth of an operand that needs neither a diagnostic nor a

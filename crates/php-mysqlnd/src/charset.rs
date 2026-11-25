@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqlnd/mysqlnd_charset.c. Similarity metric to original: 38%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+//            Georg Richter <georg@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The mysqlnd character-set table and the charset-aware escaping
 //! routines behind `mysqli_real_escape_string` (ref: `mysqlnd_charset.c`).
 

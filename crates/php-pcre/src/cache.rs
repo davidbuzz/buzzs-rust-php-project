@@ -74,30 +74,42 @@ impl Default for MatchConfig {
     }
 }
 
-/// The hash of a cache key: rustc's `FxHasher` mixing, a word of eight
-/// bytes per step, with a final 128-bit multiply fold so that the high bits
-/// the table's probe tags come from depend on every byte.
+/// `zend_inline_hash_func()`: PHP's string hash (DJBX33A over the bytes,
+/// the top bit set), the hash the cache is keyed by.
 ///
-/// Every `preg_*` call looks its pattern up, so the hash is on the hot path
-/// of tight matching loops; `SipHash`'s flooding resistance buys nothing for
-/// keys that are the script's own pattern literals (PHP hashes them with
-/// plain DJBX33A), and a byte-at-a-time hash (FNV-1a, used before) cost
-/// four instructions a byte of the pattern on every call.
+/// It is the hash a PHP string carries (`ZSTR_H`), so a binding holding
+/// the pattern as such a string passes its cached hash to
+/// [`Pcre::cached`] instead of hashing the pattern again on every call,
+/// as `pcre_get_compiled_regex_cache_ex()` looks the pattern up with
+/// `zend_hash_find(&PCRE_G(pcre_cache), regex)`.
+#[must_use]
+pub fn pattern_hash(bytes: &[u8]) -> u64 {
+    #[inline]
+    fn step(hash: u64, b: u8) -> u64 {
+        hash.wrapping_mul(33).wrapping_add(u64::from(b))
+    }
+    let mut hash: u64 = 5381;
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        for &b in c {
+            hash = step(hash, b);
+        }
+    }
+    for &b in chunks.remainder() {
+        hash = step(hash, b);
+    }
+    hash | 0x8000_0000_0000_0000
+}
+
+/// The hasher of the cache's `u64` keys (already [`pattern_hash`]es): a
+/// 128-bit multiply fold, so that the high bits the table's probe tags
+/// come from depend on every bit of the DJBX33A value (whose top bit is
+/// always set).
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PatternHasher(u64);
 
-/// rustc's `FxHasher` multiplier.
-const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-
-/// The multiplier of the final fold (`rustc-hash` 2's `K`).
+/// The multiplier of the fold (`rustc-hash` 2's `K`).
 const FOLD: u64 = 0xf1_35_7a_ea_2e_62_a9_c5;
-
-impl PatternHasher {
-    #[inline]
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(SEED);
-    }
-}
 
 impl Hasher for PatternHasher {
     #[allow(clippy::cast_possible_truncation)] // folds the 128-bit product
@@ -107,34 +119,35 @@ impl Hasher for PatternHasher {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for c in &mut chunks {
-            let mut word = [0u8; 8];
-            word.copy_from_slice(c);
-            self.add(u64::from_le_bytes(word));
-        }
-        let rest = chunks.remainder();
-        if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
-            // The length keeps "a" and "a\0" apart.
-            self.add(u64::from_le_bytes(word) ^ ((rest.len() as u64) << 56));
-        }
+        // Only `u64` keys are hashed (`write_u64`); this keeps the trait
+        // total.
+        self.0 = pattern_hash(bytes) ^ self.0.rotate_left(5);
     }
 
-    fn write_usize(&mut self, i: usize) {
-        self.add(i as u64);
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
     }
 }
 
+/// One cached pattern.
+#[derive(Debug)]
+struct Entry {
+    key: Box<[u8]>,
+    regex: Regex,
+}
+
 /// The compiled-pattern cache.  Like PHP it is keyed by the exact pattern
-/// bytes (prefixed with the `LC_CTYPE` name for locale-aware patterns) and,
-/// when it reaches [`PCRE_CACHE_SIZE`] entries, drops the oldest
-/// `PCRE_CACHE_SIZE / 8` entries that are not currently in use.
+/// bytes (prefixed with the `LC_CTYPE` name for locale-aware patterns),
+/// found by their [`pattern_hash`], and, when it reaches
+/// [`PCRE_CACHE_SIZE`] entries, drops the oldest `PCRE_CACHE_SIZE / 8`
+/// entries that are not currently in use.
 #[derive(Debug, Default)]
 pub struct RegexCache {
-    map: HashMap<Vec<u8>, Regex, BuildHasherDefault<PatternHasher>>,
-    order: Vec<Vec<u8>>,
+    /// The entries by hash; more than one only when two keys collide.
+    map: HashMap<u64, Vec<Entry>, BuildHasherDefault<PatternHasher>>,
+    /// The keys (and their hashes) in insertion order, for eviction.
+    order: Vec<(u64, Box<[u8]>)>,
 }
 
 impl RegexCache {
@@ -145,47 +158,77 @@ impl RegexCache {
 
     /// Number of cached patterns.
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.order.len()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.order.is_empty()
     }
 
     /// Looks a key up.
     pub fn get(&self, key: &[u8]) -> Option<Regex> {
-        self.map.get(key).cloned()
+        self.get_hashed(key, pattern_hash(key))
+    }
+
+    /// Looks a key up by its [`pattern_hash`] `hash`.
+    #[inline]
+    pub fn get_hashed(&self, key: &[u8], hash: u64) -> Option<Regex> {
+        debug_assert_eq!(hash, pattern_hash(key));
+        self.map
+            .get(&hash)?
+            .iter()
+            .find(|e| *e.key == *key)
+            .map(|e| e.regex.clone())
     }
 
     /// Whether `key` is cached.
     pub fn contains(&self, key: &[u8]) -> bool {
-        self.map.contains_key(key)
+        self.get(key).is_some()
     }
 
     /// Stores a freshly compiled regex, evicting first if the cache is full
     /// (`pcre_clean_cache`).
     pub fn insert(&mut self, key: Vec<u8>, regex: Regex) {
-        if self.map.len() >= PCRE_CACHE_SIZE {
-            let mut num_clean = PCRE_CACHE_SIZE / 8;
-            let map = &mut self.map;
-            self.order.retain(|k| {
-                if num_clean == 0 {
-                    return true;
-                }
-                let in_use = map.get(k).is_some_and(Regex::in_use);
-                if in_use {
-                    true
-                } else {
-                    map.remove(k);
-                    num_clean -= 1;
-                    false
-                }
-            });
+        if self.order.len() >= PCRE_CACHE_SIZE {
+            self.clean();
         }
-        if self.map.insert(key.clone(), regex).is_none() {
-            self.order.push(key);
+        let hash = pattern_hash(&key);
+        let bucket = self.map.entry(hash).or_default();
+        if let Some(e) = bucket.iter_mut().find(|e| *e.key == *key) {
+            e.regex = regex;
+            return;
         }
+        let key = key.into_boxed_slice();
+        self.order.push((hash, key.clone()));
+        bucket.push(Entry { key, regex });
+    }
+
+    /// `pcre_clean_cache()`: drops the oldest `PCRE_CACHE_SIZE / 8`
+    /// entries that are not in use.
+    fn clean(&mut self) {
+        let mut num_clean = PCRE_CACHE_SIZE / 8;
+        let map = &mut self.map;
+        self.order.retain(|(hash, key)| {
+            if num_clean == 0 {
+                return true;
+            }
+            let Some(bucket) = map.get_mut(hash) else {
+                return false;
+            };
+            let Some(i) = bucket.iter().position(|e| e.key == *key) else {
+                return false;
+            };
+            if bucket[i].regex.in_use() {
+                return true;
+            }
+            bucket.swap_remove(i);
+            if bucket.is_empty() {
+                map.remove(hash);
+            }
+            num_clean -= 1;
+            false
+        });
     }
 
     /// Drops every entry.
@@ -285,6 +328,14 @@ impl Pcre {
     /// as `E_WARNING`s, before the warning of a failed compile if any.
     pub fn take_warnings(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.warnings)
+    }
+
+    /// The cache hit of [`Pcre::compile`] (the C locale), found by the
+    /// pattern's [`pattern_hash`] `hash` (the hash the caller's string
+    /// already carries): no hashing, no allocation.
+    #[inline]
+    pub fn cached(&self, pattern: &[u8], hash: u64) -> Option<Regex> {
+        self.cache.get_hashed(pattern, hash)
     }
 
     /// `pcre_get_compiled_regex_cache()` for the C locale.
@@ -428,28 +479,49 @@ mod tests {
         assert_eq!(pcre.cache().len(), 1);
     }
 
+    /// `pattern_hash` is `zend_inline_hash_func` (what `ZSTR_H` holds).
     #[test]
-    fn pattern_hasher_tells_keys_apart() {
-        let hash = |key: &[u8]| {
-            let mut h = PatternHasher::default();
-            std::hash::Hash::hash(key, &mut h);
-            h.finish()
-        };
-        let keys: [&[u8]; 8] = [
-            b"",
-            b"a",
-            b"a\0",
-            b"/x/",
-            b"/x/i",
-            b"/abcdefgh/",
-            b"/abcdefgh/u",
-            b"/abcdefgi/",
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for k in keys {
-            assert!(seen.insert(hash(k)), "collision for {k:?}");
+    fn pattern_hash_is_zend_hash() {
+        const TOP: u64 = 0x8000_0000_0000_0000;
+        assert_eq!(pattern_hash(b""), 5381 | TOP);
+        assert_eq!(pattern_hash(b"a"), (5381 * 33 + 97) | TOP);
+        let mut h: u64 = 5381;
+        for &b in b"/abcdefghij/u" {
+            h = h.wrapping_mul(33).wrapping_add(u64::from(b));
         }
-        assert_eq!(hash(b"/x/"), hash(b"/x/"));
+        assert_eq!(pattern_hash(b"/abcdefghij/u"), h | TOP);
+    }
+
+    #[test]
+    fn hashed_lookup_and_collisions() {
+        let mut cache = RegexCache::new();
+        let a = Regex::compile(b"/a/").unwrap();
+        cache.insert(b"/a/".to_vec(), a.clone());
+        let hit = cache.get_hashed(b"/a/", pattern_hash(b"/a/")).unwrap();
+        assert!(Regex::ptr_eq(&a, &hit));
+        // Two keys under one hash (forced) stay apart.
+        let b = Regex::compile(b"/b/").unwrap();
+        cache
+            .map
+            .get_mut(&pattern_hash(b"/a/"))
+            .unwrap()
+            .push(Entry {
+                key: b"/b/".to_vec().into_boxed_slice(),
+                regex: b.clone(),
+            });
+        let found = cache.map[&pattern_hash(b"/a/")]
+            .iter()
+            .find(|e| &*e.key == b"/b/")
+            .map(|e| e.regex.clone())
+            .unwrap();
+        assert!(Regex::ptr_eq(&b, &found));
+        assert!(Regex::ptr_eq(&a, &cache.get(b"/a/").unwrap()));
+        // Re-inserting a key replaces its regex without a second entry.
+        cache.insert(b"/a/".to_vec(), b.clone());
+        assert_eq!(cache.len(), 1);
+        assert!(Regex::ptr_eq(&b, &cache.get(b"/a/").unwrap()));
+        cache.clear();
+        assert!(cache.is_empty() && cache.get(b"/a/").is_none());
     }
 
     #[test]

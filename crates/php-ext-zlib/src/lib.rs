@@ -10,7 +10,7 @@
 //!   aliases, the `compress.zlib://` wrapper and `zlib.*` filters;
 //! * [`output`] — `ob_gzhandler()`, `zlib_get_coding_type()` and the
 //!   `zlib.output_*` INI settings;
-//! * [`bz2`] — all of `ext/bz2` (registered as a second loaded extension).
+//! * [`bz2`] — all of `ext/bz2`, registered by [`Bz2`].
 //!
 //! Stream resources are those of `php-ext-streams`, so the regular file
 //! functions operate on `gzopen()`/`bzopen()` results.
@@ -26,7 +26,7 @@ use php_runtime::{Value, ZStr};
 use php_vm::ext::{Extension, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-/// The `zlib` extension (also registers `bz2`).
+/// The `zlib` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Zlib;
 
@@ -47,6 +47,21 @@ impl Extension for Zlib {
         context::register(m);
         files::register(m);
         output::register(m);
+    }
+}
+
+/// The `bz2` extension, an extension of its own as in php-src (ext/bz2):
+/// Reflection names it as its functions' extension, and
+/// `get_extension_funcs('bz2')` lists them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Bz2;
+
+impl Extension for Bz2 {
+    fn name(&self) -> &'static str {
+        "bz2"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
         bz2::register(m);
     }
 }

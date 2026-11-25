@@ -120,9 +120,20 @@ fn extract_and_compact_use_the_callers_scope() {
         run("$arr = ['v' => 1]; extract($arr, EXTR_REFS); $v = 5; echo $arr['v'];"),
         "5"
     );
+    // A callback named by a variable is a dynamic call (php8.5 throws for
+    // each form); a literal name is bound at compile time
+    // (`zend_compile_func_cuf`), so that call is extract()'s own.
     assert_eq!(
-        run("try { call_user_func('extract', ['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
+        run("try { $f = 'extract'; call_user_func($f, ['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
         "Cannot call extract() dynamically"
+    );
+    assert_eq!(
+        run("try { $f = 'extract'; $f(['a' => 1]); } catch (Error $e) { echo $e->getMessage(); }"),
+        "Cannot call extract() dynamically"
+    );
+    assert_eq!(
+        run("function h() { call_user_func('extract', ['a' => 1]); return isset($a) ? 'set' : 'unset'; } echo h();"),
+        "set"
     );
 }
 
@@ -313,6 +324,28 @@ fn globals_prefer_ref_uses_a_snapshot() {
     );
 }
 
+/// `extract()` meeting a name the function does not compile (most of
+/// `$GLOBALS`' names; `not_compiled` below) attaches the function's
+/// variable table in the middle of the walk: the variables written
+/// afterwards still reach the function (ext/standard/tests/array/bug25708.phpt).
+#[test]
+fn extract_keeps_writing_after_a_name_the_function_does_not_compile() {
+    assert_eq!(
+        run("$a = 1; $b = 2;
+            function by_ref() { $a = null; $b = null; extract($GLOBALS, EXTR_REFS); echo $a, $b, '|'; }
+            function fresh() { extract($GLOBALS, EXTR_REFS); echo $a, $b, '|'; }
+            function by_value() { $a = null; extract($GLOBALS); echo $a, $b, '|'; }
+            function mixed() { $x = 0; extract(['not_compiled' => 9, 'x' => 5, 'y' => 6]); echo $x, $y, '|'; }
+            function later() {
+                $x = 0;
+                extract(['x' => 5, 'not_compiled' => 9, 'y' => 6], EXTR_PREFIX_ALL, 'p');
+                echo $x, isset($p_x) ? $p_x : '-', $p_y;
+            }
+            by_ref(); fresh(); by_value(); mixed(); later();"),
+        "12|12|12|56|056"
+    );
+}
+
 #[test]
 fn extract_checks_typed_references_before_later_entries() {
     assert_eq!(
@@ -473,5 +506,277 @@ class B extends A {
         "\nDeprecated: Use of \"parent\" in callables is deprecated in test.php on line 6\nB1\nB2\n\
          \nDeprecated: Use of \"self\" in callables is deprecated in test.php on line 7\nB3\n\
          \nDeprecated: Callables of the form [\"B\", \"A::foo\"] are deprecated in test.php on line 8\nB4\n"
+    );
+}
+
+/// `compact()` and `extract()` in a function read and write its variables
+/// in their slots, a variable `extract()` defines (`$made`) included, and
+/// `get_defined_vars()` sees them all (`/usr/bin/php8.5 -n`:
+/// `31,2,m!,a,b,i,c,made,`).
+#[test]
+fn compact_and_extract_use_the_functions_slots() {
+    assert_eq!(
+        run("function f() { $a = 1; $b = 2; for ($i = 0; $i < 3; $i++) { $c = compact('a', 'b'); $c['a'] += 10; extract($c); } extract(['made' => 'm']); $made .= '!'; echo $a, ',', $b, ',', $made, ','; foreach (array_keys(get_defined_vars()) as $k) { echo $k, ','; } } f();"),
+        "31,2,m!,a,b,i,c,made,"
+    );
+}
+
+/// `array_keys()` reads its table and filter in place: a reference inside
+/// the array and a reference passed as the filter compare by their values,
+/// `null` is a filter, and a missing filter with `strict` throws
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_keys_reads_table_and_filter_in_place() {
+    let pre = "$x = 1; $a = ['a' => &$x, '5' => 1, 2 => '1', 'z' => null];";
+    let cases = [
+        ("echo implode(',', array_keys($a));", "a,5,2,z"),
+        ("echo implode(',', array_keys($a, 1));", "a,5,2"),
+        ("echo implode(',', array_keys($a, '1', true));", "2"),
+        ("echo implode(',', array_keys($a, null));", "z"),
+        ("$f = 1; $r = &$f; echo implode(',', array_keys($a, $r, true));", "a,5"),
+        ("echo count(array_keys([])), count($a);", "04"),
+        (
+            "try { array_keys($a, strict: true); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(); }",
+            "ArgumentCountError: array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
+        ),
+    ];
+    for (code, want) in cases {
+        assert_eq!(run(&format!("{pre} {code}")), want, "{code}");
+    }
+}
+
+/// The internal-pointer functions move the array in place and copy out
+/// the element once: a reference element reads through, a copy of the
+/// array is separated and keeps its own pointer, an empty array gives
+/// `false`, an array holding a reference to itself, an object, and a
+/// `TypeError` (`/usr/bin/php8.5 -n`).
+#[test]
+fn pointer_functions_in_place() {
+    let out = run(r#"$x = 'X'; $a = [1, &$x, 'c'];
+        echo next($a), current($a), key($a), end($a), prev($a), reset($a), '|';
+        $b = $a; next($b); next($b); echo current($a), current($b), '|';
+        $e = []; var_dump(next($e), end($e), current($e), key($e));
+        $self = [1]; $self[1] = &$self; next($self); echo gettype(current($self)), '|';
+        $o = new stdClass; $o->p = 1; $o->q = 2;
+        echo @end($o), @current($o), '|';
+        try { next($y); } catch (TypeError $t) { echo $t->getMessage(), '|'; }
+        echo end($a);"#);
+    assert_eq!(
+        out,
+        "XX1cX1|1c|bool(false)\nbool(false)\nbool(false)\nNULL\narray|22|next(): Argument #1 ($array) must be of type array, null given|c"
+    );
+}
+
+/// `array_merge()` of hashes: string keys appended by their stored hash
+/// and updated in place, integer keys renumbered, a list first or a hash
+/// first, an emptied hash first, a shared reference kept and a table that
+/// grows past its first size (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_merge_hashes() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        $x = 1; $r = ['a' => &$x, 'b' => 2];
+        echo show(array_merge(['key' => 1, 'b' => 2, 'c' => 3], ['a' => 1, 'b' => 20, 'c' => 30, 5 => 'five', 'd' => 4]));
+        echo show(array_merge([1, 2], ['a' => 1, '7' => 'x'], ['a' => 'A', 3]));
+        echo show(array_merge(['a' => 1, 9 => 'n'], [10, 11], ['b' => 2]));
+        $m = array_merge($r, ['c' => 3]); $x = 99; echo show($m);
+        $t = ['a' => 1]; unset($t['a']); echo show(array_merge($t, [1, 2], ['z' => 0]));
+        echo show(array_merge(['a' => 1], [])), show(array_merge([], ['b' => 2, 3]));
+        $big = []; for ($i = 0; $i < 20; $i++) { $big["k$i"] = $i; }
+        echo count(array_merge($big, ['k3' => 'x', 'new' => 1])), array_merge($big, ['k3' => 'x'])['k3'], '|';
+        $o = ['o' => new stdClass]; echo get_class(array_merge($o, ['p' => 1])['o']);"#,
+    );
+    assert_eq!(
+        out,
+        "'key'=1,'b'=20,'c'=30,'a'=1,0='five','d'=4,|0=1,1=2,'a'='A',2='x',3=3,|'a'=1,0='n',1=10,2=11,'b'=2,|'a'=99,'b'=2,'c'=3,|0=1,1=2,'z'=0,|'a'=1,|'b'=2,0=3,|21x|stdClass"
+    );
+}
+
+/// `array_pop()`, `array_shift()`, `array_push()` and `array_unshift()`
+/// work on the array in place: a shared reference element read after the
+/// call, a copy of the array kept apart, the next free index and the
+/// internal pointer after the call, empty arrays, an array holding a
+/// reference to itself, a non-array, and pushing the array onto itself
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn stack_functions_in_place() {
+    let out = run(r#"$x = 'X'; $a = [1, 'k' => 2, &$x]; $b = $a;
+        echo array_pop($a), count($a), count($b), '|';
+        $x = 'Y'; echo array_pop($b), '|';
+        $a = [5 => 'a', 6 => 'b']; array_pop($a); $a[] = 'c'; echo implode(',', array_keys($a)), '|';
+        $a = [1, 2, 3]; next($a); next($a); array_pop($a); echo current($a), '|';
+        $a = ['x' => 1, 3 => 2, 9 => 3]; echo array_shift($a), implode(',', array_keys($a)), '|';
+        $a = []; var_dump(array_pop($a), array_shift($a));
+        $a = [1]; echo array_push($a, 2, [3]), count($a[2]), '|';
+        $a = ['k' => 1, 5 => 2]; echo array_unshift($a, 'z', 'y'), implode(',', array_keys($a)), implode(',', array_map('strval', array_slice($a, 0, 3))), '|';
+        $a = [1, 2]; next($a); array_unshift($a, 0); echo current($a), '|';
+        $s = [1]; $s[] = &$s; echo gettype(array_pop($s)), count($s), '|';
+        $n = 5; try { array_pop($n); } catch (TypeError $e) { echo $e->getMessage(), '|'; }
+        try { array_push($n, 1); } catch (TypeError $e) { echo $e->getMessage(), '|'; }
+        $a = [1, 2]; $c = $a; array_push($a, $a); echo count($a), count($a[2]), count($c);"#);
+    assert_eq!(
+        out,
+        "X23|Y|5,6|1|10,1|NULL\nNULL\n31|40,1,k,2z,y,1|0|array1|array_pop(): Argument #1 ($array) must be of type array, int given|array_push(): Argument #1 ($array) must be of type array, int given|322"
+    );
+}
+
+/// `array_unique()` and `array_diff()` over a string set placed by the
+/// strings' stored hashes: strings, numbers and their string forms,
+/// `null`/`''`/`false`, a reference element, numeric-looking strings kept
+/// verbatim, arrays (`"Array"`), one element, and an empty exclusion
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_unique_and_diff_string_sets() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        echo show(array_unique(['a', 'b', 'c', 'd', 'e']));
+        echo show(array_unique([1, '1', 1.0, '1.0', true, 'x' => 'a', 'y' => 'a', 3 => null, 4 => '', 5 => false]));
+        $x = 'b'; echo show(array_unique(['k' => 'b', 'r' => &$x, 'z' => 'c']));
+        echo show(array_unique(['12', 12, '012', 'a' => 'A', 'b' => 'a']));
+        echo show(@array_unique([[1], [2], 'Array']));
+        echo show(array_unique([5 => 'q']));
+        echo show(array_diff(['a', 'b', 1, '2', 'c' => 'c'], ['b', 2], ['c']));
+        echo show(array_diff([1, 2, 3], []));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',1='b',2='c',3='d',4='e',|0=1,3=NULL,'x'='a',|'k'='b','z'='c',|0='12',2='012','a'='A','b'='a',|0=A,|5='q',|0='a',2=1,|0=1,1=2,2=3,|"
+    );
+}
+
+/// `array_search()` / `in_array()` walk positions and compare strings with
+/// `zend_fast_equal_strings()`'s first-byte test: numeric strings,
+/// leading whitespace, case, holes in a list and in a hash, a reference
+/// element, `null` and `0` against `''` (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_search_positions_and_strings() {
+    let out = run(r#"$small = ['a', 'b', 'c', 'd', 'e'];
+        var_export([array_search('d', $small), array_search('z', $small), array_search('10', ['1e1']), array_search('1e1', [5, '10']), array_search(' 1', ['1']), array_search('abc', ['ABC', 'abc'])]);
+        $h = [3 => 'x', 'k' => 'y', 9 => 'z']; unset($h[3]); var_export([array_search('z', $h), array_search('y', $h), in_array('x', $h)]);
+        $l = [1, 2, 3, 4]; unset($l[1]); var_export([array_search(3, $l), array_search('4', $l), array_search('4', $l, true), in_array(2, $l)]);
+        $x = 'q'; $r = ['a', &$x]; var_export([array_search('q', $r), array_search('q', $r, true), in_array(null, ['', 0]), array_search(0, ['a', 0]), array_search('', [null])]);"#);
+    assert_eq!(
+        out.replace(|c: char| c == '\n' || c == ' ', ""),
+        "array(0=>3,1=>false,2=>0,3=>1,4=>0,5=>1,)array(0=>9,1=>'k',2=>false,)array(0=>2,1=>3,2=>false,3=>false,)array(0=>1,1=>1,2=>true,3=>1,4=>0,)"
+    );
+}
+
+/// `array_filter()` without a callback decides the common scalars inline
+/// and appends kept list elements in place: every falsy and truthy kind,
+/// keys kept with holes, the next index after the call, a reference
+/// element, keys out of order, the callback forms, and NaN
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_filter_truthiness_and_keys() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        echo show(array_filter(['a', '', 'b', '0', 'c', 0, 1, null, false, true, [], [0], 0.0, 'x' => 'X', -1, '00', ' ']));
+        echo show(array_filter([0, 0, 'a', 'b'])), show(array_filter([])), show(array_filter([0, '']));
+        $l = [1, 2, 3]; unset($l[1]); echo show(array_filter($l)); $r = array_filter($l); $r[] = 9; echo show($r);
+        $x = 1; echo show(array_filter([&$x, 0]));
+        echo show(array_filter([5 => 1, 2 => 2, 0 => 3]));
+        echo show(array_filter([1, 2, 3, 4], fn($v) => $v % 2)), show(array_filter(['a' => 1, 'b' => 2], fn($k) => $k == 'b', ARRAY_FILTER_USE_KEY));
+        echo show(@array_filter([NAN, 0.0, 1.5]));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',2='b',4='c',6=1,9=true,11=A,'x'='X',13=-1,14='00',15=' ',|2='a',3='b',|||0=1,2=3,|0=1,2=3,3=9,|0=1,|5=1,2=2,0=3,|0=1,2=3,|'b'=2,|0=NAN,2=1.5,|"
+    );
+}
+
+/// `array_slice()` of a list without holes reads from the offset's
+/// position: every offset/length form, `preserve_keys`, a list with a
+/// hole, a reference element and hashes (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_slice_positions() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . var_export($v, true) . ','; } return $s . '|'; }
+        $small = ['a', 'b', 'c', 'd', 'e'];
+        echo show(array_slice($small, 0, 2)), show(array_slice($small, 3)), show(array_slice($small, -2, 1)), show(array_slice($small, 1, -1)), show(array_slice($small, 9)), show(array_slice($small, 2, 10, true)), show(array_slice($small, 0, null, true)), show(array_slice($small, -10, 2)), show(array_slice($small, 4, 5));
+        $h = [1, 2, 3, 4]; unset($h[1]); echo show(array_slice($h, 1, 2)), show(array_slice($h, 1, 2, true));
+        $x = 1; echo show(array_slice([&$x, 2], 0, 1));
+        echo show(array_slice(['a' => 1, 5 => 2, 'b' => 3], 1)), show(array_slice(['a' => 1, 5 => 2], 1, 1, true));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',1='b',|0='d',1='e',|0='d',|0='b',1='c',2='d',||2='c',3='d',4='e',|0='a',1='b',2='c',3='d',4='e',|0='a',1='b',|0='e',|0=3,1=4,|2=3,3=4,|0=1,|0=2,'b'=3,|5=2,|"
+    );
+}
+
+#[test]
+fn u_diff_variants_count_their_arguments_before_typing_them() {
+    // php_array_diff() parses "+f" before it looks at an array: a short call
+    // is an ArgumentCountError whatever its first argument, and a bad
+    // callback comes before a non-array (expected values from php8.5).
+    let t = |code: &str| {
+        run(&format!(
+            "try {{ {code}; }} catch (Throwable $e) {{ echo get_class($e), ': ', $e->getMessage(); }}"
+        ))
+    };
+    assert_eq!(
+        t("array_udiff(1)"),
+        "ArgumentCountError: array_udiff() expects at least 2 arguments, 1 given"
+    );
+    assert_eq!(
+        t("array_uintersect_uassoc('a')"),
+        "ArgumentCountError: array_uintersect_uassoc() expects at least 3 arguments, 1 given"
+    );
+    assert_eq!(
+        t("array_diff_ukey(null, 'nope')"),
+        "TypeError: array_diff_ukey(): Argument #2 must be a valid callback, function \"nope\" not found or invalid function name"
+    );
+    assert_eq!(
+        t("array_udiff(1, [], 'strcmp')"),
+        "TypeError: array_udiff(): Argument #1 ($array) must be of type array, int given"
+    );
+    assert_eq!(
+        t("array_udiff([], 2, 'strcmp')"),
+        "TypeError: array_udiff(): Argument #2 must be of type array, int given"
+    );
+}
+
+#[test]
+fn set_operations_reflect_their_stub_types() {
+    let sig = |f: &str| {
+        run(&format!(
+            "$r = new ReflectionFunction('{f}'); echo implode(', ', array_map(fn($p) => $p->getType() . ' ' . ($p->isVariadic() ? '...' : '') . '$' . $p->getName(), $r->getParameters())), ' req=', $r->getNumberOfRequiredParameters();"
+        ))
+    };
+    assert_eq!(sig("array_diff"), "array $array, array ...$arrays req=1");
+    assert_eq!(
+        sig("array_intersect_key"),
+        "array $array, array ...$arrays req=1"
+    );
+    assert_eq!(
+        sig("array_replace"),
+        "array $array, array ...$replacements req=1"
+    );
+    assert_eq!(sig("array_merge_recursive"), "array ...$arrays req=0");
+    assert_eq!(sig("array_udiff"), "array $array,  ...$rest req=1");
+    assert_eq!(
+        sig("array_uintersect_uassoc"),
+        "array $array,  ...$rest req=1"
+    );
+}
+
+#[test]
+fn count_parses_its_mode_before_it_types_the_value() {
+    // PHP_FUNCTION(count) takes Z_PARAM_ZVAL + Z_PARAM_LONG, checks the mode,
+    // and only then the value (expected output from php8.5).
+    let out = run(
+        r#"set_error_handler(function ($n, $m) { echo "[$n] $m\n"; return true; });
+foreach ([fn() => count("abc", -1), fn() => count("abc", null), fn() => count(1, []),
+          fn() => sizeof(null, 5), fn() => count([1, [2]], 1)] as $f) {
+    try { var_dump($f()); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE\n\
+         [8192] count(): Passing null to parameter #2 ($mode) of type int is deprecated\n\
+         TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given\n\
+         TypeError: count(): Argument #2 ($mode) must be of type int, array given\n\
+         ValueError: sizeof(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE\n\
+         int(3)\n"
     );
 }

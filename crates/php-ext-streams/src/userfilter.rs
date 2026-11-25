@@ -533,15 +533,59 @@ fn apply(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
     })?;
     PENDING_PARAMS.with(|p| *p.borrow_mut() = None);
     Ok(match r {
-        Some(id) => Value::Resource(Resource::new(
-            FILTER,
-            Some(Box::new(FilterRes {
-                stream: Rc::downgrade(&cell),
-                id,
-            })),
-        )),
+        Some(id) => {
+            let r = Resource::new(
+                FILTER,
+                Some(Box::new(FilterRes {
+                    stream: Rc::downgrade(&cell),
+                    id,
+                })),
+            );
+            LISTED.with(|l| {
+                let mut l = l.borrow_mut();
+                l.retain(|(_, s, _)| s.upgrade().is_some_and(|c| !c.is_closed()));
+                l.push((r.handle(), Rc::downgrade(&cell), id));
+            });
+            Value::Resource(r)
+        }
         None => Value::Bool(false),
     })
+}
+
+thread_local! {
+    /// The `stream filter` resources by handle, with their stream and
+    /// filter: `apply_filter_to_stream()` (ext/standard/streamsfuncs.c)
+    /// keeps an extra reference in `EG(regular_list)`, so `get_resources()`
+    /// lists the filter until it is removed or its stream closed, whether
+    /// or not the script kept the resource.
+    static LISTED: RefCell<Vec<(i64, Weak<StreamCell>, FilterId)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Adds the live `stream filter` resources to a `get_resources()` list.
+pub(crate) fn live_filters(out: &mut Vec<(i64, &'static str, Value)>) {
+    LISTED.with(|l| {
+        let mut l = l.borrow_mut();
+        l.retain(|(_, s, id)| {
+            let Some(c) = s.upgrade() else {
+                return false;
+            };
+            if c.is_closed() {
+                return false;
+            }
+            // In use by a running operation: still attached.
+            let attached = c.get().is_none_or(|st| st.filter_chain_of(*id).is_some());
+            attached
+        });
+        for (h, s, id) in l.iter() {
+            let data = FilterRes {
+                stream: Weak::clone(s),
+                id: *id,
+            };
+            let r = Resource::with_handle(*h, FILTER, Some(Box::new(data)));
+            out.push((*h, FILTER, Value::Resource(r)));
+        }
+    });
 }
 
 fn stream_filter_append(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

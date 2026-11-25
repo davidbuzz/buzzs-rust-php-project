@@ -25,7 +25,7 @@ use std::cell::Cell;
 
 use php_runtime::Value;
 use php_session::ini::DIRECTIVES;
-use php_support::ini::{Access, IniDirective, ModifyHandler, Stage};
+use php_support::ini::{Access, IniDirective, IniDisplayer, ModifyHandler, Stage};
 use php_support::Diagnostic;
 use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
 use php_vm::Vm;
@@ -36,6 +36,9 @@ thread_local! {
     static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
     /// `ini_restore()` is running: the modify hooks restore.
     static RESTORING: Cell<bool> = const { Cell::new(false) };
+    /// The (VM registry generation, store revision) [`sync`] last left in
+    /// sync.
+    static LAST_SYNC: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
 }
 
 /// Whether the current modify-hook call comes from `ini_restore()`.
@@ -86,18 +89,38 @@ macro_rules! hooks {
 const HOOKS: [php_vm::ext::IniModifyFn; 31] =
     hooks!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30);
 
+/// The directives ext/session/session.c declares with
+/// `STD_PHP_INI_BOOLEAN` (phpinfo() shows them as "On"/"Off").
+const BOOLEAN_DIRECTIVES: [&str; 11] = [
+    "session.auto_start",
+    "session.cookie_secure",
+    "session.cookie_partitioned",
+    "session.cookie_httponly",
+    "session.use_cookies",
+    "session.use_only_cookies",
+    "session.use_strict_mode",
+    "session.use_trans_sid",
+    "session.lazy_write",
+    "session.upload_progress.enabled",
+    "session.upload_progress.cleanup",
+];
+
 /// Registers the directives in the VM registry (module `session`) with
 /// their modify hooks, and the `ini_restore()` wrapper.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     debug_assert_eq!(DIRECTIVES.len(), HOOKS.len());
     for (d, hook) in DIRECTIVES.iter().zip(HOOKS) {
-        m.ini(IniDirective::new(
+        let mut def = IniDirective::new(
             d.name,
             Some(d.default),
             Access(d.access),
             ModifyHandler::None,
             "session",
-        ));
+        );
+        if BOOLEAN_DIRECTIVES.contains(&d.name) {
+            def = def.with_displayer(IniDisplayer::Boolean);
+        }
+        m.ini(def);
         m.ini_on_modify(d.name, hook);
     }
     let vm = m.vm();
@@ -113,17 +136,32 @@ pub(crate) fn config_value(vm: &Vm, name: &str) -> Option<Vec<u8>> {
 }
 
 /// Copies the library's values into the VM registry.
+///
+/// Runs after every session entry point and at request start and end, so
+/// it first compares the two sides' stamps (the VM registry's generation
+/// and the store's revision) with those of the last pass: when neither
+/// side changed since a pass that left them in sync, there is nothing to
+/// copy. Otherwise each directive costs two registry probes, and only
+/// directives that differ are restored or altered.
 pub(crate) fn sync(h: &mut VmHost<'_>) {
+    let (state, vm) = h.state_and_vm();
+    let stamp = (vm.ini.generation(), state.ini.revision());
+    if LAST_SYNC.with(Cell::get) == Some(stamp) {
+        return;
+    }
     let mut sink: Vec<Diagnostic> = Vec::new();
-    for d in DIRECTIVES {
-        let Some(e) = h.state().ini.entry(d.name).cloned() else {
-            continue;
-        };
-        if !e.modified {
-            h.vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
+    for (d, e) in DIRECTIVES.iter().zip(state.ini.entries()) {
+        if !e.modified && vm.ini.is_modified(d.name) {
+            vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
+        } else if !e.modified && vm.ini.raw(d.name) != Some(e.value.as_slice()) {
+            // A configured value the session's handler rejected at startup
+            // ("session.gc_divisor must be greater than 0"): C's
+            // zend_register_ini_entries() keeps the default, unmodified,
+            // so ini_get_all() reports it as the global value too.
+            vm.ini.reset_to_default(d.name);
         }
-        if h.vm.ini.raw(d.name) != Some(e.value.as_slice()) {
-            h.vm.ini.alter(
+        if vm.ini.raw(d.name) != Some(e.value.as_slice()) {
+            vm.ini.alter(
                 d.name,
                 &e.value,
                 Access::SYSTEM,
@@ -133,6 +171,8 @@ pub(crate) fn sync(h: &mut VmHost<'_>) {
             );
         }
     }
+    let stamp = (vm.ini.generation(), state.ini.revision());
+    LAST_SYNC.with(|c| c.set(Some(stamp)));
 }
 
 fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -142,5 +182,22 @@ fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let was = RESTORING.with(|r| r.replace(true));
     let res = orig(vm, a);
     RESTORING.with(|r| r.set(was));
+    // A restore the session refused ("headers already sent", an active
+    // session) keeps the library's value; zend_restore_ini_entry_cb()
+    // keeps such an entry modified, so the VM registry, already restored,
+    // gets the value back.
+    with_host_unsynced(vm, |h| sync(h));
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOOLEAN_DIRECTIVES, DIRECTIVES};
+
+    #[test]
+    fn boolean_directives_are_session_directives() {
+        for name in BOOLEAN_DIRECTIVES {
+            assert!(DIRECTIVES.iter().any(|d| d.name == name), "{name}");
+        }
+    }
 }

@@ -101,3 +101,25 @@ fn enable_crypto_requires_method() {
         "stream_socket_enable_crypto(): Argument #3 ($crypto_method) must be specified when enabling encryption\nbool(true)\nbool(true)\n"
     );
 }
+
+/// `STREAM_CLIENT_ASYNC_CONNECT` alone connects a `tcp://` client (C's
+/// `php_stream_xport_create()` connects for it as for
+/// `STREAM_CLIENT_CONNECT`); the stream is a `tcp_socket/ssl` one that
+/// becomes writable once connected. Expected output from php8.5.
+#[test]
+fn async_connect_connects() {
+    let out = run(r#"$srv = stream_socket_server("tcp://127.0.0.1:0");
+        $addr = stream_socket_get_name($srv, false);
+        $c = stream_socket_client("tcp://$addr", $errno, $errstr, 5, STREAM_CLIENT_ASYNC_CONNECT);
+        var_dump(stream_get_meta_data($c)['stream_type'], $errno);
+        stream_set_blocking($c, false);
+        $r = null; $w = [$c]; $e = null;
+        var_dump(stream_select($r, $w, $e, 5));
+        var_dump(fwrite($c, "ping"));
+        $peer = stream_socket_accept($srv, 5);
+        var_dump(fread($peer, 4));"#);
+    assert_eq!(
+        out,
+        "string(14) \"tcp_socket/ssl\"\nint(0)\nint(1)\nint(4)\nstring(4) \"ping\"\n"
+    );
+}

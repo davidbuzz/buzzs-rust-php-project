@@ -11,9 +11,12 @@ use super::{
     TOp, KC, KI, KT, SLOT_SHIFT,
 };
 use super::{Num, KL};
+use crate::exec::hot;
 use crate::exec::spec::plain_truth;
-use crate::opcode::{BinKind, Op, OpArray, Operand, UnKind};
+use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, UnKind};
+use crate::vm::Frame;
 use php_runtime::{BinaryOp, Value};
+use std::rc::Rc;
 
 /// The operators of [`num_bin_tmp`], by their code in an instruction's `e`:
 /// those of `Op::Bin` the numeric families of [`super`] leave out, for
@@ -38,6 +41,9 @@ const NUM_OPS: [BinKind; 14] = [
 /// The specialised instruction of the op at `i` when this family has one.
 #[allow(clippy::too_many_lines)] // one arm per op, like the other families' `lower`
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
+    if let Some(inst) = lower_eq_lit(code, i) {
+        return Some(inst);
+    }
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         Op::Nop => plain(TOp::Nop),
@@ -63,6 +69,26 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 }
             } else {
                 plain(TOp::Nop)
+            }
+        }
+        // `$cv = <string or array literal>`, result unused
+        // (`ZEND_ASSIGN_SPEC_CV_CONST`): the numeric arms of
+        // `super::lower_numeric` take the scalar literals.
+        Op::AssignCv {
+            cv,
+            val: Operand::Lit(l),
+            dst: None,
+        } => {
+            if !matches!(
+                code.literals.get(l as usize)?,
+                Value::Str(_) | Value::Array(_)
+            ) {
+                return None;
+            }
+            Inst {
+                a: cv_off(code, cv)?,
+                b: lit_off(l)?,
+                ..plain(TOp::AssignLitC)
             }
         }
         // `$cv = val` whose value is used (`$j += ($i = $j)`, `$a = $b =
@@ -185,6 +211,54 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         // `$cv ?: ...` and `$cv ?? ...`: the result temporary is in `b`.
+        // `match` with a jump table (`ZEND_MATCH`): the table's address
+        // in `p` (it lives in the op array, as the tape does), the
+        // subject's kind in `k` (`EQ_CV`, `EQ_KEEP`, or `MATCH_LIT`) and
+        // offset in `a`, the op's index in `d`. Every target is checked
+        // to be inside the tape. (The one jumping row without its target
+        // in `c`: no JIT region takes it, and a loop closes with no
+        // `match`.)
+        Op::Match { subject, ref table } => {
+            for to in table.labels() {
+                rel(code, i, to)?;
+            }
+            let (k, a) = match subject {
+                Operand::Cv(cv) => (EQ_CV, cv_off(code, cv)?),
+                Operand::TmpKeep(t) => (EQ_KEEP, tmp_off(code, t)?),
+                Operand::Lit(l) => {
+                    if matches!(code.literals.get(l as usize)?, Value::Reference(_)) {
+                        return None;
+                    }
+                    (MATCH_LIT, lit_off(l)?)
+                }
+                _ => return None,
+            };
+            Inst {
+                k,
+                a,
+                d: u32::try_from(i).ok()?,
+                p: std::ptr::from_ref::<crate::opcode::MatchTable>(&**table) as usize,
+                ..plain(TOp::MatchJ)
+            }
+        }
+        // `TMP ?: ...` (`ZEND_JMP_SET_SPEC_TMP`: a call's result, an
+        // element): the result temporary in `b`.
+        Op::JmpSet {
+            a: Operand::Tmp(t),
+            dst,
+            target,
+        } => Inst {
+            a: tmp_off(code, t)?,
+            b: tmp_off(code, dst)?,
+            c: rel(code, i, target)?,
+            ..plain(TOp::JmpSetT)
+        },
+        // `ZEND_FREE` of a temporary (an expression statement's unused
+        // value: `$a['k'];`).
+        Op::Free(Operand::Tmp(t)) => Inst {
+            a: tmp_off(code, t)?,
+            ..plain(TOp::FreeT)
+        },
         Op::JmpSet {
             a: Operand::Cv(cv),
             dst,
@@ -217,8 +291,454 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::CoalesceT)
         },
+        // `is_*()` / `instanceof` / `count()` of a value that is not a
+        // variable (a variable's `is_*()` and `count()` are `strs`'
+        // rows), `foreach` over an array and the release of its
+        // iterator: rows of their own instead of `hot::step_ext`'s
+        // second dispatch. The op stays at `d`; its handler reads it
+        // there.
+        Op::TypeCheck { a, .. } | Op::Count { a, .. } if !matches!(a, Operand::Cv(_)) => {
+            let op = if matches!(code.ops.get(i)?, Op::TypeCheck { .. }) {
+                TOp::TypeCheckX
+            } else {
+                TOp::CountX
+            };
+            Inst {
+                d: u32::try_from(i).ok()?,
+                ..plain(op)
+            }
+        }
+        Op::InstanceOf {
+            class: ClassSpec::Named(_),
+            ..
+        } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::InstanceOfX)
+        },
+        Op::FeReset {
+            kind: ForeachKind::Value,
+            end,
+            ..
+        } => Inst {
+            c: rel(code, i, end)?,
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeResetA)
+        },
+        Op::FeFree { .. } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeFreeA)
+        },
+        // `func_num_args()` with its result used (`ZEND_FUNC_NUM_ARGS`;
+        // unused, it is no code in a compiled loop: the `Ext` row).
+        Op::FuncNumArgs { dst: Some(d) } if d < code.num_tmps => Inst {
+            b: d,
+            ..plain(TOp::FuncNumArgsT)
+        },
+        // The `FE_FREE` before a `return` inside a `foreach` of an array.
+        Op::FeFreeOnReturn { .. } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeFreeRetA)
+        },
+        // `ZEND_FETCH_CONSTANT` of a global name (a constant `define()`d
+        // at run time: one known at compile time is a literal) on its
+        // run-time cache hit; the `To` form jumps (`c`) past its folded
+        // `AssignCv` when the value went into that op's variable `d`.
+        Op::FetchConst {
+            name,
+            fallback: None,
+            dst,
+        } if (name as usize) < code.literals.len() && dst < code.num_tmps => Inst {
+            a: name,
+            b: dst,
+            ..plain(TOp::ConstT)
+        },
+        Op::FetchConstTo {
+            name,
+            fallback: None,
+            dst,
+            to,
+        } if (name as usize) < code.literals.len()
+            && dst < code.num_tmps
+            && (to as usize) < code.cv_names.len() =>
+        {
+            Inst {
+                a: name,
+                b: dst,
+                c: rel(code, i, u32::try_from(i + 2).ok()?)?,
+                d: to,
+                ..plain(TOp::ConstTo)
+            }
+        }
+        // `(int)`, `(float)`, `(bool)`, `(array)` (`(string)` is the
+        // `dims` family's `CastStrT`, or `hot::step_ext`'s).
+        Op::Cast {
+            kind: kind @ (CastKind::Int | CastKind::Float | CastKind::Bool | CastKind::Array),
+            a,
+            dst,
+        } => {
+            let (ka, ia) = match a {
+                Operand::Cv(c) if (c as usize) < code.cv_names.len() => (0, c),
+                Operand::Tmp(t) if t < code.num_tmps => (1, t),
+                Operand::TmpKeep(t) if t < code.num_tmps => (2, t),
+                Operand::Lit(l) if (l as usize) < code.literals.len() => (3, l),
+                _ => return None,
+            };
+            if dst >= code.num_tmps {
+                return None;
+            }
+            Inst {
+                a: ia,
+                b: dst,
+                k: ka,
+                e: match kind {
+                    CastKind::Int => 0,
+                    CastKind::Float => 1,
+                    CastKind::Bool => 2,
+                    _ => 3,
+                },
+                ..plain(TOp::CastX)
+            }
+        }
         _ => return None,
     })
+}
+
+/// `Op::TypeCheck` (`ZEND_TYPE_CHECK`: `is_array($x['k'])`, `is_string(f())`)
+/// of the op at `inst.d`, as `hot::step_ext` runs it (`hot::type_check_in`:
+/// a value read without a diagnostic). `false`, nothing changed, for the
+/// generic op.
+///
+/// # Safety
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
+#[inline(never)]
+pub(super) unsafe fn type_check(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // A handle of its own on the op array: the op and the literals are
+    // read from it while the frame is borrowed mutably.
+    let code = Rc::clone(&f.code);
+    let Some(&Op::TypeCheck { a, mask, dst }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    let Some(r) = hot::type_check_in(f, &code.literals, a, mask) else {
+        return false;
+    };
+    hot::set_dst_in(f, dst, Value::Bool(r));
+    true
+}
+
+/// `Op::Count` (`ZEND_COUNT` of an array that is not a variable) of the op
+/// at `inst.d`, as [`type_check`] (`hot::count_in`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn count(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::Count { a, dst, .. }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    let Some(n) = hot::count_in(f, &code.literals, a) else {
+        return false;
+    };
+    hot::set_dst_in(f, dst, Value::Int(n));
+    true
+}
+
+/// `Op::InstanceOf` of a named class (`ZEND_INSTANCEOF` on a run-time
+/// cache hit: `hot::instanceof_in`) of the op at `inst.d`, as
+/// [`type_check`].
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // The commonest form, `$cv instanceof C` of an object of `C` itself
+    // (`instanceof_function`'s `instance_ce == ce`), without a handle on
+    // the op array or on the class. The operands are copied out of the op,
+    // so its borrow ends here.
+    let Some(&Op::InstanceOf {
+        a: Operand::Cv(cv),
+        class: ClassSpec::Named(lit),
+        dst,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        // SAFETY: the caller's contract.
+        return unsafe { instance_of_any(frame, inst) };
+    };
+    if !f.symtab_attached && is_cached_class(f, cv, lit) {
+        hot::set_tmp_in(f, dst, Value::Bool(true));
+        return true;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { instance_of_any(frame, inst) }
+}
+
+/// Whether compiled variable `cv` of frame `f` holds an object (directly)
+/// whose class is the one class literal `lit`'s cache entry names. A
+/// pointer compare, without upgrading the entry: the object's own handle
+/// keeps its class alive, and a live `Weak` keeps the class's block from
+/// being reused, so an equal address is that class (a dangling entry,
+/// `Weak::new()`, has an address no class has).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the hit of `instance_of`
+fn is_cached_class(f: &Frame, cv: u32, lit: u32) -> bool {
+    let Some(Value::Object(o)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+        return false;
+    };
+    let class = Rc::as_ptr(crate::object::class_of(o));
+    f.code.class_cache.try_borrow().is_ok_and(|cache| {
+        cache
+            .get(lit as usize)
+            .is_some_and(|named| std::ptr::eq(named.as_ptr(), class))
+    })
+}
+
+/// [`instance_of`] of any other operand or class (`hot::instanceof_in`):
+/// a subclass or an interface, a reference, a temporary or a literal.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+unsafe fn instance_of_any(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::InstanceOf {
+        a,
+        class: ClassSpec::Named(lit),
+        dst,
+    }) = code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    let Some(r) = hot::instanceof_in(f, &code.literals, a, lit) else {
+        return false;
+    };
+    hot::set_tmp_in(f, dst, Value::Bool(r));
+    true
+}
+
+/// `Op::FeReset` by value of an array (`ZEND_FE_RESET_R`:
+/// `hot::fe_reset_array_in`) of the op at `inst.d`: falls through into the
+/// loop, or jumps to its end (`c`) for an empty array. `Decline`, nothing
+/// changed, for the generic op (objects, warnings, generators).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // The commonest subject, an array in a plain variable of a frame
+    // without a symbol table, without the handle of the op array the
+    // general path takes and without its call. The operands are copied
+    // out of the op, so its borrow ends here.
+    let Some(&Op::FeReset {
+        subject: Operand::Cv(cv),
+        kind: ForeachKind::Value,
+        iter,
+        ..
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        // SAFETY: the caller's contract, passed on; the borrow has ended.
+        return unsafe { fe_reset_any(frame, inst) };
+    };
+    if f.symtab_attached {
+        // SAFETY: as above.
+        return unsafe { fe_reset_any(frame, inst) };
+    }
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return Br::Decline;
+    };
+    if slot.is_some() {
+        // An occupied iterator: the generic op.
+        return Br::Decline;
+    }
+    let Some(Value::Array(a)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+        // SAFETY: as above.
+        return unsafe { fe_reset_any(frame, inst) };
+    };
+    if a.is_empty() {
+        // `ZEND_FE_RESET_R` of an empty array: straight past the loop,
+        // nothing kept.
+        return Br::Jump;
+    }
+    let old = slot.replace(crate::vm::ForeachIter::Array {
+        arr: a.clone(),
+        pos: 0,
+    });
+    // The slot held nothing (matched above, and nothing has touched it
+    // since): there is nothing to release.
+    debug_assert!(old.is_none());
+    std::mem::forget(old);
+    Br::Fall
+}
+
+/// [`fe_reset`] of the other subjects: a variable behind a reference, a
+/// literal, a temporary, a frame with a symbol table
+/// (`hot::fe_reset_array_in`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+unsafe fn fe_reset_any(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::FeReset {
+        subject,
+        kind: ForeachKind::Value,
+        iter,
+        ..
+    }) = code.ops.get(inst.d as usize)
+    else {
+        return Br::Decline;
+    };
+    match hot::fe_reset_array_in(f, &code.literals, subject, iter) {
+        Some(true) => Br::Fall,
+        Some(false) => Br::Jump,
+        None => Br::Decline,
+    }
+}
+
+/// `Op::Cast` to int, float, bool or array (`spec::cast_in`): the operand's
+/// kind in `k` (variable, consumed temporary, kept temporary, literal) and
+/// index in `a`, the result temporary in `b`, the kind of cast in `e`.
+/// Releases a consumed operand, so it polls.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn cast(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let a = match inst.k {
+        0 => Operand::Cv(inst.a),
+        1 => Operand::Tmp(inst.a),
+        2 => Operand::TmpKeep(inst.a),
+        _ => Operand::Lit(inst.a),
+    };
+    let kind = match inst.e {
+        0 => CastKind::Int,
+        1 => CastKind::Float,
+        2 => CastKind::Bool,
+        _ => CastKind::Array,
+    };
+    crate::exec::spec::cast_in(f, kind, a, inst.b)
+}
+
+/// `Op::FeFree` of an array iterator (`ZEND_FE_FREE`:
+/// `hot::fe_free_array_in`) of the op at `inst.d`.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_free(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::FeFree { iter }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    // `hot::fe_free_array_in` with the array's handle released by itself:
+    // the iterator moved out whole went through the general drop of every
+    // kind of iterator, a call and a jump table (29 instructions).
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            if let Some(crate::vm::ForeachIter::Array { arr, .. }) = slot.take() {
+                drop(arr);
+            }
+            true
+        }
+        None => true,
+        Some(_) => false,
+    }
+}
+
+/// `Op::FeFreeOnReturn` of an array iterator ([`TOp::FeFreeRetA`], the op
+/// at `inst.d`; `hot::step_ext`'s arm): the iterator released as
+/// [`fe_free`] releases it. The generic op runs the destructors the
+/// release queued at once, so this declines when some were pending
+/// already (nothing changed), and when the release queued any (the
+/// iterator gone: `hot::step_ext`, then the generic op, find nothing to
+/// free and run them, as `hot::step_ext`'s own arm does).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_free_on_return(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::FeFreeOnReturn { iter, .. }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    if crate::object::has_pending_destructors() {
+        return false;
+    }
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            if let Some(crate::vm::ForeachIter::Array { arr, .. }) = slot.take() {
+                drop(arr);
+            }
+        }
+        None => {}
+        Some(_) => return false,
+    }
+    !crate::object::has_pending_destructors()
+}
+
+/// `ZEND_FUNC_NUM_ARGS` ([`TOp::FuncNumArgsT`]): the frame's argument
+/// count into temporary `inst.b`.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn func_num_args(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let n = i64::try_from(f.num_args()).unwrap_or(i64::MAX);
+    hot::set_tmp_in(f, inst.b, Value::Int(n));
+    true
+}
+
+/// [`TOp::ConstT`]: the cached value of the constant named by literal
+/// `inst.a` into temporary `inst.b` (`spec::fetch_const_in`, the hit
+/// `hot::step_ext` takes). Declines on a miss, having changed nothing.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fetch_const(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    crate::exec::spec::fetch_const_in(f, inst.a, inst.b, None).is_some()
+}
+
+/// [`TOp::ConstTo`]: as [`fetch_const`], into the folded `AssignCv`'s
+/// variable `inst.d` when that holds nothing to release (the jump past
+/// it), else into the temporary (falling through to the `AssignCv`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fetch_const_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    match crate::exec::spec::fetch_const_in(f, inst.a, inst.b, Some(inst.d)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
 }
 
 /// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.
@@ -476,6 +996,163 @@ pub(super) unsafe fn jmp_set_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> Br
     }
 }
 
+/// `Op::JmpSet` of a temporary (`ZEND_JMP_SET_SPEC_TMP`, `TMP ?: ...`):
+/// a truthy value moves into the result temporary (`b`) and the jump is
+/// taken; a falsy one (a scalar, `""`, `"0"`, an empty array: nothing
+/// whose release runs user code) is released and execution falls
+/// through, as `FREE_OP1` does. Declines a reference, a value whose truth
+/// needs a conversion (an object whose class casts itself, a NaN) and a
+/// result temporary holding a value to release, nothing changed.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn jmp_set_tmp(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointers: the result may be the tested temporary itself.
+    // SAFETY: `a` and `b` are validated temporary offsets.
+    let (from, dst) = unsafe {
+        (
+            st.tmps.add(inst.a as usize).cast::<Value>(),
+            st.tmps.add(inst.b as usize).cast::<Value>(),
+        )
+    };
+    // SAFETY: `from` points at a live temporary.
+    let Some(truth) = plain_truth(unsafe { &*from }) else {
+        return Br::Decline;
+    };
+    if truth {
+        if from != dst {
+            // SAFETY: `dst` points at a live temporary, another slot.
+            if !is_scalar(unsafe { &*dst }) {
+                return Br::Decline;
+            }
+            // SAFETY: the value moves from one live slot to another, which
+            // holds a scalar (nothing to drop); the source is left null,
+            // consumed.
+            unsafe { std::ptr::write(dst, std::ptr::replace(from, Value::Null)) };
+        }
+        Br::Jump
+    } else {
+        // SAFETY: `from` points at a live temporary; a falsy value's
+        // release frees at most a string or an empty array.
+        unsafe { *from = Value::Null };
+        Br::Fall
+    }
+}
+
+/// The subject kind of a [`TOp::MatchJ`] row (`k`) that is a literal.
+const MATCH_LIT: u8 = 3;
+
+/// `Op::Match` (`ZEND_MATCH`): the jump the op's table gives the subject
+/// (an int or a string by its key, anything else to the default arm), as
+/// the byte offset of its target from this row ([`super::rel`] checked
+/// every target at lowering). 0, nothing changed, for an undefined
+/// variable (the generic op warns) and a reference (dereferenced there).
+///
+/// # Safety
+/// As [`move_tmp`]; `inst` is a [`TOp::MatchJ`] row, whose `p` is the
+/// address of its op's table in the frame's op array.
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment, clippy::cast_possible_wrap)] // a slot offset from a slot vector's base; a tape offset fits
+pub(super) unsafe fn match_jump(frame: *mut Frame, inst: &Inst) -> isize {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    let v: &Value = match inst.k {
+        // SAFETY: `a` is a validated variable offset.
+        EQ_CV => match unsafe { &*cv_slot(st, inst.a) } {
+            Some(v) => v,
+            None => return 0,
+        },
+        // SAFETY: `a` is a validated temporary offset.
+        EQ_KEEP => unsafe { tmp_slot(st, inst.a) },
+        // SAFETY: `a` is a validated literal offset; it is only read.
+        _ => unsafe { &*st.lits.add(inst.a as usize).cast::<Value>() },
+    };
+    if matches!(v, Value::Reference(_)) {
+        return 0;
+    }
+    // SAFETY: the caller's contract: the table lives in the op array the
+    // frame runs, which outlives the frame's run of its tape.
+    let table = unsafe { &*(inst.p as *const crate::opcode::MatchTable) };
+    let to = table.target(v);
+    (to as isize - inst.d as isize) * std::mem::size_of::<Inst>() as isize
+}
+
+/// `Op::Free` of a temporary (`ZEND_FREE`: `zval_ptr_dtor_nogc`), as
+/// `hot::step_ext` runs it: a scalar or a string is released, and so is
+/// an array another handle shares (the release drops a count). Declines
+/// anything whose release could free an array or object or run a
+/// destructor (the generic op's).
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+pub(super) unsafe fn free_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `a` is a validated temporary offset.
+    let slot = unsafe { tmp_slot(st, inst.a) };
+    let plain = match &*slot {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) => true,
+        Value::Array(a) => a.refcount() >= 2,
+        _ => false,
+    };
+    if plain {
+        *slot = Value::Null;
+    }
+    plain
+}
+
+/// The truth of a consumed temporary holding a string, an array or an
+/// object, which is released (`i_zend_is_true`, then `FREE_OP1`), for the
+/// jumps on a temporary ([`super::tmp_truth`]) and `!` of one
+/// ([`unary_rc_tmp`]): a string; an array that is shared or empty and an
+/// object another handle keeps (their release runs no destructor) whose
+/// class does not cast it. `None`, nothing changed, for anything else.
+#[inline(never)]
+pub(super) fn rc_tmp_truth(slot: &mut Value) -> Option<bool> {
+    let releasable = match &*slot {
+        Value::Str(_) => true,
+        Value::Array(a) => a.refcount() > 1 || a.is_empty(),
+        Value::Object(o) => o.refcount() > 1,
+        _ => false,
+    };
+    if !releasable {
+        return None;
+    }
+    let truth = plain_truth(slot)?;
+    *slot = Value::Null;
+    Some(truth)
+}
+
+/// `!a` / `(bool) a` of a temporary holding a string, an array or an
+/// object ([`unary_bool_tmp`]'s miss): its truth by [`rc_tmp_truth`],
+/// which consumes it, into the temporary at `d`. Declines, nothing
+/// changed, what that declines and a destination (other than the operand)
+/// holding a value to release.
+///
+/// # Safety
+/// As [`move_tmp`]; `inst` is a [`TOp::UnaryT`] row.
+#[inline(never)]
+pub(super) unsafe fn unary_rc_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `d` is a validated temporary offset.
+    if inst.d != inst.a && !is_scalar(unsafe { tmp_slot(st, inst.d) }) {
+        return false;
+    }
+    // SAFETY: `a` is a validated temporary offset.
+    let Some(b) = rc_tmp_truth(unsafe { tmp_slot(st, inst.a) }) else {
+        return false;
+    };
+    // SAFETY: the caller's contract; the destination holds a scalar (the
+    // operand, if it is the destination, was released to null).
+    unsafe { store_bool(st, inst, b) }
+}
+
 /// `Op::Coalesce` (`ZEND_COALESCE_SPEC_CV`, `$cv ?? ...`), as
 /// `hot::coalesce_in` runs it: a value that is not null is copied into the
 /// result temporary (`b`) and the jump taken; an undefined variable or a
@@ -627,6 +1304,346 @@ pub(super) unsafe extern "C" fn assign_cv_any(
     crate::exec::hot::assign_cv_in(unsafe { &mut *frame }, inst.a >> SLOT_SHIFT, val, None)
 }
 
+/// `$cv = <string or array literal>` with the result unused
+/// (`ZEND_ASSIGN_SPEC_CV_CONST`, `TOp::AssignLitC`): the literal (`b`) is
+/// copied (a reference count raised) into the variable (`a`). What the
+/// variable held is released as `hot::assign_cv_in` releases it: nothing,
+/// a scalar or a string at once; an array through `exec::release_rooted`
+/// (a possible GC root while other handles remain, else freed: a
+/// destructor its objects queue runs at the poll after the row, as after
+/// the generic op). Declines a reference (the assignment writes through
+/// it) and an object or a resource (the generic op's), nothing changed.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn assign_lit_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `a` is a validated variable offset.
+    let dst = unsafe { st.cvs.add(inst.a as usize).cast::<Option<Value>>() };
+    // SAFETY: `dst` points at a live slot; the shared reference ends with
+    // the test.
+    if !matches!(
+        unsafe { &*dst },
+        None | Some(
+            Value::Null
+                | Value::Bool(_)
+                | Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::Array(_)
+        )
+    ) {
+        return false;
+    }
+    // SAFETY: `b` is a validated literal offset (a string or an array:
+    // `lower`); it is only read.
+    let v = match unsafe { &*st.lits.add(inst.b as usize).cast::<Value>() } {
+        Value::Str(s) => Value::Str(s.clone()),
+        Value::Array(a) => Value::Array(a.clone()),
+        // Not reached: `lower` saw a string or an array.
+        _ => return false,
+    };
+    // SAFETY: `dst` is valid for writes; the old value is released below,
+    // the slot already holding the new one (as `ZEND_ASSIGN` does).
+    match unsafe { std::ptr::replace(dst, Some(v)) } {
+        Some(Value::Str(s)) => drop(s),
+        old @ Some(Value::Array(_)) => crate::exec::release_rooted(old),
+        // Nothing or a scalar: nothing to drop.
+        old => std::mem::forget(old),
+    }
+    true
+}
+
+/// The kinds of the slot operand of an equality row with a literal (the
+/// const parameter of [`eq_lit_jmp`], [`eq_lit_tmp`], [`eq_lit_cv`]): a
+/// compiled variable.
+const EQ_CV: u8 = 0;
+/// A temporary the comparison consumes (released after it).
+const EQ_TMP: u8 = 1;
+/// A temporary the comparison only reads.
+const EQ_KEEP: u8 = 2;
+/// Flag of an equality row (`k`): `===` / `!==` (else `==` / `!=`).
+const EQ_IDENT: u8 = 1;
+/// Flag: `!=` / `!==`, the comparison's result negated.
+const EQ_NEG: u8 = 2;
+/// Flag of [`eq_lit_jmp`]: the branch jumps when the result is true (the
+/// `CmpJmp`'s `jmp_if`).
+const EQ_JMP_IF: u8 = 4;
+
+/// The equality row of the op at `i`: `==`, `!=`, `===` or `!==` of a
+/// variable or a temporary and a literal null, bool, string or empty
+/// array, as a smart branch (`Op::CmpJmp`, which covers its jump op), into
+/// a temporary (`Op::Bin`) or into a variable (`Op::BinAssignCv`, which
+/// covers its `AssignCv`). The slot is `a` (its kind the row's), the
+/// literal `b`, the flags `k`; the jump target, the result temporary or
+/// the variable in `c`. A literal on the left is swapped to the right
+/// (equality is symmetric). `None` for anything else, and for `==` /
+/// `!=` with a numeric string literal (`'1e3' == '1000'`: the generic
+/// comparison's numbers), so that two strings the row compares are equal
+/// exactly when their bytes are (`zendi_smart_streq` of a string that is
+/// not numeric).
+fn lower_eq_lit(code: &OpArray, i: usize) -> Option<Inst> {
+    let (op, a, b) = match *code.ops.get(i)? {
+        Op::CmpJmp { op, a, b, .. }
+        | Op::Bin { op, a, b, .. }
+        | Op::BinAssignCv { op, a, b, .. } => (op, a, b),
+        _ => return None,
+    };
+    let (ident, neg) = match op {
+        BinKind::Identical => (true, false),
+        BinKind::NotIdentical => (true, true),
+        BinKind::Equal => (false, false),
+        BinKind::NotEqual => (false, true),
+        _ => return None,
+    };
+    let (slot, l) = match (a, b) {
+        (s, Operand::Lit(l)) | (Operand::Lit(l), s) if !matches!(s, Operand::Lit(_)) => (s, l),
+        _ => return None,
+    };
+    let usable = match code.literals.get(l as usize)? {
+        Value::Null | Value::Bool(_) => true,
+        Value::Array(x) => x.is_empty(),
+        Value::Str(s) => {
+            ident || php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_none()
+        }
+        _ => false,
+    };
+    if !usable {
+        return None;
+    }
+    let (kind, fa) = match slot {
+        Operand::Cv(cv) => (EQ_CV, cv_off(code, cv)?),
+        Operand::Tmp(t) => (EQ_TMP, tmp_off(code, t)?),
+        Operand::TmpKeep(t) => (EQ_KEEP, tmp_off(code, t)?),
+        _ => return None,
+    };
+    let mut k = (u8::from(ident) * EQ_IDENT) | (u8::from(neg) * EQ_NEG);
+    let (op, c) = match *code.ops.get(i)? {
+        Op::CmpJmp { target, jmp_if, .. } => {
+            if jmp_if {
+                k |= EQ_JMP_IF;
+            }
+            let op = [TOp::EqLitJmpC, TOp::EqLitJmpT, TOp::EqLitJmpK][usize::from(kind)];
+            (op, rel(code, i, target)?)
+        }
+        Op::Bin { dst, .. } => {
+            let op = [TOp::EqLitTmpC, TOp::EqLitTmpT, TOp::EqLitTmpK][usize::from(kind)];
+            (op, tmp_off(code, dst)?)
+        }
+        Op::BinAssignCv { cv, .. } => {
+            let op = [TOp::EqLitCvC, TOp::EqLitCvT, TOp::EqLitCvK][usize::from(kind)];
+            (op, cv_off(code, cv)?)
+        }
+        _ => return None,
+    };
+    Some(Inst {
+        k,
+        a: fa,
+        b: lit_off(l)?,
+        c,
+        ..Inst::plain(op)
+    })
+}
+
+/// Whether `v` equals the literal `lit` (a null, a bool, a string or an
+/// empty array: [`lower_eq_lit`]) under `===` (`ident`) or `==`, where
+/// that needs no conversion, diagnostic or user code: `zend_is_identical`,
+/// and `zend_compare`'s answers for a null (`""` and the falsy values
+/// other than `"0"`), a bool (the value's truth), a string that is not
+/// numeric (the same bytes; an int never; a null when it is empty; a bool
+/// by the string's truth) and the empty array (an empty array, a null,
+/// `false`). `None` for the rest: a reference, a NaN, an object, a
+/// resource, a float against a string (`INF == 'INF'`), which the generic
+/// comparison decides.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::float_cmp)] // a float's truth is its comparison with zero
+fn eq_lit(v: &Value, lit: &Value, ident: bool) -> Option<bool> {
+    Some(match (v, lit) {
+        (Value::Reference(_), _) => return None,
+        (Value::Str(s), Value::Str(t)) => {
+            php_runtime::ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes()
+        }
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(p), Value::Bool(q)) => p == q,
+        // The literal is the empty array.
+        (Value::Array(x), Value::Array(_)) => x.is_empty(),
+        // Two types: never identical.
+        _ if ident => false,
+        (_, Value::Null) => match v {
+            Value::Bool(b) => !b,
+            Value::Int(i) => *i == 0,
+            Value::Float(x) if !x.is_nan() => *x == 0.0,
+            Value::Str(s) => s.is_empty(),
+            Value::Array(x) => x.is_empty(),
+            _ => return None,
+        },
+        (_, Value::Bool(b)) => {
+            let truth = match v {
+                Value::Null => false,
+                Value::Int(i) => *i != 0,
+                Value::Float(x) if !x.is_nan() => *x != 0.0,
+                Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+                Value::Array(x) => !x.is_empty(),
+                _ => return None,
+            };
+            truth == *b
+        }
+        (_, Value::Str(t)) => match v {
+            Value::Null => t.is_empty(),
+            Value::Bool(b) => *b == !(t.is_empty() || t.as_bytes() == b"0"),
+            // An int's digits are numeric, the literal is not.
+            Value::Int(_) => false,
+            _ => return None,
+        },
+        (_, Value::Array(_)) => match v {
+            Value::Null => true,
+            Value::Bool(b) => !b,
+            Value::Int(_) | Value::Float(_) | Value::Str(_) => false,
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
+/// The result of the equality row `inst` (its slot of kind `K`, its
+/// literal, its flags), the slot released when the comparison consumes
+/// it, as `spec::cmp_simple_in` does: a string, an array that is shared
+/// or empty, an object another holder keeps (their release runs no
+/// destructor). `None`, nothing changed, for what [`eq_lit`] declines, an
+/// undefined variable (the generic op warns) and a consumed temporary
+/// whose release could free more (an array or object it alone holds, a
+/// resource).
+///
+/// # Safety
+/// `inst` is an equality row [`lower`] built for the frame of `st`, with
+/// a slot of kind `K`.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+unsafe fn eq_lit_result<const K: u8>(st: St, inst: &Inst) -> Option<bool> {
+    // SAFETY: `b` is a validated literal offset; it is only read.
+    let lit = unsafe { &*st.lits.add(inst.b as usize).cast::<Value>() };
+    let ident = inst.k & EQ_IDENT != 0;
+    let same = match K {
+        // SAFETY: `a` is a validated variable offset.
+        EQ_CV => eq_lit(unsafe { &*cv_slot(st, inst.a) }.as_ref()?, lit, ident)?,
+        // SAFETY: `a` is a validated temporary offset.
+        EQ_KEEP => eq_lit(unsafe { tmp_slot(st, inst.a) }, lit, ident)?,
+        _ => {
+            // SAFETY: `a` is a validated temporary offset.
+            let slot = unsafe { tmp_slot(st, inst.a) };
+            let frees_more = match &*slot {
+                Value::Array(x) => x.refcount() <= 1 && !x.is_empty(),
+                Value::Object(o) => o.refcount() <= 1,
+                Value::Resource(_) => true,
+                _ => false,
+            };
+            if frees_more {
+                return None;
+            }
+            let same = eq_lit(slot, lit, ident)?;
+            if !is_scalar(slot) {
+                release_eq_tmp(slot);
+            }
+            same
+        }
+    };
+    Some(same != (inst.k & EQ_NEG != 0))
+}
+
+/// Releases the string, array or object a consumed temporary of an
+/// equality row held (`FREE_OP1`); out of line, off the rows' paths for
+/// variables.
+#[inline(never)]
+fn release_eq_tmp(slot: &mut Value) {
+    *slot = Value::Null;
+}
+
+/// `Op::CmpJmp` of a slot (kind `K`) and a literal null, bool, string or
+/// empty array ([`lower_eq_lit`]): jumps to `c` when the result is the
+/// branch's `jmp_if`, else goes on past the jump op the instruction
+/// covers (php-src's smart branch of `ZEND_IS_IDENTICAL` & co.).
+/// `Decline`, nothing changed, as [`eq_lit_result`].
+///
+/// # Safety
+/// `inst` is an instruction [`lower`] built for `frame`, the current
+/// frame.
+#[inline(never)]
+pub(super) unsafe fn eq_lit_jmp<const K: u8>(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract.
+    match unsafe { eq_lit_result::<K>(st, inst) } {
+        None => Br::Decline,
+        Some(r) if r == (inst.k & EQ_JMP_IF != 0) => Br::Jump,
+        Some(_) => Br::Fall,
+    }
+}
+
+/// `Op::Bin` of a slot (kind `K`) and a literal ([`lower_eq_lit`]): the
+/// bool into the result temporary `c`. Declines as [`eq_lit_result`], and
+/// a result temporary holding a value to release (tested first: a
+/// declined row has changed nothing).
+///
+/// # Safety
+/// As [`eq_lit_jmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn eq_lit_tmp<const K: u8>(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointer: the result may be the operand temporary.
+    // SAFETY: `c` is a validated temporary offset.
+    let dst = unsafe { st.tmps.add(inst.c as usize).cast::<Value>() };
+    // SAFETY: `dst` points at a live temporary.
+    if !is_scalar(unsafe { &*dst }) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_lit_result::<K>(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `dst` held a scalar, or is the consumed operand, released
+    // to null: nothing to drop.
+    unsafe { std::ptr::write(dst, Value::Bool(r)) };
+    true
+}
+
+/// `Op::BinAssignCv` of a slot (kind `K`) and a literal ([`lower_eq_lit`]):
+/// the bool straight into the variable `c` (the instruction covers the
+/// `AssignCv` after the op), as `hot::step` stores it. Declines a variable
+/// holding anything but nothing, a scalar or a string (the generic op
+/// stores through the `AssignCv`; tested first), and as [`eq_lit_result`].
+///
+/// # Safety
+/// As [`eq_lit_jmp`].
+#[inline(never)]
+pub(super) unsafe fn eq_lit_cv<const K: u8>(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `c` is a validated variable offset.
+    if !matches!(
+        unsafe { &*cv_slot(st, inst.c) },
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
+    ) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_lit_result::<K>(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: as above; the comparison is done with the variable, which
+    // holds nothing, a scalar or a string (released here: no side
+    // effect).
+    match unsafe { cv_slot(st, inst.c) }.replace(Value::Bool(r)) {
+        Some(Value::Str(s)) => drop(s),
+        old => std::mem::forget(old),
+    }
+    true
+}
+
 /// The number operand `x` of kind `kind` (the kinds of [`super::src`]);
 /// `None` when it holds anything else.
 ///
@@ -680,7 +1697,8 @@ pub(super) unsafe extern "C" fn num_bin_tmp(
     }
     // SAFETY: the caller's contract.
     let Some(result) = (unsafe { num_result(st, inst) }) else {
-        return false;
+        // SAFETY: the caller's contract (`dst` holds a scalar).
+        return unsafe { eq_slots_tmp(frame, inst) };
     };
     // SAFETY: a scalar has nothing to drop; `dst` is valid for writes.
     unsafe { std::ptr::write(dst, result) };
@@ -771,7 +1789,9 @@ pub(super) unsafe fn num_bin_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> bo
     }
     // SAFETY: the caller's contract.
     let Some(r) = (unsafe { num_result(st, inst) }) else {
-        return false;
+        // SAFETY: the caller's contract (the variable holds nothing to
+        // release).
+        return unsafe { eq_slots_cv(frame, inst) };
     };
     // SAFETY: as above; undefined or a scalar has nothing to drop.
     std::mem::forget(unsafe { cv_slot(st, inst.d) }.replace(r));
@@ -796,6 +1816,125 @@ pub(super) unsafe fn num_assign_op_cv(frame: *mut crate::vm::Frame, inst: &Inst)
     // SAFETY: `a` is a validated variable offset; it held a number, which
     // owns nothing.
     std::mem::forget(unsafe { cv_slot(st, inst.a) }.replace(r));
+    true
+}
+
+/// The index in [`NUM_OPS`] of `==`; `!=`, `===` and `!==` follow it.
+const NUM_EQUAL: u8 = 9;
+
+/// An operand of a [`num_bin_tmp`] / [`num_bin_cv`] row (kind `kind`,
+/// field `x`) that an equality of two slots can read without a
+/// diagnostic or a release: a defined variable that is not a reference,
+/// or a temporary holding a scalar (a temporary of these rows may be
+/// consumed or kept, so one holding a string or more is left to the
+/// generic op, which releases it). `None` for anything else, a number
+/// literal included.
+///
+/// # Safety
+/// As [`num_of_kind`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn eq_slot<'a>(st: St, kind: u8, x: u32) -> Option<&'a Value> {
+    let v: &Value = match kind {
+        // SAFETY: the caller's contract.
+        KC => unsafe { &*cv_slot(st, x) }.as_ref()?,
+        // SAFETY: the caller's contract.
+        KT => unsafe { tmp_slot(st, x) },
+        _ => return None,
+    };
+    match v {
+        Value::Reference(_) => None,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => Some(v),
+        _ if kind == KC => Some(v),
+        _ => None,
+    }
+}
+
+/// `==`, `!=`, `===`, `!==` ([`NUM_OPS`] 9 to 12) of the two slots of a
+/// [`num_bin_tmp`] / [`num_bin_cv`] row that hold no plain numbers, as
+/// `spec::cmp_simple_in` decides it without conversions: two nulls, two
+/// bools, two arrays one of which is empty, `===` of two objects (the
+/// same one), two strings (`===` by their bytes, `==` by
+/// `zendi_smart_streq`), and `===` of two types (false). `None` for the
+/// rest.
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn eq_slots(st: St, inst: &Inst) -> Option<bool> {
+    let ident = match inst.e.checked_sub(NUM_EQUAL)? {
+        0 | 1 => false,
+        2 | 3 => true,
+        _ => return None,
+    };
+    // SAFETY: the caller's contract.
+    let x = unsafe { eq_slot(st, inst.k >> 4, inst.a) }?;
+    // SAFETY: the caller's contract.
+    let y = unsafe { eq_slot(st, inst.k & 0xf, inst.b) }?;
+    let same = match (x, y) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(p), Value::Bool(q)) => p == q,
+        (Value::Array(p), Value::Array(q)) if p.is_empty() || q.is_empty() => {
+            p.is_empty() && q.is_empty()
+        }
+        (Value::Object(p), Value::Object(q)) if ident => php_runtime::Obj::ptr_eq(p, q),
+        (Value::Str(s), Value::Str(t)) => {
+            php_runtime::ZStr::ptr_eq(s, t)
+                || if ident {
+                    s.as_bytes() == t.as_bytes()
+                } else {
+                    php_runtime::ops::smart_streq(s.as_bytes(), t.as_bytes())
+                }
+        }
+        (p, q) => {
+            if !ident || std::mem::discriminant(p) == std::mem::discriminant(q) {
+                return None;
+            }
+            false
+        }
+    };
+    // `!=` (10) and `!==` (12) are the even ones.
+    Some(same != ((inst.e & 1) == 0))
+}
+
+/// [`num_bin_tmp`]'s miss: an equality of two slots ([`eq_slots`]) into
+/// the result temporary, which the caller found holding a scalar.
+/// `false`, nothing changed, for anything else.
+///
+/// # Safety
+/// As [`num_bin_tmp`]; the result temporary holds a scalar.
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+unsafe fn eq_slots_tmp(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_slots(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `c` is a validated temporary offset, holding a scalar (the
+    // caller's contract; an operand it may be was only read).
+    unsafe { std::ptr::write(st.tmps.add(inst.c as usize).cast::<Value>(), Value::Bool(r)) };
+    true
+}
+
+/// [`num_bin_cv`]'s miss: an equality of two slots ([`eq_slots`]) into the
+/// variable `d`, which the caller found holding nothing to release.
+///
+/// # Safety
+/// As [`num_bin_tmp`]; the variable `d` is undefined or holds a scalar.
+#[inline(never)]
+unsafe fn eq_slots_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { eq_slots(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `d` is a validated variable offset; undefined or a scalar
+    // has nothing to drop (an operand it may be was only read).
+    std::mem::forget(unsafe { cv_slot(st, inst.d) }.replace(Value::Bool(r)));
     true
 }
 
@@ -932,7 +2071,9 @@ pub(super) unsafe fn unary_bool_tmp(st: St, inst: &Inst) -> bool {
         Value::Bool(b) => b,
         Value::Int(i) => i != 0,
         Value::Float(x) if !x.is_nan() => x != 0.0,
-        _ => return false,
+        // A string, an array, an object: out of line.
+        // SAFETY: the caller's contract.
+        _ => return unsafe { unary_rc_tmp(st.f, inst) },
     };
     // Tested before the operand is consumed: a decline changes nothing.
     // SAFETY: the caller's contract.

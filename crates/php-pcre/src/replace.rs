@@ -71,6 +71,19 @@ fn get_backref(s: &[u8], pos: usize) -> Option<(usize, usize)> {
 impl Replacement {
     /// Parses a replacement string.
     pub fn parse(replacement: &[u8]) -> Self {
+        // The usual replacement has no `\` or `$`: one literal, made in one
+        // allocation instead of grown byte by byte.
+        if !replacement.iter().any(|&c| c == b'\\' || c == b'$') {
+            let pieces = if replacement.is_empty() {
+                Vec::new()
+            } else {
+                vec![ReplacementPiece::Literal(replacement.to_vec())]
+            };
+            return Self {
+                pieces,
+                simple: true,
+            };
+        }
         let mut pieces = Vec::new();
         let mut lit: Vec<u8> = Vec::new();
         let mut simple = true;
@@ -118,6 +131,23 @@ impl Replacement {
         self.simple
     }
 
+    /// The length of [`Replacement::expand`]'s output for one match.
+    pub(crate) fn expanded_len(&self, ov: &[usize], count: usize) -> usize {
+        self.pieces
+            .iter()
+            .map(|piece| match piece {
+                ReplacementPiece::Literal(l) => l.len(),
+                ReplacementPiece::Group(n) => {
+                    if *n < count && ov[2 * n] != ffi::PCRE2_UNSET {
+                        ov[2 * n + 1].saturating_sub(ov[2 * n])
+                    } else {
+                        0
+                    }
+                }
+            })
+            .sum()
+    }
+
     /// Appends the substitution for one match: `count` is PCRE2's return
     /// (references to groups `>= count` or unset expand to nothing).
     pub(crate) fn expand(&self, out: &mut Vec<u8>, subject: &[u8], ov: &[usize], count: usize) {
@@ -157,6 +187,60 @@ impl ReplaceOutcome {
     }
 }
 
+/// A replacement's result before it is put together: what
+/// `php_pcre_replace_impl` has in `result` and `last_end_offset` when it
+/// reaches `not_matched:`. The caller makes the final string from it in
+/// one allocation of the exact size (php-src's closing
+/// `zend_string_realloc(result, alloc_len)` + `memcpy` of the tail), or
+/// returns the subject itself when nothing was replaced
+/// (`zend_string_copy(subject_str)`), instead of copying the subject into a
+/// buffer that is then thrown away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceSplit {
+    /// `Ok(None)`: nothing was replaced, the result is the subject.
+    /// `Ok(Some((head, rest)))`: the result is `head` followed by
+    /// `subject[rest..]`. `Err`: PHP's `null`, with this error.
+    pub result: Result<Option<(Vec<u8>, usize)>, PregError>,
+    /// Replacements performed (also counted when the call later failed).
+    pub count: usize,
+}
+
+impl ReplaceSplit {
+    /// The `preg_last_error()` value after this call.
+    pub fn last_error(&self) -> PregError {
+        self.result
+            .as_ref()
+            .err()
+            .copied()
+            .unwrap_or(PregError::NoError)
+    }
+
+    /// The result's length: the head and the subject's tail after it
+    /// (the subject's own length when nothing was replaced).
+    pub fn result_len(&self, subject: &[u8]) -> Option<usize> {
+        match &self.result {
+            Ok(None) => Some(subject.len()),
+            Ok(Some((head, rest))) => Some(head.len() + subject.len().saturating_sub(*rest)),
+            Err(_) => None,
+        }
+    }
+
+    /// The whole result as one byte vector.
+    pub fn into_outcome(self, subject: &[u8]) -> ReplaceOutcome {
+        let result = self.result.map(|parts| match parts {
+            None => subject.to_vec(),
+            Some((mut head, rest)) => {
+                head.extend_from_slice(subject.get(rest..).unwrap_or_default());
+                head
+            }
+        });
+        ReplaceOutcome {
+            result,
+            count: self.count,
+        }
+    }
+}
+
 /// Converts PHP's `int $limit` to the `size_t` PHP uses internally
 /// (`-1`, and any negative value, means unlimited).
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -168,6 +252,12 @@ pub fn limit_from_php(limit: i64) -> usize {
 trait Substitute {
     /// Appends the replacement; `false` aborts (callback threw).
     fn substitute(&mut self, ex: &Exec<'_>, count: usize, out: &mut Vec<u8>) -> bool;
+
+    /// The length the substitution will have, when known before it is
+    /// made (0 otherwise): it sizes the result on the first match.
+    fn len_hint(&self, _ex: &Exec<'_>, _count: usize) -> usize {
+        0
+    }
 }
 
 struct Static<'r>(&'r Replacement);
@@ -176,6 +266,10 @@ impl Substitute for Static<'_> {
     fn substitute(&mut self, ex: &Exec<'_>, count: usize, out: &mut Vec<u8>) -> bool {
         self.0.expand(out, ex.subject, ex.ov(), count);
         true
+    }
+
+    fn len_hint(&self, ex: &Exec<'_>, count: usize) -> usize {
+        self.0.expanded_len(ex.ov(), count)
     }
 }
 
@@ -214,11 +308,11 @@ fn replace_loop(
     subject: &[u8],
     mut limit: usize,
     sub: &mut dyn Substitute,
-) -> ReplaceOutcome {
+) -> ReplaceSplit {
     let mut replaced = 0usize;
     let num_subpats = re.capture_count() + 1;
     let Some(mut ex) = Exec::new(re, cfg, subject) else {
-        return ReplaceOutcome {
+        return ReplaceSplit {
             result: Err(PregError::Internal),
             count: 0,
         };
@@ -236,17 +330,24 @@ fn replace_loop(
             loop {
                 let (s, e) = ex.span();
                 if e < s {
-                    return ReplaceOutcome {
+                    return ReplaceSplit {
                         result: Err(PregError::Internal),
                         count: replaced,
                     };
                 }
                 replaced += 1;
-                let buf = out.get_or_insert_with(Vec::new);
+                // The result is made on the first match with room for
+                // twice what it then needs, as `php_pcre_replace_impl`
+                // allocates `2 * new_len`; it grows by doubling after that
+                // and is cut to its length at the end.
+                let buf = out.get_or_insert_with(|| {
+                    let new_len = (s - last_end.min(s)).saturating_add(sub.len_hint(&ex, n));
+                    Vec::with_capacity(new_len.saturating_mul(2))
+                });
                 buf.extend_from_slice(subject.get(last_end..s).unwrap_or_default());
                 if !sub.substitute(&ex, n, buf) {
                     // Exception in the callback: `goto error` with count >= 0.
-                    return ReplaceOutcome {
+                    return ReplaceSplit {
                         result: Err(PregError::Internal),
                         count: replaced,
                     };
@@ -263,10 +364,10 @@ fn replace_loop(
                         if start < len {
                             start += ex.unit_length(start);
                         } else {
-                            return finish(out, subject, last_end, replaced);
+                            return finish(out, last_end, replaced);
                         }
                     } else {
-                        return ReplaceOutcome {
+                        return ReplaceSplit {
                             result: Err(PregError::from_pcre2(count)),
                             count: replaced,
                         };
@@ -275,9 +376,9 @@ fn replace_loop(
                 break;
             }
         } else if count == ffi::PCRE2_ERROR_NOMATCH || limit == 0 {
-            return finish(out, subject, last_end, replaced);
+            return finish(out, last_end, replaced);
         } else {
-            return ReplaceOutcome {
+            return ReplaceSplit {
                 result: Err(PregError::from_pcre2(count)),
                 count: replaced,
             };
@@ -286,17 +387,11 @@ fn replace_loop(
     }
 }
 
-/// `not_matched:` — append the tail (or return the subject untouched).
-fn finish(out: Option<Vec<u8>>, subject: &[u8], last_end: usize, count: usize) -> ReplaceOutcome {
-    let result = match out {
-        None => subject.to_vec(),
-        Some(mut buf) => {
-            buf.extend_from_slice(subject.get(last_end..).unwrap_or_default());
-            buf
-        }
-    };
-    ReplaceOutcome {
-        result: Ok(result),
+/// `not_matched:` — the result so far and where the subject's tail starts
+/// (none: the subject untouched).
+fn finish(out: Option<Vec<u8>>, last_end: usize, count: usize) -> ReplaceSplit {
+    ReplaceSplit {
+        result: Ok(out.map(|head| (head, last_end))),
         count,
     }
 }
@@ -310,6 +405,17 @@ pub fn replace(
     replacement: &Replacement,
     limit: usize,
 ) -> ReplaceOutcome {
+    replace_split(re, cfg, subject, replacement, limit).into_outcome(subject)
+}
+
+/// [`replace`] with the result left in its parts ([`ReplaceSplit`]).
+pub fn replace_split(
+    re: &Regex,
+    cfg: &MatchConfig,
+    subject: &[u8],
+    replacement: &Replacement,
+    limit: usize,
+) -> ReplaceSplit {
     replace_loop(re, cfg, subject, limit, &mut Static(replacement))
 }
 
@@ -331,6 +437,22 @@ pub fn replace_callback<F>(
     flags: i64,
     callback: F,
 ) -> ReplaceOutcome
+where
+    F: FnMut(MatchArray) -> Option<Vec<u8>>,
+{
+    replace_callback_split(re, cfg, subject, limit, flags, callback).into_outcome(subject)
+}
+
+/// [`replace_callback`] with the result left in its parts
+/// ([`ReplaceSplit`]).
+pub fn replace_callback_split<F>(
+    re: &Regex,
+    cfg: &MatchConfig,
+    subject: &[u8],
+    limit: usize,
+    flags: i64,
+    callback: F,
+) -> ReplaceSplit
 where
     F: FnMut(MatchArray) -> Option<Vec<u8>>,
 {
@@ -412,6 +534,43 @@ mod tests {
         Literal(s.as_bytes().to_vec())
     }
 
+    /// A replacement without `\` or `$` is one literal (none when
+    /// empty), simple, as the byte-by-byte walk makes it.
+    #[test]
+    fn parse_plain_literal() {
+        let r = Replacement::parse(b"N-x y");
+        assert_eq!(r.pieces(), &[lit("N-x y")]);
+        assert!(r.is_simple());
+        let r = Replacement::parse(b"");
+        assert!(r.pieces().is_empty() && r.is_simple());
+        assert!(!Replacement::parse(b"a$").is_simple());
+    }
+
+    /// `expanded_len` is the length `expand` appends, unset and missing
+    /// groups included; the result is the same with the up-front room.
+    #[test]
+    fn expanded_len_matches_expand() {
+        let r = Replacement::parse(b"<$1|$2|$9>");
+        let subject = b"xxabyy";
+        // Group 1 = "ab" (2..4), group 2 unset; count 3.
+        let ov = [2, 4, 2, 4, ffi::PCRE2_UNSET, ffi::PCRE2_UNSET];
+        let mut out = Vec::new();
+        r.expand(&mut out, subject, &ov, 3);
+        assert_eq!(out, b"<ab||>");
+        assert_eq!(r.expanded_len(&ov, 3), out.len());
+        let re = Regex::compile(b"/(a)(b)?/").unwrap();
+        let cfg = MatchConfig::default();
+        let out = replace(
+            &re,
+            &cfg,
+            b"zaab",
+            &Replacement::parse(b"[$2$1]"),
+            usize::MAX,
+        );
+        assert_eq!(out.result, Ok(b"z[a][ba]".to_vec()));
+        assert_eq!(out.count, 2);
+    }
+
     #[test]
     fn parse_backrefs() {
         assert_eq!(
@@ -465,6 +624,35 @@ mod tests {
         let out = replace(&re, &cfg, b"xyz", &Replacement::parse(b"_"), usize::MAX);
         assert_eq!(out.result.unwrap(), b"xyz");
         assert_eq!(out.count, 0);
+    }
+
+    /// The split result: no match leaves the subject alone (no copy), a
+    /// match gives the head and where the subject's tail starts, and
+    /// [`ReplaceSplit::into_outcome`] gives [`replace`]'s bytes.
+    #[test]
+    fn split_result() {
+        let re = Regex::compile(b"/o/").unwrap();
+        let cfg = MatchConfig::default();
+        let rep = Replacement::parse(b"0");
+        let out = replace_split(&re, &cfg, b"  Hello World  ", &rep, usize::MAX);
+        assert_eq!(out.count, 2);
+        // (The tail starts after the second `o`, at offset 10.)
+        assert_eq!(out.result, Ok(Some((b"  Hell0 W0".to_vec(), 10))));
+        assert_eq!(out.result_len(b"  Hello World  "), Some(15));
+        assert_eq!(
+            out.into_outcome(b"  Hello World  ").result.unwrap(),
+            b"  Hell0 W0rld  "
+        );
+        let out = replace_split(&re, &cfg, b"abc", &rep, usize::MAX);
+        assert_eq!((out.result.clone(), out.count), (Ok(None), 0));
+        assert_eq!(out.result_len(b"abc"), Some(3));
+        assert_eq!(out.into_outcome(b"abc").result.unwrap(), b"abc");
+        let out = replace_split(&re, &cfg, b"foo", &rep, 1);
+        assert_eq!(out.result, Ok(Some((b"f0".to_vec(), 2))));
+        let out =
+            replace_callback_split(&re, &cfg, b"oxo", usize::MAX, 0, |_| Some(b"[]".to_vec()));
+        assert_eq!(out.result, Ok(Some((b"[]x[]".to_vec(), 3))));
+        assert_eq!(out.result_len(b"oxo"), Some(5));
     }
 
     #[test]
