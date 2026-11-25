@@ -3237,17 +3237,16 @@ fn concat_cv_plain(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<()> {
     if !matches!(f.cvs.get(cv).and_then(CvSlot::get), Some(Value::Str(_))) {
         return None;
     }
-    let plain = |v: &Value| matches!(v, Value::Str(_) | Value::Int(_));
     // The right-hand side, checked before anything changes; a consumed
     // temporary is taken out of its slot and released after the append
     // (`FREE_OP2`).
     let taken;
     let rhs: &Value = match kind {
-        KIND_CV => f.cvs.get(vi)?.get().filter(|v| plain(v))?,
-        KIND_LIT => lits.get(vi).filter(|v| plain(v))?,
-        KIND_TMPKEEP => f.tmps.get(vi).filter(|v| plain(v))?,
+        KIND_CV => f.cvs.get(vi)?.get().filter(|v| str_or_int(v))?,
+        KIND_LIT => lits.get(vi).filter(|v| str_or_int(v))?,
+        KIND_TMPKEEP => f.tmps.get(vi).filter(|v| str_or_int(v))?,
         KIND_TMP => {
-            let slot = f.tmps.get_mut(vi).filter(|v| plain(v))?;
+            let slot = f.tmps.get_mut(vi).filter(|v| str_or_int(v))?;
             taken = std::mem::take(slot);
             &taken
         }
@@ -3268,6 +3267,14 @@ fn concat_cv_plain(f: &mut Frame, lits: &[Value], inst: &Inst) -> Option<()> {
         _ => {}
     }
     Some(())
+}
+
+/// Whether `v` is a string or an int (the values `.=` appends without a
+/// conversion).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn str_or_int(v: &Value) -> bool {
+    matches!(v, Value::Str(_) | Value::Int(_))
 }
 
 /// `Op::ConcatCv` by `concat_cv_in`: a used result, a symbol table, or

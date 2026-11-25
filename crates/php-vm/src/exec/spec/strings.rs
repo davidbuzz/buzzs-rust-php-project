@@ -84,7 +84,8 @@ const ROPE_PARTS: usize = 8;
 
 /// [`Op::Rope`](crate::opcode::Op::Rope) when every part is a string or an
 /// integer ([`peek_str_int`]): the parts are measured, copied into one
-/// exactly sized string, and the temporaries among them released. `None`,
+/// string of the result's size class, and the temporaries among them
+/// released. `None`,
 /// nothing changed, otherwise.
 #[inline]
 pub(in crate::exec) fn rope_in(f: &mut Frame, lits: &[Value], parts: &[Operand]) -> Option<ZStr> {
