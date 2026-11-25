@@ -1515,6 +1515,18 @@ fn nested_place(p: &crate::opcode::Place, cv_dims: bool, chains: bool) -> bool {
     prop_dims || chain || globals || cv
 }
 
+/// An element of a temporary, a literal or a variable read as a value,
+/// `tmp[d1]...[dn]` (`f()['k']`, `self::MAP[$k]`, the elements
+/// `[$a, $b] = $x` reads): `spec::fetch_tmp_dims_in`.
+fn tmp_dims_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(
+        p.base,
+        PlaceBase::Value(Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Lit(_) | Operand::Cv(_))
+    ) && !p.segs.is_empty()
+        && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
+}
+
 /// The generic place ops whose nested shapes have a fast path that needs
 /// the VM ([`nested_place`]): run with it at hand ([`run_vm_op`], which
 /// declines to `Vm::run`'s generic op on a miss) instead of leaving the
@@ -1530,9 +1542,11 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
     };
     let ok = match *code.ops.get(i)? {
         Op::Fetch { place, mode, dst } => {
-            mode != FetchMode::List
-                && dst < code.num_tmps
-                && nested_place(place_of(place)?, false, true)
+            let p = place_of(place)?;
+            dst < code.num_tmps
+                && ((mode != FetchMode::List && nested_place(p, false, true))
+                    || (matches!(mode, FetchMode::Read | FetchMode::Is | FetchMode::List)
+                        && tmp_dims_place(p)))
         }
         Op::Isset { place, dst } | Op::Empty { place, dst } => {
             dst < code.num_tmps && nested_place(place_of(place)?, false, false)
@@ -2416,15 +2430,29 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         // here (`lower_place`): `$this->p[$k][$j]`, `$this->a->b`,
         // `$GLOBALS['name'][$k]`.
         Some(&Op::Fetch { place, mode, dst }) => {
-            let fast = if mode == FetchMode::Read {
-                vm.fetch_place_fast(place)
-            } else {
-                None
+            let fast = match mode {
+                FetchMode::Read => vm.fetch_place_fast(place),
+                // `[$a, $b] = $x`: only an element of a value (`lower_place`).
+                FetchMode::List => {
+                    return match super::spec::fetch_tmp_dims_in(vm.frame_mut(), place, false) {
+                        Some(v) => {
+                            vm.set_tmp(dst, v);
+                            at + 1
+                        }
+                        None => DECLINED,
+                    };
+                }
+                _ => None,
             };
             match fast
                 .or_else(|| vm.fetch_prop_dims_fast(place, mode))
                 .or_else(|| vm.fetch_global_dims_fast(place, mode))
-            {
+                .or_else(|| match mode {
+                    FetchMode::Read | FetchMode::Is => {
+                        super::spec::fetch_tmp_dims_in(vm.frame_mut(), place, mode == FetchMode::Is)
+                    }
+                    _ => None,
+                }) {
                 Some(v) => {
                     vm.set_tmp(dst, v);
                     at + 1

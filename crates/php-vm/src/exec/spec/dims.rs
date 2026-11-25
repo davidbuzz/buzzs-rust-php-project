@@ -36,9 +36,9 @@
 use super::super::{num_bin, Num};
 use super::{
     assign_dims, assign_op_dims, copy_value, cv_dim_hit_in, dim_int_in, dim_key_in, dim_ref_in,
-    dim_value_in, dims_value_in, discard_plain, isset_dim_in, plain_value_in, put_tmp,
-    release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char, table_dim,
-    table_dim_mut, write_keys_in, DimRef,
+    dim_value_in, dims_value_in, dims_value_of, discard_plain, isset_dim_in, plain_value_in,
+    put_tmp, release_place_str_tmps, release_str_tmp_in, store_fetched_in, string_offset_char,
+    table_dim, table_dim_mut, write_keys_in, DimRef,
 };
 use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceBase, PlaceId, Seg};
 use crate::vm::{CvSlot, ForeachIter, Frame, FrameKind, Vm};
@@ -1187,4 +1187,112 @@ pub(in crate::exec) fn fetch_dims_is_miss_in(
     let v = is_dims_value(f, cur, segs)?;
     release_place_str_tmps(f, place);
     Some(store_fetched_in(f, dst, to, v))
+}
+
+/// The base of a `tmp[d1]...[dn]` place (`PlaceBase::Value`: `f()['k']`,
+/// `self::LIST[$k]`, the source of `[$a, $b] = ...`) of frame `f`, when
+/// reading it and releasing it afterwards (`FREE_OP1` of a consumed
+/// temporary) has no effect beyond the read: a kept temporary or a
+/// literal (not released here), or a consumed temporary holding a plain
+/// scalar or an array another handle shares (so that the release only
+/// drops a count, as in `Frame::send_place_hit`). With the operand index
+/// to release (`Some` for a consumed temporary).
+fn tmp_base(f: &Frame, base: Operand) -> Option<(&Value, Option<u32>)> {
+    match base {
+        Operand::Tmp(t) => {
+            let v = f.tmps.get(t as usize)?;
+            match v {
+                Value::Array(a) if a.refcount() >= 2 => Some((v, Some(t))),
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+                    Some((v, Some(t)))
+                }
+                _ => None,
+            }
+        }
+        Operand::TmpKeep(t) => Some((f.tmps.get(t as usize)?, None)),
+        // `[$a, $b] = $cv` reads the variable in place (an undefined one
+        // warns on the generic path).
+        Operand::Cv(c) => Some((f.cvs.get(c as usize)?.get()?, None)),
+        Operand::Lit(l) => Some((f.code.literals.get(l as usize)?, None)),
+        _ => None,
+    }
+}
+
+/// Releases what reading a `tmp[...]` place consumed: the offsets' string
+/// temporaries and the consumed base temporary `base` ([`tmp_base`]).
+fn release_tmp_place(f: &mut Frame, place: PlaceId, base: Option<u32>) {
+    release_place_str_tmps(f, place);
+    if let Some(slot) = base.and_then(|t| f.tmps.get_mut(t as usize)) {
+        // A scalar, or an array whose last handle is elsewhere.
+        drop(std::mem::take(slot));
+    }
+}
+
+/// The value of an element of a temporary, `tmp[d1]...[dn]` (place
+/// `place` of frame `f`, whose base is `PlaceBase::Value`), read in
+/// `Read` or `List` mode (`is` false: `ZEND_FETCH_DIM_R` /
+/// `ZEND_FETCH_LIST_R` on an array holding every offset; a missing key
+/// warns on the generic path) or in `Is` mode (`is`: also the silent null
+/// of a missing key or a scalar container, as [`is_dims_value`]). The
+/// base and the consumed offsets are released ([`tmp_base`]). `None`,
+/// nothing changed, for anything else.
+#[inline(never)]
+pub(in crate::exec) fn fetch_tmp_dims_in(f: &mut Frame, place: PlaceId, is: bool) -> Option<Value> {
+    let (v, base) = {
+        let p = f.code.places.get(place as usize)?;
+        let PlaceBase::Value(b) = p.base else {
+            return None;
+        };
+        let segs = p.segs.as_slice();
+        if segs.is_empty() {
+            return None;
+        }
+        let (cur, base) = tmp_base(f, b)?;
+        let v = if is {
+            if !plain_dims(f, segs) {
+                return None;
+            }
+            is_dims_value(f, Some(cur), segs)?
+        } else {
+            dims_value_of(f, cur, segs)?
+        };
+        (v, base)
+    };
+    release_tmp_place(f, place, base);
+    Some(v)
+}
+
+/// `isset()` (`empty` false) or `empty()` of an element of a temporary,
+/// `tmp[d1]...[dn]` (`isset(self::MAP[$k])`, `empty(f()['k'])`):
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` on a TMP container that is an array (or a
+/// scalar: not set), every offset an int or a string. The base and the
+/// consumed offsets are released ([`tmp_base`]). `None`, nothing changed,
+/// for anything else (a string offset, `ArrayAccess`, an object whose
+/// truth its class decides, an offset that warns or converts).
+#[inline(never)]
+pub(in crate::exec) fn isset_tmp_dims_in(
+    f: &mut Frame,
+    place: PlaceId,
+    empty: bool,
+) -> Option<bool> {
+    let (r, base) = {
+        let p = f.code.places.get(place as usize)?;
+        let PlaceBase::Value(b) = p.base else {
+            return None;
+        };
+        let segs = p.segs.as_slice();
+        if segs.is_empty() || !plain_dims(f, segs) {
+            return None;
+        }
+        let (cur, base) = tmp_base(f, b)?;
+        let v = is_dims_value(f, Some(cur), segs)?;
+        let r = if empty {
+            !super::plain_truth(&v)?
+        } else {
+            !v.is_null()
+        };
+        (r, base)
+    };
+    release_tmp_place(f, place, base);
+    Some(r)
 }

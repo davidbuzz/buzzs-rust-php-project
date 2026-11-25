@@ -711,13 +711,15 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         }
         // `ZEND_ISSET_ISEMPTY_CV`.
         Op::Isset { place, dst } => {
-            let Some(r) = isset_cv_in(f, place, false) else {
+            let Some(r) = isset_cv_in(f, place, false).or_else(|| isset_place_in(f, place, false))
+            else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
         }
         Op::Empty { place, dst } => {
-            let Some(r) = isset_cv_in(f, place, true) else {
+            let Some(r) = isset_cv_in(f, place, true).or_else(|| isset_place_in(f, place, true))
+            else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
@@ -779,7 +781,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             };
             if !is_plain_slot(Some(&*slot)) {
-                return DECLINED;
+                // An array another handle shares (the source of
+                // `[$a, $b] = $x`, a constant's array): the release only
+                // drops a count (`zval_ptr_dtor_nogc`).
+                if !matches!(slot, Value::Array(a) if a.refcount() >= 2) {
+                    return DECLINED;
+                }
             }
             discard_unrooted(Some(std::mem::take(slot)));
         }
@@ -1263,6 +1270,20 @@ fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<
         None => Some(empty),
         Some(Value::Reference(r)) => decide(&*r.try_borrow()?),
         Some(v) => decide(v),
+    }
+}
+
+/// `isset()` / `empty()` of a place [`isset_cv_in`] does not cover, on
+/// the frame-local paths of `exec/spec`: an element of a temporary
+/// (`isset(self::MAP[$k])`, `empty(f()['k'])`: `spec::isset_tmp_dims_in`).
+/// `None`, nothing changed, for the generic op. Out of line, so that the
+/// plain variable's test stays small.
+#[inline(never)]
+fn isset_place_in(f: &mut Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<bool> {
+    let p = f.code.places.get(place as usize)?;
+    match p.base {
+        crate::opcode::PlaceBase::Value(_) => spec::isset_tmp_dims_in(f, place, empty),
+        _ => None,
     }
 }
 

@@ -45,7 +45,6 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
-
 /// `$cv[k] ?? d` and `$cv[k][j] ?? d`: hits, misses, undefined and scalar containers, string offsets, odd keys, ArrayAccess.
 #[test]
 fn coalesce_dim_miss() {
@@ -129,6 +128,120 @@ array(1) {
   [0]=>
   int(2)
 }
+"#
+    );
+}
+
+/// `isset` / `empty` / reads of an element of a temporary (`self::MAP[$k]`, `f()[$k]`) and array destructuring, hits and misses.
+#[test]
+fn tmp_element_reads() {
+    assert_eq!(
+        run(r#"<?php
+class K {
+  const MAP = ['a' => 1, 'z' => 0, 'n' => null, 's' => '0', 'arr' => ['x' => [1]], 5 => 'five'];
+  static function has($k) { return isset(self::MAP[$k]); }
+  static function none($k) { return empty(static::MAP[$k]); }
+}
+class AA implements ArrayAccess {
+  function offsetExists($o): bool { echo "exists($o) "; return true; }
+  function offsetGet($o): mixed { echo "get($o) "; return 0; }
+  function offsetSet($o, $v): void {}
+  function offsetUnset($o): void {}
+}
+function arr() { return ['a' => 1, 'b' => [2, 3], 'o' => new AA]; }
+function str() { return "abc"; }
+function obj() { return new AA; }
+function f() {
+  $x = [10, 20, 'k' => 30]; $r = [1, [2, 3]]; $rr = &$r[1];
+  for ($t = 0; $t < 3; $t++) {
+    foreach (['a', 'z', 'n', 's', 'arr', 'nope', 5, '5'] as $k) {
+      echo $k, ':', json_encode([K::has($k), K::none($k), isset(K::MAP[$k]['x']), empty(K::MAP[$k]['x'][0])]), ' ';
+    }
+    echo "\n";
+    echo json_encode([isset(arr()['a']), isset(arr()['q']), empty(arr()['b'][1]), empty(arr()['b'][7]), isset(str()[1]), isset(str()['x']), empty(str()[0])]), "\n";
+    echo json_encode([isset(arr()['o']['w']), empty(arr()['o']['w']), isset(obj()['v'])]), "\n";
+    echo arr()['a'], arr()['b'][1], arr()['q'] ?? 'd', arr()['b'][9] ?? 'd', K::MAP['arr']['x'][0], K::MAP['nope'] ?? 'd', str()[2], "\n";
+    echo @arr()['missing'], '|', arr()[1.0] ?? 'd', "\n";
+    [$p, $q] = $x; ['k' => $v, 0 => $w] = $x; [, [$m, $n]] = $r;
+    echo $p, $q, $v, $w, $m, $n, "\n";
+    [$a, $b, $c] = $x; var_dump($c);
+    [$d] = "str"; [$e] = 5; [$g] = null; var_dump($d, $e, $g);
+    [$h, [$i]] = [1, 2]; var_dump($i);
+    [$j] = $undef; var_dump($j);
+    ['k' => [$l]] = ['k' => [7]]; echo $l, "\n";
+  }
+}
+f();
+"#),
+        r#"a:[true,false,false,true] z:[true,true,false,true] n:[false,true,false,true] s:[true,true,false,true] arr:[true,false,true,false] nope:[false,true,false,true] 5:[true,false,false,true] 5:[true,false,false,true] 
+[true,false,false,true,true,false,false]
+exists(w) exists(w) get(w) exists(v) [true,true,true]
+13dd1dc
+|d
+1020301023
+
+Warning: Undefined array key 2 in t.php on line 29
+NULL
+
+Warning: Cannot use string as array in t.php on line 30
+
+Warning: Cannot use int as array in t.php on line 30
+NULL
+NULL
+NULL
+
+Warning: Cannot use int as array in t.php on line 31
+NULL
+
+Warning: Undefined variable $undef in t.php on line 32
+NULL
+7
+a:[true,false,false,true] z:[true,true,false,true] n:[false,true,false,true] s:[true,true,false,true] arr:[true,false,true,false] nope:[false,true,false,true] 5:[true,false,false,true] 5:[true,false,false,true] 
+[true,false,false,true,true,false,false]
+exists(w) exists(w) get(w) exists(v) [true,true,true]
+13dd1dc
+|d
+1020301023
+
+Warning: Undefined array key 2 in t.php on line 29
+NULL
+
+Warning: Cannot use string as array in t.php on line 30
+
+Warning: Cannot use int as array in t.php on line 30
+NULL
+NULL
+NULL
+
+Warning: Cannot use int as array in t.php on line 31
+NULL
+
+Warning: Undefined variable $undef in t.php on line 32
+NULL
+7
+a:[true,false,false,true] z:[true,true,false,true] n:[false,true,false,true] s:[true,true,false,true] arr:[true,false,true,false] nope:[false,true,false,true] 5:[true,false,false,true] 5:[true,false,false,true] 
+[true,false,false,true,true,false,false]
+exists(w) exists(w) get(w) exists(v) [true,true,true]
+13dd1dc
+|d
+1020301023
+
+Warning: Undefined array key 2 in t.php on line 29
+NULL
+
+Warning: Cannot use string as array in t.php on line 30
+
+Warning: Cannot use int as array in t.php on line 30
+NULL
+NULL
+NULL
+
+Warning: Cannot use int as array in t.php on line 31
+NULL
+
+Warning: Undefined variable $undef in t.php on line 32
+NULL
+7
 "#
     );
 }
