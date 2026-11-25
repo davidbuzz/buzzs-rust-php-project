@@ -591,3 +591,54 @@ Warning: A non-numeric value encountered in t.php on line 19
 ";
     assert_eq!(run(src), expected);
 }
+
+/// Writes through `$GLOBALS['g'][...]` from a function (`ZEND_FETCH_W`
+/// with `ZEND_FETCH_GLOBAL`) change the global's array in place: the
+/// compiled variables of the global-scope frames (the main script, a
+/// top-level `eval` above it) give up their handle on it for the walk and
+/// see the new value after it, a copy taken before (`$keep`) and a
+/// reference into it (`$r`) keep their own semantics.
+#[test]
+fn globals_dim_writes_from_functions_reach_global_scope_frames() {
+    let src = r#"<?php
+function w() {
+    for ($i = 0; $i < 3; $i++) { $GLOBALS["g"][$i] = $i * 10; }
+    $GLOBALS["g"][] = "app";
+    $GLOBALS["h"]["x"][1] = 1;
+    $GLOBALS["h"]["x"][2] ??= 2;
+    $GLOBALS["h"]["x"][1] ??= 9;
+    unset($GLOBALS["g"][1]);
+    $GLOBALS["s"] .= "b";
+    $GLOBALS["n"]["c"] += 5;
+}
+$g = [];
+$h = ["x" => []];
+$s = "a";
+$n = ["c" => 1];
+$keep = $g;
+$r = &$h["x"];
+w();
+echo json_encode([$g, $h, $s, $n, $keep, $r]), "\n";
+$g[] = "top";
+w();
+echo json_encode([$g, $h, $n]), "\n";
+function inc() { $GLOBALS["k"][] = count($GLOBALS["k"]); }
+$k = [];
+for ($j = 0; $j < 3; $j++) { inc(); }
+echo json_encode($k), "\n";
+$m = [0];
+function addm($v) { $GLOBALS["m"][] = $v; }
+addm(1);
+echo json_encode($m), "\n";
+eval('$e = []; addm(2); $e[] = count($m); function adde($v) { $GLOBALS["e"][] = $v; } adde(7); echo json_encode([$m, $e]), "\n";');
+echo json_encode([$m, $e]), "\n";
+"#;
+    let expected = r#"[{"0":0,"2":20,"3":"app"},{"x":{"1":1,"2":2}},"ab",{"c":6},[],{"1":1,"2":2}]
+[{"0":0,"2":20,"3":"app","4":"top","5":"app"},{"x":{"1":1,"2":2}},{"c":11}]
+[0,1,2]
+[0,1]
+[[0,1,2],[3,7]]
+[[0,1,2],[3,7]]
+"#;
+    assert_eq!(run(src), expected);
+}

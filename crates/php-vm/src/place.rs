@@ -1828,6 +1828,43 @@ impl Vm {
                 .is_some_and(|f| Rc::ptr_eq(&f.vars, store))
     }
 
+    /// Drops the handles that compiled variables keep on slot `idx` of
+    /// `store` before a walk changes that slot in place: the running
+    /// frame's, and, when `store` is the global table, those of every frame
+    /// of the global scope attached to it (the main script and top-level
+    /// `include`/`eval` frames, [`Vm::sync_global_frames`]). Their copies
+    /// would otherwise hold a second handle on the slot's array, and every
+    /// write through `$GLOBALS['g'][...]` from a function separated it: the
+    /// whole array copied per write (php-src's table slots are
+    /// `IS_INDIRECT` into the CVs, `ZEND_FETCH_W` with `ZEND_FETCH_GLOBAL`
+    /// writes the one value in place). The sync after the write
+    /// ([`Frame::sync_from_symbol_table`], [`Vm::sync_global_frames`])
+    /// gives them the new value back.
+    ///
+    /// [`Frame::sync_from_symbol_table`]: crate::vm::Frame::sync_from_symbol_table
+    pub(crate) fn clear_cvs_for_slot(&mut self, store: &Rc<RefCell<VarStore>>, idx: usize) {
+        self.frame_mut().clear_cv_for_symtab_slot(store, idx);
+        if !Rc::ptr_eq(store, &self.globals) {
+            if let Some(main) = self.frames.get_mut(0) {
+                if main.symtab_attached {
+                    main.clear_cv_for_symtab_slot(store, idx);
+                }
+            }
+            return;
+        }
+        let running = self.frames.len().saturating_sub(1);
+        for f in self
+            .frames
+            .iter_mut()
+            .take(running)
+            .take_while(|f| f.kind == crate::vm::FrameKind::Main || Rc::ptr_eq(&f.vars, store))
+        {
+            if f.symtab_attached {
+                f.clear_cv_for_symtab_slot(store, idx);
+            }
+        }
+    }
+
     /// [`Vm::store_in_globals`] for the base of a write walk
     /// (`$GLOBALS[...]` writes the global table too).
     fn base_in_globals(&self, base: &RBase) -> bool {
@@ -2803,12 +2840,7 @@ impl Vm {
                     // so the frame's copy must not be written back over it
                     // when the error handler attaches or syncs the symbol
                     // table (`global $x` / `$GLOBALS` writes; bug79793).
-                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
-                    if let Some(main) = self.frames.get_mut(0) {
-                        if main.symtab_attached {
-                            main.clear_cv_for_symtab_slot(&store, idx);
-                        }
-                    }
+                    self.clear_cvs_for_slot(&store, idx);
                     let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                         let mut st = store.borrow_mut();
                         let step = match st.slots.get_mut(idx) {
@@ -2827,7 +2859,7 @@ impl Vm {
                     }
                 } else {
                     drop(st);
-                    self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
+                    self.clear_cvs_for_slot(&store, idx);
                     let mut st = store.borrow_mut();
                     let slot = st.slots[idx].as_mut().expect("slot defined");
                     let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
@@ -3520,12 +3552,7 @@ impl Vm {
         wop: WOp,
     ) -> VmResult<Value> {
         if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
-            self.frame_mut().clear_cv_for_symtab_slot(store, idx);
-            if let Some(main) = self.frames.get_mut(0) {
-                if main.symtab_attached {
-                    main.clear_cv_for_symtab_slot(store, idx);
-                }
-            }
+            self.clear_cvs_for_slot(store, idx);
         }
         match wop {
             WOp::Assign(v) => {
@@ -4106,12 +4133,7 @@ impl Vm {
             crate::gc::release_duplicate(Value::Reference(src));
             return self.write_place(base, &segs, WOp::Assign(v));
         };
-        self.frame_mut().clear_cv_for_symtab_slot(&store, idx);
-        if let Some(main) = self.frames.get_mut(0) {
-            if main.symtab_attached {
-                main.clear_cv_for_symtab_slot(&store, idx);
-            }
-        }
+        self.clear_cvs_for_slot(&store, idx);
         let mut wop = WOp::AssignDeref(Box::new(DeferredRead {
             src,
             hit: DeferredHit::None,
@@ -4617,12 +4639,7 @@ impl Vm {
         if let RBase::Var(store, idx) = &base {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
-                    self.frame_mut().clear_cv_for_symtab_slot(store, *idx);
-                    if let Some(main) = self.frames.get_mut(0) {
-                        if main.symtab_attached {
-                            main.clear_cv_for_symtab_slot(store, *idx);
-                        }
-                    }
+                    self.clear_cvs_for_slot(store, *idx);
                     let mut st = store.borrow_mut();
                     if let Some(Value::Str(s)) = st.slots.get_mut(*idx).and_then(Option::as_mut) {
                         if !ZStr::ptr_eq(s, add) {
