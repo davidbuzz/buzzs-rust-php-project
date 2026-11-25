@@ -2610,22 +2610,27 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         // `static $x` once initialised (`Vm::bind_static_cached`: then on
         // past the initialiser), `...$args` of an untyped variadic
         // parameter (`Vm::recv_variadic_plain`).
+        // Each only over a variable whose old value releases nothing that
+        // could run a destructor or buffer a cycle root: the tape goes on
+        // without the safe point after the op where `Vm::run` would run
+        // them (`$o = new D; global $o;` destructs before the next
+        // statement).
         Some(&Op::Global { cv, name }) => {
-            if vm.bind_global_cached(cv, name) {
+            if bind_target_plain(vm, cv) && vm.bind_global_cached(cv, name) {
                 at + 1
             } else {
                 DECLINED
             }
         }
         Some(&Op::BindStatic { cv, idx, skip }) => {
-            if vm.bind_static_cached(cv, idx) {
+            if bind_target_plain(vm, cv) && vm.bind_static_cached(cv, idx) {
                 skip as usize
             } else {
                 DECLINED
             }
         }
         Some(&Op::RecvVariadic { n, cv }) => {
-            if vm.recv_variadic_plain(n, cv) {
+            if bind_target_plain(vm, cv) && vm.recv_variadic_plain(n, cv) {
                 at + 1
             } else {
                 DECLINED
@@ -2643,6 +2648,24 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         },
         _ => DECLINED,
     }
+}
+
+/// Whether compiled variable `cv` of the current frame is undefined or
+/// holds a value whose release runs nothing (null, a bool, a number, a
+/// string): what [`run_vm_op`]'s binds require of the variable they bind.
+#[inline]
+fn bind_target_plain(vm: &Vm, cv: u32) -> bool {
+    vm.frames
+        .last()
+        .and_then(|f| f.cvs.get(cv as usize))
+        .is_some_and(|slot| {
+            matches!(
+                slot.get(),
+                None | Some(
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+                )
+            )
+        })
 }
 
 /// The address of the slot the read through the global scope at op `at`

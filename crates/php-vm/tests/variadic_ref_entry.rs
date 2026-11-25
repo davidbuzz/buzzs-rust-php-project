@@ -414,3 +414,31 @@ bool(false)
 "##
     );
 }
+
+/// `global` and `static` over a variable holding the last handle of an
+/// object: its destructor runs at the bind, before the next statement.
+#[test]
+fn entry_binds_destruct_the_old_value_at_once() {
+    assert_eq!(
+        run(r##"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "destruct {$this->n}\n"; } }
+$g = 1;
+function ow($i) { $g = new D("g$i"); global $g; echo "after global $i\n"; $s = new D("s$i"); static $s; echo "after static $i\n"; }
+function main() { for ($i = 0; $i < 3; $i++) ow($i); }
+main();
+"##),
+        r##"destruct g0
+after global 0
+destruct s0
+after static 0
+destruct g1
+after global 1
+destruct s1
+after static 1
+destruct g2
+after global 2
+destruct s2
+after static 2
+"##
+    );
+}
