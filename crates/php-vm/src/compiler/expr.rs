@@ -961,9 +961,16 @@ impl Compiler<'_> {
         }
     }
 
+    /// A property, method or constant name operand. php-src compiles the
+    /// name with `zend_compile_expr()`, which moves `CG(zend_lineno)` to the
+    /// line of the name, so the fetch, call init or assignment emitted next
+    /// reports that line (`$o\n->p` on the line of `p`).
     pub(crate) fn member_name(&mut self, n: &MemberName) -> CResult<Operand> {
         Ok(match n {
-            MemberName::Ident(id) => self.lit(Value::Str(ZStr::from(id.name.as_slice()))),
+            MemberName::Ident(id) => {
+                self.f().line = id.span.line;
+                self.lit(Value::Str(ZStr::from(id.name.as_slice())))
+            }
             MemberName::Expr(e) => self.compile_expr(e)?,
         })
     }
@@ -1670,8 +1677,19 @@ impl Compiler<'_> {
             }
             _ => {
                 let p = self.compile_write_place(target)?;
+                // An element or property assignment is the delayed opline
+                // `zend_delayed_compile_dim`/`_prop` created after compiling
+                // the last offset or name: it keeps that line, not the line
+                // the value ends on (`$o\n->p\n= f();` assigns on the line
+                // of `p`).
+                let at = match target.kind {
+                    ExprKind::Dim { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. } => {
+                        self.f().line
+                    }
+                    _ => line,
+                };
                 let v = self.compile_expr(value)?;
-                self.f().line = line;
+                self.f().line = at;
                 let pid = self.place(p);
                 let dst = need.then(|| self.tmp());
                 self.emit(Op::Assign {
@@ -2271,8 +2289,10 @@ impl Compiler<'_> {
                         line,
                     );
                 }
+                // INIT_METHOD_CALL is emitted on the line the method name
+                // left (`zend_compile_method_call`): "Call to undefined
+                // method" in a chain split over lines names that line.
                 let n = self.method_member_name(name, line)?;
-                self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
                 self.finish_call_at(args, line, member_name_line(name), need, None, pipe)
             }
@@ -2332,7 +2352,6 @@ impl Compiler<'_> {
             ExprKind::StaticCall { class, name, args } => {
                 let spec = self.chain_class_spec(class)?;
                 let n = self.method_member_name(name, line)?;
-                self.f().line = line;
                 self.emit(Op::InitStaticCall {
                     class: spec,
                     name: n,
