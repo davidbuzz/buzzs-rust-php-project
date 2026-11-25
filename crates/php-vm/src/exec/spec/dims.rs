@@ -643,6 +643,11 @@ pub(in crate::exec) fn assign_dim_cv_in(
 /// and `OP_DATA` temporaries are consumed. Returns `false` otherwise,
 /// having changed nothing but possibly separations the generic write
 /// repeats.
+///
+/// What this plain path leaves goes on to [`assign_dims_wide_in`] (arrays
+/// and objects written or written over, the array behind a reference),
+/// which the generic place walk ran before: 31,000 writes a request of a
+/// large framework application's page.
 #[inline]
 pub(in crate::exec) fn assign_dims_cv_in(
     f: &mut Frame,
@@ -650,6 +655,13 @@ pub(in crate::exec) fn assign_dims_cv_in(
     place: PlaceId,
     val: Operand,
 ) -> bool {
+    assign_dims_plain_in(f, cv, place, val) || assign_dims_wide_in(f, cv, place, val)
+}
+
+/// The plain path of [`assign_dims_cv_in`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // the body of `assign_dims_cv_in`
+fn assign_dims_plain_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) -> bool {
     let Some((keys, n)) = write_keys_in(f, place) else {
         return false;
     };
@@ -681,6 +693,94 @@ pub(in crate::exec) fn assign_dims_cv_in(
         }
     }
     true
+}
+
+/// [`assign_dims_cv_in`] for what it leaves to the generic place walk
+/// and C runs on the same fast path (`ZEND_FETCH_DIM_W` along the chain,
+/// then `ZEND_ASSIGN_DIM` + `OP_DATA` and `zend_assign_to_variable`): a
+/// value that is an array or an object (a new handle of it), an element
+/// written over that is an array or an object (released after the store,
+/// a possible root; a destructor it owes runs at the row's safe point,
+/// before the next op, as C runs it inside the assignment), and the array
+/// held through a reference (a `global`, a by-reference parameter). Every
+/// offset an int or a string, the containers on the way arrays (each
+/// separated when shared) or missing or null (made empty arrays), the
+/// element no reference. A frame with a symbol table, an element or a
+/// container that is a reference, an object, a string or `false` on the
+/// way: `false`, nothing changed but separations and created empty
+/// arrays the generic write repeats as no-ops (it would create them too).
+#[inline(never)]
+fn assign_dims_wide_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) -> bool {
+    if f.symtab_attached {
+        return false;
+    }
+    let Some((keys, n)) = write_keys_in(f, place) else {
+        return false;
+    };
+    let Some(v) = dim_value_in(f, val) else {
+        return false;
+    };
+    let Some(slot) = f.cvs.get_mut(cv as usize) else {
+        return false;
+    };
+    let res = match slot.as_mut() {
+        Some(Value::Array(arr)) => assign_dims_wide(arr.make_mut(), &keys[..n], v),
+        Some(Value::Reference(r)) => match r.try_borrow_mut() {
+            Some(mut held) => match &mut *held {
+                Value::Array(arr) => assign_dims_wide(arr.make_mut(), &keys[..n], v),
+                _ => Err(v),
+            },
+            None => Err(v),
+        },
+        _ => Err(v),
+    };
+    let Ok(old) = res else {
+        return false;
+    };
+    if let Some(old) = old {
+        release_elem(old);
+    }
+    release_place_str_tmps(f, place);
+    if let Operand::Tmp(t) = val {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            put_tmp(slot, Value::Null);
+        }
+    }
+    true
+}
+
+/// `tbl[k1][k2]... = v` along `keys` (all `Some`) for
+/// [`assign_dims_wide_in`]: each container on the way an array
+/// (separated) or missing or null (an empty array put there), then `v`
+/// stored over any element that is no reference, or added. The old
+/// element (`None` for a new key) on success; `v` back otherwise.
+fn assign_dims_wide(
+    tbl: &mut HashTable,
+    keys: &[Option<ArrayKey>],
+    v: Value,
+) -> Result<Option<Value>, Value> {
+    let Some((Some(key), rest)) = keys.split_first() else {
+        return Err(v);
+    };
+    if rest.is_empty() {
+        return match tbl.get_mut(key) {
+            Some(Value::Reference(_)) => Err(v),
+            Some(slot) => Ok(Some(std::mem::replace(slot, v))),
+            None => {
+                // A new element: the null the lookup adds owns nothing.
+                std::mem::forget(std::mem::replace(tbl.lookup_ex(key.clone()).0, v));
+                Ok(None)
+            }
+        };
+    }
+    let (elem, _) = tbl.lookup_ex(key.clone());
+    if matches!(elem, Value::Null) {
+        *elem = Value::Array(ZArray::new());
+    }
+    let Value::Array(inner) = elem else {
+        return Err(v);
+    };
+    assign_dims_wide(inner.make_mut(), rest, v)
 }
 
 /// [`Op::AssignOpDimsCv`](crate::opcode::Op::AssignOpDimsCv):

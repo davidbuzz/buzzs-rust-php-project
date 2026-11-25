@@ -1112,3 +1112,147 @@ b
 TypeError: Cannot access offset of type string on string
 dflt
 "#;
+
+/// `$x['a']['b'] = value` where the value or the element written over is
+/// an array or an object (with destructors and their order), new keys on
+/// the way, the array itself as the value, copies that keep their values,
+/// the array behind a reference, elements and containers on the way that
+/// are references, strings, `false`, `ArrayAccess` objects and ints.
+#[test]
+fn nested_writes_of_arrays_and_objects() {
+    assert_eq!(run(NESTED_WRITE), NESTED_WRITE_OUT);
+}
+
+const NESTED_WRITE: &str = r#"<?php
+class D { public function __construct(public $n) {} public function __destruct() { echo "d{$this->n} "; } }
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $x = ['a' => ['b' => 0]];
+        $x['a']['b'] = [1, 2];
+        $x['a']['c'] = new D("c$round");
+        $x['n']['m'] = ['deep' => true];
+        echo json_encode($x), "\n";
+        // Overwriting an array and an object element.
+        $x['a']['b'] = 'scalar';
+        echo "before ";
+        $x['a']['c'] = 'gone';
+        echo "after\n";
+        // The array itself as the value.
+        $y = ['a' => ['b' => 0]];
+        $y['a']['b'] = $y;
+        echo json_encode($y), "\n";
+        // A copy keeps its values.
+        $z = ['a' => ['b' => [0]]];
+        $copy = $z;
+        $z['a']['b'] = [9];
+        echo json_encode($copy), json_encode($z), "\n";
+        // The value's array is shared, not copied, and stays independent.
+        $v = [1];
+        $w = ['a' => []];
+        $w['a']['v'] = $v;
+        $v[] = 2;
+        echo json_encode($w), json_encode($v), "\n";
+        // Through a reference (a `global`, a by-reference parameter).
+        $g = ['a' => ['b' => 0]];
+        $ref = &$g;
+        $ref['a']['b'] = [1];
+        $ref['a']['new'] = 2;
+        $ref['q']['r'] = 3;
+        echo json_encode($g), "\n";
+        unset($ref);
+        // An element on the way that is a reference.
+        $inner = ['b' => 0];
+        $h = ['a' => &$inner];
+        $h['a']['b'] = [5];
+        echo json_encode($inner), "\n";
+        // The element written is a reference: written through.
+        $t = 0;
+        $e = ['a' => ['b' => &$t]];
+        $e['a']['b'] = [7];
+        echo json_encode($t), "\n";
+        // Containers on the way that are no arrays.
+        $s = ['a' => 'str'];
+        try { $s['a']['b'] = [1]; } catch (\Error $ex) { echo get_class($ex), ': ', $ex->getMessage(), "\n"; }
+        $fa = ['a' => false];
+        $fa['a']['b'] = [1];
+        echo json_encode($fa), "\n";
+        $o = ['a' => new ArrayObject()];
+        $o['a']['b'] = [1];
+        echo count($o['a']), "\n";
+        $i = ['a' => 5];
+        try { $i['a']['b'] = [1]; } catch (\Error $ex) { echo get_class($ex), ': ', $ex->getMessage(), "\n"; }
+        // Global code's variables.
+        $GLOBALS['gl']['x']['y'] = [$round];
+        // Destructor order when an array of objects is overwritten.
+        $q = ['a' => ['list' => [new D("l1-$round"), new D("l2-$round")]]];
+        echo "over ";
+        $q['a']['list'] = null;
+        echo "done\n";
+        // A value that is an object.
+        $obj = new stdClass;
+        $obj->p = 1;
+        $u = [];
+        $u['x']['o'] = $obj;
+        $obj->p = 2;
+        echo $u['x']['o']->p, "\n";
+        unset($x);
+        echo "\n";
+    }
+    echo json_encode($GLOBALS['gl']), "\n";
+}
+f();
+"#;
+
+const NESTED_WRITE_OUT: &str = r#"{"a":{"b":[1,2],"c":{"n":"c0"}},"n":{"m":{"deep":true}}}
+before dc0 after
+{"a":{"b":{"a":{"b":0}}}}
+{"a":{"b":[0]}}{"a":{"b":[9]}}
+{"a":{"v":[1]}}[1,2]
+{"a":{"b":[1],"new":2},"q":{"r":3}}
+{"b":[5]}
+[7]
+TypeError: Cannot access offset of type string on string
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 52
+{"a":{"b":[1]}}
+1
+Error: Cannot use a scalar value as an array
+over dl1-0 dl2-0 done
+2
+
+{"a":{"b":[1,2],"c":{"n":"c1"}},"n":{"m":{"deep":true}}}
+before dc1 after
+{"a":{"b":{"a":{"b":0}}}}
+{"a":{"b":[0]}}{"a":{"b":[9]}}
+{"a":{"v":[1]}}[1,2]
+{"a":{"b":[1],"new":2},"q":{"r":3}}
+{"b":[5]}
+[7]
+TypeError: Cannot access offset of type string on string
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 52
+{"a":{"b":[1]}}
+1
+Error: Cannot use a scalar value as an array
+over dl1-1 dl2-1 done
+2
+
+{"a":{"b":[1,2],"c":{"n":"c2"}},"n":{"m":{"deep":true}}}
+before dc2 after
+{"a":{"b":{"a":{"b":0}}}}
+{"a":{"b":[0]}}{"a":{"b":[9]}}
+{"a":{"v":[1]}}[1,2]
+{"a":{"b":[1],"new":2},"q":{"r":3}}
+{"b":[5]}
+[7]
+TypeError: Cannot access offset of type string on string
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 52
+{"a":{"b":[1]}}
+1
+Error: Cannot use a scalar value as an array
+over dl1-2 dl2-2 done
+2
+
+{"x":{"y":[2]}}
+"#;
