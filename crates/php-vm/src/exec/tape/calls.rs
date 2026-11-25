@@ -1601,9 +1601,11 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
 
 /// How many arguments a prepared call of builtin `b` takes: past the
 /// declared parameters only into a variadic one (else the generic call
-/// reports the count), at most [`MAX_ARGS`]. Inline: a call of its own
-/// (10 instructions) for a load and a compare.
-#[inline]
+/// reports the count), at most [`MAX_ARGS`]. Always inline: a call of its
+/// own (10 instructions, still one when merely `#[inline]`) for a load
+/// and a compare.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per prepared builtin call
 fn native_limit(b: &Builtin) -> usize {
     if b.flags & flags::VARIADIC != 0 {
         MAX_ARGS

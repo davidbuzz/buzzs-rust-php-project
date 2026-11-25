@@ -800,8 +800,11 @@ impl Builtin {
 
     /// [`Builtin::plain_call_upto`] inline, for a caller that has just
     /// called it (`calls::prepare`): the answer is worked out then, and
-    /// a second out-of-line call is not needed to read it again.
-    #[inline]
+    /// a second out-of-line call is not needed to read it again. Always
+    /// inline: merely `#[inline]`, it stayed a call of its own (11
+    /// instructions of every prepared builtin call).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load and a match, once per call
     pub(crate) fn plain_call_known(&self) -> (PlainCall, usize) {
         match self.plain.get() {
             PLAIN_NAMED => (PlainCall::Named, usize::MAX),
