@@ -10,13 +10,9 @@ use std::process::{Command, Output};
 
 fn php(memory_limit: &str, code: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_php"))
-        .args([
-            "-n",
-            "-d",
-            &format!("memory_limit={memory_limit}"),
-            "-r",
-            code,
-        ])
+        .args(["-n", "-d"])
+        .arg(format!("memory_limit={memory_limit}"))
+        .args(["-r", code])
         .output()
         .expect("spawn php")
 }
