@@ -1,0 +1,98 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/cb.php"
+  },
+  {
+   "path": "/cb.php?cs=ISO-8859-1"
+  },
+  {
+   "path": "/cb.php"
+  },
+  {
+   "path": "/cb.php?cs=&ct=text/plain"
+  },
+  {
+   "path": "/cb.php?mime=text/plain"
+  },
+  {
+   "path": "/cb.php"
+  },
+  {
+   "path": "/cb.php?ct=application/xml&cs=KOI8-R"
+  },
+  {
+   "path": "/cb.php"
+  },
+  {
+   "path": "/forms.php?m="
+  },
+  {
+   "path": "/forms.php?m=loc"
+  },
+  {
+   "path": "/forms.php?m=loc301"
+  },
+  {
+   "path": "/forms.php?m=loc201"
+  },
+  {
+   "path": "/forms.php?m=status"
+  },
+  {
+   "path": "/forms.php?m=status10"
+  },
+  {
+   "path": "/forms.php?m=statushdr"
+  },
+  {
+   "path": "/forms.php?m=code"
+  },
+  {
+   "path": "/forms.php?m=code0"
+  },
+  {
+   "path": "/forms.php?m=odd"
+  },
+  {
+   "path": "/forms.php?m=neg"
+  },
+  {
+   "path": "/forms.php?m=ct"
+  },
+  {
+   "path": "/forms.php?m=ctnocs"
+  },
+  {
+   "path": "/forms.php?m=cl"
+  },
+  {
+   "path": "/forms.php?m=date"
+  },
+  {
+   "path": "/forms.php?m=conn"
+  },
+  {
+   "path": "/forms.php?m=xpb"
+  },
+  {
+   "path": "/forms.php?m=remall"
+  },
+  {
+   "path": "/forms.php?m="
+  },
+  {
+   "method": "HEAD",
+   "path": "/forms.php?m=loc"
+  },
+  {
+   "path": "/forms.php",
+   "protocol": "HTTP/1.0"
+  }
+ ]
+}
