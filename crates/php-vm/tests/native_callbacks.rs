@@ -415,3 +415,63 @@ array(2) {
 "##
     );
 }
+
+/// The edges of the direct entries: a typed `__get`, an `offsetGet()` with a default
+/// parameter and a static variable, an `offsetSet()` with `finally`, a deprecated
+/// `__toString`, a generator `getIterator()`, a reference passed to a callback, a
+/// typed callback.
+#[test]
+fn direct_entry_edges() {
+    assert_eq!(
+        run(r##"<?php
+class G { public function __get(string $n): int { return (int) $n * 2; } }
+class D implements ArrayAccess {
+    public function offsetGet($o, $extra = 5): mixed { static $calls = 0; $calls++; return "$o/$extra/$calls"; }
+    public function offsetSet($o, $v): void { try { echo "set $o\n"; return; } finally { echo "finally $o\n"; } }
+    public function offsetExists($o): bool { return $o !== 'no'; }
+    public function offsetUnset($o): void {}
+}
+class Dep { #[\Deprecated("use other")] public function __toString(): string { return "dep"; } }
+class Gen implements IteratorAggregate { public function getIterator(): Generator { yield 'k' => 'v'; } }
+function t() {
+    $g = new G;
+    var_dump($g->{'21'});
+    try { var_dump($g->abc); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    $d = new D;
+    var_dump($d[1], $d['x']);
+    $d['y'] = 1;
+    var_dump(isset($d['no']), isset($d['yes']));
+    echo new Dep, "\n";
+    foreach (new Gen as $k => $v) { echo "$k=$v\n"; }
+    $ref = 'r';
+    $arr = [&$ref];
+    var_dump(array_map(fn($x) => $x . '!', $arr));
+    var_dump(array_filter([1, 0, 2], fn(int $x): bool => (bool) $x));
+}
+t();
+"##),
+        r##"int(42)
+int(0)
+string(5) "1/5/1"
+string(5) "x/5/2"
+set y
+finally y
+bool(false)
+bool(true)
+
+Deprecated: Method Dep::__toString() is deprecated, use other in t.php on line 19
+dep
+k=v
+array(1) {
+  [0]=>
+  string(2) "r!"
+}
+array(2) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+"##
+    );
+}
