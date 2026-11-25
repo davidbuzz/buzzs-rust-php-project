@@ -5973,8 +5973,10 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
     }
     if shape == CallShape::NOT_PLAIN {
         // Static variables, a trailing variadic parameter, a by-reference
-        // parameter past the arguments passed (`near_plain`).
-        return near_plain(uf, n);
+        // parameter past the arguments passed (`near_plain`); typed
+        // declared parameters checked here, as the skipped `RECV`s would.
+        return near_plain(uf, n)
+            && (!uf.near_typed() || near_args_accepted(uf, &call.inline_args[..n]));
     }
     if n > uf.params.len() {
         return false;
@@ -6016,6 +6018,20 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
 /// frame's argument buffer after a `None` for each declared parameter, as
 /// `push_user_call` leaves them, where `RecvVariadic`, `func_get_args()`
 /// and backtraces read them.
+/// Whether each of `args` (a near-plain call's, in parameter order) is a
+/// value its declared parameter's type takes as it is, as the `RECV`s the
+/// call skips would check (anything else, a coercion or a `TypeError`, is
+/// the generic call's). A trailing variadic parameter's arguments are left
+/// to its `RECV_VARIADIC`, which runs in the callee.
+pub(crate) fn near_args_accepted(uf: &UserFunction, args: &[Option<Value>]) -> bool {
+    uf.params.iter().zip(args).all(|(p, arg)| {
+        p.variadic
+            || p.ty
+                .as_ref()
+                .is_none_or(|ty| arg.as_ref().is_some_and(|v| param_accepts(ty, v)))
+    })
+}
+
 #[cold]
 #[inline(never)]
 pub(crate) fn near_plain(uf: &UserFunction, n: usize) -> bool {

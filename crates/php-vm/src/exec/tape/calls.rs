@@ -2999,8 +2999,15 @@ pub(super) fn enter(
     if caller.calls.len() != prep.calls_len {
         return Err(prep);
     }
-    if uf.call_shape() == CallShape::TYPED {
+    let shape = uf.call_shape();
+    if shape == CallShape::TYPED || (shape == CallShape::NOT_PLAIN && uf.near_typed()) {
+        // (A near-plain function's trailing variadic parameter is checked
+        // by its own `RECV_VARIADIC`; its arguments past the declared
+        // ones are not paired with a parameter here.)
         for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
+            if p.variadic {
+                break;
+            }
             if let Some(ty) = &p.ty {
                 if !slot
                     .get()

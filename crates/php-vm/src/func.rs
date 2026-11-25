@@ -196,6 +196,11 @@ pub struct CallShape {
     /// its calls stay generic, else one more than the most arguments a
     /// plain call of it passes.
     near: Cell<u8>,
+    /// With `near`: whether a parameter other than a trailing variadic one
+    /// has a type other than `mixed`, which a near-plain call then checks
+    /// itself ([`UserFunction::near_typed`]): the `RECV`s it skips are
+    /// where the generic call checks them.
+    near_typed: Cell<bool>,
 }
 
 /// [`CallShape::near`] of a declaration whose calls all stay generic.
@@ -299,6 +304,14 @@ impl UserFunction {
     /// The JIT and the tape's whole-function paths read only
     /// [`UserFunction::call_shape`] and keep away from these.
     #[inline]
+    /// Whether a near-plain call ([`UserFunction::near_plain_limit`], asked
+    /// first) must check its arguments against declared types: a parameter
+    /// other than a trailing variadic one has a type other than `mixed`.
+    #[inline]
+    pub(crate) fn near_typed(&self) -> bool {
+        self.call_shape.near_typed.get()
+    }
+
     pub(crate) fn near_plain_limit(&self) -> Option<usize> {
         let mut s = self.call_shape.near.get();
         if s == 0 {
@@ -322,12 +335,22 @@ impl UserFunction {
             && (self.flags & flags::CLOSURE == 0 || self.code.num_statics == 0)
             && self.code.num_finally == 0
             && nparams <= self.code.cv_names.len()
-            && self.params.iter().enumerate().all(|(i, p)| {
-                (!p.variadic || i + 1 == nparams) && p.ty.as_ref().is_none_or(TypeDecl::is_mixed)
-            });
+            && self
+                .params
+                .iter()
+                .enumerate()
+                .all(|(i, p)| !p.variadic || i + 1 == nparams);
         if !plain_rest {
             return NEAR_NO;
         }
+        // Typed declared parameters are checked by the call
+        // (`call::near_args_accepted`, the tape's `enter`); a typed variadic
+        // one by its own `RECV_VARIADIC`, which runs in the callee.
+        self.call_shape.near_typed.set(
+            self.params
+                .iter()
+                .any(|p| !p.variadic && p.ty.as_ref().is_some_and(|t| !t.is_mixed())),
+        );
         let variadic = self.params.last().is_some_and(|p| p.variadic);
         let most = if variadic { usize::MAX } else { nparams };
         let first_ref = self
