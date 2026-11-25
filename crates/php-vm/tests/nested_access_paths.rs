@@ -43,6 +43,97 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// Reads of `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
+#[test]
+fn prop_chain() {
+    assert_eq!(
+        run(r#"<?php
+class B { public $b = 1; public $arr = ['x' => 'y']; private $priv = 'p'; protected $prot = 'q'; public int $typed; public $u;
+  function __construct() { unset($this->u); }
+  function __get($n) { echo "__get $n\n"; return "magic-$n"; } }
+class Lazyish { public $v = 'lz'; }
+class A { public $a; public $list; public $n = null; public $s = 'str'; public $arr;
+  function __construct() { $this->a = new B; $this->list = ['k' => new B, 'i' => 5]; $this->arr = [1 => ['o' => new B]]; }
+  function run() {
+    $k = 'k';
+    var_dump($this->a->b, $this->a->arr, $this->list[$k]->b, $this->arr[1]['o']->b);
+    var_dump($this->a->nope ?? 'dflt', $this->a->priv, $this->a->prot, $this->a->u);
+    var_dump($this->a->typed ?? 'unset-typed');
+    try { var_dump($this->a->typed); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    var_dump($this->n->x);
+    var_dump($this->s->x);
+    var_dump($this->list['i']->x, $this->list['missing']->x ?? 'm');
+    $this->a->dyn = 'd'; var_dump($this->a->dyn);
+    $old = $this->a; $this->a = new Lazyish; var_dump($this->a->v); $this->a = $old;
+    for ($i = 0; $i < 3; $i++) { echo $this->a->b, $this->list[$k]->b; } echo "\n";
+    $r = &$this->list[$k]; var_dump($this->list[$k]->b); unset($r);
+  }
+}
+(new A)->run();
+$o = new A;
+var_dump($o->a->b, $o->a->arr['x'] ?? null);
+$reg = ['n' => new B]; $name = 'n';
+function useg() { global $reg, $name; var_dump($reg[$name]->b, $reg[$name]->arr, isset($reg[$name]), $reg[$name]->priv); }
+useg();
+$q = &$o; var_dump($q->a->b);
+class Sub extends B { public $b = 'sub'; }
+function rd($x) { return $x->a->b; }
+$o2 = new A; $o2->a = new Sub; var_dump(rd($o), rd($o2), rd($o));
+$arr = ['x' => ['y' => new B]]; $s = 'x'; var_dump($arr[$s]['y']->b, $arr[$s]['nope']->b ?? 'nn');
+"#),
+        r#"int(1)
+array(1) {
+  ["x"]=>
+  string(1) "y"
+}
+int(1)
+int(1)
+__get nope
+__get priv
+__get prot
+__get u
+string(10) "magic-nope"
+string(10) "magic-priv"
+string(10) "magic-prot"
+string(7) "magic-u"
+string(11) "unset-typed"
+Typed property B::$typed must not be accessed before initialization
+
+Warning: Attempt to read property "x" on null in t.php on line 14
+NULL
+
+Warning: Attempt to read property "x" on string in t.php on line 15
+NULL
+
+Warning: Attempt to read property "x" on int in t.php on line 16
+NULL
+string(1) "m"
+
+Deprecated: Creation of dynamic property B::$dyn is deprecated in t.php on line 17
+string(1) "d"
+string(2) "lz"
+111111
+int(1)
+int(1)
+string(1) "y"
+__get priv
+int(1)
+array(1) {
+  ["x"]=>
+  string(1) "y"
+}
+bool(true)
+string(10) "magic-priv"
+int(1)
+int(1)
+string(3) "sub"
+int(1)
+int(1)
+string(2) "nn"
+"#
+    );
+}
+
 /// Reads, `isset()`/`empty()`, assignments and appends of `$this->p[$k]` (the frame-local hits of the `*ObjPropDim` ops).
 #[test]
 fn prop_dim1() {

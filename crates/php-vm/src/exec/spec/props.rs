@@ -1642,6 +1642,126 @@ pub(super) fn assign_prop_dims_in(
     Some(old)
 }
 
+/// The object at the end of the dimension segments `segs` of frame `f`
+/// from `cur` (itself possibly through a reference): every container an
+/// array holding the int or string offset its operand peeks as, the last
+/// element an object (also through a reference), its handle copied. The
+/// chain of `ZEND_FETCH_DIM_R`/`_IS` hits before a `ZEND_FETCH_OBJ_R`;
+/// `None` for anything else.
+#[inline]
+fn dims_to_object(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Obj> {
+    let guard;
+    let mut cur = match cur {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let crate::opcode::Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = super::dim_ref_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = super::table_dim(a, key)?;
+    }
+    match cur {
+        Value::Object(o) => Some(o.clone()),
+        Value::Reference(r) => match &*r.try_borrow()? {
+            Value::Object(o) => Some(o.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_OBJ_R`/`_IS` of a place's last `->name` (literal `lit`) on
+/// `obj`, with that segment's own cache entry `idx` (see
+/// `place::propcache`'s tail entries), in frame `f` alone: the entry was
+/// filled for the object's class and the frame's scope and allows plain
+/// reads, the object is not lazy, and the property is an initialized
+/// declared slot or an existing dynamic property. Its value, dereferenced
+/// and copied; `None` otherwise.
+#[inline]
+fn read_tail_hit(f: &Frame, idx: usize, lit: u32, obj: &Obj) -> Option<Value> {
+    let od = object::data(obj);
+    let (slot, flags) = {
+        let cache = f.code.prop_cache.try_borrow().ok()?;
+        let e = cache.get(idx)?;
+        if e.class_addr == 0
+            || e.lit != lit
+            || Rc::as_ptr(&od.class) as usize != e.class_addr
+            || e.scope_addr != scope_addr(f)
+            || e.flags & PC_READ == 0
+        {
+            return None;
+        }
+        (e.slot as usize, e.flags)
+    };
+    if !od.lazy.try_borrow().is_ok_and(|l| l.is_none()) {
+        return None;
+    }
+    let dyn_prop = if flags & PC_DYN == 0 {
+        None
+    } else {
+        match f.code.literals.get(lit as usize) {
+            Some(Value::Str(name)) => Some(name),
+            _ => return None,
+        }
+    };
+    read_in(od, slot, dyn_prop)
+}
+
+/// A read (`Read` or `Is` mode: no diagnostic on a hit) of a place ending
+/// in `->name` whose containers are all reached without the walk:
+/// `$this->a->b` / `$cv->a[$k]->b` (the head from its cache entry, as
+/// [`read_hit`], then dimensions) or `$cv[$k]...->b` (the variable,
+/// possibly a reference, then dimensions), the last property read with
+/// its own cache entry ([`read_tail_hit`]). A consumed string offset is
+/// released. `None`, nothing consumed, for the generic fetch (which also
+/// fills the entries).
+#[inline(never)]
+pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    use crate::opcode::Seg;
+    let p = f.code.places.get(pid as usize)?;
+    let (Seg::Prop(Operand::Lit(lit)), mid) = p.segs.split_last()? else {
+        return None;
+    };
+    let lit = *lit;
+    let head = crate::place::propcache::cacheable_head(p);
+    let obj = if head {
+        // `[->head, [dims...], ->name]`: one property before the last at
+        // least, read through the head's entry.
+        let (_, dims) = mid.split_first()?;
+        let hit = hit_key(f, pid, PC_READ, PC_DYN)?;
+        let od = hit_data(f, &hit)?;
+        let slots = od.slots.try_borrow().ok()?;
+        let o = dims_to_object(f, slots.get(hit.slot)?.as_ref()?, dims);
+        drop(slots);
+        o?
+    } else {
+        let PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        if mid.is_empty() {
+            return None;
+        }
+        dims_to_object(f, f.cvs.get(cv as usize)?.get()?, mid)?
+    };
+    let idx = if head {
+        f.code.places.len() + pid as usize
+    } else {
+        pid as usize
+    };
+    let v = read_tail_hit(f, idx, lit, &obj)?;
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
 /// Whether place `pid` of the current frame is `$this->name[d1]...[dn]`
 /// or `$cv->name[...]`: a literal property name and only dimensions
 /// after it.
@@ -1715,15 +1835,17 @@ impl Vm {
 
     /// `Fetch` (`Read` or `Is` mode) of `$this->name[d1]...[dn]` /
     /// `$cv->name[...]` without the place walk ([`read_prop_dims_in`]),
-    /// filling the head's cache entry on a miss. `None` for the generic
-    /// fetch.
+    /// filling the head's cache entry on a miss, or of a place ending in a
+    /// property whose cache entries are filled ([`read_chain_in`]). `None`
+    /// for the generic fetch.
     pub(crate) fn fetch_prop_dims_fast(&mut self, pid: PlaceId, mode: FetchMode) -> Option<Value> {
         if mode == FetchMode::List {
             return None;
         }
         let f = self.user_frame_mut()?;
         if !is_prop_dims_place(f, pid) {
-            return None;
+            // `$this->a->b`, `$list[$k]->name` & co.
+            return read_chain_in(f, pid);
         }
         if let Some(v) = read_prop_dims_in(f, pid) {
             return Some(v);
