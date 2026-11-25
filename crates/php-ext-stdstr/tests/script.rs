@@ -69,6 +69,34 @@ fn str_replace_arrays_and_count() {
     );
 }
 
+/// `explode()` with every piece kept (the list built to size) and with a
+/// limit, then appended to: keys, values and the next index as php8.5
+/// gives them.
+#[test]
+fn explode_lists_append_like_php() {
+    let out = run(r#"
+        function t() {
+            foreach ([[',', 'a,b,c', PHP_INT_MAX], [',', 'a,b,c', 3], [',', 'a,b,c', 2],
+                      [',', ',a,', 5], [',,', 'a,,,b,,', 9], [',', 'abc', 9], [',', '', 4],
+                      [',', 'a,b,c', -1], ['ab', 'xabyabz', 3]] as [$d, $s, $l]) {
+                $r = explode($d, $s, $l);
+                $r[] = 'n';
+                foreach ($r as $k => $v) { echo "$k=$v "; }
+                echo "\n";
+            }
+            $r = explode(',', str_repeat('x,', 20));
+            $r[] = 'n';
+            echo $r[19], '|', $r[20], '|', $r[21], "\n";
+        }
+        t();
+    "#);
+    assert_eq!(
+        out,
+        "0=a 1=b 2=c 3=n \n0=a 1=b 2=c 3=n \n0=a 1=b,c 2=n \n0= 1=a 2= 3=n \n\
+         0=a 1=,b 2= 3=n \n0=abc 1=n \n0= 1=n \n0=a 1=b 2=n \n0=x 1=y 2=z 3=n \nx||n\n"
+    );
+}
+
 #[test]
 fn substr_replace_forms() {
     let out = run(r#"

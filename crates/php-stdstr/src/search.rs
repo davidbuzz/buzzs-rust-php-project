@@ -443,6 +443,49 @@ pub fn explode_slices<'a>(delim: &[u8], s: &'a [u8], limit: i64) -> StdResult<Ve
     Ok(pieces)
 }
 
+/// Every piece of `s` between the occurrences of `delim`, front to back
+/// (`php_explode()` with a limit above their number: the pieces
+/// [`explode_slices`] gives then), found as they are taken, without a
+/// vector of them. An empty `delim` gives `s` alone.
+pub fn split_all<'a>(delim: &'a [u8], s: &'a [u8]) -> SplitAll<'a> {
+    SplitAll {
+        delim,
+        rest: Some(s),
+    }
+}
+
+/// The iterator of [`split_all`].
+#[derive(Debug, Clone)]
+pub struct SplitAll<'a> {
+    delim: &'a [u8],
+    /// What is left to split; `None` once the last piece was given.
+    rest: Option<&'a [u8]>,
+}
+
+impl<'a> Iterator for SplitAll<'a> {
+    type Item = &'a [u8];
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a [u8]> {
+        let rest = self.rest?;
+        let found = if self.delim.is_empty() {
+            None
+        } else {
+            memnstr(rest, self.delim)
+        };
+        match found {
+            Some(r) => {
+                self.rest = rest.get(r + self.delim.len()..);
+                rest.get(..r)
+            }
+            None => {
+                self.rest = None;
+                Some(rest)
+            }
+        }
+    }
+}
+
 /// The per-request state behind `strtok()` (`BG(strtok_string)` /
 /// `BG(strtok_last)`).
 #[derive(Debug, Clone, Default)]
@@ -577,6 +620,23 @@ mod tests {
         assert_eq!(e(-1), vec![b"a".to_vec(), b"b".to_vec()]);
         assert_eq!(e(0), vec![b"a,b,c".to_vec()]);
         assert_eq!(e(-5), Vec::<Vec<u8>>::new());
+    }
+
+    /// `split_all` gives the pieces `explode_slices` gives without a limit.
+    #[test]
+    fn split_all_matches_unlimited_explode() {
+        let inputs: [&[u8]; 8] = [
+            b"", b",", b"a", b"a,b,c", b",a,", b"a,,,b,,", b",,,,", b"abc",
+        ];
+        for d in [&b","[..], b",,", b"ab", b"abcd"] {
+            for s in inputs {
+                let want = explode_slices(d, s, i64::MAX).unwrap_or_default();
+                let got: Vec<&[u8]> = split_all(d, s).collect();
+                assert_eq!(got, want, "{d:?} {s:?}");
+            }
+        }
+        let alone: Vec<&[u8]> = split_all(b"", b"abc").collect();
+        assert_eq!(alone, vec![&b"abc"[..]]);
     }
 
     #[test]

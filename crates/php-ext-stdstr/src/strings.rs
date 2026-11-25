@@ -138,6 +138,15 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm,
         pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
     )?;
+    // `php_explode()` keeping every piece (a separator found, a limit
+    // above the number of pieces): the list built to size, each piece
+    // `zend_string_init_fast`, with no vector of the pieces first.
+    if pieces > 1 && i64::try_from(pieces).is_ok_and(|p| limit >= p) {
+        return Ok(Value::Array(ZArray::from_list_sized(
+            pieces,
+            search::split_all(sep.as_bytes(), s.as_bytes()).map(|p| Value::Str(ZStr::init_fast(p))),
+        )));
+    }
     let r = search::explode_slices(sep.as_bytes(), s.as_bytes(), limit);
     let parts = check(vm, r)?;
     // `php_explode()`: the input itself when it is not split

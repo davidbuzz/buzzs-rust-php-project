@@ -956,6 +956,34 @@ impl HashTable {
         t
     }
 
+    /// A list of `values` (keys `0, 1, 2, ...`) built in one step, sized
+    /// for `n` elements: `array_init_size(n)` + `zend_hash_real_init_packed`
+    /// + `ZEND_HASH_FILL_PACKED`, what php-src's array builders that know
+    /// their result's size do. The elements are written straight into the
+    /// list's storage, allocated once for `nTableSize` elements (`n`
+    /// rounded up to a power of two, at least 8), with none of
+    /// [`HashTable::push`]'s per-element tests; `n` is only a hint (more
+    /// or fewer values give the same table, the storage grown as pushes
+    /// would grow it). No values leave the table untouched, as
+    /// `array_init_size` with nothing added does.
+    #[must_use]
+    pub fn from_list_sized<I: IntoIterator<Item = Value>>(n: usize, values: I) -> Self {
+        let mut t = Self::with_capacity(n);
+        let mut v: Vec<Option<Value>> = Vec::with_capacity(t.table_size as usize);
+        v.extend(values.into_iter().map(Some));
+        let len = v.len();
+        if len == 0 {
+            return t;
+        }
+        if len > t.table_size as usize {
+            t.table_size = check_size(to_u32(len));
+        }
+        t.num_elements = to_u32(len);
+        t.next_free = idx_key(len);
+        t.store = Store::Packed(v);
+        t
+    }
+
     /// Whether nothing was ever stored in the table (`zend_new_array`'s
     /// state: `HASH_FLAG_UNINITIALIZED`, no next index taken): the shared
     /// empty table of a literal being built is one.
@@ -3620,14 +3648,17 @@ impl ZArray {
         ZArray(Rc::new(t.into()))
     }
 
-    /// Builds a list from values.
+    /// Builds a list from values, sized by the iterator's lower size hint
+    /// ([`HashTable::from_list_sized`]).
     pub fn from_values<I: IntoIterator<Item = Value>>(values: I) -> Self {
         let iter = values.into_iter();
-        let mut t = HashTable::with_capacity(iter.size_hint().0);
-        for v in iter {
-            let _ = t.push(v);
-        }
-        ZArray::from_table(t)
+        ZArray::from_table(HashTable::from_list_sized(iter.size_hint().0, iter))
+    }
+
+    /// A list of `values` sized for `n` elements
+    /// ([`HashTable::from_list_sized`]).
+    pub fn from_list_sized<I: IntoIterator<Item = Value>>(n: usize, values: I) -> Self {
+        ZArray::from_table(HashTable::from_list_sized(n, values))
     }
 
     /// Builds an array from `(key, value)` pairs (later keys overwrite).
@@ -3863,6 +3894,58 @@ impl FromIterator<Value> for ZArray {
 
 #[cfg(test)]
 mod tests {
+    /// A list built to size is the list pushes build: same keys, length,
+    /// next free index, packed storage and table size, whatever the hint;
+    /// an empty one is untouched.
+    #[test]
+    fn from_list_sized_matches_pushes() {
+        for (hint, count) in [
+            (0, 0),
+            (5, 0),
+            (0, 3),
+            (5, 5),
+            (3, 9),
+            (20, 2),
+            (8, 8),
+            (9, 9),
+        ] {
+            let built = HashTable::from_list_sized(count.max(hint), (0..count).map(Value::Int));
+            let built_hinted = HashTable::from_list_sized(hint, (0..count).map(Value::Int));
+            let mut pushed = HashTable::with_capacity(hint);
+            for i in 0..count {
+                assert!(pushed.push(Value::Int(i)).is_ok());
+            }
+            for t in [&built, &built_hinted] {
+                assert_eq!(t.len(), pushed.len(), "{hint} {count}");
+                assert_eq!(t.next_free_element(), pushed.next_free_element());
+                assert_eq!(t.next_index(), pushed.next_index());
+                assert_eq!(t.is_packed(), pushed.is_packed());
+                assert_eq!(t.is_untouched(), pushed.is_untouched());
+                assert_eq!(t.used(), pushed.used());
+                assert!(t.is_list());
+                let keys: Vec<_> = t.iter().map(|(k, _)| k.clone()).collect();
+                let want: Vec<_> = pushed.iter().map(|(k, _)| k.clone()).collect();
+                assert_eq!(keys, want);
+                for i in 0..count {
+                    assert!(matches!(t.get_int(i), Some(Value::Int(v)) if *v == i));
+                }
+            }
+            assert_eq!(
+                built_hinted.table_size(),
+                pushed.table_size(),
+                "{hint} {count}"
+            );
+            assert_eq!(built_hinted.packed_capacity().is_some(), count > 0);
+        }
+        // Appending after it continues the list.
+        let mut t = HashTable::from_list_sized(2, [Value::Int(7), Value::Int(8)]);
+        assert!(matches!(t.push(Value::Int(9)), Ok(2)));
+        assert_eq!(t.len(), 3);
+        let z = ZArray::from_values(Vec::<Value>::new());
+        assert!(z.is_untouched());
+        assert_eq!(ZArray::from_list_sized(1, [Value::Null]).len(), 1);
+    }
+
     /// The lean probe finds what the general one finds for the keys it
     /// takes, and nothing for the keys it leaves to it; `entry_at` gives
     /// the element at a position with its key, and nothing at a hole.
