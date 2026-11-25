@@ -85,13 +85,14 @@ fn only_call_shapes_without_an_error_path_skip_the_frame() {
     // needles; str_replace: growing replacements reserve memory first;
     // dynamic calls and named arguments always push the frame. Calls the VM
     // answers without the handler show the real result instead of a mark:
-    // `chr()` of 0..=255 and `ord()` of one byte (`frameless_inline`), and
+    // `chr()` of 0..=255, `ord()` of one byte, and `trim()` and
+    // `strtolower()` of one string (`frameless_inline`, `quick_eval`), and
     // `is_numeric()` of an array, which is not a frameless shape but takes
     // the one-argument builtin fast path (`fast_builtin_eval`: `false`,
     // echoed as ""). Neither pushes a frame.
     assert_eq!(
         output(vm, &sink, status),
-        "FFFBFBB\nFFFFBB\nFFFBB\nFBFBFFBFB\nFBBB\nFBB\nFFBB\nFBF\nAB65B\nFB\nB\nB\n"
+        "FFFBFBB\naFFFBB\nFFFBB\nFBFBFFBFB\nFBBB\nFBB\nFFBB\naBF\nAB65B\nFB\nB\nB\n"
     );
 }
 

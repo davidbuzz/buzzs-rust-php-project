@@ -25,6 +25,7 @@ use crate::opcode::{FramelessCall, Operand};
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
+use php_stdstr::transform::TrimMode;
 use std::rc::Rc;
 
 impl Vm {
@@ -642,6 +643,7 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
+        (fl::TRIM | fl::CASE, v @ Value::Str(_)) => quick_eval(quick_id(name)?.0, v),
         _ => None,
     }
 }
@@ -672,7 +674,18 @@ pub(crate) const QUICK_ORD: u8 = 0x41;
 pub(crate) const QUICK_CHR: u8 = 0x42;
 /// [`quick_id`] of `dechex()`.
 pub(crate) const QUICK_DECHEX: u8 = 0x43;
+/// [`quick_id`] of `trim()` of one string (the default character list).
+pub(crate) const QUICK_TRIM: u8 = 0x44;
+/// [`quick_id`] of `ltrim()` of one string.
+pub(crate) const QUICK_LTRIM: u8 = 0x45;
+/// [`quick_id`] of `rtrim()` of one string.
+pub(crate) const QUICK_RTRIM: u8 = 0x46;
+/// [`quick_id`] of `strtolower()`.
+pub(crate) const QUICK_LOWER: u8 = 0x47;
+/// [`quick_id`] of `strtoupper()`.
+pub(crate) const QUICK_UPPER: u8 = 0x48;
 const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
+const _: () = assert!(QUICK_UPPER < QUICK_STRPOS);
 
 /// The id of the builtin named `lc` (lower case) when its one-argument
 /// call needs no handler ([`frameless_inline`]), with its frameless class:
@@ -686,6 +699,17 @@ pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
         fl::CHR => QUICK_CHR,
         fl::DECHEX => QUICK_DECHEX,
         fl::FLOAT | fl::LOG | fl::ROUND => crate::call::float_fn_id(lc)?,
+        fl::TRIM => match lc {
+            b"trim" => QUICK_TRIM,
+            b"ltrim" => QUICK_LTRIM,
+            b"rtrim" => QUICK_RTRIM,
+            _ => return None,
+        },
+        fl::CASE => match lc {
+            b"strtolower" => QUICK_LOWER,
+            b"strtoupper" => QUICK_UPPER,
+            _ => return None,
+        },
         _ => return None,
     };
     Some((id, class))
@@ -717,8 +741,36 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (QUICK_DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
-        (QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX, _) => None,
+        (QUICK_TRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Both))),
+        (QUICK_LTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Left))),
+        (QUICK_RTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Right))),
+        (QUICK_LOWER, Value::Str(s)) => Some(Value::Str(s.to_ascii_lowercase())),
+        (QUICK_UPPER, Value::Str(s)) => Some(Value::Str(s.to_ascii_uppercase())),
+        (
+            QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX | QUICK_TRIM | QUICK_LTRIM
+            | QUICK_RTRIM | QUICK_LOWER | QUICK_UPPER,
+            _,
+        ) => None,
         (id, v) => crate::call::float_fn_eval(id, v),
+    }
+}
+
+/// `trim()`, `ltrim()` or `rtrim()` of `s` with the default character
+/// list, as the handler (`php_trim_int()`) returns it: the string itself
+/// when nothing is trimmed, the shared empty string when everything is,
+/// else a copy of what is left. Out of line: the other quick functions'
+/// paths keep their registers.
+#[inline(never)]
+fn trim_default(s: &ZStr, mode: TrimMode) -> ZStr {
+    // The default list reports nothing (no `..` range to check).
+    let mut notices = php_stdstr::error::Notices::new();
+    let r = php_stdstr::transform::trim(s.as_bytes(), None, mode, &mut notices);
+    if r.len() == s.len() {
+        s.clone()
+    } else if r.is_empty() {
+        ZStr::empty()
+    } else {
+        ZStr::from(r)
     }
 }
 
@@ -1369,6 +1421,59 @@ impl Vm {
 #[cfg(test)]
 mod tests {
     use super::{fl, frameless_args, frameless_call, frameless_flags, frameless_inline};
+
+    /// `trim()`, `ltrim()`, `rtrim()`, `strtolower()` and `strtoupper()` of
+    /// one string, answered without the handler, return what the handler
+    /// does (`php_trim_int`, `zend_string_tolower`): the string itself when
+    /// nothing changes, the shared empty string when everything is trimmed,
+    /// else a new string; anything but a string goes to the handler.
+    #[test]
+    fn quick_trim_and_case_match_the_handlers() {
+        use super::{
+            quick_eval, quick_id, QUICK_LOWER, QUICK_LTRIM, QUICK_RTRIM, QUICK_TRIM, QUICK_UPPER,
+        };
+        use php_runtime::{Value, ZStr};
+        let eval = |id: u8, s: &ZStr| match quick_eval(id, &Value::Str(s.clone())) {
+            Some(Value::Str(r)) => r,
+            other => panic!("{id}: {other:?}"),
+        };
+        assert_eq!(quick_id(b"trim"), Some((QUICK_TRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"ltrim"), Some((QUICK_LTRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"rtrim"), Some((QUICK_RTRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"strtolower"), Some((QUICK_LOWER, fl::CASE)));
+        assert_eq!(quick_id(b"strtoupper"), Some((QUICK_UPPER, fl::CASE)));
+        let padded = ZStr::from(" \t\n\r\x0b\0 ab c \0\n");
+        assert_eq!(eval(QUICK_TRIM, &padded).as_bytes(), b"ab c");
+        assert_eq!(eval(QUICK_LTRIM, &padded).as_bytes(), b"ab c \0\n");
+        assert_eq!(eval(QUICK_RTRIM, &padded).as_bytes(), b" \t\n\r\x0b\0 ab c");
+        // `\x0c` (form feed) is in php-src master's default list
+        // (`php_trim_int()`: `' \f\t\n\r\v\0'`); PHP 8.5 leaves it.
+        assert_eq!(eval(QUICK_TRIM, &ZStr::from("\x0cx\x0c")).as_bytes(), b"x");
+        let plain = ZStr::from("abc");
+        assert!(ZStr::ptr_eq(&eval(QUICK_TRIM, &plain), &plain));
+        assert!(eval(QUICK_TRIM, &ZStr::from("  \n ")).is_interned());
+        assert!(ZStr::ptr_eq(&eval(QUICK_LOWER, &plain), &plain));
+        assert_eq!(
+            eval(QUICK_LOWER, &ZStr::from("AbC\u{c9}")).as_bytes(),
+            "abc\u{c9}".as_bytes()
+        );
+        assert_eq!(eval(QUICK_UPPER, &plain).as_bytes(), b"ABC");
+        for id in [
+            QUICK_TRIM,
+            QUICK_LTRIM,
+            QUICK_RTRIM,
+            QUICK_LOWER,
+            QUICK_UPPER,
+        ] {
+            assert!(quick_eval(id, &Value::Int(1)).is_none());
+            assert!(quick_eval(id, &Value::Null).is_none());
+        }
+        assert!(matches!(
+            frameless_inline(b"trim", fl::TRIM, Some(&Value::Str(ZStr::from(" x ")))),
+            Some(Value::Str(r)) if r.as_bytes() == b"x"
+        ));
+        assert!(frameless_inline(b"trim", fl::TRIM, Some(&Value::Int(1))).is_none());
+    }
     use crate::compiler::{special_builtin_bit, SPECIAL_BUILTINS};
     use crate::func::Func;
     use crate::opcode::type_mask;
@@ -1587,7 +1692,7 @@ mod tests {
             }
         }
         // Functions whose one-argument call needs its handler have no id.
-        for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
+        for name in ["strpos", "substr", "max", "pi", "intdiv", "strlen"] {
             assert!(quick_id(name.as_bytes()).is_none(), "{name}");
         }
         // `dechex()` is the handler's string.
