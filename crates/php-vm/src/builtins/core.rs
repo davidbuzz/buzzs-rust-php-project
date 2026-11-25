@@ -173,14 +173,9 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `zend_register_constant()`: the namespace part is case-insensitive
     // in the key; the constant keeps the name as given.
     let given = name.clone();
-    let bytes = name.as_bytes();
-    let name = match bytes.iter().rposition(|&c| c == b'\\') {
-        Some(p) => {
-            let mut n = bytes[..p].to_ascii_lowercase();
-            n.extend_from_slice(&bytes[p..]);
-            ZStr::from(n)
-        }
-        None => name,
+    let name = match crate::classlink::constant_key(given.as_bytes()) {
+        std::borrow::Cow::Owned(k) => ZStr::from(k),
+        std::borrow::Cow::Borrowed(_) => name,
     };
     let special = name.as_bytes() == b"__COMPILER_HALT_OFFSET__"
         || [&b"true"[..], b"false", b"null"]
@@ -286,7 +281,8 @@ fn defined(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .strip_prefix(b"\\")
         .unwrap_or(name.as_bytes());
-    Ok(Value::Bool(vm.constants.contains_key(n)))
+    // `zend_get_constant_ex()`: the namespace part is case-insensitive.
+    Ok(Value::Bool(vm.find_global_constant(n).is_some()))
 }
 
 fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -321,9 +317,13 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .strip_prefix(b"\\")
         .unwrap_or(name.as_bytes());
-    match vm.constants.get(n).cloned() {
-        Some(v) => {
-            vm.constant_deprecation(&ZStr::from(n))?;
+    // `zend_get_constant_ex()`: the namespace part is case-insensitive.
+    let found = vm
+        .find_global_constant(n)
+        .map(|(k, v)| (k.clone(), v.clone()));
+    match found {
+        Some((key, v)) => {
+            vm.constant_deprecation(&key)?;
             Ok(v)
         }
         None => Err(vm.make_throw(

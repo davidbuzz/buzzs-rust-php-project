@@ -839,17 +839,34 @@ impl Vm {
                 ConstSlot::Never
             };
         }
+        // The name with its namespace lowercased (`zend_register_constant`'s
+        // key): found once, it stays found, and it comes before the
+        // fallback.
+        if let std::borrow::Cow::Owned(k) = crate::classlink::constant_key(n.as_bytes()) {
+            if let Some((key, v)) = self.constants.get_key_value(k.as_slice()) {
+                return if cacheable(key, v) {
+                    ConstSlot::Direct(v.clone())
+                } else {
+                    ConstSlot::Never
+                };
+            }
+        }
         let Some(f) = fallback.and_then(|fb| self.rt_lit_str(fb)) else {
-            return ConstSlot::Never;
+            // A qualified name found with its namespace in another case
+            // ([`Vm::find_global_constant`]): it stays found.
+            return match self.find_global_constant(n.as_bytes()) {
+                Some((key, v)) if cacheable(key, v) => ConstSlot::Direct(v.clone()),
+                _ => ConstSlot::Never,
+            };
         };
         match self.constants.get(&f) {
             Some(v) if cacheable(&f, v) => ConstSlot::Fallback {
                 value: v.clone(),
                 epoch: self.constants.len(),
             },
-            // Not cacheable, or found otherwise (the case-insensitive
-            // namespace lookup): every fetch stays uncached, which also
-            // sees a namespaced constant defined later.
+            // Not cacheable, or found by the namespace-case scan after the
+            // fallback missed: every fetch stays uncached, which also sees a
+            // namespaced constant defined later.
             _ => ConstSlot::Never,
         }
     }

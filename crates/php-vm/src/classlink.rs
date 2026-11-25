@@ -554,10 +554,15 @@ impl Vm {
         Ok(v)
     }
 
-    /// Defines a global constant (`const X = ...;` / `define`).
+    /// Defines a global constant (`const X = ...;` / `define`), as
+    /// `zend_register_constant()` (Zend/zend_constants.c) does. php-src
+    /// keys the table by the name with its namespace part lowercased; here
+    /// the key keeps the spelling the caller gives (`define()` passes the
+    /// lowercased form, `const` the declared one), and a constant whose
+    /// name differs only in the case of its namespace counts as the same
+    /// one ([`Vm::find_global_constant`]). The "already defined" warning
+    /// names the lowercased form, as php-src's key.
     pub(crate) fn declare_constant(&mut self, name: ZStr, v: Value) -> VmResult<bool> {
-        // `zend_register_constant()` identifier deprecations (the namespace
-        // part is already lowercased by the callers).
         let short = name
             .as_bytes()
             .rsplit(|&c| c == b'\\')
@@ -570,10 +575,10 @@ impl Vm {
         } else if short.eq_ignore_ascii_case(b"is") {
             self.deprecated("Calling a constant \"is\" is deprecated since 8.6")?;
         }
-        if self.constants.contains_key(&name) {
+        if self.find_global_constant(name.as_bytes()).is_some() {
             self.warning(&format!(
                 "Constant {} already defined, this will be an error in PHP 9",
-                name.to_string_lossy()
+                String::from_utf8_lossy(&constant_key(name.as_bytes()))
             ))?;
             return Ok(false);
         }
@@ -584,12 +589,56 @@ impl Vm {
         Ok(true)
     }
 
-    /// Reads a global constant.
+    /// Finds a global constant by name the way `zend_get_constant_ex()`
+    /// (Zend/zend_constants.c) does for a non-class name: the namespace
+    /// part of a namespaced name is case-insensitive, the constant's own
+    /// name is not (`defined('NS\\nc')` does not find `NS\\NC`). Returns
+    /// the table's key and the value.
+    pub(crate) fn find_global_constant(&self, name: &[u8]) -> Option<(&ZStr, &Value)> {
+        if let Some(kv) = self.constants.get_key_value(name) {
+            return Some(kv);
+        }
+        let p = name.iter().rposition(|&c| c == b'\\')?;
+        if let std::borrow::Cow::Owned(k) = constant_key(name) {
+            if let Some(kv) = self.constants.get_key_value(k.as_slice()) {
+                return Some(kv);
+            }
+        }
+        self.find_constant_ns_ci(name, p)
+    }
+
+    /// The slow end of [`Vm::find_global_constant`]: a constant declared
+    /// with `const` keeps its namespace's spelling in the key, so the keys
+    /// are compared with the namespace part (`name[..p]`) ignoring case.
+    /// Only a namespaced name found neither as written nor lowercased gets
+    /// here.
+    #[cold]
+    #[inline(never)]
+    fn find_constant_ns_ci(&self, name: &[u8], p: usize) -> Option<(&ZStr, &Value)> {
+        let (ns, c) = name.split_at(p);
+        self.constants.iter().find(|(k, _)| {
+            let k = k.as_bytes();
+            k.len() == name.len() && k[p..] == *c && k[..p].eq_ignore_ascii_case(ns)
+        })
+    }
+
+    /// Reads a global constant (`ZEND_FETCH_CONSTANT`,
+    /// `zend_quick_get_constant()`, Zend/zend_execute.c): the name, its
+    /// namespace part case-insensitive (php-src looks up the literal with
+    /// the namespace lowercased that `zend_add_const_name_literal()` adds),
+    /// then the unqualified fallback of a name compiled inside a namespace.
     pub(crate) fn fetch_constant(&mut self, name: u32, fallback: Option<u32>) -> VmResult<Value> {
         let n = self.lit_str(name);
         if let Some(v) = self.constants.get(&n).cloned() {
             self.constant_deprecation(&n)?;
             return Ok(v);
+        }
+        if let std::borrow::Cow::Owned(k) = constant_key(n.as_bytes()) {
+            if let Some((key, v)) = self.constants.get_key_value(k.as_slice()) {
+                let (key, v) = (key.clone(), v.clone());
+                self.constant_deprecation(&key)?;
+                return Ok(v);
+            }
         }
         if let Some(v) = self.special_constant(n.as_bytes()) {
             return Ok(v);
@@ -604,13 +653,17 @@ impl Vm {
                 return Ok(v);
             }
         }
-        // Namespaced constant names are case-insensitive in the namespace part.
+        // A key that differs in the case of its namespace part (a `const`
+        // declared as `NS\\X`, read as `ns\\X`). The scan comes last so that
+        // an unqualified name inside a namespace, whose global fallback is
+        // the common case, never pays for it; only a namespace spelled
+        // differently from its declaration with a global constant of the
+        // same short name would see the order differ from php-src's.
         if let Some(p) = n.as_bytes().iter().rposition(|&c| c == b'\\') {
-            let (ns, c) = n.as_bytes().split_at(p);
-            let mut k = ns.to_ascii_lowercase();
-            k.extend_from_slice(c);
-            if let Some(v) = self.constants.get(&ZStr::from(k)) {
-                return Ok(v.clone());
+            if let Some((key, v)) = self.find_constant_ns_ci(n.as_bytes(), p) {
+                let (key, v) = (key.clone(), v.clone());
+                self.constant_deprecation(&key)?;
+                return Ok(v);
             }
         }
         Err(self.make_throw(
@@ -3868,5 +3921,20 @@ impl Vm {
             }
         }
         Ok((cls, recorded))
+    }
+}
+
+/// The constant table's key for the global constant `name`
+/// (`zend_register_constant()`, Zend/zend_constants.c): the namespace
+/// part, everything before the last backslash, lowercased; the constant's
+/// own name keeps its case. Borrowed when `name` is already its own key.
+pub(crate) fn constant_key(name: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match name.iter().rposition(|&c| c == b'\\') {
+        Some(p) if name[..p].iter().any(u8::is_ascii_uppercase) => {
+            let mut k = name[..p].to_ascii_lowercase();
+            k.extend_from_slice(&name[p..]);
+            std::borrow::Cow::Owned(k)
+        }
+        _ => std::borrow::Cow::Borrowed(name),
     }
 }
