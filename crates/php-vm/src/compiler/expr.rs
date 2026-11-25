@@ -1884,6 +1884,11 @@ impl Compiler<'_> {
                 line,
             );
         }
+        // `zend_compile_assign_ref` compiles the target (delayed) before
+        // the source: the target's variables get their slots first, which
+        // is the order `get_defined_vars()` and `compact()` see, and its
+        // offset expressions and calls run before the source's.
+        let target_place = self.compile_write_place(target)?;
         let src = if is_ref_expr(value) {
             let p = self.compile_place(value, false)?;
             let pid = self.place(p);
@@ -1893,9 +1898,8 @@ impl Compiler<'_> {
         } else {
             self.compile_expr(value)?
         };
-        let p = self.compile_write_place(target)?;
         self.f().line = line;
-        let pid = self.place(p);
+        let pid = self.place(target_place);
         let dst = used.then(|| self.tmp());
         self.emit(Op::AssignRef {
             place: pid,
