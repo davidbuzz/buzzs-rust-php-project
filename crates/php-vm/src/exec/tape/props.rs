@@ -344,6 +344,10 @@ pub(super) unsafe fn this_const_to(frame: *mut Frame, inst: &Inst) -> Br {
 /// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
+    if inst.op == TOp::AssignObjProp {
+        // SAFETY: the caller's contract.
+        return unsafe { assign_prop(frame, inst) };
+    }
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
     // A handle of its own on the op array: the op is borrowed from it while
@@ -355,6 +359,29 @@ pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
     };
     let mut ip = i;
     prop_op_in(f, op, &mut ip)
+}
+
+/// `Op::AssignObjProp` (`ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a
+/// cache hit, `spec::props::assign_hit`) on its own: the op's operands are
+/// copied out of the op array (no handle of its own on it, no match over
+/// the other property ops), so that the hit runs in a small frame with the
+/// object's data inlined. Declines what `assign_hit` declines, having
+/// changed nothing.
+///
+/// # Safety
+/// As [`prop_in`]; `inst.d` is the index of an `Op::AssignObjProp`.
+#[inline(never)]
+unsafe fn assign_prop(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::AssignObjProp { place, val, dst }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    // An op of a known variant on the stack: the inlined `prop_op_in`'s
+    // match folds to its `assign_hit` arm.
+    let op = Op::AssignObjProp { place, val, dst };
+    let mut ip = inst.d as usize;
+    prop_op_in(f, &op, &mut ip)
 }
 
 /// `Op::FetchObjProp` (`ZEND_FETCH_OBJ_R` / `_IS` on a cache hit) into
