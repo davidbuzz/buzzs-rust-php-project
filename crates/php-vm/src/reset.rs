@@ -185,6 +185,9 @@ impl Vm {
         self.units.clear();
         self.parsed_sources.borrow_mut().clear();
         self.anon_counter = 0;
+        // The linked classes kept for the next requests may be handed out
+        // again; those of declarations no cached script holds are dropped.
+        crate::classlink::end_request();
 
         // 3. User constants: remove all user-defined constants.
         for name in std::mem::take(&mut self.user_constants) {

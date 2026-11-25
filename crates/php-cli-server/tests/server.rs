@@ -35,6 +35,16 @@ impl Drop for ServerProc {
 }
 
 fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc {
+    start_with(name, files, router, &[])
+}
+
+/// [`start`] with extra `php` arguments (`-d` settings) before `-S`.
+fn start_with(
+    name: &str,
+    files: &[(&str, &str)],
+    router: Option<&str>,
+    extra: &[&str],
+) -> ServerProc {
     let root =
         std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -45,7 +55,9 @@ fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc
         std::fs::write(p, content).unwrap();
     }
     let mut cmd = Command::new(php_binary());
-    cmd.args(["-n", "-t"])
+    cmd.arg("-n")
+        .args(extra)
+        .arg("-t")
         .arg(&root)
         .args(["-S", "127.0.0.1:0"])
         .current_dir(&root)
@@ -344,5 +356,61 @@ fn script_handle_and_realpath_cache() {
         let r = request(srv.port, "GET /b.php HTTP/1.1\r\nHost: x\r\n\r\n");
         let (_, body) = split(&r);
         assert_eq!(body, "1 stream rb self\n3\nbool(true)\nbool(true)\n");
+    }
+}
+
+/// Requests served from the opcache's scripts, one after another on the
+/// server's VM: the classes and functions they declare (a class extending
+/// one of another file, one whose parent comes later in its file, an
+/// interface with a constant, `__toString()`'s Stringable, a conditional
+/// function) start every request fresh, static properties and static
+/// variables included, and a changed parent is seen by the next request's
+/// subclass. Expected bodies from php8.5's own server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn cached_scripts_declare_fresh_classes_in_every_request() {
+    let base = "<?php\nclass Base { public static $n = 0; public static $arr = [1]; const K = 'k1'; public static function bump() { return ++static::$n; } public function who() { return 'base1'; } }\ninterface Shape { const SIDES = 0; public function area(): float; }\n";
+    let srv = start_with(
+        "linkcache",
+        &[
+            ("base.php", base),
+            (
+                "child.php",
+                "<?php\nrequire_once __DIR__ . '/base.php';\nclass Child extends Base implements Shape { public static $m = 10; const K2 = self::K . '+'; public function area(): float { return 1.5; } public function __toString(): string { return 'child'; } }\nclass Later extends Early { public static $z = 5; }\nclass Early { public function hi() { return 'early'; } }\nif (!function_exists('cond_fn')) { function cond_fn() { static $c = 0; return ++$c; } }\n",
+            ),
+            (
+                "index.php",
+                "<?php\necho class_exists('Child', false) ? 'stale ' : 'fresh ';\nrequire_once __DIR__ . '/child.php';\nBase::$arr[] = 2;\necho Base::bump(), Base::bump(), ' ', Child::$m++, Child::$m, ' ', Child::K2, ' ', (new Child)->who(), ' ', (string) new Child, ' ';\necho Later::$z++, Later::$z, ' ', (new Later)->hi(), ' ', cond_fn(), cond_fn(), ' ', count(Base::$arr), ' ';\necho Child::SIDES, ' ', (new Child) instanceof Stringable ? 'S' : '-', \"\\n\";\n",
+            ),
+        ],
+        None,
+        &[
+            "-d",
+            "opcache.enable=1",
+            "-d",
+            "opcache.revalidate_freq=0",
+            "-d",
+            "opcache.file_update_protection=0",
+        ],
+    );
+    let get = || {
+        let r = request(srv.port, "GET /index.php HTTP/1.1\r\nHost: x\r\n\r\n");
+        split(&r).1.to_string()
+    };
+    for _ in 0..3 {
+        assert_eq!(get(), "fresh 12 1011 k1+ base1 child 56 early 12 2 0 S\n");
+    }
+    // The parent changes (another modification time): its subclass in the
+    // unchanged file is linked to the new one.
+    let path = srv.root.join("base.php");
+    std::fs::write(&path, base.replace("base1", "base2")).unwrap();
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(later))
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(get(), "fresh 12 1011 k1+ base2 child 56 early 12 2 0 S\n");
     }
 }
