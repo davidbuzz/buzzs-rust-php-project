@@ -1,0 +1,6 @@
+Files in this directory are copied unchanged from php-src ext/exif/tests
+(subdirectories from the same subdirectories there) and
+ext/standard/tests/image (the files named image_*.phpt, which are that
+directory's *.phpt with the prefix image_ added to the name) (commit
+cb90f9a237757209ecd2e67a7e0c950f36ba6ea1). Copyright © The PHP Group and
+Contributors. BSD-3-Clause; see LICENSES/php-src-BSD-3-Clause.txt.
