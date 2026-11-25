@@ -89,16 +89,32 @@ impl WebHost for CliHost<'_> {
         self.sapi.clone()
     }
     fn request_method(&self) -> Option<Vec<u8>> {
-        self.request_info("REQUEST_METHOD")
+        // `SG(request_info).request_method`, which the other SAPIs set from
+        // the request line: read from there, not from `$_SERVER`, which
+        // under `auto_globals_jit` exists only once a script names it.
+        if self.sapi == CGI_SAPI || !self.is_web() {
+            return self.request_info("REQUEST_METHOD");
+        }
+        self.vm
+            .request_info
+            .request_method
+            .clone()
+            .or_else(|| self.server_str("REQUEST_METHOD"))
     }
     fn request_uri(&self) -> Option<Vec<u8>> {
         // `SG(request_info).request_uri`: php-cgi fills it from the
         // translated `SCRIPT_NAME` (`init_request_info`), the other SAPIs
         // from the request line.
-        if self.sapi == CGI_SAPI {
+        if !self.is_web() {
+            None
+        } else if self.sapi == CGI_SAPI {
             self.request_info("SCRIPT_NAME")
         } else {
-            self.server_str("REQUEST_URI")
+            self.vm
+                .request_info
+                .request_uri
+                .clone()
+                .or_else(|| self.server_str("REQUEST_URI"))
         }
     }
     fn has_server(&self) -> bool {

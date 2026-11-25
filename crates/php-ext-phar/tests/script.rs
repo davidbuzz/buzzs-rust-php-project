@@ -41,6 +41,17 @@ fn run_web(code: &str, ini: &[(&str, &str)]) -> String {
 }
 
 fn run_as(code: &str, ini: &[(&str, &str)], sapi: Option<&str>) -> String {
+    run_with(code, ini, sapi, None)
+}
+
+/// [`run_as`] with the request (`SG(request_info)`: method and URI) the
+/// SAPI describes, as `php -S` sets it before the script runs.
+fn run_with(
+    code: &str,
+    ini: &[(&str, &str)],
+    sapi: Option<&str>,
+    request: Option<(&str, &str)>,
+) -> String {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let spl = php_ext_spl::Spl;
@@ -56,6 +67,10 @@ fn run_as(code: &str, ini: &[(&str, &str)], sapi: Option<&str>) -> String {
     if let Some(sapi) = sapi {
         vm.constants
             .insert(ZStr::from("PHP_SAPI"), Value::Str(ZStr::from(sapi)));
+    }
+    if let Some((method, uri)) = request {
+        vm.request_info.request_method = Some(method.as_bytes().to_vec());
+        vm.request_info.request_uri = Some(uri.as_bytes().to_vec());
     }
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
@@ -187,6 +202,36 @@ echo "after include\n";"#,
         WRITABLE,
     );
     assert_eq!(out, "index: index.php\nlib a\nsees globals\ndone\n");
+}
+
+/// `Phar::webPhar()` takes the request from `SG(request_info)`, not from
+/// `$_SERVER`, which under `auto_globals_jit` the web SAPIs create only
+/// once a script names it (gh25093.phpt: a stub and router that never
+/// name it). Oracle: php 8.5 `php -S` serving the archive through a
+/// router that includes it, `GET /<archive>/index.php`.
+#[test]
+fn webphar_reads_the_request_info_without_server() {
+    let name = format!("phpext-phar-ri-{}.phar", std::process::id());
+    let out = run_with(
+        &format!(
+            r#"$f = sys_get_temp_dir() . '/{name}';
+@unlink($f);
+$p = new Phar($f);
+$p['index.php'] = '<?php echo "index: ", basename(__FILE__), "\n";';
+$p->setStub('<?php
+Phar::webPhar();
+echo "not reached\n";
+__HALT_COMPILER();');
+unset($p);
+register_shutdown_function(function () use ($f) {{ @unlink($f); }});
+include $f;
+echo "after include\n";"#
+        ),
+        WRITABLE,
+        Some("cli-server"),
+        Some(("GET", &format!("/{name}/index.php"))),
+    );
+    assert_eq!(out, "index: index.php\n");
 }
 
 /// A plain include follows the include path as it is at the time: a
