@@ -3458,47 +3458,49 @@ enum Mode {
     Next,
 }
 
-/// `zend_array_dup_value` for one slot of a table being copied: a hole or
-/// a scalar is copied as it stands (`ZVAL_COPY_VALUE`, nothing to count);
-/// anything else goes to [`dup_counted`].
+/// `zend_array_dup_value` for one slot of a table being copied: a null,
+/// bool, int or float is copied as it stands (`ZVAL_COPY_VALUE`, nothing
+/// to count), which is one compare of the tag (those variants come first);
+/// a hole or anything else goes to [`dup_other`].
 #[inline(always)]
 #[allow(clippy::inline_always)] // one tag test per element of a copied table
 fn dup_slot(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
     match slot {
-        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
-            // SAFETY: a hole or a null, bool, int or float owns no
-            // allocation and has no drop glue, so its bits are a second,
-            // independent value (php-src copies such a zval with
-            // `ZVAL_COPY_VALUE`). `ptr::read` is a typed copy of a valid,
-            // initialised `Option<Value>` behind a shared reference. The
-            // safe version (`slot.clone()`, a match over every variant that
-            // rebuilds the enum) measured 27 instructions an element of a
-            // packed list of ints under callgrind; this is one tag test
-            // and one 16-byte copy.
+        Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // SAFETY: a null, bool, int or float owns no allocation and has
+            // no drop glue, so its bits are a second, independent value
+            // (php-src copies such a zval with `ZVAL_COPY_VALUE`).
+            // `ptr::read` is a typed copy of a valid, initialised
+            // `Option<Value>` behind a shared reference. The safe version
+            // (`slot.clone()`, a match over every variant that rebuilds the
+            // enum) measured 27 instructions an element of a packed list of
+            // ints under callgrind; this is one tag test and one 16-byte
+            // copy.
             unsafe { std::ptr::read(slot) }
         }
-        Some(v) => Some(dup_counted(v, table)),
+        _ => dup_other(slot, table),
     }
 }
 
-/// `zend_array_dup_value` for a refcounted element of the table at `table`:
-/// a reference held only by the source (refcount 1) is unwrapped into its
-/// value, unless it refers to that table itself; anything else is shared
-/// (`Z_ADDREF`). Out of line, so the loop over scalars stays tight.
+/// [`dup_slot`] for a hole or a refcounted element of the table at
+/// `table`: a reference held only by the source (refcount 1) is unwrapped
+/// into its value, unless it refers to that table itself; anything else is
+/// shared (`Z_ADDREF`). Out of line, so the loop over scalars stays tight.
 #[inline(never)]
-fn dup_counted(v: &Value, table: *const HashTable) -> Value {
+fn dup_other(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
+    let v = slot.as_ref()?;
     if let Value::Reference(r) = v {
         if r.refcount() == 1 {
             if let Some(inner) = r.try_borrow() {
                 let is_self =
                     matches!(&*inner, Value::Array(a) if std::ptr::eq(Rc::as_ptr(&a.0), table));
                 if !is_self {
-                    return inner.clone();
+                    return Some(inner.clone());
                 }
             }
         }
     }
-    v.clone()
+    Some(v.clone())
 }
 
 impl Clone for HashTable {
