@@ -516,3 +516,29 @@ fn htmlspecialchars_default_charset_follows_ini() {
         "efbfbd266c743b|e9266c743b|efbfbd266c743b|e9266c743b||efbfbd266c743b|plain"
     );
 }
+
+/// `htmlspecialchars()` returns its argument itself when nothing needs
+/// encoding (php-src master's `html_verbatim_prefix_len()` fast path:
+/// `zend_string_copy`, so refcount(3) here; PHP 8.5 copies and shows 2),
+/// the interned empty string for `''`, and encodes after the verbatim
+/// prefix as before: quotes by flags, UTF-8 kept or substituted, double
+/// encoding off, `ENT_DISALLOWED`, single-byte and partially supported
+/// charsets (`/usr/bin/php8.5 -n` for the encoded results).
+#[test]
+fn htmlspecialchars_verbatim_prefix() {
+    let out = run(
+        r#"$p = ''; for ($i = 0; $i < 2; $i++) { $p .= 'plain text'; }
+        $r = htmlspecialchars($p); debug_zval_dump($r);
+        $e = ''; for ($i = 0; $i < 1; $i++) { $e .= ''; } debug_zval_dump(htmlspecialchars($e));
+        echo htmlspecialchars("a<b>&c\"d'e"), '|', htmlspecialchars("x'y\"z", ENT_NOQUOTES), '|', htmlspecialchars("x'y", ENT_COMPAT), '|';
+        echo htmlspecialchars("caf\xc3\xa9 & t\xc3\xa9"), '|', bin2hex(htmlspecialchars("ok\xff<")), '|', htmlspecialchars("ok\xc3\xa9"), '|';
+        echo htmlspecialchars("&amp; &lt; &bogus;", ENT_QUOTES, null, false), '|', bin2hex(htmlspecialchars("abc\x01\x7f", ENT_QUOTES | ENT_DISALLOWED | ENT_HTML5)), '|';
+        echo bin2hex(htmlspecialchars("\xe9t\xe9", ENT_QUOTES, 'ISO-8859-1')), '|', bin2hex(htmlspecialchars("\x81\x40<", ENT_QUOTES, 'SJIS')), '|', htmlspecialchars("it's", ENT_QUOTES | ENT_HTML5);"#,
+    );
+    assert_eq!(
+        out,
+        "string(20) \"plain textplain text\" refcount(3)\nstring(0) \"\" interned\n\
+         a&lt;b&gt;&amp;c&quot;d&#039;e|x'y\"z|x'y|caf\u{e9} &amp; t\u{e9}|6f6befbfbd266c743b|ok\u{e9}|\
+         &amp; &lt; &amp;bogus;|616263efbfbdefbfbd|e974e9|8140266c743b|it&apos;s"
+    );
+}

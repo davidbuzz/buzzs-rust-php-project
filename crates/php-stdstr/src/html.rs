@@ -15,6 +15,8 @@
 //!   exactly when PHP performs it.
 //! * `double_encode` defaults to `true`.
 
+use std::borrow::Cow;
+
 use crate::error::{Notice, Notices};
 use crate::html_tables::{
     EntityRow, INV_HTML4, INV_HTML5, TABLE_HTML4, TABLE_HTML5, TO_UNI_CP866, TO_UNI_ISO88591,
@@ -888,11 +890,43 @@ fn find_entity_for_char(
     }
 }
 
+/// `html_verbatim_prefix_len()`: the length of the longest prefix of
+/// `old` that [`escape_html_entities`] copies unchanged when only the
+/// basic entities are encoded and disallowed characters are not
+/// substituted: no `&`, `<`, `>`, no quote the flags encode, and no byte
+/// above 0x7F except in a single-byte charset or as part of a valid UTF-8
+/// sequence; it ends on a character boundary.
+fn verbatim_prefix_len(old: &[u8], flags: u32, charset: Charset) -> usize {
+    let high_stops = !charset.single_byte();
+    let mut pos = 0;
+    while let Some(&b) = old.get(pos) {
+        let stop = match b {
+            b'&' | b'<' | b'>' => true,
+            b'\'' => flags & QUOTE_SINGLE != 0,
+            b'"' => flags & QUOTE_DOUBLE != 0,
+            0x80.. => high_stops,
+            _ => false,
+        };
+        if !stop {
+            pos += 1;
+            continue;
+        }
+        if b >= 0x80 && charset == Charset::Utf8 {
+            if let (Ok(_), next) = next_char_utf8(old, pos) {
+                pos = next;
+                continue;
+            }
+        }
+        return pos;
+    }
+    pos
+}
+
 /// `php_escape_html_entities_ex()`: the engine behind
 /// [`htmlspecialchars`] (`all == false`) and [`htmlentities`]
 /// (`all == true`). `func` names the PHP function for diagnostics; `quiet`
 /// suppresses the charset warning and the partial-support notice.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub fn escape_html_entities(
     old: &[u8],
     all: bool,
@@ -903,6 +937,35 @@ pub fn escape_html_entities(
     func: &'static str,
     notices: &mut Notices,
 ) -> Vec<u8> {
+    escape_html_entities_cow(
+        old,
+        all,
+        flags,
+        charset,
+        double_encode,
+        quiet,
+        func,
+        notices,
+    )
+    .into_owned()
+}
+
+/// [`escape_html_entities`] that gives `old` itself back when nothing in
+/// it is encoded (`escape_html_entities()` returning
+/// `zend_string_copy(old_str)` once `html_verbatim_prefix_len()` covers
+/// the whole input), and otherwise starts encoding after that prefix,
+/// copied in one piece.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn escape_html_entities_cow<'a>(
+    old: &'a [u8],
+    all: bool,
+    flags: i64,
+    charset: Option<&[u8]>,
+    double_encode: bool,
+    quiet: bool,
+    func: &'static str,
+    notices: &mut Notices,
+) -> Cow<'a, [u8]> {
     let flags = flag_bits(flags);
     let charset = determine_charset(charset, quiet, func, notices);
     let doctype = flags & DOC_TYPE_MASK;
@@ -918,6 +981,15 @@ pub fn escape_html_entities(
         // LIMIT_ALL
         all = !charset.partial_support() && doctype != DOC_XML1;
     }
+    let verbatim = if !all && flags & SUBSTITUTE_DISALLOWED == 0 {
+        let n = verbatim_prefix_len(old, flags, charset);
+        if n == old.len() {
+            return Cow::Borrowed(old);
+        }
+        n
+    } else {
+        0
+    };
 
     let table: &'static [(u32, EntityRow)] = if doctype == DOC_HTML5 {
         TABLE_HTML5
@@ -938,7 +1010,8 @@ pub fn escape_html_entities(
 
     let oldlen = old.len();
     let mut out = Vec::with_capacity(oldlen + oldlen / 4);
-    let mut cursor = 0;
+    out.extend_from_slice(&old[..verbatim]);
+    let mut cursor = verbatim;
     while cursor < oldlen {
         let before = cursor;
         let byte = old[cursor];
@@ -954,7 +1027,7 @@ pub fn escape_html_entities(
                 out.extend_from_slice(replacement);
                 continue;
             } else {
-                return Vec::new();
+                return Cow::Owned(Vec::new());
             }
         } else {
             cursor += 1;
@@ -1040,7 +1113,7 @@ pub fn escape_html_entities(
         }
         out.extend_from_slice(mbsequence);
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Backs `htmlspecialchars(string $string, int $flags = ENT_QUOTES |
@@ -1053,10 +1126,22 @@ pub fn htmlspecialchars(
     double_encode: bool,
     notices: &mut Notices,
 ) -> Vec<u8> {
+    htmlspecialchars_cow(s, flags, charset, double_encode, notices).into_owned()
+}
+
+/// [`htmlspecialchars`] that gives `s` itself back when nothing in it is
+/// encoded ([`escape_html_entities_cow`]).
+pub fn htmlspecialchars_cow<'a>(
+    s: &'a [u8],
+    flags: i64,
+    charset: Option<&[u8]>,
+    double_encode: bool,
+    notices: &mut Notices,
+) -> Cow<'a, [u8]> {
     if s.is_empty() {
-        return Vec::new();
+        return Cow::Borrowed(s);
     }
-    escape_html_entities(
+    escape_html_entities_cow(
         s,
         false,
         flags,
@@ -1213,6 +1298,39 @@ mod tests {
         assert_eq!(hsc(b"a\xffb", ENT_QUOTES), b"");
         assert_eq!(hsc(b"a\xffb", ENT_QUOTES | ENT_IGNORE), b"ab");
         assert_eq!(hsc(b"a\xffb", DEFAULT_FLAGS), "a\u{FFFD}b".as_bytes());
+    }
+
+    /// The verbatim prefix: the input itself when nothing is encoded
+    /// (quotes the flags leave alone, valid UTF-8, high bytes of a
+    /// single-byte charset), a copy from the first byte that is.
+    #[test]
+    fn verbatim_prefix_gives_the_input_back() {
+        let cow = |s: &'static [u8], flags: i64, cs: Option<&[u8]>| {
+            htmlspecialchars_cow(s, flags, cs, true, &mut Notices::new())
+        };
+        for (s, flags, cs) in [
+            (&b"plain text"[..], DEFAULT_FLAGS, None),
+            (&b"it's \"q\""[..], ENT_NOQUOTES, None),
+            (&b"it's"[..], ENT_COMPAT, None),
+            ("caf\u{e9}".as_bytes(), DEFAULT_FLAGS, None),
+            (&b"caf\xe9"[..], DEFAULT_FLAGS, Some(&b"ISO-8859-1"[..])),
+            (&b""[..], DEFAULT_FLAGS, None),
+        ] {
+            assert!(matches!(cow(s, flags, cs), Cow::Borrowed(_)), "{s:?}");
+        }
+        assert_eq!(&*cow(b"ab<c", DEFAULT_FLAGS, None), b"ab&lt;c");
+        assert_eq!(
+            &*cow(b"ab\xffc", DEFAULT_FLAGS, None),
+            "ab\u{FFFD}c".as_bytes()
+        );
+        assert_eq!(
+            &*cow(b"\x81\x40<", DEFAULT_FLAGS, Some(&b"SJIS"[..])),
+            b"\x81\x40&lt;"
+        );
+        assert_eq!(
+            &*cow(b"abc\x01", ENT_QUOTES | ENT_DISALLOWED | ENT_HTML5, None),
+            "abc\u{FFFD}".as_bytes()
+        );
     }
 
     #[test]

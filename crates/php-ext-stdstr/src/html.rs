@@ -62,17 +62,24 @@ fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let enc = a.opt(2).map(|_| a.str(2));
     let cs = charset_hint(vm, enc.as_ref());
     let double = !a.has(3) || a.bool(3);
-    let input = a.str(0);
-    let mut n = Notices::new();
-    let r = html::htmlspecialchars(input.as_bytes(), flags(a, 1), cs.as_deref(), double, &mut n);
-    drop(cs);
-    emit(vm, n)?;
-    // php_escape_html_entities_ex() returns the input itself when nothing
-    // needed encoding.
-    if r == input.as_bytes() {
-        return Ok(Value::Str(input));
+    let input = a.zstr(0);
+    // `RETURN_EMPTY_STRING()`: the interned empty string.
+    if input.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
     }
-    Ok(bytes(r))
+    let mut n = Notices::new();
+    let r =
+        html::htmlspecialchars_cow(input.as_bytes(), flags(a, 1), cs.as_deref(), double, &mut n);
+    drop(cs);
+    // escape_html_entities() returns the input itself when nothing needs
+    // encoding (`zend_string_copy`), found by its verbatim prefix without
+    // building a copy to compare.
+    let out = match r {
+        std::borrow::Cow::Borrowed(_) => ZStr::clone(&input),
+        std::borrow::Cow::Owned(v) => ZStr::from(v),
+    };
+    emit(vm, n)?;
+    Ok(Value::Str(out))
 }
 
 fn htmlentities(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
