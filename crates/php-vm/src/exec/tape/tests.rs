@@ -1867,10 +1867,10 @@ fn match_with_a_table_is_a_row() {
     assert_eq!(run(MATCH_TABLE), "12234000\n");
 }
 
-/// `isset($a['key'])` / `empty(...)` with a string literal that is no
-/// integer in digits gets the row that looks the literal up as it is
-/// (`IssetDimSC`); a literal in digits, a variable and an int keep the
-/// general row. Expected output from `/usr/bin/php8.5 -n`.
+/// `isset($a[...])` / `empty(...)` with an offset in a variable, an int
+/// literal or a string literal that is no integer in digits gets the lean
+/// row (`IssetDimL`); a string literal in digits keeps the general row.
+/// Expected output from `/usr/bin/php8.5 -n`.
 #[test]
 fn isset_of_a_string_literal_key_has_its_own_row() {
     let src = "<?php function f($a, $k) { $r = []; \
@@ -1881,8 +1881,8 @@ fn isset_of_a_string_literal_key_has_its_own_row() {
     let arrays = op_arrays(src);
     let tape = check(&arrays[1]);
     let rows = |op: TOp| tape.iter().filter(|inst| inst.op == op).count();
-    assert_eq!(rows(TOp::IssetDimSC), 2);
-    assert_eq!(rows(TOp::IssetDimC), 3);
+    assert_eq!(rows(TOp::IssetDimL), 4);
+    assert_eq!(rows(TOp::IssetDimC), 1);
     assert_eq!(
         run(src),
         "[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]\n"

@@ -355,14 +355,19 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             ..
         } => {
             let (dk, di) = dim_operand(code, dim)?;
-            // A string literal that is no integer in digits is looked up
-            // as it is ([`isset_dim_str`]).
-            let op = match code.literals.get(di as usize) {
-                Some(Value::Str(s))
-                    if dk == KIND_LIT && matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_)) =>
-                {
-                    TOp::IssetDimSC
-                }
+            // An offset in a variable or a temporary, an int literal and
+            // a string literal that is no integer in digits are looked up
+            // by the lean row ([`isset_dim_lean`]); a literal of another
+            // type or in digits takes the general one.
+            let op = match dk {
+                KIND_CV | KIND_TMP | KIND_TMPKEEP => TOp::IssetDimL,
+                KIND_LIT => match code.literals.get(di as usize) {
+                    Some(Value::Int(_)) => TOp::IssetDimL,
+                    Some(Value::Str(s)) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_)) => {
+                        TOp::IssetDimL
+                    }
+                    _ => TOp::IssetDimC,
+                },
                 _ => TOp::IssetDimC,
             };
             Inst {
@@ -1398,19 +1403,19 @@ pub(super) unsafe fn isset_dim(frame: *mut Frame, inst: &Inst) -> bool {
     isset_dim_cv_in(f, inst.a, dim, inst.c >> SLOT_SHIFT, inst.e != 0)
 }
 
-/// `TOp::IssetDimSC`: `isset($cv['key'])` / `empty($cv['key'])` with a
-/// string literal that is no integer in digits ([`isset_lit_lean`]), else
-/// [`isset_dim`].
+/// `TOp::IssetDimL`: `isset($cv[$key])` / `empty($cv[$key])` with an
+/// int or a string offset ([`isset_lean`]), else [`isset_dim`].
 ///
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
-pub(super) unsafe fn isset_dim_str(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn isset_dim_lean(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
-    if let Some(r) = isset_lit_lean(f, inst) {
+    if let Some(r) = isset_lean(f, inst) {
         if let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) {
             put_tmp(slot, Value::Bool(r));
+            release_key(f, dim_kind(inst), inst.b);
             return true;
         }
     }
@@ -1419,24 +1424,35 @@ pub(super) unsafe fn isset_dim_str(frame: *mut Frame, inst: &Inst) -> bool {
     unsafe { isset_dim(frame, inst) }
 }
 
-/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` of a `CV` array and a `CONST` string
-/// offset as php-src runs it: `zend_hash_find_known_hash` with the
-/// literal's stored hash and a type test, here without a call (the
-/// literal's own bucket key matches by pointer). The array is the one the
-/// variable holds directly; a list or an empty table has no string key.
-/// `None` for anything else ([`isset_dim`]: a reference, another
-/// container, an element whose truth needs a conversion).
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` of a `CV` array as php-src runs it: one
+/// lookup (`zend_hash_find_known_hash` with a string's stored hash, or
+/// `zend_hash_index_find`) and a type test, here without a call (a
+/// literal's own bucket key matches by pointer). The offset is an int or
+/// a string that is surely no integer in digits, in a variable, a
+/// temporary or a literal; the array the one the variable holds directly
+/// (a list or an empty table has no string key). `None` for anything
+/// else ([`isset_dim`]: an offset of another type or in digits, a
+/// reference, another container, an element whose truth needs a
+/// conversion). A consumed key temporary is the caller's to release.
 #[inline(always)]
-#[allow(clippy::inline_always)] // the body of `isset_dim_str`
-fn isset_lit_lean(f: &Frame, inst: &Inst) -> Option<bool> {
+#[allow(clippy::inline_always)] // the body of `isset_dim_lean`
+fn isset_lean(f: &Frame, inst: &Inst) -> Option<bool> {
     let Some(Value::Array(arr)) = f.cvs.get(inst.a as usize).and_then(CvSlot::get) else {
         return None;
     };
-    let Some(Value::Str(key)) = f.code.literals.get(inst.b as usize) else {
-        return None;
+    let key = match dim_kind(inst) {
+        KIND_LIT => f.code.literals.get(inst.b as usize),
+        KIND_CV => f.cvs.get(inst.b as usize).and_then(CvSlot::get),
+        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize),
+        _ => None,
+    };
+    let found = match key? {
+        Value::Str(s) if ArrayKey::surely_str(s.as_bytes()) => arr.lean_find(s, s.hash_now()),
+        Value::Int(i) => arr.lean_get_int(*i),
+        _ => return None,
     };
     let empty = inst.e != 0;
-    let Some(v) = arr.lean_find(key, key.hash_now()) else {
+    let Some(v) = found else {
         return Some(empty);
     };
     if empty {

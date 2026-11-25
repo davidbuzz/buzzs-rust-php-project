@@ -816,3 +816,163 @@ str2estr2
 Warning: Undefined array key "nope" in t.php on line 38
 |
 "#;
+
+/// `isset($a[$k])` and `empty($a[$k])` with keys in variables and
+/// temporaries: strings, integers in digits and not, ints (negative, past
+/// a list's end), floats, bools and null, over a hash and a list, a list
+/// with a hole, an undefined key variable.
+#[test]
+fn isset_by_variable_and_int_keys() {
+    assert_eq!(run(ISSET_VAR), ISSET_VAR_OUT);
+}
+
+const ISSET_VAR: &str = r#"<?php
+function f() {
+    for ($round = 0; $round < 3; $round++) {
+        $a = ['key' => 1, 'nul' => null, 'zero' => 0, 7 => 'seven', -2 => 'minus', 9 => null];
+        $l = [10, 0, null, ''];
+        $keys = ['key', 'nul', 'zero', 'nope', 7, -2, 9, 8, '7', '07', 1.5, true, null, 0, 1, 2, 3, 4, -1];
+        foreach ($keys as $k) {
+            echo var_export($k, true), ': ', json_encode([isset($a[$k]), empty($a[$k]), isset($l[$k]), empty($l[$k])]), "\n";
+        }
+        $p = 'ke';
+        echo json_encode([isset($a[$p . 'y']), empty($a[$p . 'y']), isset($a[$p . 'x']), isset($l[$round % 2]), isset($a[$round + 7])]), "\n";
+        // A key variable that is undefined.
+        echo json_encode(isset($a[$undefinedKey])), "\n";
+        // Holes in a list.
+        $h = [1, 2, 3];
+        unset($h[1]);
+        $i = 1;
+        echo json_encode([isset($h[$i]), isset($h[0]), empty($h[2])]), "\n";
+    }
+}
+f();
+"#;
+
+const ISSET_VAR_OUT: &str = r#"'key': [true,false,false,true]
+'nul': [false,true,false,true]
+'zero': [true,true,false,true]
+'nope': [false,true,false,true]
+7: [true,false,false,true]
+-2: [true,false,false,true]
+9: [false,true,false,true]
+8: [false,true,false,true]
+'7': [true,false,false,true]
+'07': [false,true,false,true]
+1.5: 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+[false,true,true,true]
+true: [false,true,true,true]
+NULL: 
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+[false,true,false,true]
+0: [false,true,true,false]
+1: [false,true,true,true]
+2: [false,true,false,true]
+3: [false,true,true,true]
+4: [false,true,false,true]
+-1: [false,true,false,true]
+[true,false,false,true,true]
+
+Warning: Undefined variable $undefinedKey in t.php on line 13
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 13
+false
+[false,true,false]
+'key': [true,false,false,true]
+'nul': [false,true,false,true]
+'zero': [true,true,false,true]
+'nope': [false,true,false,true]
+7: [true,false,false,true]
+-2: [true,false,false,true]
+9: [false,true,false,true]
+8: [false,true,false,true]
+'7': [true,false,false,true]
+'07': [false,true,false,true]
+1.5: 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+[false,true,true,true]
+true: [false,true,true,true]
+NULL: 
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+[false,true,false,true]
+0: [false,true,true,false]
+1: [false,true,true,true]
+2: [false,true,false,true]
+3: [false,true,true,true]
+4: [false,true,false,true]
+-1: [false,true,false,true]
+[true,false,false,true,false]
+
+Warning: Undefined variable $undefinedKey in t.php on line 13
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 13
+false
+[false,true,false]
+'key': [true,false,false,true]
+'nul': [false,true,false,true]
+'zero': [true,true,false,true]
+'nope': [false,true,false,true]
+7: [true,false,false,true]
+-2: [true,false,false,true]
+9: [false,true,false,true]
+8: [false,true,false,true]
+'7': [true,false,false,true]
+'07': [false,true,false,true]
+1.5: 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+[false,true,true,true]
+true: [false,true,true,true]
+NULL: 
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 8
+[false,true,false,true]
+0: [false,true,true,false]
+1: [false,true,true,true]
+2: [false,true,false,true]
+3: [false,true,true,true]
+4: [false,true,false,true]
+-1: [false,true,false,true]
+[true,false,false,true,false]
+
+Warning: Undefined variable $undefinedKey in t.php on line 13
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 13
+false
+[false,true,false]
+"#;
