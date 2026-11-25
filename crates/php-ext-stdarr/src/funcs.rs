@@ -379,7 +379,7 @@ pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_push(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
     let vals = rest(a, 1);
-    let r = sa::stack::array_push(&arr, &vals);
+    let r = sa::stack::array_push_owned(&arr, vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -396,7 +396,7 @@ pub fn array_shift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_unshift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
     let vals = rest(a, 1);
-    let r = sa::stack::array_unshift(&arr, &vals);
+    let r = sa::stack::array_unshift_owned(&arr, vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 

@@ -591,3 +591,31 @@ fn array_merge_hashes() {
         "'key'=1,'b'=20,'c'=30,'a'=1,0='five','d'=4,|0=1,1=2,'a'='A',2='x',3=3,|'a'=1,0='n',1=10,2=11,'b'=2,|'a'=99,'b'=2,'c'=3,|0=1,1=2,'z'=0,|'a'=1,|'b'=2,0=3,|21x|stdClass"
     );
 }
+
+/// `array_pop()`, `array_shift()`, `array_push()` and `array_unshift()`
+/// work on the array in place: a shared reference element read after the
+/// call, a copy of the array kept apart, the next free index and the
+/// internal pointer after the call, empty arrays, an array holding a
+/// reference to itself, a non-array, and pushing the array onto itself
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn stack_functions_in_place() {
+    let out = run(r#"$x = 'X'; $a = [1, 'k' => 2, &$x]; $b = $a;
+        echo array_pop($a), count($a), count($b), '|';
+        $x = 'Y'; echo array_pop($b), '|';
+        $a = [5 => 'a', 6 => 'b']; array_pop($a); $a[] = 'c'; echo implode(',', array_keys($a)), '|';
+        $a = [1, 2, 3]; next($a); next($a); array_pop($a); echo current($a), '|';
+        $a = ['x' => 1, 3 => 2, 9 => 3]; echo array_shift($a), implode(',', array_keys($a)), '|';
+        $a = []; var_dump(array_pop($a), array_shift($a));
+        $a = [1]; echo array_push($a, 2, [3]), count($a[2]), '|';
+        $a = ['k' => 1, 5 => 2]; echo array_unshift($a, 'z', 'y'), implode(',', array_keys($a)), implode(',', array_map('strval', array_slice($a, 0, 3))), '|';
+        $a = [1, 2]; next($a); array_unshift($a, 0); echo current($a), '|';
+        $s = [1]; $s[] = &$s; echo gettype(array_pop($s)), count($s), '|';
+        $n = 5; try { array_pop($n); } catch (TypeError $e) { echo $e->getMessage(), '|'; }
+        try { array_push($n, 1); } catch (TypeError $e) { echo $e->getMessage(), '|'; }
+        $a = [1, 2]; $c = $a; array_push($a, $a); echo count($a), count($a[2]), count($c);"#);
+    assert_eq!(
+        out,
+        "X23|Y|5,6|1|10,1|NULL\nNULL\n31|40,1,k,2z,y,1|0|array1|array_pop(): Argument #1 ($array) must be of type array, int given|array_push(): Argument #1 ($array) must be of type array, int given|322"
+    );
+}
