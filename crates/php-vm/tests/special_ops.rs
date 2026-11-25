@@ -407,13 +407,14 @@ fn defined_in_array_array_key_exists_chr_ord_compile_by_their_literals() {
             .count(),
         1
     );
-    // The other calls stay calls. The fifteen of frameless builtins are
-    // still one `FramelessICall` each: the fusion goes by the name (php-src
-    // compiles the internal function's calls so), and the op runs the call
-    // ops it replaced when the function is not that builtin at run time.
+    // The other calls stay calls. The sixteen of frameless builtins
+    // (`array_key_exists()` among them) are still one `FramelessICall`
+    // each: the fusion goes by the name (php-src compiles the internal
+    // function's calls so), and the op runs the call ops it replaced when
+    // the function is not that builtin at run time.
     let calls = |pred: fn(&Op) -> bool| without.iter().filter(|o| pred(o)).count();
-    assert_eq!(calls(|o| matches!(o, Op::DoCall { .. })), 7);
-    assert_eq!(calls(|o| matches!(o, Op::FramelessICall(_))), 15);
+    assert_eq!(calls(|o| matches!(o, Op::DoCall { .. })), 6);
+    assert_eq!(calls(|o| matches!(o, Op::FramelessICall(_))), 16);
 }
 
 #[test]

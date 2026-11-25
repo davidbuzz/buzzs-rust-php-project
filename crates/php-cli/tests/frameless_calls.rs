@@ -231,3 +231,105 @@ int(1)
 ";
     assert_eq!(run(src), expected);
 }
+
+/// `array_key_exists()` from namespaced code, answered in place for a
+/// string or int key: numeric and non-numeric strings, negative ints,
+/// references, the `key_exists()` alias; float and bool keys (the
+/// handler), array and object keys and a non-array haystack (its type
+/// errors), a namespace's own function. Then the illegal-key error of
+/// each kind of call: by its global name and fully qualified (the
+/// `ZEND_ARRAY_KEY_EXISTS` opcode's "Cannot access offset"), and named,
+/// spread, through `call_user_func()` and dynamic (the function's).
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // the scripts and their expected output
+fn array_key_exists_calls() {
+    let src = r#"<?php
+namespace App {
+    function t() {
+        $a = ['a' => 1, 1 => 2, '01' => 3, -5 => 4, '' => 5, 'n' => null];
+        foreach (['a', 'b', '1', 1, '01', '-5', -5, '-0', '', 'n', 0] as $k) { echo var_export(array_key_exists($k, $a), true), ' '; }
+        echo "\n";
+        $r = &$a; $kr = 'a'; $kref = &$kr; var_dump(array_key_exists($kref, $r), key_exists('a', $a), array_key_exists(1, [1 => 0]));
+        var_dump(array_key_exists(1.0, $a), array_key_exists(true, $a), array_key_exists(1.5, $a));
+        foreach ([[1], new \stdClass] as $bad) { try { array_key_exists($bad, $a); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; } }
+        try { array_key_exists('a', new \ArrayObject(['a' => 1])); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+namespace Shadow { function array_key_exists($k, $a) { return 'shadow'; } function c() { return array_key_exists('x', []); } }
+namespace { App\t(); var_dump(Shadow\c()); }
+"#;
+    let expected = r#"true false true true true true true false true true false 
+bool(true)
+bool(true)
+bool(true)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in Standard input code on line 8
+bool(true)
+bool(true)
+bool(true)
+array_key_exists(): Argument #1 ($key) must be a valid array offset type
+array_key_exists(): Argument #1 ($key) must be a valid array offset type
+array_key_exists(): Argument #2 ($array) must be of type array, ArrayObject given
+string(6) "shadow"
+"#;
+    assert_eq!(run(src), expected);
+    let src = r#"<?php
+$a = ['x' => 1];
+foreach ([[1], new stdClass] as $bad) {
+  try { array_key_exists($bad, $a); } catch (TypeError $e) { echo "plain: ", $e->getMessage(), "\n"; }
+  try { \array_key_exists($bad, $a); } catch (TypeError $e) { echo "fq: ", $e->getMessage(), "\n"; }
+  try { array_key_exists(key: $bad, array: $a); } catch (TypeError $e) { echo "named: ", $e->getMessage(), "\n"; }
+  try { array_key_exists(...[$bad, $a]); } catch (TypeError $e) { echo "spread: ", $e->getMessage(), "\n"; }
+  try { call_user_func('array_key_exists', $bad, $a); } catch (TypeError $e) { echo "cuf: ", $e->getMessage(), "\n"; }
+  $f = 'array_key_exists'; try { $f($bad, $a); } catch (TypeError $e) { echo "dyn: ", $e->getMessage(), "\n"; }
+}
+"#;
+    let expected = r#"plain: Cannot access offset of type array on array
+fq: Cannot access offset of type array on array
+named: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+spread: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+cuf: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+dyn: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+plain: Cannot access offset of type stdClass on array
+fq: Cannot access offset of type stdClass on array
+named: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+spread: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+cuf: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+dyn: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `strtolower()`/`strtoupper()` answered in place for a string:
+/// empty, ASCII, mixed and non-ASCII bytes (only ASCII letters change),
+/// already-lowercase input, a first-class callable and a fully qualified
+/// call; other types (coerced, or a type error) take the handler.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn case_conversions() {
+    let src = r#"<?php
+namespace App;
+$m0 = memory_get_usage();
+foreach (['', 'abc', 'ABC', 'MiXeD 123 ÄÖÜ', "\xff\x00A"] as $s) { $l = strtolower($s); $u = strtoupper($s); echo json_encode([bin2hex($l), bin2hex($u)]), "\n"; }
+$x = 'already lower'; $y = strtolower($x); $x2 = 'ALREADY'; $z = strtoupper($x2);
+var_dump($y, $z, strtolower(...)('Q'), \strtolower('W'));
+try { strtolower([]); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(strtolower(12), strtoupper(1.5), strtolower(true));
+"#;
+    let expected = r#"["",""]
+["616263","414243"]
+["616263","414243"]
+["6d697865642031323320c384c396c39c","4d495845442031323320c384c396c39c"]
+["ff0061","ff0041"]
+string(13) "already lower"
+string(7) "ALREADY"
+string(1) "q"
+string(1) "w"
+strtolower(): Argument #1 ($string) must be of type string, array given
+string(2) "12"
+string(3) "1.5"
+string(1) "1"
+"#;
+    assert_eq!(run(src), expected);
+}

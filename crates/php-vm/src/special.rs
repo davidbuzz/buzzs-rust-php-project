@@ -398,6 +398,10 @@ mod fl {
     /// `count()`, `sizeof()` of an array (a `Countable` object calls its
     /// `count()`).
     pub(super) const COUNT: u32 = 25;
+    /// `array_key_exists()` (`key_exists()`) of a string or int key in an
+    /// array (a float or `null` key can warn or deprecate, another type
+    /// throws).
+    pub(super) const KEY_EXISTS: u32 = 26;
 }
 
 /// The frameless-call class bits ([`flags::FRAMELESS`]) of the builtin
@@ -435,6 +439,7 @@ pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
         | b"is_scalar" => fl::TYPE_TEST,
         b"strlen" => fl::STRLEN,
         b"count" | b"sizeof" => fl::COUNT,
+        b"array_key_exists" | b"key_exists" => fl::KEY_EXISTS,
         _ => return 0,
     };
     class << flags::FRAMELESS_SHIFT
@@ -501,7 +506,8 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
         )
         | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))])
         | (fl::TYPE_TEST, [Some(_)])
-        | (fl::COUNT, [Some(Array(_))]) => true,
+        | (fl::COUNT, [Some(Array(_))])
+        | (fl::KEY_EXISTS, [Some(Str(_) | Int(_)), Some(Array(_))]) => true,
         (fl::TRIM, [Some(Str(_)), Some(Str(chars))]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Some(Str(_)), Some(Int(levels))]) => *levels >= 1,
         (fl::IS_NUMERIC, [Some(v)]) => is_scalar(v),
@@ -536,6 +542,7 @@ fn inline_class(class: u32) -> bool {
         fl::TYPE_TEST
             | fl::STRLEN
             | fl::COUNT
+            | fl::CASE
             | fl::ABS
             | fl::ORD
             | fl::CHR
@@ -554,6 +561,7 @@ pub(crate) fn frameless_arity(lc: &[u8], argc: usize) -> bool {
     match frameless_flags(lc) >> flags::FRAMELESS_SHIFT {
         0 => false,
         fl::TYPE_TEST | fl::STRLEN | fl::COUNT => argc == 1,
+        fl::KEY_EXISTS => argc == 2,
         _ => true,
     }
 }
@@ -694,8 +702,9 @@ impl Vm {
 /// one-byte string, `chr()` of 0..=255 (the shared one-character string,
 /// `ZSTR_CHAR`, as the handler returns it), and the one-argument math
 /// functions of classes `FLOAT`, `LOG` and `ROUND` (function `name`; see
-/// [`crate::call::float_builtin_eval`]), and the type tests, `strlen()` and
-/// `count()` ([`crate::call::fast_eval`]). `arg` already has the shape
+/// [`crate::call::float_builtin_eval`]), `strtolower()` and `strtoupper()`
+/// of a string, and the type tests, `strlen()` and `count()`
+/// ([`crate::call::fast_eval`]). `arg` already has the shape
 /// [`frameless_args`] accepts for `class`; `None` for every other call.
 #[inline]
 fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Value> {
@@ -707,6 +716,13 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
+        // What the handlers return (`zend_string_tolower` /
+        // `zend_string_toupper`).
+        (fl::CASE, Value::Str(s)) => match name {
+            b"strtolower" => Some(Value::Str(s.to_ascii_lowercase())),
+            b"strtoupper" => Some(Value::Str(s.to_ascii_uppercase())),
+            _ => None,
+        },
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
         (fl::TYPE_TEST | fl::STRLEN | fl::COUNT, v) => {
             crate::call::fast_eval(crate::call::fast_eval_id(name), v)
@@ -996,10 +1012,11 @@ impl Vm {
         if !call.args.is_empty() || !plain_call(call) || !frameless_args(class, sent) {
             return None;
         }
-        // `in_array()` and the `str_contains()` family: answered by
+        // `in_array()`, `array_key_exists()` and the `str_contains()`
+        // family: answered by
         // [`Vm::frameless_two`], the pending call popped as the handler's
         // call would pop it (its argument buffer back to the pool).
-        if matches!(class, fl::IN_ARRAY | fl::STR_TEST) && (2..=3).contains(&n) {
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST | fl::KEY_EXISTS) && (2..=3).contains(&n) {
             let b = Rc::clone(b);
             let mut sent: [Option<Value>; 3] = [None, None, None];
             for (slot, arg) in sent.iter_mut().zip(call.inline_args[..n].iter_mut()) {
@@ -1218,10 +1235,11 @@ impl Vm {
             self.put_call_result(dst, v);
             return Some(Ok(()));
         }
-        // `in_array()` and the `str_contains()` family, whose accepted
+        // `in_array()`, `array_key_exists()` and the `str_contains()`
+        // family, whose accepted
         // arguments [`Vm::frameless_two`] always answers: taken out of the
         // frame, as the handler's call would leave it.
-        if matches!(class, fl::IN_ARRAY | fl::STR_TEST) && (2..=3).contains(&n) {
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST | fl::KEY_EXISTS) && (2..=3).contains(&n) {
             let mut sent: [Option<Value>; 3] = [None, None, None];
             for (slot, arg) in sent.iter_mut().zip(frame.args.drain(..)) {
                 *slot = arg;
@@ -1321,8 +1339,8 @@ impl Vm {
 
 impl Vm {
     /// The handler of a two- or three-argument frameless call evaluated
-    /// without the handler's argument and result vectors: `in_array()`
-    /// and the `str_contains()` family, as their handlers
+    /// without the handler's argument and result vectors: `in_array()`,
+    /// `array_key_exists()` and the `str_contains()` family, as their handlers
     /// compute them (`php_stdarr::basic::in_array`, `php_stdstr::search`),
     /// for arguments [`frameless_args`] accepted for `class`. `None` for
     /// every other call (the handler then runs).
@@ -1350,6 +1368,14 @@ impl Vm {
                     .map(Value::Bool)
                     .map_err(|e| self.rt_throw(e)),
             ),
+            // `array_key_exists()`'s lookups (a numeric string finds its int
+            // key), by the key's cached hash.
+            (fl::KEY_EXISTS, [Some(Value::Str(k)), Some(Value::Array(a))]) => {
+                Some(Ok(Value::Bool(a.get_sym_zstr(k).is_some())))
+            }
+            (fl::KEY_EXISTS, [Some(Value::Int(k)), Some(Value::Array(a))]) => {
+                Some(Ok(Value::Bool(a.get_int(*k).is_some())))
+            }
             (
                 fl::IN_ARRAY,
                 [Some(needle), Some(Value::Array(haystack)), Some(Value::Bool(strict))],
@@ -2133,6 +2159,7 @@ mod tests {
             b"is_string",
             b"strlen",
             b"count",
+            b"array_key_exists",
         ];
         let mut seen = Vec::new();
         for name in names {

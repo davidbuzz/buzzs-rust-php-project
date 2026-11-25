@@ -122,16 +122,11 @@ pub fn array_is_list(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let key = a.at(0);
     let h = a.array(1);
+    // (A call by its global name with two positional arguments is compiled
+    // to the ZEND_ARRAY_KEY_EXISTS opcode, whose error for an illegal key
+    // differs; every call that reaches the function, namespaced, named,
+    // spread or dynamic, reports the function's.)
     let f = a.func_name_str();
-    // A direct call to `array_key_exists()` is compiled to the
-    // ZEND_ARRAY_KEY_EXISTS opcode, whose error for illegal keys differs.
-    if f == "array_key_exists"
-        && matches!(key, Value::Array(_) | Value::Object(_))
-        && called_from_code(vm)
-    {
-        let msg = format!("Cannot access offset of type {} on array", key.value_name());
-        return Err(vm.throw("TypeError", &msg));
-    }
     let r = sa::basic::array_key_exists(vm, f, &key, &h);
     Ok(Value::Bool(rt(vm, r)?))
 }

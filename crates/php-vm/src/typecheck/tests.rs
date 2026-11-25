@@ -713,12 +713,14 @@ fn array_key_exists_specialization_is_float_literal_only() {
             .ops
             .iter()
             .any(|op| matches!(op, Op::ArrayKeyExists { .. })));
+        // A call (a frameless one: `array_key_exists()` has a frameless
+        // class, and the op runs the call's ops for other keys).
         assert!(unit
             .main
             .code
             .ops
             .iter()
-            .any(|op| matches!(op, Op::DoCall { .. })));
+            .any(|op| matches!(op, Op::DoCall { .. } | Op::FramelessICall(_))));
     }
     for src in [
         "<?php namespace N; array_key_exists(1e42, $array);",
