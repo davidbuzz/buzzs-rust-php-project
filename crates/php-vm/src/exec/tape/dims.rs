@@ -25,8 +25,8 @@ use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cast_string_in,
     concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dim_is_miss_in,
-    fetch_dims_cv_in, fetch_dims_is_miss_in, incdec_dim_cv_in, isset_cv_dims_in, isset_dim_cv_in,
-    key_exists_in, put_tmp, rope_in,
+    fetch_dims_cv_in, fetch_dims_is_miss_in, in_array_in, incdec_dim_cv_in, isset_cv_dims_in,
+    isset_dim_cv_in, key_exists_in, put_tmp, rope_in,
 };
 use crate::opcode::{
     BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, PlaceBase, Seg,
@@ -308,6 +308,19 @@ fn fetched(r: Option<bool>) -> Br {
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
+        // `in_array($x, ['a', 'b'])` with a literal haystack
+        // (`ZEND_IN_ARRAY`): one key lookup (`spec::in_array_in`).
+        Op::InArray { set, dst, .. } => {
+            if !matches!(code.literals.get(set as usize), Some(Value::Array(_)))
+                || dst.is_some_and(|d| d >= code.num_tmps)
+            {
+                return None;
+            }
+            Inst {
+                d: u32::try_from(i).ok()?,
+                ..plain(TOp::InArrayX)
+            }
+        }
         Op::FetchDimCv {
             cv,
             dim,
@@ -3303,4 +3316,28 @@ unsafe fn concat_cv_general(frame: *mut Frame, inst: &Inst) -> bool {
     let val = operand(val_kind(inst), inst.p as u32);
     let dst = (inst.c != u32::MAX).then_some(inst.c >> SLOT_SHIFT);
     concat_cv_in(f, inst.a, val, dst)
+}
+
+/// `Op::InArray` ([`TOp::InArrayX`], the op at `inst.d`) settled by one
+/// key lookup in its literal haystack (`spec::in_array_in`, the path
+/// `hot::step_ext` takes). Declines anything else, having changed
+/// nothing: `hot::step_ext`, then the generic op.
+///
+/// # Safety
+/// `frame` is the current frame and `inst` a row [`lower`] built for its
+/// tape.
+#[inline(never)]
+pub(super) unsafe fn in_array(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::InArray {
+        a,
+        set,
+        strict,
+        dst,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    in_array_in(f, a, set, strict, dst)
 }

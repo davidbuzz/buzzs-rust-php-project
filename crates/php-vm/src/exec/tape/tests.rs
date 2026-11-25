@@ -1622,6 +1622,30 @@ fn dynamic_method_calls() {
     assert_eq!(run(DYN_METHODS), "m0m0\nm1n1\nm2m2\n");
 }
 
+const IN_ARRAY_AND_ARGS: &str = r#"<?php
+function f($x) { return (in_array($x, ['a', 'b'], true) ? 'y' : 'n') . func_num_args(); }
+for ($i = 0; $i < 3; $i++) { echo f('a'), f('c', 2), "\n"; }
+"#;
+
+/// `in_array()` of a literal haystack and `func_num_args()` with its
+/// result used are rows of their own (`dims::in_array`,
+/// `scalar::func_num_args`).
+#[test]
+fn in_array_and_func_num_args() {
+    let arrays = op_arrays(IN_ARRAY_AND_ARGS);
+    let f = with_cv(&arrays, "x");
+    let tape = check(f);
+    let rows: Vec<TOp> = f
+        .ops
+        .iter()
+        .zip(tape.iter())
+        .filter(|(op, _)| matches!(op, Op::InArray { .. } | Op::FuncNumArgs { .. }))
+        .map(|(_, inst)| inst.op)
+        .collect();
+    assert_eq!(rows, [TOp::InArrayX, TOp::FuncNumArgsT], "{rows:?}");
+    assert_eq!(run(IN_ARRAY_AND_ARGS), "y1n2\ny1n2\ny1n2\n");
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];

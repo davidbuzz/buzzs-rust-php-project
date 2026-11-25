@@ -1359,6 +1359,7 @@ tape_ops! {
         FeFreeRetA = (scalar::fe_free_on_return, 1, poll_f),
         ConstT = (scalar::fetch_const, 1, poll_f),
         ConstTo = (scalar::fetch_const_to, 1, branch_poll_f),
+        FuncNumArgsT = (scalar::func_num_args, 1, poll_f),
 
         // ---- end of scalar ----
         //
@@ -1389,6 +1390,7 @@ tape_ops! {
         FeFetchA = (dims::fe_fetch, 1, branch_poll_f),
         FeFetchV = (dims::fe_fetch_v, 2, branch_poll_f),
         FeFetchKV = (dims::fe_fetch_kv, 3, branch_poll_f),
+        InArrayX = (dims::in_array, 1, poll_f),
 
         // ---- end of dims ----
         //

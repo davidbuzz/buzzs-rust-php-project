@@ -328,6 +328,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             d: u32::try_from(i).ok()?,
             ..plain(TOp::FeFreeA)
         },
+        // `func_num_args()` with its result used (`ZEND_FUNC_NUM_ARGS`;
+        // unused, it is no code in a compiled loop: the `Ext` row).
+        Op::FuncNumArgs { dst: Some(d) } if d < code.num_tmps => Inst {
+            b: d,
+            ..plain(TOp::FuncNumArgsT)
+        },
         // The `FE_FREE` before a `return` inside a `foreach` of an array.
         Op::FeFreeOnReturn { .. } => Inst {
             d: u32::try_from(i).ok()?,
@@ -639,6 +645,20 @@ pub(super) unsafe fn fe_free_on_return(frame: *mut Frame, inst: &Inst) -> bool {
         Some(_) => return false,
     }
     !crate::object::has_pending_destructors()
+}
+
+/// `ZEND_FUNC_NUM_ARGS` ([`TOp::FuncNumArgsT`]): the frame's argument
+/// count into temporary `inst.b`.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn func_num_args(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let n = i64::try_from(f.num_args()).unwrap_or(i64::MAX);
+    hot::set_tmp_in(f, inst.b, Value::Int(n));
+    true
 }
 
 /// [`TOp::ConstT`]: the cached value of the constant named by literal

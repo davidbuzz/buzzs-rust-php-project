@@ -298,3 +298,47 @@ closure2 bound
 "#
     );
 }
+
+/// `in_array()` with a literal haystack of strings or ints, strict and
+/// loose, of every kind of needle (a numeric string, a float, a bool, null,
+/// an empty string, an array, another case) and of a reference; and
+/// `func_num_args()` with fewer, as many and more arguments than declared,
+/// and of a variadic function.
+#[test]
+fn in_array_literals_and_func_num_args() {
+    assert_eq!(
+        run(r#"<?php
+function ia($x) {
+    return var_export(in_array($x, ['a', 'b', 'c'], true), true) . var_export(in_array($x, ['a', 'b', '1']), true)
+        . var_export(in_array($x, [1, 2, 3], true), true) . var_export(in_array($x, [1, 2, 3]), true);
+}
+foreach (['a', 'z', 1, '1', 1.0, true, null, 0, '', [], 'B'] as $v) {
+    for ($i = 0; $i < 3; $i++) { echo ia($v), ' '; }
+    echo "\n";
+}
+$r = 'b'; $ref = &$r; for ($i = 0; $i < 3; $i++) { echo var_export(in_array($ref, ['a', 'b'], true), true), "\n"; }
+function na() { return func_num_args(); }
+function nb($a, $b = 2) { $n = func_num_args(); return $n . ':' . func_num_args(); }
+function nv(...$xs) { return func_num_args(); }
+for ($i = 0; $i < 3; $i++) { echo na(), na(1, 2), nb(1), nb(1, 2, 3), nv(), nv(1, 2), "\n"; }
+"#),
+        r#"truetruefalsefalse truetruefalsefalse truetruefalsefalse 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+falsetruetruetrue falsetruetruetrue falsetruetruetrue 
+falsetruefalsetrue falsetruefalsetrue falsetruefalsetrue 
+falsetruefalsetrue falsetruefalsetrue falsetruefalsetrue 
+falsetruefalsetrue falsetruefalsetrue falsetruefalsetrue 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+falsefalsefalsefalse falsefalsefalsefalse falsefalsefalsefalse 
+true
+true
+true
+021:13:302
+021:13:302
+021:13:302
+"#
+    );
+}
