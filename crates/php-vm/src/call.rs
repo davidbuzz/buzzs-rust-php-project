@@ -5087,10 +5087,11 @@ impl Vm {
         name: &str,
         args: Vec<Value>,
     ) -> VmResult<Value> {
-        let cls = object::class_of(o).clone();
-        let m = class_method_lc(&cls, name);
+        let m = class_method_lc(object::class_of(o), name);
         let mut call = match m {
-            Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
+            // `offsetGet()`, the Iterator methods, ...: the method found
+            // takes `call_method`'s entry (its frame readied in place).
+            Some(m) => return self.call_method(o, &m, args),
             None => self.method_call(o, &ZStr::from(name))?,
         };
         self.fill_call_args(&mut call, args);
