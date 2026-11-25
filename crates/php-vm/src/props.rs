@@ -233,13 +233,12 @@ impl Vm {
         if self.prop_guards.is_empty() {
             return false;
         }
-        self.prop_guards.contains(&(o.handle(), name.clone(), kind))
+        self.prop_guards.contains(o.handle(), name, kind)
             || object::data(o).lazy.borrow().as_ref().is_some_and(|info| {
                 info.proxy
                     && info.initialized
                     && info.instance.as_ref().is_some_and(|instance| {
-                        self.prop_guards
-                            .contains(&(instance.handle(), name.clone(), kind))
+                        self.prop_guards.contains(instance.handle(), name, kind)
                     })
             })
             // A proxy's guard covers its instance: the frames' `$this` are
@@ -264,9 +263,7 @@ impl Vm {
                                     .as_ref()
                                     .is_some_and(|instance| Obj::ptr_eq(instance, o))
                         })
-                        && self
-                            .prop_guards
-                            .contains(&(this.handle(), name.clone(), kind))
+                        && self.prop_guards.contains(this.handle(), name, kind)
                 })
     }
 
@@ -277,10 +274,10 @@ impl Vm {
         kind: u8,
         f: impl FnOnce(&mut Vm) -> VmResult<T>,
     ) -> VmResult<T> {
-        let key = (o.handle(), name.clone(), kind);
-        self.prop_guards.insert(key.clone());
+        let handle = o.handle();
+        self.prop_guards.insert(handle, name.clone(), kind);
         let r = f(self);
-        self.prop_guards.remove(&key);
+        self.prop_guards.remove(handle, name, kind);
         r
     }
 
@@ -890,17 +887,17 @@ impl Vm {
     /// once (`IS_PROP_REINITABLE`).
     pub(crate) fn readonly_locked(&self, o: &Obj, pi: &PropInfo) -> bool {
         object::data(o).flags.get() & oflags::CLONING == 0
-            || self
-                .prop_guards
-                .contains(&(o.handle(), pi.name.clone(), G_REINIT))
+            || self.prop_guards.contains(o.handle(), &pi.name, G_REINIT)
     }
 
     /// Clears `IS_PROP_REINITABLE` after a readonly property was written
     /// during cloning.
     fn consume_reinit(&mut self, o: &Obj, pi: &PropInfo) {
         if pi.flags & flags::READONLY != 0 && object::data(o).flags.get() & oflags::CLONING != 0 {
-            self.prop_guards
-                .insert((o.handle(), pi.name.clone(), G_REINIT));
+            if !self.prop_guards.contains(o.handle(), &pi.name, G_REINIT) {
+                self.prop_guards
+                    .insert(o.handle(), pi.name.clone(), G_REINIT);
+            }
         }
     }
 
@@ -1432,9 +1429,7 @@ impl Vm {
         // The slot of the real instance (a lazy proxy forwards).
         let lazy_target = self.lazy_object_for_write(o, name)?;
         if !Obj::ptr_eq(o, &lazy_target)
-            && !self
-                .prop_guards
-                .contains(&(o.handle(), name.clone(), G_GET))
+            && !self.prop_guards.contains(o.handle(), name, G_GET)
             && self.guard_active(&lazy_target, name, G_GET)
             && !object::class_of(&lazy_target).prop_map.contains_key(name)
             && !object::data(&lazy_target)

@@ -2697,12 +2697,10 @@ pub struct Vm {
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.
     pub empty_vars: Rc<RefCell<VarStore>>,
-    /// Active `__get`/`__set`/`__isset`/`__unset` guards: (object handle,
-    /// property name, kind). One insert and one remove per magic access,
-    /// so hashed with [`crate::class::FxHasher`]: the set only holds the
-    /// guards of the accesses in progress.
-    pub prop_guards:
-        HashSet<(u32, ZStr, u8), std::hash::BuildHasherDefault<crate::class::FxHasher>>,
+    /// Active `__get`/`__set`/`__isset`/`__unset` guards and the
+    /// readonly reinitialization markers of a clone in progress
+    /// ([`PropGuards`]).
+    pub prop_guards: PropGuards,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
@@ -3463,5 +3461,86 @@ mod tests {
         assert!(!f.caller_strict);
         assert!(f.tmps.is_empty() && f.args.is_empty() && f.named.is_empty());
         assert!(f.vars.borrow().slots.is_empty());
+    }
+}
+
+/// The property guards in effect: php-src's `zend_get_property_guard`
+/// (`Zend/zend_object_handlers.c`), which keeps, per object, a flag word
+/// for the name of a magic access in progress (`IN_GET`, `IN_SET`,
+/// `IN_ISSET`, `IN_UNSET`) and a table only when several names are in
+/// flight, plus the `IS_PROP_REINITABLE` state of a readonly property
+/// during `__clone()`. Here one list holds (object handle, property name,
+/// kind) for every guard in effect, innermost last: a magic access pushes
+/// its guard and removes it when the method returns, and only the
+/// accesses in progress are on it (a handful at most), so a push, a
+/// compare of the handle and kind first, and a removal from the end cost
+/// a few instructions where a hash set hashed the name twice.
+#[derive(Debug, Default)]
+pub struct PropGuards {
+    /// The guards in effect, innermost last.
+    active: Vec<(u32, ZStr, u8)>,
+}
+
+impl PropGuards {
+    /// Whether no guard is in effect.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
+    }
+
+    /// Whether the guard `kind` of `name` on the object `handle` is in
+    /// effect.
+    #[inline]
+    #[must_use]
+    pub fn contains(&self, handle: u32, name: &ZStr, kind: u8) -> bool {
+        self.active
+            .iter()
+            .any(|(h, n, k)| *h == handle && *k == kind && n.as_bytes() == name.as_bytes())
+    }
+
+    /// Puts the guard `kind` of `name` on the object `handle` in effect.
+    #[inline]
+    pub fn insert(&mut self, handle: u32, name: ZStr, kind: u8) {
+        self.active.push((handle, name, kind));
+    }
+
+    /// Ends the innermost guard `kind` of `name` on the object `handle`
+    /// (the last one put in effect: magic accesses nest, and a fiber
+    /// suspended inside one may end it out of order). Nothing when none is
+    /// in effect.
+    #[inline]
+    pub fn remove(&mut self, handle: u32, name: &ZStr, kind: u8) {
+        if let Some(i) = self
+            .active
+            .iter()
+            .rposition(|(h, n, k)| *h == handle && *k == kind && n.as_bytes() == name.as_bytes())
+        {
+            self.active.remove(i);
+        }
+    }
+
+    /// Keeps only the guards `keep` accepts.
+    pub fn retain(&mut self, keep: impl FnMut(&(u32, ZStr, u8)) -> bool) {
+        self.active.retain(keep);
+    }
+
+    /// The guards in effect, outermost first.
+    pub fn iter(&self) -> std::slice::Iter<'_, (u32, ZStr, u8)> {
+        self.active.iter()
+    }
+
+    /// Ends every guard (request shutdown).
+    pub fn clear(&mut self) {
+        self.active.clear();
+    }
+}
+
+impl<'a> IntoIterator for &'a PropGuards {
+    type Item = &'a (u32, ZStr, u8);
+    type IntoIter = std::slice::Iter<'a, (u32, ZStr, u8)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.active.iter()
     }
 }
