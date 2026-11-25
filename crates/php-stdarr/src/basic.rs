@@ -598,7 +598,8 @@ pub fn array_key_exists<C: RuntimeContext + ?Sized>(
     array: &HashTable,
 ) -> RtResult<bool> {
     Ok(match key {
-        Value::Str(s) => array.get_sym(s.as_bytes()).is_some(),
+        // The key's cached hash, not one computed from its bytes again.
+        Value::Str(s) => array.get_sym_zstr(s).is_some(),
         Value::Int(i) => array.get_int(*i).is_some(),
         Value::Null => {
             ctx.diagnostic(
