@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/pdo/pdo_stmt.c. Similarity metric to original: 12%
+//   Copyright © The PHP Group and Contributors.
+//   Author: Wez Furlong <wez@php.net>
+//           Marcus Boerger <helly@php.net>
+//           Sterling Hughes <sterling@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The fetch engine of `pdo_stmt.c`: `fetch_value()` (with the
 //! `ORACLE_NULLS` / stringify / type-override conversions), `do_fetch()`
 //! for every `PDO::FETCH_*` mode, `fetchAll()` grouping, fetch-mode

@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/streams/userspace.c. Similarity metric to original: 6%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Wez Furlong <wez@thebrainroom.com>
+//            Sara Golemon <pollita@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! User-space stream wrappers (`main/streams/userspace.c`).
 //!
 //! `stream_wrapper_register()` binds a protocol to a PHP class. The VM

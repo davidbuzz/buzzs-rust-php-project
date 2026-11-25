@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqlnd/mysqlnd_ps_codec.c. Similarity metric to original: 20%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Row decoding into PHP values (text protocol `php_mysqlnd_rowp_read_text_protocol`
 //! and binary protocol `php_mysqlnd_rowp_read_binary_protocol` +
 //! `mysqlnd_ps_fetch_functions`) and the statistics they collect

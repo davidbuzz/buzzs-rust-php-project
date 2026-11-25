@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src sapi/cgi/cgi_main.c. Similarity metric to original: 6%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Stig Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            FastCGI: Ben Mansell <php@slimyhorror.com>
+//            Shane Caraveo <shane@caraveo.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `php-cgi` binary: the CGI/1.1 and `FastCGI` SAPI (ref:
 //! `sapi/cgi/cgi_main.c`, `main/fastcgi.c`).
 //!

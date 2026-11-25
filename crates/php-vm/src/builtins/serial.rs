@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/var_unserializer.re. Similarity metric to original: 6%
+//   Copyright © The PHP Group and Contributors. Author: Sascha Schumann <sascha@schumann.cx>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `serialize()` / `unserialize()` (`ext/standard/var.c`,
 //! `ext/standard/var_unserializer.re`).
 //!

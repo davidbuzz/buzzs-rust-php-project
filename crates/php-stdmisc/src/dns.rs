@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/dns.c. Similarity metric to original: 10%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: The typical suspects
+//            Pollita <pollita@php.net>
+//            Marcus Boerger <helly@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! DNS functions (`ext/standard/dns.c`): `dns_check_record`/`checkdnsrr`,
 //! `dns_get_record`, `dns_get_mx`/`getmxrr`.
 //!

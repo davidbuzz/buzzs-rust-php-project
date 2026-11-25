@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mysqlnd/mysqlnd_vio.c. Similarity metric to original: 10%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrey Hristov <andrey@php.net>
+//            Ulf Wendel <uw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Transport (`mysqlnd_vio.c`) and packet framing
 //! (`mysqlnd_protocol_frame_codec.c`): TCP / Unix-socket streams with
 //! optional TLS, read timeouts, 16 MiB packet splitting, sequence-number

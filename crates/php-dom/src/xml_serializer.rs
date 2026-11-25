@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/dom/xml_serializer.c. Similarity metric to original: 16%
+//   Copyright © The PHP Group and Contributors. Authors: Nora Dossche <ndossche@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The spec-compliant XML serializer (`xml_serializer.c`) used by the
 //! `Dom\XMLDocument` save handlers and the XML branch of `innerHTML`.
 //!

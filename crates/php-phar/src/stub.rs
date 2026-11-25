@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/phar/stub.h. Similarity metric to original: 52%
+//   Copyright © The PHP Group and Contributors. Authors: Gregory Beaver <cellog@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Stubs: the default stub (`phar_create_default_stub()` / `stub.h`,
 //! byte-exact with php-src master) and user stub normalisation.
 

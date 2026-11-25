@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/pdo/pdo_dbh.c. Similarity metric to original: 15%
+//   Copyright © The PHP Group and Contributors.
+//   Author: Wez Furlong <wez@php.net>
+//           Marcus Boerger <helly@php.net>
+//           Sterling Hughes <sterling@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `PDO` class (`pdo_dbh.c`): connection construction (DSN aliases,
 //! `uri:` DSNs, persistent connections, driver-specific subclasses),
 //! attributes, transactions, `exec`/`prepare`/`query`/`quote` and the

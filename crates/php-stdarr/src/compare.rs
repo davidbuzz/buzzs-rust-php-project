@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/array.c. Similarity metric to original: 7%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andi Gutmans <andi@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            Rasmus Lerdorf <rasmus@php.net>
+//            Andrei Zmievski <andrei@php.net>
+//            Stig Venaas <venaas@php.net>
+//            Jason Greene <jason@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The bucket comparison functions of `ext/standard/array.c`
 //! (`php_array_key_compare*`, `php_array_data_compare*`,
 //! `php_array_natural*`), `strnatcmp_ex`, and the user-callback comparators

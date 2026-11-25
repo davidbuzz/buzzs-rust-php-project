@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/pcre/php_pcre.c. Similarity metric to original: 7%
+//   Copyright © The PHP Group and Contributors. Author: Andrei Zmievski <andrei@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Pattern parsing (`/body/flags`) and compiled regular expressions
 //! (`pcre_get_compiled_regex_cache_ex` in `php_pcre.c`).
 

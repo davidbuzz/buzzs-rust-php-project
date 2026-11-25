@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/math.c. Similarity metric to original: 14%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Jim Winstead <jimw@php.net>
+//            Stig Sæther Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            PHP 4.0 patches by Thies C. Arntzen <thies@thieso.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `round()` (`_php_math_round()`) and `number_format()`
 //! (`_php_math_number_format_ex()` / `_php_math_number_format_long()`) from
 //! `ext/standard/math.c`.

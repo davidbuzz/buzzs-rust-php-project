@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/pack.c. Similarity metric to original: 14%
+//   Copyright © The PHP Group and Contributors. Author: Chris Schneider <cschneid@relog.ch>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `pack()` / `unpack()` — port of `ext/standard/pack.c`.
 //!
 //! The port assumes the reference platform PHP runs on in practice:

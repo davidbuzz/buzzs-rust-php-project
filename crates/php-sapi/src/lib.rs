@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/SAPI.h. Similarity metric to original: 13%
+//   Copyright © The PHP Group and Contributors. Author: Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! What every server API shares (`main/SAPI.h`), independent of the VM and
 //! the value model: the request as the SAPI describes it
 //! (`SG(request_info)`). Each SAPI (CLI, CGI, the built-in server, Apache,

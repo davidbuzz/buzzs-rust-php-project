@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/date/php_date.c. Similarity metric to original: 9%
+//   Copyright © The PHP Group and Contributors. Authors: Derick Rethans <derick@derickrethans.nl>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! PHP-function-shaped entry points built on the timelib port.
 //!
 //! These mirror the bodies of `php_date.c`'s functions and methods so the

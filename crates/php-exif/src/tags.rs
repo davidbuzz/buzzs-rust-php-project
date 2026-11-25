@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/exif/exif.c. Similarity metric to original: 16%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Marcus Boerger <helly@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Tag-name tables, generated from the `tag_table_*` arrays in
 //! `ext/exif/exif.c` (each table ends with the `TAG_TABLE_END` entries,
 //! whose `TAG_NONE`/`TAG_COMPUTED_VALUE` tags wrap to `0xFFFF`/`0xFFFE`

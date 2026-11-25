@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/string.c. Similarity metric to original: 8%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Stig Sæther Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! String transformations from `ext/standard/string.c`: case mapping,
 //! trimming, padding, wrapping, splitting, translation and replacement,
 //! plus the path helpers `basename()`/`dirname()`/`pathinfo()`.

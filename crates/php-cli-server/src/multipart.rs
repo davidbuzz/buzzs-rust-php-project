@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/rfc1867.c. Similarity metric to original: 16%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Jani Taskinen <jani@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `multipart/form-data` request bodies: a port of `main/rfc1867.c`
 //! (`rfc1867_post_handler` and the libapreq-derived multipart buffer).
 //!

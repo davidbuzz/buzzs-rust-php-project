@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/mbstring/mbstring.c. Similarity metric to original: 6%
+//   Copyright © The PHP Group and Contributors.
+//   Author: Tsukada Takuya <tsukada@fminn.nagano.nagano.jp>
+//           Rui Hirokawa <hirokawa@php.net>
+//           Hironori Sato <satoh@jpnnet.com>
+//           Shigeru Kanemoto <sgk@happysize.co.jp>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Encoding detection (`mb_guess_encoding_for_strings`), `mb_detect_encoding`,
 //! `mb_convert_encoding` and the core of `mb_convert_variables`.
 //!

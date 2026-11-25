@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/soap/php_http.c. Similarity metric to original: 20%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Brad Lafountain <rodif_bl@yahoo.com>
+//            Shane Caraveo <shane@caraveo.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The HTTP transport of `SoapClient::__doRequest` (`php_http.c`):
 //! request bytes (headers in PHP's order, cookies, basic/digest
 //! authentication, proxies, compression), response reading (status,

@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/opcache/zend_accelerator_module.c. Similarity metric to original: 7%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andi Gutmans <andi@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            Stanislav Malyshev <stas@zend.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `ext/opcache` core for phprust: the compiled-script cache behind
 //! `opcache.enable`, its file cache, invalidation and status.
 //!

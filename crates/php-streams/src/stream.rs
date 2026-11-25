@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src main/streams/streams.c. Similarity metric to original: 10%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Wez Furlong <wez@thebrainroom.com>
+//            Borrowed code from:
+//            Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Jim Winstead <jimw@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The core stream object (`php_stream`, `main/streams/streams.c`).
 //!
 //! A [`Stream`] owns a [`StreamOps`] implementation (the C `php_stream_ops`

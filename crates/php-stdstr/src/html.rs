@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/html.c. Similarity metric to original: 24%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Jaakko Hyvätti <jaakko.hyvatti@iki.fi>
+//            Wez Furlong <wez@thebrainroom.com>
+//            Gustavo Lopes <cataphract@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `htmlspecialchars()`, `htmlentities()`, their decoders and
 //! `get_html_translation_table()` — a port of `ext/standard/html.c`.
 //!
