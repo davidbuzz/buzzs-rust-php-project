@@ -2531,6 +2531,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
     };
     for (a, slot) in args.iter_mut().zip(slots) {
         let Some(Value::Int(v)) = slot.get() else {
+            not_int_argument(uf);
             return false;
         };
         *a = *v;
@@ -2554,6 +2555,37 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
         crate::exec::spec::put_tmp(slot, Value::Int(r));
     }
     true
+}
+
+/// The plain calls of a function not compiled whole yet, counted by
+/// [`compiled`] as `jit::native_call` counts its own toward compiling the
+/// function (its `NATIVE_HOT_CALLS`).
+const NATIVE_TRY_CALLS: u32 = 100;
+
+/// [`compiled`] of a call that passed a parameter something other than an
+/// int, which native code cannot take: while the function is still being
+/// counted ([`crate::func::CallShape::native`] 0), the call counts toward
+/// it as `jit::native_call` counts an int call, and when this call reaches
+/// the count first, the function is given up ([`super::jit::NATIVE_REFUSED`]):
+/// its later calls are not looked at again. Before, such a call returned
+/// before `native_call` counted anything, so a function called with
+/// strings or arrays was never decided on and every call of it paid the
+/// frame lookup and the argument test (53 instructions instead of the 19
+/// of a refused function's call). Whether a function runs as native code
+/// is not observable.
+#[inline(never)]
+fn not_int_argument(uf: &UserFunction) {
+    let shape = &uf.call_shape;
+    if shape.native.get() != 0 {
+        return;
+    }
+    let n = shape.native_count.get() + 1;
+    if n >= NATIVE_TRY_CALLS {
+        shape.native_count.set(0);
+        shape.native.set(super::jit::NATIVE_REFUSED);
+    } else {
+        shape.native_count.set(n);
+    }
 }
 
 /// Whether the prepared call is a builtin's ([`call_native`]).

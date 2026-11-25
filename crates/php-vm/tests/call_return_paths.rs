@@ -702,3 +702,48 @@ NULL
 "#
     );
 }
+
+/// Different functions taking turns at one stack depth, so that each call
+/// readies the pooled frame another function used last: functions of
+/// different numbers of variables and temporaries, a generator, a frame
+/// left by an exception, `get_defined_vars()` and `compact()` in a reused
+/// frame, a function called with ints and with strings, a recursion
+/// beside a smaller function. Each reuse must find its variables
+/// undefined and its defaults bound, and release what the previous call
+/// held at that call's return (php8.5 -n).
+#[test]
+fn alternating_functions_reuse_the_frame_at_each_depth() {
+    let src = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n} "; } }
+function big($a, $b) { $c = $a + 1; $d = $b; $e = $c * 2; $f = [$a]; $g = $e - $c; $h = null; $o = new D("big$a"); if ($g > 1000000) { $h = $f; } return $g; }
+function small($x) { return $x . "!"; }
+function vars($p, $q = 'dq') { $r = $p; return get_defined_vars(); }
+function names($u) { $w = $u * 2; return compact('u', 'w'); }
+function gen($n) { for ($i = 0; $i < $n; $i++) { $v = new D("g$i"); yield $i => $v->n; } }
+function thrower($x) { $t = new D("t$x"); $y = [$x, $x]; throw new Exception("e$x"); }
+function sum3($a, $b, $c) { return $a + $b + $c; }
+function mixed_($a, $b) { return is_int($a) ? $a + $b : $a . $b; }
+for ($i = 0; $i < 3; $i++) {
+  echo big($i, "s"), " ", small($i), " ";
+  echo json_encode(vars($i)), " ", json_encode(names($i)), " ";
+  foreach (gen(2) as $k => $v) { echo "$k=$v "; }
+  echo sum3($i, 1, 2), " ";
+  try { thrower($i); } catch (Exception $e) { echo $e->getMessage(), " "; }
+  echo json_encode(vars("after$i", [1])), " ", small("z"), "\n";
+}
+$acc = 0; $s = '';
+for ($i = 0; $i < 400; $i++) { $s = mixed_("a", $i % 10); $acc = mixed_($acc, $i); }
+echo $s, " ", $acc, "\n";
+function depth($n) { return $n ? depth($n - 1) + small2($n) : 0; }
+function small2($n) { $a = $n; $b = [$a]; return count($b); }
+echo depth(50), " ", depth(3), "\n";
+"#;
+    assert_eq!(
+        run(src),
+        "~big0 1 0! {\"p\":0,\"q\":\"dq\",\"r\":0} {\"u\":0,\"w\":0} 0=g0 ~g0 1=g1 ~g1 3 ~t0 e0 {\"p\":\"after0\",\"q\":[1],\"r\":\"after0\"} z!\n\
+         ~big1 2 1! {\"p\":1,\"q\":\"dq\",\"r\":1} {\"u\":1,\"w\":2} 0=g0 ~g0 1=g1 ~g1 4 ~t1 e1 {\"p\":\"after1\",\"q\":[1],\"r\":\"after1\"} z!\n\
+         ~big2 3 2! {\"p\":2,\"q\":\"dq\",\"r\":2} {\"u\":2,\"w\":4} 0=g0 ~g0 1=g1 ~g1 5 ~t2 e2 {\"p\":\"after2\",\"q\":[1],\"r\":\"after2\"} z!\n\
+         a9 79800\n\
+         50 3\n"
+    );
+}
