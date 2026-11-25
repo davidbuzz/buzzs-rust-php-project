@@ -1524,6 +1524,35 @@ fn this_and_closures() {
     assert_eq!(run(THIS_AND_CLOSURES), "k012k0c 5\nk112k1c 5\nk212k2c 5\n");
 }
 
+const RETURNS_AND_CONSTANTS: &str = r#"<?php
+define('RT', 'rt');
+function first($a) { foreach ($a as $k => $v) { if ($v > 1) { return "$k=$v"; } } return 'none'; }
+function consts() { $x = RT; return $x . RT; }
+for ($i = 0; $i < 3; $i++) { echo first([0, 1, 5]), first([]), consts(), "\n"; }
+"#;
+
+/// A `return` inside a `foreach` frees the iterator with a row of its own
+/// (`scalar::fe_free_on_return`).
+#[test]
+fn foreach_returns_and_constants() {
+    let arrays = op_arrays(RETURNS_AND_CONSTANTS);
+    let mut frees = 0;
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            if let Op::FeFreeOnReturn { .. } = op {
+                assert_eq!(tape[i].op, TOp::FeFreeRetA, "op {i}: {op:?}");
+                frees += 1;
+            }
+        }
+    }
+    assert!(frees >= 1, "{frees}");
+    assert_eq!(
+        run(RETURNS_AND_CONSTANTS),
+        "2=5nonertrt\n2=5nonertrt\n2=5nonertrt\n"
+    );
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];

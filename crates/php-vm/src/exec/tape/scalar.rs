@@ -328,6 +328,11 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             d: u32::try_from(i).ok()?,
             ..plain(TOp::FeFreeA)
         },
+        // The `FE_FREE` before a `return` inside a `foreach` of an array.
+        Op::FeFreeOnReturn { .. } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeFreeRetA)
+        },
         // `(int)`, `(float)`, `(bool)`, `(array)` (`(string)` is the
         // `dims` family's `CastStrT`, or `hot::step_ext`'s).
         Op::Cast {
@@ -569,6 +574,41 @@ pub(super) unsafe fn fe_free(frame: *mut Frame, inst: &Inst) -> bool {
         None => true,
         Some(_) => false,
     }
+}
+
+/// `Op::FeFreeOnReturn` of an array iterator ([`TOp::FeFreeRetA`], the op
+/// at `inst.d`; `hot::step_ext`'s arm): the iterator released as
+/// [`fe_free`] releases it. The generic op runs the destructors the
+/// release queued at once, so this declines when some were pending
+/// already (nothing changed), and when the release queued any (the
+/// iterator gone: `hot::step_ext`, then the generic op, find nothing to
+/// free and run them, as `hot::step_ext`'s own arm does).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_free_on_return(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::FeFreeOnReturn { iter, .. }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    if crate::object::has_pending_destructors() {
+        return false;
+    }
+    let Some(slot) = f.iters.get_mut(iter as usize) else {
+        return false;
+    };
+    match slot {
+        Some(crate::vm::ForeachIter::Array { .. }) => {
+            if let Some(crate::vm::ForeachIter::Array { arr, .. }) = slot.take() {
+                drop(arr);
+            }
+        }
+        None => {}
+        Some(_) => return false,
+    }
+    !crate::object::has_pending_destructors()
 }
 
 /// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.

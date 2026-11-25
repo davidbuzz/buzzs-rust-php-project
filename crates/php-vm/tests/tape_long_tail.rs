@@ -110,3 +110,61 @@ after
 "#
     );
 }
+
+/// `return` inside a `foreach` (`FE_FREE` before the return): arrays by key
+/// and value, nested loops, an array whose release runs destructors before
+/// the returned value is used, iterators, generators and a loop by
+/// reference (the generic op's); constants `define()`d at run time read
+/// into a temporary and into a variable (the run-time cache hit), a name
+/// not yet defined (the `Error`) that is defined later.
+#[test]
+fn foreach_returns_and_runtime_constants() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~D{$this->n} "; } }
+function first($a) { foreach ($a as $k => $v) { if ($v > 1) { return "$k=$v"; } } return 'none'; }
+function nested($a) { foreach ($a as $row) { foreach ($row as $v) { if ($v === 'x') return 'found'; } } return 'no'; }
+function objs() { foreach ([new D(1), new D(2)] as $o) { return $o->n; } }
+function objs2($n) { $a = [new D($n)]; foreach ($a as $o) { unset($a); $o = null; return 'r'; } }
+function iter() { foreach (new ArrayIterator([1, 2]) as $v) { return $v; } }
+function gen() { yield 1; yield 2; }
+function fromgen() { foreach (gen() as $v) { return $v; } }
+function byref() { $a = [1, 2]; foreach ($a as &$v) { return $v; } }
+for ($i = 0; $i < 3; $i++) {
+    echo first([0, 1, 5, 7]), ' ', first([]), ' ', nested([['a'], ['b', 'x']]), ' ', nested([[]]), "\n";
+    echo objs(), "|\n";
+    echo objs2($i), "|\n";
+    echo iter(), fromgen(), byref(), "\n";
+}
+if (!defined('RT')) define('RT', 'rt');
+define('RT_ARR', [1, 2]);
+define('RT_INT', 42);
+function consts() { $x = RT; $y = RT_ARR; return $x . RT . implode(',', $y) . RT_INT . (RT_INT + 1); }
+function late() { try { return LATE_C; } catch (Error $e) { return $e->getMessage(); } }
+function lateTo() { try { $v = LATE_D; return $v; } catch (Error $e) { return $e->getMessage(); } }
+for ($i = 0; $i < 3; $i++) {
+    echo consts(), ' ', late(), ' ', lateTo(), "\n";
+    if ($i == 1) { define('LATE_C', 'c'); define('LATE_D', 'd'); }
+}
+function caseins() { return \RT; }
+echo caseins(), "\n";
+"#),
+        r#"2=5 none found no
+~D2 ~D1 1|
+~D0 r|
+111
+2=5 none found no
+~D2 ~D1 1|
+~D1 r|
+111
+2=5 none found no
+~D2 ~D1 1|
+~D2 r|
+111
+rtrt1,24243 Undefined constant "LATE_C" Undefined constant "LATE_D"
+rtrt1,24243 Undefined constant "LATE_C" Undefined constant "LATE_D"
+rtrt1,24243 c d
+rt
+"#
+    );
+}

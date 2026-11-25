@@ -1356,6 +1356,7 @@ tape_ops! {
         JmpSetT = (scalar::jmp_set_tmp, 1, branch_poll_f),
         FreeT = (scalar::free_tmp, 1, plain_f),
         MatchJ = (scalar::match_jump, 1, switch_f),
+        FeFreeRetA = (scalar::fe_free_on_return, 1, poll_f),
 
         // ---- end of scalar ----
         //
