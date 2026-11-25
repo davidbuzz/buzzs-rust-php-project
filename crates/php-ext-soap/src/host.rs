@@ -823,6 +823,9 @@ impl SoapHost for VmHost<'_> {
     }
 
     fn server_var(&mut self, name: &str) -> Option<Vec<u8>> {
+        // soap.c: `zend_is_auto_global()` creates a still-armed JIT
+        // `$_SERVER` first.
+        self.vm.is_auto_global(b"_SERVER");
         let server = global_array(self.vm, b"_SERVER")?;
         match server.get_str(name.as_bytes()).map(Value::deref) {
             Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),

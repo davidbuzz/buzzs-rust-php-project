@@ -158,9 +158,60 @@ fn startup_warning(vm: &mut Vm, message: &str, docref: bool) {
 }
 
 fn set_global(vm: &mut Vm, name: &str, arr: ZArray) {
+    set_global_bytes(vm, name.as_bytes(), arr);
+}
+
+fn set_global_bytes(vm: &mut Vm, name: &[u8], arr: ZArray) {
     let mut g = vm.globals.borrow_mut();
-    let i = g.find_or_add(name.as_bytes()) as usize;
+    let i = g.find_or_add(name) as usize;
     g.slots[i] = Some(Value::Array(arr));
+}
+
+/// The JIT auto-globals (`$_SERVER`, `$_ENV`, `$_REQUEST`) of `JIT_NAMES`
+/// as the request's startup built them, until compiled code names one
+/// (or an extension asks for it) and [`create_armed`] puts it in the
+/// global symbol table.
+const JIT_NAMES: [&str; 3] = ["_SERVER", "_ENV", "_REQUEST"];
+
+thread_local! {
+    static ARMED: std::cell::RefCell<[Option<ZArray>; 3]> =
+        const { std::cell::RefCell::new([None, None, None]) };
+}
+
+/// The armed auto-global's creation callback (`php_auto_globals_create_*`):
+/// the array request startup built for it.
+fn create_armed(vm: &mut Vm, name: &[u8]) {
+    let Some(i) = JIT_NAMES.iter().position(|n| n.as_bytes() == name) else {
+        return;
+    };
+    let arr = ARMED.with(|a| a.borrow_mut()[i].take()).unwrap_or_default();
+    set_global_bytes(vm, name, arr);
+}
+
+/// `php_startup_auto_globals()` and `zend_activate_auto_globals()`: the
+/// auto-globals in registration order, `$_GET`, `$_POST`, `$_COOKIE`,
+/// `$_SERVER`, `$_ENV`, `$_REQUEST`, `$_FILES`, where under
+/// `auto_globals_jit` the middle three are armed instead of created (and
+/// so absent from `$GLOBALS` and `get_defined_vars()` until a script names
+/// them); `$_SERVER` is not JIT with `register_argc_argv` (the request has
+/// no `argc`). `main/php_variables.c`, `Zend/zend_compile.c`.
+fn activate_auto_globals(vm: &mut Vm, [get, post, cookie, files]: [ZArray; 4], jit: [ZArray; 3]) {
+    set_global(vm, "_GET", get);
+    set_global(vm, "_POST", post);
+    set_global(vm, "_COOKIE", cookie);
+    let auto_jit = vm.ini_bool("auto_globals_jit");
+    let server_jit = auto_jit && !vm.ini_bool("register_argc_argv");
+    for (i, arr) in jit.into_iter().enumerate() {
+        let name = JIT_NAMES[i];
+        if (i == 0 && server_jit) || (i > 0 && auto_jit) {
+            ARMED.with(|a| a.borrow_mut()[i] = Some(arr));
+            vm.arm_auto_global(name.as_bytes(), create_armed);
+        } else {
+            ARMED.with(|a| a.borrow_mut()[i] = None);
+            set_global(vm, name, arr);
+        }
+    }
+    set_global(vm, "_FILES", files);
 }
 
 fn register(vm: &mut Vm, name: &[u8], value: Value, track: &mut ZArray, cookie: bool) {
@@ -807,13 +858,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         }
     }
 
-    set_global(vm, "_GET", get);
-    set_global(vm, "_POST", post);
-    set_global(vm, "_COOKIE", cookie);
-    set_global(vm, "_FILES", files);
-    set_global(vm, "_SERVER", server);
-    set_global(vm, "_ENV", env);
-    set_global(vm, "_REQUEST", request);
+    activate_auto_globals(vm, [get, post, cookie, files], [server, env, request]);
 }
 
 /// The SAPI's part of `request_parse_body()` ([`php_vm::ext::ParseBodyFn`],

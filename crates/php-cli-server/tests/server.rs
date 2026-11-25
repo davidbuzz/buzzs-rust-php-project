@@ -595,3 +595,51 @@ fn http_response_code_after_output_and_truncation() {
     assert!(r.starts_with("HTTP/1.1 296 "), "{r}");
     assert_eq!(split(&r).1, "int(200)\nint(200)\nint(296)\n");
 }
+
+/// Under `auto_globals_jit` (the default) `$_SERVER`, `$_ENV` and
+/// `$_REQUEST` exist only once compiled code names them, after the other
+/// auto-globals; without it they are created in registration order. Every
+/// request starts armed again. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn jit_auto_globals_appear_when_named() {
+    let files = [
+        (
+            "a.php",
+            "<?php echo json_encode(array_keys(get_defined_vars())), \"\\n\";",
+        ),
+        (
+            "b.php",
+            "<?php echo json_encode(array_keys(get_defined_vars())), \" \", $_SERVER[\"REQUEST_URI\"], \"\\n\"; include \"c.inc\";",
+        ),
+        (
+            "c.inc",
+            "<?php echo json_encode(array_keys($GLOBALS)), \" \", count($_ENV) >= 0 ? \"env\" : \"\", \"\\n\";",
+        ),
+    ];
+    let get = |port: u16, f: &str| {
+        let r = request(
+            port,
+            &format!("GET /{f}.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"),
+        );
+        split(&r).1.to_string()
+    };
+    let srv = start("jitag", &files, None);
+    assert_eq!(
+        get(srv.port, "a"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\"]\n"
+    );
+    assert_eq!(
+        get(srv.port, "b"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\"] /b.php\n[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\",\"_ENV\"] env\n"
+    );
+    assert_eq!(
+        get(srv.port, "a"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\"]\n"
+    );
+    drop(srv);
+    let srv = start_with("jitoff", &files, None, &["-d", "auto_globals_jit=0"]);
+    let all = "[\"_GET\",\"_POST\",\"_COOKIE\",\"_SERVER\",\"_ENV\",\"_REQUEST\",\"_FILES\"]";
+    assert_eq!(get(srv.port, "a"), format!("{all}\n"));
+    assert_eq!(get(srv.port, "b"), format!("{all} /b.php\n{all} env\n"));
+}
