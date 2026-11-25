@@ -1389,6 +1389,11 @@ pub(super) struct Prepared {
     /// callback's (`call_user_func()`, [`prepare_user_call`]), which has
     /// none unless it is a closure.
     closure: bool,
+    /// Whether the callee frame's closure may have bound variables
+    /// (`use`) for [`enter`] to copy in ([`bind_closure_vars`]): known
+    /// by [`prepare_closure`], which has the closure's data at hand;
+    /// assumed by the callback paths that set `closure`.
+    binds: bool,
     /// The constructor call of `new` (the pending call's `is_ctor`).
     ctor: bool,
 }
@@ -1452,6 +1457,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         calls_len: caller.calls.len(),
         fcall: true,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1501,6 +1507,7 @@ pub(super) fn prepare_quick(
         calls_len: caller.calls.len(),
         fcall: true,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1717,6 +1724,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
         calls_len,
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1763,6 +1771,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1817,6 +1826,7 @@ fn prepare_native_method(
         calls_len,
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1901,6 +1911,7 @@ pub(super) fn prepare_relative_static(
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: false,
     })
 }
@@ -1956,6 +1967,9 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
         &mut frame.closure,
         if d.fake { None } else { Some(o.clone()) },
     );
+    // A closure without `use`s (or a fake one, which `enter` would not
+    // bind from) spares `enter` the second look at its data.
+    let binds = !d.fake && !d.vars.is_empty();
     drop(internal);
     Some(Prepared {
         limit,
@@ -1964,6 +1978,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds,
         ctor: false,
     })
 }
@@ -2043,6 +2058,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
         calls_len: caller.calls.len(),
         fcall: false,
         closure: false,
+        binds: false,
         ctor: true,
     }))
 }
@@ -2395,7 +2411,9 @@ pub(super) fn enter(
     }
     // The `RECV`s of the passed arguments have nothing left to do.
     frame.ip = uf.plain_first_op(n);
-    if prep.closure {
+    // (Its own borrow of the closure's data and the downcast: ~30
+    // instructions a closure call, for nothing without `use`s.)
+    if prep.binds {
         bind_closure_vars(frame);
     }
     // Released by `Frame::release_direct` at its return.
@@ -3059,6 +3077,7 @@ pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds: true,
         ctor: false,
     })
 }
@@ -3128,6 +3147,7 @@ fn user_call_static(
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds: true,
         ctor: false,
     })
 }
@@ -3186,6 +3206,7 @@ fn user_call_function(
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds: true,
         ctor: false,
     })
 }
@@ -3245,6 +3266,7 @@ fn user_call_method(
         calls_len: caller.calls.len(),
         fcall: false,
         closure: true,
+        binds: true,
         ctor: false,
     })
 }
@@ -3288,6 +3310,7 @@ fn user_call_object(
             calls_len,
             fcall: false,
             closure: true,
+            binds: true,
             ctor: false,
         });
     }
@@ -3310,6 +3333,7 @@ fn user_call_object(
         calls_len,
         fcall: false,
         closure: true,
+        binds: true,
         ctor: false,
     })
 }

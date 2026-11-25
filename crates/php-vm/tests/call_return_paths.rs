@@ -596,3 +596,41 @@ NULL
 "#
     );
 }
+
+/// Closures of each kind called through the prepared call: without and
+/// with `use`d variables (by value, by reference, an arrow function's
+/// captures), fake closures of a function, a static closure, one bound to
+/// `$this`, and closures as `call_user_func()` callbacks.
+#[test]
+fn closure_calls_bind_their_variables() {
+    assert_eq!(
+        run(r#"<?php
+function plain($a) { return "p$a"; }
+class K { public $v = 'k'; function get() { return function ($a) { return $this->v . $a; }; } }
+function run() {
+    $u = 'u'; $r = 0;
+    $none = function ($a) { return "n$a"; };
+    $uses = function ($a) use ($u) { return "$u$a"; };
+    $byref = function ($a) use (&$r) { $r++; return "r$r$a"; };
+    $arrow = fn($a) => $u . $a . 'f';
+    $fake = plain(...);
+    $fake2 = Closure::fromCallable('plain');
+    $static = static function ($a) { return "s$a"; };
+    $bound = (new K)->get();
+    $out = '';
+    for ($i = 0; $i < 3; $i++) {
+        $out .= $none($i) . $uses($i) . $byref($i) . $arrow($i) . $fake($i) . $fake2($i)
+            . $static($i) . $bound($i) . call_user_func($uses, $i) . call_user_func($none, $i) . "\n";
+        $u .= '+';
+    }
+    return $out . $r;
+}
+echo run(), "\n";
+"#),
+        r#"n0u0r10u0fp0p0s0k0u0n0
+n1u1r21u1fp1p1s1k1u1n1
+n2u2r32u2fp2p2s2k2u2n2
+3
+"#
+    );
+}
