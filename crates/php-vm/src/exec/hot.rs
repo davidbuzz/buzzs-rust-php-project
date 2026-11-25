@@ -159,6 +159,10 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::InArray { .. }
             | Op::FeFreeOnReturn { .. }
             | Op::RecvInit { .. }
+            | Op::RecvDefault {
+                val: Operand::Tmp(_),
+                ..
+            }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
                 ..
@@ -1026,11 +1030,24 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             }
         }
         // `RECV_INIT` of a parameter the call did not pass, whose default
-        // is a literal (the `RecvDefault` right after it).
+        // is a literal (the `RecvDefault` right after it); one computed by
+        // code (a constant, a class constant, an expression) is computed
+        // by the ops that follow, so the `RecvInit` only goes on to them.
         Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
             Some(next) => ip = next,
+            None if (n as usize) >= f.num_args() => {}
             None => return DECLINED,
         },
+        // The default those ops computed into a temporary, bound.
+        Op::RecvDefault {
+            n,
+            cv,
+            val: Operand::Tmp(t),
+        } => {
+            if !recv_computed_default_in(f, n, cv, t) {
+                return DECLINED;
+            }
+        }
         _ => return DECLINED,
     }
     ip
@@ -1141,6 +1158,51 @@ fn recv_literal_default_in(
     debug_assert!(old.is_none());
     drop(old);
     Some(at + 2)
+}
+
+/// `ZEND_RECV_INIT`'s binding of a default computed by code (the
+/// `RecvDefault` of temporary `t` after a constant, a class constant or an
+/// expression was evaluated into it) to parameter `n`'s compiled variable
+/// `cv`, as `Vm::op_recv_default` binds it: the value moves out of the
+/// temporary (`Vm::read`) into the variable. `false`, having changed
+/// nothing, when the declared type would coerce or reject it (the
+/// generic op converts it or throws the `TypeError`), the temporary holds
+/// a reference, a symbol table is attached, or the variable is not
+/// undefined. Before, each such default left the tape twice (19,036
+/// times a request of a large framework application: the `RecvInit`,
+/// then this op, to `Vm::run`).
+#[inline]
+fn recv_computed_default_in(f: &mut Frame, n: u32, cv: u32, t: u32) -> bool {
+    if f.symtab_attached {
+        return false;
+    }
+    let Some(value) = f.tmps.get(t as usize) else {
+        return false;
+    };
+    if matches!(value, Value::Reference(_)) {
+        return false;
+    }
+    let Some(uf) = f.ufunc.as_ref() else {
+        return false;
+    };
+    let Some(param) = uf.params.get(n as usize) else {
+        return false;
+    };
+    if let Some(ty) = &param.ty {
+        if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
+            return false;
+        }
+    }
+    if f.cvs.get(cv as usize).is_none_or(CvSlot::is_some) {
+        return false;
+    }
+    let value = std::mem::take(&mut f.tmps[t as usize]);
+    if let Some(slot) = f.cvs.get_mut(cv as usize) {
+        let old = slot.set(Some(value));
+        debug_assert!(old.is_none());
+        drop(old);
+    }
+    true
 }
 
 /// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`

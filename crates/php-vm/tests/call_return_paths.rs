@@ -747,3 +747,32 @@ echo depth(50), " ", depth(3), "\n";
          50 3\n"
     );
 }
+
+/// Defaults computed by code (constants, class constants, an expression of
+/// them, `new` in an initializer, an undefined constant) of parameters a
+/// call did not pass, typed ones coerced or rejected, a named-argument gap
+/// filled: the `RecvInit` goes on to the default's code and its
+/// `RecvDefault` binds the computed value (php8.5 -n).
+#[test]
+fn computed_parameter_defaults() {
+    let src = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n} "; } }
+class K { const C = [1, 2]; const S = 'ks'; }
+const MINE = 42;
+function c1($x, $y = E_ALL, $z = PHP_EOL, $w = K::C, $v = K::S . '!', $u = MINE * 2) { return [$x, $y, $z, $w, $v, $u]; }
+function c2(float $f = MINE, ?string $s = K::S, int|string $m = MINE) { var_dump($f, $s, $m); }
+function c3($o = new D('dflt')) { echo "in "; $o = 1; echo "reset "; }
+function c4(int $i = K::S) { return $i; }
+function c5($a, $b = UNDEFINED_CONST_X) { return $a; }
+function c6($a, $b = [MINE, K::S], $c = null) { return func_get_args(); }
+for ($i = 0; $i < 3; $i++) {
+  echo json_encode(c1($i)), json_encode(c1($i, 5)), json_encode(c1($i, 5, 6, 7, 8, 9)), "\n";
+  c2(); c2(1.5, null, 'x');
+  c3(); echo "after\n";
+  try { c4(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+  try { c5(1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+  echo json_encode(c6(1)), json_encode(c6(1, 2)), json_encode(c6(1, c: 3)), "\n";
+}
+"#;
+    assert_eq!(run(src), "[0,30719,\"\\n\",[1,2],\"ks!\",84][0,5,\"\\n\",[1,2],\"ks!\",84][0,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n[1,30719,\"\\n\",[1,2],\"ks!\",84][1,5,\"\\n\",[1,2],\"ks!\",84][1,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n[2,30719,\"\\n\",[1,2],\"ks!\",84][2,5,\"\\n\",[1,2],\"ks!\",84][2,5,6,7,8,9]\nfloat(42)\nstring(2) \"ks\"\nint(42)\nfloat(1.5)\nNULL\nstring(1) \"x\"\nin ~dflt reset after\nc4(): Argument #1 ($i) must be of type int, string given, called in t.php on line 15\nUndefined constant \"UNDEFINED_CONST_X\"\n[1][1,2][1,[42,\"ks\"],3]\n");
+}
