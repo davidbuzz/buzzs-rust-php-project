@@ -41,6 +41,68 @@ the same ground is not covered twice, and add a row when a change lands.
 Our front end (lex/parse/compile, ≈1.2G of route:list) is close to C's.
 The gap is execution.
 
+## Where the remaining gap is (measured 25 Nov 2026, against C 8.5)
+
+The unit tests take 180G instructions here and 50G under C 8.5. By
+component (`perf record` of the run, grouped by symbol):
+
+| Share | Component |
+|---|---|
+| 25% | tape interpreter (`run_tape`, `run_call`, `step_ext`) |
+| 13% | other VM work (property and place walks, classes, misc) |
+| 9% | value drop and clone (reference counts) |
+| 6% | call machinery |
+| 8% | lexer, parser and compiler |
+| 3% | each: GC, hash tables, frames |
+
+Per operation, with the JIT off (instructions, ours / C 8.5):
+
+| Operation | ours / C 8.5 |
+|---|---|
+| empty loop | 27 / 34 |
+| `$x + $i` | 59 / 71 |
+| `$y = $s` (string copy) | 104 / 62 |
+| `$a['k']` | 169 / 123 |
+| `$o->p` | 189 / 84 |
+| `$o->arr['k']` | 475 / 174 |
+| `$s . 'x'` | 455 / 238 |
+| `if ($s === 'abc')` | 228 / 101 |
+| `isset($a['k'])` | 231 / 118 |
+| `$a['z'] ?? null` | 578 / 174 |
+| `f()` | 747 / 169 |
+| `$o->m()` | 1,127 / 204 |
+
+Integer work is at C's level. Anything touching reference-counted values
+(strings, arrays, objects) is 2–3× C, and every call costs about 690
+instructions more than C's.
+
+A census of the tape's exits from its core loop in one unit-test run
+(169M) puts calls and returns first: `Return` 29.9M, `InitMethodCall`
+25.3M, `DoCall` 10.7M, frameless calls 10.4M, static and function calls
+14.4M. After them come ops the core loop does not run itself (class
+constants 5.5M, `instanceof` 3.8M, `foreach` start and end 7M, `$this`
+3.3M) and string comparisons on the slow step. The patch for that census
+is `slowcount-tape.diff` (run with `DBG_OPS=1 DBG_TAPE=1`); apply it to
+`crates/php-vm` and `php-cli`'s `main.rs` only, and revert it with the
+same patch.
+
+So the gap is not one thing. The plan, in order of instructions at
+stake:
+
+1. **The call protocol** (~20G): preparing, readying the frame, sending,
+   entering and returning, outside the core loop.
+2. **Per-site caches** for method calls, class constants and static
+   properties. These use a cache per name with checks, where php-src
+   reads a run-time cache slot per opline.
+3. **Reference-counted values in the core loop**: string comparison and
+   assignment, property reads, the release of objects (the GC's
+   possible-root check).
+4. **Beyond that**, closing the gap to C needs architecture work, not
+   more fast paths. One route is a baseline JIT for whole functions: the
+   trace JIT already beats C on hot loops. Another is a leaner frame and
+   dispatch, with guaranteed tail calls (nightly Rust's `become`). Both
+   are decisions for the project's owner.
+
 ## Calls
 
 The biggest lever, because Laravel is all namespaced code calling small
