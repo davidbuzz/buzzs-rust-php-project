@@ -1306,9 +1306,14 @@ impl Vm {
                                 break 'slow;
                             };
                             let lits: &[Value] = &code.literals;
-                            let next = hot::step(f, ops, lits, at);
+                            let mut next = hot::step(f, ops, lits, at);
                             if next == hot::DECLINED {
-                                break 'slow;
+                                // A variable holding a reference
+                                // (`exec/spec/refs.rs`), out of line.
+                                next = spec::step_ref(f, ops, lits, at);
+                                if next == hot::DECLINED {
+                                    break 'slow;
+                                }
                             }
                             ip = next;
                             if Self::safe_point_due() {
