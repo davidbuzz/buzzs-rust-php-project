@@ -1664,6 +1664,42 @@ pub(super) fn read_prop_dims_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
     Some(v)
 }
 
+/// The `Is`-mode read of `$this->name[d1]...[dn]` / `$cv->name[...]`
+/// (`$this->map[$k][$j] ?? d`) that [`read_prop_dims_in`] did not take,
+/// on the same property cache hit: a key missing on the way, or a null or
+/// `bool`/`int`/`float` container, gives null silently
+/// (`ZEND_FETCH_DIM_IS`, [`super::dims::is_dims_value`]); every offset
+/// must be an int or a string. A consumed string offset is released.
+/// `None`, nothing consumed, for the generic fetch (a string offset,
+/// `ArrayAccess`, a property the cache does not hold: `__get`, hooks).
+#[inline(never)]
+pub(super) fn read_prop_dims_is_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ, 0)?;
+    let segs = prop_dim_segs(f, pid)?;
+    if !super::dims::plain_dims(f, segs) {
+        return None;
+    }
+    let dyn_prop = dyn_name(f, &hit);
+    if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {
+        return None;
+    }
+    let slot = hit.slot;
+    let v = with_hit_obj(f, &hit, |od| {
+        if let Some(name) = dyn_prop {
+            let table = od.dynamic.try_borrow().ok()?;
+            let r = super::dims::is_dims_value(f, Some(table.as_deref()?.get_zstr(name)?), segs);
+            drop(table);
+            return r;
+        }
+        let slots = od.slots.try_borrow().ok()?;
+        let r = super::dims::is_dims_value(f, Some(slots.get(slot)?.as_ref()?), segs);
+        drop(slots);
+        r
+    })?;
+    super::release_place_str_tmps(f, pid);
+    Some(v)
+}
+
 /// `isset($this->name[d1]...[dn])` / `empty(...)` (and on `$cv->name`) of
 /// place `pid` of frame `f` on a property cache hit for `isset()`:
 /// `ZEND_FETCH_OBJ_IS` of an initialized declared slot or an existing
@@ -2000,13 +2036,23 @@ impl Vm {
             // `$this->a->b`, `$list[$k]->name` & co.
             return read_chain_in(f, pid);
         }
-        if let Some(v) = read_prop_dims_in(f, pid) {
+        // A hit; in `Is` mode also a missing key (`?? d`).
+        let read = |f: &mut Frame| {
+            read_prop_dims_in(f, pid).or_else(|| {
+                if mode == FetchMode::Is {
+                    read_prop_dims_is_in(f, pid)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(v) = read(f) {
             return Some(v);
         }
         if !self.prop_head_refill(pid) {
             return None;
         }
-        read_prop_dims_in(self.user_frame_mut()?, pid)
+        read(self.user_frame_mut()?)
     }
 
     /// `isset()` / `empty()` of `$this->name[d1]...[dn]` / `$cv->name[...]`
@@ -2015,7 +2061,15 @@ impl Vm {
     pub(crate) fn isset_prop_dims_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
         let f = self.user_frame_mut()?;
         if !is_prop_dims_place(f, pid) {
-            return None;
+            // `isset($this->a->b)`, `isset($list[$k]->name)`: the chain's
+            // read on its cache hits (an existing, initialized property:
+            // no `__isset`), then the value tested.
+            let v = read_chain_in(f, pid)?;
+            return if empty {
+                plain_truth(&v).map(|t| !t)
+            } else {
+                Some(!v.is_null())
+            };
         }
         if let Some(r) = isset_prop_dims_in(f, pid, empty) {
             return Some(r);

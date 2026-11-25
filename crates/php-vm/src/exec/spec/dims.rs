@@ -1104,7 +1104,7 @@ sx ta
 /// deprecation on the generic path); a string or object container
 /// (string offsets, `ArrayAccess`) gives `None`, as does a borrowed
 /// reference.
-fn is_dims_value(f: &Frame, cur: Option<&Value>, segs: &[Seg]) -> Option<Value> {
+pub(super) fn is_dims_value(f: &Frame, cur: Option<&Value>, segs: &[Seg]) -> Option<Value> {
     let Some((Seg::Dim(dim), rest)) = segs.split_first() else {
         return match (segs, cur) {
             ([], None) => Some(Value::Null),
@@ -1131,7 +1131,7 @@ fn is_dims_value(f: &Frame, cur: Option<&Value>, segs: &[Seg]) -> Option<Value> 
 
 /// Whether every segment of `segs` is a dimension whose offset operand
 /// peeks as an int or a string in frame `f` ([`dim_ref_in`]).
-fn plain_dims(f: &Frame, segs: &[Seg]) -> bool {
+pub(super) fn plain_dims(f: &Frame, segs: &[Seg]) -> bool {
     segs.iter()
         .all(|s| matches!(s, Seg::Dim(d) if dim_ref_in(f, *d).is_some()))
 }
@@ -1356,4 +1356,39 @@ pub(in crate::exec) fn key_exists_in(
         put_tmp(slot, Value::Bool(found));
     }
     true
+}
+
+/// `isset()` (`empty` false) or `empty()` of `$cv[d1]...[dn]` (place
+/// `place` of frame `f`, two or more offsets: one is
+/// [`Op::IssetDimCv`](crate::opcode::Op::IssetDimCv)), every offset an int
+/// or a string: the `ZEND_FETCH_DIM_IS` chain and
+/// `ZEND_ISSET_ISEMPTY_DIM_OBJ` on the last container ([`is_dims_value`]:
+/// a missing key, an undefined variable or a scalar container on the way
+/// is not set). Consumed string offsets are released. `None`, nothing
+/// changed, for a string offset, `ArrayAccess`, an object whose truth its
+/// class decides, or a frame with an attached symbol table.
+#[inline(never)]
+pub(in crate::exec) fn isset_cv_dims_in(
+    f: &mut Frame,
+    cv: u32,
+    place: PlaceId,
+    empty: bool,
+) -> Option<bool> {
+    if f.symtab_attached {
+        return None;
+    }
+    let r = {
+        let segs = f.code.places.get(place as usize)?.segs.as_slice();
+        if segs.is_empty() || !plain_dims(f, segs) {
+            return None;
+        }
+        let v = is_dims_value(f, f.cvs.get(cv as usize)?.get(), segs)?;
+        if empty {
+            !super::plain_truth(&v)?
+        } else {
+            !v.is_null()
+        }
+    };
+    release_place_str_tmps(f, place);
+    Some(r)
 }

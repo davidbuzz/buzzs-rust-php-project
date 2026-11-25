@@ -204,6 +204,77 @@ array_key_exists(): Argument #2 ($array) must be of type array, null given
     );
 }
 
+/// `isset` / `empty` / `??` of two- to four-offset paths on a variable and on `$this->p`, and of `$this->a->b`: hits, misses, magic and ArrayAccess.
+#[test]
+fn nested_isset_paths() {
+    assert_eq!(
+        run(r#"<?php
+class Inner { public $b = 'B'; public $n = null; public ?int $typed; public $z = 0; }
+class M { private $d = ['q' => 1]; function __get($n) { echo "__get($n) "; return $this->d; } function __isset($n) { echo "__isset($n) "; return $n === 'magic'; } }
+class O {
+  public $p = ['a' => ['b' => [1 => 'one', 'n' => null]], 'z' => 0];
+  public $a; public $m; public $nul = null; public $ao;
+  function __construct() { $this->a = new Inner; $this->m = new M; $this->ao = new ArrayObject(['k' => ['j' => 1]]); }
+  function t($k, $j) {
+    return json_encode([
+      isset($this->p[$k][$j]), empty($this->p[$k][$j]), $this->p[$k][$j] ?? 'd', $this->p[$k][$j][1] ?? 'd',
+      isset($this->a->b), isset($this->a->n), empty($this->a->z), isset($this->a->typed), isset($this->a->nope),
+      isset($this->nul->x), isset($this->m->magic), isset($this->m->other), $this->m->magic['q'] ?? 'd',
+      isset($this->ao['k']['j']), $this->ao['k']['j'] ?? 'd',
+    ]);
+  }
+}
+function f() {
+  $a = ['l' => ['m' => [3 => ['x' => 0, 'y' => 'Y']]], 's' => 'str', 'n' => null]; $o = new O;
+  $r = ['x' => ['y' => 1]]; $ref = &$r['x'];
+  for ($t = 0; $t < 3; $t++) {
+    foreach ([3, 4, '3'] as $k) {
+      echo json_encode([isset($a['l']['m'][$k]['x']), empty($a['l']['m'][$k]['x']), isset($a['l']['m'][$k]['y']), empty($a['l']['m'][$k]['y']), isset($a['l']['m'][$k])]), ' ';
+    }
+    echo "\n", json_encode([isset($a['s'][0]), isset($a['s']['x']), isset($a['s'][0][0]), empty($a['s'][9]), isset($a['n']['x']), isset($a['q']['r']), isset($u['a']['b']), isset($r['x']['y']), empty($r['x']['y'])]), "\n";
+    echo json_encode([isset($a[1.5]['x']), isset($a[null]['x'])]), "\n";
+    echo $o->t('a', 'b'), "\n", $o->t('a', 'c'), "\n", $o->t('z', 'b'), "\n", $o->t('q', 'r'), "\n";
+  }
+}
+f();
+"#),
+        r#"[true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
+[true,false,true,true,false,false,false,true,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+[false,false]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+[true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
+[true,false,true,true,false,false,false,true,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+[false,false]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+[true,true,true,false,true] [false,true,false,true,false] [true,true,true,false,true] 
+[true,false,true,true,false,false,false,true,false]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 25
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 25
+[false,false]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [true,false,{"1":"one","n":null},"one",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+__isset(magic) __isset(other) __isset(magic) __get(magic) [false,true,"d","d",true,false,true,false,false,false,true,false,1,true,1]
+"#
+    );
+}
+
 /// `isset` / `empty` / reads of an element of a temporary (`self::MAP[$k]`, `f()[$k]`) and array destructuring, hits and misses.
 #[test]
 fn tmp_element_reads() {

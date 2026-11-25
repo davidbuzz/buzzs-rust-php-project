@@ -1275,19 +1275,25 @@ fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<
 
 /// `isset()` / `empty()` of a place [`isset_cv_in`] does not cover, on
 /// the frame-local paths of `exec/spec`: an element of a temporary
-/// (`isset(self::MAP[$k])`, `empty(f()['k'])`: `spec::isset_tmp_dims_in`).
+/// (`isset(self::MAP[$k])`, `empty(f()['k'])`: `spec::isset_tmp_dims_in`)
+/// and the dimensions of a variable (`isset($a['k'][$j])`:
+/// `spec::isset_cv_dims_in`).
 /// `None`, nothing changed, for the generic op. Out of line, so that the
 /// plain variable's test stays small.
 #[inline(never)]
 fn isset_place_in(f: &mut Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<bool> {
-    let tmp_base = matches!(
-        f.code.places.get(place as usize)?.base,
-        crate::opcode::PlaceBase::Value(_)
-    );
-    if tmp_base {
-        return spec::isset_tmp_dims_in(f, place, empty);
+    // The base, copied out before the frame is borrowed mutably: `None`
+    // for a temporary's element, the variable's index for a variable.
+    let cv = match f.code.places.get(place as usize)?.base {
+        crate::opcode::PlaceBase::Value(_) => None,
+        crate::opcode::PlaceBase::Cv(cv) => Some(cv),
+        _ => return None,
+    };
+    match cv {
+        None => spec::isset_tmp_dims_in(f, place, empty),
+        // `isset($a['k'][$j])`: the dimensions of a variable.
+        Some(cv) => spec::isset_cv_dims_in(f, cv, place, empty),
     }
-    None
 }
 
 /// Copies compiled variable `cv`'s new value into the attached symbol

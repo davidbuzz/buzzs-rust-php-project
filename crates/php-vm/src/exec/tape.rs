@@ -1550,7 +1550,7 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
                         && tmp_dims_place(p)))
         }
         Op::Isset { place, dst } | Op::Empty { place, dst } => {
-            dst < code.num_tmps && nested_place(place_of(place)?, false, false)
+            dst < code.num_tmps && nested_place(place_of(place)?, false, true)
         }
         Op::Unset { place } => nested_place(place_of(place)?, true, false),
         Op::Assign { place, val, dst } => {
