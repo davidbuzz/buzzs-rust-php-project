@@ -69,6 +69,19 @@ def norm(data, binary, tmp):
     s = re.sub(r"Zend Engine v[\d.]+", "Zend Engine vX", s)
     s = re.sub(r"Copyright \(c\) [^\n]*", "Copyright", s)
     s = re.sub(r"with Zend OPcache[^\n]*\n?", "", s)
+    # php-src master no longer names the path in stream open warnings.
+    s = re.sub(r"(\w+)\([^)\n]*\): Failed to open stream", r"\1(): Failed to open stream", s)
+    # -v: the Ubuntu build line and master's copyright wording.
+    s = s.replace("Built by Ubuntu\n", "")
+    s = s.replace("Copyright © The PHP Group and Contributors", "Copyright")
+    s = re.sub(r"Zend Engine vX(-dev)?, Copyright[^\n]*(\n    )?", "Zend Engine vX, Copyright", s)
+    # The usage text names basename(argv[0]).
+    s = re.sub(r"(?m)(^Usage: |^   )php8\.5 ", r"\1php ", s)
+    # Usage lines master added after 8.5 (master is the specification).
+    s = s.replace("  -C               Do not chdir to the script's directory"
+                  " (no-op in CLI)\n", "")
+    s = s.replace("  -q               Do not output HTTP headers"
+                  " (no-op in CLI)\n", "")
     return s
 
 

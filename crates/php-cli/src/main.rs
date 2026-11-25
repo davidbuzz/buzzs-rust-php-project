@@ -92,12 +92,17 @@ fn usage(argv0: &[u8]) -> Vec<u8> {
     .into_bytes()
 }
 
-/// `php_get_version()`.
+/// `php_get_version()`: the PHP line, then `get_zend_version()`, the
+/// engine line followed by one `zend_append_version_info()` line per
+/// started zend_extension. opcache is always built in and its
+/// `accel_startup` always succeeds (ext/opcache/ZendAccelerator.c
+/// `opcache_extension_entry`), so its line is always there.
 fn version_banner() -> String {
     format!(
-        "PHP {} (cli) (built: {BUILD_DATE}) (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v{}, Copyright \u{a9} Zend by Perforce\n",
+        "PHP {} (cli) (built: {BUILD_DATE}) (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v{}, Copyright \u{a9} Zend by Perforce\n    with Zend OPcache v{}, Copyright \u{a9}, by Zend by Perforce\n",
         php_vm::PHP_VERSION,
-        php_vm::ZEND_VERSION
+        php_vm::ZEND_VERSION,
+        php_vm::PHP_VERSION
     )
 }
 
@@ -1449,6 +1454,11 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         assert!(
             v.contains(") (NTS)\nCopyright \u{a9} The PHP Group and Contributors\nZend Engine v")
         );
+        // zend_append_version_info(): "    with %s v%s, %s, by %s\n".
+        assert!(v.ends_with(&format!(
+            ", Copyright \u{a9} Zend by Perforce\n    with Zend OPcache v{}, Copyright \u{a9}, by Zend by Perforce\n",
+            php_vm::PHP_VERSION
+        )));
     }
 
     fn args(a: &[&str]) -> Vec<Vec<u8>> {
