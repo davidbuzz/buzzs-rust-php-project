@@ -2103,6 +2103,39 @@ impl HashTable {
         Ok(h)
     }
 
+    /// Appends every value of `vals` in order, as [`HashTable::push`] of
+    /// each would (`ZEND_HASH_FILL_PACKED`): a list without holes with
+    /// room for all of them takes them in one `Vec` extension; any other
+    /// table pushes one by one. Gives back the first value with no free
+    /// next key (left unpushed, with those after it).
+    pub fn push_all<I>(&mut self, vals: I) -> Result<(), Value>
+    where
+        I: IntoIterator<Item = Value>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let it = vals.into_iter();
+        let n = it.len();
+        let ts = self.table_size as usize;
+        if let Store::Packed(v) = &mut self.store {
+            let len = v.len();
+            let next = if self.next_free == i64::MIN {
+                0
+            } else {
+                self.next_free
+            };
+            if usize::try_from(next).is_ok_and(|x| x == len) && len + n <= ts {
+                v.extend(it.map(Some));
+                self.next_free = i64::try_from(len + n).unwrap_or(i64::MAX);
+                self.num_elements += to_u32(n);
+                return Ok(());
+            }
+        }
+        for val in it {
+            self.push(val)?;
+        }
+        Ok(())
+    }
+
     /// Like [`HashTable::push`] but returns a mutable reference to the new slot.
     pub fn push_mut(&mut self, val: Value) -> Result<&mut Value, Value> {
         let h = self.next_free;
@@ -3199,10 +3232,11 @@ impl HashTable {
     /// Builds a list (`zend_array_to_list`) from the values.
     #[must_use]
     pub fn to_list(&self) -> HashTable {
-        let mut out = HashTable::with_capacity(self.len());
-        for v in self.values() {
-            let _ = out.push(copy_for_insert(v));
+        if self.is_empty() {
+            return HashTable::new();
         }
+        let mut out = HashTable::with_capacity_packed(self.len());
+        let _ = out.push_all(self.values().map(copy_for_insert));
         out
     }
 }
@@ -3863,6 +3897,40 @@ impl FromIterator<Value> for ZArray {
 
 #[cfg(test)]
 mod tests {
+    /// `push_all` appends as `push` of each value would: into a list
+    /// with room, a list with a hole (pushed one by one), a hash and a
+    /// table whose next key is taken.
+    #[test]
+    fn push_all_appends_like_push() {
+        use super::{ArrayKey, HashTable};
+        use crate::value::Value;
+        let vals = || (1..=3).map(Value::Int).collect::<Vec<_>>();
+        let mut each = HashTable::with_capacity_packed(8);
+        let mut all = HashTable::with_capacity_packed(8);
+        for v in vals() {
+            each.push(v).unwrap();
+        }
+        all.push_all(vals()).unwrap();
+        all.push_all(Vec::new()).unwrap();
+        assert!(all.is_packed());
+        assert_eq!(all.len(), 3);
+        assert_eq!(all.next_index(), 3);
+        assert_eq!(format!("{all:?}"), format!("{each:?}"));
+        let mut holed = HashTable::new();
+        holed.push_all(vals()).unwrap();
+        holed.remove(&ArrayKey::Int(2));
+        holed.push_all(vals()).unwrap();
+        assert_eq!(holed.len(), 5);
+        assert_eq!(holed.next_index(), 6);
+        let mut hash = HashTable::new();
+        hash.insert(ArrayKey::Int(10), Value::Null);
+        hash.push_all(vals()).unwrap();
+        assert_eq!(hash.next_index(), 14);
+        let mut full = HashTable::new();
+        full.insert(ArrayKey::Int(i64::MAX), Value::Null);
+        assert!(full.push_all(vals()).is_err());
+    }
+
     /// The lean probe finds what the general one finds for the keys it
     /// takes, and nothing for the keys it leaves to it; `entry_at` gives
     /// the element at a position with its key, and nothing at a hole.

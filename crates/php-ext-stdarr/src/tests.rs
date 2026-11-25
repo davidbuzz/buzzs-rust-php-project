@@ -674,3 +674,205 @@ bool(false)
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// `array_merge()` of lists only appends their values in one go: a list
+/// with a hole, a reference shared or not, nested arrays, empty lists, a
+/// string key among the lists, appending after the result and a list with
+/// sparse integer keys. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn array_merge_of_lists() {
+    let src = r#"$a = [1, 2, 3]; unset($a[1]); $b = [4, [5]]; $x = 9; $r = [&$x, 7]; $e = [];
+var_dump(array_merge($a, $b), array_merge($a, $r, $b, $e), array_merge($e, $e), array_merge([1], ['k' => 2], [3]));
+$m = array_merge($r, [8]); $m[0] = 'changed'; var_dump($x, $m);
+$big = array_merge(range(1, 3), range(4, 6), range(7, 9)); $big[] = 10; var_dump(count($big), array_key_last($big));
+$h = [5 => 'a', 9 => 'b']; var_dump(array_merge($h, [1]));
+"#;
+    let expected = r#"array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+  [2]=>
+  int(4)
+  [3]=>
+  array(1) {
+    [0]=>
+    int(5)
+  }
+}
+array(6) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+  [2]=>
+  &int(9)
+  [3]=>
+  int(7)
+  [4]=>
+  int(4)
+  [5]=>
+  array(1) {
+    [0]=>
+    int(5)
+  }
+}
+array(0) {
+}
+array(3) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+string(7) "changed"
+array(3) {
+  [0]=>
+  &string(7) "changed"
+  [1]=>
+  int(7)
+  [2]=>
+  int(8)
+}
+int(10)
+int(9)
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  int(1)
+}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `array_keys()` without a filter, `array_slice()` of a list and
+/// `array_values()` fill their lists in one go: hash and holed lists, a
+/// filter loose and strict, slices with and without kept keys, past the
+/// end, of references, and appending after the result. Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn lists_filled_in_one_go() {
+    let src = r"$h = ['a' => 1, 5 => 2, 'b' => [3], -7 => 4]; $p = [1, 2, 3, 4, 5]; unset($p[2]); $x = 1; $r = [&$x, 2];
+var_dump(array_keys($h), array_keys($p), array_keys($h, 2), array_keys($p, '2', true));
+var_dump(array_slice($p, 1, 2), array_slice($p, -2), array_slice($p, 0, 10, true), array_slice($p, 1, 2, true), array_slice($h, 1, 2), array_slice($h, 1, 2, true), array_slice($p, 9), array_slice($r, 0, 1));
+var_dump(array_values($h), array_values($p), array_values($r)); $v = array_values($r); $v[0] = 9; var_dump($x);
+$k = array_keys($p); $k[] = 'n'; var_dump(array_key_last($k));
+";
+    let expected = r#"array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  int(5)
+  [2]=>
+  string(1) "b"
+  [3]=>
+  int(-7)
+}
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+}
+array(1) {
+  [0]=>
+  int(5)
+}
+array(0) {
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+}
+array(2) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(5)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [3]=>
+  int(4)
+  [4]=>
+  int(5)
+}
+array(2) {
+  [1]=>
+  int(2)
+  [3]=>
+  int(4)
+}
+array(2) {
+  [0]=>
+  int(2)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [5]=>
+  int(2)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  &int(1)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+  [3]=>
+  int(4)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(4)
+  [3]=>
+  int(5)
+}
+array(2) {
+  [0]=>
+  &int(1)
+  [1]=>
+  int(2)
+}
+int(9)
+int(4)
+"#;
+    assert_eq!(run(src), expected);
+}

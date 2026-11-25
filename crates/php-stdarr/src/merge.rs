@@ -147,6 +147,17 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
             }
         }
     }
+    // Lists only (the commonest merge): a packed result sized for all of
+    // them, their values appended in order (`ZEND_HASH_FILL_PACKED`), no
+    // key made for any element.
+    if !recursive && tables.iter().all(|t| t.is_packed()) {
+        let mut dest = HashTable::with_capacity_packed(usize::try_from(count).unwrap_or(0));
+        for t in &tables {
+            dest.push_all(t.values().map(copy_elem))
+                .map_err(|_| cannot_add_element())?;
+        }
+        return Ok(ZArray::from_table(dest));
+    }
     let src = tables[0];
     let mut dest = HashTable::with_capacity(usize::try_from(count).unwrap_or(0));
     for (k, v) in src.iter() {

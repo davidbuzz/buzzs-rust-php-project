@@ -448,12 +448,18 @@ pub fn array_keys<C: RuntimeContext + ?Sized>(
     if array.is_empty() {
         return Ok(ZArray::new());
     }
-    let mut out = HashTable::with_capacity(if filter.is_some() { 0 } else { array.len() });
+    let Some(filter) = filter else {
+        // All the keys: a list filled in one go (`ZEND_HASH_FILL_PACKED`).
+        let mut out = HashTable::with_capacity_packed(array.len());
+        let _ = out.push_all(array.iter().map(|(k, _)| k.to_value()));
+        return Ok(ZArray::from_table(out));
+    };
+    let mut out = HashTable::with_capacity(0);
     for (k, v) in array {
-        let keep = match filter {
-            None => true,
-            Some(f) if strict => ops::is_identical(f, &deref(v))?,
-            Some(f) => ops::is_equal(f, v, ctx)?,
+        let keep = if strict {
+            ops::is_identical(filter, &deref(v))?
+        } else {
+            ops::is_equal(filter, v, ctx)?
         };
         if keep {
             let _ = out.push(k.to_value());
@@ -773,9 +779,15 @@ pub fn array_slice(
     }
     let skip = usize::try_from(offset).unwrap_or(0);
     let take = usize::try_from(length).unwrap_or(usize::MAX);
-    let mut out = HashTable::with_capacity(take);
     let packed = array.is_packed();
     let list = packed && (!preserve_keys || (offset == 0 && array.is_without_holes()));
+    if list {
+        // A list's slice is a list: filled in one go.
+        let mut out = HashTable::with_capacity_packed(take.min(array.len()));
+        let _ = out.push_all(array.values().skip(skip).take(take).map(copy_elem));
+        return ZArray::from_table(out);
+    }
+    let mut out = HashTable::with_capacity(take);
     for (k, v) in array.iter().skip(skip).take(take) {
         match k {
             _ if list => {
