@@ -2009,7 +2009,57 @@ impl Vm {
 
     /// `place =& v`.
     pub(crate) fn place_assign_ref(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let v = match self.cv_assign_ref_fast(pid, v) {
+            Ok(r) => return Ok(r),
+            Err(v) => v,
+        };
         self.with_cv_symtab(pid, |vm| vm.place_assign_ref_impl(pid, v))
+    }
+
+    /// `$cv =& <reference>` (`ZEND_ASSIGN_REF` with a CV result operand,
+    /// `zend_assign_to_variable_reference`, `Zend/zend_execute.c`) in a
+    /// frame whose symbol table is not attached: the CV slot is the
+    /// variable, so it is bound to the reference in place and its old value
+    /// released (`zval_ptr_dtor`: a possible root, a destructor when it was
+    /// the last handle), as [`Vm::write_var_root`] does on a table slot,
+    /// minus the attach/detach round trip of [`Vm::with_cv_symtab`] that
+    /// copied all the frame's variables into the table and back for each
+    /// `$a = &$b` and each iteration of `foreach (... as &$v)`. `Err` hands
+    /// `v` back, unchanged, for any other place, frame state or a value
+    /// that is not a reference ("Only variables should be assigned by
+    /// reference" and the other diagnostics stay the generic path's).
+    #[inline]
+    fn cv_assign_ref_fast(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+        let Value::Reference(r) = v else {
+            return Err(v);
+        };
+        let Some(f) = self.frames.last_mut() else {
+            return Err(Value::Reference(r));
+        };
+        if f.symtab_attached
+            || !matches!(
+                f.kind,
+                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+            )
+        {
+            return Err(Value::Reference(r));
+        }
+        let cv = match f.code.places.get(pid as usize) {
+            Some(p) if p.segs.is_empty() => match p.base {
+                PlaceBase::Cv(cv) => cv as usize,
+                _ => return Err(Value::Reference(r)),
+            },
+            _ => return Err(Value::Reference(r)),
+        };
+        let Some(slot) = f.cvs.get_mut(cv) else {
+            return Err(Value::Reference(r));
+        };
+        let old = slot.set(Some(Value::Reference(r.clone())));
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
+        drop(old);
+        Ok(Value::Reference(r))
     }
 
     /// Makes a place a reference.
