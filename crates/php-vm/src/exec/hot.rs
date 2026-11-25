@@ -151,6 +151,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::FeFree { .. }
+            | Op::KeyExists { .. }
             | Op::RecvInit { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
@@ -948,6 +949,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 return DECLINED;
             }
         }
+        // `ZEND_ARRAY_KEY_EXISTS` of an int or string key in an array.
+        Op::KeyExists { key, array, dst } => {
+            if !spec::key_exists_in(f, key, array, dst) {
+                return DECLINED;
+            }
+        }
         // `RECV_INIT` of a parameter the call did not pass, whose default
         // is a literal (the `RecvDefault` right after it).
         Op::RecvInit { n, cv, .. } => match recv_literal_default_in(f, ops, lits, at, n, cv) {
@@ -967,7 +974,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
 /// anything else (objects, the warning of a non-iterable value or of an
 /// undefined variable, an occupied iterator slot: the generic op).
 #[inline]
-fn fe_reset_array_in(f: &mut Frame, lits: &[Value], subject: Operand, iter: u32) -> Option<bool> {
+pub(super) fn fe_reset_array_in(
+    f: &mut Frame,
+    lits: &[Value],
+    subject: Operand,
+    iter: u32,
+) -> Option<bool> {
     if f.iters.get(iter as usize)?.is_some() {
         return None;
     }
@@ -1065,7 +1077,7 @@ fn recv_literal_default_in(
 /// `FE_FREE` of a by-value array iterator (`Vm::op_fe_free_and_destruct`
 /// releases nothing else for it); `false` for any other iterator.
 #[inline]
-fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
+pub(super) fn fe_free_array_in(f: &mut Frame, iter: u32) -> bool {
     let Some(slot) = f.iters.get_mut(iter as usize) else {
         return false;
     };
@@ -1092,7 +1104,7 @@ fn concat_ext(f: &mut Frame, lits: &[Value], a: Operand, b: Operand) -> Option<Z
 /// the result is used ([`set_tmp_in`]); an unused int or bool owns nothing.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
+pub(super) fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
     if let Some(t) = dst {
         set_tmp_in(f, t, v);
     }
@@ -1137,7 +1149,7 @@ fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
 /// as `Vm::op_count_slow` releases it). `None` for anything else.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
+pub(super) fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
     let n = match a {
         Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
             Value::Array(arr) => arr.len(),
@@ -1172,7 +1184,7 @@ fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
 /// `None` for an undefined variable (the generic op warns).
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
+pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
     use crate::opcode::type_mask::matches;
     match a {
         Operand::Cv(cv) if !f.symtab_attached => {
@@ -1198,7 +1210,7 @@ fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<
 /// undefined (the generic op warns) or attached to a symbol table.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
     let cls = f
         .code
         .class_cache
@@ -1325,7 +1337,7 @@ fn scalar_copy(v: &Value) -> Value {
 /// slot is ignored, as the pre-match did.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
+pub(super) fn set_tmp_in(f: &mut Frame, t: u32, v: Value) {
     if let Some(slot) = f.tmps.get_mut(t as usize) {
         put_tmp(slot, v);
     }

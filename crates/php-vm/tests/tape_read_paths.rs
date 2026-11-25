@@ -388,3 +388,74 @@ NULL
 "#
     );
 }
+
+/// `is_*()` and `count()` of values that are not variables, `instanceof`, and `foreach` over arrays, empty arrays, objects and generators, with `break` and nesting.
+#[test]
+fn type_checks_and_foreach() {
+    assert_eq!(
+        run(r#"<?php
+interface I {} class A implements I {} class B extends A {}
+function gen() { yield 1; yield 2; }
+function vals() { return [1, 'one', 1.5, null, true, [1], new B]; }
+function f($m) {
+  $objs = [new A, new B, 'A', null, new ArrayObject([])];
+  for ($t = 0; $t < 3; $t++) {
+    $row = [];
+    foreach (vals() as $i => $v) {
+      $w = [$v];
+      $row[] = (is_int($w[0]) ? 'i' : '') . (is_string($w[0]) ? 's' : '') . (is_float($w[0]) ? 'f' : '') . (is_null($w[0]) ? 'n' : '')
+        . (is_bool($w[0]) ? 'b' : '') . (is_array($w[0]) ? 'a' : '') . (is_object($w[0]) ? 'o' : '') . (is_resource($w[0]) ? 'r' : '')
+        . (is_scalar($w[0]) ? 'S' : '') . (is_iterable($w[0]) ? 'I' : '') . (is_countable($w[0]) ? 'C' : '') . (is_callable($w[0]) ? 'X' : '');
+    }
+    echo implode(',', $row), "\n";
+    echo json_encode([is_array($m['k'] ?? null), is_string(implode('', ['a'])), is_int(count($objs))]), "\n";
+    $io = [];
+    foreach ($objs as $o) { $x = [$o]; $io[] = [$x[0] instanceof A, $x[0] instanceof B, $x[0] instanceof I, $x[0] instanceof Countable, $o instanceof Missing]; }
+    echo json_encode($io), "\n";
+    echo count($m), count($m['k']), count([1, 2, 3]), count([]), count(vals(), COUNT_RECURSIVE), "\n";
+    try { echo count($m['s']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    echo count(new ArrayObject([1, 2])), "\n";
+    $s = 0;
+    foreach ([] as $v) { $s += 100; }
+    foreach ($m['k'] as $v) { foreach ($m['k'] as $w) { $s += $v * $w; } }
+    foreach ($m['k'] as $k => $v) { if ($k == 1) break; $s += $v; }
+    foreach (gen() as $v) { $s += $v; }
+    foreach (new ArrayObject([5, 6]) as $v) { $s += $v; }
+    $arr = [1, 2]; foreach ($arr as $v) { $arr[] = $v; } $s += count($arr);
+    echo $s, "\n";
+    foreach ($m['nope'] ?? [] as $v) { echo "never\n"; }
+    foreach ($m['s'] as $v) { echo "never\n"; }
+  }
+}
+f(['k' => [1, 2, 3], 's' => 'str']);
+"#),
+        r#"iS,sS,fS,n,bS,aIC,o
+[true,true,true]
+[[true,false,true,false,false],[true,true,true,false,false],[false,false,false,false,false],[false,false,false,false,false],[false,false,false,true,false]]
+23308
+count(): Argument #1 ($value) must be of type Countable|array, string given
+2
+55
+
+Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+iS,sS,fS,n,bS,aIC,o
+[true,true,true]
+[[true,false,true,false,false],[true,true,true,false,false],[false,false,false,false,false],[false,false,false,false,false],[false,false,false,true,false]]
+23308
+count(): Argument #1 ($value) must be of type Countable|array, string given
+2
+55
+
+Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+iS,sS,fS,n,bS,aIC,o
+[true,true,true]
+[[true,false,true,false,false],[true,true,true,false,false],[false,false,false,false,false],[false,false,false,false,false],[false,false,false,true,false]]
+23308
+count(): Argument #1 ($value) must be of type Countable|array, string given
+2
+55
+
+Warning: foreach() argument must be of type array|object, string given in t.php on line 32
+"#
+    );
+}

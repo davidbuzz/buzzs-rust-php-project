@@ -11,9 +11,12 @@ use super::{
     TOp, KC, KI, KT, SLOT_SHIFT,
 };
 use super::{Num, KL};
+use crate::exec::hot;
 use crate::exec::spec::plain_truth;
-use crate::opcode::{BinKind, Op, OpArray, Operand, UnKind};
+use crate::opcode::{BinKind, ClassSpec, ForeachKind, Op, OpArray, Operand, UnKind};
+use crate::vm::Frame;
 use php_runtime::{BinaryOp, Value};
+use std::rc::Rc;
 
 /// The operators of [`num_bin_tmp`], by their code in an instruction's `e`:
 /// those of `Op::Bin` the numeric families of [`super`] leave out, for
@@ -217,8 +220,158 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::CoalesceT)
         },
+        // `is_*()` / `instanceof` / `count()` of a value that is not a
+        // variable (a variable's `is_*()` and `count()` are `strs`'
+        // rows), `foreach` over an array and the release of its
+        // iterator: rows of their own instead of `hot::step_ext`'s
+        // second dispatch. The op stays at `d`; its handler reads it
+        // there.
+        Op::TypeCheck { a, .. } | Op::Count { a, .. } if !matches!(a, Operand::Cv(_)) => {
+            let op = if matches!(code.ops.get(i)?, Op::TypeCheck { .. }) {
+                TOp::TypeCheckX
+            } else {
+                TOp::CountX
+            };
+            Inst {
+                d: u32::try_from(i).ok()?,
+                ..plain(op)
+            }
+        }
+        Op::InstanceOf {
+            class: ClassSpec::Named(_),
+            ..
+        } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::InstanceOfX)
+        },
+        Op::FeReset {
+            kind: ForeachKind::Value,
+            end,
+            ..
+        } => Inst {
+            c: rel(code, i, end)?,
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeResetA)
+        },
+        Op::FeFree { .. } => Inst {
+            d: u32::try_from(i).ok()?,
+            ..plain(TOp::FeFreeA)
+        },
         _ => return None,
     })
+}
+
+/// `Op::TypeCheck` (`ZEND_TYPE_CHECK`: `is_array($x['k'])`, `is_string(f())`)
+/// of the op at `inst.d`, as `hot::step_ext` runs it (`hot::type_check_in`:
+/// a value read without a diagnostic). `false`, nothing changed, for the
+/// generic op.
+///
+/// # Safety
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
+#[inline(never)]
+pub(super) unsafe fn type_check(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // A handle of its own on the op array: the op and the literals are
+    // read from it while the frame is borrowed mutably.
+    let code = Rc::clone(&f.code);
+    let Some(&Op::TypeCheck { a, mask, dst }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    let Some(r) = hot::type_check_in(f, &code.literals, a, mask) else {
+        return false;
+    };
+    hot::set_dst_in(f, dst, Value::Bool(r));
+    true
+}
+
+/// `Op::Count` (`ZEND_COUNT` of an array that is not a variable) of the op
+/// at `inst.d`, as [`type_check`] (`hot::count_in`).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn count(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::Count { a, dst, .. }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    let Some(n) = hot::count_in(f, &code.literals, a) else {
+        return false;
+    };
+    hot::set_dst_in(f, dst, Value::Int(n));
+    true
+}
+
+/// `Op::InstanceOf` of a named class (`ZEND_INSTANCEOF` on a run-time
+/// cache hit: `hot::instanceof_in`) of the op at `inst.d`, as
+/// [`type_check`].
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::InstanceOf {
+        a,
+        class: ClassSpec::Named(lit),
+        dst,
+    }) = code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    let Some(r) = hot::instanceof_in(f, &code.literals, a, lit) else {
+        return false;
+    };
+    hot::set_tmp_in(f, dst, Value::Bool(r));
+    true
+}
+
+/// `Op::FeReset` by value of an array (`ZEND_FE_RESET_R`:
+/// `hot::fe_reset_array_in`) of the op at `inst.d`: falls through into the
+/// loop, or jumps to its end (`c`) for an empty array. `Decline`, nothing
+/// changed, for the generic op (objects, warnings, generators).
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let code = Rc::clone(&f.code);
+    let Some(&Op::FeReset {
+        subject,
+        kind: ForeachKind::Value,
+        iter,
+        ..
+    }) = code.ops.get(inst.d as usize)
+    else {
+        return Br::Decline;
+    };
+    match hot::fe_reset_array_in(f, &code.literals, subject, iter) {
+        Some(true) => Br::Fall,
+        Some(false) => Br::Jump,
+        None => Br::Decline,
+    }
+}
+
+/// `Op::FeFree` of an array iterator (`ZEND_FE_FREE`:
+/// `hot::fe_free_array_in`) of the op at `inst.d`.
+///
+/// # Safety
+/// As [`type_check`].
+#[inline(never)]
+pub(super) unsafe fn fe_free(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::FeFree { iter }) = f.code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    hot::fe_free_array_in(f, iter)
 }
 
 /// The boolean ops of [`lower`]: `&&`/`||` as values, `!` and `(bool)`.

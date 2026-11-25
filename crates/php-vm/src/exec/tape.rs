@@ -1313,6 +1313,11 @@ tape_ops! {
         JmpSetC = (scalar::jmp_set_cv, 1, branch_f),
         CoalesceC = (scalar::coalesce_cv, 1, branch_f),
         CoalesceT = (scalar::coalesce_tmp, 1, branch_f),
+        TypeCheckX = (scalar::type_check, 1, poll_f),
+        CountX = (scalar::count, 1, poll_f),
+        InstanceOfX = (scalar::instance_of, 1, poll_f),
+        FeResetA = (scalar::fe_reset, 1, branch_poll_f),
+        FeFreeA = (scalar::fe_free, 1, poll_f),
 
         // ---- end of scalar ----
         //
