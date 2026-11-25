@@ -514,6 +514,28 @@ fn calls_of_functions_returning_a_literal_are_inlined() {
     assert!(main.contains("ECHO string(\"1\")"), "{out}");
 }
 
+/// or_null.phpt, mixed_return_*_error.phpt: a function with a return type
+/// other than `void` and no `return` throws "none returned" (or "must not
+/// implicitly return" for `never`) when called; `zend_emit_final_return`
+/// puts its check before the `RETURN null`, so php-src keeps the call.
+#[test]
+fn typed_functions_without_return_are_not_inlined() {
+    for ty in [": ?int", ": mixed", ": iterable", ": never", ": int|string"] {
+        let out = dump(&format!("<?php\nfunction f(){ty} {{}}\necho f();\n"));
+        assert!(
+            section_named(&out, "$_main").contains("DO_UCALL"),
+            "{ty}: {out}"
+        );
+    }
+    for ty in ["", ": void"] {
+        let out = dump(&format!("<?php\nfunction f(){ty} {{}}\necho f();\n"));
+        assert!(
+            !section_named(&out, "$_main").contains("DO_UCALL"),
+            "{ty}: {out}"
+        );
+    }
+}
+
 #[test]
 fn functions_the_vm_optimizer_reduced_to_a_literal_are_not_inlined() {
     // sccp_042.phpt / ct_eval_md5_sha1.phpt: php-src inlines a call only
