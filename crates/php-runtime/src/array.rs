@@ -261,7 +261,7 @@ pub struct IterId(u32);
 
 thread_local! {
     static NEXT_ITER_ID: Cell<u32> = const { Cell::new(1) };
-    static EMPTY_ARRAY: ZArray = ZArray(Rc::new(HashTable::new()));
+    static EMPTY_ARRAY: ZArray = ZArray(Rc::new(HashTable::immutable_empty()));
 }
 
 /// The ordered hash table.
@@ -273,6 +273,15 @@ pub struct HashTable {
     next_free: i64,
     /// Registered iterator positions: `(id, pos)`.
     iterators: IterList,
+    /// The cycle collector's mark (php-src's `GC_INFO`, the root buffer
+    /// slot in the array's header): 0 while the array is not a possible
+    /// root, [`HashTable::GC_IMMUTABLE`] for the shared empty array
+    /// (`zend_empty_array`, never buffered), else its slot + 1 in the
+    /// array root buffer ([`crate::ref_roots`]). It takes the header's
+    /// four bytes of tail padding, so the table stays 72 bytes. A table
+    /// cloned or built is unmarked; the mark stays with the allocation
+    /// (see [`ZArray::make_mut`]).
+    gc_root: Cell<u32>,
 }
 
 /// The registered iterators of a table (`HT_ITERATORS_COUNT`): boxed and
@@ -362,10 +371,16 @@ fn release_element(slot: Option<Value>) {
 }
 
 impl Drop for HashTable {
-    /// `zend_array_destroy`: the elements are released in order, a bucket's
-    /// value before its key. Left to the storage's own drop, every element
-    /// of a list of ints cost a call into the drop glue of `Value`.
+    /// `zend_array_destroy`: a buffered array leaves the root buffer first
+    /// (`GC_REMOVE_FROM_BUFFER`, one test of the mark otherwise), then the
+    /// elements are released in order, a bucket's value before its key.
+    /// Left to the storage's own drop, every element of a list of ints cost
+    /// a call into the drop glue of `Value`.
     fn drop(&mut self) {
+        let mark = self.gc_root.get();
+        if mark != 0 {
+            crate::ref_roots::array_freed(self, mark);
+        }
         match std::mem::replace(&mut self.store, Store::Uninit) {
             Store::Uninit => {}
             Store::Packed(values) => {
@@ -1024,6 +1039,7 @@ impl HashTable {
             internal_ptr: 0,
             next_free: i64::MIN,
             iterators: IterList::default(),
+            gc_root: Cell::new(0),
         }
     }
 
@@ -1038,6 +1054,7 @@ impl HashTable {
             internal_ptr: 0,
             next_free: i64::MIN,
             iterators: IterList::default(),
+            gc_root: Cell::new(0),
         }
     }
 
@@ -3141,6 +3158,9 @@ impl HashTable {
         }
         out.iterators = std::mem::take(&mut self.iterators);
         out.internal_ptr = 0;
+        // Still the same array: its root buffer mark stays (the old
+        // table's drop would take it out of the buffer).
+        out.gc_root.set(self.gc_root.replace(0));
         *self = out;
         removed
     }
@@ -3240,6 +3260,8 @@ impl HashTable {
         for it in &mut new.iterators {
             it.1 += argc;
         }
+        // Still the same array: its root buffer mark stays.
+        new.gc_root.set(self.gc_root.replace(0));
         *self = new;
     }
 
@@ -3460,6 +3482,7 @@ impl Clone for HashTable {
             },
             next_free: self.next_free,
             iterators: self.iterators.clone(),
+            gc_root: Cell::new(0),
         };
         if self.num_elements == 0 {
             out.table_size = HT_MIN_SIZE;
@@ -3700,6 +3723,48 @@ impl<'a> IntoIterator for &'a HashTable {
     }
 }
 
+/// The cycle collector's mark in the header (`GC_INFO`, see
+/// [`crate::ref_roots`] for the array root buffer).
+impl HashTable {
+    /// The mark of the shared empty array (`zend_empty_array`, which is
+    /// `GC_IMMUTABLE`): never a possible root.
+    pub const GC_IMMUTABLE: u32 = u32::MAX;
+
+    /// The shared empty table, marked [`HashTable::GC_IMMUTABLE`].
+    fn immutable_empty() -> Self {
+        let t = Self::new();
+        t.gc_root.set(Self::GC_IMMUTABLE);
+        t
+    }
+
+    /// The root buffer mark: 0 when the array may be buffered as a
+    /// possible root (`GC_MAY_LEAK`); otherwise it is buffered already or
+    /// is the immutable empty array. What a release to a non-zero count
+    /// tests before anything else.
+    #[inline]
+    #[must_use]
+    pub fn gc_root_mark(&self) -> u32 {
+        self.gc_root.get()
+    }
+
+    /// Sets the root buffer mark (the buffer's own bookkeeping).
+    #[inline]
+    pub(crate) fn set_gc_root_mark(&self, mark: u32) {
+        self.gc_root.set(mark);
+    }
+
+    /// Takes a buffered table out of the root buffer
+    /// (`GC_REMOVE_FROM_BUFFER`) and clears its mark, before its contents
+    /// leave the allocation the buffer knows.
+    fn leave_root_buffer(&self) {
+        let mark = self.gc_root.get();
+        if mark != 0 {
+            crate::ref_roots::array_freed(self, mark);
+            self.gc_root.set(0);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ZArray: the refcounted copy-on-write handle
 // ---------------------------------------------------------------------------
@@ -3785,13 +3850,44 @@ impl ZArray {
 
     /// Returns a mutable table, separating (copying) it first when shared
     /// (`SEPARATE_ARRAY`).
+    ///
+    /// The table must never be moved out from behind the returned borrow
+    /// (`mem::take`, `mem::swap`, `mem::replace` of the whole table): the
+    /// cycle collector's root buffer knows a buffered array by its
+    /// address, and a moved table would leave that entry pointing at the
+    /// allocation (assigning a new table in place is fine: the old one is
+    /// dropped there). [`ZArray::into_table`] is the way to take a table.
+    #[inline]
     pub fn make_mut(&mut self) -> &mut HashTable {
+        // Only a self-containing array registered with the collector has
+        // a weak handle; `Rc::make_mut` moves such a table when it is not
+        // shared otherwise.
+        if Rc::weak_count(&self.0) != 0 {
+            return self.make_mut_with_weak();
+        }
         Rc::make_mut(&mut self.0)
+    }
+
+    /// [`ZArray::make_mut`] of a table with a weak handle: `Rc::make_mut`
+    /// moves it into a new allocation when this is its only strong handle,
+    /// and a buffered table's root buffer entry follows it.
+    #[cold]
+    #[inline(never)]
+    fn make_mut_with_weak(&mut self) -> &mut HashTable {
+        let old = Rc::as_ptr(&self.0);
+        let t = Rc::make_mut(&mut self.0);
+        let mark = t.gc_root.get();
+        let new: *const HashTable = &*t;
+        if mark != 0 && !std::ptr::eq(old, new) {
+            crate::ref_roots::array_moved(old, &*t, mark);
+        }
+        t
     }
 
     /// The table for writing in place when this handle is its only one
     /// (no other handle and no weak one), so [`ZArray::make_mut`] would
     /// neither copy nor move it; `None` when a write must separate first.
+    /// As with [`ZArray::make_mut`], never move the table out of it.
     #[inline]
     pub fn get_mut_unshared(&mut self) -> Option<&mut HashTable> {
         Rc::get_mut(&mut self.0)
@@ -3815,9 +3911,39 @@ impl ZArray {
         Rc::as_ptr(&self.0) as usize
     }
 
+    /// The table's address in its allocation: what the array root buffer
+    /// holds for a buffered array, without a count ([`crate::ref_roots`]).
+    #[inline]
+    pub(crate) fn table_ptr(&self) -> *const HashTable {
+        Rc::as_ptr(&self.0)
+    }
+
+    /// A new handle of the buffered array whose table is at `table`.
+    ///
+    /// # Safety
+    /// `table` must be [`ZArray::table_ptr`] of an array that is still
+    /// alive. The root buffer keeps that true for its entries: a table
+    /// leaves the buffer when it is dropped (`HashTable::drop`) and before
+    /// its contents leave the allocation ([`ZArray::into_table`],
+    /// [`ZArray::gc_take_contents`], the move in [`ZArray::make_mut`]).
+    pub(crate) unsafe fn from_buffered(table: *const HashTable) -> ZArray {
+        // SAFETY: per the contract, `table` is `Rc::as_ptr` of a live
+        // `Rc<HashTable>` (strong count >= 1): the count is raised for the
+        // handle made here, which then owns it.
+        unsafe {
+            Rc::increment_strong_count(table);
+            ZArray(Rc::from_raw(table))
+        }
+    }
+
     /// Takes the table out if unshared, otherwise clones it.
     #[must_use]
     pub fn into_table(self) -> HashTable {
+        // A buffered table leaves the root buffer before it leaves its
+        // allocation (a shared one is copied, unmarked).
+        if self.0.gc_root.get() != 0 && Rc::strong_count(&self.0) == 1 {
+            self.0.leave_root_buffer();
+        }
         Rc::try_unwrap(self.0).unwrap_or_else(|rc| (*rc).clone())
     }
 
@@ -3838,7 +3964,7 @@ impl ZArray {
             return None;
         }
         // Unshared first: the handles below are then the only other ones.
-        let _ = Rc::make_mut(&mut self.0);
+        let _ = self.make_mut();
         let stored = ZArray(Rc::clone(&self.0));
         let result = Value::Array(ZArray(Rc::clone(&self.0)));
         let top = Rc::as_ptr(&self.0).cast_mut();
@@ -3952,6 +4078,9 @@ impl ZArray {
     /// no PHP code runs and the graph holds handles only.
     #[must_use]
     pub unsafe fn gc_take_contents(&self) -> HashTable {
+        // The contents leave the allocation: a buffered table leaves the
+        // root buffer first.
+        self.0.leave_root_buffer();
         let table = Rc::as_ptr(&self.0).cast_mut();
         // SAFETY: per this function's contract no other reference into the
         // table exists while it is replaced; `Rc::as_ptr` keeps the
