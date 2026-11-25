@@ -149,6 +149,14 @@ pub(in crate::exec) fn concat_in(
                     t.clone()
                 } else if t.is_empty() && !matches!(b, Operand::Lit(_)) {
                     s
+                } else if t.is_empty() && (s.refcount() != 1 || s.is_interned()) {
+                    // An empty LITERAL on the right is not `ZEND_CONCAT`'s
+                    // shortcut (`OP2_TYPE != IS_CONST`): a left string
+                    // somebody else holds, or an interned one, is copied
+                    // into a new string (`zend_string_alloc` + `memcpy`):
+                    // `$row['k'] . ''` is written to separate a value. One
+                    // nobody else holds is extended by nothing and stays.
+                    ZStr::concat_str(&s, t)
                 } else {
                     s.concat_owned_str_spare(t)
                 }),

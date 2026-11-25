@@ -2404,6 +2404,19 @@ unsafe fn concat_onto_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     };
     let r = match concat_rhs(f, lits, inst) {
         Some(Value::Str(t)) if s.is_empty() => t.clone(),
+        // An empty LITERAL on the right is not `ZEND_CONCAT`'s shortcut
+        // (that one needs `OP2_TYPE != IS_CONST`): a left string somebody
+        // else holds, or an interned one, is copied into a new string
+        // (`zend_string_alloc` + `memcpy`), which is what
+        // `$row['k'] . ''` is written for; one nobody else holds is
+        // extended by nothing and stays itself.
+        Some(Value::Str(t))
+            if t.is_empty()
+                && val_kind(inst) == KIND_LIT
+                && (s.refcount() != 1 || s.is_interned()) =>
+        {
+            ZStr::from(s.as_bytes())
+        }
         Some(Value::Str(t)) => s.concat_owned_str_spare(t),
         Some(Value::Int(n)) => s.concat_owned_long_spare(*n),
         // Checked above, and `b` is not the temporary just taken.
