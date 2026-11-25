@@ -731,6 +731,13 @@ impl Compiler<'_> {
     }
 
     pub(crate) fn fetch_place(&mut self, p: Place, mode: FetchMode) -> Operand {
+        let lines = self.f().place_lines.take();
+        let p = match (mode, lines) {
+            (FetchMode::Read, Some((q, lines))) if q == p && lines.len() == p.segs.len() => {
+                self.split_read_by_line(p, &lines)
+            }
+            _ => p,
+        };
         let pid = self.place(p);
         let t = self.tmp();
         self.emit(Op::Fetch {
@@ -739,6 +746,51 @@ impl Compiler<'_> {
             dst: t,
         });
         Operand::Tmp(t)
+    }
+
+    /// A read of a chain whose segments lie on different lines
+    /// (`$o->a\n->b`, `$a['x']\n['y']`): php-src emits one FETCH opline
+    /// per segment, each on the line the compiler was on after the
+    /// segment's offset or name (`zend_delayed_compile_dim()` /
+    /// `zend_delayed_compile_prop()`), so a warning or error of a segment
+    /// names that segment's line. The segments before each line change
+    /// are fetched into a temporary on their own line, and the rest of
+    /// the chain reads on from it, the last piece on its own line; a
+    /// chain on one line stays one place. Returns the last piece.
+    fn split_read_by_line(&mut self, p: Place, lines: &[u32]) -> Place {
+        let known = |l: &u32| *l != 0;
+        if !lines.iter().all(known) || lines.windows(2).all(|w| w[0] == w[1]) {
+            return p;
+        }
+        let Place { mut base, segs } = p;
+        let mut start = 0;
+        for (k, w) in lines.windows(2).enumerate() {
+            if w[0] == w[1] {
+                continue;
+            }
+            let end = k + 1;
+            self.f().line = w[0];
+            let piece = Place {
+                base,
+                segs: segs[start..end].to_vec(),
+            };
+            let pid = self.place(piece);
+            let t = self.tmp();
+            self.emit(Op::Fetch {
+                place: pid,
+                mode: FetchMode::Read,
+                dst: t,
+            });
+            base = PlaceBase::Value(Operand::Tmp(t));
+            start = end;
+        }
+        if let Some(&last) = lines.last() {
+            self.f().line = last;
+        }
+        Place {
+            base,
+            segs: segs[start..].to_vec(),
+        }
     }
 
     /// `zend_compile_encaps_list` (`Zend/zend_compile.c`). php-src converts
@@ -1151,6 +1203,7 @@ impl Compiler<'_> {
                     }
                 }
                 let mut p = self.compile_place_base(base)?;
+                let mut lines = self.take_place_lines(&p);
                 // `zend_ast_evaluate_ex` rejects an object container of a
                 // constant-expression dimension fetch (it could run
                 // arbitrary code through `offsetGet()`) before evaluating
@@ -1168,6 +1221,8 @@ impl Compiler<'_> {
                     None => Seg::Append,
                 };
                 p.segs.push(seg);
+                lines.push(self.f().line);
+                self.f().place_lines = Some((p.clone(), lines));
                 p
             }
             ExprKind::Prop {
@@ -1176,6 +1231,7 @@ impl Compiler<'_> {
                 nullsafe,
             } => {
                 let mut p = self.compile_place_base(object)?;
+                let mut lines = self.take_place_lines(&p);
                 if *nullsafe {
                     let chain = self.null_chain();
                     let mode = if chain == NullChain::Quiet {
@@ -1206,6 +1262,7 @@ impl Compiler<'_> {
                         base,
                         segs: Vec::new(),
                     };
+                    lines.clear();
                 }
                 if self.in_evaluated_const_expr() {
                     return self.const_prop_place(p, name);
@@ -1224,6 +1281,11 @@ impl Compiler<'_> {
                     _ => self.member_name(name)?,
                 };
                 p.segs.push(Seg::Prop(n));
+                lines.push(match name {
+                    MemberName::Ident(id) => id.span.line,
+                    MemberName::Expr(_) => self.f().line,
+                });
+                self.f().place_lines = Some((p.clone(), lines));
                 p
             }
             ExprKind::StaticProp { class, name, .. } => {
@@ -1248,6 +1310,16 @@ impl Compiler<'_> {
                 }
             }
         })
+    }
+
+    /// The segment lines [`Compiler::compile_place`] recorded for `p` (see
+    /// `FnCtx::place_lines`), or 0, unknown, for each segment of a place
+    /// built otherwise.
+    fn take_place_lines(&mut self, p: &Place) -> Vec<u32> {
+        match self.f().place_lines.take() {
+            Some((q, lines)) if q == *p && lines.len() == p.segs.len() => lines,
+            _ => vec![0; p.segs.len()],
+        }
     }
 
     fn compile_place_base(&mut self, base: &Expr) -> CResult<Place> {
