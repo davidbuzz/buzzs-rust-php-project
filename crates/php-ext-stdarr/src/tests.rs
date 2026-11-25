@@ -643,3 +643,20 @@ fn array_unique_and_diff_string_sets() {
         "0='a',1='b',2='c',3='d',4='e',|0=1,3=NULL,'x'='a',|'k'='b','z'='c',|0='12',2='012','a'='A','b'='a',|0=A,|5='q',|0='a',2=1,|0=1,1=2,2=3,|"
     );
 }
+
+/// `array_search()` / `in_array()` walk positions and compare strings with
+/// `zend_fast_equal_strings()`'s first-byte test: numeric strings,
+/// leading whitespace, case, holes in a list and in a hash, a reference
+/// element, `null` and `0` against `''` (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_search_positions_and_strings() {
+    let out = run(r#"$small = ['a', 'b', 'c', 'd', 'e'];
+        var_export([array_search('d', $small), array_search('z', $small), array_search('10', ['1e1']), array_search('1e1', [5, '10']), array_search(' 1', ['1']), array_search('abc', ['ABC', 'abc'])]);
+        $h = [3 => 'x', 'k' => 'y', 9 => 'z']; unset($h[3]); var_export([array_search('z', $h), array_search('y', $h), in_array('x', $h)]);
+        $l = [1, 2, 3, 4]; unset($l[1]); var_export([array_search(3, $l), array_search('4', $l), array_search('4', $l, true), in_array(2, $l)]);
+        $x = 'q'; $r = ['a', &$x]; var_export([array_search('q', $r), array_search('q', $r, true), in_array(null, ['', 0]), array_search(0, ['a', 0]), array_search('', [null])]);"#);
+    assert_eq!(
+        out.replace(['\n', ' '], ""),
+        "array(0=>3,1=>false,2=>0,3=>1,4=>0,5=>1,)array(0=>9,1=>'k',2=>false,)array(0=>2,1=>3,2=>false,3=>false,)array(0=>1,1=>1,2=>true,3=>1,4=>0,)"
+    );
+}
