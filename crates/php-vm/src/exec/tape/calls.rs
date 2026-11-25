@@ -1633,7 +1633,7 @@ fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     {
         frame.reinit_same_call(code, FrameKind::Function);
     } else {
-        frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
+        frame.reinit_for_call(code, FrameKind::Function);
     }
     if !frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
         // The frame keeps the function across calls in this slot

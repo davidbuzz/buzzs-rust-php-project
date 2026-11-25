@@ -854,7 +854,7 @@ impl FrameStack {
             {
                 f.reinit_same_call(code, kind);
             } else {
-                f.reinit_for_call(code.clone(), kind);
+                f.reinit_for_call(code, kind);
             }
         } else {
             self.vec.push(Frame::new(code.clone(), kind));
@@ -1355,6 +1355,18 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
     if n != 0 {
         // `resize_with` stores the length once, after the loop; a `push`
         // per element stored it every time (~9 instructions an element).
+        v.resize_with(n, make);
+    }
+}
+
+/// Cuts or grows `v`, whose elements are all in their released state, to
+/// `n` elements, making the new ones with `make`: the ones kept are not
+/// written ([`Frame::reinit_for_call`]).
+#[inline]
+fn fit_released<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
+    if v.len() > n {
+        v.truncate(n);
+    } else if v.len() < n {
         v.resize_with(n, make);
     }
 }
@@ -2032,13 +2044,19 @@ impl Frame {
         }
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
-            for slot in vs.slots.iter_mut() {
-                *slot = None;
-            }
-            // Names kept shared with the previous code
-            // (`clear_for_reuse`) are not this code's:
-            // `attach_symbol_table` shares the new ones.
-            if !same_code {
+            if same_code {
+                for slot in vs.slots.iter_mut() {
+                    *slot = None;
+                }
+            } else {
+                // Names kept shared with the previous code
+                // (`clear_for_reuse`) are not this code's:
+                // `attach_symbol_table` shares the new ones, and sizes the
+                // slots for them (a store's slots run parallel to its
+                // names: the previous code may have had more variables).
+                if !vs.slots.is_empty() {
+                    vs.slots.clear();
+                }
                 clear_opt(&mut vs.names.shared);
             }
         } else {
@@ -2053,35 +2071,46 @@ impl Frame {
     /// Re-initializes a pooled frame for a new user function call, leaving
     /// the compiled variables empty for the caller to fill (the arguments
     /// move into them, [`crate::call`]'s `init_cvs`).
-    pub(crate) fn reinit_for_call(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.released_direct = false;
-        self.kind = kind;
-        self.ip = 0;
-        refill_with(&mut self.tmps, code.num_tmps as usize, || Value::Null);
-        refill_with(&mut self.iters, code.num_iters as usize, || None);
-        refill_with(&mut self.fins, code.num_finally as usize, || FinState::None);
-        self.calls.clear();
-        self.silence_saved.clear();
-        let ncv = code.cv_names.len();
-        refill_with(&mut self.cvs, ncv, || CvSlot::new(None));
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-            let vs = rc_mut.get_mut();
-            vs.slots.clear();
-            vs.names.share(&code);
-            vs.index = None;
-        } else {
-            let mut vs = VarStore::for_code(&code);
-            vs.slots.clear();
-            self.vars = Rc::new(RefCell::new(vs));
-        }
-        self.symtab_attached = false;
-        self.code = code;
+    ///
+    /// A pooled frame is released ([`Frame::slots_released`]: every
+    /// temporary holds `null`, every compiled variable, iterator and
+    /// finally state nothing), so only the lengths change: each slot vector
+    /// is cut or grown to the code's count, and the slots it keeps are not
+    /// written again (php-src's `i_init_func_execute_data` sets the
+    /// variables after the arguments to undefined and leaves the
+    /// temporaries alone). Emptying and refilling them cost ~250
+    /// instructions a call of another function than the one the frame
+    /// held (`Vec::clear` calls `Value`'s out-of-line drop glue for every
+    /// temporary). The rest is [`Frame::reinit_same_call`]'s, which leaves
+    /// the variable names to the first attach of a symbol table instead of
+    /// sharing them on every call (`VarNames::share`).
+    pub(crate) fn reinit_for_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
+        debug_assert!(self.slots_released());
+        fit_released(&mut self.tmps, code.num_tmps as usize, || Value::Null);
+        fit_released(&mut self.iters, code.num_iters as usize, || None);
+        fit_released(&mut self.fins, code.num_finally as usize, || FinState::None);
+        fit_released(&mut self.cvs, code.cv_names.len(), || CvSlot::new(None));
+        self.reinit_same_call(code, kind);
+    }
+
+    /// Whether every slot of the frame is in its released state: the
+    /// temporaries `null`, the compiled variables undefined, the foreach
+    /// iterators and finally states empty. Every release leaves a frame
+    /// so ([`Frame::release_direct`], [`Frame::clear_for_reuse`],
+    /// [`Frame::clear_builtin_for_reuse`], [`Frame::clear_for_pool`] and a
+    /// newly built frame); [`Frame::reinit_for_call`] relies on it. For
+    /// debug assertions.
+    pub(crate) fn slots_released(&self) -> bool {
+        self.tmps.iter().all(Value::is_null)
+            && self.cvs.iter().all(CvSlot::is_none)
+            && self.iters.iter().all(Option::is_none)
+            && self.fins.iter().all(|f| matches!(f, FinState::None))
     }
 
     /// Re-initializes a pooled frame for a new user function call, with
     /// every compiled variable undefined.
     pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.reinit_for_call(code.clone(), kind);
+        self.reinit_for_call(&code, kind);
         let ncv = self.code.cv_names.len();
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
@@ -3281,7 +3310,7 @@ mod tests {
         let uf = user_function(code.clone());
         let other = user_function(Rc::new(OpArray::default()));
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
         assert!(!f.released_direct);
@@ -3301,13 +3330,13 @@ mod tests {
         f.direct = true;
         assert!(f.release_direct());
         assert!(f.released_direct);
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         assert!(!f.released_direct);
         f.direct = true;
         assert!(f.release_direct());
         f.clear_for_reuse(&empty);
         assert!(!f.released_direct);
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
         f.direct = true;
@@ -3322,7 +3351,7 @@ mod tests {
         let code = Rc::new(OpArray::default());
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
         f.clear_for_reuse(&empty);
@@ -3353,15 +3382,18 @@ mod tests {
         let code = named("a");
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
-        // `code`, `uf.code`, `f.code` and the shared names.
+        // `code`, `uf.code` and `f.code`: the names are shared only by a
+        // symbol table's attach.
+        assert_eq!(Rc::strong_count(&code), 3);
+        f.attach_symbol_table();
         assert_eq!(Rc::strong_count(&code), 4);
         f.clear_for_reuse(&empty);
         assert_eq!(Rc::strong_count(&code), 4);
         // The same function again: nothing to share anew.
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         assert_eq!(Rc::strong_count(&code), 4);
         f.clear_for_reuse(&empty);
         // Another function of the same shape: its own names.
@@ -3541,6 +3573,75 @@ mod tests {
         assert!(v.iter().all(|x| matches!(x, Value::Int(2))));
     }
 
+    /// Two functions of different shapes alternating in one pooled frame
+    /// (the next call at a depth calling another function): each entry
+    /// cuts or grows the slot vectors to the code's counts, keeps their
+    /// buffers, and finds every slot released; the variable names follow
+    /// the code that attaches a table.
+    #[test]
+    fn reinit_for_call_fits_the_slots_of_alternating_functions() {
+        let empty = Rc::new(OpArray::default());
+        let big = Rc::new(OpArray {
+            cv_names: ["a", "b", "c", "d"].map(ZStr::from).to_vec(),
+            num_tmps: 6,
+            num_iters: 2,
+            num_finally: 1,
+            ..OpArray::default()
+        });
+        let small = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("x")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let mut f = Frame::new_pooled(empty.clone());
+        for round in 0..3 {
+            f.reinit_for_call(&big, FrameKind::Function);
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (4, 6, 2, 1)
+            );
+            assert!(f.slots_released());
+            let tmps_at = f.tmps.as_ptr();
+            let s = ZStr::from(format!("v{round}").as_str());
+            f.tmps[5] = Value::Str(s.clone());
+            f.cvs[3].set(Some(Value::Str(s.clone())));
+            f.attach_symbol_table();
+            assert_eq!(
+                f.vars
+                    .borrow()
+                    .names
+                    .iter()
+                    .map(ZStr::as_bytes)
+                    .collect::<Vec<_>>(),
+                [&b"a"[..], b"b", b"c", b"d"]
+            );
+            f.clear_for_reuse(&empty);
+            assert_eq!(s.refcount(), 1);
+            assert!(f.slots_released());
+            f.reinit_for_call(&small, FrameKind::Function);
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (1, 2, 0, 0)
+            );
+            assert_eq!(f.tmps.as_ptr(), tmps_at);
+            assert!(f.slots_released());
+            assert!(Rc::ptr_eq(&f.code, &small));
+            {
+                let vars = f.vars.borrow();
+                assert!(vars.slots.is_empty() && vars.names.is_empty());
+            }
+            f.cvs[0].set(Some(Value::Int(round)));
+            f.attach_symbol_table();
+            {
+                let vars = f.vars.borrow();
+                assert_eq!(vars.names.len(), 1);
+                assert_eq!(vars.slots.len(), 1);
+                assert!(matches!(vars.slots[0], Some(Value::Int(r)) if r == round));
+            }
+            f.clear_for_reuse(&empty);
+        }
+    }
+
     #[test]
     fn reinit_for_call_leaves_the_compiled_variables_to_the_caller() {
         let empty = Rc::new(OpArray::default());
@@ -3552,17 +3653,20 @@ mod tests {
             ..OpArray::default()
         });
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         assert_eq!(f.tmps.len(), 3);
         assert_eq!(f.iters.len(), 1);
         assert_eq!(f.fins.len(), 1);
         assert_eq!(f.kind, FrameKind::Function);
         assert!(Rc::ptr_eq(&f.code, &code));
         {
+            // The names wait for a symbol table's attach.
             let vars = f.vars.borrow();
             assert!(vars.slots.is_empty());
-            assert_eq!(vars.names.len(), 2);
+            assert!(vars.names.is_empty());
         }
+        f.attach_symbol_table();
+        assert_eq!(f.vars.borrow().names.len(), 2);
         // `reinit_for_user` fills them as undefined.
         f.clear_for_pool(&empty);
         f.reinit_for_user(code.clone(), FrameKind::Function);

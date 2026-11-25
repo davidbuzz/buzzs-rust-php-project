@@ -2238,7 +2238,7 @@ impl Vm {
             {
                 frame.reinit_same_call(code, FrameKind::Function);
             } else {
-                frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
+                frame.reinit_for_call(code, FrameKind::Function);
             }
             set_opt(&mut frame.this, call.this.take());
             set_opt(&mut frame.scope, call.scope.take());
