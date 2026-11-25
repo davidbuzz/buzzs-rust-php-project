@@ -71,6 +71,19 @@ fn get_backref(s: &[u8], pos: usize) -> Option<(usize, usize)> {
 impl Replacement {
     /// Parses a replacement string.
     pub fn parse(replacement: &[u8]) -> Self {
+        // The usual replacement has no `\` or `$`: one literal, made in one
+        // allocation instead of grown byte by byte.
+        if !replacement.iter().any(|&c| c == b'\\' || c == b'$') {
+            let pieces = if replacement.is_empty() {
+                Vec::new()
+            } else {
+                vec![ReplacementPiece::Literal(replacement.to_vec())]
+            };
+            return Self {
+                pieces,
+                simple: true,
+            };
+        }
         let mut pieces = Vec::new();
         let mut lit: Vec<u8> = Vec::new();
         let mut simple = true;
@@ -116,6 +129,23 @@ impl Replacement {
     /// True when the string contains no `\` or `$` at all.
     pub fn is_simple(&self) -> bool {
         self.simple
+    }
+
+    /// The length of [`Replacement::expand`]'s output for one match.
+    pub(crate) fn expanded_len(&self, ov: &[usize], count: usize) -> usize {
+        self.pieces
+            .iter()
+            .map(|piece| match piece {
+                ReplacementPiece::Literal(l) => l.len(),
+                ReplacementPiece::Group(n) => {
+                    if *n < count && ov[2 * n] != ffi::PCRE2_UNSET {
+                        ov[2 * n + 1].saturating_sub(ov[2 * n])
+                    } else {
+                        0
+                    }
+                }
+            })
+            .sum()
     }
 
     /// Appends the substitution for one match: `count` is PCRE2's return
@@ -168,6 +198,12 @@ pub fn limit_from_php(limit: i64) -> usize {
 trait Substitute {
     /// Appends the replacement; `false` aborts (callback threw).
     fn substitute(&mut self, ex: &Exec<'_>, count: usize, out: &mut Vec<u8>) -> bool;
+
+    /// The length the substitution will have, when known before it is
+    /// made (0 otherwise): it sizes the result on the first match.
+    fn len_hint(&self, _ex: &Exec<'_>, _count: usize) -> usize {
+        0
+    }
 }
 
 struct Static<'r>(&'r Replacement);
@@ -176,6 +212,10 @@ impl Substitute for Static<'_> {
     fn substitute(&mut self, ex: &Exec<'_>, count: usize, out: &mut Vec<u8>) -> bool {
         self.0.expand(out, ex.subject, ex.ov(), count);
         true
+    }
+
+    fn len_hint(&self, ex: &Exec<'_>, count: usize) -> usize {
+        self.0.expanded_len(ex.ov(), count)
     }
 }
 
@@ -242,7 +282,14 @@ fn replace_loop(
                     };
                 }
                 replaced += 1;
-                let buf = out.get_or_insert_with(Vec::new);
+                // The result is made on the first match with room for
+                // twice what it then needs, as `php_pcre_replace_impl`
+                // allocates `2 * new_len`; it grows by doubling after that
+                // and is cut to its length at the end.
+                let buf = out.get_or_insert_with(|| {
+                    let new_len = (s - last_end.min(s)).saturating_add(sub.len_hint(&ex, n));
+                    Vec::with_capacity(new_len.saturating_mul(2))
+                });
                 buf.extend_from_slice(subject.get(last_end..s).unwrap_or_default());
                 if !sub.substitute(&ex, n, buf) {
                     // Exception in the callback: `goto error` with count >= 0.
@@ -410,6 +457,43 @@ mod tests {
 
     fn lit(s: &str) -> ReplacementPiece {
         Literal(s.as_bytes().to_vec())
+    }
+
+    /// A replacement without `\` or `$` is one literal (none when
+    /// empty), simple, as the byte-by-byte walk makes it.
+    #[test]
+    fn parse_plain_literal() {
+        let r = Replacement::parse(b"N-x y");
+        assert_eq!(r.pieces(), &[lit("N-x y")]);
+        assert!(r.is_simple());
+        let r = Replacement::parse(b"");
+        assert!(r.pieces().is_empty() && r.is_simple());
+        assert!(!Replacement::parse(b"a$").is_simple());
+    }
+
+    /// `expanded_len` is the length `expand` appends, unset and missing
+    /// groups included; the result is the same with the up-front room.
+    #[test]
+    fn expanded_len_matches_expand() {
+        let r = Replacement::parse(b"<$1|$2|$9>");
+        let subject = b"xxabyy";
+        // Group 1 = "ab" (2..4), group 2 unset; count 3.
+        let ov = [2, 4, 2, 4, ffi::PCRE2_UNSET, ffi::PCRE2_UNSET];
+        let mut out = Vec::new();
+        r.expand(&mut out, subject, &ov, 3);
+        assert_eq!(out, b"<ab||>");
+        assert_eq!(r.expanded_len(&ov, 3), out.len());
+        let re = Regex::compile(b"/(a)(b)?/").unwrap();
+        let cfg = MatchConfig::default();
+        let out = replace(
+            &re,
+            &cfg,
+            b"zaab",
+            &Replacement::parse(b"[$2$1]"),
+            usize::MAX,
+        );
+        assert_eq!(out.result, Ok(b"z[a][ba]".to_vec()));
+        assert_eq!(out.count, 2);
     }
 
     #[test]
