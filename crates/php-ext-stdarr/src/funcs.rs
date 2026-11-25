@@ -449,8 +449,16 @@ pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 macro_rules! args_fn {
     ($name:ident, $f:path) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            let vals = rest(a, 0);
-            let r = $f(vm, &vals);
+            // The arguments as they are when none is a reference (a
+            // by-value variadic's never is): `rest` copied them into a
+            // vector of their own, then released it (~120 instructions
+            // of a two-array `array_merge()`).
+            let r = if a.values.iter().any(|v| matches!(v, Value::Reference(_))) {
+                let vals = rest(a, 0);
+                $f(vm, &vals)
+            } else {
+                $f(vm, &a.values)
+            };
             Ok(Value::Array(rt(vm, r)?))
         }
     };

@@ -166,3 +166,51 @@ t();
 0='a' 1='b' 2='c' 3='n'
 "#);
 }
+
+/// array_merge() and the other variadic array builtins called with their
+/// arguments as they are: string keys overwritten, lists renumbered and
+/// filled to size, a shared reference kept, the type error of a
+/// non-array. Expected output from php8.5, except the named variadic
+/// error, which follows php-src master (Zend/zend_API.c).
+#[test]
+fn array_merge_forms_give_what_php_gives() {
+    let out = run(r#"<?php
+function show($a) { $a[] = 'n'; $o = []; foreach ($a as $k => $v) { $o[] = "$k=" . (is_array($v) ? '[' . implode(',', $v) . ']' : var_export($v, true)); } return implode(' ', $o); }
+function t() {
+    $x = ['k' => 1, 'j' => 2]; $y = ['z' => 3, 'k' => 4];
+    $l = [1, 2, 3]; unset($l[1]); $m = [5 => 'a', 9 => 'b'];
+    echo show(array_merge($x, $y)), "\n";
+    echo show(array_merge($l, [7, 8])), "\n";
+    echo show(array_merge($l)), "\n";
+    echo show(array_merge($m, $x, $l)), "\n";
+    echo show(array_merge([], $m)), "\n";
+    echo show(array_merge([], [])), "\n";
+    echo show(array_merge()), "\n";
+    $r = 1; $withref = [&$r, 2];
+    $mm = array_merge($withref, [3]); $r = 9;
+    echo show($mm), "\n";
+    echo show(array_merge_recursive([1, [2]], [3], ['a' => [4]], ['a' => 5])), "\n";
+    echo show(array_merge_recursive($l, [7])), "\n";
+    try { array_merge([1], 2); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { array_merge(...['a' => [1]]); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+    echo show(array_intersect([1, 2, 3], [2, 3])), "\n";
+    echo show(array_diff_key(['a' => 1, 'b' => 2], ['a' => 0])), "\n";
+}
+t();
+"#);
+    assert_eq!(out, r#"k=4 j=2 z=3 0='n'
+0=1 1=3 2=7 3=8 4='n'
+0=1 1=3 2='n'
+0='a' 1='b' k=1 j=2 2=1 3=3 4='n'
+0='a' 1='b' 2='n'
+0='n'
+0='n'
+0=9 1=2 2=3 3='n'
+0=1 1=[2] 2=3 a=[4,5] 3='n'
+0=1 1=3 2=7 3='n'
+array_merge(): Argument #2 must be of type array, int given
+ArgumentCountError: Internal function array_merge() does not accept named variadic arguments
+1=2 2=3 3='n'
+b=2 0='n'
+"#);
+}

@@ -124,12 +124,15 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
     if args.is_empty() {
         return Ok(ZArray::new());
     }
-    let tables = arrays(func, args, None)?;
-    let count: u64 = tables.iter().map(|a| a.len() as u64).sum();
+    // `Z_PARAM_VARIADIC('+')` + the type check of each argument, without
+    // collecting them into a vector first.
+    check_arrays(func, args, None)?;
+    let tables = || args.iter().filter_map(as_table);
+    let count: u64 = tables().map(|a| a.len() as u64).sum();
     if count >= u64::from(HT_MAX_SIZE) {
         return Err(too_many());
     }
-    if let [a, b] = tables[..] {
+    if let [Value::Array(a), Value::Array(b)] = args {
         let ret = if a.is_empty() {
             Some(b)
         } else if b.is_empty() {
@@ -147,8 +150,20 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
             }
         }
     }
-    let src = tables[0];
-    let mut dest = HashTable::with_capacity(usize::try_from(count).unwrap_or(0));
+    let size = usize::try_from(count).unwrap_or(0);
+    // Lists only: every key is renumbered, so the result is their values
+    // in order, the list filled to size (`ZEND_HASH_FILL_PACKED`).
+    if tables().all(|t| t.is_packed()) {
+        return Ok(ZArray::from_list_sized(
+            size,
+            tables().flat_map(|t| t.values()).map(copy_elem),
+        ));
+    }
+    let mut rest = tables();
+    let Some(src) = rest.next() else {
+        return Ok(ZArray::new());
+    };
+    let mut dest = HashTable::with_capacity(size);
     for (k, v) in src.iter() {
         match k {
             ArrayKey::Str(s) => {
@@ -159,7 +174,7 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
             }
         }
     }
-    for a in &tables[1..] {
+    for a in rest {
         if recursive {
             php_array_merge_recursive(ctx, &mut dest, a)?;
         } else {
@@ -167,6 +182,30 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
         }
     }
     Ok(ZArray::from_table(dest))
+}
+
+/// The array an argument holds (checked by [`check_arrays`]).
+fn as_table(v: &Value) -> Option<&ZArray> {
+    match v {
+        Value::Array(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// [`arrays`]' type check alone: the error for the first argument that
+/// is not an array.
+fn check_arrays(func: &str, args: &[Value], first_name: Option<&str>) -> RtResult<()> {
+    for (i, a) in args.iter().enumerate() {
+        if !matches!(a, Value::Array(_)) {
+            return Err(not_array_error(
+                func,
+                i + 1,
+                if i == 0 { first_name } else { None },
+                a,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `array_merge(array ...$arrays): array`.
