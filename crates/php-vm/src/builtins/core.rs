@@ -55,7 +55,7 @@ fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 /// (name, value, sensitive) grown per argument, a name lookup per
 /// parameter, then an insert of each): ~940 instructions for two
 /// arguments, C's whole call ~500.
-fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
+pub(crate) fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
     if f.symtab_attached || f.kind != FrameKind::Function {
         return None;
     }
@@ -68,10 +68,9 @@ fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
     }
     let nparams = uf.params.len();
     let passed = f.num_args();
-    let mut t = HashTable::with_capacity_packed(passed);
-    for i in 0..passed.min(nparams) {
+    let declared = (0..passed.min(nparams)).map(|i| {
         // Not yet received (RECV pending): the passed value.
-        let v = match f.cvs.get(i).and_then(crate::vm::CvSlot::get) {
+        match f.cvs.get(i).and_then(crate::vm::CvSlot::get) {
             Some(v) => v.deref(),
             None => f
                 .args
@@ -79,13 +78,10 @@ fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
                 .and_then(Option::as_ref)
                 .map(Value::deref)
                 .unwrap_or_default(),
-        };
-        let _ = t.push(v);
-    }
-    for a in f.args.iter().skip(nparams).flatten() {
-        let _ = t.push(a.deref());
-    }
-    Some(ZArray::from_table(t))
+        }
+    });
+    let extra = f.args.iter().skip(nparams).flatten().map(Value::deref);
+    Some(ZArray::from_list_sized(passed, declared.chain(extra)))
 }
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {

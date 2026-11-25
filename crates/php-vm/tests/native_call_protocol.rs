@@ -82,7 +82,9 @@ foreach (f('a,b,c', [1, 2, 3, 4]) as $line) {
     echo $line, "\n";
 }
 "#);
-    assert_eq!(out, r#"a|b|c:3
+    assert_eq!(
+        out,
+        r#"a|b|c:3
 2,3
 b,b,c
 k
@@ -108,7 +110,8 @@ explode(,a,b,c)
 2
 first
 0
-"#);
+"#
+    );
 }
 
 /// Lists the array builtins build to size (array_keys, array_slice,
@@ -145,7 +148,9 @@ function t() {
 }
 t();
 "#);
-    assert_eq!(out, r#"0=5 1='x' 2=9 3='n'
+    assert_eq!(
+        out,
+        r#"0=5 1='x' 2=9 3='n'
 0=0 1=2 2=3 3='n'
 0='n'
 0='c' 1='d' 2='n'
@@ -164,7 +169,8 @@ t();
 0='a' x='b' 1='c' 2=0 3='n'
 0='a' 1='c' 2='d' 3='n'
 0='a' 1='b' 2='c' 3='n'
-"#);
+"#
+    );
 }
 
 /// array_merge() and the other variadic array builtins called with their
@@ -198,7 +204,9 @@ function t() {
 }
 t();
 "#);
-    assert_eq!(out, r#"k=4 j=2 z=3 0='n'
+    assert_eq!(
+        out,
+        r#"k=4 j=2 z=3 0='n'
 0=1 1=3 2=7 3=8 4='n'
 0=1 1=3 2='n'
 0='a' 1='b' k=1 j=2 2=1 3=3 4='n'
@@ -212,5 +220,42 @@ array_merge(): Argument #2 must be of type array, int given
 ArgumentCountError: Internal function array_merge() does not accept named variadic arguments
 1=2 2=3 3='n'
 b=2 0='n'
+"#
+    );
+}
+
+/// func_get_args() called by its unqualified name in a namespace (the
+/// builtin, read from the frame and filled to size) and as `\func_get_args()`
+/// (the compiled op): no arguments, extra arguments, a parameter changed
+/// before the call, an omitted default, a by-reference parameter.
+/// Expected output from php8.5.
+#[test]
+fn func_get_args_gives_what_php_gives() {
+    let out = run(r#"<?php
+namespace N;
+function show($a) { $a[] = 'n'; $o = []; foreach ($a as $k => $v) { $o[] = "$k=" . var_export($v, true); } return implode(' ', $o); }
+function none() { return func_get_args(); }
+function two($a, $b = 5) { $a = 'changed'; return func_get_args(); }
+function refs(&$r, $x) { return func_get_args(); }
+function direct($a) { return \func_get_args(); }
+$v = 1;
+echo show(none()), "\n";
+echo show(none(1, 'x', [2])), "\n";
+echo show(two(1)), "\n";
+echo show(two(1, 2, 3, 4)), "\n";
+echo show(refs($v, 7, 8)), "\n";
+echo show(direct('d', 'e')), "\n";
 "#);
+    assert_eq!(
+        out,
+        r#"0='n'
+0=1 1='x' 2=array (
+  0 => 2,
+) 3='n'
+0='changed' 1='n'
+0='changed' 1=2 2=3 3=4 4='n'
+0=1 1=7 2=8 3='n'
+0='d' 1='e' 2='n'
+"#
+    );
 }
