@@ -7,14 +7,15 @@ use crate::class::cflags;
 use crate::func::Func;
 use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 thread_local! {
-    /// The function table the last [`Vm::request_reset`] on this thread
-    /// left: the VM's address, the function-table version and the table's
-    /// length. Equal at the next reset, the table holds no user function.
-    static CLEAN_FUNCTIONS: Cell<Option<(usize, u64, usize)>> = const { Cell::new(None) };
+    /// The function table the last full pass of [`Vm::request_reset`] on
+    /// this thread left: its VM (by the VM's own `empty_code`, which the
+    /// `Weak` keeps from being reused by another VM) and its length.
+    static CLEAN_FUNCTIONS: RefCell<Option<(Weak<crate::opcode::OpArray>, usize)>> =
+        const { RefCell::new(None) };
 }
 
 /// The objects store and the collector as the next request's VM must find
@@ -73,6 +74,18 @@ fn reset_internal_class(c: &crate::class::Class) {
 }
 
 impl Vm {
+    /// Whether the function table holds no user function: it has the
+    /// length the last full pass of [`Vm::request_reset`] left this VM's
+    /// table with (see there).
+    fn functions_clean(&self) -> bool {
+        CLEAN_FUNCTIONS.with(|c| {
+            c.borrow().as_ref().is_some_and(|(vm, len)| {
+                std::ptr::eq(vm.as_ptr(), Rc::as_ptr(&self.empty_code))
+                    && *len == self.functions.len()
+            })
+        })
+    }
+
     /// `zend_deactivate()` after `shutdown_executor()`, for a SAPI that
     /// drops the VM once the request is over (CGI, FPM):
     /// `zend_ini_deactivate()` restores every directive the request
@@ -144,17 +157,13 @@ impl Vm {
         // are off since the request's shutdown. php-src stops at the first
         // persistent function (`zend_hash_discard()` past
         // `EG(persistent_functions_count)`); here the pass over the
-        // thousands of internal functions is skipped when the table is the
-        // one the previous reset left: a user function enters the table
-        // only with a new function-table version.
-        let stamp = |vm: &Vm| {
-            (
-                std::ptr::from_ref(vm) as usize,
-                crate::func::FUNC_TABLE_VERSION.load(std::sync::atomic::Ordering::Relaxed),
-                vm.functions.len(),
-            )
-        };
-        if CLEAN_FUNCTIONS.with(Cell::get) != Some(stamp(self)) {
+        // thousands of internal functions is skipped when the table has
+        // the length the previous reset of this VM left it with. Internal
+        // functions leave the table only at startup (`disable_functions`)
+        // or together with their own registration (the destructor
+        // fiber's), so a request that declared a function grows it, and
+        // one that registered an internal function too gets the pass.
+        if !self.functions_clean() {
             self.functions.retain(|_, f| match f {
                 Func::User(u) => {
                     u.statics.borrow_mut().clear();
@@ -163,7 +172,8 @@ impl Vm {
                 Func::Builtin(_) => true,
             });
             crate::func::bump_func_table_version();
-            CLEAN_FUNCTIONS.with(|c| c.set(Some(stamp(self))));
+            let stamp = (Rc::downgrade(&self.empty_code), self.functions.len());
+            CLEAN_FUNCTIONS.with(|c| *c.borrow_mut() = Some(stamp));
         }
         crate::builtins::info::forget_user_functions();
 
