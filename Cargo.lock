@@ -670,6 +670,7 @@ name = "php-ext-json"
 version = "0.1.0"
 dependencies = [
  "php-json",
+ "php-memlimit",
  "php-runtime",
  "php-vm",
 ]
