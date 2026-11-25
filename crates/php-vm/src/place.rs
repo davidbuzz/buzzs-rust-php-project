@@ -2181,18 +2181,16 @@ impl Vm {
     }
 
     /// The bare compiled variable `place` names in the running frame, when
-    /// that frame is a function's or the main script's and its symbol
-    /// table is not attached: the CV slot is then the variable (php-src's
-    /// `EX_VAR`), and an access to it needs no table.
+    /// that frame is a function's and its symbol table is not attached:
+    /// the CV slot is then the variable (php-src's `EX_VAR`), and an access
+    /// to it needs no table. Not the main script's: the global table keeps
+    /// its own entry for each of its variables, which an undefined slot
+    /// would not clear when the table is attached again
+    /// ([`crate::vm::Frame::sync_cvs_to_symtab`] skips undefined slots).
     #[inline]
     fn bare_cv_slot(&self, pid: PlaceId) -> Option<u32> {
         let f = self.frames.last()?;
-        if f.symtab_attached
-            || !matches!(
-                f.kind,
-                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
-            )
-        {
+        if f.symtab_attached || f.kind != crate::vm::FrameKind::Function {
             return None;
         }
         let p = f.code.places.get(pid as usize)?;
@@ -2274,9 +2272,6 @@ impl Vm {
         let Some(f) = self.frames.last() else {
             return Err(v);
         };
-        if f.kind != crate::vm::FrameKind::Function {
-            return Err(v);
-        }
         let vars = Rc::as_ptr(&f.vars);
         let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
             Some(cur) => cur.deref(),
