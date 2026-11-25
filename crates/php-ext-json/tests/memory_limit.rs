@@ -81,7 +81,7 @@ fn reservations_beyond_memory_limit_are_fatal() {
 
     // Even with JSON_THROW_ON_ERROR it is the fatal, not an exception.
     let out = run(
-        r#"ini_set("memory_limit", "16M"); try { json_decode('"' . str_repeat("a", 20 << 20) . '"', false, 512, JSON_THROW_ON_ERROR); } catch (JsonException $e) { echo "caught"; } echo "not reached";"#,
+        r#"ini_set("memory_limit", "16M"); $n = 6 << 20; $j = str_repeat("\x80", $n); $j[0] = '"'; $j[$n - 1] = '"'; try { json_decode($j, false, 512, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR); } catch (JsonException $e) { echo "caught"; } echo "not reached";"#,
     );
     assert!(
         out.contains("Allowed memory size of 16777216 bytes exhausted"),
