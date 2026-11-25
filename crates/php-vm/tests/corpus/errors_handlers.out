@@ -130,37 +130,37 @@ array (
 -- h_false 0
 F[2] Undefined variable $undef @8
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+Warning: Undefined variable $undef in errors_handlers.php on line 8
 F[2] Undefined array key 7 @10
 
-Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 7 in errors_handlers.php on line 10
 F[2] Undefined array key 9 @10
 
-Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 9 in errors_handlers.php on line 10
 F[2] Uninitialized string offset 10 @11
 
-Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+Warning: Uninitialized string offset 10 in errors_handlers.php on line 11
 F[2] A non-numeric value encountered @12
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+Warning: A non-numeric value encountered in errors_handlers.php on line 12
 F[2] Undefined property: stdClass::$missing @14
 
-Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+Warning: Undefined property: stdClass::$missing in errors_handlers.php on line 14
 F[8192] Implicit conversion from float 1.5 to int loses precision @16
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_handlers.php on line 16
 F[8192] Implicit conversion from float 1.7 to int loses precision @17
 
-Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+Deprecated: Implicit conversion from float 1.7 to int loses precision in errors_handlers.php on line 17
 F[8192] Automatic conversion of false to array is deprecated @18
 
-Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+Deprecated: Automatic conversion of false to array is deprecated in errors_handlers.php on line 18
 F[2] Array to string conversion @19
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+Warning: Array to string conversion in errors_handlers.php on line 19
 F[2] Array to string conversion @20
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+Warning: Array to string conversion in errors_handlers.php on line 20
 array (
   0 => 0,
   1 => 
@@ -195,37 +195,37 @@ array (
 -- h_false 1
 F[2] Undefined variable $undef @8
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+Warning: Undefined variable $undef in errors_handlers.php on line 8
 F[2] Undefined array key 7 @10
 
-Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 7 in errors_handlers.php on line 10
 F[2] Undefined array key 9 @10
 
-Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 9 in errors_handlers.php on line 10
 F[2] Uninitialized string offset 10 @11
 
-Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+Warning: Uninitialized string offset 10 in errors_handlers.php on line 11
 F[2] A non-numeric value encountered @12
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+Warning: A non-numeric value encountered in errors_handlers.php on line 12
 F[2] Undefined property: stdClass::$missing @14
 
-Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+Warning: Undefined property: stdClass::$missing in errors_handlers.php on line 14
 F[8192] Implicit conversion from float 1.5 to int loses precision @16
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_handlers.php on line 16
 F[8192] Implicit conversion from float 1.7 to int loses precision @17
 
-Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+Deprecated: Implicit conversion from float 1.7 to int loses precision in errors_handlers.php on line 17
 F[8192] Automatic conversion of false to array is deprecated @18
 
-Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+Deprecated: Automatic conversion of false to array is deprecated in errors_handlers.php on line 18
 F[2] Array to string conversion @19
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+Warning: Array to string conversion in errors_handlers.php on line 19
 F[2] Array to string conversion @20
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+Warning: Array to string conversion in errors_handlers.php on line 20
 array (
   0 => 1,
   1 => 
@@ -260,37 +260,37 @@ array (
 -- h_false 2
 F[2] Undefined variable $undef @8
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 8
+Warning: Undefined variable $undef in errors_handlers.php on line 8
 F[2] Undefined array key 7 @10
 
-Warning: Undefined array key 7 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 7 in errors_handlers.php on line 10
 F[2] Undefined array key 9 @10
 
-Warning: Undefined array key 9 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 10
+Warning: Undefined array key 9 in errors_handlers.php on line 10
 F[2] Uninitialized string offset 10 @11
 
-Warning: Uninitialized string offset 10 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 11
+Warning: Uninitialized string offset 10 in errors_handlers.php on line 11
 F[2] A non-numeric value encountered @12
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 12
+Warning: A non-numeric value encountered in errors_handlers.php on line 12
 F[2] Undefined property: stdClass::$missing @14
 
-Warning: Undefined property: stdClass::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 14
+Warning: Undefined property: stdClass::$missing in errors_handlers.php on line 14
 F[8192] Implicit conversion from float 1.5 to int loses precision @16
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 16
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_handlers.php on line 16
 F[8192] Implicit conversion from float 1.7 to int loses precision @17
 
-Deprecated: Implicit conversion from float 1.7 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 17
+Deprecated: Implicit conversion from float 1.7 to int loses precision in errors_handlers.php on line 17
 F[8192] Automatic conversion of false to array is deprecated @18
 
-Deprecated: Automatic conversion of false to array is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 18
+Deprecated: Automatic conversion of false to array is deprecated in errors_handlers.php on line 18
 F[2] Array to string conversion @19
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 19
+Warning: Array to string conversion in errors_handlers.php on line 19
 F[2] Array to string conversion @20
 
-Warning: Array to string conversion in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_handlers.php on line 20
+Warning: Array to string conversion in errors_handlers.php on line 20
 array (
   0 => 2,
   1 => 

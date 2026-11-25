@@ -205,52 +205,52 @@ array (
 -- false 0
 H[false] Undefined array key "y" @9
 
-Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+Warning: Undefined array key "y" in errors_mid_op.php on line 9
 H[false] Undefined variable $undef @10
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Warning: Undefined variable $undef in errors_mid_op.php on line 10
 H[false] Using null as an array offset is deprecated, use an empty string instead @10
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in errors_mid_op.php on line 10
 H[false] Undefined variable $undef2 @11
 
-Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+Warning: Undefined variable $undef2 in errors_mid_op.php on line 11
 H[false] Implicit conversion from float 1.5 to int loses precision @12
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 12
 H[false] Undefined variable $undef3 @13
 
-Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+Warning: Undefined variable $undef3 in errors_mid_op.php on line 13
 H[false] Undefined property: P::$missing @14
 
-Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+Warning: Undefined property: P::$missing in errors_mid_op.php on line 14
 H[false] Undefined array key "nope" @15
 
-Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+Warning: Undefined array key "nope" in errors_mid_op.php on line 15
 H[false] Trying to access array offset on null @17
 
-Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+Warning: Trying to access array offset on null in errors_mid_op.php on line 17
 H[false] Implicit conversion from float 1.5 to int loses precision @18
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 18
 H[false] Undefined array key 2 @19
 
-Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+Warning: Undefined array key 2 in errors_mid_op.php on line 19
 H[false] A non-numeric value encountered @20
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+Warning: A non-numeric value encountered in errors_mid_op.php on line 20
 H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
 
-Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in errors_mid_op.php on line 21
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 array (
   0 => 
   array (
@@ -305,52 +305,52 @@ array (
 -- false 1
 H[false] Undefined array key "y" @9
 
-Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+Warning: Undefined array key "y" in errors_mid_op.php on line 9
 H[false] Undefined variable $undef @10
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Warning: Undefined variable $undef in errors_mid_op.php on line 10
 H[false] Using null as an array offset is deprecated, use an empty string instead @10
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in errors_mid_op.php on line 10
 H[false] Undefined variable $undef2 @11
 
-Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+Warning: Undefined variable $undef2 in errors_mid_op.php on line 11
 H[false] Implicit conversion from float 1.5 to int loses precision @12
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 12
 H[false] Undefined variable $undef3 @13
 
-Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+Warning: Undefined variable $undef3 in errors_mid_op.php on line 13
 H[false] Undefined property: P::$missing @14
 
-Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+Warning: Undefined property: P::$missing in errors_mid_op.php on line 14
 H[false] Undefined array key "nope" @15
 
-Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+Warning: Undefined array key "nope" in errors_mid_op.php on line 15
 H[false] Trying to access array offset on null @17
 
-Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+Warning: Trying to access array offset on null in errors_mid_op.php on line 17
 H[false] Implicit conversion from float 1.5 to int loses precision @18
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 18
 H[false] Undefined array key 2 @19
 
-Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+Warning: Undefined array key 2 in errors_mid_op.php on line 19
 H[false] A non-numeric value encountered @20
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+Warning: A non-numeric value encountered in errors_mid_op.php on line 20
 H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
 
-Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in errors_mid_op.php on line 21
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 array (
   0 => 
   array (
@@ -405,52 +405,52 @@ array (
 -- false 2
 H[false] Undefined array key "y" @9
 
-Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+Warning: Undefined array key "y" in errors_mid_op.php on line 9
 H[false] Undefined variable $undef @10
 
-Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Warning: Undefined variable $undef in errors_mid_op.php on line 10
 H[false] Using null as an array offset is deprecated, use an empty string instead @10
 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in errors_mid_op.php on line 10
 H[false] Undefined variable $undef2 @11
 
-Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+Warning: Undefined variable $undef2 in errors_mid_op.php on line 11
 H[false] Implicit conversion from float 1.5 to int loses precision @12
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 12
 H[false] Undefined variable $undef3 @13
 
-Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+Warning: Undefined variable $undef3 in errors_mid_op.php on line 13
 H[false] Undefined property: P::$missing @14
 
-Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+Warning: Undefined property: P::$missing in errors_mid_op.php on line 14
 H[false] Undefined array key "nope" @15
 
-Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+Warning: Undefined array key "nope" in errors_mid_op.php on line 15
 H[false] Trying to access array offset on null @17
 
-Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+Warning: Trying to access array offset on null in errors_mid_op.php on line 17
 H[false] Implicit conversion from float 1.5 to int loses precision @18
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+Deprecated: Implicit conversion from float 1.5 to int loses precision in errors_mid_op.php on line 18
 H[false] Undefined array key 2 @19
 
-Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+Warning: Undefined array key 2 in errors_mid_op.php on line 19
 H[false] A non-numeric value encountered @20
 
-Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+Warning: A non-numeric value encountered in errors_mid_op.php on line 20
 H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
 
-Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in errors_mid_op.php on line 21
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 H[false] Undefined variable $undefLoop @22
 
-Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+Warning: Undefined variable $undefLoop in errors_mid_op.php on line 22
 array (
   0 => 
   array (

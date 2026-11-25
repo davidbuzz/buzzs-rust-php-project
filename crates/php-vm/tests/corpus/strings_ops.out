@@ -1,5 +1,5 @@
 
-Deprecated: Using ${var} in strings is deprecated, use {$var} instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php on line 33
+Deprecated: Using ${var} in strings is deprecated, use {$var} instead in strings_ops.php on line 33
 -- hello
 E[2] Uninitialized string offset 10 @6
 E[2] Uninitialized string offset -10 @6
@@ -501,8 +501,8 @@ array (
 E[2] Array to string conversion @33
 E[2] Array to string conversion @33
 
-Fatal error: Uncaught Error: Object of class stdClass could not be converted to string in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php:33
+Fatal error: Uncaught Error: Object of class stdClass could not be converted to string in strings_ops.php:33
 Stack trace:
-#0 /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php(38): concat(0.1)
+#0 strings_ops.php(38): concat(0.1)
 #1 {main}
-  thrown in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/strings_ops.php on line 33
+  thrown in strings_ops.php on line 33

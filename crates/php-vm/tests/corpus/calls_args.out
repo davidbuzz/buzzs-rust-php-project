@@ -206,10 +206,10 @@ array (
   2 => 5,
   3 => true,
 )',
-  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
+  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
+  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in calls_args.php on line 27',
+  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in calls_args.php on line 27',
+  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
   30 => 
   array (
     0 => 1,
@@ -423,10 +423,10 @@ array (
   2 => 5,
   3 => true,
 )',
-  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
+  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
+  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in calls_args.php on line 27',
+  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in calls_args.php on line 27',
+  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
   30 => 
   array (
     0 => 1,
@@ -641,10 +641,10 @@ array (
   2 => 5,
   3 => true,
 )',
-  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
+  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
+  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in calls_args.php on line 27',
+  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in calls_args.php on line 27',
+  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
   30 => 
   array (
     0 => 1,
@@ -860,10 +860,10 @@ array (
   2 => 5,
   3 => true,
 )',
-  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
-  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/calls_args.php on line 27',
+  26 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
+  27 => 'typed(): Argument #1 ($i) must be of type int, null given, called in calls_args.php on line 27',
+  28 => 'typed(): Argument #1 ($i) must be of type int, array given, called in calls_args.php on line 27',
+  29 => 'typed(): Argument #1 ($i) must be of type int, string given, called in calls_args.php on line 27',
   30 => 
   array (
     0 => 1,

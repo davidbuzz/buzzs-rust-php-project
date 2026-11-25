@@ -17,7 +17,7 @@ no throw
 2
 3
 
-Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+Deprecated: Implicit conversion from float 3.5 to int loses precision in exceptions_flow.php on line 11
 3
 typedRet(): Return value must be of type int, string returned
 typedRet(): Return value must be of type int, null returned
@@ -43,7 +43,7 @@ caught with dtor
 2
 3
 
-Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+Deprecated: Implicit conversion from float 3.5 to int loses precision in exceptions_flow.php on line 11
 3
 typedRet(): Return value must be of type int, string returned
 typedRet(): Return value must be of type int, null returned
@@ -66,7 +66,7 @@ no throw
 2
 3
 
-Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+Deprecated: Implicit conversion from float 3.5 to int loses precision in exceptions_flow.php on line 11
 3
 typedRet(): Return value must be of type int, string returned
 typedRet(): Return value must be of type int, null returned
@@ -92,7 +92,7 @@ caught with dtor
 2
 3
 
-Deprecated: Implicit conversion from float 3.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/exceptions_flow.php on line 11
+Deprecated: Implicit conversion from float 3.5 to int loses precision in exceptions_flow.php on line 11
 3
 typedRet(): Return value must be of type int, string returned
 typedRet(): Return value must be of type int, null returned

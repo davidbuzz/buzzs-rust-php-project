@@ -1,7 +1,7 @@
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 array (
   0 => 'A',
   1 => 'A',
@@ -160,9 +160,9 @@ array (
   33 => 102,
 )
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 array (
   0 => 'A',
   1 => 'A',
@@ -321,9 +321,9 @@ array (
   33 => 104,
 )
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 array (
   0 => 'A',
   1 => 'A',
@@ -482,9 +482,9 @@ array (
   33 => 106,
 )
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 
-Deprecated: Use of "parent" in callables is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/class_statics_lsb.php on line 9
+Deprecated: Use of "parent" in callables is deprecated in class_statics_lsb.php on line 9
 array (
   0 => 'A',
   1 => 'A',

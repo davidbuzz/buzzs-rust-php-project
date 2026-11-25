@@ -146,7 +146,7 @@ array (
   17 => false,
 )
 set(k) set() 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/arrays_isset.php on line 6
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in arrays_isset.php on line 6
 unset(n) get(a) array (
   'a' => 
   array (
@@ -304,7 +304,7 @@ array (
   17 => false,
 )
 set(k) set() 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/arrays_isset.php on line 6
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in arrays_isset.php on line 6
 unset(n) get(a) array (
   'a' => 
   array (
@@ -462,7 +462,7 @@ array (
   17 => false,
 )
 set(k) set() 
-Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/arrays_isset.php on line 6
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in arrays_isset.php on line 6
 unset(n) get(a) array (
   'a' => 
   array (
