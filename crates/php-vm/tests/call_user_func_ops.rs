@@ -775,3 +775,59 @@ end
     );
     assert_eq!(status, 0);
 }
+
+/// Static methods by `"Class::name"` and `['Class', 'name']` from one call
+/// site: a leading `\`, other cases, a subclass, an alias (never taken
+/// for the class itself), an object of the class, a private method from
+/// inside and outside its class, and the late static binding of a call
+/// made from an instance method whose `$this` is of a subclass
+/// (`zend_is_callable_check_class`), which a static context does not get.
+#[test]
+fn static_method_callbacks_from_one_call_site() {
+    let (status, out) = run(r#"<?php
+class A {
+    static function s($x = '') { return static::class . $x; }
+    private static function p() { return 'p' . static::class; }
+    function inst() {
+        $r = '';
+        for ($i = 0; $i < 2; $i++) $r .= call_user_func(['A', 's']) . call_user_func('A::s', 1) . call_user_func_array('A::p', []) . ' ';
+        return $r;
+    }
+    static function st() {
+        $r = '';
+        for ($i = 0; $i < 2; $i++) $r .= call_user_func(['A', 's']) . call_user_func('A::p') . ' ';
+        return $r;
+    }
+}
+class B extends A {}
+class Other { function run($cb) { return call_user_func($cb, '!'); } }
+for ($i = 0; $i < 3; $i++) {
+    echo call_user_func(['A', 's']), call_user_func('B::s'), call_user_func(['\A', 's']), call_user_func_array('\B::s', [$i]), "\n";
+}
+echo (new A)->inst(), (new B)->inst(), (new A)->inst(), "\n";
+echo A::st(), B::st(), "\n";
+class_alias('A', 'AA');
+$o = new Other;
+foreach (['A::s', 'AA::s', 'B::s', ['B', 's'], [new B, 's'], [new A, 's'], 'a::S', ['aa', 's'], 'A::s'] as $cb) {
+    echo call_user_func($cb, '.'), call_user_func_array($cb, ['-']), $o->run($cb), ' ';
+}
+echo "\n";
+foreach (['A::p', ['B', 'p'], 'A::s'] as $cb) {
+    try { echo call_user_func($cb), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(
+        out,
+        r#"ABAB0
+ABAB1
+ABAB2
+AA1pA AA1pA BB1pB BB1pB AA1pA AA1pA 
+ApA ApA ApA ApA 
+A.A-A! A.A-A! B.B-B! B.B-B! B.B-B! A.A-A! A.A-A! A.A-A! A.A-A! 
+call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method A::p()
+call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method B::p()
+A
+"#
+    );
+    assert_eq!(status, 0);
+}

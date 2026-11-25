@@ -2488,7 +2488,8 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
 /// callback, read from `callee` (a literal, a temporary, a compiled
 /// variable), is the function a string names as last time, the method an
 /// `[$object, "name"]` array names for the same class and calling scope,
-/// a closure, or an invokable object. When the callee is a user function
+/// the static method a `"Class::name"` string or a `['Class', 'name']`
+/// array names likewise, a closure, or an invokable object. When the callee is a user function
 /// whose declaration makes a plain call (or a builtin whose call is
 /// plain), the pooled frame above the current one is readied for it as
 /// [`prepare`], [`prepare_method`] and [`prepare_closure`] ready it, and
@@ -2551,10 +2552,66 @@ fn forbids_dynamic_call(b: &Builtin) -> bool {
     )
 }
 
+/// [`prepare_user_call`] of a string: a function by its name
+/// ([`user_call_function`]), else a static method by `"Class::name"`
+/// ([`user_call_static`]).
+fn user_call_named(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    name: &[u8],
+    at: usize,
+) -> Option<Prepared> {
+    if let Some(p) = user_call_function(caller, frame, name, at) {
+        return Some(p);
+    }
+    let colons = crate::call::find_double_colon(name)?;
+    user_call_static(
+        caller,
+        frame,
+        name.get(..colons)?,
+        name.get(colons + 2..)?,
+        at,
+    )
+}
+
+/// [`prepare_user_call`] of a static method named by a `"Class::name"`
+/// string or a `['Class', 'name']` array (`class`, `method`): the method
+/// the op's slot of the method cache holds for that class, name and
+/// calling scope (`crate::call::user_call_static_hit`), a user method
+/// whose declaration makes a plain call, with its declaring scope and the
+/// class as the called scope (no `$this`).
+fn user_call_static(
+    caller: &crate::vm::Frame,
+    frame: &mut crate::vm::Frame,
+    class: &[u8],
+    method: &[u8],
+    at: usize,
+) -> Option<Prepared> {
+    let (func, scope, called) = crate::call::user_call_static_hit(caller, at, class, method)?;
+    let Func::User(uf) = func else {
+        return None;
+    };
+    if !prepares(&uf) {
+        return None;
+    }
+    ready_frame(frame, &uf);
+    frame.scope = scope;
+    frame.called = Some(called);
+    Some(Prepared {
+        limit: uf.params.len().min(MAX_ARGS),
+        callee: Callee::User(uf),
+        n: 0,
+        calls_len: caller.calls.len(),
+        fcall: false,
+        closure: true,
+        ctor: false,
+    })
+}
+
 /// [`prepare_user_call`] of a function named by the string `name` (any
 /// case, one leading `\`): the function the call site's slot past the
 /// literals holds (`Vm::user_call_cached`'s), when its name is that one.
-fn user_call_named(
+fn user_call_function(
     caller: &crate::vm::Frame,
     frame: &mut crate::vm::Frame,
     name: &[u8],
@@ -2616,7 +2673,8 @@ fn user_call_named(
 /// op's slot of the method cache holds for the object's class, the calling
 /// scope and that name (`Vm::user_call_cached`'s hit), a user method whose
 /// declaration makes a plain call, with `$this` (none for a static method),
-/// its declaring scope and the object's class as the called scope.
+/// its declaring scope and the object's class as the called scope; of a
+/// `['Class', 'name']` array: [`user_call_static`].
 fn user_call_method(
     caller: &crate::vm::Frame,
     frame: &mut crate::vm::Frame,
@@ -2627,10 +2685,12 @@ fn user_call_method(
     if a.len() != 2 {
         return None;
     }
-    let (Some(Value::Object(o)), Some(Value::Str(m))) =
-        (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
-    else {
-        return None;
+    let (o, m) = match (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) {
+        (Some(Value::Object(o)), Some(Value::Str(m))) => (o, m),
+        (Some(Value::Str(c)), Some(Value::Str(m))) => {
+            return user_call_static(caller, frame, c.as_bytes(), m.as_bytes(), at);
+        }
+        _ => return None,
     };
     let cls = crate::object::class_of(o);
     let (uf, scope, is_static) = {

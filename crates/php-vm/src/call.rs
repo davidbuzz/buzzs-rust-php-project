@@ -5801,6 +5801,62 @@ fn frame_args(values: &[Value], out: &mut Vec<Option<Value>>) {
     }
 }
 
+/// The static method a `"Class::name"` string or a `['Class', 'name']`
+/// array (`class`, `method`) names at the `ZEND_INIT_USER_CALL` whose
+/// method cache slot is `slot` in the running frame `f`, as
+/// [`Vm::remember_user_call`] stored it (or as an `[$object, "name"]`
+/// array of an object of that class stored it for a static method, which
+/// resolves alike): the function, its declaring scope and the class, its
+/// called scope. `None` on a miss: another class name (an alias too),
+/// method or calling scope, and a calling frame whose `$this` makes the
+/// call late-bound (`zend_is_callable_check_class`: a `$this` of the
+/// calling scope's class, which is the named class or a subclass of it,
+/// is the call's object and called scope).
+pub(crate) fn user_call_static_hit(
+    f: &Frame,
+    slot: usize,
+    class: &[u8],
+    method: &[u8],
+) -> Option<(Func, Option<Rc<Class>>, Rc<Class>)> {
+    let class = class.strip_prefix(b"\\").unwrap_or(class);
+    let cache = f.code.method_cache.try_borrow().ok()?;
+    let e = cache.get(slot)?.as_ref()?;
+    let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    if !e.is_static || e.scope_addr != scope_addr || !e.name.as_bytes().eq_ignore_ascii_case(method)
+    {
+        return None;
+    }
+    let cls = e.class.upgrade()?;
+    if Rc::as_ptr(&cls) as usize != e.class_addr || !cls.name.as_bytes().eq_ignore_ascii_case(class)
+    {
+        return None;
+    }
+    if let (Some(fs), Some(t)) = (&f.scope, &f.this) {
+        if object::class_of(t).is_subclass_of(fs) && fs.is_subclass_of(&cls) {
+            return None;
+        }
+    }
+    let func = e.func.get()?;
+    let scope = match &e.method_scope {
+        Some(w) => Some(w.upgrade()?),
+        None => None,
+    };
+    Some((func, scope, cls))
+}
+
+/// [`user_call_static_hit`] at the running `ZEND_INIT_USER_CALL` (its
+/// method cache slot the op's index: the frame's `ip` is past it) as the
+/// pending call [`Vm::user_call_cached`] returns.
+fn user_call_static_call(f: &Frame, class: &[u8], method: &[u8]) -> Option<PendingCall> {
+    let (func, scope, called) = user_call_static_hit(f, f.ip.checked_sub(1)?, class, method)?;
+    Some(PendingCall {
+        scope,
+        called: Some(called),
+        dynamic: true,
+        ..PendingCall::new(func)
+    })
+}
+
 /// `sodium_remove_param_values_from_backtrace()`: replaces the `args` of
 /// every frame in the exception's `trace` with an empty array.
 #[cold]
@@ -5868,10 +5924,13 @@ impl Vm {
         let f = self.frame();
         match cb {
             Value::Str(s) => {
+                let name = s.as_bytes();
+                if let Some(p) = find_double_colon(name) {
+                    return user_call_static_call(f, &name[..p], &name[p + 2..]);
+                }
                 let slot = f.code.literals.len() + f.ip;
                 let cache = f.code.fcall_cache.borrow();
                 let func = cache.get(slot)?.as_ref()?.get()?;
-                let name = s.as_bytes();
                 let name = name.strip_prefix(b"\\").unwrap_or(name);
                 if !func.name().as_bytes().eq_ignore_ascii_case(name) {
                     return None;
@@ -5885,7 +5944,12 @@ impl Vm {
                     a.get(&ArrayKey::Int(0)).map(Value::deref),
                     a.get(&ArrayKey::Int(1)).map(Value::deref),
                 ) else {
-                    return None;
+                    return match (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) {
+                        (Some(Value::Str(c)), Some(Value::Str(m))) => {
+                            user_call_static_call(f, c.as_bytes(), m.as_bytes())
+                        }
+                        _ => None,
+                    };
                 };
                 let cls = object::class_of(&o);
                 let slot = f.ip.checked_sub(1)?;
@@ -5962,6 +6026,10 @@ impl Vm {
         match cb {
             Value::Str(s) => {
                 let name = s.as_bytes();
+                if let Some(p) = find_double_colon(name) {
+                    self.remember_user_call_static(&name[..p], &name[p + 2..], call);
+                    return;
+                }
                 let name = name.strip_prefix(b"\\").unwrap_or(name);
                 if call.this.is_some()
                     || call.scope.is_some()
@@ -5984,6 +6052,11 @@ impl Vm {
                     a.get(&ArrayKey::Int(0)).map(Value::deref),
                     a.get(&ArrayKey::Int(1)).map(Value::deref),
                 ) else {
+                    if let (Some(Value::Str(c)), Some(Value::Str(m))) =
+                        (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+                    {
+                        self.remember_user_call_static(c.as_bytes(), m.as_bytes(), call);
+                    }
                     return;
                 };
                 let cls = object::class_of(&o);
@@ -6029,6 +6102,56 @@ impl Vm {
             }
             _ => {}
         }
+    }
+
+    /// [`Vm::remember_user_call`] of a static method named by a
+    /// `"Class::name"` string or a `['Class', 'name']` array (`class` and
+    /// `method` its two parts): remembered in the op's slot of the method
+    /// cache, as a static method of the class itself (its name, not an
+    /// alias, and a method it declares), when the call has no `$this` and
+    /// the class is its called scope. [`user_call_static_hit`] judges a
+    /// later call again for the late static binding the calling frame's
+    /// `$this` may bring in.
+    fn remember_user_call_static(&self, class: &[u8], method: &[u8], call: &PendingCall) {
+        let class = class.strip_prefix(b"\\").unwrap_or(class);
+        let Some(cls) = call.called.as_ref() else {
+            return;
+        };
+        if call.this.is_some()
+            || call.func.flags() & flags::STATIC == 0
+            || find_double_colon(method).is_some()
+            || !cls.name.as_bytes().eq_ignore_ascii_case(class)
+            || !call.func.name().as_bytes().eq_ignore_ascii_case(method)
+        {
+            return;
+        }
+        let method = ZStr::from(method);
+        let declared = cls
+            .methods
+            .get(&method.to_ascii_lowercase())
+            .is_some_and(|d| same_func(&d.func, &call.func));
+        let f = self.frame();
+        let Some(slot) = f.ip.checked_sub(1).filter(|_| declared) else {
+            return;
+        };
+        let entry = MethodCallCacheEntry {
+            class_addr: Rc::as_ptr(cls) as usize,
+            scope_addr: f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize),
+            class: Rc::downgrade(cls),
+            method_scope: call.scope.as_ref().map(Rc::downgrade),
+            func: crate::opcode::CachedFunc::new(&call.func),
+            is_static: true,
+            name_lit: None,
+            name: method,
+        };
+        let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
+            return;
+        };
+        if cache.len() <= slot {
+            let size = f.code.ops.len().max(slot + 1);
+            crate::rtcache::grow_slots(&mut cache, size, || None);
+        }
+        cache[slot] = Some(entry);
     }
 
     /// `ZEND_SEND_USER`: argument `n` (1-based) of the pending
