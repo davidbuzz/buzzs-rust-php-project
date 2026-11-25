@@ -1010,3 +1010,40 @@ end
 "#
     );
 }
+
+/// Callbacks called by builtins return arrays and objects from their
+/// variables (`Vm::return_at_base`): the values, the destruction of the
+/// callbacks' other locals at each return, and the roots buffered.
+#[test]
+fn callbacks_return_counted_values() {
+    assert_eq!(
+        run(r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "destruct {$this->n}\n"; } }
+$r = array_map(function ($v) { $a = [$v, $v * 2]; $o = new D("cb$v"); return $a; }, [1, 2]);
+echo json_encode($r), "\n";
+$objs = array_map(function ($v) { $o = new D("kept$v"); $t = new D("tmp$v"); return $o; }, [1, 2]);
+echo count($objs), "\n";
+usort($objs, function ($a, $b) { $x = [$a->n, $b->n]; return strcmp($x[1], $x[0]); });
+echo $objs[0]->n, "\n";
+gc_collect_cycles();
+$s0 = gc_status()['roots'];
+$shared = [1, 2, 3];
+$m = array_map(function ($v) use ($shared) { $c = $shared; return $c; }, [1, 2, 3]);
+var_dump(gc_status()['roots'] - $s0);
+unset($objs);
+echo "end\n";
+"#),
+        r#"destruct cb1
+destruct cb2
+[[1,2],[2,4]]
+destruct tmp1
+destruct tmp2
+2
+kept2
+int(1)
+destruct kept2
+destruct kept1
+end
+"#
+    );
+}

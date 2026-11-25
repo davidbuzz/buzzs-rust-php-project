@@ -2684,10 +2684,12 @@ impl Vm {
                             // that `gc::frame_released` still buffers them
                             // as possible roots, as `zend_leave_helper`'s
                             // release of the variables does.
-                            if matches!(v, Value::Array(_) | Value::Object(_)) {
-                                clone_value(v)
-                            } else {
-                                slot.take()?
+                            // (The copies are the handles' own inline
+                            // count increments, not `Value::clone`.)
+                            match v {
+                                Value::Array(a) => Value::Array(a.clone()),
+                                Value::Object(o) => Value::Object(o.clone()),
+                                _ => slot.take()?,
                             }
                         }
                     }
