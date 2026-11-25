@@ -193,3 +193,33 @@ fn rejected_startup_session_values_keep_the_default() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn script_encoding_without_multibyte_keeps_the_default() {
+    let d = temp_dir("script-encoding");
+    let read = "var_dump(ini_get('zend.script_encoding'), \
+                ini_get_all()['zend.script_encoding']['global_value']);";
+    let out = php_in(&d, &["-d", "zend.script_encoding=UTF-8", "-r", read]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "string(0) \"\"\nNULL\n"
+    );
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "zend.multibyte=1",
+            "-d",
+            "zend.script_encoding=UTF-8",
+            "-r",
+            read,
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "string(5) \"UTF-8\"\nstring(5) \"UTF-8\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
