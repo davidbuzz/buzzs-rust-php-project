@@ -548,3 +548,230 @@ call_user_func(): Argument #1 ($callback) must be a valid callback, cannot acces
     );
     assert_eq!(status, 0);
 }
+
+/// One call site called again and again (its cache hit, and missed by
+/// another name, another case, a leading `\`), argument counts below the
+/// required ones and past the declared parameters, packed and unpacked
+/// arrays, references in the array, string keys, an empty array, variadic
+/// and typed callees, the sliced form, a callback call as an argument: the
+/// paths the tape's prepared call takes and those it leaves to the
+/// generic ops.
+#[test]
+fn callback_functions_by_name_on_the_prepared_path() {
+    let (status, out) = run(r#"<?php
+function f($a, $b = 2) { return "f(" . implode(',', func_get_args()) . ")"; }
+function g($a) { return "g$a"; }
+foreach (['f', 'g', 'f', 'F', '\f', 'f'] as $cb) {
+    echo call_user_func($cb, 1), ' ', call_user_func_array($cb, [1, 3]), "\n";
+}
+foreach ([[], [1], [1, 2], [1, 2, 3], ['b' => 5, 'a' => 1], [1, 'b' => 4]] as $args) {
+    try { echo call_user_func_array('f', $args), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+for ($i = 0; $i < 3; $i++) {
+    try { echo call_user_func('f'), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    echo call_user_func('f', 1, 2, 3, 4), "\n";
+}
+function none() { return func_num_args(); }
+for ($i = 0; $i < 2; $i++) { var_dump(call_user_func_array('none', []), call_user_func('none'), call_user_func_array('none', [1, 2])); }
+$a = [1, 2, 3]; unset($a[0]);
+for ($i = 0; $i < 2; $i++) echo call_user_func_array('f', $a), call_user_func_array('f', [1 => 'x', 0 => 'y']), "\n";
+function byval($x) { $x = 9; return $x; }
+function byref(&$x) { $x .= '!'; return $x; }
+$w = 'w'; $refs = [&$w, 2];
+for ($i = 0; $i < 2; $i++) { echo call_user_func_array('byval', $refs), call_user_func_array('f', $refs), call_user_func_array('byref', $refs), " $w\n"; }
+for ($i = 0; $i < 2; $i++) { echo call_user_func('byref', $w), " $w\n"; }
+function v(...$xs) { return count($xs) . ':' . implode(',', $xs); }
+function v2($a, ...$xs) { return "$a/" . implode(',', $xs); }
+for ($i = 0; $i < 2; $i++) { echo call_user_func_array('v', [1, 2, 3]), ' ', call_user_func_array('v2', [1, 2, 3]), ' ', call_user_func('v2', 1, 2), ' ', call_user_func_array('v', ['k' => 1]), "\n"; }
+function t(int $x, string ...$r) { return var_export($x, true) . implode('', $r); }
+for ($i = 0; $i < 2; $i++) { echo call_user_func('t', "5"), call_user_func_array('t', ["6", 7]), "\n"; }
+try { call_user_func_array('t', ["x"]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function w() { return call_user_func_array('f', array_slice(func_get_args(), 1)); }
+function w2() { return call_user_func_array('f', array_slice(func_get_args(), 1, 1)); }
+for ($i = 0; $i < 2; $i++) { echo w(0, 1, 2), w2(0, 1, 2), call_user_func("f", call_user_func("g", $i), call_user_func_array("g", [$i])), "\n"; }
+try { w(0); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"f(1) f(1,3)
+g1 g1
+f(1) f(1,3)
+f(1) f(1,3)
+f(1) f(1,3)
+f(1) f(1,3)
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 8 and at least 1 expected
+f(1)
+f(1,2)
+f(1,2,3)
+f(1,5)
+f(1,4)
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 11 and at least 1 expected
+f(1,2,3,4)
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 11 and at least 1 expected
+f(1,2,3,4)
+ArgumentCountError: Too few arguments to function f(), 0 passed in t.php on line 11 and at least 1 expected
+f(1,2,3,4)
+int(0)
+int(0)
+int(2)
+int(0)
+int(0)
+int(2)
+f(2,3)f(x,y)
+f(2,3)f(x,y)
+9f(w,2)w! w!
+9f(w!,2)w!! w!!
+
+Warning: byref(): Argument #1 ($x) must be passed by reference, value given in t.php on line 22
+w!!! w!!
+
+Warning: byref(): Argument #1 ($x) must be passed by reference, value given in t.php on line 22
+w!!! w!!
+3:1,2,3 1/2,3 1/2 1:1
+3:1,2,3 1/2,3 1/2 1:1
+567
+567
+t(): Argument #1 ($x) must be of type int, string given, called in t.php on line 28
+f(1,2)f(1)f(g0,g0)
+f(1,2)f(1)f(g1,g1)
+Too few arguments to function f(), 0 passed in t.php on line 29 and at least 1 expected
+"#
+    );
+    assert_eq!(status, 0);
+}
+
+/// Methods by `[$object, 'name']`, `['Class', 'name']`, `'Class::name'`
+/// and `'static::name'` (a private one from inside its class), closures
+/// (with bound variables, static, bound to an object and scope),
+/// invokable objects, generators, builtins by a variable name (coerced,
+/// rejected, miscounted, forbidden as dynamic calls), destructor order of
+/// a temporary argument, backtraces and exceptions, each called
+/// repeatedly from one call site.
+#[test]
+fn callback_methods_closures_and_builtins_on_the_prepared_path() {
+    let (status, out) = run(r#"<?php
+class C {
+    private $v = 'priv';
+    function m($a = 'd') { return static::class . "->m$a"; }
+    static function s($a = 'd') { return static::class . "::s$a"; }
+    private function p($a) { return "$this->v$a"; }
+    function run() {
+        $r = '';
+        for ($i = 0; $i < 3; $i++) {
+            $r .= call_user_func([$this, 'p'], $i) . call_user_func_array([$this, 'p'], [$i]);
+            $r .= call_user_func([$this, 'm'], $i) . call_user_func('static::s', $i);
+        }
+        return $r;
+    }
+}
+class D extends C { function __destruct() { echo "~D\n"; } }
+$c = new C; $d = new D;
+for ($i = 0; $i < 3; $i++) {
+    $o = $i == 1 ? $d : $c;
+    echo call_user_func([$o, 'm'], $i), ' ', call_user_func_array([$o, 'm'], [$i]), ' ', call_user_func([$o, 's'], $i), ' ',
+        call_user_func(['C', 's']), ' ', call_user_func_array('D::s', [$i]), ' ', call_user_func(['D', 'S'], $i), "\n";
+}
+echo $c->run(), "\n", $d->run(), "\n";
+try { call_user_func([$c, 'p'], 1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$k = 'ka';
+$cl = function ($x, $y = 'y') use ($k) { return "$k$x$y"; };
+$st = static fn($x) => "st$x";
+$bound = Closure::bind(function ($x) { return $this->v . $x . static::class; }, new D, C::class);
+for ($i = 0; $i < 3; $i++) {
+    echo call_user_func($cl, $i), call_user_func_array($cl, [$i, 'z']), call_user_func($st, $i), call_user_func_array($bound, [$i]), "\n";
+}
+class Inv { function __invoke($a) { return "inv$a"; } }
+$inv = new Inv;
+for ($i = 0; $i < 2; $i++) echo call_user_func($inv, $i), call_user_func_array($inv, [$i]), call_user_func([$inv, '__invoke'], $i), "\n";
+function gen($n) { for ($i = 0; $i < $n; $i++) yield $i; }
+for ($i = 1; $i < 3; $i++) { foreach (call_user_func('gen', $i) as $v) echo $v; foreach (call_user_func_array('gen', [$i]) as $v) echo $v; echo "\n"; }
+$f = 'strlen'; $am = 'array_merge'; $sr = 'str_repeat'; $mx = 'max';
+for ($i = 0; $i < 3; $i++) {
+    echo call_user_func($f, 'abc'), call_user_func_array($f, ['ab']), json_encode(call_user_func_array($am, [[1], [2, $i]])),
+        call_user_func($sr, 5, 2), call_user_func_array($mx, [1, $i, 2]), "\n";
+}
+try { call_user_func($f, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { call_user_func($f); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+try { call_user_func_array($f, ['a', 'b']); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function inner() { $x = 1; foreach (['func_get_args', 'compact', 'get_defined_vars'] as $n) { try { call_user_func($n, 'x'); } catch (Error $e) { echo $e->getMessage(), "\n"; } } }
+inner();
+class Del { function __construct(public $n) {} function __destruct() { echo "~{$this->n}\n"; } }
+function eat($o) { echo "eat {$o->n}\n"; }
+for ($i = 0; $i < 2; $i++) { call_user_func('eat', new Del("a$i")); echo "after\n"; call_user_func_array('eat', [new Del("b$i")]); echo "after\n"; }
+function bt() { return implode(',', array_map(fn($f) => ($f['class'] ?? '') . $f['function'] . '@' . ($f['line'] ?? '-'), debug_backtrace())); }
+class B { function m() { return bt(); } static function s() { return bt(); } }
+for ($i = 0; $i < 2; $i++) {
+    echo call_user_func('bt'), ' ', call_user_func_array('bt', []), ' ', call_user_func([new B, 'm']), ' ', call_user_func('B::s'), ' ', call_user_func(fn() => bt()), "\n";
+}
+function thrower($m) { throw new RuntimeException($m); }
+for ($i = 0; $i < 2; $i++) {
+    try { call_user_func('thrower', "t$i"); } catch (Exception $e) { echo $e->getMessage(), ' ', $e->getLine(), "\n", $e->getTraceAsString(), "\n"; }
+    try { call_user_func_array([new B, 'nope'], []); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+echo "end\n";
+"#);
+    assert_eq!(
+        out,
+        r#"C->m0 C->m0 C::s0 C::sd D::s0 D::s0
+D->m1 D->m1 D::s1 C::sd D::s1 D::s1
+C->m2 C->m2 C::s2 C::sd D::s2 D::s2
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+priv0priv0C->m0C::s0priv1priv1C->m1C::s1priv2priv2C->m2C::s2
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+
+Deprecated: Use of "static" in callables is deprecated in t.php on line 11
+priv0priv0D->m0D::s0priv1priv1D->m1D::s1priv2priv2D->m2D::s2
+call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method C::p()
+ka0yka0zst0priv0D
+ka1yka1zst1priv1D
+ka2yka2zst2priv2D
+inv0inv0inv0
+inv1inv1inv1
+00
+0101
+32[1,2,0]552
+32[1,2,1]552
+32[1,2,2]552
+strlen(): Argument #1 ($string) must be of type string, array given
+strlen() expects exactly 1 argument, 0 given
+strlen() expects exactly 1 argument, 2 given
+func_get_args() expects exactly 0 arguments, 1 given
+Cannot call compact() dynamically
+get_defined_vars() expects exactly 0 arguments, 1 given
+eat a0
+~a0
+after
+eat b0
+~b0
+after
+eat a1
+~a1
+after
+eat b1
+~b1
+after
+bt@53 bt@53 bt@51,Bm@53 bt@51,Bs@53 bt@53,{closure:t.php:53}@53
+bt@53 bt@53 bt@51,Bm@53 bt@51,Bs@53 bt@53,{closure:t.php:53}@53
+t0 55
+#0 t.php(57): thrower('t0')
+#1 {main}
+call_user_func_array(): Argument #1 ($callback) must be a valid callback, class B does not have a method "nope"
+t1 55
+#0 t.php(57): thrower('t1')
+#1 {main}
+call_user_func_array(): Argument #1 ($callback) must be a valid callback, class B does not have a method "nope"
+end
+~D
+~D
+"#
+    );
+    assert_eq!(status, 0);
+}
