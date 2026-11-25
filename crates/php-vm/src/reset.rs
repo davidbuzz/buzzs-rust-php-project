@@ -145,29 +145,31 @@ impl Vm {
         crate::func::bump_func_table_version();
         crate::builtins::info::forget_user_functions();
 
-        // 2. Classes, in one pass: a user class's static properties,
-        // constants, defaults and enum cases are cleared and it leaves the
-        // table; an internal class has its static properties and constants
-        // put back to their initial values. An internal class stays under
-        // its own name only: an alias of one (`class_alias('stdClass',
-        // 'foo')`) is the request's, like every entry php-src's
-        // `shutdown_executor()` discards past the startup classes. Kept, it
-        // would make the next request's `class foo {}` "Cannot redeclare
-        // class stdClass".
+        // 2. Classes: a user class's static properties, constants,
+        // defaults and enum cases are cleared and it leaves the table. An
+        // internal class stays under its own name only: an alias of one
+        // (`class_alias('stdClass', 'foo')`) is the request's, like every
+        // entry php-src's `shutdown_executor()` discards past the startup
+        // classes. Kept, it would make the next request's `class foo {}`
+        // "Cannot redeclare class stdClass".
         let mut dropped = false;
         self.classes.retain(|key, c| {
             if c.flags & cflags::INTERNAL != 0 {
-                if !key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes()) {
-                    dropped = true;
-                    return false;
+                if key.as_bytes().eq_ignore_ascii_case(c.name.as_bytes()) {
+                    return true;
                 }
-                reset_internal_class(c);
-                return true;
+            } else {
+                clear_user_class(c);
             }
-            clear_user_class(c);
             dropped = true;
             false
         });
+        // Then the internal classes' static properties go back to their
+        // initial values: after the user classes, as a subclass that does
+        // not redeclare a static property shares its parent's cell.
+        for c in self.classes.values() {
+            reset_internal_class(c);
+        }
         // The declaration order lists the table's names: with nothing
         // dropped (a request that declared no class) it still does.
         if dropped || self.class_order.len() != self.classes.len() {
