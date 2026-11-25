@@ -4667,6 +4667,10 @@ impl Vm {
         if let Some(v) = self.fetch_prop_dims_fast(pid, mode) {
             return Ok(v);
         }
+        // `$GLOBALS['name'][$k]` on a variable of the global scope.
+        if let Some(v) = self.fetch_global_dims_fast(pid, mode) {
+            return Ok(v);
+        }
         if matches!(
             self.frame().code.places[pid as usize].base,
             PlaceBase::Global(_) | PlaceBase::GlobalsArray

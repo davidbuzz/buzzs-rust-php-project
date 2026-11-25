@@ -932,6 +932,75 @@ impl Vm {
         Some(false)
     }
 
+    /// `$GLOBALS['name'][$k]...` (also written `$GLOBALS['name']` as a
+    /// global base) read in `Read` or `Is` mode when `name` is a literal
+    /// naming a variable of the global scope's frame (not a superglobal)
+    /// that holds an array with every key on the way
+    /// ([`props::dims_read`]): `ZEND_FETCH_R` with `ZEND_FETCH_GLOBAL`,
+    /// then the `ZEND_FETCH_DIM_R`/`_IS` hits. The variable is found once
+    /// and remembered in the op array's global cache at
+    /// `places.len() + pid` (the entry at `pid` is
+    /// [`Vm::fetch_global_fast`]'s, which answers the base alone). A
+    /// consumed string offset is released. `None`, nothing consumed, for
+    /// the generic fetch (an undefined variable or key warns there).
+    pub(crate) fn fetch_global_dims_fast(
+        &mut self,
+        pid: PlaceId,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        // The main frame's variable is the global's value only while no
+        // top-level include or `eval` runs above it
+        // (`Vm::main_is_global_top`).
+        if mode == FetchMode::List || !self.main_is_global_top() {
+            return None;
+        }
+        let f = self.frames.last()?;
+        if f.kind == FrameKind::Builtin {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        let (lit, segs) = match (&p.base, p.segs.as_slice()) {
+            (PlaceBase::Global(Operand::Lit(lit)), segs @ [Seg::Dim(_), ..]) => (*lit, segs),
+            (PlaceBase::GlobalsArray, [Seg::Dim(Operand::Lit(lit)), segs @ ..])
+                if !segs.is_empty() =>
+            {
+                (*lit, segs)
+            }
+            _ => return None,
+        };
+        let idx = f.code.places.len() + pid as usize;
+        let cached = f.code.rt_cache.globals.try_borrow().ok()?.get(idx).copied();
+        let main = self.frames.first()?;
+        let cv = match cached {
+            Some(GlobalSlot::GlobalCv(cv)) => cv,
+            _ => {
+                let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+                    return None;
+                };
+                if main.kind != FrameKind::Main
+                    || crate::place::is_superglobal_name(name.as_bytes())
+                {
+                    return None;
+                }
+                let cv = main
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == name.as_bytes())?;
+                let cv = u32::try_from(cv).ok()?;
+                let mut cache = f.code.rt_cache.globals.try_borrow_mut().ok()?;
+                if cache.len() <= idx {
+                    crate::rtcache::grow_slots(&mut cache, idx + 1, || GlobalSlot::Empty);
+                }
+                cache[idx] = GlobalSlot::GlobalCv(cv);
+                cv
+            }
+        };
+        let v = props::dims_read(f, main.cvs.get(cv as usize)?.get()?, segs)?;
+        release_place_str_tmps(self.frame_mut(), pid);
+        Some(v)
+    }
+
     /// [`crate::opcode::Op::FetchGlobal`]: global variable read
     /// (`$GLOBALS['name']`, superglobals) resolved directly from the VM's
     /// global scope or the global store, with runtime caching.

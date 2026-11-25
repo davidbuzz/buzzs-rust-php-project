@@ -1526,7 +1526,7 @@ fn prop_dim_segs(f: &Frame, pid: PlaceId) -> Option<&[crate::opcode::Seg]> {
 /// hits. `None` (a miss, which warns in `Read` mode, a string offset, an
 /// object, an element held by reference on the way) for the generic walk.
 #[inline]
-fn dims_read(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Value> {
+pub(super) fn dims_read(f: &Frame, cur: &Value, segs: &[crate::opcode::Seg]) -> Option<Value> {
     let guard;
     let mut cur = match cur {
         Value::Reference(r) => {

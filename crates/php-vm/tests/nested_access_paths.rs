@@ -248,6 +248,78 @@ Cannot access offset of type string on string
     );
 }
 
+/// Reads of `$GLOBALS['name'][$k]` on variables of the global scope.
+#[test]
+fn globals_dims() {
+    assert_eq!(
+        run(r#"<?php
+$conf = ['db' => ['host' => 'h', 'port' => 1], 'list' => [1, 2]];
+$str = 'abc';
+$nul = null;
+function rd() {
+  $k = 'db';
+  var_dump($GLOBALS['conf'][$k]['host'], $GLOBALS['conf']['list'][1], $GLOBALS['conf'][$k]['nope'] ?? 'd');
+  var_dump($GLOBALS['conf']['missing']);
+  var_dump($GLOBALS['undefined_var']['x']);
+  var_dump($GLOBALS['str'][1], $GLOBALS['nul']['x']);
+  var_dump(isset($GLOBALS['conf'][$k]['port']), isset($GLOBALS['conf']['zz']['y']));
+  $GLOBALS['conf'][$k]['host'] = 'h2'; var_dump($GLOBALS['conf'][$k]['host']);
+  $GLOBALS['later'] = ['a' => 1]; var_dump($GLOBALS['later']['a']);
+  global $conf; $conf['db']['port'] = 2; var_dump($GLOBALS['conf']['db']['port']);
+}
+for ($i = 0; $i < 2; $i++) rd();
+var_dump($GLOBALS['conf']['db']);
+"#),
+        r#"string(1) "h"
+int(2)
+string(1) "d"
+
+Warning: Undefined array key "missing" in t.php on line 8
+NULL
+
+Warning: Undefined global variable $undefined_var in t.php on line 9
+
+Warning: Trying to access array offset on null in t.php on line 9
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 10
+string(1) "b"
+NULL
+bool(true)
+bool(false)
+string(2) "h2"
+int(1)
+int(2)
+string(2) "h2"
+int(2)
+string(1) "d"
+
+Warning: Undefined array key "missing" in t.php on line 8
+NULL
+
+Warning: Undefined global variable $undefined_var in t.php on line 9
+
+Warning: Trying to access array offset on null in t.php on line 9
+NULL
+
+Warning: Trying to access array offset on null in t.php on line 10
+string(1) "b"
+NULL
+bool(true)
+bool(false)
+string(2) "h2"
+int(1)
+int(2)
+array(2) {
+  ["host"]=>
+  string(2) "h2"
+  ["port"]=>
+  int(2)
+}
+"#
+    );
+}
+
 /// Reads of `$this->a->b`, `$this->list[$k]->b` and `$cv[$k]->b`.
 #[test]
 fn prop_chain() {
