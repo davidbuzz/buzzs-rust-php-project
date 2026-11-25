@@ -567,12 +567,16 @@ impl Vm {
         if self.ini.get_bool("html_errors") {
             let mut out = prepend.clone();
             out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
-            // `php_error_cb`: the message is HTML-escaped with html_errors,
-            // unless `php_verror` already escaped it (docref messages).
-            if std::mem::take(&mut self.error_msg_html_ready) {
-                out.extend_from_slice(msg);
-            } else {
+            // `php_error_cb`: with html_errors only an `E_ERROR` or
+            // `E_PARSE` message is HTML-escaped there (an uncaught
+            // exception's too); other levels print it as raised. A
+            // `php_verror` (docref) message was escaped already.
+            let escape = !std::mem::take(&mut self.error_msg_html_ready)
+                && matches!(level, level::ERROR | level::PARSE);
+            if escape {
                 out.extend_from_slice(&self.error_html_escape(msg));
+            } else {
+                out.extend_from_slice(msg);
             }
             // The `E_ERROR`/`E_PARSE` format has no stack trace.
             let trace = if matches!(level, level::ERROR | level::PARSE) {
