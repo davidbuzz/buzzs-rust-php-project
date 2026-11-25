@@ -163,6 +163,14 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                     dst,
                     to,
                 } if t == this_tmp => (name, dst, Some(to)),
+                // `$this` as a value (`return $this;`, `f($this)`,
+                // `[$this, 'm']`): the object into its temporary.
+                _ if this_tmp < code.num_tmps => {
+                    return Some(Inst {
+                        b: this_tmp,
+                        ..plain(TOp::FetchThisT)
+                    })
+                }
                 _ => return None,
             };
             if dst >= code.num_tmps || this_tmp >= code.num_tmps {
@@ -194,6 +202,25 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         }
         _ => return None,
     })
+}
+
+/// `ZEND_FETCH_THIS` ([`TOp::FetchThisT`]): the frame's `$this` into
+/// temporary `inst.b` (one more reference to the object). Declines without
+/// `$this`, having changed nothing: the generic op throws "Using $this
+/// when not in object context".
+///
+/// # Safety
+/// As [`prop_in`].
+#[inline(never)]
+pub(super) unsafe fn fetch_this(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(this) = &f.this else {
+        return false;
+    };
+    let v = php_runtime::Value::Object(this.clone());
+    crate::exec::hot::set_tmp_in(f, inst.b, v);
+    true
 }
 
 /// `++`/`--` of a static property ([`TOp::IncDecStatic`], the op at

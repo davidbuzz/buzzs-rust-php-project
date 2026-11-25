@@ -1401,6 +1401,7 @@ tape_ops! {
         IncDecStatic = (props::incdec_static, 1, poll_f),
         ThisConst = (props::this_const, 2, poll_f),
         ThisConstTo = (props::this_const_to, 2, branch_poll_f),
+        FetchThisT = (props::fetch_this, 1, poll_f),
 
         // ---- end of props ----
         //
@@ -1645,6 +1646,12 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
             dst < code.num_tmps && (nested_place(p, false, true) || static_dims_place(p))
         }
         Op::Unset { place } => nested_place(place_of(place)?, true, false),
+        // `function () use (...) {...}` / `fn() => ...`
+        // (`ZEND_DECLARE_LAMBDA_FUNCTION`): made with the VM at hand
+        // (`run_vm_op`).
+        Op::MakeClosure { idx, dst } => {
+            (idx as usize) < code.decls.functions.borrow().len() && dst < code.num_tmps
+        }
         // `defined('NAME')`: the op's run-time cache hit (`run_vm_op`).
         Op::Defined { name, dst } => {
             (name as usize) < code.literals.len() && dst.is_none_or(|d| d < code.num_tmps)
@@ -2610,6 +2617,43 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
             None => DECLINED,
         },
+        // `ZEND_DECLARE_LAMBDA_FUNCTION` (`Vm::make_closure`: the bound
+        // variables, `$this` and the called scope, the cached closure of a
+        // static one), when no variable bound by value is undefined (its
+        // warning is the generic op's) and the frame has no attached symbol
+        // table. A throw is the op's ([`CALL_THREW`]).
+        Some(&Op::MakeClosure { idx, dst }) => {
+            let f = vm.frame();
+            if f.symtab_attached {
+                return DECLINED;
+            }
+            let Some(func) = f.code.decls.functions.borrow().get(idx as usize).cloned() else {
+                return DECLINED;
+            };
+            let undefined = |cv: u32| {
+                f.cvs
+                    .get(cv as usize)
+                    .and_then(crate::vm::CvSlot::get)
+                    .is_none()
+            };
+            if func
+                .uses
+                .iter()
+                .any(|u| !u.by_ref && !u.implicit && undefined(u.parent_cv))
+            {
+                return DECLINED;
+            }
+            match vm.make_closure(&func) {
+                Ok(c) => {
+                    vm.set_tmp(dst, c);
+                    at + 1
+                }
+                Err(t) => {
+                    vm.tape_throw = Some(t);
+                    at | CALL_THREW
+                }
+            }
+        }
         // `unset($a[$k])`, `unset($this->p[$k][$j])` & co. (`lower_place`).
         Some(&Op::Unset { place }) => {
             if vm.unset_dims_fast(place) {

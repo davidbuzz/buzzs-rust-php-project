@@ -1480,6 +1480,50 @@ fn hook_calls() {
     );
 }
 
+const THIS_AND_CLOSURES: &str = r#"<?php
+class K { public $n = 5; function get() { $f = function () { return $this; }; return $f; } }
+function uses_this() { return $this; }
+function make($k) {
+    $a = function ($x) use ($k) { return $k . $x; };
+    $b = fn($x) => $x . $k;
+    $c = static fn() => 'c';
+    return $a(1) . $b(2) . $c();
+}
+for ($i = 0; $i < 3; $i++) { echo make("k$i"), ' ', ((new K)->get())()->n, "\n"; }
+"#;
+
+/// `$this` as a value is a row of its own (`props::fetch_this`) and a
+/// closure's creation runs with the VM at hand (`run_vm_op`), not in
+/// `Vm::run`.
+#[test]
+fn this_and_closures() {
+    let arrays = op_arrays(THIS_AND_CLOSURES);
+    let (mut this, mut closures) = (0, 0);
+    for code in &arrays {
+        let tape = check(code);
+        for (i, op) in code.ops.iter().enumerate() {
+            match op {
+                Op::FetchThis { .. }
+                    if !matches!(
+                        code.ops.get(i + 1),
+                        Some(Op::FetchClassConst { .. } | Op::FetchClassConstTo { .. })
+                    ) =>
+                {
+                    assert_eq!(tape[i].op, TOp::FetchThisT, "op {i}: {op:?}");
+                    this += 1;
+                }
+                Op::MakeClosure { .. } => {
+                    assert_eq!(tape[i].op, TOp::VmOp, "op {i}: {op:?}");
+                    closures += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(this >= 1 && closures >= 3, "{this} {closures}");
+    assert_eq!(run(THIS_AND_CLOSURES), "k012k0c 5\nk112k1c 5\nk212k2c 5\n");
+}
+
 const OTHER_BINARY_OPERATORS: &str = r#"<?php
 function f($a, $b, $x) {
     $r = [];
