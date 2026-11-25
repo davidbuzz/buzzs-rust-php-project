@@ -428,6 +428,11 @@ pub struct PendingCall {
     pub dynamic: bool,
 }
 
+/// How many argument records [`CallBufs::args_pool`] keeps: the depth of
+/// nested builtin calls (a callback's builtin call inside `array_map()`)
+/// served without allocating.
+const ARGS_POOL: usize = 8;
+
 /// Reusable buffers of the call protocol (see [`Vm::call_bufs`]).
 #[derive(Debug, Default)]
 pub(crate) struct CallBufs {
@@ -445,6 +450,13 @@ pub(crate) struct CallBufs {
     pub(crate) lent_values: Vec<Value>,
     /// The passed-flag vector lent alongside [`CallBufs::lent_values`].
     pub(crate) lent_passed: Vec<bool>,
+    /// Boxed argument records for the tape's internal call
+    /// (`exec/tape/calls.rs`, `call_native`; [`CallBufs::take_args`]):
+    /// one is taken whole for a call, one pointer each way, its two
+    /// vectors keeping their capacity, where lending the vectors one by
+    /// one and building the record on the stack cost ~105 instructions a
+    /// call. A nested call takes the next one.
+    pub(crate) args_pool: Vec<Box<crate::func::Args>>,
     /// Prewarmed and pooled user function frames.
     pub(crate) user_frames: Vec<Frame>,
     /// The run-time cache of `ZEND_INIT_METHOD_CALL`.
@@ -462,6 +474,7 @@ impl CallBufs {
             passed: Vec::with_capacity(16),
             lent_values: Vec::with_capacity(8),
             lent_passed: Vec::with_capacity(8),
+            args_pool: Vec::with_capacity(ARGS_POOL),
             user_frames: Vec::with_capacity(8),
             methods: crate::call::MethodCache::default(),
         };
@@ -470,8 +483,54 @@ impl CallBufs {
             b.values.push(Vec::with_capacity(8));
             b.passed.push(Vec::with_capacity(8));
             b.user_frames.push(Frame::new_pooled(empty_code.clone()));
+            b.args_pool.push(CallBufs::new_args());
         }
         b
+    }
+
+    /// An empty argument record for a builtin call, taken whole from the
+    /// pool ([`CallBufs::args_pool`]); a new one when the calls in progress
+    /// hold them all.
+    #[inline]
+    pub(crate) fn take_args(&mut self) -> Box<crate::func::Args> {
+        match self.args_pool.pop() {
+            Some(a) => a,
+            None => CallBufs::new_args(),
+        }
+    }
+
+    /// Gives back a record [`CallBufs::take_args`] lent, emptied by the
+    /// caller (`Args::release_in_place`).
+    #[inline]
+    pub(crate) fn put_args(&mut self, a: Box<crate::func::Args>) {
+        debug_assert!(a.values.is_empty(), "the values were released");
+        if self.args_pool.len() < ARGS_POOL {
+            self.args_pool.push(a);
+        } else {
+            CallBufs::drop_args(a);
+        }
+    }
+
+    /// A record with room for eight arguments. It outlives the request,
+    /// as php-src's VM stack does: its memory is not the request's
+    /// (`memory_get_usage()`).
+    #[cold]
+    #[inline(never)]
+    fn new_args() -> Box<crate::func::Args> {
+        php_memlimit::persistent(|| {
+            Box::new(crate::func::Args {
+                values: Vec::with_capacity(8),
+                passed: Vec::with_capacity(8),
+                ..crate::func::Args::default()
+            })
+        })
+    }
+
+    /// Releases a record the full pool has no room for.
+    #[cold]
+    #[inline(never)]
+    fn drop_args(a: Box<crate::func::Args>) {
+        php_memlimit::persistent(|| drop(a));
     }
 
     /// An empty value vector for a builtin's [`crate::func::Args`]: the

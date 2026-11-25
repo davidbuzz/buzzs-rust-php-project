@@ -1196,6 +1196,31 @@ impl Args {
 }
 
 impl Args {
+    /// [`Args::release_into`] of a pooled record
+    /// (`crate::vm::CallBufs::take_args`): the copies of the arguments
+    /// released front to back, the vectors kept with their capacity, the
+    /// other fields emptied only when set.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per builtin call
+    pub(crate) fn release_in_place(&mut self) {
+        release_arg_copies(&mut self.values);
+        self.passed.clear();
+        if self.named.capacity() != 0 {
+            drop(std::mem::take(&mut self.named));
+        }
+        if self.this.is_some() {
+            self.this = None;
+        }
+        if self.called.is_some() {
+            self.called = None;
+        }
+        if self.func.is_some() {
+            self.func = None;
+        }
+    }
+}
+
+impl Args {
     /// Number of arguments.
     pub fn len(&self) -> usize {
         self.values.len()

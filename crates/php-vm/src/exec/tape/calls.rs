@@ -44,7 +44,7 @@
 
 use super::{rel, Inst, TOp, SLOT_SHIFT};
 use crate::call::{accepts_without_coercion, clone_value};
-use crate::func::{flags, Args, Builtin, CallShape, Func, PlainCall, UserFunction, FOLD_STEPS};
+use crate::func::{flags, Builtin, CallShape, Func, PlainCall, UserFunction, FOLD_STEPS};
 use crate::opcode::{
     ArgSrc, BinKind, ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase, PROP_CACHE_THIS,
 };
@@ -2943,21 +2943,23 @@ pub(super) fn call_native(
     let sent_ref = b.sends_ref_within(n);
     // The handler's copies of the arguments (php-src's handler reads them
     // in the frame), then the declared defaults of the omitted trailing
-    // parameters, not marked as passed.
-    // The two vectors are lent whole for the call (`CallBufs::take_values`;
-    // a nested builtin call meanwhile takes pooled ones).
-    let mut values = vm.call_bufs.take_values();
-    let mut passed = vm.call_bufs.take_passed();
+    // parameters, not marked as passed, in a pooled record taken whole for
+    // the call (`CallBufs::take_args`; a nested builtin call meanwhile
+    // takes the next one).
+    //
     // A `match`, not `map_or(Value::Null, ..)`: that builds the null
     // first and drops it (an out-of-line drop call per argument). One
     // `extend` of the frame's slice and one `resize` store each length
     // once (a `push` per argument tested the capacity and stored the
     // length every time).
-    values.extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
-        Some(v) => crate::func::copy_arg(v),
-        None => Value::Null,
-    }));
-    passed.resize(values.len(), true);
+    let mut args = vm.call_bufs.take_args();
+    args.values
+        .extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
+            Some(v) => crate::func::copy_arg(v),
+            None => Value::Null,
+        }));
+    let given = args.values.len();
+    args.passed.resize(given, true);
     let sig = b.signature();
     let nparams = sig.params.len();
     let upto = if b.flags & flags::VARIADIC != 0 {
@@ -2965,12 +2967,12 @@ pub(super) fn call_native(
     } else {
         nparams
     };
-    while values.len() < upto {
-        let i = values.len();
+    while args.values.len() < upto {
+        let i = args.values.len();
         match vm.builtin_default(&b, i) {
             Some(d) if i >= sig.required as usize => {
-                values.push(d);
-                passed.push(false);
+                args.values.push(d);
+                args.passed.push(false);
             }
             _ => break,
         }
@@ -3005,18 +3007,16 @@ pub(super) fn call_native(
     let handler = b.handler;
     // A method's `$this` and called scope, readied on the frame by
     // `prepare_method` (a function's frame has none).
-    let (this, called) = {
+    {
         let frame = &vm.frames.vec[live];
-        (frame.this.clone(), frame.called.clone())
-    };
-    let mut args = Args {
-        values,
-        passed,
-        named: Vec::new(),
-        this,
-        called,
-        func: Some(b),
-    };
+        if let Some(this) = &frame.this {
+            args.this = Some(this.clone());
+        }
+        if let Some(called) = &frame.called {
+            args.called = Some(Rc::clone(called));
+        }
+    }
+    args.func = Some(b);
     let mut r = handler(vm, &mut args);
     // `zend_try_assign_typed_ref`: what the handler wrote to a typed
     // by-reference argument (a typed property sent by reference, a
@@ -3037,7 +3037,7 @@ pub(super) fn call_native(
         // variables are unwrapped below (`release_copies_but_refs`).
         release_copies_but_refs(&mut args.values, &vm.frames.vec[live].args);
     } else {
-        args.release_into(&mut vm.call_bufs);
+        args.release_in_place();
     }
     // Released by the handler, destructed while its frame is current.
     if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
@@ -3056,11 +3056,10 @@ pub(super) fn call_native(
         if vm.frames.live == live + 1 {
             unwrap_sent_refs(vm, live, &args.values);
         }
-        args.release_into(&mut vm.call_bufs);
+        args.release_in_place();
     }
-    // Its fields are all empty now (`Args::release_into`): nothing left
-    // for the drop glue, whose out-of-line call is skipped.
-    std::mem::forget(args);
+    // Emptied (`Args::release_in_place`), back to the pool.
+    vm.call_bufs.put_args(args);
     // Popped off the VM stack, frames left above it (none, normally)
     // first. Released in place (`release_native`), its argument buffer
     // stays with the pooled frame for the next call at this depth.
