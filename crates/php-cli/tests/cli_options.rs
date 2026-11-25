@@ -279,3 +279,32 @@ fn unknown_openssl_libctx_is_fatal_at_startup() {
     assert_eq!(out.stdout, b"default");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn zlib_ini_warnings_and_refused_restore() {
+    let d = temp_dir("zlib");
+    let out = php_in(
+        &d,
+        &[
+            "-r",
+            "var_dump(ini_set('zlib.output_handler', 'x')); ini_restore('zlib.output_handler'); \
+             var_dump(ini_get('zlib.output_handler'));",
+        ],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "string(0) \"\"\n\nWarning: ini_restore(): Cannot change zlib.output_handler - headers \
+         already sent in Command line code on line 1\nstring(1) \"x\"\n"
+    );
+    let out = php_in(&d, &["-r", "ini_set('zlib.output_compression', 'abc');"]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nWarning: Invalid \"zlib.output_compression\" setting. Invalid quantity \"abc\": no \
+         valid leading digits, interpreting as \"0\" for backwards compatibility in Command line \
+         code on line 1\n\nWarning: ini_set(): Cannot change zlib.output_compression - headers \
+         already sent in Command line code on line 1\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
