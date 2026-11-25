@@ -156,11 +156,13 @@ impl CallerSymbols {
         if self.direct {
             let Some(f) = self.direct_frame(vm) else {
                 self.attach(vm);
-                return self.write_table(name, value, assign);
+                self.write_table(name, value, assign);
+                return;
             };
             let Some(slot) = cv_of(f, name.as_bytes()).and_then(|i| f.cvs.get_mut(i)) else {
                 self.attach(vm);
-                return self.write_table(name, value, assign);
+                self.write_table(name, value, assign);
+                return;
             };
             let held = match slot.get() {
                 Some(Value::Reference(r)) if assign => Some(r.clone()),
