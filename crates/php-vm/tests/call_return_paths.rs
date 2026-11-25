@@ -527,3 +527,72 @@ echo run();
 "#
     );
 }
+
+/// Variables of each kind passed by value to a prepared call (`send`'s
+/// copy: scalars inline, strings, arrays and objects by count, a
+/// variable bound by reference dereferenced, an undefined one warned
+/// about by the generic send).
+#[test]
+fn variables_sent_by_value() {
+    assert_eq!(
+        run(r#"<?php
+function id($a) { return $a; }
+function two($a, $b) { $b[] = 1; return [$a, count($b)]; }
+function run() {
+    $int = 7; $float = 1.25; $bool = false; $null = null; $str = str_repeat('x', 2);
+    $arr = [1, 2]; $obj = new stdClass; $obj->p = 1;
+    $ref = 5; $alias = &$ref;
+    $out = [];
+    for ($i = 0; $i < 3; $i++) {
+        $out[] = id($int); $out[] = id($float); $out[] = id($bool); $out[] = id($null);
+        $out[] = id($str); $out[] = id($arr); $out[] = id($obj); $out[] = id($ref);
+        $out[] = two($str, $arr);
+        $alias++;
+    }
+    $out[] = id($undef);
+    var_dump($out[0], $out[1], $out[2], $out[3], $out[4], $out[5], $out[6] === $obj, $out[7], $out[8], $out[15], $out[23], $arr, count($out), end($out));
+}
+run();
+"#),
+        r#"
+Warning: Undefined variable $undef in t.php on line 15
+int(7)
+float(1.25)
+bool(false)
+NULL
+string(2) "xx"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+bool(true)
+int(5)
+array(2) {
+  [0]=>
+  string(2) "xx"
+  [1]=>
+  int(3)
+}
+object(stdClass)#1 (1) {
+  ["p"]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+int(28)
+NULL
+"#
+    );
+}

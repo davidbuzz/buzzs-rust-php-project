@@ -2297,15 +2297,36 @@ fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
 }
 
 /// The value of compiled variable `cv` of `frame` as an argument: a copy,
-/// dereferenced; `None` when it is undefined.
+/// dereferenced; `None` when it is undefined (`ZEND_SEND_VAR`'s
+/// `ZVAL_COPY_DEREF`).
+///
+/// A scalar is copied inline; anything that owns a count (a string, an
+/// array, an object) or sits behind a reference is copied by
+/// [`cv_value_counted`]. Out of line as a whole, an int argument cost ~33
+/// instructions here: the call, the tag dispatch of the copy and the
+/// value returned through memory.
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice in `send`, once per argument
 fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {
-    match frame
+    let v = frame
         .cvs
         .get(cv as usize)
-        .and_then(crate::vm::CvSlot::get)?
-    {
-        Value::Reference(r) => Some(r.get()),
-        v => Some(clone_value(v)),
+        .and_then(crate::vm::CvSlot::get)?;
+    Some(match v {
+        Value::Null => Value::Null,
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(f) => Value::Float(*f),
+        _ => cv_value_counted(v),
+    })
+}
+
+/// [`cv_value`] of a value that is not a scalar, out of line.
+#[inline(never)]
+fn cv_value_counted(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) => r.get(),
+        v => clone_value(v),
     }
 }
 
