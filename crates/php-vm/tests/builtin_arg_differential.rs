@@ -106,3 +106,39 @@ string(3) "axc"
 "#
     );
 }
+
+/// `array_key_exists()` by its literal name compiles to
+/// `ZEND_ARRAY_KEY_EXISTS`, whose illegal-key error is the array access
+/// one; every other call runs the function, whose error names the
+/// parameter (`$f()`, `call_user_func()`, an unqualified call in a
+/// namespace, unpacked or named arguments, the `key_exists()` alias).
+#[test]
+fn array_key_exists_literal_and_dynamic_illegal_keys() {
+    let out = run(r#"<?php
+namespace Foo;
+function t($f) { try { $f(); } catch (\Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; } }
+t(fn() => array_key_exists([], []));
+t(fn() => \array_key_exists([], []));
+t(fn() => array_key_exists(...[[], []]));
+t(fn() => \array_key_exists(key: [], array: []));
+t(fn() => \call_user_func('array_key_exists', [], []));
+t(fn() => \array_map('array_key_exists', [[]], [[]]));
+t(fn() => \key_exists([], []));
+$ake = 'array_key_exists';
+t(fn() => $ake(new \stdClass, []));
+t(fn() => \array_key_exists(new \stdClass, []));
+"#);
+    assert_eq!(
+        out,
+        "TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: Cannot access offset of type array on array
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: array_key_exists(): Argument #1 ($key) must be a valid array offset type
+TypeError: Cannot access offset of type stdClass on array
+"
+    );
+}
