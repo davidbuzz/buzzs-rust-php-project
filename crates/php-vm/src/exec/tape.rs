@@ -605,7 +605,9 @@ enum Br {
 ///   may release a value or allocate);
 /// * `branch`: `unsafe fn(St, &Inst) -> Br`; a taken jump polls, as every
 ///   jump does;
-/// * `branch_poll`: the same, polling on the fall-through path as well.
+/// * `branch_poll`: the same, polling on the fall-through path as well;
+/// * `switch_f`: `unsafe fn(*mut Frame, &Inst) -> isize`, a jump to the
+///   byte offset the handler answers (0: declined).
 macro_rules! fam_arm {
     // The thin modes: the handler is called with the frame alone (`st.f`)
     // and reads any slot base from it (`frame_st`). Passed all four bases,
@@ -653,6 +655,25 @@ macro_rules! fam_arm {
                 }
             }
             Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
+        }
+    }};
+    // A jump to a target the handler picks (`scalar::match_jump`): it
+    // answers the target's byte offset from the instruction, or 0 when it
+    // declined. The targets are forward (no back edge for the JIT hook),
+    // and a taken jump polls, as every jump does.
+    (switch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
+        let off = ($h)($st.f, $inst);
+        if off == 0 {
+            return step_out($ip);
+        }
+        let at = $ip;
+        $ip = $ip.byte_offset(off);
+        if crate::interrupt::safe_point_due() {
+            return Out {
+                ip: $ip,
+                at,
+                why: WHY_POLL,
+            };
         }
     }};
     (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
@@ -1334,6 +1355,7 @@ tape_ops! {
         EqLitCvK = (scalar::eq_lit_cv::<2>, 2, plain_f),
         JmpSetT = (scalar::jmp_set_tmp, 1, branch_poll_f),
         FreeT = (scalar::free_tmp, 1, plain_f),
+        MatchJ = (scalar::match_jump, 1, switch_f),
 
         // ---- end of scalar ----
         //

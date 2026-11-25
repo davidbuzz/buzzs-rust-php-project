@@ -201,3 +201,38 @@ echo "end\n";
         "f0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \nempty ~m0 obj | kept ~j0 | none ~u0 false\nf0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \narr ~m1 obj | kept ~j1 | none ~u1 false\nf0!nbdflt T1pBarray T1pBx f0!nbdflt f0!nbdflt T1pBobject f0!nbdflt f0!nbdflt \narr ~m2 obj | kept ~j2 | none ~u2 false\n~kept end\n"
     );
 }
+
+/// `match` with a jump table (`ZEND_MATCH`): int and string keys (`10`
+/// and `'10'` apart), a float, a bool, null and an array going to the
+/// default arm, a subject behind a reference, a temporary subject, the
+/// `UnhandledMatchError` with no default arm, an undefined variable (its
+/// warning).
+#[test]
+fn match_jump_tables() {
+    assert_eq!(
+        run(r#"<?php
+function g($v) {
+  return match ($v) { 'a' => 1, 'b', 'c' => 2, 10 => 3, '10' => 4, default => 0 };
+}
+function h($v) {
+  return match ($v) { 'x' => 'X', 'y' => 'Y' };
+}
+function f() {
+  $out = '';
+  for ($i = 0; $i < 3; $i++) {
+    foreach (['a', 'b', 'c', 10, '10', 10.0, true, null, 'd', [], 1] as $v) { $out .= g($v); }
+    $r = 'b'; $ref = &$r; $out .= g($ref) . match ($ref) { 'b' => 'B', 'c' => 'C', default => '-' }; unset($ref);
+    $out .= match (strtolower('A')) { 'a' => 'lo', 'b' => 'b', default => '?' };
+    $out .= ' ';
+  }
+  echo $out, "\n";
+  echo h('y'), "\n";
+  try { echo h('z'); } catch (\UnhandledMatchError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+  try { echo h(5); } catch (\UnhandledMatchError $e) { echo $e->getMessage(), "\n"; }
+  echo g($undef), "\n";
+}
+f();
+"#),
+        "122340000002Blo 122340000002Blo 122340000002Blo \nY\nUnhandledMatchError: Unhandled match case 'z'\nUnhandled match case 5\n\nWarning: Undefined variable $undef in t.php on line 20\n0\n"
+    );
+}

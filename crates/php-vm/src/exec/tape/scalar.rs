@@ -211,6 +211,36 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         // `$cv ?: ...` and `$cv ?? ...`: the result temporary is in `b`.
+        // `match` with a jump table (`ZEND_MATCH`): the table's address
+        // in `p` (it lives in the op array, as the tape does), the
+        // subject's kind in `k` (`EQ_CV`, `EQ_KEEP`, or `MATCH_LIT`) and
+        // offset in `a`, the op's index in `d`. Every target is checked
+        // to be inside the tape. (The one jumping row without its target
+        // in `c`: no JIT region takes it, and a loop closes with no
+        // `match`.)
+        Op::Match { subject, ref table } => {
+            for to in table.labels() {
+                rel(code, i, to)?;
+            }
+            let (k, a) = match subject {
+                Operand::Cv(cv) => (EQ_CV, cv_off(code, cv)?),
+                Operand::TmpKeep(t) => (EQ_KEEP, tmp_off(code, t)?),
+                Operand::Lit(l) => {
+                    if matches!(code.literals.get(l as usize)?, Value::Reference(_)) {
+                        return None;
+                    }
+                    (MATCH_LIT, lit_off(l)?)
+                }
+                _ => return None,
+            };
+            Inst {
+                k,
+                a,
+                d: u32::try_from(i).ok()?,
+                p: std::ptr::from_ref::<crate::opcode::MatchTable>(&**table) as usize,
+                ..plain(TOp::MatchJ)
+            }
+        }
         // `TMP ?: ...` (`ZEND_JMP_SET_SPEC_TMP`: a call's result, an
         // element): the result temporary in `b`.
         Op::JmpSet {
@@ -771,6 +801,44 @@ pub(super) unsafe fn jmp_set_tmp(frame: *mut Frame, inst: &Inst) -> Br {
         unsafe { *from = Value::Null };
         Br::Fall
     }
+}
+
+/// The subject kind of a [`TOp::MatchJ`] row (`k`) that is a literal.
+const MATCH_LIT: u8 = 3;
+
+/// `Op::Match` (`ZEND_MATCH`): the jump the op's table gives the subject
+/// (an int or a string by its key, anything else to the default arm), as
+/// the byte offset of its target from this row ([`super::rel`] checked
+/// every target at lowering). 0, nothing changed, for an undefined
+/// variable (the generic op warns) and a reference (dereferenced there).
+///
+/// # Safety
+/// As [`move_tmp`]; `inst` is a [`TOp::MatchJ`] row, whose `p` is the
+/// address of its op's table in the frame's op array.
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment, clippy::cast_possible_wrap)] // a slot offset from a slot vector's base; a tape offset fits
+pub(super) unsafe fn match_jump(frame: *mut Frame, inst: &Inst) -> isize {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    let v: &Value = match inst.k {
+        // SAFETY: `a` is a validated variable offset.
+        EQ_CV => match unsafe { &*cv_slot(st, inst.a) } {
+            Some(v) => v,
+            None => return 0,
+        },
+        // SAFETY: `a` is a validated temporary offset.
+        EQ_KEEP => unsafe { tmp_slot(st, inst.a) },
+        // SAFETY: `a` is a validated literal offset; it is only read.
+        _ => unsafe { &*st.lits.add(inst.a as usize).cast::<Value>() },
+    };
+    if matches!(v, Value::Reference(_)) {
+        return 0;
+    }
+    // SAFETY: the caller's contract: the table lives in the op array the
+    // frame runs, which outlives the frame's run of its tape.
+    let table = unsafe { &*(inst.p as *const crate::opcode::MatchTable) };
+    let to = table.target(v);
+    (to as isize - inst.d as isize) * std::mem::size_of::<Inst>() as isize
 }
 
 /// `Op::Free` of a temporary (`ZEND_FREE`: `zval_ptr_dtor_nogc`), as

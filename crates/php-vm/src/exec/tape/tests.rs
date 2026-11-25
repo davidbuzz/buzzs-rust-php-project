@@ -86,6 +86,7 @@ fn check(code: &OpArray) -> Box<[Inst]> {
                 | TOp::IncDecStatic
                 | TOp::InitArrayT
                 | TOp::ArrayAddT
+                | TOp::MatchJ
         ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
@@ -1833,4 +1834,35 @@ fn temporary_truth_and_free_rows() {
     assert_eq!(count(TOp::JmpSetT), 1, "{:?}", code.ops);
     assert!(count(TOp::FreeT) >= 1, "{:?}", code.ops);
     assert_eq!(run(TEMPORARY_TRUTH), "y.Ty.Ty.T y!y!y!\n");
+}
+
+const MATCH_TABLE: &str = r#"<?php
+function g($v) {
+  return match ($v) { 'a' => 1, 'b', 'c' => 2, 10 => 3, '10' => 4, default => 0 };
+}
+$out = '';
+foreach (['a', 'b', 'c', 10, '10', 10.0, null, 'd'] as $v) { $out .= g($v); }
+echo $out, "\n";
+"#;
+
+/// A `match` with a jump table is a row ([`TOp::MatchJ`]) whose table
+/// gives the jump.
+#[test]
+fn match_with_a_table_is_a_row() {
+    let arrays = op_arrays(MATCH_TABLE);
+    for code in &arrays {
+        check(code);
+    }
+    let code = arrays
+        .iter()
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::Match { .. })))
+        .expect("the function with the match");
+    let tape = check(code);
+    assert_eq!(
+        tape.iter().filter(|i| i.op == TOp::MatchJ).count(),
+        1,
+        "{:?}",
+        code.ops
+    );
+    assert_eq!(run(MATCH_TABLE), "12234000\n");
 }
