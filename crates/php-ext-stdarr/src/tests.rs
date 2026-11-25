@@ -702,3 +702,50 @@ fn array_slice_positions() {
         "0='a',1='b',|0='d',1='e',|0='d',|0='b',1='c',2='d',||2='c',3='d',4='e',|0='a',1='b',2='c',3='d',4='e',|0='a',1='b',|0='e',|0=3,1=4,|2=3,3=4,|0=1,|0=2,'b'=3,|5=2,|"
     );
 }
+
+#[test]
+fn u_diff_variants_count_their_arguments_before_typing_them() {
+    // php_array_diff() parses "+f" before it looks at an array: a short call
+    // is an ArgumentCountError whatever its first argument, and a bad
+    // callback comes before a non-array (expected values from php8.5).
+    let t = |code: &str| {
+        run(&format!(
+            "try {{ {code}; }} catch (Throwable $e) {{ echo get_class($e), ': ', $e->getMessage(); }}"
+        ))
+    };
+    assert_eq!(
+        t("array_udiff(1)"),
+        "ArgumentCountError: array_udiff() expects at least 2 arguments, 1 given"
+    );
+    assert_eq!(
+        t("array_uintersect_uassoc('a')"),
+        "ArgumentCountError: array_uintersect_uassoc() expects at least 3 arguments, 1 given"
+    );
+    assert_eq!(
+        t("array_diff_ukey(null, 'nope')"),
+        "TypeError: array_diff_ukey(): Argument #2 must be a valid callback, function \"nope\" not found or invalid function name"
+    );
+    assert_eq!(
+        t("array_udiff(1, [], 'strcmp')"),
+        "TypeError: array_udiff(): Argument #1 ($array) must be of type array, int given"
+    );
+    assert_eq!(
+        t("array_udiff([], 2, 'strcmp')"),
+        "TypeError: array_udiff(): Argument #2 must be of type array, int given"
+    );
+}
+
+#[test]
+fn set_operations_reflect_their_stub_types() {
+    let sig = |f: &str| {
+        run(&format!(
+            "$r = new ReflectionFunction('{f}'); echo implode(', ', array_map(fn($p) => $p->getType() . ' ' . ($p->isVariadic() ? '...' : '') . '$' . $p->getName(), $r->getParameters())), ' req=', $r->getNumberOfRequiredParameters();"
+        ))
+    };
+    assert_eq!(sig("array_diff"), "array $array, array ...$arrays req=1");
+    assert_eq!(sig("array_intersect_key"), "array $array, array ...$arrays req=1");
+    assert_eq!(sig("array_replace"), "array $array, array ...$replacements req=1");
+    assert_eq!(sig("array_merge_recursive"), "array ...$arrays req=0");
+    assert_eq!(sig("array_udiff"), "array $array,  ...$rest req=1");
+    assert_eq!(sig("array_uintersect_uassoc"), "array $array,  ...$rest req=1");
+}
