@@ -370,3 +370,43 @@ strlen(): Argument #1 ($string) must be of type string, array given
 "##
     );
 }
+
+/// Static properties sent by value (`array_key_exists($k, static::$arr)`,
+/// Eloquent's `resolveClassAttribute()`): `static::`, `self::`,
+/// `parent::` and named, a redeclared one in a subclass, one holding a
+/// reference, to builtins and user functions; a by-reference parameter
+/// (`sort(self::$prot)`), a typed uninitialized property, an undeclared
+/// and a private one keep the generic send and its errors. Expected
+/// output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn static_properties_sent_by_value() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class B { public static $arr = ['a' => 1]; protected static $prot = [3, 1, 2]; private static $priv = 'p'; public static int $typed; public static $ref;
+  static function viaStatic($k) { return array_key_exists($k, static::$arr) ? 'y' : 'n'; }
+  static function viaSelf($k) { return array_key_exists($k, self::$arr) ? 'y' : 'n'; }
+  static function sortProt() { sort(self::$prot); return implode(',', self::$prot); }
+  static function cnt() { return count(static::$arr) . strlen(self::$priv); }
+  static function typed() { return gettype(static::$typed); }
+}
+class C extends B { public static $arr = ['c' => 2];
+  static function viaParent($k) { return array_key_exists($k, parent::$arr) ? 'y' : 'n'; } }
+function userf($x) { return is_array($x) ? count($x) : $x; }
+$x = ['z' => 9]; B::$ref = &$x;
+for ($i = 0; $i < 3; $i++) {
+    echo B::viaStatic('a'), C::viaStatic('a'), C::viaStatic('c'), B::viaSelf('a'), C::viaSelf('c'), C::viaParent('a'), ' ';
+    echo B::sortProt(), ' ', B::cnt(), C::cnt(), ' ', userf(B::$arr), userf(C::$arr), userf(B::$ref), ' ';
+    echo array_key_exists('z', B::$ref) ? 'R' : '-', ' ';
+    try { echo B::typed(), ' '; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo count(B::$nope), ' '; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo strlen(B::$priv), ' '; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $x['w' . $i] = $i; echo count(B::$ref), "\n";
+}
+"#),
+        r#"ynyyny 1,2,3 1111 111 R Typed static property App\B::$typed must not be accessed before initialization Access to undeclared static property App\B::$nope Cannot access private property App\B::$priv 2
+ynyyny 1,2,3 1111 112 R Typed static property App\B::$typed must not be accessed before initialization Access to undeclared static property App\B::$nope Cannot access private property App\B::$priv 3
+ynyyny 1,2,3 1111 113 R Typed static property App\B::$typed must not be accessed before initialization Access to undeclared static property App\B::$nope Cannot access private property App\B::$priv 4
+"#
+    );
+}

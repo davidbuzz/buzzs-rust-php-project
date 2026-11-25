@@ -1523,6 +1523,15 @@ fn this_place(code: &OpArray, pid: u32) -> bool {
 fn read_place(code: &OpArray, pid: u32) -> bool {
     use crate::opcode::Seg;
     code.places.get(pid as usize).is_some_and(|p| {
+        // `A::$p` / `static::$p` (`static::$classAttributes`): the static
+        // property cache hit (`spec::statics::static_prop_value_in`).
+        if let PlaceBase::StaticProp {
+            name: Operand::Lit(_),
+            ..
+        } = p.base
+        {
+            return p.segs.is_empty();
+        }
         matches!(
             p.base,
             PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::Value(Operand::Tmp(_))

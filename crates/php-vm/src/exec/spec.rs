@@ -486,6 +486,9 @@ enum ArgPlace {
     Chain,
     /// `tmp[d1]...[dn]` (`f()['k']`).
     TmpDims(u32),
+    /// `A::$name`, `static::$name`, `self::$name`: a static property named
+    /// by a literal.
+    Static,
 }
 
 impl ArgPlace {
@@ -517,6 +520,13 @@ impl ArgPlace {
             (PlaceBase::Cv(_) | PlaceBase::This, [_, .., Seg::Prop(Operand::Lit(_))]) => {
                 ArgPlace::Chain
             }
+            (
+                PlaceBase::StaticProp {
+                    name: Operand::Lit(_),
+                    ..
+                },
+                [],
+            ) => ArgPlace::Static,
             _ => return None,
         })
     }
@@ -553,6 +563,7 @@ impl Frame {
             ArgPlace::Prop => props::read_hit(self, pid),
             ArgPlace::PropDims => props::read_prop_dims_in(self, pid),
             ArgPlace::Chain => props::read_chain_in(self, pid),
+            ArgPlace::Static => statics::static_prop_value_in(self, pid),
             ArgPlace::TmpDims(t) => {
                 let v = {
                     let Value::Array(a) = self.tmps.get(t as usize)? else {
