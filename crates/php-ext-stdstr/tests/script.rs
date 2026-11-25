@@ -498,3 +498,21 @@ fn ucfirst_lcfirst_share_unchanged_strings() {
         "string(6) \"AbAbAb\" refcount(3)\nstring(6) \"abAbAb\" refcount(2)\nstring(0) \"\" interned\nstring(0) \"\" interned\nHellohELLO1xsameaB"
     );
 }
+
+/// The default charset hint of `htmlspecialchars()` follows `ini_set()`
+/// of `default_charset` and `internal_encoding` (worked out once per INI
+/// generation): UTF-8, ISO-8859-1, `internal_encoding` taking precedence
+/// and given up again, an explicit `$encoding` (`/usr/bin/php8.5 -n`).
+#[test]
+fn htmlspecialchars_default_charset_follows_ini() {
+    let out = run(r#"echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('default_charset', 'ISO-8859-1'); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('internal_encoding', 'UTF-8'); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        ini_set('internal_encoding', ''); echo bin2hex(htmlspecialchars("\xe9<")), '|';
+        echo bin2hex(htmlspecialchars("\xe9<", ENT_QUOTES, 'UTF-8')), '|';
+        ini_set('default_charset', 'UTF-8'); echo bin2hex(htmlspecialchars("\xe9<")), '|', htmlspecialchars('plain');"#);
+    assert_eq!(
+        out,
+        "efbfbd266c743b|e9266c743b|efbfbd266c743b|e9266c743b||efbfbd266c743b|plain"
+    );
+}
