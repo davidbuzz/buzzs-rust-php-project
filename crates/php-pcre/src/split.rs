@@ -28,7 +28,6 @@ fn piece(subject: &[u8], start: usize, end: usize, offset_capture: bool) -> Valu
 ///
 /// Returns the list PHP returns, or the error that makes it return `false`
 /// (`preg_last_error()` is `NoError` on success, the error otherwise).
-#[allow(clippy::too_many_lines)]
 pub fn split(
     re: &Regex,
     cfg: &MatchConfig,
@@ -36,6 +35,22 @@ pub fn split(
     limit: i64,
     flags: i64,
 ) -> Result<MatchArray, PregError> {
+    split_with_tail(re, cfg, subject, limit, flags).map(|(out, _)| out)
+}
+
+/// [`split`], also telling whether the list's last entry is the whole
+/// subject as its tail (the piece from offset 0, without
+/// `PREG_SPLIT_OFFSET_CAPTURE`): `php_pcre_split_impl` adds that one as
+/// the subject string itself (`ZVAL_STR_COPY(&tmp, subject_str)` when
+/// `start_offset == 0`), every other piece as a new string.
+#[allow(clippy::too_many_lines)]
+pub fn split_with_tail(
+    re: &Regex,
+    cfg: &MatchConfig,
+    subject: &[u8],
+    limit: i64,
+    flags: i64,
+) -> Result<(MatchArray, bool), PregError> {
     let no_empty = flags & PREG_SPLIT_NO_EMPTY != 0;
     let delim_capture = flags & PREG_SPLIT_DELIM_CAPTURE != 0;
     let offset_capture = flags & PREG_SPLIT_OFFSET_CAPTURE != 0;
@@ -126,10 +141,12 @@ pub fn split(
 
     // `last:`
     let start = last_match;
+    let mut whole_tail = false;
     if !no_empty || start < len {
         out.push(piece(subject, start, len, offset_capture));
+        whole_tail = start == 0 && !offset_capture;
     }
-    Ok(out)
+    Ok((out, whole_tail))
 }
 
 /// `preg_grep($pattern, $array, $flags)`: returns the positions (into
@@ -274,6 +291,35 @@ mod tests {
         let r = split(&re, &cfg, b"a-b", -1, PREG_SPLIT_OFFSET_CAPTURE).unwrap();
         let second = r.get_index(1).unwrap().as_array().unwrap();
         assert_eq!(second.get_index(1), Some(&Value::Int(2)));
+    }
+
+    /// The tail from offset 0 is told apart from a piece of the same length
+    /// (`/$/` with `PREG_SPLIT_NO_EMPTY`: the piece before the empty match).
+    #[test]
+    fn split_tells_the_whole_subject_tail() {
+        let cfg = MatchConfig::default();
+        let whole = |pat: &[u8], subject: &[u8], limit: i64, flags: i64| {
+            let re = Regex::compile(pat).unwrap();
+            split_with_tail(&re, &cfg, subject, limit, flags).unwrap().1
+        };
+        assert!(whole(b"/z/", b"abc", -1, 0));
+        assert!(whole(b"/z/", b"abc", -1, PREG_SPLIT_NO_EMPTY));
+        assert!(whole(b"/b/", b"abc", 1, 0));
+        assert!(!whole(b"/b/", b"abc", -1, 0));
+        assert!(!whole(b"/$/", b"abc", -1, 0), "the tail is the empty piece");
+        assert!(!whole(b"/$/", b"abc", -1, PREG_SPLIT_NO_EMPTY));
+        assert!(!whole(
+            b"/(abc)/",
+            b"abc",
+            -1,
+            PREG_SPLIT_NO_EMPTY | PREG_SPLIT_DELIM_CAPTURE
+        ));
+        assert!(!whole(b"/z/", b"abc", -1, PREG_SPLIT_OFFSET_CAPTURE));
+        assert!(whole(b"/z/", b"", -1, 0));
+        assert!(
+            !whole(b"/z/", b"", -1, PREG_SPLIT_NO_EMPTY),
+            "no entry at all"
+        );
     }
 
     #[test]

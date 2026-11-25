@@ -24,6 +24,31 @@ pub(crate) fn to_zarray(m: MatchArray, utf: bool) -> ZArray {
     ZArray::from(out)
 }
 
+/// [`to_zarray`] of `preg_split()`'s list; `whole_tail` is the subject
+/// when the last entry is the whole subject as the tail
+/// ([`php_pcre::split_with_tail`]), which becomes that string itself, as
+/// `php_pcre_split_impl` adds it (`ZVAL_STR_COPY(&tmp, subject_str)`).
+pub(crate) fn split_to_zarray(m: MatchArray, utf: bool, whole_tail: Option<&ZStr>) -> ZArray {
+    let Some(subject) = whole_tail else {
+        return to_zarray(m, utf);
+    };
+    let n = m.len();
+    let mut out = HashTable::with_capacity(n);
+    for (i, (k, v)) in m.into_iter().enumerate() {
+        let key = match k {
+            Key::Index(i) => ArrayKey::Int(i),
+            Key::Name(n) => ArrayKey::Str(str_utf(&n, utf)),
+        };
+        let val = if i + 1 == n {
+            Value::Str(subject.clone())
+        } else {
+            to_value(v, utf)
+        };
+        out.insert(key, val);
+    }
+    ZArray::from(out)
+}
+
 /// Converts a single [`php_pcre::Value`] (`utf`: see [`to_zarray`]).
 pub(crate) fn to_value(v: PValue, utf: bool) -> Value {
     match v {

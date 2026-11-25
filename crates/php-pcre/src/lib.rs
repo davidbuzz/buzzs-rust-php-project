@@ -57,7 +57,7 @@ pub use replace::{
     limit_from_php, replace, replace_array, replace_callback, ReplaceOutcome, Replacement,
     ReplacementPiece, Replacements,
 };
-pub use split::{grep, quote, quote_if_needed, split};
+pub use split::{grep, quote, quote_if_needed, split, split_with_tail};
 pub use value::{Key, MatchArray, Value};
 
 /// `PREG_PATTERN_ORDER`

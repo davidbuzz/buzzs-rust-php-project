@@ -192,6 +192,47 @@ fn preg_quote_returns_its_argument_when_nothing_is_escaped() {
     );
 }
 
+/// With nothing replaced, `preg_replace()`, `preg_replace_callback()` (also
+/// over an array of patterns or of subjects, and with a limit of 0) return
+/// the subject string itself, and `preg_split()`'s tail from offset 0 is
+/// the subject itself, but not a piece of the same length before an empty
+/// match (`/usr/bin/php8.5 -n`'s `debug_zval_dump()`).
+#[test]
+fn unchanged_subjects_are_returned_themselves() {
+    let out = run(r"$s = str_repeat('abc', 3);
+$r = preg_replace('/z/', 'y', $s);
+debug_zval_dump($r);
+$r2 = preg_replace_callback('/z/', fn($m) => 'y', $s);
+debug_zval_dump($r2);
+$r3 = preg_replace(['/z/', '/q/'], 'y', $s);
+debug_zval_dump($r3);
+debug_zval_dump(preg_replace('/z/', 'y', [$s]));
+debug_zval_dump(preg_replace('/a/', 'y', $s, 0));
+debug_zval_dump(preg_replace('/a/', 'y', $s));
+$p = preg_split('/z/', $s);
+debug_zval_dump($p[0]);
+debug_zval_dump(preg_split('/$/', $s, -1, PREG_SPLIT_NO_EMPTY));
+");
+    assert_eq!(
+        out,
+        r#"string(9) "abcabcabc" refcount(3)
+string(9) "abcabcabc" refcount(4)
+string(9) "abcabcabc" refcount(5)
+array(1) packed refcount(1){
+  [0]=>
+  string(9) "abcabcabc" refcount(5)
+}
+string(9) "abcabcabc" refcount(5)
+string(9) "ybcybcybc" refcount(1)
+string(9) "abcabcabc" refcount(6)
+array(1) packed refcount(1){
+  [0]=>
+  string(9) "abcabcabc" refcount(1)
+}
+"#
+    );
+}
+
 #[test]
 fn compile_errors_warn_and_set_last_error() {
     let out = run(r"var_dump(@preg_match('/(/', 'a'));

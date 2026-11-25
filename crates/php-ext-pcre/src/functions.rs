@@ -8,7 +8,7 @@ use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::vm::PendingCall;
 use php_vm::Vm;
 
-use crate::convert::{to_zarray, unnamed_subpats};
+use crate::convert::{split_to_zarray, to_zarray, unnamed_subpats};
 use crate::memory;
 use crate::state;
 
@@ -194,7 +194,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
             let r = replace_in_subject(vm, &regex, &replacement, &s, limit, &mut count);
             if let Some(Some(r)) = pending.absorb(r)? {
                 if !is_filter || count > old {
-                    out.insert(key, Value::Str(exact(r)));
+                    out.insert(key, Value::Str(result_str(r, &s)));
                 }
             }
         }
@@ -202,7 +202,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
     } else {
         let s = vm.value_to_string(&subject)?;
         match replace_in_subject(vm, &regex, &replacement, &s, limit, &mut count)? {
-            Some(r) if !is_filter || count > 0 => Value::Str(exact(r)),
+            Some(r) if !is_filter || count > 0 => Value::Str(result_str(r, &s)),
             _ => Value::Null,
         }
     };
@@ -260,6 +260,34 @@ fn count_value(count: usize) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
 }
 
+/// What a subject became.
+enum Replaced {
+    /// No replacement was made: php-src returns the subject string itself
+    /// (`zend_string_copy`, which `debug_zval_dump()` shows in its
+    /// refcount).
+    Subject,
+    /// The new bytes.
+    New(Vec<u8>),
+}
+
+impl Replaced {
+    /// The bytes of the result for `subject`.
+    fn bytes<'a>(&'a self, subject: &'a [u8]) -> &'a [u8] {
+        match self {
+            Self::Subject => subject,
+            Self::New(v) => v,
+        }
+    }
+}
+
+/// The PHP string of a [`Replaced`] of `subject`.
+fn result_str(r: Replaced, subject: &ZStr) -> ZStr {
+    match r {
+        Replaced::Subject => subject.clone(),
+        Replaced::New(v) => exact(v),
+    }
+}
+
 /// `php_replace_in_subject()`: `Ok(None)` is PHP's `NULL` result.
 fn replace_in_subject(
     vm: &mut Vm,
@@ -268,7 +296,7 @@ fn replace_in_subject(
     subject_str: &ZStr,
     limit: usize,
     count: &mut usize,
-) -> VmResult<Option<Vec<u8>>> {
+) -> VmResult<Option<Replaced>> {
     let subject = subject_str.as_bytes();
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
@@ -293,7 +321,9 @@ fn replace_in_subject(
         other => Some(vm.value_to_string(other)?),
     };
     let mut next_replacement = replacements.map(Vec::into_iter);
-    let mut current = subject.to_vec();
+    // `php_pcre_replace_array()` passes each result on as the next
+    // subject: the subject string itself as long as nothing was replaced.
+    let mut current = Replaced::Subject;
     for (_, entry) in entries(patterns) {
         let pattern = vm.value_to_string(&entry)?;
         let rep = match (&mut next_replacement, &single) {
@@ -304,8 +334,10 @@ fn replace_in_subject(
             (None, Some(s)) => s.clone(),
             (None, None) => ZStr::from(""),
         };
-        match replace_one(vm, &pattern, rep.as_bytes(), &current, false, limit, count)? {
-            Some(r) => current = r,
+        let bytes = current.bytes(subject);
+        match replace_one(vm, &pattern, rep.as_bytes(), bytes, false, limit, count)? {
+            Some(Replaced::New(r)) => current = Replaced::New(r),
+            Some(Replaced::Subject) => {}
             None => return Ok(None),
         }
     }
@@ -321,7 +353,7 @@ fn replace_one(
     valid_utf8: bool,
     limit: usize,
     count: &mut usize,
-) -> VmResult<Option<Vec<u8>>> {
+) -> VmResult<Option<Replaced>> {
     let Some(re) = state::compile(vm, pattern)? else {
         return Ok(None);
     };
@@ -331,7 +363,18 @@ fn replace_one(
     let out = php_pcre::replace(&re, &cfg, subject, &replacement, limit);
     *count += out.count;
     state::set_last_error(out.last_error());
-    checked(vm, out.result.ok())
+    replaced(vm, out.count, out.result.ok())
+}
+
+/// The [`Replaced`] of a replacement call that made `n` replacements and
+/// gave `result` (`None`: PHP's `NULL`): with none, the subject itself
+/// (`result == NULL` → `zend_string_copy(subject_str)`), which needs no
+/// memory; otherwise the new string, checked against the memory limit.
+fn replaced(vm: &mut Vm, n: usize, result: Option<Vec<u8>>) -> VmResult<Option<Replaced>> {
+    if n == 0 {
+        return Ok(result.map(|_| Replaced::Subject));
+    }
+    Ok(checked(vm, result)?.map(Replaced::New))
 }
 
 /// A PHP string from a result buffer, without its spare capacity (PHP
@@ -445,7 +488,7 @@ fn replace_func_impl(
             }
             let r = replace_func_in_subject(vm, regex, callback, &s, limit, flags, count);
             if let Some(Some(r)) = pending.absorb(r)? {
-                out.insert(key, Value::Str(exact(r)));
+                out.insert(key, Value::Str(result_str(r, &s)));
             }
         }
         return pending.finish(Value::Array(ZArray::from(out)));
@@ -453,7 +496,7 @@ fn replace_func_impl(
     let s = vm.value_to_string(subject)?;
     Ok(
         match replace_func_in_subject(vm, regex, callback, &s, limit, flags, count)? {
-            Some(r) => Value::Str(exact(r)),
+            Some(r) => Value::Str(result_str(r, &s)),
             None => Value::Null,
         },
     )
@@ -468,7 +511,7 @@ fn replace_func_in_subject(
     limit: usize,
     flags: i64,
     count: &mut usize,
-) -> VmResult<Option<Vec<u8>>> {
+) -> VmResult<Option<Replaced>> {
     let subject = subject_str.as_bytes();
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
@@ -483,11 +526,13 @@ fn replace_func_in_subject(
             count,
         );
     };
-    let mut current = subject.to_vec();
+    let mut current = Replaced::Subject;
     for (_, entry) in entries(patterns) {
         let pattern = vm.value_to_string(&entry)?;
-        match replace_func(vm, &pattern, callback, &current, false, limit, flags, count)? {
-            Some(r) => current = r,
+        let bytes = current.bytes(subject);
+        match replace_func(vm, &pattern, callback, bytes, false, limit, flags, count)? {
+            Some(Replaced::New(r)) => current = Replaced::New(r),
+            Some(Replaced::Subject) => {}
             None => return Ok(None),
         }
     }
@@ -505,7 +550,7 @@ fn replace_func(
     limit: usize,
     flags: i64,
     count: &mut usize,
-) -> VmResult<Option<Vec<u8>>> {
+) -> VmResult<Option<Replaced>> {
     let Some(re) = state::compile(vm, pattern)? else {
         return Ok(None);
     };
@@ -529,7 +574,7 @@ fn replace_func(
     if let Some(t) = thrown {
         return Err(t);
     }
-    checked(vm, out.result.ok())
+    replaced(vm, out.count, out.result.ok())
 }
 
 /// `preg_do_repl_func()`: calls the resolved user callback with the match
@@ -561,11 +606,12 @@ fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cfg = state::config_for(&subject);
     let no_empty = flags & php_pcre::PREG_SPLIT_NO_EMPTY != 0;
     memory::precheck_split(vm, &re, &cfg, subject.as_bytes(), no_empty)?;
-    match php_pcre::split(&re, &cfg, subject.as_bytes(), limit, flags) {
-        Ok(parts) => {
+    match php_pcre::split_with_tail(&re, &cfg, subject.as_bytes(), limit, flags) {
+        Ok((parts, whole_tail)) => {
             state::set_last_error(PregError::NoError);
             memory::check(vm, memory::array_size(&parts))?;
-            Ok(Value::Array(to_zarray(parts, re.is_utf())))
+            let tail = whole_tail.then_some(&subject);
+            Ok(Value::Array(split_to_zarray(parts, re.is_utf(), tail)))
         }
         Err(e) => {
             state::set_last_error(e);
