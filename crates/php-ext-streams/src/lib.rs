@@ -85,6 +85,7 @@ fn shutdown(vm: &mut Vm) {
     res::close_deferred(vm);
     // `zend_close_rsrc_list()`: a fatal error in a destructor ends only it.
     vm.closing_resources(res::shutdown);
+    userwrap::shutdown();
     http::shutdown();
     dirs::shutdown();
     files::restore_umask();
