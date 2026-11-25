@@ -2102,6 +2102,81 @@ fn place_arg(
     caller.send_place_hit(pid)
 }
 
+/// `ZEND_SEND_REF` of a plain variable (`f($x)` of a by-reference
+/// parameter) for the prepared call, which [`send`] declined because the
+/// argument reached the first by-reference parameter ([`prepares`]'s
+/// limit): the caller's variable becomes a reference if it is not one (an
+/// undefined one a reference to null, without a notice, as
+/// `Vm::place_make_ref` makes it) and the callee's compiled variable gets
+/// that reference. The limit then moves on to the next by-reference
+/// parameter. `false`, having changed nothing, for any other argument or
+/// parameter (a value, a dimension or property, a symbol table attached in
+/// the caller, a by-reference variadic): the call is materialized and the
+/// generic send, with its diagnostics ("Only variables should be passed by
+/// reference", "could not be passed by reference"), runs.
+#[inline(never)]
+pub(super) fn send_ref(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
+    let n = prep.n;
+    let Callee::User(uf) = &prep.callee else {
+        return false;
+    };
+    if n != prep.limit || n >= MAX_ARGS || n >= uf.code.cv_names.len() {
+        return false;
+    }
+    if !uf.params.get(n).is_some_and(|p| p.by_ref && !p.variadic) {
+        return false;
+    }
+    let ArgSrc::Place(pid) = src else {
+        return false;
+    };
+    let live = vm.frames.live;
+    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+        return false;
+    };
+    if caller.calls.len() != prep.calls_len
+        || caller.symtab_attached
+        || !matches!(caller.kind, FrameKind::Main | FrameKind::Function)
+    {
+        return false;
+    }
+    let Some(cv) = place_cv(&caller.code, *pid) else {
+        return false;
+    };
+    let Some(slot) = caller.cvs.get_mut(cv as usize) else {
+        return false;
+    };
+    let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
+    let Some(dst) = frame.cvs.get_mut(n) else {
+        return false;
+    };
+    // A prepared frame's compiled variables are empty.
+    if let Some(old) = dst.as_mut().replace(Value::Reference(r)) {
+        drop(old);
+    }
+    prep.n = n + 1;
+    prep.limit = ref_limit(uf, n + 1);
+    true
+}
+
+/// The send limit of a prepared call of `uf` once its arguments reached
+/// parameter `from`: up to its next by-reference parameter, any number into
+/// a variadic one (at most [`MAX_ARGS`] and its compiled variables, as
+/// [`prepares`]).
+#[cold]
+#[inline(never)]
+fn ref_limit(uf: &UserFunction, from: usize) -> usize {
+    let most = match uf.params.get(from..) {
+        Some(rest) => match rest.iter().position(|p| p.by_ref) {
+            Some(i) => from + i,
+            None if uf.params.last().is_some_and(|p| p.variadic) => usize::MAX,
+            None => uf.params.len(),
+        },
+        None => from,
+    };
+    most.min(MAX_ARGS).min(uf.code.cv_names.len())
+}
+
 /// The value of compiled variable `cv` of `frame` as an argument: a copy,
 /// dereferenced; `None` when it is undefined.
 fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {

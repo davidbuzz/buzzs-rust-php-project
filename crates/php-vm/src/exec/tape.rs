@@ -2418,7 +2418,7 @@ fn run_call(
                         *prep = None;
                         return next;
                     }
-                } else if calls::send(vm, call, src) {
+                } else if calls::send(vm, call, src) || calls::send_ref(vm, call, src) {
                     return at + 1;
                 }
             }
@@ -2844,7 +2844,8 @@ fn enter_after_sends(
 fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize) -> usize {
     let mut next = at + 1;
     while let Some(Op::Send { src }) = ops.get(next) {
-        if !calls::send(vm, call, src) {
+        // (A plain variable for a by-reference parameter: `send_ref`.)
+        if !calls::send(vm, call, src) && !calls::send_ref(vm, call, src) {
             break;
         }
         next += 1;
