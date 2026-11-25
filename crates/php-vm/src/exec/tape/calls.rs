@@ -1585,7 +1585,30 @@ fn fill<T>(slot: &mut Option<T>, v: Option<T>) {
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
 /// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
+///
+/// A frame the last call of the same function left
+/// (`Frame::release_direct`, [`crate::vm::Frame::released_direct`]) is
+/// ready as it is: its slot vectors are sized for the code, the variable
+/// store, the pending calls and the `@` masks are empty, and it holds the
+/// function's handles; only the mark is cleared (`zend_vm_stack_push_call_frame`
+/// has nothing to set up either: `ZEND_DO_UCALL` initialises the rest).
+/// That test inline, the rest ([`ready_frame_slow`]) out of line: it
+/// spent ~55 instructions a call, most of them in its own prologue and
+/// in `reinit_same_call` storing what was already there.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per prepared call
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
+    if frame.released_direct && frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
+        debug_assert!(frame.is_released_for(uf));
+        frame.released_direct = false;
+        return;
+    }
+    ready_frame_slow(frame, uf);
+}
+
+/// [`ready_frame`] of a frame in any other released state.
+#[inline(never)]
+fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     debug_assert!(
         frame.this.is_none()
             && frame.scope.is_none()

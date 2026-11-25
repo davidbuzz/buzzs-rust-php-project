@@ -485,3 +485,45 @@ float(1.5)
 "#
     );
 }
+
+/// Calls of the same function in a row at one depth (the pooled frame
+/// `release_direct` left is readied by its mark alone), alternating with
+/// other functions, builtins, methods, closures and recursion at that
+/// depth, with defaults, locals, a foreach, `func_get_args()` and a
+/// backtrace read in the callee.
+#[test]
+fn repeated_calls_reuse_the_released_frame() {
+    assert_eq!(
+        run(r#"<?php
+function f($a, $b = 'd') { $l = $a . $b; return $l; }
+function g($x) { $t = [$x, $x]; foreach ($t as $k => $v) { $x .= $k; } return $x; }
+function n() { return func_num_args() . ':' . implode(',', func_get_args()); }
+function bt($a) { $t = debug_backtrace(); return $t[0]['function'] . count($t[0]['args']); }
+function rec($n) { return $n <= 0 ? 'r' : rec($n - 1) . $n; }
+class M { public $p = 'p'; function m($a) { return $this->p . $a; } static function s($a) { return "s$a"; } }
+function run() {
+    $o = new M;
+    $c = function ($a) { return "c$a"; };
+    $out = '';
+    for ($i = 0; $i < 5; $i++) {
+        $out .= f($i) . f($i, 'x') . f('a');
+        $out .= g("g$i") . f($i);
+        $out .= strlen(f('abc')) . f($i);
+        $out .= n($i, $i + 1) . n() . n($i);
+        $out .= bt($i, 7) . bt($i);
+        $out .= rec(3) . rec(2);
+        $out .= $o->m($i) . f($i) . M::s($i) . $c($i) . f($i);
+        $out .= "\n";
+    }
+    return $out;
+}
+echo run();
+"#),
+        r#"0d0xadg0010d40d2:0,10:1:0bt2bt1r123r12p00ds0c00d
+1d1xadg1011d41d2:1,20:1:1bt2bt1r123r12p11ds1c11d
+2d2xadg2012d42d2:2,30:1:2bt2bt1r123r12p22ds2c22d
+3d3xadg3013d43d2:3,40:1:3bt2bt1r123r12p33ds3c33d
+4d4xadg4014d44d2:4,50:1:4bt2bt1r123r12p44ds4c44d
+"#
+    );
+}

@@ -1204,6 +1204,14 @@ pub struct Frame {
     /// compiled variables, so `args` stays empty instead of holding a
     /// `None` per argument. See [`Frame::num_args`].
     pub(crate) direct_argc: u32,
+    /// Released by [`Frame::release_direct`] and untouched since: every
+    /// field is in its released state, the slot vectors are sized for the
+    /// code of `ufunc`, which the frame still holds (`keeps_function`),
+    /// and the variable store is empty ([`Frame::is_released_for`]). A
+    /// call of that same function readies it with nothing left to do
+    /// (`exec::tape::calls::ready_frame`). Cleared by every other release
+    /// and by every readying.
+    pub(crate) released_direct: bool,
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -1425,6 +1433,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -1473,6 +1482,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
     }
 
     /// Clears a frame for pool reuse while retaining its compiled code and buffer sizes.
@@ -1553,6 +1563,7 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn reinit_for_builtin(&mut self, empty_code: &Rc<OpArray>) {
+        self.released_direct = false;
         self.kind = FrameKind::Builtin;
         if !self.tmps.is_empty() {
             self.tmps.clear();
@@ -1612,6 +1623,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -1741,6 +1753,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
     }
 
     /// [`Frame::clear_for_reuse`] of a frame the tape's call protocol made
@@ -1808,6 +1821,10 @@ impl Frame {
         self.caller_strict = false;
         self.direct = false;
         self.direct_argc = 0;
+        // Every field is in its released state now, and the function's
+        // handles and slot sizes are kept: the next call of the same
+        // function in this slot readies nothing (`calls::ready_frame`).
+        self.released_direct = true;
         true
     }
 
@@ -1883,6 +1900,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
         true
     }
 
@@ -1930,6 +1948,45 @@ impl Frame {
         self.args.len().max(self.direct_argc as usize)
     }
 
+    /// Whether the frame is in the state [`Frame::release_direct`] leaves
+    /// for a later call of `uf` ([`Frame::released_direct`]): what
+    /// `calls::ready_frame` would otherwise set up for that call
+    /// (`reinit_same_call` of its code, the function handles) is already
+    /// so. For the debug assertion of that path.
+    pub(crate) fn is_released_for(&self, uf: &Rc<UserFunction>) -> bool {
+        let code = &uf.code;
+        let store_empty = self.vars.try_borrow().is_ok_and(|vs| {
+            vs.slots.iter().all(Option::is_none) && vs.index.is_none() && vs.names.owned.is_empty()
+        });
+        self.kind == FrameKind::Function
+            && self.ip == 0
+            && !self.direct
+            && self.direct_argc == 0
+            && !self.symtab_attached
+            && self.calls.is_empty()
+            && self.silence_saved.is_empty()
+            && self.args.is_empty()
+            && self.named.is_empty()
+            && self.this.is_none()
+            && self.closure.is_none()
+            && self.scope.is_none()
+            && self.called.is_none()
+            && self.generator.is_none()
+            && self.pending_exc.is_none()
+            && self.statics.is_none()
+            && !self.is_ctor
+            && matches!(self.ret, RetTarget::Discard)
+            && Rc::ptr_eq(&self.code, code)
+            && self.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf))
+            && matches!(&self.func, Some(Func::User(f)) if Rc::ptr_eq(f, uf))
+            && self.cvs.len() == code.cv_names.len()
+            && self.cvs.iter().all(CvSlot::is_none)
+            && self.tmps.len() == code.num_tmps as usize
+            && self.iters.len() == code.num_iters as usize
+            && self.fins.len() == code.num_finally as usize
+            && store_empty
+    }
+
     /// Whether a frame being recycled keeps its function handles (`func`,
     /// `ufunc` and `code`), so that the next call of the same function in
     /// this slot (a loop calling it) does not replace them: when they are
@@ -1958,6 +2015,7 @@ impl Frame {
     /// Re-initializes an existing frame when `cvs` and `tmps` already have the right lengths.
     #[inline(always)]
     pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
+        self.released_direct = false;
         self.kind = kind;
         self.ip = 0;
         // Empty after a return: `clear` would still call the out-of-line
@@ -1996,6 +2054,7 @@ impl Frame {
     /// the compiled variables empty for the caller to fill (the arguments
     /// move into them, [`crate::call`]'s `init_cvs`).
     pub(crate) fn reinit_for_call(&mut self, code: Rc<OpArray>, kind: FrameKind) {
+        self.released_direct = false;
         self.kind = kind;
         self.ip = 0;
         refill_with(&mut self.tmps, code.num_tmps as usize, || Value::Null);
@@ -2138,6 +2197,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -3208,6 +3268,52 @@ mod tests {
             hook_prop: None,
             call_shape: crate::func::CallShape::default(),
         })
+    }
+
+    /// `release_direct` marks the frame ready for the next call of the same
+    /// function (`calls::ready_frame` then sets nothing up), in exactly
+    /// the state `is_released_for` describes; any other readying or
+    /// release clears the mark.
+    #[test]
+    fn release_direct_marks_the_frame_ready_for_the_same_function() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray::default());
+        let uf = user_function(code.clone());
+        let other = user_function(Rc::new(OpArray::default()));
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        assert!(!f.released_direct);
+        // Only a frame the tape's protocol entered is released directly.
+        assert!(!f.release_direct());
+        assert!(!f.released_direct);
+        f.direct = true;
+        f.direct_argc = 1;
+        f.ret = super::RetTarget::Tmp(0);
+        f.ip = 3;
+        assert!(f.release_direct());
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        assert!(!f.is_released_for(&other));
+        f.reinit_same_call(&code, FrameKind::Function);
+        assert!(!f.released_direct);
+        f.direct = true;
+        assert!(f.release_direct());
+        assert!(f.released_direct);
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        assert!(!f.released_direct);
+        f.direct = true;
+        assert!(f.release_direct());
+        f.clear_for_reuse(&empty);
+        assert!(!f.released_direct);
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        f.direct = true;
+        assert!(f.release_direct());
+        f.reinit_for_builtin(&empty);
+        assert!(!f.released_direct);
     }
 
     #[test]
