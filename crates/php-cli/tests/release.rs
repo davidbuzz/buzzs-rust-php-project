@@ -244,3 +244,23 @@ fn lint_reports_compile_errors_through_the_engine() {
     assert_eq!(out.status.code(), Some(255));
     let _ = std::fs::remove_file(&file);
 }
+
+/// `mb_regex_set_options()` sets module globals (`MBREX(regex_default_options)`,
+/// `_syntax`) that `PHP_GINIT(mb_regex)` initialises once per thread and no
+/// request resets: php8.5's second run finds the first run's options.
+#[test]
+fn repeat_keeps_the_default_mbregex_options() {
+    let out = php(&[
+        "--repeat",
+        "2",
+        "-r",
+        "var_dump(@mb_regex_set_options()); @mb_regex_set_options('i');",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Executing for the first time...\nstring(2) \"pr\"\n\
+         Finished execution, repeating...\nstring(2) \"ir\"\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
