@@ -37,7 +37,55 @@ fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
             "func_get_args() cannot be called from the global scope",
         ));
     }
+    if let Some(args) = plain_frame_args(&vm.frames[idx]) {
+        return Ok(Value::Array(args));
+    }
     Ok(Value::Array(vm.frame_args(idx)))
+}
+
+/// `func_get_args()` of a user function's frame whose variables are only
+/// its compiled variables (no symbol table, no variadic parameter): what
+/// [`Vm::frame_args`] returns for it, read straight from the frame. As
+/// `ZEND_FUNC_GET_ARGS`'s handler does, the list is sized for the
+/// arguments (`array_init_size` + `ZEND_HASH_FILL_PACKED`): each declared
+/// parameter's current value (an unset one is null), then the extra
+/// arguments, references dereferenced. `None` for every other frame.
+///
+/// The general list goes through `debug_backtrace`'s triples (a vector of
+/// (name, value, sensitive) grown per argument, a name lookup per
+/// parameter, then an insert of each): ~940 instructions for two
+/// arguments, C's whole call ~500.
+fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
+    if f.symtab_attached || f.kind != FrameKind::Function {
+        return None;
+    }
+    let uf = f.ufunc.as_ref()?;
+    if uf.params.iter().any(|p| p.variadic) {
+        return None;
+    }
+    if !f.vars.try_borrow().ok()?.slots.is_empty() {
+        return None;
+    }
+    let nparams = uf.params.len();
+    let passed = f.num_args();
+    let mut t = HashTable::with_capacity_packed(passed);
+    for i in 0..passed.min(nparams) {
+        // Not yet received (RECV pending): the passed value.
+        let v = match f.cvs.get(i).and_then(crate::vm::CvSlot::get) {
+            Some(v) => v.deref(),
+            None => f
+                .args
+                .get(i)
+                .and_then(Option::as_ref)
+                .map(Value::deref)
+                .unwrap_or_default(),
+        };
+        let _ = t.push(v);
+    }
+    for a in f.args.iter().skip(nparams).flatten() {
+        let _ = t.push(a.deref());
+    }
+    Some(ZArray::from_table(t))
 }
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -3034,5 +3082,56 @@ mod ini_get_tests {
         };
         assert!(!long.is_interned());
         assert_eq!(long.len(), INI_SHARED_MAX + 1);
+    }
+}
+
+#[cfg(test)]
+mod func_get_args_tests {
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The direct list (`plain_frame_args`) and the general one (a frame
+    /// with a symbol table, a variadic) agree with `/usr/bin/php8.5 -n`:
+    /// `[["changed"],["changed",2],["changed",2,3,4],[null,9],[1,2],[1,2]]`
+    /// for the first six, plus the variadic's.
+    #[test]
+    fn func_get_args_of_plain_and_other_frames() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(
+            br#"<?php
+function f($a, $b = 5) { $a = 'changed'; return func_get_args(); }
+function g($a, &$r) { $r = 9; unset($a); return func_get_args(); }
+function h($a) { return func_get_args(); }
+function k($a, $b) { $x = 'x'; $$x = 1; return func_get_args(); }
+function v($a, ...$rest) { return func_get_args(); }
+function show($l) { echo '['; foreach ($l as $i => $e) { echo $i, '=', $e === null ? 'N' : $e, ' '; } echo ']'; }
+$v = 1;
+show(f(1)); show(f(1, 2)); show(f(1, 2, 3, 4)); show(g(1, $v)); show(h(...[1, 2])); show(k(1, 2));
+show(v(1, 2, 3));
+"#,
+            "fga.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "[0=changed ][0=changed 1=2 ][0=changed 1=2 2=3 3=4 ][0=N 1=9 ][0=1 1=2 ][0=1 1=2 ][0=1 1=2 2=3 ]"
+        );
     }
 }
