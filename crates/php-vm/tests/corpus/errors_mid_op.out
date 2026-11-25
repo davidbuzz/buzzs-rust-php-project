@@ -1,0 +1,1065 @@
+-- return 0
+H[return] Undefined array key "y" @9
+H[return] Undefined variable $undef @10
+H[return] Using null as an array offset is deprecated, use an empty string instead @10
+H[return] Undefined variable $undef2 @11
+H[return] Implicit conversion from float 1.5 to int loses precision @12
+H[return] Undefined variable $undef3 @13
+H[return] Undefined property: P::$missing @14
+H[return] Undefined array key "nope" @15
+H[return] Trying to access array offset on null @17
+H[return] Implicit conversion from float 1.5 to int loses precision @18
+H[return] Undefined array key 2 @19
+H[return] A non-numeric value encountered @20
+H[return] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 5,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- return 1
+H[return] Undefined array key "y" @9
+H[return] Undefined variable $undef @10
+H[return] Using null as an array offset is deprecated, use an empty string instead @10
+H[return] Undefined variable $undef2 @11
+H[return] Implicit conversion from float 1.5 to int loses precision @12
+H[return] Undefined variable $undef3 @13
+H[return] Undefined property: P::$missing @14
+H[return] Undefined array key "nope" @15
+H[return] Trying to access array offset on null @17
+H[return] Implicit conversion from float 1.5 to int loses precision @18
+H[return] Undefined array key 2 @19
+H[return] A non-numeric value encountered @20
+H[return] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 6,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- return 2
+H[return] Undefined array key "y" @9
+H[return] Undefined variable $undef @10
+H[return] Using null as an array offset is deprecated, use an empty string instead @10
+H[return] Undefined variable $undef2 @11
+H[return] Implicit conversion from float 1.5 to int loses precision @12
+H[return] Undefined variable $undef3 @13
+H[return] Undefined property: P::$missing @14
+H[return] Undefined array key "nope" @15
+H[return] Trying to access array offset on null @17
+H[return] Implicit conversion from float 1.5 to int loses precision @18
+H[return] Undefined array key 2 @19
+H[return] A non-numeric value encountered @20
+H[return] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+H[return] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 7,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- false 0
+H[false] Undefined array key "y" @9
+
+Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+H[false] Undefined variable $undef @10
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Using null as an array offset is deprecated, use an empty string instead @10
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Undefined variable $undef2 @11
+
+Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+H[false] Implicit conversion from float 1.5 to int loses precision @12
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+H[false] Undefined variable $undef3 @13
+
+Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+H[false] Undefined property: P::$missing @14
+
+Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+H[false] Undefined array key "nope" @15
+
+Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+H[false] Trying to access array offset on null @17
+
+Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+H[false] Implicit conversion from float 1.5 to int loses precision @18
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+H[false] Undefined array key 2 @19
+
+Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+H[false] A non-numeric value encountered @20
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 5,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- false 1
+H[false] Undefined array key "y" @9
+
+Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+H[false] Undefined variable $undef @10
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Using null as an array offset is deprecated, use an empty string instead @10
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Undefined variable $undef2 @11
+
+Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+H[false] Implicit conversion from float 1.5 to int loses precision @12
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+H[false] Undefined variable $undef3 @13
+
+Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+H[false] Undefined property: P::$missing @14
+
+Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+H[false] Undefined array key "nope" @15
+
+Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+H[false] Trying to access array offset on null @17
+
+Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+H[false] Implicit conversion from float 1.5 to int loses precision @18
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+H[false] Undefined array key 2 @19
+
+Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+H[false] A non-numeric value encountered @20
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 6,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- false 2
+H[false] Undefined array key "y" @9
+
+Warning: Undefined array key "y" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 9
+H[false] Undefined variable $undef @10
+
+Warning: Undefined variable $undef in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Using null as an array offset is deprecated, use an empty string instead @10
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 10
+H[false] Undefined variable $undef2 @11
+
+Warning: Undefined variable $undef2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 11
+H[false] Implicit conversion from float 1.5 to int loses precision @12
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 12
+H[false] Undefined variable $undef3 @13
+
+Warning: Undefined variable $undef3 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 13
+H[false] Undefined property: P::$missing @14
+
+Warning: Undefined property: P::$missing in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 14
+H[false] Undefined array key "nope" @15
+
+Warning: Undefined array key "nope" in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 15
+H[false] Trying to access array offset on null @17
+
+Warning: Trying to access array offset on null in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 17
+H[false] Implicit conversion from float 1.5 to int loses precision @18
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 18
+H[false] Undefined array key 2 @19
+
+Warning: Undefined array key 2 in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 19
+H[false] A non-numeric value encountered @20
+
+Warning: A non-numeric value encountered in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 20
+H[false] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 21
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+H[false] Undefined variable $undefLoop @22
+
+Warning: Undefined variable $undefLoop in /home/buzz/.t3/worktrees/phprust/t3-2cd4debd-dcb9b63a667050e4/crates/php-vm/tests/corpus/errors_mid_op.php on line 22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 7,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- throw 0
+H[throw] Undefined array key "y" @9
+H[throw] Undefined variable $undef @10
+H[throw] Undefined variable $undef2 @11
+H[throw] Implicit conversion from float 1.5 to int loses precision @12
+H[throw] Undefined variable $undef3 @13
+H[throw] Undefined property: P::$missing @14
+H[throw] Undefined array key "nope" @15
+H[throw] Trying to access array offset on null @17
+H[throw] Implicit conversion from float 1.5 to int loses precision @18
+H[throw] Undefined array key 2 @19
+H[throw] A non-numeric value encountered @20
+H[throw] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[throw] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "y"',
+    2 => 
+    array (
+      'x' => 1,
+    ),
+  ),
+  1 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef',
+    2 => 
+    array (
+      0 => 1,
+    ),
+  ),
+  2 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef2',
+    2 => 5,
+  ),
+  3 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 0,
+  ),
+  4 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef3',
+    2 => 
+    array (
+      0 => NULL,
+    ),
+  ),
+  5 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined property: P::$missing',
+    2 => 
+    \P::__set_state(array(
+       'arr' => 
+      array (
+      ),
+       'n' => 0,
+       'v' => NULL,
+    )),
+  ),
+  6 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "nope"',
+    2 => 
+    array (
+      'k' => 1,
+    ),
+  ),
+  7 => 'abc  z',
+  8 => 
+  array (
+    0 => 'T',
+    1 => 'Trying to access array offset on null',
+    2 => false,
+  ),
+  9 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 
+    array (
+    ),
+  ),
+  10 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key 2',
+    2 => 1,
+    3 => 'u',
+  ),
+  11 => 
+  array (
+    0 => 'T',
+    1 => 'A non-numeric value encountered',
+    2 => false,
+  ),
+  12 => 
+  array (
+    0 => 'T',
+    1 => 'strlen(): Passing null to parameter #1 ($string) of type string is deprecated',
+  ),
+  13 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undefLoop',
+    2 => 
+    array (
+    ),
+  ),
+)
+-- throw 1
+H[throw] Undefined array key "y" @9
+H[throw] Undefined variable $undef @10
+H[throw] Undefined variable $undef2 @11
+H[throw] Implicit conversion from float 1.5 to int loses precision @12
+H[throw] Undefined variable $undef3 @13
+H[throw] Undefined property: P::$missing @14
+H[throw] Undefined array key "nope" @15
+H[throw] Trying to access array offset on null @17
+H[throw] Implicit conversion from float 1.5 to int loses precision @18
+H[throw] Undefined array key 2 @19
+H[throw] A non-numeric value encountered @20
+H[throw] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[throw] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "y"',
+    2 => 
+    array (
+      'x' => 1,
+    ),
+  ),
+  1 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef',
+    2 => 
+    array (
+      0 => 1,
+    ),
+  ),
+  2 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef2',
+    2 => 5,
+  ),
+  3 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 0,
+  ),
+  4 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef3',
+    2 => 
+    array (
+      0 => NULL,
+    ),
+  ),
+  5 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined property: P::$missing',
+    2 => 
+    \P::__set_state(array(
+       'arr' => 
+      array (
+      ),
+       'n' => 0,
+       'v' => NULL,
+    )),
+  ),
+  6 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "nope"',
+    2 => 
+    array (
+      'k' => 1,
+    ),
+  ),
+  7 => 'abc  z',
+  8 => 
+  array (
+    0 => 'T',
+    1 => 'Trying to access array offset on null',
+    2 => false,
+  ),
+  9 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 
+    array (
+    ),
+  ),
+  10 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key 2',
+    2 => 1,
+    3 => 'u',
+  ),
+  11 => 
+  array (
+    0 => 'T',
+    1 => 'A non-numeric value encountered',
+    2 => false,
+  ),
+  12 => 
+  array (
+    0 => 'T',
+    1 => 'strlen(): Passing null to parameter #1 ($string) of type string is deprecated',
+  ),
+  13 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undefLoop',
+    2 => 
+    array (
+    ),
+  ),
+)
+-- throw 2
+H[throw] Undefined array key "y" @9
+H[throw] Undefined variable $undef @10
+H[throw] Undefined variable $undef2 @11
+H[throw] Implicit conversion from float 1.5 to int loses precision @12
+H[throw] Undefined variable $undef3 @13
+H[throw] Undefined property: P::$missing @14
+H[throw] Undefined array key "nope" @15
+H[throw] Trying to access array offset on null @17
+H[throw] Implicit conversion from float 1.5 to int loses precision @18
+H[throw] Undefined array key 2 @19
+H[throw] A non-numeric value encountered @20
+H[throw] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[throw] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "y"',
+    2 => 
+    array (
+      'x' => 1,
+    ),
+  ),
+  1 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef',
+    2 => 
+    array (
+      0 => 1,
+    ),
+  ),
+  2 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef2',
+    2 => 5,
+  ),
+  3 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 0,
+  ),
+  4 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undef3',
+    2 => 
+    array (
+      0 => NULL,
+    ),
+  ),
+  5 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined property: P::$missing',
+    2 => 
+    \P::__set_state(array(
+       'arr' => 
+      array (
+      ),
+       'n' => 0,
+       'v' => NULL,
+    )),
+  ),
+  6 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key "nope"',
+    2 => 
+    array (
+      'k' => 1,
+    ),
+  ),
+  7 => 'abc  z',
+  8 => 
+  array (
+    0 => 'T',
+    1 => 'Trying to access array offset on null',
+    2 => false,
+  ),
+  9 => 
+  array (
+    0 => 'T',
+    1 => 'Implicit conversion from float 1.5 to int loses precision',
+    2 => 
+    array (
+    ),
+  ),
+  10 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined array key 2',
+    2 => 1,
+    3 => 'u',
+  ),
+  11 => 
+  array (
+    0 => 'T',
+    1 => 'A non-numeric value encountered',
+    2 => false,
+  ),
+  12 => 
+  array (
+    0 => 'T',
+    1 => 'strlen(): Passing null to parameter #1 ($string) of type string is deprecated',
+  ),
+  13 => 
+  array (
+    0 => 'T',
+    1 => 'Undefined variable $undefLoop',
+    2 => 
+    array (
+    ),
+  ),
+)
+-- mutate 0
+H[mutate] Undefined array key "y" @9
+H[mutate] Undefined variable $undef @10
+H[mutate] Using null as an array offset is deprecated, use an empty string instead @10
+H[mutate] Undefined variable $undef2 @11
+H[mutate] Implicit conversion from float 1.5 to int loses precision @12
+H[mutate] Undefined variable $undef3 @13
+H[mutate] Undefined property: P::$missing @14
+H[mutate] Undefined array key "nope" @15
+H[mutate] Trying to access array offset on null @17
+H[mutate] Implicit conversion from float 1.5 to int loses precision @18
+H[mutate] Undefined array key 2 @19
+H[mutate] A non-numeric value encountered @20
+H[mutate] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'mut' => 'by handler',
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 5,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- mutate 1
+H[mutate] Undefined array key "y" @9
+H[mutate] Undefined variable $undef @10
+H[mutate] Using null as an array offset is deprecated, use an empty string instead @10
+H[mutate] Undefined variable $undef2 @11
+H[mutate] Implicit conversion from float 1.5 to int loses precision @12
+H[mutate] Undefined variable $undef3 @13
+H[mutate] Undefined property: P::$missing @14
+H[mutate] Undefined array key "nope" @15
+H[mutate] Trying to access array offset on null @17
+H[mutate] Implicit conversion from float 1.5 to int loses precision @18
+H[mutate] Undefined array key 2 @19
+H[mutate] A non-numeric value encountered @20
+H[mutate] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'mut' => 'by handler',
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 6,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
+-- mutate 2
+H[mutate] Undefined array key "y" @9
+H[mutate] Undefined variable $undef @10
+H[mutate] Using null as an array offset is deprecated, use an empty string instead @10
+H[mutate] Undefined variable $undef2 @11
+H[mutate] Implicit conversion from float 1.5 to int loses precision @12
+H[mutate] Undefined variable $undef3 @13
+H[mutate] Undefined property: P::$missing @14
+H[mutate] Undefined array key "nope" @15
+H[mutate] Trying to access array offset on null @17
+H[mutate] Implicit conversion from float 1.5 to int loses precision @18
+H[mutate] Undefined array key 2 @19
+H[mutate] A non-numeric value encountered @20
+H[mutate] strlen(): Passing null to parameter #1 ($string) of type string is deprecated @21
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+H[mutate] Undefined variable $undefLoop @22
+array (
+  0 => 
+  array (
+    'x' => 1,
+    'y' => 'z',
+  ),
+  1 => 
+  array (
+    0 => 1,
+    '' => 'v',
+  ),
+  2 => 5,
+  3 => 1,
+  4 => 
+  array (
+    0 => NULL,
+  ),
+  5 => 
+  \P::__set_state(array(
+     'arr' => 
+    array (
+    ),
+     'n' => 0,
+     'v' => NULL,
+  )),
+  6 => 
+  array (
+    'k' => 1,
+    'mut' => 'by handler',
+    'k2' => 'x',
+  ),
+  7 => 'abc  z',
+  8 => NULL,
+  9 => 
+  array (
+    1 => 1,
+  ),
+  10 => 
+  array (
+    0 => 1,
+    1 => 2,
+    2 => NULL,
+  ),
+  11 => 7,
+  12 => '120',
+  13 => 
+  array (
+    0 => NULL,
+    1 => NULL,
+    2 => NULL,
+  ),
+)
