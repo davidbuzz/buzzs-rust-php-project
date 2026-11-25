@@ -510,9 +510,9 @@ class B extends A {
 }
 
 /// `compact()` and `extract()` in a function read and write its variables
-/// in their slots; a name the function does not compile (`$made`) is
-/// created in its symbol table, and `get_defined_vars()` lists it after
-/// the compiled ones (`/usr/bin/php8.5 -n`: `31,2,m!,a,b,i,c,made,`).
+/// in their slots, a variable `extract()` defines (`$made`) included, and
+/// `get_defined_vars()` sees them all (`/usr/bin/php8.5 -n`:
+/// `31,2,m!,a,b,i,c,made,`).
 #[test]
 fn compact_and_extract_use_the_functions_slots() {
     assert_eq!(
