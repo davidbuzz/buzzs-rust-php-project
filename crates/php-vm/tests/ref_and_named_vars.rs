@@ -519,3 +519,43 @@ array(18) {
 "#
     );
 }
+
+/// Reference assignments and `foreach` by reference in loops long enough
+/// to run on the tape and to be compiled by the trace JIT: the values,
+/// the destructors of the values the bindings release, references kept
+/// in an array, the result of `$r = ($a = &$b)`.
+#[test]
+fn reference_bindings_in_hot_loops() {
+    assert_eq!(
+        run(r#"<?php
+class D { static $n = 0; function __destruct() { self::$n++; } }
+function loops() {
+  $a = 0; $sum = 0;
+  for ($i = 0; $i < 3000; $i++) { $b = &$a; $b++; $c = &$b; $c += 2; $sum += $a; unset($b); }
+  var_dump($a, $sum);
+  $arr = range(1, 2000);
+  for ($k = 0; $k < 3; $k++) { foreach ($arr as &$v) { $v = $v + 1; } }
+  unset($v); var_dump(array_sum($arr), $arr[0], $arr[1999]);
+  $x = null;
+  for ($i = 0; $i < 2000; $i++) { $x = new D; $y = 1; $x = &$y; }
+  var_dump(D::$n);
+  $refs = [];
+  for ($i = 0; $i < 1500; $i++) { $t = $i; $refs[] = &$t; unset($t); }
+  var_dump(count($refs), $refs[1499]);
+  $m = 1; for ($i = 0; $i < 1200; $i++) { $q = &$m; $r = ($q2 = &$q); }
+  $r = 5; var_dump($m);
+}
+loops();
+"#),
+        r#"int(9000)
+int(13504500)
+int(2007000)
+int(4)
+int(2003)
+int(2000)
+int(1500)
+int(1499)
+int(1)
+"#
+    );
+}

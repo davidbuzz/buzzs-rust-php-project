@@ -53,10 +53,10 @@ use super::spec::{
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{
     cmp_outcome, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, NullChain, Op,
-    Operand, UnKind,
+    Operand, PlaceBase, PlaceId, UnKind,
 };
-use crate::vm::{CvSlot, Frame};
-use php_runtime::{BinaryOp, Value, ZStr};
+use crate::vm::{CvSlot, Frame, FrameKind};
+use php_runtime::{BinaryOp, PhpRef, Value, ZStr};
 
 /// The second half of [`super::tape::run_tape`]'s result when no safe
 /// point is due: the op at the returned `ip` stopped the loop.
@@ -161,6 +161,13 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::RecvInit { .. }
             | Op::InstanceOf {
                 class: ClassSpec::Named(_),
+                ..
+            }
+            // `&$cv` and `$cv =& <reference>` of a plain variable
+            // (`ref_cv_in`, `assign_ref_cv_in`).
+            | Op::MakeRef { .. }
+            | Op::AssignRef {
+                src: Operand::Tmp(_),
                 ..
             }
     )
@@ -783,6 +790,25 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
             }
         }
         // `ZEND_FREE` of a temporary whose release has no side effect.
+        // `ZEND_MAKE_REF` of a plain variable: it becomes (or already
+        // is) a reference, in its slot.
+        Op::MakeRef { place, dst } => {
+            let Some(r) = ref_cv_in(f, place) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Reference(r));
+        }
+        // `ZEND_ASSIGN_REF` to a plain variable from a reference (`$a =
+        // &$b`, the binding of `foreach (... as &$v)`).
+        Op::AssignRef {
+            place,
+            src: Operand::Tmp(src),
+            dst,
+        } => {
+            if !assign_ref_cv_in(f, place, src, dst) {
+                return DECLINED;
+            }
+        }
         Op::Free(Operand::Tmp(t)) => {
             let Some(slot) = f.tmps.get_mut(t as usize) else {
                 return DECLINED;
@@ -1419,6 +1445,67 @@ fn take_truth_other(slot: &mut Value) -> Option<bool> {
     };
     *slot = Value::Null;
     Some(b)
+}
+
+/// The compiled variable a bare-variable place of `f` names, when `f`'s
+/// slots are its variables: a function's or the main script's frame
+/// without an attached symbol table (`Vm::cv_make_ref_fast`).
+#[inline]
+fn bare_cv_in(f: &Frame, place: PlaceId) -> Option<usize> {
+    if f.symtab_attached || !matches!(f.kind, FrameKind::Main | FrameKind::Function) {
+        return None;
+    }
+    let p = f.code.places.get(place as usize)?;
+    match (&p.base, p.segs.is_empty()) {
+        (PlaceBase::Cv(cv), true) => Some(*cv as usize),
+        _ => None,
+    }
+}
+
+/// `&$cv` (`ZEND_MAKE_REF`, `Vm::cv_make_ref_fast`): the variable becomes
+/// a reference in its slot, an undefined one a reference to null without
+/// a notice (`BP_VAR_W`). Nothing is released. `None`, having changed
+/// nothing, for any other place or frame.
+fn ref_cv_in(f: &mut Frame, place: PlaceId) -> Option<PhpRef> {
+    let cv = bare_cv_in(f, place)?;
+    let slot = f.cvs.get_mut(cv)?.as_mut();
+    Some(slot.get_or_insert(Value::Null).make_ref())
+}
+
+/// `$cv =& <reference>` (`ZEND_ASSIGN_REF`,
+/// `zend_assign_to_variable_reference`) where temporary `src` holds the
+/// reference: the variable's slot takes it and the old value is released
+/// (a possible cycle root; a destructor it queues runs at the safe point
+/// after the op, as `AssignCv`'s), as `Vm::place_assign_ref` does. The
+/// result goes to `dst`, or is dropped as the duplicate handle it is.
+/// `false`, having changed nothing, for any other place, frame or source
+/// (a value: "Only variables should be assigned by reference").
+fn assign_ref_cv_in(f: &mut Frame, place: PlaceId, src: u32, dst: Option<u32>) -> bool {
+    let Some(cv) = bare_cv_in(f, place) else {
+        return false;
+    };
+    if cv >= f.cvs.len() {
+        return false;
+    }
+    let Some(tmp) = f.tmps.get_mut(src as usize) else {
+        return false;
+    };
+    if !matches!(tmp, Value::Reference(_)) {
+        return false;
+    }
+    let Value::Reference(r) = std::mem::take(tmp) else {
+        return false;
+    };
+    let Some(slot) = f.cvs.get_mut(cv) else {
+        return false;
+    };
+    let old = slot.set(Some(Value::Reference(r.clone())));
+    release_rooted(old);
+    match dst {
+        Some(d) => set_tmp_in(f, d, Value::Reference(r)),
+        None => crate::gc::release_duplicate(Value::Reference(r)),
+    }
+    true
 }
 
 /// The truth of an operand that needs neither a diagnostic nor a
