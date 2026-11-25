@@ -1570,6 +1570,14 @@ fn static_dims_place(p: &crate::opcode::Place) -> bool {
         && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
 }
 
+/// `$this->$name` / `$cv->$name`: a property named by a variable
+/// (`Vm::fetch_dyn_prop_fast`, `Vm::assign_dyn_prop_fast`).
+fn dyn_prop_place(p: &crate::opcode::Place) -> bool {
+    use crate::opcode::{PlaceBase, Seg};
+    matches!(p.base, PlaceBase::This | PlaceBase::Cv(_))
+        && matches!(p.segs.as_slice(), [Seg::Prop(Operand::Cv(_))])
+}
+
 /// The generic place ops whose nested shapes have a fast path that needs
 /// the VM ([`nested_place`]): run with it at hand ([`run_vm_op`], which
 /// declines to `Vm::run`'s generic op on a miss) instead of leaving the
@@ -1590,7 +1598,8 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
                 && ((mode != FetchMode::List && nested_place(p, false, true))
                     || (matches!(mode, FetchMode::Read | FetchMode::Is | FetchMode::List)
                         && tmp_dims_place(p))
-                    || (mode != FetchMode::List && static_dims_place(p)))
+                    || (mode != FetchMode::List && static_dims_place(p))
+                    || (matches!(mode, FetchMode::Read | FetchMode::Is) && dyn_prop_place(p)))
         }
         Op::Isset { place, dst } | Op::Empty { place, dst } => {
             let p = place_of(place)?;
@@ -1605,7 +1614,7 @@ fn lower_place(code: &OpArray, i: usize) -> Option<Inst> {
             let p = place_of(place)?;
             in_range(val)
                 && dst.is_none_or(|d| d < code.num_tmps)
-                && (nested_place(p, true, true) || static_dims_place(p))
+                && (nested_place(p, true, true) || static_dims_place(p) || dyn_prop_place(p))
         }
         _ => false,
     };
@@ -2497,6 +2506,7 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             match fast
                 .or_else(|| vm.fetch_prop_dims_fast(place, mode))
                 .or_else(|| vm.fetch_global_dims_fast(place, mode))
+                .or_else(|| vm.fetch_dyn_prop_fast(place, mode))
                 .or_else(|| match mode {
                     FetchMode::Read | FetchMode::Is => {
                         let is = mode == FetchMode::Is;
@@ -2562,6 +2572,7 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             match vm
                 .assign_prop_dims_fast(place, v)
                 .or_else(|v| super::spec::assign_static_dims_in(vm.frame_mut(), place, v))
+                .or_else(|v| vm.assign_dyn_prop_fast(place, v))
             {
                 Ok(r) => {
                     if let Operand::Tmp(t) = val {

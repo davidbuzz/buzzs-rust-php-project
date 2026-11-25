@@ -474,6 +474,142 @@ impl Vm {
         }
     }
 
+    /// The slot of the declared property `name` of `o` that `$o->$name`
+    /// (a name held by a variable) reads (`write` false) or assigns
+    /// without any further dispatch, as the frame's scope `scope` sees it:
+    /// `zend_get_property_offset`'s answer (`Zend/zend_object_handlers.c`)
+    /// for a declared, non-static, non-hooked property accessible from
+    /// `scope` — public, or any declared by `scope` itself when that is
+    /// the object's class — holding a value that is not a reference; for a
+    /// write also untyped, not readonly and without asymmetric
+    /// visibility, or unset in a class without `__set`. Mirrors
+    /// [`Vm::lookup_prop`]: when the scope is another class that declares
+    /// a private property of that name, `None` (the scope's own property
+    /// may be the one meant). `None` sends the access to the generic path.
+    pub(crate) fn dyn_prop_slot(
+        o: &Obj,
+        name: &ZStr,
+        write: bool,
+        scope: Option<&Rc<Class>>,
+    ) -> Option<usize> {
+        let data = object::data(o);
+        let cls = &data.class;
+        if cls.hooks.is_some() || data.lazy.borrow().is_some() {
+            return None;
+        }
+        let pi = cls.prop_map.get(name)?;
+        let own_scope = scope.is_some_and(|s| Rc::ptr_eq(s, cls));
+        if !own_scope {
+            if scope.is_some_and(|s| {
+                s.prop_map
+                    .get(name)
+                    .is_some_and(|sp| sp.visibility() == flags::PRIVATE)
+            }) {
+                return None;
+            }
+            if pi.visibility() != flags::PUBLIC {
+                return None;
+            }
+        } else if pi.visibility() == flags::PRIVATE
+            && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes())
+        {
+            return None;
+        }
+        let blocked = flags::STATIC
+            | flags::VIRTUAL
+            | if write {
+                flags::READONLY | flags::SET_MASK
+            } else {
+                0
+            };
+        if pi.flags & blocked != 0 || pi.hooks.is_some() || (write && pi.ty.is_some()) {
+            return None;
+        }
+        let slot = pi.slot as usize;
+        match data.slots.borrow().get(slot) {
+            Some(Some(value)) if !matches!(value, Value::Reference(_)) => Some(slot),
+            Some(None) if write && cls.magic.set.is_none() => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// The object and property name of a `$this->$name` / `$cv->$name`
+    /// place of the running frame (`pid`): the name a variable holds as a
+    /// string, the object the frame's `$this` or a variable holds
+    /// directly.
+    fn dyn_prop_target(&self, pid: crate::opcode::PlaceId) -> Option<(Obj, ZStr)> {
+        use crate::opcode::{Operand, PlaceBase, Seg};
+        let f = self.frame();
+        let p = f.code.places.get(pid as usize)?;
+        let [Seg::Prop(Operand::Cv(n))] = p.segs.as_slice() else {
+            return None;
+        };
+        let Some(Value::Str(name)) = f.cvs.get(*n as usize).and_then(crate::vm::CvSlot::get) else {
+            return None;
+        };
+        let obj = match p.base {
+            PlaceBase::This => f.this.clone()?,
+            PlaceBase::Cv(c) => match f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some((obj, name.clone()))
+    }
+
+    /// `$this->$name` / `$cv->$name` read (`Fetch` of the place `pid` in
+    /// `Read` or `Is` mode) of a declared property ([`Vm::dyn_prop_slot`]),
+    /// without the generic place walk. `None`: nothing done.
+    pub(crate) fn fetch_dyn_prop_fast(
+        &mut self,
+        pid: crate::opcode::PlaceId,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        if mode == FetchMode::List {
+            return None;
+        }
+        let (o, name) = self.dyn_prop_target(pid)?;
+        let slot = Self::dyn_prop_slot(&o, &name, false, self.frame().scope.as_ref())?;
+        let slots = object::data(&o).slots.borrow();
+        slots.get(slot).cloned().flatten()
+    }
+
+    /// `$this->$name = v` / `$cv->$name = v` (`Assign` to the place `pid`)
+    /// of a declared property ([`Vm::dyn_prop_slot`]), as
+    /// `write_property_ex` stores into a plain slot. `Err(v)`: nothing
+    /// done, the value handed back.
+    pub(crate) fn assign_dyn_prop_fast(
+        &mut self,
+        pid: crate::opcode::PlaceId,
+        v: Value,
+    ) -> Result<Value, Value> {
+        if matches!(v, Value::Reference(_)) {
+            return Err(v);
+        }
+        let Some((o, name)) = self.dyn_prop_target(pid) else {
+            return Err(v);
+        };
+        let Some(slot) = Self::dyn_prop_slot(&o, &name, true, self.frame().scope.as_ref()) else {
+            return Err(v);
+        };
+        let data = object::data(&o);
+        let mut slots = data.slots.borrow_mut();
+        let Some(cell) = slots.get_mut(slot) else {
+            return Err(v);
+        };
+        let old = cell.replace(v.clone());
+        drop(slots);
+        data.set_slot_unset(slot, false);
+        if let Some(old) = &old {
+            if !old.is_plain() {
+                crate::gc::possible_root(old);
+            }
+        }
+        drop(old);
+        Ok(v)
+    }
+
     /// Reads `$o->name`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn read_property(
