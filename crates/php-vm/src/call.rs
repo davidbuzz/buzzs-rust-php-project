@@ -4242,17 +4242,51 @@ impl Vm {
     /// [`Vm::builtin_default`] of a parameter whose default is not a
     /// literal: a constant's value, or `None`.
     ///
+    /// The resolution is kept with the function ([`Builtin::cached_default`])
+    /// when it cannot change: no default (`UNKNOWN`, text that names no
+    /// constant), or the scalar value of a constant of the engine or an
+    /// extension (`SORT_STRING`) or of an internal class: those are
+    /// registered at start-up and cannot be redefined. Resolved on every
+    /// call, the text's trim, its scan and the constant table's lookup cost
+    /// ~120 instructions per omitted parameter (~355 an `array_unique($a)`).
+    /// A constant a script defined, or a value that is not a scalar, is
+    /// looked up every time, as before.
+    #[inline(never)]
+    fn builtin_default_named(&mut self, b: &Builtin, i: usize) -> Option<Value> {
+        if let Some(known) = b.cached_default(i) {
+            return known;
+        }
+        match self.resolve_builtin_default(b, i) {
+            NamedDefault::Absent => {
+                if i < b.params.len() {
+                    b.cache_default(i, None);
+                }
+                None
+            }
+            NamedDefault::Fixed(v) => {
+                b.cache_default(i, Some(&v));
+                Some(v)
+            }
+            NamedDefault::Varying(v) => v,
+        }
+    }
+
+    /// The resolution of [`Vm::builtin_default_named`], and whether it can
+    /// be kept.
+    ///
     /// `UNKNOWN` is no constant: it is `gen_stub`'s marker of a parameter
     /// whose default the function works out itself (`array_keys()`'s
     /// `$filter_value`, `mt_rand()`'s bounds), which php-src never looks
     /// up. It is answered before anything else: looking it up as a
     /// constant on every call of such a function cost ~250 instructions
     /// a call, and a script's own `UNKNOWN` constant is not the default.
-    #[inline(never)]
-    fn builtin_default_named(&mut self, b: &Builtin, i: usize) -> Option<Value> {
-        let text = b.params.get(i)?.default_text.as_deref()?.trim();
+    fn resolve_builtin_default(&mut self, b: &Builtin, i: usize) -> NamedDefault {
+        let Some(text) = b.params.get(i).and_then(|p| p.default_text.as_deref()) else {
+            return NamedDefault::Absent;
+        };
+        let text = text.trim();
         if text == "UNKNOWN" {
-            return None;
+            return NamedDefault::Absent;
         }
         let text = text.strip_prefix('\\').unwrap_or(text);
         if text.is_empty()
@@ -4260,15 +4294,33 @@ impl Vm {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c == b'\\')
         {
-            return None;
+            return NamedDefault::Absent;
         }
         if let Some(p) = find_double_colon(text.as_bytes()) {
-            let cls = self.find_class(&text.as_bytes()[..p])?;
-            return self
+            let Some(cls) = self.find_class(&text.as_bytes()[..p]) else {
+                return NamedDefault::Varying(None);
+            };
+            let v = self
                 .class_constant(&cls, &ZStr::from(&text.as_bytes()[p + 2..]))
                 .ok();
+            return match v {
+                // An internal class's constant (no declaration).
+                Some(v) if cls.decl.is_none() => NamedDefault::Fixed(v),
+                v => NamedDefault::Varying(v),
+            };
         }
-        self.constants.get(text.as_bytes()).cloned()
+        let v = self.constants.get(text.as_bytes()).cloned();
+        match v {
+            Some(v)
+                if !self
+                    .user_constants
+                    .iter()
+                    .any(|n| n.as_bytes().eq_ignore_ascii_case(text.as_bytes())) =>
+            {
+                NamedDefault::Fixed(v)
+            }
+            v => NamedDefault::Varying(v),
+        }
     }
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
@@ -6454,6 +6506,19 @@ fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> R
     }
 }
 
+/// What [`Vm::resolve_builtin_default`] made of a builtin parameter's
+/// named default.
+enum NamedDefault {
+    /// The call supplies no default.
+    Absent,
+    /// A value that cannot change ([`Builtin::cache_default`] keeps it when
+    /// it is a scalar).
+    Fixed(Value),
+    /// Resolved again on every call (a script's constant, a class not
+    /// found yet).
+    Varying(Option<Value>),
+}
+
 /// Finds `::` in a callable string.
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
@@ -7178,6 +7243,39 @@ mod buffer_tests {
         assert!(matches!(vm.builtin_default(&round, 1), Some(Value::Int(0))));
         assert!(vm.builtin_default(&round, 0).is_none(), "required");
         assert!(vm.builtin_default(&round, 9).is_none(), "no such parameter");
+    }
+
+    /// A default named by an engine constant (`array_unique()`'s
+    /// `$flags = SORT_STRING`, 2 under php8.5) is resolved once and kept
+    /// with the function, as is `UNKNOWN`'s "no default"; a parameter
+    /// past the declared ones keeps nothing.
+    #[test]
+    fn builtin_named_defaults_are_resolved_once() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let builtin = |vm: &Vm, name: &str| match vm.functions.get(&ZStr::from(name)) {
+            Some(Func::Builtin(b)) => b.clone(),
+            _ => panic!("{name} is a core builtin"),
+        };
+        let unique = builtin(&vm, "array_unique");
+        assert!(unique.cached_default(1).is_none(), "not resolved yet");
+        assert!(matches!(
+            vm.builtin_default(&unique, 1),
+            Some(Value::Int(2))
+        ));
+        assert!(matches!(
+            unique.cached_default(1),
+            Some(Some(Value::Int(2)))
+        ));
+        assert!(matches!(
+            vm.builtin_default(&unique, 1),
+            Some(Value::Int(2))
+        ));
+        let keys = builtin(&vm, "array_keys");
+        assert!(vm.builtin_default(&keys, 1).is_none());
+        assert!(matches!(keys.cached_default(1), Some(None)));
+        assert!(vm.builtin_default(&keys, 1).is_none());
+        assert!(vm.builtin_default(&keys, 7).is_none());
+        assert!(keys.cached_default(7).is_none(), "no such parameter");
     }
 
     fn capacities(vm: &Vm) -> Vec<usize> {

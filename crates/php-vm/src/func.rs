@@ -529,6 +529,23 @@ pub struct Builtin {
     accepts: OnceCell<Box<[u32]>>,
     /// [`Builtin::name_str`], once asked for.
     name_str: OnceCell<Box<str>>,
+    /// The resolved defaults of parameters whose stub default is a name
+    /// (`SORT_STRING`, `Class::CONST`, `UNKNOWN`), by position
+    /// ([`Builtin::cached_default`]): filled on first use.
+    named_defaults: RefCell<Vec<NamedDefault>>,
+}
+
+/// One parameter's entry of [`Builtin::cached_default`].
+#[derive(Clone, Debug, Default)]
+enum NamedDefault {
+    /// Not looked up yet, or not kept (resolved again on every call).
+    #[default]
+    Unresolved,
+    /// No default the call supplies (`UNKNOWN`, or a default that is no
+    /// constant name).
+    Absent,
+    /// A scalar constant's value.
+    Value(Value),
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -632,6 +649,7 @@ impl Builtin {
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -653,6 +671,7 @@ impl Builtin {
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -668,6 +687,7 @@ impl Builtin {
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
+            named_defaults: RefCell::new(Vec::new()),
         }
     }
 
@@ -678,6 +698,46 @@ impl Builtin {
             // Depends on the name.
             plain: Cell::new(PLAIN_UNKNOWN),
             ..self.clone()
+        }
+    }
+
+    /// The kept resolution of parameter `i`'s named default
+    /// (`Vm::builtin_default`): `Some(None)` when the call supplies no
+    /// default, `Some(Some(v))` a constant's scalar value, `None` when not
+    /// resolved yet or not kept.
+    #[inline]
+    pub(crate) fn cached_default(&self, i: usize) -> Option<Option<Value>> {
+        match self.named_defaults.borrow().get(i)? {
+            NamedDefault::Unresolved => None,
+            NamedDefault::Absent => Some(None),
+            NamedDefault::Value(v) => Some(Some(v.clone())),
+        }
+    }
+
+    /// Keeps the resolution of parameter `i`'s named default for
+    /// [`Builtin::cached_default`]: `None` for no default, or a scalar
+    /// (`null`, a bool, an int or a float, which owns no memory) that
+    /// depends on nothing a request can change. The table lives with the
+    /// function, beyond the request, so its allocation is not counted as
+    /// the request's memory (`memory_get_usage()`).
+    pub(crate) fn cache_default(&self, i: usize, v: Option<&Value>) {
+        let entry = match v {
+            None => NamedDefault::Absent,
+            Some(v @ (Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) => {
+                NamedDefault::Value(v.clone())
+            }
+            Some(_) => return,
+        };
+        let Ok(mut table) = self.named_defaults.try_borrow_mut() else {
+            return;
+        };
+        php_memlimit::persistent(|| {
+            if table.len() <= i {
+                table.resize(i + 1, NamedDefault::Unresolved);
+            }
+        });
+        if let Some(slot) = table.get_mut(i) {
+            *slot = entry;
         }
     }
 
@@ -887,6 +947,7 @@ impl std::ops::DerefMut for Builtin {
         // Worked out again from the edited signature.
         self.plain.set(PLAIN_UNKNOWN);
         self.accepts = OnceCell::new();
+        self.named_defaults = RefCell::new(Vec::new());
         self.sig.get_mut().expect("signature initialised above")
     }
 }
