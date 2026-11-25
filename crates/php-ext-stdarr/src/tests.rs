@@ -619,3 +619,27 @@ fn stack_functions_in_place() {
         "X23|Y|5,6|1|10,1|NULL\nNULL\n31|40,1,k,2z,y,1|0|array1|array_pop(): Argument #1 ($array) must be of type array, int given|array_push(): Argument #1 ($array) must be of type array, int given|322"
     );
 }
+
+/// `array_unique()` and `array_diff()` over a string set placed by the
+/// strings' stored hashes: strings, numbers and their string forms,
+/// `null`/`''`/`false`, a reference element, numeric-looking strings kept
+/// verbatim, arrays (`"Array"`), one element, and an empty exclusion
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_unique_and_diff_string_sets() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        echo show(array_unique(['a', 'b', 'c', 'd', 'e']));
+        echo show(array_unique([1, '1', 1.0, '1.0', true, 'x' => 'a', 'y' => 'a', 3 => null, 4 => '', 5 => false]));
+        $x = 'b'; echo show(array_unique(['k' => 'b', 'r' => &$x, 'z' => 'c']));
+        echo show(array_unique(['12', 12, '012', 'a' => 'A', 'b' => 'a']));
+        echo show(@array_unique([[1], [2], 'Array']));
+        echo show(array_unique([5 => 'q']));
+        echo show(array_diff(['a', 'b', 1, '2', 'c' => 'c'], ['b', 2], ['c']));
+        echo show(array_diff([1, 2, 3], []));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',1='b',2='c',3='d',4='e',|0=1,3=NULL,'x'='a',|'k'='b','z'='c',|0='12',2='012','a'='A','b'='a',|0=A,|5='q',|0='a',2=1,|0=1,1=2,2=3,|"
+    );
+}

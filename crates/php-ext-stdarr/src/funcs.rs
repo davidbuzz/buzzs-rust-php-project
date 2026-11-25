@@ -562,7 +562,7 @@ uucb_fn!(array_udiff_uassoc, sa::setops::array_udiff_uassoc);
 uucb_fn!(array_uintersect_uassoc, sa::setops::array_uintersect_uassoc);
 
 pub fn array_unique(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = a.array(0);
+    let h = a.array_ref(0);
     let r = sa::setops::array_unique(vm, &h, int_or(a, 1, sa::SORT_STRING));
     Ok(Value::Array(rt(vm, r)?))
 }
