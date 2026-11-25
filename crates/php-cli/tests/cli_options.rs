@@ -352,3 +352,33 @@ fn hide_args_empties_the_code_and_script_names() {
     assert_eq!(out.stderr, b"Could not open input file: \n");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn define_syntax_error_stops_the_later_defines() {
+    let d = temp_dir("define-syntax");
+    let out = Command::new(env!("CARGO_BIN_EXE_php"))
+        .current_dir(&d)
+        .args([
+            "-n",
+            "-d",
+            "precision=3",
+            "-d",
+            "=x",
+            "-d",
+            "serialize_precision=4",
+            "-r",
+            "var_dump(ini_get('precision'), ini_get('serialize_precision'));",
+        ])
+        .output()
+        .expect("spawn php");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "PHP:  syntax error, unexpected '=' in Unknown on line 7\n"
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "string(1) \"3\"\nstring(2) \"-1\"\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}

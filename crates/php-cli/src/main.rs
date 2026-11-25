@@ -402,6 +402,7 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
         binary: std::env::current_exe().ok(),
         ..config::Options::default()
     };
+    let mut define_args: Vec<Vec<u8>> = Vec::new();
     let mut g = GetOpt::new(argv, OPTIONS, true);
     while let Some((c, v)) = g.next_opt() {
         match c {
@@ -412,9 +413,7 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
             _ => match u8::try_from(c).unwrap_or(0) {
                 b'c' => opts.path_override = v,
                 b'n' => opts.ignore = true,
-                b'd' => opts
-                    .defines
-                    .extend(php_vm::parse_cli_define(&v.unwrap_or_default())),
+                b'd' => define_args.push(v.unwrap_or_default()),
                 b'h' | b'?' => {
                     out(&usage(&argv0));
                     return 0;
@@ -424,7 +423,15 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
             },
         }
     }
-    let cfg = Config::load(&opts);
+    let define_error = config::defines_syntax_error(&define_args, false);
+    let applied = define_error.as_ref().map_or(define_args.len(), |(n, _)| *n);
+    for arg in &define_args[..applied] {
+        opts.defines.extend(php_vm::parse_cli_define(arg));
+    }
+    let mut cfg = Config::load(&opts);
+    if let Some((_, warning)) = define_error {
+        cfg.warnings.push(warning);
+    }
     for w in &cfg.warnings {
         err(format!("PHP:  {w}\n").as_bytes());
     }
