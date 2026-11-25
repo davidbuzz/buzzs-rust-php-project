@@ -196,5 +196,10 @@ mod tests {
         assert_eq!(mem::occurrences(b"aXaxa", b"x", false), 1);
         assert_eq!(mem::occurrences(b"aXaxa", b"x", true), 2);
         assert_eq!(mem::occurrences(b"aaaa", b"aa", false), 2);
+        // One-byte needles take the counting pass.
+        assert_eq!(mem::occurrences(b",a,,b,", b",", false), 4);
+        assert_eq!(mem::occurrences(b"", b",", false), 0);
+        assert_eq!(mem::occurrences(b"abc", b"z", false), 0);
+        assert_eq!(mem::occurrences(b"\0a\0", b"\0", false), 2);
     }
 }

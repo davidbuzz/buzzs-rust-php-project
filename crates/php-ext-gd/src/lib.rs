@@ -30,13 +30,18 @@ impl Extension for Gd {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        m.ini(IniDirective::new(
-            "gd.jpeg_ignore_warning",
-            Some("1"),
-            Access::ALL,
-            ModifyHandler::Bool,
-            "gd",
-        ));
+        // PHP_INI_ENTRY_EX(..., NULL, zend_ini_boolean_displayer_cb) in
+        // ext/gd/gd.c: no on_modify, so ini_restore() keeps a set value.
+        m.ini(
+            IniDirective::new(
+                "gd.jpeg_ignore_warning",
+                Some("1"),
+                Access::ALL,
+                ModifyHandler::Bool,
+                "gd",
+            )
+            .without_on_modify(),
+        );
         for (name, v) in info::constants() {
             m.constant(
                 name,

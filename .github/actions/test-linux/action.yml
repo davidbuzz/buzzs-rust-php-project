@@ -1,9 +1,8 @@
 # php-src's actions/test-linux: one run of the PHPT suite, with upstream's environment
 # and INI settings. Varied:
-# - phpt-runner instead of run-tests.php. Until the runner has run-tests.php's spellings
-#   (CI_PLAN.md), -q stands in for `-g FAIL,BORK,LEAK,XLEAK --no-progress`, --timeout for
-#   --set-timeout, and --offline is the runner's default (SKIP_ONLINE_TESTS=1). -P has no
-#   counterpart (--php names the binary).
+# - phpt-runner instead of run-tests.php, with run-tests.php's options (-P, -q, -g,
+#   --no-progress, --offline, --show-diff, --show-slow, --set-timeout) as upstream passes
+#   them; --php names the binary, and --srcdir the php-src root.
 # - the baseline (phpt-baseline.txt) and the environment and scope files apply, and each
 #   run keeps its JSON report and a summary on the run's page.
 # - `jit: off` turns our trace JIT off (BUZZS_JIT=0); upstream's `jitType: disable` does
@@ -46,6 +45,10 @@ runs:
         fi
         export PDO_MYSQL_TEST_USER=root
         export PDO_MYSQL_TEST_PASS=root
+        # Ours: ext/pdo_mysql's tests build DSNs from these too; their default host,
+        # localhost, is the unix socket, and the MySQL service here is reached over TCP.
+        export PDO_MYSQL_TEST_HOST=127.0.0.1
+        export PDO_MYSQL_TEST_DB=test
         export SKIP_IO_CAPTURE_TESTS=1
         export STACK_LIMIT_DEFAULTS_CHECK=1
         export RUN_RESOURCE_HEAVY_TESTS=1
@@ -58,19 +61,24 @@ runs:
         # `shell: bash` runs with -e and pipefail: a failing run must still write its
         # summary and hand its own exit status back.
         set +e
-        env -u LANGUAGE "$PHP_BIN_DIR/phpt-runner" --php "$PHP_BIN_DIR/php" -q ${{ inputs.runTestsParameters }} \
+        env -u LANGUAGE "$PHP_BIN_DIR/phpt-runner" --php "$PHP_BIN_DIR/php" -P -q ${{ inputs.runTestsParameters }} \
           ${{ inputs.enableOpcache == 'true' && '-d opcache.enable_cli=1' || '' }} \
           -d opcache.jit=${{ inputs.jitType }} \
           -d opcache.protect_memory=1 \
           -d opcache.jit_buffer_size=64M \
           "${jit[@]}" \
           ${{ inputs.idleCpu == 'true' && '-j$(($(/usr/bin/nproc) - 1))' || '-j$(/usr/bin/nproc)' }} \
+          -g FAIL,BORK,LEAK,XLEAK \
+          --no-progress \
+          --offline \
           --show-diff \
+          --show-slow 1000 \
+          --set-timeout 120 \
           --no-artifacts \
-          --timeout 120 \
           --baseline phpt-baseline.txt \
           --summary-depth 1 \
           --json "$report.json" \
+          --srcdir modules/php-src \
           ${{ inputs.testPaths }} 2>&1 | tee "$report.txt"
         rc=${PIPESTATUS[0]}
         {

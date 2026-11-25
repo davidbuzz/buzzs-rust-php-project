@@ -35,6 +35,16 @@ impl Drop for ServerProc {
 }
 
 fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc {
+    start_with(name, files, router, &[])
+}
+
+/// [`start`] with extra `php` arguments (`-d` settings) before `-S`.
+fn start_with(
+    name: &str,
+    files: &[(&str, &str)],
+    router: Option<&str>,
+    extra: &[&str],
+) -> ServerProc {
     let root =
         std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -45,7 +55,9 @@ fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc
         std::fs::write(p, content).unwrap();
     }
     let mut cmd = Command::new(php_binary());
-    cmd.args(["-n", "-t"])
+    cmd.arg("-n")
+        .args(extra)
+        .arg("-t")
         .arg(&root)
         .args(["-S", "127.0.0.1:0"])
         .current_dir(&root)
@@ -323,4 +335,412 @@ fn banner_on_pipes_and_log_survives_startup() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `php_cli_server_dispatch_script()` names the script by file, so
+/// compiling it opens it as resource #1 (mode "rb", the script's path as
+/// URI), open while it runs, and leaves its path in the realpath cache:
+/// php8.5 -S prints this body for every request.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn script_handle_and_realpath_cache() {
+    let srv = start(
+        "handle",
+        &[(
+            "b.php",
+            "<?php foreach (get_resources() as $k => $r) { echo $k, ' ', get_resource_type($r), ' ', stream_get_meta_data($r)['mode'], ' ', stream_get_meta_data($r)['uri'] === __FILE__ ? 'self' : 'other', \"\\n\"; } echo (int) fopen('php://memory', 'r'), \"\\n\"; var_dump(isset(realpath_cache_get()[__FILE__]), isset(realpath_cache_get()[__DIR__]));",
+        )],
+        None,
+    );
+    for _ in 0..2 {
+        let r = request(srv.port, "GET /b.php HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (_, body) = split(&r);
+        assert_eq!(body, "1 stream rb self\n3\nbool(true)\nbool(true)\n");
+    }
+}
+
+/// Requests served from the opcache's scripts, one after another on the
+/// server's VM: the classes and functions they declare (a class extending
+/// one of another file, one whose parent comes later in its file, an
+/// interface with a constant, `__toString()`'s Stringable, a conditional
+/// function) start every request fresh, static properties and static
+/// variables included, and a changed parent is seen by the next request's
+/// subclass. Expected bodies from php8.5's own server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn cached_scripts_declare_fresh_classes_in_every_request() {
+    let base = "<?php\nclass Base { public static $n = 0; public static $arr = [1]; const K = 'k1'; public static function bump() { return ++static::$n; } public function who() { return 'base1'; } }\ninterface Shape { const SIDES = 0; public function area(): float; }\n";
+    let srv = start_with(
+        "linkcache",
+        &[
+            ("base.php", base),
+            (
+                "child.php",
+                "<?php\nrequire_once __DIR__ . '/base.php';\nclass Child extends Base implements Shape { public static $m = 10; const K2 = self::K . '+'; public function area(): float { return 1.5; } public function __toString(): string { return 'child'; } }\nclass Later extends Early { public static $z = 5; }\nclass Early { public function hi() { return 'early'; } }\nif (!function_exists('cond_fn')) { function cond_fn() { static $c = 0; return ++$c; } }\n",
+            ),
+            (
+                "index.php",
+                "<?php\necho class_exists('Child', false) ? 'stale ' : 'fresh ';\nrequire_once __DIR__ . '/child.php';\nBase::$arr[] = 2;\necho Base::bump(), Base::bump(), ' ', Child::$m++, Child::$m, ' ', Child::K2, ' ', (new Child)->who(), ' ', (string) new Child, ' ';\necho Later::$z++, Later::$z, ' ', (new Later)->hi(), ' ', cond_fn(), cond_fn(), ' ', count(Base::$arr), ' ';\necho Child::SIDES, ' ', (new Child) instanceof Stringable ? 'S' : '-', \"\\n\";\n",
+            ),
+        ],
+        None,
+        &[
+            "-d",
+            "opcache.enable=1",
+            "-d",
+            "opcache.revalidate_freq=0",
+            "-d",
+            "opcache.file_update_protection=0",
+        ],
+    );
+    let get = || {
+        let r = request(srv.port, "GET /index.php HTTP/1.1\r\nHost: x\r\n\r\n");
+        split(&r).1.to_string()
+    };
+    for _ in 0..3 {
+        assert_eq!(get(), "fresh 12 1011 k1+ base1 child 56 early 12 2 0 S\n");
+    }
+    // The parent changes (another modification time): its subclass in the
+    // unchanged file is linked to the new one.
+    let path = srv.root.join("base.php");
+    std::fs::write(&path, base.replace("base1", "base2")).unwrap();
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(later))
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(get(), "fresh 12 1011 k1+ base2 child 56 early 12 2 0 S\n");
+    }
+}
+
+/// What a request changes is gone in the next one, with the opcache on
+/// and repeated: a session directive changed with `ini_set()` and
+/// `session_name()`, a core directive, a declared function with a static
+/// variable; and every request header is in `$_SERVER`, in order. The
+/// request-end shortcuts (the session's INI sync, the reset's pass over
+/// the function table, the heap collection) must not keep any of it.
+/// Expected output from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn request_changes_do_not_reach_the_next_request() {
+    let srv = start_with(
+        "nextreq",
+        &[
+            (
+                "a.php",
+                "<?php\nob_start();\nini_set('session.gc_maxlifetime', '77');\nsession_name('first');\nini_set('precision', '5');\nfunction only_in_a() { static $n = 0; return ++$n; }\necho only_in_a(), only_in_a(), ' ', ini_get('session.gc_maxlifetime'), ' ', session_name(), ' ', 1/3, \"\\n\";\n",
+            ),
+            (
+                "b.php",
+                "<?php\necho function_exists('only_in_a') ? 'stale' : 'none', ' ', ini_get('session.gc_maxlifetime'), ' ', session_name(), ' ', ini_get('session.name'), ' ', 1/3, \"\\n\";\n$h = array_filter(array_keys($_SERVER), fn($k) => str_starts_with($k, 'HTTP_'));\necho implode(',', $h), ' ', $_SERVER['HTTP_X_ONE'], $_SERVER['HTTP_X_TWO'], \"\\n\";\n",
+            ),
+        ],
+        None,
+        &["-d", "opcache.enable=1"],
+    );
+    for _ in 0..2 {
+        let a = request(
+            srv.port,
+            "GET /a.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(split(&a).1, "12 77 first 0.33333\n");
+        let b = request(
+            srv.port,
+            "GET /b.php HTTP/1.1\r\nHost: x\r\nX-One: 1\r\nX-Two: 2\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(
+            split(&b).1,
+            "none 1440 PHPSESSID PHPSESSID 0.33333333333333\nHTTP_HOST,HTTP_X_ONE,HTTP_X_TWO,HTTP_CONNECTION 12\n"
+        );
+    }
+}
+
+/// The response headers of a header with the given name (case-insensitive).
+fn header_values<'a>(head: &'a str, name: &str) -> Vec<&'a str> {
+    head.split("\r\n")
+        .filter_map(|l| l.split_once(": "))
+        .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v)
+        .collect()
+}
+
+/// `sapi_send_headers()` builds the default `Content-Type` from
+/// `default_charset` and `default_mimetype` as the script left them, and
+/// runs the `header_register_callback()` callable when output first
+/// reaches the SAPI (its own output comes first); a later request starts
+/// from the startup values again. Expected values from php8.5's own
+/// built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn header_callback_and_runtime_default_charset() {
+    let srv = start(
+        "hdrcb",
+        &[(
+            "cb.php",
+            "<?php\nheader_register_callback(function () { header('X-Callback: ' . ini_get('default_charset')); echo '[cb]'; });\nini_set('default_charset', $_GET['cs'] ?? 'UTF-8');\nif (isset($_GET['ct'])) header('Content-Type: ' . $_GET['ct']);\nif (isset($_GET['mime'])) ini_set('default_mimetype', $_GET['mime']);\necho \"body\\n\";\n",
+        )],
+        None,
+    );
+    let get = |q: &str| {
+        request(
+            srv.port,
+            &format!("GET /cb.php{q} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"),
+        )
+    };
+    let r = get("");
+    let (head, body) = split(&r);
+    assert_eq!(
+        header_values(head, "Content-type"),
+        ["text/html; charset=UTF-8"]
+    );
+    assert_eq!(header_values(head, "X-Callback"), ["UTF-8"]);
+    assert_eq!(body, "[cb]body\n");
+    let r = get("?cs=ISO-8859-1");
+    let (head, _) = split(&r);
+    assert_eq!(
+        header_values(head, "Content-type"),
+        ["text/html; charset=ISO-8859-1"]
+    );
+    assert_eq!(header_values(head, "X-Callback"), ["ISO-8859-1"]);
+    let r = get("?cs=&ct=text/plain");
+    assert_eq!(header_values(split(&r).0, "Content-Type"), ["text/plain"]);
+    let r = get("?mime=text/plain");
+    assert_eq!(
+        header_values(split(&r).0, "Content-type"),
+        ["text/plain; charset=UTF-8"]
+    );
+    let r = get("?ct=application/xml&cs=KOI8-R");
+    assert_eq!(
+        header_values(split(&r).0, "Content-Type"),
+        ["application/xml"]
+    );
+    let r = get("");
+    assert_eq!(
+        header_values(split(&r).0, "Content-type"),
+        ["text/html; charset=UTF-8"]
+    );
+}
+
+/// A HEAD request to a script gets its headers, with the header callback's
+/// header, and no body: `php_header()` returns `!headers_only` and the
+/// output layer disables output (`main/output.c`). Expected from php8.5's
+/// own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn head_request_to_a_script_has_no_body() {
+    let srv = start(
+        "headreq",
+        &[(
+            "h.php",
+            "<?php\nheader_register_callback(function () { header('X-Cb: 1'); });\nheader('X-A: 1');\necho \"body\\n\";\nheader('X-B: 1');\n",
+        )],
+        None,
+    );
+    for _ in 0..2 {
+        let r = request(
+            srv.port,
+            "HEAD /h.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        let (head, body) = split(&r);
+        assert_eq!(header_values(head, "X-A"), ["1"]);
+        assert_eq!(header_values(head, "X-Cb"), ["1"]);
+        assert!(header_values(head, "X-B").is_empty());
+        assert_eq!(body, "");
+        let r = request(
+            srv.port,
+            "GET /h.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        assert!(split(&r).1.starts_with("body\n"));
+    }
+}
+
+/// `http_response_code()` after output names where output started, and
+/// truncates its argument to 32 bits as C's `(int)` cast does. Expected
+/// from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn http_response_code_after_output_and_truncation() {
+    let srv = start(
+        "rcode",
+        &[
+            (
+                "late.php",
+                "<?php\necho \"x\\n\";\nvar_dump(http_response_code(500));\n",
+            ),
+            (
+                "wide.php",
+                "<?php\nvar_dump(http_response_code(4294967496), http_response_code(-4294967000), http_response_code());\n",
+            ),
+        ],
+        None,
+    );
+    let r = request(
+        srv.port,
+        "GET /late.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    let path = srv.root.join("late.php");
+    let path = path.display();
+    assert_eq!(
+        split(&r).1,
+        format!(
+            "x\n<br />\n<b>Warning</b>:  http_response_code(): Cannot set response code - headers already sent (output started at {path}:2) in <b>{path}</b> on line <b>3</b><br />\nbool(false)\n"
+        )
+    );
+    let r = request(
+        srv.port,
+        "GET /wide.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert!(r.starts_with("HTTP/1.1 296 "), "{r}");
+    assert_eq!(split(&r).1, "int(200)\nint(200)\nint(296)\n");
+}
+
+/// Under `auto_globals_jit` (the default) `$_SERVER`, `$_ENV` and
+/// `$_REQUEST` exist only once compiled code names them, after the other
+/// auto-globals; without it they are created in registration order. Every
+/// request starts armed again. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn jit_auto_globals_appear_when_named() {
+    let files = [
+        (
+            "a.php",
+            "<?php echo json_encode(array_keys(get_defined_vars())), \"\\n\";",
+        ),
+        (
+            "b.php",
+            "<?php echo json_encode(array_keys(get_defined_vars())), \" \", $_SERVER[\"REQUEST_URI\"], \"\\n\"; include \"c.inc\";",
+        ),
+        (
+            "c.inc",
+            "<?php echo json_encode(array_keys($GLOBALS)), \" \", count($_ENV) >= 0 ? \"env\" : \"\", \"\\n\";",
+        ),
+    ];
+    let get = |port: u16, f: &str| {
+        let r = request(
+            port,
+            &format!("GET /{f}.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"),
+        );
+        split(&r).1.to_string()
+    };
+    let srv = start("jitag", &files, None);
+    assert_eq!(
+        get(srv.port, "a"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\"]\n"
+    );
+    assert_eq!(
+        get(srv.port, "b"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\"] /b.php\n[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\",\"_ENV\"] env\n"
+    );
+    assert_eq!(
+        get(srv.port, "a"),
+        "[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\"]\n"
+    );
+    drop(srv);
+    let srv = start_with("jitoff", &files, None, &["-d", "auto_globals_jit=0"]);
+    let all = "[\"_GET\",\"_POST\",\"_COOKIE\",\"_SERVER\",\"_ENV\",\"_REQUEST\",\"_FILES\"]";
+    assert_eq!(get(srv.port, "a"), format!("{all}\n"));
+    assert_eq!(get(srv.port, "b"), format!("{all} /b.php\n{all} env\n"));
+}
+
+/// An exception thrown by the `header_register_callback()` callable when
+/// output sends the headers is the script's: uncaught, it is a fatal
+/// error after that output, and the script ends. Expected from php8.5's
+/// own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn header_callback_exception_reaches_the_script() {
+    let srv = start(
+        "cbthrow",
+        &[(
+            "t.php",
+            "<?php\nheader_register_callback(function () { throw new Exception(\"cb\"); });\necho \"body\\n\";\necho \"end\\n\";\n",
+        )],
+        None,
+    );
+    let r = request(
+        srv.port,
+        "GET /t.php HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert!(r.starts_with("HTTP/1.1 200 OK\r\n"), "{r}");
+    let path = srv.root.join("t.php");
+    let body = split(&r).1;
+    assert!(
+        body.starts_with(&format!(
+            "body\n<br />\n<b>Fatal error</b>:  Uncaught Exception: cb in {}:2\nStack trace:\n",
+            path.display()
+        )),
+        "{body}"
+    );
+    assert!(!body.contains("end"), "{body}");
+}
+
+/// A JIT `$_REQUEST` is merged when a script first names it, from the
+/// `$_GET`, `$_POST` and `$_COOKIE` that `filter.default` filtered
+/// (`php_auto_globals_create_request()`), each source once however often
+/// `request_order` names it. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn jit_request_merges_the_filtered_inputs_once() {
+    let files = [(
+        "r.php",
+        "<?php echo $_GET['a'], ' ', $_REQUEST['a'], ' ', $_REQUEST['p'] ?? '-', ' ', json_encode(array_keys($_REQUEST)), \"\\n\";\n",
+    )];
+    let body = "p=%22x%22&q=1";
+    let post = |port: u16| {
+        let r = request(
+            port,
+            &format!(
+                "POST /r.php?a=%3Cb%3E&p=g HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        split(&r).1.to_string()
+    };
+    let filtered = [
+        "-d",
+        "filter.default=special_chars",
+        "-d",
+        "error_reporting=24575",
+    ];
+    let srv = start_with("reqflt", &files, None, &filtered);
+    assert_eq!(
+        post(srv.port),
+        "&#60;b&#62; &#60;b&#62; &#34;x&#34; [\"a\",\"p\",\"q\"]\n"
+    );
+    drop(srv);
+    let mut pgp = filtered.to_vec();
+    pgp.extend(["-d", "request_order=PGP"]);
+    let srv = start_with("reqpgp", &files, None, &pgp);
+    assert_eq!(
+        post(srv.port),
+        "&#60;b&#62; &#60;b&#62; g [\"p\",\"q\",\"a\"]\n"
+    );
+}
+
+/// `filter.default` filters a JIT `$_SERVER` too, and `INPUT_SERVER`
+/// keeps the raw value. Expected from php8.5's own built-in server.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn filter_default_reaches_a_jit_server() {
+    let files = [(
+        "s.php",
+        "<?php echo $_SERVER[\"HTTP_X_FOO\"], \"|\", json_encode(array_keys($GLOBALS)), \"|\", filter_input(INPUT_SERVER, \"HTTP_X_FOO\"), \"\\n\";\n",
+    )];
+    let args = [
+        "-d",
+        "filter.default=special_chars",
+        "-d",
+        "error_reporting=24575",
+    ];
+    let srv = start_with("srvflt", &files, None, &args);
+    let r = request(
+        srv.port,
+        "GET /s.php HTTP/1.1\r\nHost: x\r\nX-Foo: <b>\r\nConnection: close\r\n\r\n",
+    );
+    assert_eq!(
+        split(&r).1,
+        "&#60;b&#62;|[\"_GET\",\"_POST\",\"_COOKIE\",\"_FILES\",\"_SERVER\"]|<b>\n"
+    );
 }

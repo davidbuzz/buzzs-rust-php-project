@@ -1,0 +1,229 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/o.php?m=",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=gz",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=gz_nested",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=zlib",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=zlib_level",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=flush",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=cl",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=cl_ob",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=empty",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=empty_ob",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=nested",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=cb_header",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=r304",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=r204",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=chunk",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=implicit",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=list",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=clean_all",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=output_add",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "gzip, deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=gz"
+  },
+  {
+   "path": "/o.php?m=gz",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=zlib"
+  },
+  {
+   "path": "/o.php?m=zlib",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "deflate"
+    ]
+   ]
+  },
+  {
+   "path": "/o.php?m=list"
+  },
+  {
+   "path": "/o.php?m=list",
+   "headers": [
+    [
+     "Accept-Encoding",
+     "deflate"
+    ]
+   ]
+  }
+ ],
+ "args": [
+  "-d",
+  "output_buffering=4096"
+ ]
+}

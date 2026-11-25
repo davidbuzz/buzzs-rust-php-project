@@ -1,4 +1,12 @@
 /*
+ * Derived from php-src ext/bcmath/bcmath.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Author: Andi Gutmans <andi@php.net>
+ * Port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+/*
  * libbcmath oracle for php-bcmath's fixture tests.
  *
  * Links the unmodified php-src master libbcmath and re-implements the thin

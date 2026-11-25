@@ -443,7 +443,8 @@ pub(crate) fn parameter_string(vm: &Vm, f: &FnRef, idx: usize, required: bool) -
     } else {
         "<optional> "
     });
-    if let Some(t) = &p.ty {
+    let declared = p.arginfo_type();
+    if let Some(t) = declared.as_deref() {
         b.s(&ZType::from_decl(t).to_php()).c(b' ');
     }
     if p.by_ref {

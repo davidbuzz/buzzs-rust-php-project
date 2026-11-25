@@ -1,5 +1,7 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/standard/incomplete_class.c. Similarity metric to original: 25%
+//   Copyright © The PHP Group and Contributors. Author: Sascha Schumann <sascha@schumann.cx>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! Core interfaces and classes (`zend_interfaces.c`, `zend_attributes.c`,
 //! `stdClass`, enums interfaces).
 

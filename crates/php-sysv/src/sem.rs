@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/sysvsem/sysvsem.c. Similarity metric to original: 40%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Tom May <tom@go2net.com>
+//            Gavin Sherry <gavin@linuxworld.com.au>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! `ext/sysvsem` (ref: `ext/sysvsem/sysvsem.c`).
 //!
 //! PHP allocates three semaphores per key:

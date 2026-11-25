@@ -582,3 +582,22 @@ fn unfilled_static_prop_entries_share_their_cell() {
     assert!(Rc::ptr_eq(&a.cell, &b.cell));
     assert_eq!(a.class_ptr, 0);
 }
+
+/// `clear` empties a cache that was used and leaves an empty one as it
+/// is; `is_empty` sees every kind of entry.
+#[test]
+fn clear_empties_used_caches_only() {
+    use super::{put, DefinedSlot, GlobalSlot, RuntimeCache};
+    let c = RuntimeCache::default();
+    assert!(c.is_empty());
+    c.clear();
+    assert!(c.is_empty());
+    put(&c.defined, 2, DefinedSlot::Found);
+    assert!(!c.is_empty());
+    c.clear();
+    assert!(c.is_empty());
+    put(&c.globals, 0, GlobalSlot::GlobalStore(3));
+    assert!(!c.is_empty());
+    c.clear();
+    assert!(c.is_empty());
+}

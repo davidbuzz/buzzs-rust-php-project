@@ -1,0 +1,681 @@
+-- 0
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 5,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 5,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 5.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '5',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => '5',
+  ),
+)
+array (
+  0 => 10,
+  1 => '55',
+  2 => 
+  array (
+    0 => 6.0,
+    1 => 9,
+  ),
+  3 => 5,
+  4 => 2,
+  5 => 'ValueError',
+  6 => NULL,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign string to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 5,
+  1 => 5.0,
+)
+-- 1
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 1,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 1,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 1.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '1',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 1,
+  ),
+)
+array (
+  0 => 2,
+  1 => '11',
+  2 => 
+  array (
+    0 => 2.0,
+    1 => 1,
+  ),
+  3 => 1,
+  4 => 3,
+  5 => 'ValueError',
+  6 => NULL,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign int to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 1,
+  1 => 1.0,
+)
+-- 2
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 1,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 1,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 1.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '1',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 1,
+  ),
+)
+array (
+  0 => 2,
+  1 => '11',
+  2 => 
+  array (
+    0 => 2.0,
+    1 => 1,
+  ),
+  3 => 1,
+  4 => 4,
+  5 => 'ValueError',
+  6 => NULL,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign float to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 1,
+  1 => 1.0,
+)
+-- 3
+E[8192] Implicit conversion from float 1.5 to int loses precision @9
+E[8192] Implicit conversion from float 1.5 to int loses precision @9
+E[8192] Implicit conversion from float 1.5 to int loses precision @9
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 1,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 1,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 1.5,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '1.5',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 1,
+  ),
+)
+E[8192] Implicit conversion from float 2.5 to int loses precision @15
+E[8192] Implicit conversion from float 1.5 to int loses precision @20
+array (
+  0 => 2,
+  1 => '1.51.5',
+  2 => 
+  array (
+    0 => 2.5,
+    1 => 1,
+  ),
+  3 => 1,
+  4 => 5,
+  5 => 'ValueError',
+  6 => NULL,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign float to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+E[8192] Implicit conversion from float 1.5 to int loses precision @28
+array (
+  0 => 1,
+  1 => 1.5,
+)
+-- 4
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 'Cannot assign string to property T::$i of type int',
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 'Cannot assign string to property T::$ni of type ?int',
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 'Cannot assign string to property T::$f of type float',
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => 'a',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 'a',
+  ),
+)
+array (
+  0 => 1,
+  1 => 'aa',
+  2 => 
+  array (
+    0 => 2.5,
+    1 => 0,
+  ),
+  3 => 1,
+  4 => 6,
+  5 => 
+  \E::A,
+  6 => 'Cannot modify readonly property T::$ro',
+  7 => 'Cannot assign string to property T::$o of type ?T',
+  8 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+Cannot assign string to property T::$i of type int
+-- 5
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 1,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 1,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 1.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '1',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 1,
+  ),
+)
+array (
+  0 => 2,
+  1 => '11',
+  2 => 
+  array (
+    0 => 2.0,
+    1 => 1,
+  ),
+  3 => 1,
+  4 => 7,
+  5 => 'ValueError',
+  6 => 
+  \E::A,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign true to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 1,
+  1 => 1.0,
+)
+-- 6
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 'Cannot assign null to property T::$i of type int',
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => NULL,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 'Cannot assign null to property T::$f of type float',
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => 'Cannot assign null to property T::$s of type string',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => 'Cannot assign null to property T::$b of type bool',
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 'Cannot assign null to property T::$u of type string|int',
+  ),
+)
+E[8192] E::from(): Passing null to parameter #1 ($value) of type string|int is deprecated @20
+array (
+  0 => 1,
+  1 => '11',
+  2 => 
+  array (
+    0 => 2.0,
+    1 => 0,
+  ),
+  3 => 5,
+  4 => 8,
+  5 => 'ValueError',
+  6 => 
+  \E::A,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+Cannot assign null to property T::$i of type int
+-- 7
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 7,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 7,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 7.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => ' 7',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => ' 7',
+  ),
+)
+array (
+  0 => 14,
+  1 => ' 7 7',
+  2 => 
+  array (
+    0 => 8.0,
+    1 => 13,
+  ),
+  3 => 7,
+  4 => 9,
+  5 => 'ValueError',
+  6 => 
+  \E::A,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign string to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 7,
+  1 => 7.0,
+)
+-- 8
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 7,
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 7,
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 7.0,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '7 ',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => '7 ',
+  ),
+)
+array (
+  0 => 14,
+  1 => '7 7 ',
+  2 => 
+  array (
+    0 => 8.0,
+    1 => 13,
+  ),
+  3 => 7,
+  4 => 10,
+  5 => 'ValueError',
+  6 => 
+  \E::A,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign string to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+array (
+  0 => 7,
+  1 => 7.0,
+)
+-- 9
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 'Cannot assign string to property T::$i of type int',
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 'Cannot assign string to property T::$ni of type ?int',
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 'Cannot assign string to property T::$f of type float',
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => 'a',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 'a',
+  ),
+)
+array (
+  0 => 7,
+  1 => 'aa',
+  2 => 
+  array (
+    0 => 8.0,
+    1 => 6,
+  ),
+  3 => 7,
+  4 => 11,
+  5 => 
+  \E::A,
+  6 => 'Cannot modify readonly property T::$ro',
+  7 => 'Cannot assign string to property T::$o of type ?T',
+  8 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+Cannot assign string to property T::$i of type int
+-- 10
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 'Cannot assign string to property T::$i of type int',
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 'Cannot assign string to property T::$ni of type ?int',
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 'Cannot assign string to property T::$f of type float',
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => 'b',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => 'b',
+  ),
+)
+array (
+  0 => 6,
+  1 => 'bb',
+  2 => 
+  array (
+    0 => 9.0,
+    1 => 5,
+  ),
+  3 => 7,
+  4 => 12,
+  5 => 
+  \E::B,
+  6 => 'Cannot modify readonly property T::$ro',
+  7 => 'Cannot assign string to property T::$o of type ?T',
+  8 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+Cannot assign string to property T::$i of type int
+-- 11
+array (
+  0 => 
+  array (
+    0 => 'i',
+    1 => 'Cannot assign float to property T::$i of type int',
+  ),
+  1 => 
+  array (
+    0 => 'ni',
+    1 => 'Cannot assign float to property T::$ni of type ?int',
+  ),
+  2 => 
+  array (
+    0 => 'f',
+    1 => 9.223372036854776E+18,
+  ),
+  3 => 
+  array (
+    0 => 's',
+    1 => '9.2233720368548E+18',
+  ),
+  4 => 
+  array (
+    0 => 'b',
+    1 => true,
+  ),
+  5 => 
+  array (
+    0 => 'u',
+    1 => '9.2233720368548E+18',
+  ),
+)
+array (
+  0 => 'Cannot assign float to property T::$i of type int',
+  1 => '9.2233720368548E+189.2233720368548E+18',
+  2 => 
+  array (
+    0 => 9.223372036854776E+18,
+    1 => 4,
+  ),
+  3 => 7,
+  4 => 13,
+  5 => 'ValueError',
+  6 => 
+  \E::B,
+  7 => 'Cannot modify readonly property T::$ro',
+  8 => 'Cannot assign float to property T::$o of type ?T',
+  9 => 'Cannot assign array to reference held by property T::$u of type string|int',
+)
+Cannot assign float to property T::$i of type int
+object(T)#2 (10) {
+  ["i"]=>
+  int(4)
+  ["ni"]=>
+  int(7)
+  ["f"]=>
+  float(9.223372036854776E+18)
+  ["s"]=>
+  string(38) "9.2233720368548E+189.2233720368548E+18"
+  ["b"]=>
+  bool(true)
+  ["a"]=>
+  array(13) {
+    [0]=>
+    string(1) "5"
+    ["k"]=>
+    float(9.223372036854776E+18)
+    [1]=>
+    int(1)
+    [2]=>
+    float(1)
+    [3]=>
+    float(1.5)
+    [4]=>
+    string(1) "a"
+    [5]=>
+    bool(true)
+    [6]=>
+    NULL
+    [7]=>
+    string(2) " 7"
+    [8]=>
+    string(2) "7 "
+    [9]=>
+    string(1) "a"
+    [10]=>
+    string(1) "b"
+    [11]=>
+    float(9.223372036854776E+18)
+  }
+  ["o"]=>
+  NULL
+  ["u"]=>
+  string(19) "9.2233720368548E+18"
+  ["e"]=>
+  enum(E::B)
+  ["ro"]=>
+  int(7)
+}

@@ -39,6 +39,13 @@ thread_local! {
     static PCRE: RefCell<Option<php_pcre::Pcre>> = const { RefCell::new(None) };
 }
 
+/// Empties the property-table cache for a new request (`PHP_RINIT`): the
+/// objects its entries were made for ended with the last one, and their
+/// handles are given out again.
+pub(crate) fn reset_request() {
+    PROP_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 /// Converts a VM throw into a runtime error. Bailouts (`exit`, fatal
 /// errors) are parked in [`Vm::pending_throw`] and come back out of
 /// [`rt_throw`]. So is the unwinder of a destroyed fiber (the hidden
@@ -217,14 +224,23 @@ fn std_property_count(obj: &Obj) -> usize {
 /// Records the table handed out for `obj`.
 ///
 /// Only the keys and the iterator positions of the cached table are ever
-/// used ([`std_properties`] refreshes the values), so references are not
-/// kept: holding them would count as a second owner and make `var_dump()`
-/// show the object's property as `&` after `$ao[$k] += $v`.
+/// used ([`std_properties`] refreshes the values), so no value that owns
+/// anything is kept: the cache would be a second owner. php-src has one
+/// table (`zobj->properties`), so `unset($o->p)` or an assignment over the
+/// property releases the old value at once, and an object in it is
+/// destructed there and then; a reference kept here would make
+/// `var_dump()` show the object's property as `&` after `$ao[$k] += $v`.
 fn remember(obj: &Obj, table: &ZArray) {
+    let owns = |v: &Value| {
+        !matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        )
+    };
     let mut table = table.clone();
-    if table.values().any(|v| matches!(v, Value::Reference(_))) {
+    if table.values().any(owns) {
         for (_, v) in table.make_mut().iter_mut() {
-            if matches!(v, Value::Reference(_)) {
+            if owns(&*v) {
                 *v = Value::Null;
             }
         }

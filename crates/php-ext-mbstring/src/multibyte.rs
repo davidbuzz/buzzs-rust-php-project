@@ -30,6 +30,12 @@ pub(crate) fn install(vm: &mut Vm) {
             );
         }
         vm.headers_sent = headers_sent;
+    } else if !vm.ini.is_modified("zend.script_encoding") {
+        // OnUpdateScriptEncoding fails while zend.multibyte is off, and a
+        // configured value its startup call refuses leaves the default,
+        // NULL (zend_register_ini_entries(); php8.5 -d
+        // zend.script_encoding=UTF-8 reads back "").
+        vm.ini.reset_to_default("zend.script_encoding");
     }
 }
 

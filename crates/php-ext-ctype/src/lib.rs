@@ -3,7 +3,7 @@
 //! `ext/ctype` for the phprust VM: binds the `php-ctype` library through
 //! the `php_vm::ext` extension API.
 
-use php_ctype::{ctype_call, CtypeClass};
+use php_ctype::{ctype_call_locale, CtypeClass};
 use php_runtime::Value;
 use php_vm::ext::{Args, Extension, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -15,7 +15,7 @@ pub struct Ctype;
 fn call(vm: &mut Vm, a: &Args, class: CtypeClass) -> VmResult<Value> {
     // `mixed $text`: no coercion; php-ctype decides and reports the
     // deprecation, which we emit with the function-name prefix.
-    let out = ctype_call(class, &a.at(0));
+    let out = ctype_call_locale(class, &a.at(0));
     if let Some(msg) = &out.deprecation {
         vm.php_deprecated(msg)?;
     }

@@ -1,0 +1,9 @@
+Files in this directory are copied unchanged from php-src ext/exif/tests
+(subdirectories from the same subdirectories there) (commit
+cb90f9a237757209ecd2e67a7e0c950f36ba6ea1). Copyright © The PHP Group and
+Contributors. BSD-3-Clause; see LICENSES/php-src-BSD-3-Clause.txt. Some of
+the photographs carry credits of other people in their EXIF data (for example
+"Photo (c) M.Boerger" in test2.jpg, "Eric Stewart" in image008.jpg, "Antonin
+Roussel" in bug72735/nokia.jpg, "2017 by Lee Traynor" in
+bug73115/bug73115.jpg, "Public Domain" in bug50845.jpg); this notice does not
+state a licence for them beyond php-src's.

@@ -297,8 +297,14 @@ impl Vm {
         self.error_at_bytes(level, msg.as_bytes(), file, line)
     }
 
-    /// Reports an error with a binary message at the current location.
+    /// Reports an error with a binary message at the current location; an
+    /// `E_CORE_ERROR` or `E_CORE_WARNING` has none (`get_filename_lineno()`
+    /// of `Zend/zend.c`): it is reported in "Unknown" on line 0, also when
+    /// a script's `ini_set()` raised it.
     pub fn error_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+        if level == level::CORE_ERROR || level == level::CORE_WARNING {
+            return self.error_at_bytes(level, msg, &ZStr::from("Unknown"), 0);
+        }
         let (file, line) = self.current_location();
         self.error_at_bytes(level, msg, &file, line)
     }
@@ -567,12 +573,16 @@ impl Vm {
         if self.ini.get_bool("html_errors") {
             let mut out = prepend.clone();
             out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
-            // `php_error_cb`: the message is HTML-escaped with html_errors,
-            // unless `php_verror` already escaped it (docref messages).
-            if std::mem::take(&mut self.error_msg_html_ready) {
-                out.extend_from_slice(msg);
-            } else {
+            // `php_error_cb`: with html_errors only an `E_ERROR` or
+            // `E_PARSE` message is HTML-escaped there (an uncaught
+            // exception's too); other levels print it as raised. A
+            // `php_verror` (docref) message was escaped already.
+            let escape = !std::mem::take(&mut self.error_msg_html_ready)
+                && matches!(level, level::ERROR | level::PARSE);
+            if escape {
                 out.extend_from_slice(&self.error_html_escape(msg));
+            } else {
+                out.extend_from_slice(msg);
             }
             // The `E_ERROR`/`E_PARSE` format has no stack trace.
             let trace = if matches!(level, level::ERROR | level::PARSE) {

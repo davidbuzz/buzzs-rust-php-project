@@ -7,10 +7,12 @@
 
 use crate::config::Config;
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_support::output::{status as output_status, OutputHost};
 use php_vm::ext::{Args, VmResult};
-use php_vm::Vm;
-use std::cell::RefCell;
+use php_vm::{Throw, Vm};
+use std::cell::{Cell, RefCell};
 use std::os::unix::ffi::OsStrExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// `sapi_cli_ub_write()`: `write(2)` straight to file descriptor 1.
 ///
@@ -18,24 +20,65 @@ use std::os::unix::ffi::OsStrExt;
 /// (a `memrchr` per write) under the VM's own buffer; under the CLI's
 /// `implicit_flush=1` every `echo` paid for both layers. Writing to the
 /// descriptor itself (not a duplicate) keeps C's behaviour after
-/// `fclose(STDOUT)`: later output fails silently.
+/// `fclose(STDOUT)`.
+///
+/// A write that fails (`EPIPE` once a reader such as `head` has gone,
+/// `EBADF` after `fclose(STDOUT)`) is C's `ret < 0` branch:
+/// `EG(exit_status) = 255` and `php_handle_aborted_connection()`, which
+/// bails out of the script unless `ignore_user_abort` is set. The writer
+/// has no VM, so it records the failure and requests a VM interrupt;
+/// [`stdout_failed_interrupt`] does the rest at the next instruction.
 pub struct RawStdout;
+
+/// Standard output could not be written (see [`RawStdout`]).
+static STDOUT_FAILED: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// [`stdout_failed_interrupt`] ran for the failure.
+    static ABORT_HANDLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a write to standard output failed during this process.
+#[must_use]
+pub fn stdout_failed() -> bool {
+    STDOUT_FAILED.load(Ordering::Relaxed)
+}
+
+/// `sapi_cli_select()`: waits until descriptor 1 is writable again.
+fn wait_writable() {
+    let mut fd = libc::pollfd {
+        fd: libc::STDOUT_FILENO,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    // SAFETY: `fd` is a valid, initialised `pollfd` and the count is 1.
+    unsafe {
+        libc::poll(&raw mut fd, 1, -1);
+    }
+}
 
 impl std::io::Write for RawStdout {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // SAFETY: `buf` is a live slice of `buf.len()` initialised bytes;
-        // write(2) only reads it.
-        let n = unsafe { libc::write(libc::STDOUT_FILENO, buf.as_ptr().cast(), buf.len()) };
-        match usize::try_from(n) {
-            Ok(n) => Ok(n),
-            Err(_) => {
-                let e = std::io::Error::last_os_error();
-                // Like `std::io::stdout()`: a closed descriptor swallows
-                // the output.
-                if e.raw_os_error() == Some(libc::EBADF) {
-                    Ok(buf.len())
-                } else {
-                    Err(e)
+        if stdout_failed() {
+            // `PHP_OUTPUT_DISABLED`: nothing more is written.
+            return Ok(buf.len());
+        }
+        loop {
+            // SAFETY: `buf` is a live slice of `buf.len()` initialised
+            // bytes; write(2) only reads it.
+            let n = unsafe { libc::write(libc::STDOUT_FILENO, buf.as_ptr().cast(), buf.len()) };
+            if let Ok(n) = usize::try_from(n) {
+                return Ok(n);
+            }
+            // `sapi_cli_single_write()` retries EINTR, and EAGAIN once the
+            // descriptor is writable.
+            match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::EINTR) => {}
+                Some(libc::EAGAIN) => wait_writable(),
+                _ => {
+                    STDOUT_FAILED.store(true, Ordering::Relaxed);
+                    php_vm::interrupt::request_interrupt();
+                    return Ok(buf.len());
                 }
             }
         }
@@ -43,6 +86,24 @@ impl std::io::Write for RawStdout {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// The CLI's VM interrupt handler: the rest of `sapi_cli_ub_write()`'s
+/// failure branch once [`RawStdout`] recorded one. The output layer is
+/// disabled and, without `ignore_user_abort`, the script ends as
+/// `zend_bailout()` ends it: shutdown functions still run, the status is
+/// 255.
+fn stdout_failed_interrupt(vm: &mut Vm) -> VmResult<()> {
+    if !stdout_failed() || ABORT_HANDLED.with(|h| h.replace(true)) {
+        return Ok(());
+    }
+    vm.exit_status = 255;
+    OutputHost::output(vm).set_status(output_status::DISABLED);
+    if vm.ini_bool("ignore_user_abort") {
+        Ok(())
+    } else {
+        Err(Throw::Exit)
     }
 }
 
@@ -96,6 +157,7 @@ fn cli_get_process_title(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers the CLI functions and constants on a freshly created VM.
 pub fn register(vm: &mut Vm, cfg: &Config) {
+    vm.interrupt_handlers.push(stdout_failed_interrupt);
     INI_FILES.with(|f| *f.borrow_mut() = (cfg.opened_path.clone(), cfg.scanned_files.clone()));
     vm.register_function("php_ini_loaded_file(): string|false", php_ini_loaded_file);
     vm.register_function(

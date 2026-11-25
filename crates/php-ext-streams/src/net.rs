@@ -107,7 +107,7 @@ impl StreamOps for FdSockOps {
         true
     }
 
-    fn write(&mut self, _st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
+    fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
         let fd = self.raw().ok_or(OpFailed)?;
         // SAFETY: `buf` is a valid readable buffer of `buf.len()` bytes.
         let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_NOSIGNAL) };
@@ -116,6 +116,8 @@ impl StreamOps for FdSockOps {
             if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
                 return Ok(0);
             }
+            // `php_sockop_write()`'s warning.
+            st.send_failed(buf.len(), e);
             return Err(OpFailed);
         }
         Ok(usize::try_from(n).unwrap_or(0))
@@ -251,11 +253,11 @@ pub(crate) fn xport_create(
 ) -> VmResult<Result<Stream, XportError>> {
     let (r, hook) = xport_open(vm, address, timeout, server, flags, persistent_id, ctx)?;
     let Some(hook) = hook else {
-        return Ok(r);
+        return pending_or(r);
     };
     let mut s = match r {
         Ok(s) => s,
-        Err(e) => return Ok(Err(e)),
+        Err(e) => return pending_or(Err(e)),
     };
     let r = hook(vm, &mut s);
     if !matches!(r, Ok(Ok(()))) {
@@ -267,12 +269,45 @@ pub(crate) fn xport_create(
             thrown: Some(t), ..
         }) => {
             // C reports the connect failure before the exception surfaces.
-            vm.php_warning(&format!("Unable to connect to {address} (Unknown error)"))?;
+            warn_with_exception_pending(
+                vm,
+                &format!("Unable to connect to {address} (Unknown error)"),
+            );
             Err(t)
         }
         Err(e) => Ok(Err(e.error)),
     }
 }
+
+/// `r`, unless a user error handler threw for a warning of the failed
+/// creation: that exception is pending when php_stream_xport_create()
+/// returns.
+fn pending_or(r: Result<Stream, XportError>) -> VmResult<Result<Stream, XportError>> {
+    match bridge::take_pending() {
+        Some(t) => Err(t),
+        None => Ok(r),
+    }
+}
+
+/// `php_error_docref(E_WARNING)` while an exception is pending
+/// (`zend_error_impl()`, Zend/zend.c): a user error handler for warnings
+/// is not called (`zend_call_function()` does nothing with an exception
+/// pending), so the warning is neither shown nor recorded; without one the
+/// warning is reported as usual.
+pub(crate) fn warn_with_exception_pending(vm: &mut Vm, message: &str) {
+    let user_handler = vm
+        .error_handlers
+        .last()
+        .is_some_and(|h| !h.callback.is_null() && h.mask & E_WARNING != 0);
+    if !user_handler {
+        // Only an exception can come back, and one is pending already
+        // (the first one wins).
+        let _ = vm.php_warning(message);
+    }
+}
+
+/// `E_WARNING`.
+const E_WARNING: i64 = 2;
 
 /// A client connection from [`xport_connect`].
 pub(crate) enum Connected {
@@ -301,7 +336,9 @@ pub(crate) fn xport_connect(
     let (r, hook) = xport_open(vm, address, timeout, false, flags, persistent_id, ctx)?;
     let s = match r {
         Ok(s) => s,
-        Err(e) => return Ok(Connected::Failed(e, None)),
+        // An exception a user error handler threw for the transport's
+        // warnings stays pending while the caller reports the failure.
+        Err(e) => return Ok(Connected::Failed(e, bridge::take_pending())),
     };
     let v = res::new_persistent(s, pid);
     let Some(hook) = hook else {
@@ -382,6 +419,11 @@ fn xport_open(
     Ok((r, hook))
 }
 
+/// `STREAM_CLIENT_ASYNC_CONNECT` (`PHP_STREAM_CLIENT_ASYNC_CONNECT`).
+const STREAM_CLIENT_ASYNC_CONNECT: i64 = 2;
+/// `STREAM_CLIENT_CONNECT` (`PHP_STREAM_CLIENT_CONNECT`).
+const STREAM_CLIENT_CONNECT: i64 = 4;
+
 /// [`xport_create`] after the `socket` context options were validated.
 #[allow(clippy::too_many_arguments)]
 fn xport_create_inner(
@@ -412,9 +454,19 @@ fn xport_create_inner(
             context: ctx.clone(),
         };
         let r = (t.create)(vm, &req);
-        // Warnings the transport queued (php_network_getaddresses()).
+        // Warnings the transport queued (php_network_getaddresses(), a
+        // failed `bindto`).
         bridge::flush_diags(vm);
         let r = r?;
+        // A user error handler threw for one of them: in C the exception
+        // is pending when php_stream_xport_create() returns, so the
+        // created stream is never handed to PHP code. A failed connect
+        // keeps it pending for the caller (see `xport_connect`).
+        if r.is_ok() {
+            if let Some(t) = bridge::take_pending() {
+                return Err(t);
+            }
+        }
         if let Ok(s) = &r {
             if server {
                 xport::note_server(s.id(), &scheme);
@@ -427,9 +479,13 @@ fn xport_create_inner(
             s
         }));
     }
-    if !server && flags & 4 == 0 && matches!(scheme.as_str(), "tcp" | "udp" | "unix") {
-        // No STREAM_CLIENT_CONNECT: an unconnected socket (xp_socket parses
-        // the address only when connecting).
+    if !server
+        && flags & (STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT) == 0
+        && matches!(scheme.as_str(), "tcp" | "udp" | "unix")
+    {
+        // Neither STREAM_CLIENT_CONNECT nor STREAM_CLIENT_ASYNC_CONNECT: an
+        // unconnected socket (xp_socket parses the address only when
+        // connecting; `php_stream_xport_create()` connects for either flag).
         let domain = if scheme == "unix" {
             libc::AF_UNIX
         } else {
@@ -462,8 +518,9 @@ fn xport_create_inner(
             s
         }));
     }
+    let asynchronous = flags & STREAM_CLIENT_ASYNC_CONNECT != 0;
     let r = bridge::run(vm, || {
-        transports::socket_client(address.as_bytes(), timeout)
+        transports::socket_client_ex(address.as_bytes(), timeout, asynchronous, ctx.as_ref())
     })?;
     Ok(r.map(|mut s| {
         s.context = ctx;
@@ -517,18 +574,19 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
         Connected::Failed(e, thrown) => {
             // `%s` stops at an embedded NUL.
             let shown = host_s.split('\0').next().unwrap_or_default();
-            vm.php_warning(&format!(
-                "Unable to connect to {shown}:{port} ({})",
-                e.shown()
-            ))?;
-            if let Some(t) = thrown {
-                return Err(t);
+            let message = format!("Unable to connect to {shown}:{port} ({})", e.shown());
+            match &thrown {
+                Some(_) => warn_with_exception_pending(vm, &message),
+                None => vm.php_warning(&message)?,
             }
             set_ref(a, 2, Value::Int(i64::from(e.errno)));
             if !e.message.is_empty() {
                 set_ref(a, 3, bytes(e.message.as_bytes()));
             }
-            Ok(Value::Bool(false))
+            match thrown {
+                Some(t) => Err(t),
+                None => Ok(Value::Bool(false)),
+            }
         }
     }
 }
@@ -556,19 +614,21 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match xport_connect(vm, &addr, timeout, flags, pid, ctx)? {
         Connected::Stream(v) => Ok(v),
         Connected::Failed(e, thrown) => {
-            vm.php_warning(&format!(
-                "Unable to connect to {} ({})",
-                addslashes(&addr),
-                e.shown()
-            ))?;
-            if let Some(t) = thrown {
-                return Err(t);
+            let message = format!("Unable to connect to {} ({})", addslashes(&addr), e.shown());
+            match &thrown {
+                Some(_) => warn_with_exception_pending(vm, &message),
+                None => vm.php_warning(&message)?,
             }
+            // C fills `$error_code`/`$error_message` before returning,
+            // exception or not.
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
             if !e.message.is_empty() {
                 set_ref(a, 2, bytes(e.message.as_bytes()));
             }
-            Ok(Value::Bool(false))
+            match thrown {
+                Some(t) => Err(t),
+                None => Ok(Value::Bool(false)),
+            }
         }
     }
 }
@@ -734,7 +794,7 @@ fn stream_socket_get_crypto_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value>
     Ok(Value::Int(st))
 }
 
-fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
+fn sockaddr_name(fd: RawFd, remote: bool) -> Option<Vec<u8>> {
     // SAFETY: zeroed sockaddr_storage is a valid out-parameter.
     let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).ok()?;
@@ -750,29 +810,40 @@ fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
     if rc != 0 {
         return None;
     }
+    sockaddr_text(&ss, len)
+}
+
+/// The text form of the first `len` bytes of `ss`
+/// (`php_network_populate_name_from_sockaddr()`, main/network.c):
+/// `ip:port`, `[ip6]:port`, or a Unix socket's path, an abstract name
+/// keeping its leading NUL and the length the kernel gave.
+fn sockaddr_text(ss: &libc::sockaddr_storage, len: libc::socklen_t) -> Option<Vec<u8>> {
     match i32::from(ss.ss_family) {
         libc::AF_INET => {
             // SAFETY: family is AF_INET so the storage holds a sockaddr_in.
-            let sin = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_in>() };
+            let sin = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_in>() };
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
-            Some(format!("{ip}:{}", u16::from_be(sin.sin_port)))
+            Some(format!("{ip}:{}", u16::from_be(sin.sin_port)).into_bytes())
         }
         libc::AF_INET6 => {
             // SAFETY: family is AF_INET6 so the storage holds a sockaddr_in6.
-            let sin = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_in6>() };
+            let sin = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_in6>() };
             let ip = std::net::Ipv6Addr::from(sin.sin6_addr.s6_addr);
-            Some(format!("[{ip}]:{}", u16::from_be(sin.sin6_port)))
+            Some(format!("[{ip}]:{}", u16::from_be(sin.sin6_port)).into_bytes())
         }
         libc::AF_UNIX => {
             // SAFETY: family is AF_UNIX so the storage holds a sockaddr_un.
-            let sun = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_un>() };
-            let path: Vec<u8> = sun
-                .sun_path
-                .iter()
-                .take_while(|&&c| c != 0)
-                .map(|&c| c.to_ne_bytes()[0])
-                .collect();
-            Some(String::from_utf8_lossy(&path).into_owned())
+            let sun = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_un>() };
+            let path = sun.sun_path.iter().map(|&c| c.to_ne_bytes()[0]);
+            Some(if sun.sun_path[0] == 0 {
+                // Abstract: `sl - sizeof(sa_family_t)` bytes.
+                let n = usize::try_from(len)
+                    .unwrap_or(0)
+                    .saturating_sub(std::mem::size_of::<libc::sa_family_t>());
+                path.take(n).collect()
+            } else {
+                path.take_while(|&c| c != 0).collect()
+            })
         }
         _ => None,
     }
@@ -802,7 +873,7 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let owned = unsafe { OwnedFd::from_raw_fd(nfd) };
     let label = cell.get().map_or("tcp_socket", |s| s.ops_label());
     if a.has(2) {
-        let peer = sockaddr_name(nfd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
+        let peer = sockaddr_name(nfd, true).map_or(Value::Null, bytes);
         a.set_ref(2, peer);
     }
     let listener_ctx = cell.get().and_then(|s| s.context.clone());
@@ -857,7 +928,7 @@ fn stream_socket_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let name = fd.and_then(|fd| sockaddr_name(fd, remote));
     Ok(match name {
-        Some(n) if !n.is_empty() => bytes(n.as_bytes()),
+        Some(n) if !n.is_empty() => bytes(n),
         _ => Value::Bool(false),
     })
 }
@@ -927,15 +998,39 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let mut buf = vec![0u8; usize::try_from(len).unwrap_or(0)];
-    // SAFETY: `buf` is valid for `buf.len()` bytes.
-    let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), flags) };
+    // `sock_recvfrom()` (main/streams/xp_socket.c): with `$address`,
+    // recvfrom() reports the sender, which is how a server answers an
+    // unconnected UDP peer; an empty address (a connected TCP socket's)
+    // is "".
+    // SAFETY: zeroed sockaddr_storage is a valid out-parameter.
+    let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut sl =
+        libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).unwrap_or(0);
+    // SAFETY: `buf` is valid for `buf.len()` bytes; `ss`/`sl` describe a
+    // sockaddr_storage that outlives the call.
+    let n = unsafe {
+        libc::recvfrom(
+            fd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            flags,
+            std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
+            &raw mut sl,
+        )
+    };
     if n < 0 {
         return Ok(Value::Bool(false));
     }
     buf.truncate(usize::try_from(n).unwrap_or(0));
     if a.has(3) {
-        let peer = sockaddr_name(fd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
-        a.set_ref(3, peer);
+        let peer = if sl == 0 {
+            Some(Vec::new())
+        } else {
+            sockaddr_text(&ss, sl)
+        };
+        if let Some(p) = peer {
+            a.set_ref(3, bytes(p));
+        }
     }
     Ok(bytes(buf))
 }
@@ -944,14 +1039,17 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let data = str_arg(a, 1);
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
-    let fd = cell
+    let has_fd = cell
         .get()
-        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
-    let Some(fd) = fd else {
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false))
+        .is_some();
+    if !has_fd {
         return Ok(Value::Bool(false));
-    };
+    }
     let target = if a.has(3) { str_arg(a, 3) } else { Vec::new() };
-    if !target.is_empty() {
+    let addr = if target.is_empty() {
+        None
+    } else {
         let Some(addr) = parse_network_address(&target) else {
             vm.php_warning(&format!(
                 "Failed to parse `{}' into a valid network address",
@@ -959,25 +1057,34 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ))?;
             return Ok(Value::Bool(false));
         };
-        let n = php_streams::sys::sendto(fd, &data, flags | libc::MSG_NOSIGNAL, &addr);
-        return Ok(n.map_or(Value::Bool(false), |n| {
-            Value::Int(i64::try_from(n).unwrap_or(0))
-        }));
-    }
-    // SAFETY: `data` is valid for `data.len()` bytes.
-    let n = unsafe {
-        libc::send(
-            fd,
-            data.as_ptr().cast(),
-            data.len(),
-            flags | libc::MSG_NOSIGNAL,
-        )
+        Some(addr)
     };
-    Ok(if n < 0 {
-        Value::Bool(false)
-    } else {
-        Value::Int(i64::try_from(n).unwrap_or(0))
-    })
+    // `sock_sendto()` (main/streams/xp_socket.c): -1 on failure, with
+    // php_stream_warn(NetworkSendFailed, strerror(errno)).
+    let r = res::with_stream(vm, &cell, |s| {
+        let fd = s.cast(CastAs::FdForSelect, false)?;
+        let flags = flags | libc::MSG_NOSIGNAL;
+        let r = match &addr {
+            Some(addr) => php_streams::sys::sendto(fd, &data, flags, addr),
+            None => {
+                // SAFETY: `data` is valid for `data.len()` bytes.
+                let n = unsafe { libc::send(fd, data.as_ptr().cast(), data.len(), flags) };
+                usize::try_from(n).map_err(|_| php_streams::sys::last_errno())
+            }
+        };
+        Some(match r {
+            Ok(n) => i64::try_from(n).unwrap_or(0),
+            Err(e) => {
+                s.state.warn(
+                    php_streams::diag::StreamErrorCode::NetworkSendFailed,
+                    php_streams::sys::strerror(e),
+                );
+                -1
+            }
+        })
+    })?
+    .flatten();
+    Ok(r.map_or(Value::Bool(false), Value::Int))
 }
 
 /// `php_network_parse_network_address_with_port()`: `host:port` or

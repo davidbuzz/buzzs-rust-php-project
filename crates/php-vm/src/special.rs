@@ -25,6 +25,7 @@ use crate::opcode::{FramelessCall, Operand};
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
+use php_stdstr::transform::TrimMode;
 use std::rc::Rc;
 
 impl Vm {
@@ -154,10 +155,22 @@ impl Vm {
     /// Like `zend_quick_check_constant`, only the exact name is looked up:
     /// `true`/`false`/`null` were resolved at compile time, and
     /// `__COMPILER_HALT_OFFSET__` is registered under a mangled name.
+    /// The answer is kept in the op array's run-time cache
+    /// ([`Vm::defined_hit`], as php-src's `CACHED_PTR`), which the tape's
+    /// row for the op reads without coming here.
     #[inline]
     pub(crate) fn op_defined(&mut self, name: u32) -> VmResult<bool> {
+        if let Some(r) = self.defined_hit(name) {
+            return Ok(r);
+        }
         if let Value::Str(n) = &self.frame().code.literals[name as usize] {
-            return Ok(self.constants.contains_key(n));
+            // `zend_quick_check_constant()`: the name as written, then the
+            // literal with its namespace part lowercased; the table keeps
+            // a `const`'s declared spelling, so a namespaced miss compares
+            // the namespace ignoring case (one lookup with `constant()`).
+            let r = self.find_global_constant(n.as_bytes()).is_some();
+            self.defined_fill(name, n, r);
+            return Ok(r);
         }
         self.op_defined_slow(name)
     }
@@ -490,6 +503,45 @@ fn plain_call(call: &PendingCall) -> bool {
 /// coercion, deprecation or `TypeError`), and none of the class's error
 /// conditions holds.
 pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
+    let mut refs: [Option<&Value>; 3] = [None; 3];
+    let Some(sent) = refs.get_mut(..args.len()) else {
+        return false;
+    };
+    for (r, a) in sent.iter_mut().zip(args) {
+        *r = a.as_ref();
+    }
+    frameless_refs(class, sent)
+}
+
+/// [`frameless_args`] of arguments read straight from their operands
+/// ([`Vm::frameless_icall_op`]). The borrows are built at fixed positions
+/// (a loop over a zipped iterator into a zeroed array cost ~48
+/// instructions a call).
+#[inline]
+fn frameless_values(class: u32, args: &[Value]) -> bool {
+    let refs = [args.first(), args.get(1), args.get(2)];
+    refs.get(..args.len())
+        .is_some_and(|sent| frameless_refs(class, sent))
+}
+
+/// Marks the `n` arguments of a frameless call (at most three) as passed,
+/// in an emptied record's flag vector: a push each, where
+/// `Vec::resize` was an out-of-line call (~37 instructions a call).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+// twice, in the frameless calls
+// A push each, not `extend`/`resize`: those are the out-of-line call this
+// replaces.
+#[allow(clippy::same_item_push)]
+fn push_passed(passed: &mut Vec<bool>, n: usize) {
+    for _ in 0..n {
+        passed.push(true);
+    }
+}
+
+/// [`frameless_args`] of borrowed arguments (`None`: a position not
+/// sent, which no class takes).
+fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
     use Value::{Array, Bool, Float, Int, Null, Str};
     match (class, args) {
         (fl::ABS | fl::FLOAT | fl::LOG | fl::ROUND, [Some(Int(_) | Float(_))])
@@ -748,17 +800,11 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
-        // What the handlers return (`zend_string_tolower` /
-        // `zend_string_toupper`).
-        (fl::CASE, Value::Str(s)) => match name {
-            b"strtolower" => Some(Value::Str(s.to_ascii_lowercase())),
-            b"strtoupper" => Some(Value::Str(s.to_ascii_uppercase())),
-            _ => None,
-        },
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
         (fl::TYPE_TEST | fl::STRLEN | fl::COUNT, v) => {
             crate::call::fast_eval(crate::call::fast_eval_id(name), v)
         }
+        (fl::TRIM | fl::CASE, v @ Value::Str(_)) => quick_eval(quick_id(name)?.0, v),
         _ => None,
     }
 }
@@ -789,7 +835,18 @@ pub(crate) const QUICK_ORD: u8 = 0x41;
 pub(crate) const QUICK_CHR: u8 = 0x42;
 /// [`quick_id`] of `dechex()`.
 pub(crate) const QUICK_DECHEX: u8 = 0x43;
+/// [`quick_id`] of `trim()` of one string (the default character list).
+pub(crate) const QUICK_TRIM: u8 = 0x44;
+/// [`quick_id`] of `ltrim()` of one string.
+pub(crate) const QUICK_LTRIM: u8 = 0x45;
+/// [`quick_id`] of `rtrim()` of one string.
+pub(crate) const QUICK_RTRIM: u8 = 0x46;
+/// [`quick_id`] of `strtolower()`.
+pub(crate) const QUICK_LOWER: u8 = 0x47;
+/// [`quick_id`] of `strtoupper()`.
+pub(crate) const QUICK_UPPER: u8 = 0x48;
 const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
+const _: () = assert!(QUICK_UPPER < QUICK_STRPOS);
 
 /// The id of the builtin named `lc` (lower case) when its one-argument
 /// call needs no handler ([`frameless_inline`]), with its frameless class:
@@ -803,6 +860,17 @@ pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
         fl::CHR => QUICK_CHR,
         fl::DECHEX => QUICK_DECHEX,
         fl::FLOAT | fl::LOG | fl::ROUND => crate::call::float_fn_id(lc)?,
+        fl::TRIM => match lc {
+            b"trim" => QUICK_TRIM,
+            b"ltrim" => QUICK_LTRIM,
+            b"rtrim" => QUICK_RTRIM,
+            _ => return None,
+        },
+        fl::CASE => match lc {
+            b"strtolower" => QUICK_LOWER,
+            b"strtoupper" => QUICK_UPPER,
+            _ => return None,
+        },
         _ => return None,
     };
     Some((id, class))
@@ -834,8 +902,48 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (QUICK_DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
-        (QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX, _) => None,
+        (QUICK_TRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Both))),
+        (QUICK_LTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Left))),
+        (QUICK_RTRIM, Value::Str(s)) => Some(Value::Str(trim_default(s, TrimMode::Right))),
+        (QUICK_LOWER, Value::Str(s)) => Some(Value::Str(case_quick(s, false))),
+        (QUICK_UPPER, Value::Str(s)) => Some(Value::Str(case_quick(s, true))),
+        (
+            QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX | QUICK_TRIM | QUICK_LTRIM
+            | QUICK_RTRIM | QUICK_LOWER | QUICK_UPPER,
+            _,
+        ) => None,
         (id, v) => crate::call::float_fn_eval(id, v),
+    }
+}
+
+/// `strtoupper()` (`upper`) or `strtolower()` of `s`, as the handlers
+/// return it (`zend_string_toupper` / `zend_string_tolower`: the string
+/// itself when no byte changes). Out of line, as [`trim_default`].
+#[inline(never)]
+fn case_quick(s: &ZStr, upper: bool) -> ZStr {
+    if upper {
+        s.to_ascii_uppercase()
+    } else {
+        s.to_ascii_lowercase()
+    }
+}
+
+/// `trim()`, `ltrim()` or `rtrim()` of `s` with the default character
+/// list, as the handler (`php_trim_int()`) returns it: the string itself
+/// when nothing is trimmed, the shared empty string when everything is,
+/// else a copy of what is left. Out of line: the other quick functions'
+/// paths keep their registers.
+#[inline(never)]
+fn trim_default(s: &ZStr, mode: TrimMode) -> ZStr {
+    // The default list reports nothing (no `..` range to check).
+    let mut notices = php_stdstr::error::Notices::new();
+    let r = php_stdstr::transform::trim(s.as_bytes(), None, mode, &mut notices);
+    if r.len() == s.len() {
+        s.clone()
+    } else if r.is_empty() {
+        ZStr::empty()
+    } else {
+        ZStr::from(r)
     }
 }
 
@@ -981,6 +1089,14 @@ pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
 /// value), which for these types is a comparison of the same type's values
 /// (`fast_is_identical_function`). `None` for any other needle and for a
 /// reference being written.
+///
+/// Out of line, with a loop of its own for a string needle: inlined into
+/// the tape's `frameless_quick_n`, whose other paths (the one-argument
+/// trim and case conversions among them) keep many values in registers,
+/// the loop saved and restored about a dozen of them around each
+/// element's `memcmp` call (in_array('d', $five, true): 467 instructions
+/// before those paths were added, 506 after).
+#[inline(never)]
 fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
     let same = |v: &Value| match (needle, v) {
         (Value::Null, Value::Null) => true,
@@ -988,19 +1104,36 @@ fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
         (Value::Int(a), Value::Int(b)) => a == b,
         #[allow(clippy::float_cmp)] // `Z_DVAL_P(op1) == Z_DVAL_P(op2)`
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::Str(a), Value::Str(b)) => a.as_bytes() == b.as_bytes(),
         _ => false,
     };
-    if !matches!(
-        needle,
-        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
-    ) {
-        return None;
+    match needle {
+        Value::Str(n) => return in_array_str(n, haystack),
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {}
+        _ => return None,
     }
     for v in haystack.values() {
         let hit = match v {
             Value::Reference(r) => same(&*r.try_borrow()?),
             v => same(v),
+        };
+        if hit {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// [`in_array_identical`] of the string `needle`: `zend_string_equals`
+/// of each string element (the same string first, then the length, then
+/// the bytes).
+fn in_array_str(needle: &ZStr, haystack: &ZArray) -> Option<bool> {
+    let n = needle.as_bytes();
+    let eq = |s: &ZStr| ZStr::ptr_eq(s, needle) || s.as_bytes() == n;
+    for v in haystack.values() {
+        let hit = match v {
+            Value::Str(s) => eq(s),
+            Value::Reference(r) => matches!(&*r.try_borrow()?, Value::Str(s) if eq(s)),
+            _ => false,
         };
         if hit {
             return Some(true);
@@ -1055,7 +1188,8 @@ impl Vm {
                 *slot = arg.take();
             }
             let PendingCall { args: spare, .. } = frame.calls.pop()?;
-            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &sent[..n]) else {
+            let refs = [sent[0].as_ref(), sent[1].as_ref(), sent[2].as_ref()];
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &refs[..n]) else {
                 unreachable!("frameless_two answers the arguments frameless_args accepts")
             };
             drop(sent);
@@ -1276,7 +1410,8 @@ impl Vm {
             for (slot, arg) in sent.iter_mut().zip(frame.args.drain(..)) {
                 *slot = arg;
             }
-            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &sent[..n]) else {
+            let refs = [sent[0].as_ref(), sent[1].as_ref(), sent[2].as_ref()];
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &refs[..n]) else {
                 unreachable!("frameless_two answers the arguments frameless_args accepts")
             };
             drop(sent);
@@ -1294,42 +1429,40 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        let mut values = self.call_bufs.values.pop().unwrap_or_default();
-        values.reserve(nparams.max(n));
-        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
-        passed.reserve(nparams.max(n));
-        for arg in self.frames.vec[live].args.drain(..) {
-            values.push(arg.unwrap_or_default());
-            passed.push(true);
+        // The arguments move from the frame's buffer into a pooled
+        // record taken whole for the call (`CallBufs::take_args`), the
+        // length stored once, and the emptied buffer is cut without a
+        // `Drain`.
+        let mut args = self.call_bufs.take_args();
+        args.values.reserve(nparams.max(n));
+        {
+            let sent = &mut self.frames.vec[live].args;
+            args.values
+                .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
+            sent.clear();
         }
+        push_passed(&mut args.passed, args.values.len());
         self.pending_call_dst = dst;
         if self.magic_call_name.is_some() {
             self.magic_call_name = None;
         }
-        while values.len() < nparams {
-            let i = values.len();
+        while args.values.len() < nparams {
+            let i = args.values.len();
             if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
-                values.push(crate::call::clone_value(d));
-                passed.push(false);
+                args.values.push(crate::call::clone_value(d));
+                args.passed.push(false);
                 continue;
             }
             match self.builtin_default(b, i) {
                 Some(d) if i >= required => {
-                    values.push(d);
-                    passed.push(false);
+                    args.values.push(d);
+                    args.passed.push(false);
                 }
                 _ => break,
             }
         }
         let handler = b.handler;
-        let mut args = Args {
-            values,
-            passed,
-            named: Vec::new(),
-            this: None,
-            called: None,
-            func: Some(Rc::clone(b)),
-        };
+        args.func = Some(Rc::clone(b));
         let mut r = handler(self, &mut args);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
@@ -1337,24 +1470,45 @@ impl Vm {
                 r = Err(e);
             }
         }
-        let Args {
-            values,
-            passed,
-            named,
-            ..
-        } = args;
-        forget_unallocated(named);
-        self.put_val_vec(values);
-        self.put_bool_vec(passed);
-        Some(r.map(|v| self.put_call_result(dst, v)))
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
+        let v = match r {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        self.put_call_result(dst, v);
+        Some(Ok(()))
     }
 
     /// Stores a call's result in its temporary, or releases it when the
     /// result is unused (a scalar without the out-of-line drop call).
-    #[inline]
+    ///
+    /// Always inline, and called directly, not from a closure given to
+    /// `Result::map` (which came out of line: ~33 instructions a call).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per frameless call site
     pub(crate) fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
         match dst {
-            Some(d) => self.set_tmp(d, v),
+            Some(d) => {
+                let Some(slot) = self
+                    .frames
+                    .last_mut()
+                    .and_then(|f| f.tmps.get_mut(d as usize))
+                else {
+                    drop(v);
+                    return;
+                };
+                let old = std::mem::replace(slot, v);
+                if matches!(
+                    old,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    std::mem::forget(old);
+                } else {
+                    drop(old);
+                }
+            }
             None => {
                 if matches!(
                     v,
@@ -1381,7 +1535,7 @@ impl Vm {
         &mut self,
         name: &[u8],
         class: u32,
-        args: &[Option<Value>],
+        args: &[Option<&Value>],
     ) -> Option<VmResult<Value>> {
         use php_stdstr::search;
         match (class, args) {
@@ -1636,13 +1790,24 @@ impl Vm {
         if frame.symtab_attached {
             return None;
         }
-        let cached = match fc.ns {
-            None => frame
-                .code
-                .fcall_cache
-                .borrow()
-                .get(fc.name as usize)
-                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get)),
+        // The builtin's handle straight from its cache entry, tested
+        // before it is copied (`CachedFunc::get` built a `Func` first).
+        let b = match fc.ns {
+            None => {
+                let cache = frame.code.fcall_cache.borrow();
+                let Some(Some(entry)) = cache.get(fc.name as usize) else {
+                    return None;
+                };
+                let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+                    return None;
+                };
+                if b.flags & flags::FRAMELESS == 0
+                    || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+                {
+                    return None;
+                }
+                Rc::clone(b)
+            }
             // `ZEND_JMP_FRAMELESS`: the call site's slot, where its
             // `InitFCall` keeps the global fallback it resolved to
             // (`Vm::op_init_fcall`, at the same `ip`), decided on the site's
@@ -1655,19 +1820,22 @@ impl Vm {
                     .borrow()
                     .get(slot)
                     .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
-                match site {
-                    Some(f) => Some(f),
-                    None => Some(self.frameless_ns_first_run(ns, fc.name, slot)?),
+                let site = match site {
+                    Some(f) => f,
+                    None => self.frameless_ns_first_run(ns, fc.name, slot)?,
+                };
+                let Func::Builtin(b) = site else {
+                    return None;
+                };
+                if b.flags & flags::FRAMELESS == 0
+                    || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+                {
+                    return None;
                 }
+                b
             }
         };
-        let Some(Func::Builtin(b)) = cached else {
-            return None;
-        };
         let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
-        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
-            return None;
-        }
         if fc.argc == 1 && inline_class(class) {
             if let Some(r) = self.frameless_one(&b, class, fc, ip) {
                 return Some(r);
@@ -1680,31 +1848,46 @@ impl Vm {
         }
         let frame = self.frames.last_mut()?;
         let n = usize::from(fc.argc).min(3);
-        // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`):
-        // a literal's copy, a variable's value (a reference's target).
-        let mut sent: [Option<Value>; 3] = [None, None, None];
-        for (slot, operand) in sent.iter_mut().zip(&fc.vals[..n]) {
-            *slot = Some(match *operand {
-                Operand::Lit(l) => crate::call::clone_value(frame.code.literals.get(l as usize)?),
-                Operand::Cv(cv) => match frame
+        // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
+        // written once, where the handler reads it: a literal's copy, a
+        // variable's value (a reference's target). The record is a pooled
+        // one taken whole (`CallBufs::take_args`) and given back on a
+        // decline.
+        let mut args = self.call_bufs.take_args();
+        let mut read = true;
+        for operand in &fc.vals[..n] {
+            let v = match *operand {
+                Operand::Lit(l) => frame
+                    .code
+                    .literals
+                    .get(l as usize)
+                    .map(crate::func::copy_arg),
+                Operand::Cv(cv) => frame
                     .cvs
                     .get(cv as usize)
-                    .and_then(crate::vm::CvSlot::get)?
-                {
-                    Value::Reference(r) => r.get(),
-                    v => crate::call::clone_value(v),
-                },
+                    .and_then(crate::vm::CvSlot::get)
+                    .map(|v| match v {
+                        Value::Reference(r) => r.get(),
+                        v => crate::func::copy_arg(v),
+                    }),
                 // An argument computed before the op: a copy for now; the
                 // temporary is released below, once the call is known to
                 // run here (its `Send` would have moved it).
-                Operand::Tmp(t) => match frame.tmps.get(t as usize)? {
+                Operand::Tmp(t) => frame.tmps.get(t as usize).map(|v| match v {
                     Value::Reference(r) => r.get(),
-                    v => crate::call::clone_value(v),
-                },
-                _ => return None,
-            });
+                    v => crate::func::copy_arg(v),
+                }),
+                _ => None,
+            };
+            let Some(v) = v else {
+                read = false;
+                break;
+            };
+            args.values.push(v);
         }
-        if !frameless_args(class, &sent[..n]) {
+        if !read || !frameless_values(class, &args.values) {
+            args.values.clear();
+            self.call_bufs.put_args(args);
             return None;
         }
         for operand in &fc.vals[..n] {
@@ -1716,27 +1899,30 @@ impl Vm {
         }
         frame.ip = ip;
         let quick = match n {
-            1 => frameless_inline(b.name.as_bytes(), class, sent[0].as_ref()).map(Ok),
+            1 => frameless_inline(b.name.as_bytes(), class, args.values.first()).map(Ok),
             // `in_array()`, `array_key_exists()` and the `str_*` tests,
             // then what the tape's quick rows answer for global names
             // (`strpos()`, `substr()`, `max()`, `min()`, strict `in_array()`:
             // `quick_eval_2`/`_3`, `None` for shapes they do not take).
-            2 | 3 => self
-                .frameless_two(b.name.as_bytes(), class, &sent[..n])
-                .or_else(|| {
-                    let (id, _) = quick_id_n(b.name.as_bytes(), n)?;
-                    let v = match &sent[..n] {
-                        [Some(a), Some(b)] => quick_eval_2(id, a, b),
-                        [Some(a), Some(b), Some(c)] => quick_eval_3(id, a, b, c),
-                        _ => None,
-                    }?;
-                    Some(Ok(v))
-                }),
+            2 | 3 => {
+                let sent = [args.values.first(), args.values.get(1), args.values.get(2)];
+                self.frameless_two(b.name.as_bytes(), class, &sent[..n])
+                    .or_else(|| {
+                        let (id, _) = quick_id_n(b.name.as_bytes(), n)?;
+                        let v = match &args.values[..] {
+                            [a, b] => quick_eval_2(id, a, b),
+                            [a, b, c] => quick_eval_3(id, a, b, c),
+                            _ => None,
+                        }?;
+                        Some(Ok(v))
+                    })
+            }
             _ => None,
         };
         if let Some(v) = quick {
             drop(b);
-            drop(sent);
+            args.values.clear();
+            self.call_bufs.put_args(args);
             let v = match v {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e)),
@@ -1757,38 +1943,24 @@ impl Vm {
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
-        let mut values = self.call_bufs.values.pop().unwrap_or_default();
-        values.reserve(nparams.max(n));
-        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
-        passed.reserve(nparams.max(n));
-        for arg in sent.iter_mut().take(n) {
-            values.push(arg.take().unwrap_or_default());
-            passed.push(true);
-        }
-        while values.len() < nparams {
-            let i = values.len();
+        push_passed(&mut args.passed, n);
+        while args.values.len() < nparams {
+            let i = args.values.len();
             if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
-                values.push(crate::call::clone_value(d));
-                passed.push(false);
+                args.values.push(crate::call::clone_value(d));
+                args.passed.push(false);
                 continue;
             }
             match self.builtin_default(&b, i) {
                 Some(d) if i >= required => {
-                    values.push(d);
-                    passed.push(false);
+                    args.values.push(d);
+                    args.passed.push(false);
                 }
                 _ => break,
             }
         }
         let handler = b.handler;
-        let mut args = Args {
-            values,
-            passed,
-            named: Vec::new(),
-            this: None,
-            called: None,
-            func: Some(b),
-        };
+        args.func = Some(b);
         let mut r = handler(self, &mut args);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
@@ -1796,20 +1968,15 @@ impl Vm {
                 r = Err(e);
             }
         }
-        let Args {
-            values,
-            passed,
-            named,
-            ..
-        } = args;
-        forget_unallocated(named);
-        self.put_val_vec(values);
-        self.put_bool_vec(passed);
-        Some(r.map(|v| {
-            if let Some(d) = fc.dst {
-                self.set_tmp(d, v);
-            }
-        }))
+        // Emptied (`Args::release_in_place`), back to the pool.
+        args.release_in_place();
+        self.call_bufs.put_args(args);
+        let v = match r {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        self.put_call_result(fc.dst, v);
+        Some(Ok(()))
     }
 }
 
@@ -1891,6 +2058,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `trim()`, `ltrim()`, `rtrim()`, `strtolower()` and `strtoupper()` of
+    /// one string, answered without the handler, return what the handler
+    /// does (`php_trim_int`, `zend_string_tolower`): the string itself when
+    /// nothing changes, the shared empty string when everything is trimmed,
+    /// else a new string; anything but a string goes to the handler.
+    #[test]
+    fn quick_trim_and_case_match_the_handlers() {
+        use super::{
+            quick_eval, quick_id, QUICK_LOWER, QUICK_LTRIM, QUICK_RTRIM, QUICK_TRIM, QUICK_UPPER,
+        };
+        use php_runtime::{Value, ZStr};
+        let eval = |id: u8, s: &ZStr| match quick_eval(id, &Value::Str(s.clone())) {
+            Some(Value::Str(r)) => r,
+            other => panic!("{id}: {other:?}"),
+        };
+        assert_eq!(quick_id(b"trim"), Some((QUICK_TRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"ltrim"), Some((QUICK_LTRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"rtrim"), Some((QUICK_RTRIM, fl::TRIM)));
+        assert_eq!(quick_id(b"strtolower"), Some((QUICK_LOWER, fl::CASE)));
+        assert_eq!(quick_id(b"strtoupper"), Some((QUICK_UPPER, fl::CASE)));
+        let padded = ZStr::from(" \t\n\r\x0b\0 ab c \0\n");
+        assert_eq!(eval(QUICK_TRIM, &padded).as_bytes(), b"ab c");
+        assert_eq!(eval(QUICK_LTRIM, &padded).as_bytes(), b"ab c \0\n");
+        assert_eq!(eval(QUICK_RTRIM, &padded).as_bytes(), b" \t\n\r\x0b\0 ab c");
+        // `\x0c` (form feed) is in php-src master's default list
+        // (`php_trim_int()`: `' \f\t\n\r\v\0'`); PHP 8.5 leaves it.
+        assert_eq!(eval(QUICK_TRIM, &ZStr::from("\x0cx\x0c")).as_bytes(), b"x");
+        let plain = ZStr::from("abc");
+        assert!(ZStr::ptr_eq(&eval(QUICK_TRIM, &plain), &plain));
+        assert!(eval(QUICK_TRIM, &ZStr::from("  \n ")).is_interned());
+        assert!(ZStr::ptr_eq(&eval(QUICK_LOWER, &plain), &plain));
+        assert_eq!(
+            eval(QUICK_LOWER, &ZStr::from("AbC\u{c9}")).as_bytes(),
+            "abc\u{c9}".as_bytes()
+        );
+        assert_eq!(eval(QUICK_UPPER, &plain).as_bytes(), b"ABC");
+        for id in [
+            QUICK_TRIM,
+            QUICK_LTRIM,
+            QUICK_RTRIM,
+            QUICK_LOWER,
+            QUICK_UPPER,
+        ] {
+            assert!(quick_eval(id, &Value::Int(1)).is_none());
+            assert!(quick_eval(id, &Value::Null).is_none());
+        }
+        assert!(matches!(
+            frameless_inline(b"trim", fl::TRIM, Some(&Value::Str(ZStr::from(" x ")))),
+            Some(Value::Str(r)) if r.as_bytes() == b"x"
+        ));
+        assert!(frameless_inline(b"trim", fl::TRIM, Some(&Value::Int(1))).is_none());
     }
     use crate::compiler::{special_builtin_bit, SPECIAL_BUILTINS};
     use crate::func::Func;
@@ -2110,7 +2330,7 @@ mod tests {
             }
         }
         // Functions whose one-argument call needs its handler have no id.
-        for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
+        for name in ["strpos", "substr", "max", "pi", "intdiv", "strlen"] {
             assert!(quick_id(name.as_bytes()).is_none(), "{name}");
         }
         // `dechex()` is the handler's string.
@@ -2158,6 +2378,17 @@ mod tests {
                 Value::Int(1),
                 Value::Float(1.5),
                 Value::Str(ZStr::from("2")),
+            ]))
+        };
+        // Strings, one behind a reference, and an int among them.
+        let letters = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Str(ZStr::from("a")),
+                Value::Str(ZStr::from("bc")),
+                Value::Int(1),
+                Value::Reference(php_runtime::PhpRef::new(Value::Str(ZStr::from("r")))),
+                Value::Str(ZStr::from("d")),
+                Value::Str(ZStr::from("")),
             ]))
         };
         let t = Value::Bool(true);
@@ -2218,6 +2449,13 @@ mod tests {
             ("in_array", vec![Value::Float(1.5), mixed(), t.clone()]),
             ("in_array", vec![Value::Float(1.0), mixed(), t.clone()]),
             ("in_array", vec![Value::Int(1), mixed(), t.clone()]),
+            ("in_array", vec![s("d"), letters(), t.clone()]),
+            ("in_array", vec![s("x"), letters(), t.clone()]),
+            ("in_array", vec![s("bb"), letters(), t.clone()]),
+            ("in_array", vec![s(""), letters(), t.clone()]),
+            ("in_array", vec![s("r"), letters(), t.clone()]),
+            ("in_array", vec![s("1"), letters(), t.clone()]),
+            ("in_array", vec![s("d"), ints(), t.clone()]),
             ("str_contains", vec![s("hello"), s("ell")]),
             ("str_contains", vec![s("hello"), s("")]),
             ("str_contains", vec![s("hello"), s("elx")]),
@@ -2480,7 +2718,12 @@ mod tests {
         let pools = |vm: &Vm| {
             let mut sizes: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();
             sizes.sort_unstable();
-            (sizes, vm.call_bufs.values.len(), vm.call_bufs.passed.len())
+            (
+                sizes,
+                vm.call_bufs.values.len(),
+                vm.call_bufs.passed.len(),
+                vm.call_bufs.args_pool.len(),
+            )
         };
         let before = pools(&vm);
         let status = vm.run_script(
@@ -2497,6 +2740,12 @@ for ($i = 0; $i < 3; $i++) {
         assert_eq!(pools(&vm), before);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
         assert!(vm.call_bufs.values.iter().all(Vec::is_empty));
+        // The pooled argument records came back empty.
+        assert!(vm
+            .call_bufs
+            .args_pool
+            .iter()
+            .all(|a| a.values.is_empty() && a.passed.is_empty() && a.func.is_none()));
     }
 
     /// Frameless calls made in place (`Vm::frameless_icall_in_place`):

@@ -13,6 +13,20 @@
 #   dates with lemsdosdate/lemsdostime.  5.45 formats a DOS date as
 #   "%a, %b %d %Y" without clamping the month, so `php-msdosdate` spells
 #   out 5.48's file_fmtdate() ("%b %d %Y", invalid months as January).
+#
+# Stop-gap entries from php-src master's ext/fileinfo/magicdata.patch (its
+# own edits to the 5.48 Magdir sources, 10 Nov 2026), until a Rust matcher
+# over php-src's database makes this overlay unnecessary:
+# * `sfnt-font` (Magdir/fonts, GH-25051, php-src 915072ecd03): 5.48 allows
+#   a space in the first table tag (FontKit's "FK  "), says font/ttf, not
+#   font/sfnt, and prints "(FontKit)" after TrueType instead of the tag.
+#   The system's `\0\1\0\0`, `true` and `typ1` tests `use` this block.
+# * `msooxml` and its `PK\3\4` test (Magdir/msooxml, php-src cf2bc030211):
+#   5.48 adds NuGet packages, and the first-member regex accepts names
+#   ending in .md/.png only from the start of the name, so an HWPX archive
+#   with such a member later on is not taken for OOXML.  The top-level test
+#   is repeated so that it runs the new regex; it is tried before the
+#   system's zip tests, as in 5.48's own sorted list.
 0	string/tb	\<?xml\ version=
 !:strength +50
 >14	regex	['"\ \t]*[0-9.]+['"\ \t]*
@@ -309,3 +323,77 @@
 >0	uleshort&0xfe00	=0xfa00	2105
 >0	uleshort&0xfe00	=0xfc00	2106
 >0	uleshort&0xfe00	=0xfe00	2107
+
+# Magdir/fonts (5.48 + php-src magicdata.patch, GH-25051)
+0	name		sfnt-font
+>4	ubeshort	<0x30
+>>12	regex/4l	\^[A-Za-z][A-Za-z2][A-Za-z/\ ][A-Za-z2\ ]
+>>>0	ubelong		!0x4f54544f	TrueType
+!:mime	font/ttf
+!:apple	????tfil
+!:ext	ttf/tte
+>>>>12	ubelong		0x464b2020	(FontKit)
+>>>0	ubelong		0x4f54544f	OpenType
+!:mime	font/otf
+!:apple	????OTTO
+!:ext	otf
+>>>0	ubelong		x		Font data
+>>>12	search/448	DSIG		\b, digitally signed
+>>>4	ubeshort	x		\b, %d tables
+>>>12	ubelong		!0x464b2020
+>>>>12	string		x		\b, 1st "%4.4s"
+
+# Magdir/msooxml (5.48 + php-src magicdata.patch, HWPX)
+0		name		msooxml
+>0		string		word/		Microsoft Word 2007+
+!:mime application/vnd.openxmlformats-officedocument.wordprocessingml.document
+!:ext	docx
+>0		string		ppt/		Microsoft PowerPoint 2007+
+!:mime application/vnd.openxmlformats-officedocument.presentationml.presentation
+!:ext	pptx
+>0		string		xl/		Microsoft Excel 2007+
+!:mime application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+!:ext	xlsx
+>0		string		visio/		Microsoft Visio 2013+
+!:mime application/vnd.ms-visio.drawing.main+xml
+>0		string		AppManifest.xaml	Microsoft Silverlight Application
+!:mime application/x-silverlight-app
+>0		search/100	.nuspec		NuGet package
+!:mime application/vnd.nuget.package
+
+0		string		PK\003\004
+!:strength +10
+>0x1E		use		msooxml
+>0x1E		default		x
+>>0x1E		regex		\\[Content_Types\\]\\.xml|_rels/\\.rels|docProps|customXml|\^[[:print:]]*\\.md|\^[[:print:]]*\\.png
+>>>&26		search/10000	PK\003\004
+>>>>&26		use		msooxml
+>>>>&26		default		x
+>>>>>&26	search/10000	PK\003\004
+>>>>>>&26	use		msooxml
+>>>>>>&26	default		x
+>>>>>>>&26	search/10000	PK\003\004
+>>>>>>>>&26	use		msooxml
+>>>>>>>>&26	default		x
+>>>>>>>>>&26	search/10000	PK\003\004
+>>>>>>>>>>&26	use		msooxml
+>>>>>>>>>>&26	default		x
+>>>>>>>>>>>&26	search/10000	PK\003\004
+>>>>>>>>>>>>&26	use		msooxml
+>>>>>>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>&26	default		x	Microsoft OOXML
+>>0x1E		regex		\\[trash\\]
+>>>&26		search/10000	PK\003\004
+>>>>&26		search/10000	PK\003\004
+>>>>>&26	use		msooxml
+>>>>>&26	default		x
+>>>>>>&26	search/10000	PK\003\004
+>>>>>>>&26	use		msooxml
+>>>>>>>&26	default		x	Microsoft OOXML
+>>>>>>&26	default		x	Microsoft OOXML
+>>>>>&26	default		x	Microsoft OOXML

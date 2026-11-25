@@ -3,6 +3,7 @@
 //! `foreach` (`FE_RESET_*`, `FE_FETCH_*`, `FE_FREE`) and generic iteration
 //! of `Traversable` objects.
 
+use crate::class::iter_funcs;
 use crate::func::flags;
 use crate::object;
 use crate::opcode::{ForeachKind, Operand, PlaceId};
@@ -11,6 +12,21 @@ use crate::vm::{ForeachIter, Vm, VmResult};
 use php_runtime::{ArrayKey, Obj, PhpRef, Value, ZArray, ZStr};
 
 impl Vm {
+    /// Calls the `Iterator` / `IteratorAggregate` method `which` (an
+    /// [`iter_funcs`] slot) of `o`, as `zend_user_it_*` call
+    /// `ce->iterator_funcs_ptr->zf_*`: the method resolved once for the
+    /// class, called as [`Vm::call_method_name`] calls a method it finds
+    /// (a method the class lacks goes by name, to its `__call`).
+    fn call_iter_method(&mut self, o: &Obj, which: usize) -> VmResult<Value> {
+        match iter_funcs::method(object::class_of(o), which) {
+            Some(m) => Ok(self.call_method(o, &m, Vec::new())?.deref()),
+            None => {
+                let name = iter_funcs::NAMES.get(which).copied().unwrap_or_default();
+                self.call_method_name(o, name, Vec::new())
+            }
+        }
+    }
+
     /// Resolves `IteratorAggregate::getIterator()` chains.
     pub(crate) fn get_iterator(&mut self, o: &Obj) -> VmResult<Obj> {
         let mut cur = o.clone();
@@ -19,7 +35,7 @@ impl Vm {
                 return Ok(cur);
             }
             if self.instance_of(&cur, b"iteratoraggregate") {
-                let r = self.call_method_name(&cur, "getIterator", Vec::new())?;
+                let r = self.call_iter_method(&cur, iter_funcs::GET_ITERATOR)?;
                 match r {
                     Value::Object(n) if self.instance_of(&n, b"traversable") => {
                         cur = n;
@@ -266,7 +282,7 @@ impl Vm {
             // delegates to its iterator's own by-ref support (a
             // by-reference generator); user Iterators have none.
             if !self.instance_of(&o, b"iterator") && self.instance_of(&o, b"iteratoraggregate") {
-                let r = self.call_method_name(&o, "getIterator", Vec::new())?;
+                let r = self.call_iter_method(&o, iter_funcs::GET_ITERATOR)?;
                 if let Value::Object(n) = r {
                     if self.instance_of(&n, b"traversable") {
                         return self.object_iter(n, true);
@@ -302,7 +318,7 @@ impl Vm {
             handle: object::HandleGuard::reserve(),
         };
         if let ForeachIter::Iterator { obj, .. } = &fe {
-            self.call_method_name(obj, "rewind", Vec::new())?;
+            self.call_iter_method(obj, iter_funcs::REWIND)?;
         }
         Ok(fe)
     }
@@ -447,10 +463,15 @@ impl Vm {
                     match &mut *held {
                         Value::Array(arr) => {
                             let table = arr.make_mut();
+                            // The key only when the loop has a variable
+                            // for it (a string key is a copy).
                             table.iterator_fetch(id).and_then(|pos| {
-                                let key = table.key_value_at(pos)?;
+                                let k = match key {
+                                    Some(_) => Some(table.key_value_at(pos)?),
+                                    None => None,
+                                };
                                 let slot = table.at_mut(pos)?;
-                                Some((key, slot.make_ref()))
+                                Some((k, slot.make_ref()))
                             })
                         }
                         Value::Object(_) => None,
@@ -469,7 +490,7 @@ impl Vm {
                 match item {
                     Some((k, rf)) => {
                         self.set_tmp(val, Value::Reference(rf));
-                        if let Some(kt) = key {
+                        if let (Some(kt), Some(k)) = (key, k) {
                             self.set_tmp(kt, k);
                         }
                         Ok(true)
@@ -517,15 +538,15 @@ impl Vm {
             ForeachIter::Iterator { obj, started, .. } => {
                 let obj = obj.clone();
                 if *started {
-                    self.call_method_name(&obj, "next", Vec::new())?;
+                    self.call_iter_method(&obj, iter_funcs::NEXT)?;
                 }
                 *started = true;
-                let valid = self.call_method_name(&obj, "valid", Vec::new())?;
+                let valid = self.call_iter_method(&obj, iter_funcs::VALID)?;
                 if self.to_bool(&valid)? {
-                    let v = self.call_method_name(&obj, "current", Vec::new())?;
+                    let v = self.call_iter_method(&obj, iter_funcs::CURRENT)?;
                     self.set_tmp(val, v);
                     if let Some(kt) = key {
-                        let k = self.call_method_name(&obj, "key", Vec::new())?;
+                        let k = self.call_iter_method(&obj, iter_funcs::KEY)?;
                         self.set_tmp(kt, k);
                     }
                     Ok(true)
@@ -806,16 +827,16 @@ impl Vm {
         // `zend_user_it_get_iterator`: the handle comes after the
         // `getIterator()` calls, before `rewind`.
         let it = UnpackIter::new(it);
-        self.call_method_name(&it.inner, "rewind", Vec::new())?;
+        self.call_iter_method(&it.inner, iter_funcs::REWIND)?;
         loop {
-            let valid = self.call_method_name(&it.inner, "valid", Vec::new())?;
+            let valid = self.call_iter_method(&it.inner, iter_funcs::VALID)?;
             if !self.to_bool(&valid)? {
                 break;
             }
-            let value = self.call_method_name(&it.inner, "current", Vec::new())?;
-            let key = self.call_method_name(&it.inner, "key", Vec::new())?;
+            let value = self.call_iter_method(&it.inner, iter_funcs::CURRENT)?;
+            let key = self.call_iter_method(&it.inner, iter_funcs::KEY)?;
             each(self, key, value)?;
-            self.call_method_name(&it.inner, "next", Vec::new())?;
+            self.call_iter_method(&it.inner, iter_funcs::NEXT)?;
         }
         it.finish(self)
     }
@@ -1001,4 +1022,69 @@ fn nul_dynamic_prop_ref(o: &Obj, name: &ZStr) -> Option<PhpRef> {
         .as_mut()
         .and_then(|t| t.get_mut(&ArrayKey::Str(name.clone())))
         .map(Value::make_ref)
+}
+
+/// `ZEND_FE_FETCH_RW` of a by-reference `foreach` over an array held by
+/// the iterated variable's reference ([`ForeachIter::ArrayRef`]), as the
+/// frame-local loop runs it: the array the reference holds is separated
+/// when shared (`SEPARATE_ARRAY`, a copy that runs no user code), the
+/// next element from the iterator's position is made a reference in place
+/// (`ZVAL_MAKE_REF`: one already held by reference is shared) and that
+/// reference goes to temporary `val`, the element's key to `key` when the
+/// loop has a key variable. `Some(true)` with the element fetched,
+/// `Some(false)` at the end (the loop jumps out). `None`, nothing changed,
+/// for everything the generic [`Vm::op_fe_fetch`] does: other iterators
+/// (objects, `Iterator`s, generators), a variable the loop body overwrote
+/// with a non-array (a warning), and result slots whose old value's
+/// release could run a destructor or the cycle collector.
+#[inline(never)]
+pub(crate) fn fe_fetch_ref_in(
+    f: &mut crate::vm::Frame,
+    iter: u32,
+    val: u32,
+    key: Option<u32>,
+) -> Option<bool> {
+    let free = |v: Option<&Value>| {
+        matches!(
+            v,
+            Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
+        )
+    };
+    if !free(f.tmps.get(val as usize)) || key.is_some_and(|k| !free(f.tmps.get(k as usize))) {
+        return None;
+    }
+    // The iterators and the temporaries are borrowed apart.
+    let tmps = &mut f.tmps;
+    let Some(Some(ForeachIter::ArrayRef { r, id })) = f.iters.get(iter as usize) else {
+        return None;
+    };
+    let (k, rf) = {
+        let mut held = r.try_borrow_mut()?;
+        let Value::Array(arr) = &mut *held else {
+            return None;
+        };
+        let table = arr.make_mut();
+        let Some(pos) = table.iterator_fetch(*id) else {
+            return Some(false);
+        };
+        let k = match key {
+            Some(_) => table.key_value_at(pos),
+            None => None,
+        };
+        let Some(slot) = table.at_mut(pos) else {
+            // Unreachable: `iterator_fetch` returns a used position.
+            return Some(false);
+        };
+        (k, slot.make_ref())
+    };
+    if let Some(slot) = tmps.get_mut(val as usize) {
+        // Null, a scalar or a string (checked above): no destructor.
+        drop(std::mem::replace(slot, Value::Reference(rf)));
+    }
+    if let (Some(kt), Some(k)) = (key, k) {
+        if let Some(slot) = tmps.get_mut(kt as usize) {
+            drop(std::mem::replace(slot, k));
+        }
+    }
+    Some(true)
 }

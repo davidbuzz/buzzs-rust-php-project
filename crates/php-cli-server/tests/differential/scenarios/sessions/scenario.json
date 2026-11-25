@@ -1,0 +1,110 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "cookies": true,
+ "requests": [
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=regen"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=encode"
+  },
+  {
+   "path": "/s.php?m=reset"
+  },
+  {
+   "path": "/s.php?m=abort"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=limiter&l=public"
+  },
+  {
+   "path": "/s.php?m=limiter&l=private"
+  },
+  {
+   "path": "/s.php?m=limiter&l=private_no_expire"
+  },
+  {
+   "path": "/s.php?m=limiter&l="
+  },
+  {
+   "path": "/s.php?m=two"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=params"
+  },
+  {
+   "path": "/s.php?m=handler"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=destroy"
+  },
+  {
+   "path": "/s.php"
+  },
+  {
+   "path": "/s.php?m=strict",
+   "headers": [
+    [
+     "Cookie",
+     "PHPSESSID=attackerchosen1234"
+    ]
+   ]
+  },
+  {
+   "path": "/s.php?m=lax",
+   "headers": [
+    [
+     "Cookie",
+     "PHPSESSID=attackerchosen1234"
+    ]
+   ]
+  },
+  {
+   "path": "/s.php",
+   "headers": [
+    [
+     "Cookie",
+     "PHPSESSID=bad!chars"
+    ]
+   ]
+  },
+  {
+   "path": "/s.php?PHPSESSID=fromquery12345"
+  },
+  {
+   "path": "/s.php"
+  }
+ ],
+ "args": [
+  "-d",
+  "session.cookie_httponly=0",
+  "-d",
+  "session.cookie_samesite=",
+  "-d",
+  "session.use_strict_mode=0",
+  "-d",
+  "session.save_path=/nonexistent-difftest"
+ ]
+}

@@ -1,0 +1,59 @@
+{
+ "modes": [
+  "server"
+ ],
+ "router": "router.php",
+ "requests": [
+  {
+   "path": "/false"
+  },
+  {
+   "path": "/static/a.txt"
+  },
+  {
+   "path": "/str"
+  },
+  {
+   "path": "/none"
+  },
+  {
+   "path": "/a.css"
+  },
+  {
+   "path": "/a.txt"
+  },
+  {
+   "path": "/hdr"
+  },
+  {
+   "path": "/withindex/"
+  },
+  {
+   "path": "/withhtml/"
+  },
+  {
+   "path": "/sub/x.php"
+  },
+  {
+   "path": "/sub/x.php/pi"
+  },
+  {
+   "path": "/other"
+  },
+  {
+   "path": "/missing.php"
+  },
+  {
+   "path": "/"
+  },
+  {
+   "path": "/a.json"
+  },
+  {
+   "path": "/false"
+  },
+  {
+   "path": "/other?x=1"
+  }
+ ]
+}

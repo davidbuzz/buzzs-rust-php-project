@@ -261,7 +261,7 @@ pub struct IterId(u32);
 
 thread_local! {
     static NEXT_ITER_ID: Cell<u32> = const { Cell::new(1) };
-    static EMPTY_ARRAY: ZArray = ZArray(Rc::new(HashTable::new()));
+    static EMPTY_ARRAY: ZArray = ZArray(Rc::new(HashTable::immutable_empty()));
 }
 
 /// The ordered hash table.
@@ -273,6 +273,15 @@ pub struct HashTable {
     next_free: i64,
     /// Registered iterator positions: `(id, pos)`.
     iterators: IterList,
+    /// The cycle collector's mark (php-src's `GC_INFO`, the root buffer
+    /// slot in the array's header): 0 while the array is not a possible
+    /// root, [`HashTable::GC_IMMUTABLE`] for the shared empty array
+    /// (`zend_empty_array`, never buffered), else its slot + 1 in the
+    /// array root buffer ([`crate::ref_roots`]). It takes the header's
+    /// four bytes of tail padding, so the table stays 72 bytes. A table
+    /// cloned or built is unmarked; the mark stays with the allocation
+    /// (see [`ZArray::make_mut`]).
+    gc_root: Cell<u32>,
 }
 
 /// The registered iterators of a table (`HT_ITERATORS_COUNT`): boxed and
@@ -362,10 +371,16 @@ fn release_element(slot: Option<Value>) {
 }
 
 impl Drop for HashTable {
-    /// `zend_array_destroy`: the elements are released in order, a bucket's
-    /// value before its key. Left to the storage's own drop, every element
-    /// of a list of ints cost a call into the drop glue of `Value`.
+    /// `zend_array_destroy`: a buffered array leaves the root buffer first
+    /// (`GC_REMOVE_FROM_BUFFER`, one test of the mark otherwise), then the
+    /// elements are released in order, a bucket's value before its key.
+    /// Left to the storage's own drop, every element of a list of ints cost
+    /// a call into the drop glue of `Value`.
     fn drop(&mut self) {
+        let mark = self.gc_root.get();
+        if mark != 0 {
+            crate::ref_roots::array_freed(self, mark);
+        }
         match std::mem::replace(&mut self.store, Store::Uninit) {
             Store::Uninit => {}
             Store::Packed(values) => {
@@ -756,6 +771,23 @@ impl HashData {
         self.index.get(hash_slot(ts, h)).copied().unwrap_or(INVALID)
     }
 
+    /// Whether the index links the buckets as they stand, as far as one
+    /// probe tells: the last-placed bucket heads its chain in every linked
+    /// table (appends link at the head, unlinks keep the order, re-links
+    /// build it that way), and in no table whose index was reset while its
+    /// buckets stay ([`HashTable::live_sort_begin`]: a sort with a PHP
+    /// comparator, which may copy the table half-sorted). An empty table
+    /// is linked.
+    fn last_is_linked(&self, ts: u32) -> bool {
+        match self.buckets.len().checked_sub(1) {
+            None => true,
+            Some(last) => self
+                .buckets
+                .get(last)
+                .is_some_and(|b| self.head(ts, b.key.hash()) == to_u32(last)),
+        }
+    }
+
     /// The bucket after `idx` in its chain (`Z_NEXT`).
     #[inline]
     #[allow(dead_code)]
@@ -917,6 +949,14 @@ impl HashTable {
     /// See [`HashTable::TABLE_SIZE_OFFSET`].
     pub const NEXT_FREE_OFFSET: usize = std::mem::offset_of!(HashTable, next_free);
 
+    /// The byte offset of the root buffer mark (a `u32`,
+    /// [`HashTable::gc_root_mark`]; `Cell` is `repr(transparent)`):
+    /// machine code that drops one handle of a shared array a variable
+    /// held without a call may do so only while the mark is not 0 (the
+    /// array is buffered already, or immutable); at 0 the release is a
+    /// possible root to buffer (php-vm's trace JIT).
+    pub const GC_ROOT_OFFSET: usize = std::mem::offset_of!(HashTable, gc_root);
+
     /// The room of a list's allocation, in elements; `None` for a table
     /// that is no list. (For the layout test of the code that appends to
     /// a list without a call.)
@@ -956,6 +996,34 @@ impl HashTable {
         t
     }
 
+    /// A list of `values` (keys `0, 1, 2, ...`) built in one step, sized
+    /// for `n` elements: `array_init_size(n)` + `zend_hash_real_init_packed`
+    /// + `ZEND_HASH_FILL_PACKED`, what php-src's array builders that know
+    /// their result's size do. The elements are written straight into the
+    /// list's storage, allocated once for `nTableSize` elements (`n`
+    /// rounded up to a power of two, at least 8), with none of
+    /// [`HashTable::push`]'s per-element tests; `n` is only a hint (more
+    /// or fewer values give the same table, the storage grown as pushes
+    /// would grow it). No values leave the table untouched, as
+    /// `array_init_size` with nothing added does.
+    #[must_use]
+    pub fn from_list_sized<I: IntoIterator<Item = Value>>(n: usize, values: I) -> Self {
+        let mut t = Self::with_capacity(n);
+        let mut v: Vec<Option<Value>> = Vec::with_capacity(t.table_size as usize);
+        v.extend(values.into_iter().map(Some));
+        let len = v.len();
+        if len == 0 {
+            return t;
+        }
+        if len > t.table_size as usize {
+            t.table_size = check_size(to_u32(len));
+        }
+        t.num_elements = to_u32(len);
+        t.next_free = idx_key(len);
+        t.store = Store::Packed(v);
+        t
+    }
+
     /// Whether nothing was ever stored in the table (`zend_new_array`'s
     /// state: `HASH_FLAG_UNINITIALIZED`, no next index taken): the shared
     /// empty table of a literal being built is one.
@@ -979,6 +1047,22 @@ impl HashTable {
             internal_ptr: 0,
             next_free: i64::MIN,
             iterators: IterList::default(),
+            gc_root: Cell::new(0),
+        }
+    }
+
+    /// An empty table of `table_size` (already [`check_size`]d) whose
+    /// storage is `store` (empty, with room for `table_size` elements):
+    /// [`HashTable::with_capacity`]'s fields with the storage set up front.
+    fn sized(table_size: u32, store: Store) -> Self {
+        HashTable {
+            store,
+            num_elements: 0,
+            table_size,
+            internal_ptr: 0,
+            next_free: i64::MIN,
+            iterators: IterList::default(),
+            gc_root: Cell::new(0),
         }
     }
 
@@ -1962,6 +2046,39 @@ impl HashTable {
         Ok(())
     }
 
+    /// Appends `val` under the next index to a list with room for it,
+    /// without a call: the packed append of `zend_hash_next_index_insert`
+    /// (`ZEND_ADD_ARRAY_ELEMENT` with no key) for a table that neither
+    /// grows nor changes its kind. The same table as [`HashTable::push`]
+    /// makes.
+    ///
+    /// # Errors
+    /// Gives the value back, nothing changed, for a table that is no list,
+    /// is full, or whose next index is not its end (a hole before it): the
+    /// general [`HashTable::push`]'s.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the body of a lean handler
+    pub fn lean_push(&mut self, val: Value) -> Result<(), Value> {
+        let ts = self.table_size as usize;
+        let next = if self.next_free == i64::MIN {
+            0
+        } else {
+            self.next_free
+        };
+        let Store::Packed(v) = &mut self.store else {
+            return Err(val);
+        };
+        let len = v.len();
+        if len >= ts || len == v.capacity() || next != idx_key(len) {
+            return Err(val);
+        }
+        v.push(Some(val));
+        // `next < nTableSize`, so no overflow.
+        self.next_free = next + 1;
+        self.num_elements += 1;
+        Ok(())
+    }
+
     /// Mutable [`HashTable::lean_find`].
     #[inline(always)]
     #[allow(clippy::inline_always)] // the body of a lean handler
@@ -2270,27 +2387,26 @@ impl HashTable {
     /// forgetting a scalar or releasing a string (what the collector looks
     /// at when a table is released). A loop over the storage itself: a
     /// table of scalars costs a tag test an element.
+    ///
+    /// The variants array, object, resource and reference are adjacent, so
+    /// the loop tests one range of tags (one compare an element, where the
+    /// three-variant pattern took two and a bit test); the rare resource is
+    /// sorted out behind it.
     pub fn for_each_counted<'a>(&'a self, mut f: impl FnMut(&'a Value)) {
+        let mut visit = |slot: &'a Option<Value>| {
+            if let Some(
+                v @ (Value::Array(_) | Value::Object(_) | Value::Resource(_) | Value::Reference(_)),
+            ) = slot
+            {
+                if !matches!(v, Value::Resource(_)) {
+                    f(v);
+                }
+            }
+        };
         match &self.store {
             Store::Uninit => {}
-            Store::Packed(values) => {
-                for slot in values {
-                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
-                        slot
-                    {
-                        f(v);
-                    }
-                }
-            }
-            Store::Hash(data) => {
-                for bucket in &data.buckets {
-                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
-                        &bucket.val
-                    {
-                        f(v);
-                    }
-                }
-            }
+            Store::Packed(values) => values.iter().for_each(&mut visit),
+            Store::Hash(data) => data.buckets.iter().for_each(|b| visit(&b.val)),
         }
     }
 
@@ -3079,6 +3195,9 @@ impl HashTable {
         }
         out.iterators = std::mem::take(&mut self.iterators);
         out.internal_ptr = 0;
+        // Still the same array: its root buffer mark stays (the old
+        // table's drop would take it out of the buffer).
+        out.gc_root.set(self.gc_root.replace(0));
         *self = out;
         removed
     }
@@ -3178,6 +3297,8 @@ impl HashTable {
         for it in &mut new.iterators {
             it.1 += argc;
         }
+        // Still the same array: its root buffer mark stays.
+        new.gc_root.set(self.gc_root.replace(0));
         *self = new;
     }
 
@@ -3229,12 +3350,7 @@ impl HashTable {
     /// Builds a list (`zend_array_to_list`) from the values.
     #[must_use]
     pub fn to_list(&self) -> HashTable {
-        if self.is_empty() {
-            return HashTable::new();
-        }
-        let mut out = HashTable::with_capacity_packed(self.len());
-        let _ = out.push_all(self.values().map(copy_for_insert));
-        out
+        HashTable::from_list_sized(self.len(), self.values().map(copy_for_insert))
     }
 }
 
@@ -3372,6 +3488,51 @@ enum Mode {
     Next,
 }
 
+/// `zend_array_dup_value` for one slot of a table being copied: a null,
+/// bool, int or float is copied as it stands (`ZVAL_COPY_VALUE`, nothing
+/// to count), which is one compare of the tag (those variants come first);
+/// a hole or anything else goes to [`dup_other`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per element of a copied table
+fn dup_slot(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
+    match slot {
+        Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // SAFETY: a null, bool, int or float owns no allocation and has
+            // no drop glue, so its bits are a second, independent value
+            // (php-src copies such a zval with `ZVAL_COPY_VALUE`).
+            // `ptr::read` is a typed copy of a valid, initialised
+            // `Option<Value>` behind a shared reference. The safe version
+            // (`slot.clone()`, a match over every variant that rebuilds the
+            // enum) measured 27 instructions an element of a packed list of
+            // ints under callgrind; this is one tag test and one 16-byte
+            // copy.
+            unsafe { std::ptr::read(slot) }
+        }
+        _ => dup_other(slot, table),
+    }
+}
+
+/// [`dup_slot`] for a hole or a refcounted element of the table at
+/// `table`: a reference held only by the source (refcount 1) is unwrapped
+/// into its value, unless it refers to that table itself; anything else is
+/// shared (`Z_ADDREF`). Out of line, so the loop over scalars stays tight.
+#[inline(never)]
+fn dup_other(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
+    let v = slot.as_ref()?;
+    if let Value::Reference(r) = v {
+        if r.refcount() == 1 {
+            if let Some(inner) = r.try_borrow() {
+                let is_self =
+                    matches!(&*inner, Value::Array(a) if std::ptr::eq(Rc::as_ptr(&a.0), table));
+                if !is_self {
+                    return Some(inner.clone());
+                }
+            }
+        }
+    }
+    Some(v.clone())
+}
+
 impl Clone for HashTable {
     /// `zend_array_dup`: copies the table; references with refcount 1 (other
     /// than a reference to this very array) are unwrapped; holes are removed
@@ -3379,19 +3540,6 @@ impl Clone for HashTable {
     /// that `foreach` by reference can find its position in the copy.
     fn clone(&self) -> Self {
         let self_ptr: *const HashTable = self;
-        let dup_val = |v: &Value| -> Value {
-            if let Value::Reference(r) = v {
-                if r.refcount() == 1 {
-                    if let Some(inner) = r.try_borrow() {
-                        let is_self = matches!(&*inner, Value::Array(a) if std::ptr::eq(Rc::as_ptr(&a.0), self_ptr));
-                        if !is_self {
-                            return inner.clone();
-                        }
-                    }
-                }
-            }
-            v.clone()
-        };
         let mut out = HashTable {
             store: Store::Uninit,
             num_elements: self.num_elements,
@@ -3403,6 +3551,7 @@ impl Clone for HashTable {
             },
             next_free: self.next_free,
             iterators: self.iterators.clone(),
+            gc_root: Cell::new(0),
         };
         if self.num_elements == 0 {
             out.table_size = HT_MIN_SIZE;
@@ -3416,13 +3565,41 @@ impl Clone for HashTable {
             Store::Uninit => {}
             Store::Packed(v) => {
                 let mut vals = Vec::with_capacity(cap.max(v.len()));
-                vals.extend(v.iter().map(|s| s.as_ref().map(&dup_val)));
+                vals.extend(v.iter().map(|s| dup_slot(s, self_ptr)));
                 out.store = Store::Packed(vals);
+            }
+            Store::Hash(d)
+                if self.is_without_holes()
+                    && d.index.len() == index_len(out.table_size)
+                    && d.last_is_linked(out.table_size) =>
+            {
+                // No holes: every bucket keeps its position in the copy, so
+                // the source's chains and index are the copy's as they
+                // stand (they are what re-linking the copy would build: a
+                // chain lists its live buckets last-placed first, which
+                // appends, unlinks and re-links all keep), copied instead
+                // of rebuilt bucket by bucket. Not while an in-place sort
+                // has the index reset ([`HashData::last_is_linked`]): such
+                // a copy is re-linked below, so lookups in it work.
+                let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
+                buckets.extend(d.buckets.iter().map(|b| Bucket {
+                    val: dup_slot(&b.val, self_ptr),
+                    key: b.key.clone(),
+                    next: b.next,
+                }));
+                out.store = Store::Hash(HashData {
+                    buckets,
+                    index: d.index.clone(),
+                });
             }
             Store::Hash(d) => {
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
-                    Some(v) => Bucket::new(b.key.clone(), dup_val(v), INVALID),
+                    Some(_) => Bucket {
+                        val: dup_slot(&b.val, self_ptr),
+                        key: b.key.clone(),
+                        next: INVALID,
+                    },
                     None => Bucket {
                         val: None,
                         key: ArrayKey::Int(0),
@@ -3619,6 +3796,48 @@ impl<'a> IntoIterator for &'a HashTable {
     }
 }
 
+/// The cycle collector's mark in the header (`GC_INFO`, see
+/// [`crate::ref_roots`] for the array root buffer).
+impl HashTable {
+    /// The mark of the shared empty array (`zend_empty_array`, which is
+    /// `GC_IMMUTABLE`): never a possible root.
+    pub const GC_IMMUTABLE: u32 = u32::MAX;
+
+    /// The shared empty table, marked [`HashTable::GC_IMMUTABLE`].
+    fn immutable_empty() -> Self {
+        let t = Self::new();
+        t.gc_root.set(Self::GC_IMMUTABLE);
+        t
+    }
+
+    /// The root buffer mark: 0 when the array may be buffered as a
+    /// possible root (`GC_MAY_LEAK`); otherwise it is buffered already or
+    /// is the immutable empty array. What a release to a non-zero count
+    /// tests before anything else.
+    #[inline]
+    #[must_use]
+    pub fn gc_root_mark(&self) -> u32 {
+        self.gc_root.get()
+    }
+
+    /// Sets the root buffer mark (the buffer's own bookkeeping).
+    #[inline]
+    pub(crate) fn set_gc_root_mark(&self, mark: u32) {
+        self.gc_root.set(mark);
+    }
+
+    /// Takes a buffered table out of the root buffer
+    /// (`GC_REMOVE_FROM_BUFFER`) and clears its mark, before its contents
+    /// leave the allocation the buffer knows.
+    fn leave_root_buffer(&self) {
+        let mark = self.gc_root.get();
+        if mark != 0 {
+            crate::ref_roots::array_freed(self, mark);
+            self.gc_root.set(0);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ZArray: the refcounted copy-on-write handle
 // ---------------------------------------------------------------------------
@@ -3644,6 +3863,34 @@ impl ZArray {
         ZArray(Rc::new(HashTable::with_capacity(n)))
     }
 
+    /// A new array whose list storage is in place for `n` elements: the
+    /// table of an array literal whose elements have no keys
+    /// (`zend_new_array(n)` + `zend_hash_real_init_packed`, as
+    /// `ZEND_INIT_ARRAY` with a first element and no key makes it). The
+    /// same table and allocations, in the same order (the storage, then the
+    /// handle), as `ZArray::from_table(HashTable::with_capacity_packed(n))`,
+    /// built without the intermediate table's moves and the release of its
+    /// placeholder storage.
+    #[must_use]
+    pub fn packed_sized(n: usize) -> Self {
+        let table_size = check_size(to_u32(n));
+        let store = Store::Packed(Vec::with_capacity(table_size as usize));
+        ZArray(Rc::new(HashTable::sized(table_size, store)))
+    }
+
+    /// A new array whose hash storage (buckets and index) is in place for
+    /// `n` elements: the table of an array literal with a string key
+    /// (`zend_new_array(n)` + `zend_hash_real_init_mixed`, for
+    /// `ZEND_INIT_ARRAY` with `ZEND_ARRAY_NOT_PACKED`). As
+    /// [`ZArray::packed_sized`], the same as
+    /// `ZArray::from_table(HashTable::with_capacity_mixed(n))`.
+    #[must_use]
+    pub fn mixed_sized(n: usize) -> Self {
+        let table_size = check_size(to_u32(n));
+        let store = Store::Hash(HashData::new(table_size));
+        ZArray(Rc::new(HashTable::sized(table_size, store)))
+    }
+
     /// Wraps a table (also accepts a boxed table, such as an object's
     /// dynamic property table).
     #[must_use]
@@ -3651,17 +3898,17 @@ impl ZArray {
         ZArray(Rc::new(t.into()))
     }
 
-    /// Builds a list from values.
+    /// Builds a list from values, sized by the iterator's lower size hint
+    /// ([`HashTable::from_list_sized`]).
     pub fn from_values<I: IntoIterator<Item = Value>>(values: I) -> Self {
         let iter = values.into_iter();
-        let n = iter.size_hint().0;
-        let mut t = if n > 0 {
-            HashTable::with_capacity_packed(n)
-        } else {
-            HashTable::new()
-        };
-        let _ = t.push_all(iter);
-        ZArray::from_table(t)
+        ZArray::from_table(HashTable::from_list_sized(iter.size_hint().0, iter))
+    }
+
+    /// A list of `values` sized for `n` elements
+    /// ([`HashTable::from_list_sized`]).
+    pub fn from_list_sized<I: IntoIterator<Item = Value>>(n: usize, values: I) -> Self {
+        ZArray::from_table(HashTable::from_list_sized(n, values))
     }
 
     /// Builds an array from `(key, value)` pairs (later keys overwrite).
@@ -3676,13 +3923,44 @@ impl ZArray {
 
     /// Returns a mutable table, separating (copying) it first when shared
     /// (`SEPARATE_ARRAY`).
+    ///
+    /// The table must never be moved out from behind the returned borrow
+    /// (`mem::take`, `mem::swap`, `mem::replace` of the whole table): the
+    /// cycle collector's root buffer knows a buffered array by its
+    /// address, and a moved table would leave that entry pointing at the
+    /// allocation (assigning a new table in place is fine: the old one is
+    /// dropped there). [`ZArray::into_table`] is the way to take a table.
+    #[inline]
     pub fn make_mut(&mut self) -> &mut HashTable {
+        // Only a self-containing array registered with the collector has
+        // a weak handle; `Rc::make_mut` moves such a table when it is not
+        // shared otherwise.
+        if Rc::weak_count(&self.0) != 0 {
+            return self.make_mut_with_weak();
+        }
         Rc::make_mut(&mut self.0)
+    }
+
+    /// [`ZArray::make_mut`] of a table with a weak handle: `Rc::make_mut`
+    /// moves it into a new allocation when this is its only strong handle,
+    /// and a buffered table's root buffer entry follows it.
+    #[cold]
+    #[inline(never)]
+    fn make_mut_with_weak(&mut self) -> &mut HashTable {
+        let old = Rc::as_ptr(&self.0);
+        let t = Rc::make_mut(&mut self.0);
+        let mark = t.gc_root.get();
+        let new: *const HashTable = &*t;
+        if mark != 0 && !std::ptr::eq(old, new) {
+            crate::ref_roots::array_moved(old, &*t, mark);
+        }
+        t
     }
 
     /// The table for writing in place when this handle is its only one
     /// (no other handle and no weak one), so [`ZArray::make_mut`] would
     /// neither copy nor move it; `None` when a write must separate first.
+    /// As with [`ZArray::make_mut`], never move the table out of it.
     #[inline]
     pub fn get_mut_unshared(&mut self) -> Option<&mut HashTable> {
         Rc::get_mut(&mut self.0)
@@ -3706,9 +3984,39 @@ impl ZArray {
         Rc::as_ptr(&self.0) as usize
     }
 
+    /// The table's address in its allocation: what the array root buffer
+    /// holds for a buffered array, without a count ([`crate::ref_roots`]).
+    #[inline]
+    pub(crate) fn table_ptr(&self) -> *const HashTable {
+        Rc::as_ptr(&self.0)
+    }
+
+    /// A new handle of the buffered array whose table is at `table`.
+    ///
+    /// # Safety
+    /// `table` must be [`ZArray::table_ptr`] of an array that is still
+    /// alive. The root buffer keeps that true for its entries: a table
+    /// leaves the buffer when it is dropped (`HashTable::drop`) and before
+    /// its contents leave the allocation ([`ZArray::into_table`],
+    /// [`ZArray::gc_take_contents`], the move in [`ZArray::make_mut`]).
+    pub(crate) unsafe fn from_buffered(table: *const HashTable) -> ZArray {
+        // SAFETY: per the contract, `table` is `Rc::as_ptr` of a live
+        // `Rc<HashTable>` (strong count >= 1): the count is raised for the
+        // handle made here, which then owns it.
+        unsafe {
+            Rc::increment_strong_count(table);
+            ZArray(Rc::from_raw(table))
+        }
+    }
+
     /// Takes the table out if unshared, otherwise clones it.
     #[must_use]
     pub fn into_table(self) -> HashTable {
+        // A buffered table leaves the root buffer before it leaves its
+        // allocation (a shared one is copied, unmarked).
+        if self.0.gc_root.get() != 0 && Rc::strong_count(&self.0) == 1 {
+            self.0.leave_root_buffer();
+        }
         Rc::try_unwrap(self.0).unwrap_or_else(|rc| (*rc).clone())
     }
 
@@ -3729,7 +4037,7 @@ impl ZArray {
             return None;
         }
         // Unshared first: the handles below are then the only other ones.
-        let _ = Rc::make_mut(&mut self.0);
+        let _ = self.make_mut();
         let stored = ZArray(Rc::clone(&self.0));
         let result = Value::Array(ZArray(Rc::clone(&self.0)));
         let top = Rc::as_ptr(&self.0).cast_mut();
@@ -3843,6 +4151,9 @@ impl ZArray {
     /// no PHP code runs and the graph holds handles only.
     #[must_use]
     pub unsafe fn gc_take_contents(&self) -> HashTable {
+        // The contents leave the allocation: a buffered table leaves the
+        // root buffer first.
+        self.0.leave_root_buffer();
         let table = Rc::as_ptr(&self.0).cast_mut();
         // SAFETY: per this function's contract no other reference into the
         // table exists while it is replaced; `Rc::as_ptr` keeps the
@@ -3929,6 +4240,59 @@ mod tests {
         let mut full = HashTable::new();
         full.insert(ArrayKey::Int(i64::MAX), Value::Null);
         assert!(full.push_all(vals()).is_err());
+    }
+
+    /// A list built to size is the list pushes build: same keys, length,
+    /// next free index, packed storage and table size, whatever the hint;
+    /// an empty one is untouched.
+    #[test]
+    fn from_list_sized_matches_pushes() {
+        for (hint, count) in [
+            (0_usize, 0_i64),
+            (5, 0),
+            (0, 3),
+            (5, 5),
+            (3, 9),
+            (20, 2),
+            (8, 8),
+            (9, 9),
+        ] {
+            let size = usize::try_from(count).unwrap_or(0);
+            let built = HashTable::from_list_sized(size.max(hint), (0..count).map(Value::Int));
+            let built_hinted = HashTable::from_list_sized(hint, (0..count).map(Value::Int));
+            let mut pushed = HashTable::with_capacity(hint);
+            for i in 0..count {
+                assert!(pushed.push(Value::Int(i)).is_ok());
+            }
+            for t in [&built, &built_hinted] {
+                assert_eq!(t.len(), pushed.len(), "{hint} {count}");
+                assert_eq!(t.next_free_element(), pushed.next_free_element());
+                assert_eq!(t.next_index(), pushed.next_index());
+                assert_eq!(t.is_packed(), pushed.is_packed());
+                assert_eq!(t.is_untouched(), pushed.is_untouched());
+                assert_eq!(t.used(), pushed.used());
+                assert!(t.is_list());
+                let keys: Vec<_> = t.iter().map(|(k, _)| k.clone()).collect();
+                let want: Vec<_> = pushed.iter().map(|(k, _)| k.clone()).collect();
+                assert_eq!(keys, want);
+                for i in 0..count {
+                    assert!(matches!(t.get_int(i), Some(Value::Int(v)) if *v == i));
+                }
+            }
+            assert_eq!(
+                built_hinted.table_size(),
+                pushed.table_size(),
+                "{hint} {count}"
+            );
+            assert_eq!(built_hinted.packed_capacity().is_some(), count > 0);
+        }
+        // Appending after it continues the list.
+        let mut t = HashTable::from_list_sized(2, [Value::Int(7), Value::Int(8)]);
+        assert!(matches!(t.push(Value::Int(9)), Ok(2)));
+        assert_eq!(t.len(), 3);
+        let z = ZArray::from_values(Vec::<Value>::new());
+        assert!(z.is_untouched());
+        assert_eq!(ZArray::from_list_sized(1, [Value::Null]).len(), 1);
     }
 
     /// The lean probe finds what the general one finds for the keys it
@@ -4363,6 +4727,9 @@ mod tests {
     fn table_header_stays_small() {
         // data, index, boxed iterator list, counters (zend_array: 56).
         assert!(std::mem::size_of::<HashTable>() <= 80);
+        // The root buffer mark lives in what was tail padding.
+        assert_eq!(std::mem::size_of::<HashTable>(), 72);
+        assert!(HashTable::GC_ROOT_OFFSET + 4 <= std::mem::size_of::<HashTable>());
         assert_eq!(std::mem::size_of::<IterList>(), 8);
         let mut t = HashTable::new();
         let _ = t.push(Value::Int(1));
@@ -5148,6 +5515,102 @@ mod tests {
         assert!(!copy.get_int(0).is_some_and(Value::is_reference));
     }
 
+    /// `zend_array_dup` of a packed table with holes and every kind of
+    /// element: scalars and holes are copied as they stand, a string and
+    /// a nested array gain a handle, a reference held only by the source
+    /// is unwrapped, a shared one stays shared; the count, the next free
+    /// index and the internal pointer carry over, and dropping the copy
+    /// gives the handles back.
+    #[test]
+    fn clone_of_a_packed_table_copies_each_kind() {
+        let s = ZStr::from(String::from("heap string"));
+        let inner = {
+            let mut a = ZArray::new();
+            a.make_mut().push(Value::Int(7)).unwrap();
+            a
+        };
+        let shared = crate::PhpRef::new(Value::Int(5));
+        let mut t = HashTable::new();
+        t.push(Value::Null).unwrap();
+        t.push(Value::Bool(true)).unwrap();
+        t.push(Value::Int(-3)).unwrap();
+        t.push(Value::Float(1.5)).unwrap();
+        t.push(Value::Str(s.clone())).unwrap();
+        t.push(Value::Array(inner.clone())).unwrap();
+        t.push(Value::Reference(crate::PhpRef::new(Value::Int(9))))
+            .unwrap();
+        t.push(Value::Reference(shared.clone())).unwrap();
+        t.push(Value::Int(100)).unwrap();
+        t.remove(&ArrayKey::Int(8));
+        t.remove(&ArrayKey::Int(1));
+        t.move_next();
+        t.move_next();
+        assert!(matches!(t.store, Store::Packed(_)));
+        let (s_rc, inner_rc, shared_rc) = (s.refcount(), inner.refcount(), shared.refcount());
+        let copy = t.clone();
+        assert!(matches!(copy.store, Store::Packed(_)));
+        assert_eq!(copy.len(), 7);
+        assert_eq!(copy.next_free, 9);
+        assert_eq!(copy.current_key(), t.current_key());
+        assert!(matches!(copy.get_int(0), Some(Value::Null)));
+        assert!(copy.get_int(1).is_none());
+        assert!(matches!(copy.get_int(2), Some(Value::Int(-3))));
+        assert!(
+            matches!(copy.get_int(3), Some(Value::Float(f)) if f.to_bits() == 1.5f64.to_bits())
+        );
+        assert!(matches!(copy.get_int(4), Some(Value::Str(c)) if ZStr::ptr_eq(c, &s)));
+        assert!(matches!(copy.get_int(5), Some(Value::Array(c)) if ZArray::ptr_eq(c, &inner)));
+        assert!(matches!(copy.get_int(6), Some(Value::Int(9))));
+        assert!(
+            matches!(copy.get_int(7), Some(Value::Reference(r)) if r.refcount() == shared_rc + 1)
+        );
+        assert!(copy.get_int(8).is_none());
+        assert_eq!(s.refcount(), s_rc + 1);
+        assert_eq!(inner.refcount(), inner_rc + 1);
+        assert!(t.get_int(6).is_some_and(Value::is_reference));
+        drop(copy);
+        assert_eq!(s.refcount(), s_rc);
+        assert_eq!(inner.refcount(), inner_rc);
+        assert_eq!(shared.refcount(), shared_rc);
+    }
+
+    /// `for_each_counted` visits the arrays and references of a packed
+    /// table and of a hash, in order, and skips scalars, strings, holes
+    /// and resources.
+    #[test]
+    fn for_each_counted_visits_arrays_objects_and_references() {
+        let fill = |t: &mut HashTable| {
+            t.push(Value::Int(1)).unwrap();
+            t.push(Value::Array(ZArray::new())).unwrap();
+            t.push(Value::Str(ZStr::from("s"))).unwrap();
+            t.push(Value::Resource(crate::value::Resource::new("stream", None)))
+                .unwrap();
+            t.push(Value::Reference(crate::PhpRef::new(Value::Null)))
+                .unwrap();
+            t.push(Value::Float(2.0)).unwrap();
+            t.push(Value::Array(ZArray::new())).unwrap();
+            t.remove(&ArrayKey::Int(5));
+        };
+        let mut packed = HashTable::new();
+        fill(&mut packed);
+        let mut hash = HashTable::with_capacity_mixed(0);
+        hash.insert("k", Value::Null);
+        fill(&mut hash);
+        assert!(matches!(packed.store, Store::Packed(_)));
+        assert!(matches!(hash.store, Store::Hash(_)));
+        for t in [&packed, &hash] {
+            let mut seen = Vec::new();
+            t.for_each_counted(|v| {
+                seen.push(match v {
+                    Value::Array(_) => 'a',
+                    Value::Reference(_) => 'r',
+                    _ => '?',
+                });
+            });
+            assert_eq!(seen, ['a', 'r', 'a']);
+        }
+    }
+
     #[test]
     fn internal_pointer() {
         let mut t = HashTable::new();
@@ -5528,5 +5991,185 @@ mod tests {
         let t = table_of(&r);
         assert_eq!(render(&t), "y=1,x=3,z=2,new=9");
         assert!(matches!(t.get(&ArrayKey::from("x")), Some(Value::Int(3))));
+    }
+
+    /// The literal tables built in one step are the tables the general
+    /// constructors make: kind, table size, room, next index, and the same
+    /// tables after the same appends (sizes 0, 1, 8 and 9: below, at and
+    /// past the smallest table size).
+    #[test]
+    fn sized_literal_tables_match_the_general_ones() {
+        for n in [0usize, 1, 8, 9] {
+            let packed = ZArray::packed_sized(n);
+            let general = HashTable::with_capacity_packed(n);
+            assert_eq!(packed.kind(), Kind::Packed, "{n}");
+            assert_eq!(packed.table_size(), general.table_size(), "{n}");
+            assert_eq!(packed.packed_capacity(), general.packed_capacity(), "{n}");
+            assert_eq!(packed.next_free_element(), i64::MIN, "{n}");
+            assert!(packed.is_empty() && !packed.is_untouched(), "{n}");
+            let mixed = ZArray::mixed_sized(n);
+            let general_mixed = HashTable::with_capacity_mixed(n);
+            assert_eq!(mixed.kind(), Kind::Hash, "{n}");
+            assert_eq!(mixed.table_size(), general_mixed.table_size(), "{n}");
+            match (&mixed.store, &general_mixed.store) {
+                (Store::Hash(a), Store::Hash(b)) => {
+                    assert_eq!(a.index.len(), b.index.len(), "{n}");
+                    assert_eq!(a.buckets.capacity(), b.buckets.capacity(), "{n}");
+                    assert!(a.index.iter().all(|&i| i == INVALID), "{n}");
+                }
+                _ => panic!("not hashes: {n}"),
+            }
+            assert_eq!(mixed.next_free_element(), i64::MIN, "{n}");
+            // The same appends make the same tables.
+            let (mut a, mut b) = (packed, ZArray::from_table(general));
+            let (mut c, mut d) = (mixed, ZArray::from_table(general_mixed));
+            for i in 0..n {
+                let i = i64::try_from(i).unwrap_or(0);
+                let _ = a.make_mut().push(Value::Int(i));
+                let _ = b.make_mut().push(Value::Int(i));
+                c.make_mut().insert(format!("k{i}").as_str(), Value::Int(i));
+                d.make_mut().insert(format!("k{i}").as_str(), Value::Int(i));
+            }
+            assert_eq!(render(&a), render(&b), "{n}");
+            assert_eq!(a.table_size(), b.table_size(), "{n}");
+            assert_eq!(a.next_index(), b.next_index(), "{n}");
+            assert_eq!(render(&c), render(&d), "{n}");
+            assert_eq!(c.table_size(), d.table_size(), "{n}");
+            assert_eq!(c.next_index(), d.next_index(), "{n}");
+        }
+    }
+
+    /// `lean_push` makes the table `push` makes while the list has room,
+    /// with counted (strings, arrays) and plain elements, and gives the
+    /// value back for a full list, a hash, an empty table with no storage
+    /// and a list whose next index is past its end.
+    #[test]
+    fn lean_push_agrees_with_push() {
+        for n in [0usize, 1, 8, 9] {
+            let mut lean = HashTable::with_capacity_packed(n);
+            let mut general = HashTable::with_capacity_packed(n);
+            let ts = lean.table_size() as usize;
+            for i in 0..ts + 2 {
+                let k = i64::try_from(i).unwrap_or(0);
+                let v = match i % 3 {
+                    0 => Value::Int(k),
+                    1 => Value::Str(ZStr::from(format!("s{i}"))),
+                    _ => Value::Array(ZArray::from_values([Value::Int(k)])),
+                };
+                let _ = general.push(v.clone());
+                // The lean push takes the value while the list has room,
+                // also the room a general push made by growing it.
+                let room = lean.len() < lean.table_size() as usize;
+                match lean.lean_push(v) {
+                    Ok(()) => assert!(room, "{n}: {i}"),
+                    Err(v) => {
+                        assert!(!room, "{n}: {i}");
+                        let _ = lean.push(v);
+                    }
+                }
+            }
+            assert_eq!(lean.len(), general.len(), "{n}");
+            assert_eq!(lean.table_size(), general.table_size(), "{n}");
+            assert_eq!(lean.next_index(), general.next_index(), "{n}");
+            assert_eq!(
+                lean.keys().cloned().collect::<Vec<_>>(),
+                general.keys().cloned().collect::<Vec<_>>(),
+                "{n}"
+            );
+            for (a, b) in lean.values().zip(general.values()) {
+                assert_eq!(std::mem::discriminant(a), std::mem::discriminant(b), "{n}");
+            }
+        }
+        // Not a list with room at its end: the general push's.
+        let mut hash = HashTable::with_capacity_mixed(8);
+        assert!(hash.lean_push(Value::Int(1)).is_err());
+        assert!(hash.is_empty());
+        let mut uninit = HashTable::new();
+        assert!(uninit.lean_push(Value::Int(1)).is_err());
+        assert!(uninit.is_untouched());
+        let mut gap = HashTable::with_capacity_packed(8);
+        assert!(gap.lean_push(Value::Int(0)).is_ok());
+        gap.set_next_free_element(5);
+        assert!(gap.lean_push(Value::Int(5)).is_err());
+        assert_eq!(gap.len(), 1);
+        assert!(matches!(gap.push(Value::Int(5)), Ok(5)));
+        assert_eq!(render(&gap), "0=0,5=5");
+    }
+
+    /// A copy of a hash without holes takes the source's chains and index
+    /// as they stand: they equal what re-linking the copy builds, every
+    /// key is found, and the copy grows and takes new keys as a table of
+    /// its own. A hash with holes is still compacted (sizes 1, 8, 9 and
+    /// 40; int and string keys, counted and plain values).
+    #[test]
+    fn clone_of_a_hash_keeps_its_chains() {
+        for n in [1i64, 8, 9, 40] {
+            let mut t = HashTable::with_capacity_mixed(0);
+            for i in 0..n {
+                if i % 2 == 0 {
+                    t.insert(ArrayKey::Int(i * 7 - 9), Value::Int(i));
+                } else {
+                    t.insert(
+                        format!("k{i}").as_str(),
+                        Value::Str(ZStr::from(format!("v{i}"))),
+                    );
+                }
+            }
+            let copy = t.clone();
+            let (Store::Hash(a), Store::Hash(b)) = (&t.store, &copy.store) else {
+                panic!("not hashes: {n}");
+            };
+            assert_eq!(a.index, b.index, "{n}");
+            let nexts = |d: &HashData| d.buckets.iter().map(|b| b.next).collect::<Vec<_>>();
+            assert_eq!(nexts(a), nexts(b), "{n}");
+            let mut relinked = copy.clone();
+            relinked.rehash_without_compaction();
+            let Store::Hash(r) = &relinked.store else {
+                panic!("not a hash: {n}");
+            };
+            assert_eq!(r.index, b.index, "{n}");
+            assert_eq!(nexts(r), nexts(b), "{n}");
+            for (k, _) in t.iter() {
+                assert!(copy.contains_key(k), "{n}: {k:?}");
+            }
+            assert_eq!(copy.len(), t.len(), "{n}");
+            assert_eq!(copy.next_index(), t.next_index(), "{n}");
+            let mut grown = copy;
+            for i in 0..20 {
+                grown.insert(format!("new{i}").as_str(), Value::Int(i));
+            }
+            assert_eq!(grown.len(), t.len() + 20, "{n}");
+            for (k, _) in t.iter() {
+                assert!(grown.contains_key(k), "{n}: {k:?}");
+            }
+            assert!(matches!(
+                grown.get(&ArrayKey::from("new19")),
+                Some(Value::Int(19))
+            ));
+            // With a hole: the copy is compacted and every key found.
+            let first = t.first().map(|(k, _)| k.clone());
+            if let Some(k) = first {
+                drop(t.remove(&k));
+            }
+            let compacted = t.clone();
+            assert_eq!(compacted.used() as usize, compacted.len(), "{n}");
+            for (k, _) in t.iter() {
+                assert!(compacted.contains_key(k), "{n}: {k:?}");
+            }
+            // Half-way through an in-place sort (the index reset, the
+            // buckets kept): the copy is re-linked, every key found.
+            if t.len() > 1 {
+                let keys: Vec<ArrayKey> = t.keys().cloned().collect();
+                assert!(t.live_sort_begin(false).is_some(), "{n}");
+                let mid = t.clone();
+                for k in &keys {
+                    assert!(mid.contains_key(k), "{n}: {k:?}");
+                }
+                t.live_sort_finish(false);
+                for k in &keys {
+                    assert!(t.contains_key(k), "{n}: {k:?}");
+                }
+            }
+        }
     }
 }

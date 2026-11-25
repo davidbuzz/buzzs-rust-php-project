@@ -46,7 +46,7 @@ mod replace;
 mod split;
 mod value;
 
-pub use cache::{MatchConfig, Pcre, RegexCache, PCRE_CACHE_SIZE};
+pub use cache::{pattern_hash, MatchConfig, Pcre, RegexCache, PCRE_CACHE_SIZE};
 pub use error::{CompileError, PregError};
 pub use matching::{
     match_all, match_all_spans, match_one, match_one_spans, MatchFailure, MatchOutcome, MatchRef,
@@ -54,10 +54,10 @@ pub use matching::{
 };
 pub use regex::{parse_pattern, ParsedPattern, Regex};
 pub use replace::{
-    limit_from_php, replace, replace_array, replace_callback, ReplaceOutcome, Replacement,
-    ReplacementPiece, Replacements,
+    limit_from_php, replace, replace_array, replace_callback, replace_callback_split,
+    replace_split, ReplaceOutcome, ReplaceSplit, Replacement, ReplacementPiece, Replacements,
 };
-pub use split::{grep, quote, split};
+pub use split::{grep, quote, quote_if_needed, split, split_with_tail};
 pub use value::{Key, MatchArray, Value};
 
 /// `PREG_PATTERN_ORDER`

@@ -1,0 +1,1 @@
+<?php echo "index php\n", $_SERVER["SCRIPT_NAME"], " ", $_SERVER["PHP_SELF"], "\n";

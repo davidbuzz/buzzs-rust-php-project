@@ -1,0 +1,90 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/e.php?m="
+  },
+  {
+   "path": "/e.php?m=fatal"
+  },
+  {
+   "path": "/e.php?m=exc"
+  },
+  {
+   "path": "/e.php?m=exc_handler"
+  },
+  {
+   "path": "/e.php?m=exit_str"
+  },
+  {
+   "path": "/e.php?m=exit_int"
+  },
+  {
+   "path": "/e.php?m=die_shutdown"
+  },
+  {
+   "path": "/e.php?m=warn"
+  },
+  {
+   "path": "/e.php?m=notice_then_header"
+  },
+  {
+   "path": "/e.php?m=parse"
+  },
+  {
+   "path": "/e.php?m=mem"
+  },
+  {
+   "path": "/e.php?m=trigger"
+  },
+  {
+   "path": "/e.php?m=handler"
+  },
+  {
+   "path": "/e.php?m=docref"
+  },
+  {
+   "path": "/e.php?m=ob_fatal"
+  },
+  {
+   "path": "/e.php?m=ob_cb_fatal"
+  },
+  {
+   "path": "/e.php?m=error_log"
+  },
+  {
+   "path": "/e.php?m=stack"
+  },
+  {
+   "path": "/e.php?m=gle"
+  },
+  {
+   "path": "/e.php?m="
+  },
+  {
+   "path": "/e.php?m=warn&de=0"
+  },
+  {
+   "path": "/e.php?m=warn&de=1&he=0"
+  },
+  {
+   "path": "/e.php?m=fatal&he=0"
+  },
+  {
+   "path": "/e.php?m=exc&de=stderr"
+  },
+  {
+   "path": "/e.php?m=exc&de=0"
+  },
+  {
+   "path": "/e.php?m=fatal&de=0"
+  },
+  {
+   "path": "/e.php?m=warn"
+  }
+ ]
+}

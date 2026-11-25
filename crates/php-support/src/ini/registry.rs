@@ -114,6 +114,123 @@ pub enum ModifyHandler {
     /// `OnUpdateAutoDetectLineEndings`: `OnUpdateBool` plus an
     /// "`auto_detect_line_endings` is deprecated" `E_DEPRECATED` for true values.
     AutoDetectLineEndings,
+    /// `OnUpdateReportMemleaks` (main/main.c): `OnUpdateBool` plus a
+    /// "Directive 'report_memleaks' is deprecated" docref `E_DEPRECATED`
+    /// for false values.
+    ReportMemleaks,
+    /// `OnChangeMemoryHardLimitPercent` (main/main.c): a quantity that is
+    /// -1 or at least 100 ("memory_hard_limit_percent must be >= 100, or
+    /// -1" otherwise). Whether the allocator can take it is checked
+    /// where the limit is applied.
+    MemoryHardLimitPercent,
+}
+
+/// How `phpinfo()`, `php -i` and `--ri` show a directive's value (the
+/// `ZEND_INI_DISP` callback of its `zend_ini_entry_def`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IniDisplayer {
+    /// No displayer: `php_ini_displayer_cb()` prints the value (HTML
+    /// escaped outside text mode), or "no value".
+    Default,
+    /// `zend_ini_boolean_displayer_cb` (every `*_INI_BOOLEAN` entry, and
+    /// `zend_gc_enabled_displayer_cb`): "On" or "Off".
+    Boolean,
+    /// `php_ini_color_displayer_cb` (`highlight.*`).
+    Color,
+    /// main.c's `display_errors_mode` displayer: "On"/"Off"/"STDOUT"/
+    /// "STDERR".
+    DisplayErrors,
+}
+
+impl IniDisplayer {
+    /// The displayer C gives a directive with this modify handler: every
+    /// `OnUpdateBool` entry in php-src is declared with
+    /// `STD_PHP_INI_BOOLEAN`, and the `highlight.*` colours with
+    /// `php_ini_color_displayer_cb` (main/main.c).
+    #[must_use]
+    pub fn for_handler(name: &str, handler: ModifyHandler) -> IniDisplayer {
+        match handler {
+            ModifyHandler::Bool
+            | ModifyHandler::GcEnabled
+            | ModifyHandler::AutoDetectLineEndings
+            | ModifyHandler::ReportMemleaks => IniDisplayer::Boolean,
+            ModifyHandler::DisplayErrors => IniDisplayer::DisplayErrors,
+            _ if name.starts_with("highlight.") => IniDisplayer::Color,
+            _ => IniDisplayer::Default,
+        }
+    }
+
+    /// The text this displayer prints for `value` (the local or the
+    /// master value; `ZEND_INI_DISPLAY_ACTIVE`/`_ORIG`). `html` is false in
+    /// text mode (the CLI's `phpinfo_as_text`). The colour displayer tests `zend_uv.html_errors`,
+    /// which `php_module_startup()` sets to 1 and nothing changes, so it
+    /// always prints the `<span>`.
+    #[must_use]
+    pub fn display(self, value: Option<&[u8]>, html: bool) -> Vec<u8> {
+        // `ZSTR_VAL()`: the C displayers see the value up to its first NUL.
+        let c_str = value.map(|v| v.split(|&c| c == 0).next().unwrap_or_default());
+        match self {
+            // `zend_ini_parse_bool()` and `php_get_display_errors_mode()`
+            // compare the whole zend_string.
+            IniDisplayer::Boolean => {
+                if value.is_some_and(parse_bool) {
+                    b"On".to_vec()
+                } else {
+                    b"Off".to_vec()
+                }
+            }
+            IniDisplayer::DisplayErrors => display_errors_text(value).to_vec(),
+            IniDisplayer::Color => match c_str {
+                Some(v) => {
+                    let mut s = b"<span style=\"color: ".to_vec();
+                    s.extend_from_slice(v);
+                    s.extend_from_slice(b"\">");
+                    s.extend_from_slice(v);
+                    s.extend_from_slice(b"</span>");
+                    s
+                }
+                None => b"<i>no value</i>".to_vec(),
+            },
+            // php_ini_displayer_cb(): a value whose first byte is not NUL
+            // is written whole (`PHPWRITE` with its length).
+            IniDisplayer::Default => match value {
+                Some(v) if v.first().is_some_and(|&c| c != 0) => {
+                    if html {
+                        html_puts(v)
+                    } else {
+                        v.to_vec()
+                    }
+                }
+                _ if html => b"<i>no value</i>".to_vec(),
+                _ => b"no value".to_vec(),
+            },
+        }
+    }
+}
+
+/// `zend_html_puts()` as php-stdmisc's highlighter ports it.
+fn html_puts(v: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len());
+    for &c in v {
+        match c {
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'\t' => out.extend_from_slice(b"    "),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// main.c's `PHP_INI_DISP(display_errors_mode)`: the
+/// `php_get_display_errors_mode()` mode of the value, as a word.
+fn display_errors_text(value: Option<&[u8]>) -> &'static [u8] {
+    match display_errors_mode(value) {
+        0 => b"Off",
+        2 => b"STDERR",
+        _ => b"STDOUT",
+    }
 }
 
 /// Static description of a directive (`zend_ini_entry_def`).
@@ -129,6 +246,13 @@ pub struct IniDirective {
     pub handler: ModifyHandler,
     /// Owning extension (`"Core"`, `"standard"`, …) for `ini_get_all()`.
     pub module: String,
+    /// How phpinfo() shows the value.
+    pub displayer: IniDisplayer,
+    /// Whether C gives the entry an `on_modify` handler. Entries declared
+    /// with a NULL one (`PHP_INI_ENTRY("SMTP", ..., NULL)`) cannot be
+    /// restored at runtime: `zend_restore_ini_entry_cb()` starts from
+    /// `FAILURE` and only an `on_modify` call changes that.
+    pub has_on_modify: bool,
 }
 
 impl IniDirective {
@@ -146,7 +270,26 @@ impl IniDirective {
             access,
             handler,
             module: module.to_string(),
+            displayer: IniDisplayer::for_handler(name, handler),
+            has_on_modify: true,
         }
+    }
+
+    /// The same directive declared with a NULL `on_modify` in C (see
+    /// [`IniDirective::has_on_modify`]).
+    #[must_use]
+    pub fn without_on_modify(mut self) -> Self {
+        self.has_on_modify = false;
+        self
+    }
+
+    /// The same directive with another displayer (an entry whose modify
+    /// handler is its own but which C declares with `*_INI_BOOLEAN`, or
+    /// with a `PHP_INI_ENTRY_EX` displayer).
+    #[must_use]
+    pub fn with_displayer(mut self, displayer: IniDisplayer) -> Self {
+        self.displayer = displayer;
+        self
     }
 }
 
@@ -174,6 +317,20 @@ pub struct IniEntryInfo {
     pub builtin_default_value: Option<Vec<u8>>,
     /// `access` bitmask.
     pub access: u8,
+    /// How phpinfo() shows the values.
+    pub displayer: IniDisplayer,
+}
+
+impl IniEntryInfo {
+    /// The local and the master value as `display_ini_entries()` shows
+    /// them (`html` false in text mode).
+    #[must_use]
+    pub fn displayed(&self, html: bool) -> (Vec<u8>, Vec<u8>) {
+        (
+            self.displayer.display(self.local_value.as_deref(), html),
+            self.displayer.display(self.global_value.as_deref(), html),
+        )
+    }
 }
 
 /// The `FxHash` multiply-rotate hash (rustc's): directive names are short
@@ -383,6 +540,12 @@ impl IniRegistry {
             .map(|e| e.value.as_deref().unwrap_or_default())
     }
 
+    /// Whether a directive was modified since startup or the last
+    /// [`IniRegistry::deactivate`] (it is in `EG(modified_ini_directives)`).
+    pub fn is_modified(&self, name: &str) -> bool {
+        self.entries.get(name).is_some_and(|e| e.modified)
+    }
+
     /// The raw value (`None` when the directive has no value).
     pub fn raw(&self, name: &str) -> Option<&[u8]> {
         self.entries.get(name).and_then(|e| e.value.as_deref())
@@ -482,15 +645,18 @@ impl IniRegistry {
     }
 
     fn restore_entry(&mut self, name: &str, stage: Stage, diag: &mut dyn DiagnosticSink) -> bool {
-        let Some(entry) = self.entries.get(name).cloned() else {
+        let Some(entry) = self.entries.get(name) else {
             return false;
         };
         if !entry.modified {
             return true;
         }
+        let entry = entry.clone();
         self.generation = next_generation();
         let result = self.on_modify(&entry, entry.orig_value.as_deref(), stage, diag);
-        if stage == Stage::Runtime && result.is_err() {
+        // "runtime failure is OK": the entry stays modified; without an
+        // on_modify the result stays FAILURE.
+        if stage == Stage::Runtime && (result.is_err() || !entry.def.has_on_modify) {
             return false;
         }
         let mut e = entry;
@@ -581,8 +747,28 @@ impl IniRegistry {
     /// (case-insensitive).  `Err` carries the "Extension \"%s\" cannot be
     /// found" warning. The PHP binding calls [`Self::sort_entries`] first;
     /// this read-only query does not change the shared table order.
+    /// The rows are exactly the module's (`display_ini_entries()`); the
+    /// PHP function itself uses [`Self::ini_get_all_function`].
     pub fn ini_get_all(&self, extension: Option<&str>) -> Result<Vec<IniEntryInfo>, Diagnostic> {
         self.rows(extension, true)
+    }
+
+    /// The rows of the PHP function `ini_get_all($extension)`. The Core
+    /// module has module number 0, and `PHP_FUNCTION(ini_get_all)` filters
+    /// only on a non-zero number (ext/standard/basic_functions.c), so
+    /// `ini_get_all('core')` lists every extension's directives.
+    pub fn ini_get_all_function(
+        &self,
+        extension: Option<&str>,
+    ) -> Result<Vec<IniEntryInfo>, Diagnostic> {
+        match extension {
+            Some(ext) if ext.eq_ignore_ascii_case("core") => {
+                // The module lookup still runs (Core is always registered).
+                self.rows(Some(ext), true)?;
+                self.rows(None, true)
+            }
+            _ => self.rows(extension, true),
+        }
     }
 
     /// The same rows as [`Self::ini_get_all`] but in current table order
@@ -621,14 +807,17 @@ impl IniRegistry {
                 let e = &self.entries[n];
                 IniEntryInfo {
                     name: n.clone(),
+                    // PHP_FUNCTION(ini_get_all): orig_value, else value
+                    // (a directive modified from NULL has no orig_value).
                     global_value: if e.modified {
-                        e.orig_value.clone()
+                        e.orig_value.clone().or_else(|| e.value.clone())
                     } else {
                         e.value.clone()
                     },
                     local_value: e.value.clone(),
                     builtin_default_value: e.def.default.clone(),
                     access: e.modifiable.0,
+                    displayer: e.def.displayer,
                 }
             })
             .collect())
@@ -669,6 +858,32 @@ impl IniRegistry {
                 }
                 (IniTyped::Bool(on), None)
             }
+            ModifyHandler::ReportMemleaks => {
+                let on = parse_bool(v);
+                // The CLI reports the startup value itself (php-cli's
+                // startup.rs); the request-end restore is not reported.
+                if !on && stage == Stage::Runtime {
+                    diag.report(Diagnostic::docref(
+                        ErrorLevel::DEPRECATED,
+                        "Directive 'report_memleaks' is deprecated",
+                    ));
+                }
+                (IniTyped::Bool(on), None)
+            }
+            ModifyHandler::MemoryHardLimitPercent => match new_value {
+                Some(n) => {
+                    let value = quantity(diag, n);
+                    if value < 100 && value != -1 {
+                        warn(
+                            diag,
+                            "memory_hard_limit_percent must be >= 100, or -1".into(),
+                        );
+                        return Err(());
+                    }
+                    (IniTyped::Long(value), None)
+                }
+                None => (IniTyped::Long(-1), None),
+            },
             ModifyHandler::Long => (IniTyped::Long(quantity(diag, v)), None),
             ModifyHandler::LongGEZero => {
                 let t = quantity(diag, v);
@@ -725,7 +940,24 @@ impl IniRegistry {
                 (IniTyped::None, None)
             }
             ModifyHandler::MailCrLfMode => {
-                if !matches!(v, b"crlf" | b"lf" | b"mixed" | b"os") {
+                // OnUpdateMailCrLfMode (main/main.c): an empty value is
+                // accepted; a bad one is an E_WARNING at runtime and an
+                // E_ERROR at the other stages, silent at deactivation.
+                if !v.is_empty() && !matches!(v, b"crlf" | b"lf" | b"mixed" | b"os") {
+                    if stage != Stage::Deactivate {
+                        let level = if stage == Stage::Runtime {
+                            ErrorLevel::WARNING
+                        } else {
+                            ErrorLevel::ERROR
+                        };
+                        diag.report(Diagnostic::docref(
+                            level,
+                            format!(
+                                "Invalid value \"{}\" for mail.cr_lf_mode. Must be one of: \"crlf\", \"lf\", \"mixed\", \"os\"",
+                                String::from_utf8_lossy(v)
+                            ),
+                        ));
+                    }
                     return Err(());
                 }
                 (IniTyped::None, None)
@@ -890,11 +1122,11 @@ pub fn core_directives() -> Vec<IniDirective> {
         IniDirective::new(n, d, a, h, "standard")
     };
     vec![
-        c("highlight.comment", Some("#FF8000"), A::ALL, H::None),
-        c("highlight.default", Some("#0000BB"), A::ALL, H::None),
-        c("highlight.html", Some("#000000"), A::ALL, H::None),
-        c("highlight.keyword", Some("#007700"), A::ALL, H::None),
-        c("highlight.string", Some("#DD0000"), A::ALL, H::None),
+        c("highlight.comment", Some("#FF8000"), A::ALL, H::None).without_on_modify(),
+        c("highlight.default", Some("#0000BB"), A::ALL, H::None).without_on_modify(),
+        c("highlight.html", Some("#000000"), A::ALL, H::None).without_on_modify(),
+        c("highlight.keyword", Some("#007700"), A::ALL, H::None).without_on_modify(),
+        c("highlight.string", Some("#DD0000"), A::ALL, H::None).without_on_modify(),
         c("display_errors", Some("1"), A::ALL, H::DisplayErrors),
         c("display_startup_errors", Some("1"), A::ALL, H::Bool),
         c("enable_dl", Some("1"), A::SYSTEM, H::Bool),
@@ -911,7 +1143,7 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("log_errors", Some("0"), A::ALL, H::Bool),
         c("ignore_repeated_errors", Some("0"), A::ALL, H::Bool),
         c("ignore_repeated_source", Some("0"), A::ALL, H::Bool),
-        c("report_memleaks", Some("1"), A::ALL, H::Bool),
+        c("report_memleaks", Some("1"), A::ALL, H::ReportMemleaks),
         c("report_zend_debug", Some("0"), A::ALL, H::Bool),
         c("output_buffering", Some("0"), pd_sys, H::Long),
         c("output_handler", None, pd_sys, H::StrNotEmpty),
@@ -963,8 +1195,8 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("request_order", None, pd_sys, H::String),
         c("error_append_string", None, A::ALL, H::String),
         c("error_prepend_string", None, A::ALL, H::String),
-        c("SMTP", Some("localhost"), A::ALL, H::None),
-        c("smtp_port", Some("25"), A::ALL, H::None),
+        c("SMTP", Some("localhost"), A::ALL, H::None).without_on_modify(),
+        c("smtp_port", Some("25"), A::ALL, H::None).without_on_modify(),
         c("mail.add_x_header", Some("0"), pd_sys, H::Bool),
         c("mail.mixed_lf_and_crlf", Some("0"), pd_sys, H::Bool),
         c("mail.cr_lf_mode", Some("crlf"), pd_sys, H::MailCrLfMode),
@@ -972,19 +1204,25 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("browscap", None, A::SYSTEM, H::None),
         c("max_memory_limit", Some("-1"), A::SYSTEM, H::MaxMemoryLimit),
         c("memory_limit", Some("128M"), A::ALL, H::MemoryLimit),
-        c("memory_hard_limit_percent", None, A::ALL, H::None),
+        c(
+            "memory_hard_limit_percent",
+            None,
+            A::ALL,
+            H::MemoryHardLimitPercent,
+        ),
         c("precision", Some("14"), A::ALL, H::Precision),
-        c("sendmail_from", None, A::ALL, H::None),
+        c("sendmail_from", None, A::ALL, H::None).without_on_modify(),
         c(
             "sendmail_path",
             Some("/usr/sbin/sendmail -t -i"),
             A::SYSTEM,
             H::None,
-        ),
+        )
+        .without_on_modify(),
         c("mail.force_extra_parameters", None, pd_sys, H::None),
-        c("disable_functions", Some(""), A::SYSTEM, H::None),
-        c("max_file_uploads", Some("20"), pd_sys, H::None),
-        c("max_multipart_body_parts", Some("-1"), pd_sys, H::None),
+        c("disable_functions", Some(""), A::SYSTEM, H::None).without_on_modify(),
+        c("max_file_uploads", Some("20"), pd_sys, H::None).without_on_modify(),
+        c("max_multipart_body_parts", Some("-1"), pd_sys, H::None).without_on_modify(),
         c("allow_url_fopen", Some("1"), A::SYSTEM, H::Bool),
         c("allow_url_include", Some("0"), A::SYSTEM, H::Bool),
         c("enable_post_data_reading", Some("1"), pd_sys, H::Bool),
@@ -1015,7 +1253,9 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("fiber.stack_size", None, A::ALL, H::FiberStackSize),
         c("zend.max_allowed_stack_size", Some("0"), A::SYSTEM, H::Long),
         c("zend.reserved_stack_size", Some("0"), A::SYSTEM, H::Long),
-        // ext/standard (a selection used throughout the test suite)
+        // ext/standard, in basic_functions.c's MINIT order: var.c,
+        // file.c, assert.c, url_scanner_ex.re.
+        s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
         s("user_agent", None, A::ALL, H::String),
         s("from", None, A::ALL, H::String),
         s("default_socket_timeout", Some("60"), A::ALL, H::Long),
@@ -1025,15 +1265,20 @@ pub fn core_directives() -> Vec<IniDirective> {
             A::ALL,
             H::AutoDetectLineEndings,
         ),
-        s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
-        s("url_rewriter.tags", Some("form="), A::ALL, H::String),
-        s("url_rewriter.hosts", Some(""), A::ALL, H::String),
+        s("assert.active", Some("1"), A::ALL, H::Bool),
+        s("assert.bail", Some("0"), A::ALL, H::Bool),
+        s("assert.warning", Some("1"), A::ALL, H::Bool),
+        s("assert.callback", None, A::ALL, H::None),
+        s("assert.exception", Some("1"), A::ALL, H::Bool),
         s(
             "session.trans_sid_tags",
             Some("a=href,area=href,frame=src,form="),
             A::ALL,
             H::String,
         ),
+        s("session.trans_sid_hosts", Some(""), A::ALL, H::String),
+        s("url_rewriter.tags", Some("form="), A::ALL, H::String),
+        s("url_rewriter.hosts", Some(""), A::ALL, H::String),
     ]
 }
 
@@ -1106,6 +1351,29 @@ mod tests {
         r.deactivate(&mut d);
         assert_ne!(r.generation(), g3);
         assert_eq!(r.get("include_path"), Some(&b".:/usr/share/php"[..]));
+    }
+
+    #[test]
+    fn is_modified_follows_alter_restore_and_deactivate() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert!(!r.is_modified("precision"));
+        assert!(!r.is_modified("no.such.directive"));
+        let g = r.generation();
+        assert!(r.restore("precision", Stage::Deactivate, &mut d));
+        assert_eq!(
+            r.generation(),
+            g,
+            "restoring an unmodified entry changes nothing"
+        );
+        r.ini_set("precision", b"6", &mut d);
+        assert!(r.is_modified("precision"));
+        r.ini_restore("precision", &mut d);
+        assert!(!r.is_modified("precision"));
+        r.ini_set("precision", b"7", &mut d);
+        r.deactivate(&mut d);
+        assert!(!r.is_modified("precision"));
+        assert_eq!(r.get("precision"), Some(&b"14"[..]));
     }
 
     #[test]
@@ -1312,6 +1580,196 @@ mod tests {
             .all(|e| ["user_agent", "from"].contains(&e.name.as_str())
                 || e.name.contains('_')
                 || e.name.contains('.')));
+    }
+
+    #[test]
+    fn displayers_follow_the_c_entry_definitions() {
+        // php8.5 -n -i: "html_errors => Off => Off", "display_errors =>
+        // STDOUT => STDOUT", highlight.* in <span>s even in text mode,
+        // "zend.enable_gc => On", "auto_detect_line_endings => Off".
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("html_errors", b"yes", &mut d),
+            Some(b"0".to_vec())
+        );
+        let all = r.ini_get_all(None).unwrap();
+        let shown = |name: &str, html: bool| {
+            let e = all.iter().find(|e| e.name == name).unwrap();
+            let (l, g) = e.displayed(html);
+            (String::from_utf8(l).unwrap(), String::from_utf8(g).unwrap())
+        };
+        let pair = |l: &str, g: &str| (l.to_string(), g.to_string());
+        assert_eq!(shown("html_errors", false), pair("On", "Off"));
+        assert_eq!(shown("display_errors", false), pair("STDOUT", "STDOUT"));
+        assert_eq!(shown("zend.enable_gc", false), pair("On", "On"));
+        assert_eq!(shown("auto_detect_line_endings", false), pair("Off", "Off"));
+        assert_eq!(shown("assert.active", false), pair("On", "On"));
+        assert_eq!(
+            shown("highlight.comment", false),
+            pair(
+                "<span style=\"color: #FF8000\">#FF8000</span>",
+                "<span style=\"color: #FF8000\">#FF8000</span>"
+            )
+        );
+        assert_eq!(shown("precision", false), pair("14", "14"));
+        assert_eq!(shown("error_log", false), pair("no value", "no value"));
+        assert_eq!(
+            shown("error_log", true),
+            pair("<i>no value</i>", "<i>no value</i>")
+        );
+        assert_eq!(
+            shown("session.trans_sid_tags", false).0,
+            "a=href,area=href,frame=src,form="
+        );
+        let disp = |v: &[u8]| {
+            String::from_utf8(IniDisplayer::DisplayErrors.display(Some(v), false)).unwrap()
+        };
+        assert_eq!(disp(b"stderr"), "STDERR");
+        assert_eq!(disp(b"0"), "Off");
+        assert_eq!(disp(b"258"), "STDERR");
+        assert_eq!(disp(b"garbage"), "Off");
+        assert_eq!(disp(b"yes"), "STDOUT");
+        assert_eq!(
+            IniDisplayer::Default.display(Some(b"a<b>&\tc"), true),
+            b"a&lt;b&gt;&amp;    c".to_vec()
+        );
+        assert_eq!(IniDisplayer::Boolean.display(None, false), b"Off".to_vec());
+        assert_eq!(disp(b"stderr\0tail"), "Off");
+        assert_eq!(
+            String::from_utf8(IniDisplayer::DisplayErrors.display(None, false)).unwrap(),
+            "STDOUT"
+        );
+        assert_eq!(
+            IniDisplayer::Color.display(Some(b"#123\0x"), false),
+            b"<span style=\"color: #123\">#123</span>".to_vec()
+        );
+    }
+
+    #[test]
+    fn entries_without_on_modify_are_not_restored_at_runtime() {
+        // php8.5: ini_set('SMTP', 'x'); ini_restore('SMTP'); ini_get('SMTP')
+        // is "x"; precision (OnSetPrecision) is restored.
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        for (name, old) in [("SMTP", "localhost"), ("highlight.string", "#DD0000")] {
+            assert_eq!(r.ini_set(name, b"x", &mut d), Some(old.as_bytes().to_vec()));
+            r.ini_restore(name, &mut d);
+            assert_eq!(r.get(name), Some(&b"x"[..]));
+            assert!(r.is_modified(name));
+        }
+        r.ini_set("precision", b"3", &mut d);
+        r.ini_restore("precision", &mut d);
+        assert_eq!(r.get("precision"), Some(&b"14"[..]));
+        // The request end restores them all.
+        r.deactivate(&mut d);
+        assert_eq!(r.get("SMTP"), Some(&b"localhost"[..]));
+        assert_eq!(r.get("highlight.string"), Some(&b"#DD0000"[..]));
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn report_memleaks_off_is_deprecated_at_runtime() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("report_memleaks", b"1", &mut d),
+            Some(b"1".to_vec())
+        );
+        assert!(d.is_empty());
+        assert_eq!(
+            r.ini_set("report_memleaks", b"0", &mut d),
+            Some(b"1".to_vec())
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0].render(Some("ini_set")),
+            "ini_set(): Directive 'report_memleaks' is deprecated"
+        );
+        assert!(!r.get_bool("report_memleaks"));
+    }
+
+    #[test]
+    fn mail_cr_lf_mode_rejects_unknown_modes() {
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core([("mail.cr_lf_mode".to_string(), b"abc".to_vec())], &mut d);
+        assert_eq!(r.get("mail.cr_lf_mode"), Some(&b"crlf"[..]));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].level, ErrorLevel::ERROR);
+        assert_eq!(
+            d[0].message,
+            "Invalid value \"abc\" for mail.cr_lf_mode. Must be one of: \"crlf\", \"lf\", \"mixed\", \"os\""
+        );
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core([("mail.cr_lf_mode".to_string(), Vec::<u8>::new())], &mut d);
+        assert_eq!(r.get("mail.cr_lf_mode"), Some(&b""[..]));
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn memory_hard_limit_percent_is_at_least_100_or_minus_one() {
+        // php8.5 -n -d memory_hard_limit_percent=50: the warning, and the
+        // directive keeps its NULL default.
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core(
+            [("memory_hard_limit_percent".to_string(), b"50".to_vec())],
+            &mut d,
+        );
+        assert_eq!(r.raw("memory_hard_limit_percent"), None);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0].message,
+            "memory_hard_limit_percent must be >= 100, or -1"
+        );
+        assert!(!d[0].docref);
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("memory_hard_limit_percent", b"150", &mut d),
+            Some(Vec::new())
+        );
+        assert!(r
+            .ini_set("memory_hard_limit_percent", b"-1", &mut d)
+            .is_some());
+        assert!(d.is_empty());
+        assert!(r
+            .ini_set("memory_hard_limit_percent", b"abc", &mut d)
+            .is_none());
+        assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn get_all_core_lists_every_module() {
+        // php8.5 -n: ini_get_all('core') holds date.*, pcre.*, session.*, ...
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        r.register_module("other");
+        assert!(r.register(
+            IniDirective::new(
+                "other.x",
+                Some("1"),
+                Access::ALL,
+                ModifyHandler::Long,
+                "other"
+            ),
+            &mut d,
+        ));
+        let all = r.ini_get_all(None).unwrap();
+        for name in ["core", "Core", "CORE"] {
+            let c = r.ini_get_all_function(Some(name)).unwrap();
+            assert_eq!(c.len(), all.len());
+            assert!(c.iter().any(|e| e.name == "other.x"));
+        }
+        let o = r.ini_get_all_function(Some("other")).unwrap();
+        assert_eq!(o.len(), 1);
+        assert!(r.ini_get_all_function(Some("nope")).is_err());
+        // phpinfo(), --ri/--re and ReflectionExtension match the module
+        // exactly.
+        let info = r.ini_get_all(Some("Core")).unwrap();
+        assert!(info.iter().all(|e| e.name != "other.x"));
+        let reg = r.ini_entries_registered(Some("core")).unwrap();
+        assert!(reg.iter().all(|e| e.name != "other.x"));
+        assert!(reg.iter().any(|e| e.name == "precision"));
     }
 
     #[test]

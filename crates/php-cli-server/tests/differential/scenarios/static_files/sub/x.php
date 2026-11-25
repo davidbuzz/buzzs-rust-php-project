@@ -1,0 +1,1 @@
+<?php echo "sub ", $_SERVER["SCRIPT_NAME"], " ", $_SERVER["PATH_INFO"] ?? "-", " ", $_SERVER["PHP_SELF"], "\n";

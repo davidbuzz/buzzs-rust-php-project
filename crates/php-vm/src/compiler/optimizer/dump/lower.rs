@@ -21,7 +21,7 @@ use crate::opcode::{
     MatchKey, NullChain, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use crate::types::TypeDecl;
-use php_runtime::{BinaryOp, Value, ZStr};
+use php_runtime::{BinaryOp, Value, ZArray, ZStr};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -386,9 +386,22 @@ pub(crate) fn literal_return_value(
         Op::Return {
             val: Operand::Lit(l),
         } => f.code.literals.get(l as usize)?.clone(),
+        // A body without `return` returns nothing, which only `void`
+        // accepts: any other return type (`mixed` and `?T` included) throws
+        // "Return value must be of type T, none returned", and `never`
+        // throws "never-returning function must not implicitly return"
+        // (`zend_emit_final_return` puts a `ZEND_VERIFY_RETURN_TYPE` before
+        // that `RETURN null`, so `zend_try_inline_call`, which wants the
+        // `RETURN` right after the arguments, leaves the call).
         Op::Return {
             val: Operand::Unused,
-        } => Value::Null,
+        } if f
+            .return_type
+            .as_ref()
+            .is_none_or(crate::types::TypeDecl::is_void) =>
+        {
+            Value::Null
+        }
         _ => return None,
     };
     // A literal of another type than the declared return type is
@@ -460,6 +473,20 @@ struct Call {
     /// A named argument out of order, or an unpacking: some parameter
     /// may be missing (`may_have_undef`, `ZEND_CHECK_UNDEF_ARGS`).
     undef: bool,
+    /// A named placeholder was sent (`foo(a: ?)`): php-src's
+    /// `zend_compile_args` built `named_positions`, which
+    /// `CALLABLE_CONVERT_PARTIAL` carries as its `op2` literal.
+    named_placeholder: bool,
+}
+
+/// A call whose arguments `ZEND_SEND_USER` / `ZEND_SEND_ARRAY` send
+/// (also one a literal function name started with `INIT_FCALL`): it ends
+/// in `DO_FCALL` with nothing known of the callee.
+fn user_call(call: &mut Call) {
+    call.kind = CallKind::Dynamic;
+    call.known = None;
+    call.inline = None;
+    call.frameless = None;
 }
 
 /// `zend_compile_args_ex` for one argument of `call`: a named argument
@@ -890,10 +917,14 @@ impl<'a> Lower<'a> {
             match generic(op) {
                 Op::InitFCall { .. }
                 | Op::InitDynCall { .. }
+                | Op::InitUserCall { .. }
                 | Op::InitMethodCall { .. }
                 | Op::InitStaticCall { .. }
                 | Op::InitParentHook { .. }
                 | Op::New { .. } => depth += 1,
+                // `zend_compile_func_cuf`: the `extended_value` of the
+                // call's `INIT_*` counts its `SEND_USER`s.
+                Op::SendUser { .. } if depth == 0 => n += 1,
                 Op::DoCall { .. } | Op::CallableConvert { .. } | Op::CallablePartial { .. } => {
                     if depth == 0 {
                         return (n, simple);
@@ -1146,6 +1177,7 @@ impl<'a> Lower<'a> {
                     names: None,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitMethodCall { obj, name } => {
@@ -1189,6 +1221,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitStaticCall { class, name } => {
@@ -1242,6 +1275,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::InitParentHook { prop, set } => {
@@ -1263,6 +1297,7 @@ impl<'a> Lower<'a> {
                     names: None,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::New { class, dst, .. } => {
@@ -1316,6 +1351,7 @@ impl<'a> Lower<'a> {
                     names,
                     count: 0,
                     undef: false,
+                    named_placeholder: false,
                 });
             }
             Op::Send { src } => self.lower_send(src, None),
@@ -1332,11 +1368,60 @@ impl<'a> Lower<'a> {
                 }
                 self.push(ZLine::new("SEND_UNPACK").a(s));
             }
+            // `zend_compile_func_cuf` / `zend_compile_func_cufa`: the call
+            // ends in a plain `DO_FCALL` (no `zend_get_call_op`, no
+            // inlining), after `CHECK_UNDEF_ARGS` for a whole array.
+            Op::InitUserCall { callee, array } => {
+                let c = self.copy_kept(callee);
+                let (n, _) = self.scan_call(i, None);
+                let name = if *array {
+                    "call_user_func_array"
+                } else {
+                    "call_user_func"
+                };
+                self.push(
+                    ZLine::new("INIT_USER_CALL")
+                        .x(format!(" {n}"))
+                        .a(Z::Const(Value::Str(ZStr::from(name))))
+                        .b(c),
+                );
+                self.calls.push(Call {
+                    kind: CallKind::Dynamic,
+                    known: None,
+                    frameless: None,
+                    args: Vec::new(),
+                    sent: 0,
+                    inline: None,
+                    names: None,
+                    count: 0,
+                    undef: false,
+                    named_placeholder: false,
+                });
+            }
+            Op::SendUser { src, n } => {
+                let s = self.z(src);
+                if let Some(c) = self.calls.last_mut() {
+                    c.sent += 1;
+                    user_call(c);
+                }
+                self.push(ZLine::new("SEND_USER").a(s).b(Z::Num(*n)));
+            }
+            Op::SendArray { src, len, skip } => {
+                let s = self.z(src);
+                let whole = *len == Operand::Unused;
+                let l = if whole { Z::Unused } else { self.z(len) };
+                if let Some(c) = self.calls.last_mut() {
+                    user_call(c);
+                    c.undef = whole;
+                }
+                self.push(ZLine::new("SEND_ARRAY").x(format!(" {skip}")).a(s).b(l));
+            }
             Op::SendPlaceholder { name } => {
                 let name = (*name).map(|n| self.lit(n));
                 let (num, name) = match self.calls.last_mut() {
                     Some(c) => {
                         c.sent += 1;
+                        c.named_placeholder |= name.is_some();
                         resolve_arg(c, name)
                     }
                     None => (Some(1), name),
@@ -1353,9 +1438,16 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("CALLABLE_CONVERT").t(*dst).x(" 0"));
             }
             Op::CallablePartial { dst, name, .. } => {
-                self.calls.pop();
+                // `zend_compile_call_partial`: `op1` is the closure's name,
+                // `op2` the `named_positions` array of named placeholders
+                // (printed `array(...)`), unused without them.
+                let named = self.calls.pop().is_some_and(|c| c.named_placeholder);
                 let n = Z::Const(self.lit(*name));
-                self.push(ZLine::new("CALLABLE_CONVERT_PARTIAL").t(*dst).x(" 0").b(n));
+                let mut line = ZLine::new("CALLABLE_CONVERT_PARTIAL").t(*dst).x(" 0").a(n);
+                if named {
+                    line = line.b(Z::Const(Value::Array(ZArray::new())));
+                }
+                self.push(line);
             }
             Op::Recv { n, cv } => {
                 self.push(ZLine::new("RECV").r(Z::Cv(*cv)).a(Z::Num(n + 1)));
@@ -1569,7 +1661,12 @@ impl<'a> Lower<'a> {
                 self.push(l);
             }
             Op::FetchClassName { class, dst, .. } => {
-                let c = self.class_z(class, "");
+                // `zend_compile_class_name`: `$obj::class` takes the
+                // expression itself as op1, with no FETCH_CLASS before it.
+                let c = match class {
+                    ClassSpec::Dyn(op) => self.copy_kept(op),
+                    other => self.class_z(other, ""),
+                };
                 self.push(ZLine::new("FETCH_CLASS_NAME").t(*dst).a(c));
             }
             Op::InstanceOf { a, class, dst } => {
@@ -2475,6 +2572,7 @@ impl Lower<'_> {
                 names,
                 count: 0,
                 undef: false,
+                named_placeholder: false,
             });
             return;
         }
@@ -2514,6 +2612,7 @@ impl Lower<'_> {
             names,
             count: 0,
             undef: false,
+            named_placeholder: false,
         });
     }
 
@@ -2560,10 +2659,29 @@ impl Lower<'_> {
             }
             ArgSrc::CallResult(o) => {
                 let v = self.z(o);
-                let op = match by_ref {
-                    Some(true) => "SEND_VAR_NO_REF",
-                    Some(false) => "SEND_VAL",
-                    None => "SEND_VAL_EX",
+                // `zend_compile_args_ex`: a call sent to a by-reference or
+                // unknown parameter is compiled for `BP_VAR_FUNC_ARG`, its
+                // result an `IS_VAR` sent with `SEND_VAR_NO_REF(_EX)`; to a
+                // by-value parameter, for `BP_VAR_R` (a TMP, `SEND_VAL`). A
+                // call that became a builtin instruction or a literal
+                // (no `DO_*CALL` line producing the operand) is sent as a
+                // value.
+                let var = by_ref != Some(false)
+                    && v.tmp().is_some()
+                    && self
+                        .lines
+                        .last()
+                        .is_some_and(|l| super::passes::is_do_call(l.op) && l.res.tmp() == v.tmp());
+                if var {
+                    if let Some(l) = self.lines.last_mut() {
+                        l.res_var = true;
+                    }
+                }
+                let op = match (by_ref, var) {
+                    (Some(true), _) => "SEND_VAR_NO_REF",
+                    (Some(false), _) => "SEND_VAL",
+                    (None, true) => "SEND_VAR_NO_REF_EX",
+                    (None, false) => "SEND_VAL_EX",
                 };
                 self.push(ZLine::new(op).a(v).b(pos));
             }

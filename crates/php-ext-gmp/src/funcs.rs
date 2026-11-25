@@ -48,6 +48,17 @@ fn pair(vm: &mut Vm, func: &str, r: Result<(Mpz, Mpz), GmpError>) -> VmResult<Va
     Ok(Value::Array(ZArray::from_values([x, y])))
 }
 
+/// `Z_PARAM_LONG` of the arguments in `range`, after the handler has
+/// converted the GMP numbers before them: their parameters are
+/// `@unchecked int` so that, as in `ZEND_PARSE_PARAMETERS_START`, a bad
+/// number throws before a later argument is coerced (or deprecated).
+fn zpp_ints(vm: &mut Vm, a: &mut Args, range: std::ops::Range<usize>) -> VmResult<()> {
+    for n in range {
+        vm.coerce_unchecked_arg(a, n)?;
+    }
+    Ok(())
+}
+
 /// An `int` argument with a stub default.
 fn int_or(a: &Args, n: usize, default: i64) -> i64 {
     if a.has(n) {
@@ -87,6 +98,7 @@ fn gmp_import(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = num_arg(vm, a, 0, "gmp_export")?;
+    zpp_ints(vm, a, 1..3)?;
     let r = gmp::gmp_export(
         &n,
         int_or(a, 1, 1),
@@ -98,6 +110,7 @@ fn gmp_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_strval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = num_arg(vm, a, 0, "gmp_strval")?;
+    zpp_ints(vm, a, 1..2)?;
     let r = gmp::gmp_strval(&n, int_or(a, 1, 10));
     lift(vm, "gmp_strval", r).map(Value::from)
 }
@@ -204,12 +217,13 @@ pub(crate) fn pow_bits(x: &Mpz, e: u64) -> u128 {
 
 fn div_with(
     vm: &mut Vm,
-    a: &Args,
+    a: &mut Args,
     func: &str,
     f: fn(&Mpz, &Mpz, i64) -> Result<Mpz, GmpError>,
 ) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, func)?;
     let y = num_arg(vm, a, 1, func)?;
+    zpp_ints(vm, a, 2..3)?;
     let r = f(&x, &y, int_or(a, 2, gmp::GMP_ROUND_ZERO));
     gmp_result(vm, func, r)
 }
@@ -230,6 +244,7 @@ fn gmp_div_qr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let func = "gmp_div_qr";
     let x = num_arg(vm, a, 0, func)?;
     let y = num_arg(vm, a, 1, func)?;
+    zpp_ints(vm, a, 2..3)?;
     let r = gmp::gmp_div_qr(&x, &y, int_or(a, 2, gmp::GMP_ROUND_ZERO));
     pair(vm, func, r)
 }
@@ -241,16 +256,19 @@ fn gmp_sqrtrem(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_root(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_root")?;
+    zpp_ints(vm, a, 1..2)?;
     gmp_result(vm, "gmp_root", gmp::gmp_root(&x, a.int(1)))
 }
 
 fn gmp_rootrem(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_rootrem")?;
+    zpp_ints(vm, a, 1..2)?;
     pair(vm, "gmp_rootrem", gmp::gmp_rootrem(&x, a.int(1)))
 }
 
 fn gmp_pow(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_pow")?;
+    zpp_ints(vm, a, 1..2)?;
     if let Ok(e) = u64::try_from(a.int(1)) {
         check_bits(vm, pow_bits(&x, e))?;
     }
@@ -259,6 +277,7 @@ fn gmp_pow(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_binomial(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_binomial")?;
+    zpp_ints(vm, a, 1..2)?;
     if let Ok(k) = u64::try_from(a.int(1)) {
         // C(n, k) < n^k.
         let k = u128::from(k.min(x.to_u64().map_or(k, |n| n.saturating_sub(k)).max(1)));
@@ -289,6 +308,7 @@ fn gmp_powm_sec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_prob_prime(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_prob_prime")?;
+    zpp_ints(vm, a, 1..2)?;
     Ok(Value::Int(gmp::gmp_prob_prime(&x, int_or(a, 1, 10))))
 }
 
@@ -380,16 +400,19 @@ fn gmp_clrbit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_testbit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_testbit")?;
+    zpp_ints(vm, a, 1..2)?;
     lift(vm, "gmp_testbit", gmp::gmp_testbit(&x, a.int(1))).map(Value::Bool)
 }
 
 fn gmp_scan0(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_scan0")?;
+    zpp_ints(vm, a, 1..2)?;
     lift(vm, "gmp_scan0", gmp::gmp_scan0(&x, a.int(1))).map(Value::Int)
 }
 
 fn gmp_scan1(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_scan1")?;
+    zpp_ints(vm, a, 1..2)?;
     lift(vm, "gmp_scan1", gmp::gmp_scan1(&x, a.int(1))).map(Value::Int)
 }
 
@@ -405,143 +428,143 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_import),
     ),
     (
-        "gmp_export(mixed $num, int $word_size = 1, int $flags = GMP_MSW_FIRST | GMP_NATIVE_ENDIAN): string",
+        "gmp_export(@unchecked GMP|int|string $num, @unchecked int $word_size = 1, @unchecked int $flags = GMP_MSW_FIRST | GMP_NATIVE_ENDIAN): string",
         uncounted!(gmp_export),
     ),
     (
-        "gmp_intval(mixed $num): int",
+        "gmp_intval(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_intval),
     ),
     (
-        "gmp_strval(mixed $num, int $base = 10): string",
+        "gmp_strval(@unchecked GMP|int|string $num, @unchecked int $base = 10): string",
         uncounted!(gmp_strval),
     ),
     (
-        "gmp_add(mixed $num1, mixed $num2): GMP",
+        "gmp_add(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_add),
     ),
     (
-        "gmp_sub(mixed $num1, mixed $num2): GMP",
+        "gmp_sub(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_sub),
     ),
     (
-        "gmp_mul(mixed $num1, mixed $num2): GMP",
+        "gmp_mul(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_mul),
     ),
     (
-        "gmp_div_qr(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): array",
+        "gmp_div_qr(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, @unchecked int $rounding_mode = GMP_ROUND_ZERO): array",
         uncounted!(gmp_div_qr),
     ),
     (
-        "gmp_div_q(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div_q(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, @unchecked int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div_q),
     ),
     (
-        "gmp_div_r(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div_r(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, @unchecked int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div_r),
     ),
     (
-        "gmp_div(mixed $num1, mixed $num2, int $rounding_mode = GMP_ROUND_ZERO): GMP",
+        "gmp_div(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2, @unchecked int $rounding_mode = GMP_ROUND_ZERO): GMP",
         uncounted!(gmp_div),
     ),
     (
-        "gmp_mod(mixed $num1, mixed $num2): GMP",
+        "gmp_mod(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_mod),
     ),
     (
-        "gmp_divexact(mixed $num1, mixed $num2): GMP",
+        "gmp_divexact(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_divexact),
     ),
     (
-        "gmp_neg(mixed $num): GMP",
+        "gmp_neg(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_neg),
     ),
     (
-        "gmp_abs(mixed $num): GMP",
+        "gmp_abs(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_abs),
     ),
     (
-        "gmp_fact(mixed $num): GMP",
+        "gmp_fact(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_fact),
     ),
     (
-        "gmp_sqrt(mixed $num): GMP",
+        "gmp_sqrt(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_sqrt),
     ),
     (
-        "gmp_sqrtrem(mixed $num): array",
+        "gmp_sqrtrem(@unchecked GMP|int|string $num): array",
         uncounted!(gmp_sqrtrem),
     ),
     (
-        "gmp_root(mixed $num, int $nth): GMP",
+        "gmp_root(@unchecked GMP|int|string $num, @unchecked int $nth): GMP",
         uncounted!(gmp_root),
     ),
     (
-        "gmp_rootrem(mixed $num, int $nth): array",
+        "gmp_rootrem(@unchecked GMP|int|string $num, @unchecked int $nth): array",
         uncounted!(gmp_rootrem),
     ),
     (
-        "gmp_pow(mixed $num, int $exponent): GMP",
+        "gmp_pow(@unchecked GMP|int|string $num, @unchecked int $exponent): GMP",
         uncounted!(gmp_pow),
     ),
     (
-        "gmp_powm(mixed $num, mixed $exponent, mixed $modulus): GMP",
+        "gmp_powm(@unchecked GMP|int|string $num, @unchecked GMP|int|string $exponent, @unchecked GMP|int|string $modulus): GMP",
         uncounted!(gmp_powm),
     ),
     (
-        "gmp_powm_sec(mixed $num, mixed $exponent, mixed $modulus): GMP",
+        "gmp_powm_sec(@unchecked GMP|int|string $num, @unchecked GMP|int|string $exponent, @unchecked GMP|int|string $modulus): GMP",
         uncounted!(gmp_powm_sec),
     ),
     (
-        "gmp_perfect_square(mixed $num): bool",
+        "gmp_perfect_square(@unchecked GMP|int|string $num): bool",
         uncounted!(gmp_perfect_square),
     ),
     (
-        "gmp_perfect_power(mixed $num): bool",
+        "gmp_perfect_power(@unchecked GMP|int|string $num): bool",
         uncounted!(gmp_perfect_power),
     ),
     (
-        "gmp_prob_prime(mixed $num, int $repetitions = 10): int",
+        "gmp_prob_prime(@unchecked GMP|int|string $num, @unchecked int $repetitions = 10): int",
         uncounted!(gmp_prob_prime),
     ),
     (
-        "gmp_gcd(mixed $num1, mixed $num2): GMP",
+        "gmp_gcd(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_gcd),
     ),
     (
-        "gmp_gcdext(mixed $num1, mixed $num2): array",
+        "gmp_gcdext(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): array",
         uncounted!(gmp_gcdext),
     ),
     (
-        "gmp_lcm(mixed $num1, mixed $num2): GMP",
+        "gmp_lcm(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_lcm),
     ),
     (
-        "gmp_invert(mixed $num1, mixed $num2): GMP|false",
+        "gmp_invert(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP|false",
         uncounted!(gmp_invert),
     ),
     (
-        "gmp_jacobi(mixed $num1, mixed $num2): int",
+        "gmp_jacobi(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_jacobi),
     ),
     (
-        "gmp_legendre(mixed $num1, mixed $num2): int",
+        "gmp_legendre(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_legendre),
     ),
     (
-        "gmp_kronecker(mixed $num1, mixed $num2): int",
+        "gmp_kronecker(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_kronecker),
     ),
     (
-        "gmp_cmp(mixed $num1, mixed $num2): int",
+        "gmp_cmp(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_cmp),
     ),
     (
-        "gmp_sign(mixed $num): int",
+        "gmp_sign(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_sign),
     ),
     (
-        "gmp_random_seed(mixed $seed): void",
+        "gmp_random_seed(@unchecked GMP|int|string $seed): void",
         uncounted!(gmp_random_seed),
     ),
     (
@@ -549,23 +572,23 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_random_bits),
     ),
     (
-        "gmp_random_range(mixed $min, mixed $max): GMP",
+        "gmp_random_range(@unchecked GMP|int|string $min, @unchecked GMP|int|string $max): GMP",
         uncounted!(gmp_random_range),
     ),
     (
-        "gmp_and(mixed $num1, mixed $num2): GMP",
+        "gmp_and(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_and),
     ),
     (
-        "gmp_or(mixed $num1, mixed $num2): GMP",
+        "gmp_or(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_or),
     ),
     (
-        "gmp_com(mixed $num): GMP",
+        "gmp_com(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_com),
     ),
     (
-        "gmp_xor(mixed $num1, mixed $num2): GMP",
+        "gmp_xor(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): GMP",
         uncounted!(gmp_xor),
     ),
     (
@@ -577,35 +600,35 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
         uncounted!(gmp_clrbit),
     ),
     (
-        "gmp_testbit(mixed $num, int $index): bool",
+        "gmp_testbit(@unchecked GMP|int|string $num, @unchecked int $index): bool",
         uncounted!(gmp_testbit),
     ),
     (
-        "gmp_scan0(mixed $num1, int $start): int",
+        "gmp_scan0(@unchecked GMP|int|string $num1, @unchecked int $start): int",
         uncounted!(gmp_scan0),
     ),
     (
-        "gmp_scan1(mixed $num1, int $start): int",
+        "gmp_scan1(@unchecked GMP|int|string $num1, @unchecked int $start): int",
         uncounted!(gmp_scan1),
     ),
     (
-        "gmp_popcount(mixed $num): int",
+        "gmp_popcount(@unchecked GMP|int|string $num): int",
         uncounted!(gmp_popcount),
     ),
     (
-        "gmp_hamdist(mixed $num1, mixed $num2): int",
+        "gmp_hamdist(@unchecked GMP|int|string $num1, @unchecked GMP|int|string $num2): int",
         uncounted!(gmp_hamdist),
     ),
     (
-        "gmp_nextprime(mixed $num): GMP",
+        "gmp_nextprime(@unchecked GMP|int|string $num): GMP",
         uncounted!(gmp_nextprime),
     ),
     (
-        "gmp_prevprime(mixed $num, &$definitely_prime = null): GMP",
+        "gmp_prevprime(@unchecked GMP|int|string $num, &$definitely_prime = null): GMP",
         uncounted!(gmp_prevprime),
     ),
     (
-        "gmp_binomial(mixed $n, int $k): GMP",
+        "gmp_binomial(@unchecked GMP|int|string $n, @unchecked int $k): GMP",
         uncounted!(gmp_binomial),
     ),
 ];

@@ -212,6 +212,8 @@ fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn getopt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let short = a.str(0);
     let long: Option<ZArray> = a.has(1).then(|| a.array(1));
+    // `zend_is_auto_global()`: a still-armed JIT `$_SERVER` is created.
+    vm.is_auto_global(b"_SERVER");
     let server_argv = match global(vm, b"_SERVER") {
         Some(Value::Array(s)) => s.get_str(b"argv").map(Value::deref),
         _ => None,

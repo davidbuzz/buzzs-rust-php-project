@@ -245,13 +245,6 @@ jobs:
     name: OPCACHE_VARIATION
     runs-on: ubuntu-${{ fromJson(inputs.branch).config.ubuntu_version }}
     timeout-minutes: 240
-    # Until phpt-runner has run-tests.php's --file-cache-prime and --file-cache-use
-    # (CI_PLAN.md), these are their settings spelled out: the cache directory
-    # run-tests.php uses, opcache.record_warnings=1, opcache.jit=0, and when using,
-    # opcache.validate_timestamps=0; ext/opcache's own tests are left out, as
-    # run-tests.php leaves them out in this mode.
-    env:
-      FILE_CACHE: /tmp/php-run-tests-file-cache
     steps:
       - name: git checkout
         uses: actions/checkout@v4
@@ -275,64 +268,39 @@ jobs:
         uses: ./.github/actions/setup-caddy
       - name: Setup
         uses: ./.github/actions/setup-x64
-      - name: The tests without ext/opcache
-        run: |
-          paths=$(ls -d modules/php-src/Zend modules/php-src/tests modules/php-src/sapi modules/php-src/ext/*/ | grep -v '/ext/opcache/$' | tr '\n' ' ')
-          echo "TEST_PATHS=$paths" >> "$GITHUB_ENV"
-      # run-tests.php --file-cache-prime starts from an empty cache directory (opcache
-      # refuses a file_cache directory that does not exist).
-      - name: Empty the file cache
-        run: rm -rf "$FILE_CACHE" && mkdir -p "$FILE_CACHE"
       - name: Test File Cache (prime shm)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-prime-shm
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
+            --file-cache-prime
       - name: Test File Cache (prime shm, use shm)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-use-shm
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
       - name: Test File Cache (prime shm, use file)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-use-file
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
             -d opcache.file_cache_only=1
-      # run-tests.php --file-cache-prime starts from an empty cache directory.
-      - name: Empty the file cache
-        run: rm -rf "$FILE_CACHE" && mkdir -p "$FILE_CACHE"
       - name: Test File Cache Only (prime)
         continue-on-error: true
         uses: ./.github/actions/test-linux
         with:
           name: file-cache-only-prime
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
+            --file-cache-prime
             -d opcache.file_cache_only=1
       - name: Test File Cache Only (use)
         continue-on-error: true
@@ -340,12 +308,8 @@ jobs:
         with:
           name: file-cache-only-use
           enableOpcache: true
-          testPaths: ${{ env.TEST_PATHS }}
           runTestsParameters: >-
-            -d opcache.file_cache=/tmp/php-run-tests-file-cache
-            -d opcache.record_warnings=1
-            -d opcache.jit=0
-            -d opcache.validate_timestamps=0
+            --file-cache-use
             -d opcache.file_cache_only=1
       - name: Keep the reports
         if: ${{ always() }}
@@ -362,8 +326,13 @@ jobs:
     # Upstream also sets ASAN_OPTIONS, UBSAN_OPTIONS, USE_ZEND_ALLOC=0 and
     # USE_TRACKED_ALLOC=1 for its sanitizer builds; we have none. Our `php` reads its
     # ini files from PHP_INI_SCAN_DIR (upstream: --with-config-file-scan-dir).
+    # Ours: each project's suite runs under `timeout -s KILL $PROJECT_TIMEOUT`, so a
+    # hang (amphp/dns's suite never finished, 24 and 25 Nov) is killed, exits 137 and
+    # counts as a crash by upstream's "exit status above 128" rule, instead of using up
+    # the job's 6 hours and leaving the other projects unrun.
     env:
       PHP_INI_SCAN_DIR: /etc/php.d
+      PROJECT_TIMEOUT: 45m
     steps:
       - name: git checkout
         uses: actions/checkout@v4
@@ -429,7 +398,7 @@ jobs:
             git rev-parse HEAD
             php /usr/bin/composer install --no-progress --ignore-platform-req=php+
             EXIT_CODE=0
-            vendor/bin/phpunit || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
               X=1;
@@ -447,7 +416,7 @@ jobs:
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
           # Hack to disable a test that hangs
           php -r '$c = file_get_contents("tests/Filesystem/FilesystemTest.php"); $c = str_replace("public function testSharedGet()", "#[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testSharedGet()", $c); file_put_contents("tests/Filesystem/FilesystemTest.php", $c);'
-          php vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -463,7 +432,7 @@ jobs:
             git rev-parse HEAD
             php /usr/bin/composer install --no-progress --ignore-platform-req=php+
             EXIT_CODE=0
-            vendor/bin/phpunit || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             # (Upstream has `$[EXIT_CODE:-0}` here, a typo for the expansion below.)
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
@@ -482,7 +451,7 @@ jobs:
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
           # Broken since https://github.com/php/php-src/pull/14452.
           php -r '$c = file_get_contents("test/Driver/StreamSelectDriverTest.php"); $c = str_replace("public function testTooLargeFileDescriptorSet(): void", "/** @group skip */\n    #[\\PHPUnit\\Framework\\Attributes\\Group('"'"'skip'"'"')]\n    public function testTooLargeFileDescriptorSet(): void", $c); file_put_contents("test/Driver/StreamSelectDriverTest.php", $c);'
-          vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" vendor/bin/phpunit --exclude-group skip || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -507,7 +476,7 @@ jobs:
           for component in $(find src/Symfony -mindepth 2 -type f -name phpunit.xml.dist -printf '%h\n'); do
             echo "::group::$component"
             EXIT_CODE=0
-            php ./phpunit $component --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group transient --exclude-group skip || EXIT_CODE=$?
+            timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit $component --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group transient --exclude-group skip || EXIT_CODE=$?
             echo -e "\n::endgroup::"
             if [ ${EXIT_CODE:-0} -gt 128 ]; then
               X=1;
@@ -522,7 +491,7 @@ jobs:
           cd phpunit
           git rev-parse HEAD
           php /usr/bin/composer install --no-progress --ignore-platform-req=php+
-          php ./phpunit || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php ./phpunit || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi
@@ -534,7 +503,7 @@ jobs:
           cd symfony_demo
           git rev-parse HEAD
           sed -i 's/PHP_SAPI/"cli-server"/g' var/cache/dev/App_KernelDevDebugContainer.preload.php
-          php -d opcache.preload=var/cache/dev/App_KernelDevDebugContainer.preload.php public/index.php
+          timeout -s KILL "$PROJECT_TIMEOUT" php -d opcache.preload=var/cache/dev/App_KernelDevDebugContainer.preload.php public/index.php
       - name: Test Wordpress
         if: ${{ !cancelled() }}
         run: |
@@ -546,7 +515,7 @@ jobs:
           sed -i 's/youremptytestdbnamehere/test/g' wp-tests-config.php
           sed -i 's/yourusernamehere/root/g' wp-tests-config.php
           sed -i 's/yourpasswordhere/root/g' wp-tests-config.php
-          php vendor/bin/phpunit || EXIT_CODE=$?
+          timeout -s KILL "$PROJECT_TIMEOUT" php vendor/bin/phpunit || EXIT_CODE=$?
           if [ ${EXIT_CODE:-0} -gt 128 ]; then
             exit 1
           fi

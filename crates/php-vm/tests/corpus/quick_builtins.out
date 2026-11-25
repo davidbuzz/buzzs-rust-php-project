@@ -1,0 +1,948 @@
+4: [4,4.0,4.0,2.0,54.598150033144236,1.3862943611198906,0.6020599913279624,-0.7568024953079282,-0.6536436208636119,1.1578212823495775,0,2.0947125472611012,false,true,false,0.06981317007977318,229.1831180523293,true,"4","\u0004",52,53.598150033144236,1.6094379124341003,4.0,4.0,0.0,1,1.0,0,16,2.0,1.3258176636680326,5.656854249492381,4,2,"10",4]
+-4.5: E[8192] Implicit conversion from float -4.5 to int loses precision @23
+E[8192] Implicit conversion from float -4.5 to int loses precision @24
+E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float -4.5 to int loses precision @29
+[4.5,-4.0,-5.0,0,0.011108996538242306,0,0,0.977530117665097,-0.2107957994307797,-4.637332054551185,0,-2.209347708615334,false,true,false,-0.07853981633974483,-257.8310078088704,true,"fffffffffffffffc",null,45,-0.9888910034617577,0,-5.0,-4.5,-0.0,-1,-1.5,0,20.25,0,-1.3521273809209546,6.020797289396148,2,-4.5,"10",-4.5]
+'9': [9,9.0,9.0,3.0,8103.083927575384,2.1972245773362196,0.9542425094393249,0.4121184852417566,-0.9111302618846769,-0.45231565944180985,0,2.8934439858858716,false,true,false,0.15707963267948966,515.6620156177408,true,"9","\t",57,8102.083927575384,2.302585092994046,9.0,9.0,10.0,3,0.0,0,81,3.0,1.460139105621001,9.848857801796104,"9",2,"10","9"]
+'1e2': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[100.0,100.0,100.0,10.0,2.6881171418161356e+43,4.605170185988092,2.0,-0.5063656411097588,0.8623188722876839,-0.5872139151569291,0,5.298342365610589,false,true,false,1.7453292519943295,5729.577951308232,true,"64","d",49,2.6881171418161356e+43,4.61512051684126,100.0,100.0,100.0,33,1.0,0,10000.0,10.0,1.5607966601082315,100.07996802557443,"1e2",2,"1e2","1e2"]
+' 16': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",32,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642," 16",2," 16"," 16"]
+'16 ': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",49,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642,"16 ",2,"16 ","16 "]
+'abc': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",97,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given","abc",2,"abc","abc"]
+true: [1,1.0,1.0,1.0,2.718281828459045,0.0,0.0,0.8414709848078965,0.5403023058681398,1.5574077246549023,0.0,0.881373587019543,false,true,false,0.017453292519943295,57.29577951308232,false,"1","\u0001",49,1.718281828459045,0.6931471805599453,1.0,1.0,0.0,0,1.0,0,1,1.0,0.7853981633974483,4.123105625617661,true,2,true,true]
+NULL: E[8192] abs(): Passing null to parameter #1 ($num) of type int|float is deprecated @5
+E[8192] ceil(): Passing null to parameter #1 ($num) of type int|float is deprecated @6
+E[8192] floor(): Passing null to parameter #1 ($num) of type int|float is deprecated @7
+E[8192] sqrt(): Passing null to parameter #1 ($num) of type float is deprecated @8
+E[8192] exp(): Passing null to parameter #1 ($num) of type float is deprecated @9
+E[8192] log(): Passing null to parameter #1 ($num) of type float is deprecated @10
+E[8192] log10(): Passing null to parameter #1 ($num) of type float is deprecated @11
+E[8192] sin(): Passing null to parameter #1 ($num) of type float is deprecated @12
+E[8192] cos(): Passing null to parameter #1 ($num) of type float is deprecated @13
+E[8192] tan(): Passing null to parameter #1 ($num) of type float is deprecated @14
+E[8192] acos(): Passing null to parameter #1 ($num) of type float is deprecated @15
+E[8192] asinh(): Passing null to parameter #1 ($num) of type float is deprecated @16
+E[8192] is_nan(): Passing null to parameter #1 ($num) of type float is deprecated @17
+E[8192] is_finite(): Passing null to parameter #1 ($num) of type float is deprecated @18
+E[8192] is_infinite(): Passing null to parameter #1 ($num) of type float is deprecated @19
+E[8192] deg2rad(): Passing null to parameter #1 ($num) of type float is deprecated @20
+E[8192] rad2deg(): Passing null to parameter #1 ($num) of type float is deprecated @21
+E[8192] dechex(): Passing null to parameter #1 ($num) of type int is deprecated @23
+E[8192] chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated @24
+E[8192] ord(): Passing null to parameter #1 ($character) of type string is deprecated @25
+E[8192] ord(): Providing an empty string is deprecated @25
+E[8192] expm1(): Passing null to parameter #1 ($num) of type float is deprecated @26
+E[8192] log1p(): Passing null to parameter #1 ($num) of type float is deprecated @27
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] intdiv(): Passing null to parameter #1 ($num1) of type int is deprecated @29
+E[8192] fmod(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] fdiv(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] atan2(): Passing null to parameter #1 ($y) of type float is deprecated @29
+E[8192] hypot(): Passing null to parameter #1 ($x) of type float is deprecated @29
+[0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,false,"0","\u0000",0,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,null,"10",null]
+0: [0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,true,"0","\u0000",48,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,0,"10",0]
+-0.0: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0.0,-0.0,-0.0,-0.0,1.0,0,0,-0.0,1.0,-0.0,1.5707963267948966,-0.0,false,true,false,-0.0,-0.0,true,"0","\u0000",45,-0.0,-0.0,-0.0,-0.0,-0.0,0,-0.0,0,0.0,0.0,-0.0,4.0,2,-0.0,"10",-0.0]
+-9223372036854775807-1: E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,0,0.0,0,0,-0.9999303766734422,0.011800076512800236,-84.73931296875567,0,-44.3614195558365,false,true,false,-1.6097821017949162e+17,-5.2846029059076024e+20,true,"8000000000000000","\u0000",45,-1.0,0,-9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,-3074457345618258602,-2.0,0,8.507059173023462e+37,0,-1.5707963267948966,9.223372036854776e+18,2,-9223372036854775808,"10",-9223372036854775808]
+2.5: E[8192] Implicit conversion from float 2.5 to int loses precision @23
+E[8192] Implicit conversion from float 2.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 2.5 to int loses precision @29
+[2.5,3.0,2.0,1.5811388300841898,12.182493960703473,0.9162907318741551,0.3979400086720376,0.5984721441039565,-0.8011436155469337,-0.7470222972386603,0,1.6472311463710958,false,true,false,0.04363323129985824,143.2394487827058,true,"2","\u0002",50,11.182493960703473,1.252762968495368,3.0,2.5,0.0,0,2.5,0,6.25,1.5811388300841898,1.1902899496825317,4.716990566028302,2.5,2,"10",2.5]
+NAN: E[2] unexpected NAN value was coerced to string @25
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,true,false,false,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",78,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",2,2,0,0]
+INF: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,false,false,true,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",73,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",0,2,0,0]
+'0x10': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",48,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given",2,"0x10","10","0x10"]
+3.5: E[8192] Implicit conversion from float 3.5 to int loses precision @23
+E[8192] Implicit conversion from float 3.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 3.5 to int loses precision @29
+[3.5,4.0,3.0,1.8708286933869707,33.11545195869231,1.252762968495368,0.5440680443502757,-0.35078322768961984,-0.9364566872907963,0.3745856401585947,0,1.9657204716496515,false,true,false,0.061086523819801536,200.53522829578816,true,"3","\u0003",51,32.11545195869231,1.5040773967762742,4.0,3.5,0.0,1,0.5,0,12.25,1.8708286933869707,1.2924966677897853,5.315072906367325,3.5,2,"10",3.5]
+4: [4,4.0,4.0,2.0,54.598150033144236,1.3862943611198906,0.6020599913279624,-0.7568024953079282,-0.6536436208636119,1.1578212823495775,0,2.0947125472611012,false,true,false,0.06981317007977318,229.1831180523293,true,"4","\u0004",52,53.598150033144236,1.6094379124341003,4.0,4.0,0.0,1,1.0,0,16,2.0,1.3258176636680326,5.656854249492381,4,2,"10",4]
+-4.5: E[8192] Implicit conversion from float -4.5 to int loses precision @23
+E[8192] Implicit conversion from float -4.5 to int loses precision @24
+E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float -4.5 to int loses precision @29
+[4.5,-4.0,-5.0,0,0.011108996538242306,0,0,0.977530117665097,-0.2107957994307797,-4.637332054551185,0,-2.209347708615334,false,true,false,-0.07853981633974483,-257.8310078088704,true,"fffffffffffffffc",null,45,-0.9888910034617577,0,-5.0,-4.5,-0.0,-1,-1.5,0,20.25,0,-1.3521273809209546,6.020797289396148,2,-4.5,"10",-4.5]
+'9': [9,9.0,9.0,3.0,8103.083927575384,2.1972245773362196,0.9542425094393249,0.4121184852417566,-0.9111302618846769,-0.45231565944180985,0,2.8934439858858716,false,true,false,0.15707963267948966,515.6620156177408,true,"9","\t",57,8102.083927575384,2.302585092994046,9.0,9.0,10.0,3,0.0,0,81,3.0,1.460139105621001,9.848857801796104,"9",2,"10","9"]
+'1e2': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[100.0,100.0,100.0,10.0,2.6881171418161356e+43,4.605170185988092,2.0,-0.5063656411097588,0.8623188722876839,-0.5872139151569291,0,5.298342365610589,false,true,false,1.7453292519943295,5729.577951308232,true,"64","d",49,2.6881171418161356e+43,4.61512051684126,100.0,100.0,100.0,33,1.0,0,10000.0,10.0,1.5607966601082315,100.07996802557443,"1e2",2,"1e2","1e2"]
+' 16': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",32,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642," 16",2," 16"," 16"]
+'16 ': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",49,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642,"16 ",2,"16 ","16 "]
+'abc': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",97,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given","abc",2,"abc","abc"]
+true: [1,1.0,1.0,1.0,2.718281828459045,0.0,0.0,0.8414709848078965,0.5403023058681398,1.5574077246549023,0.0,0.881373587019543,false,true,false,0.017453292519943295,57.29577951308232,false,"1","\u0001",49,1.718281828459045,0.6931471805599453,1.0,1.0,0.0,0,1.0,0,1,1.0,0.7853981633974483,4.123105625617661,true,2,true,true]
+NULL: E[8192] abs(): Passing null to parameter #1 ($num) of type int|float is deprecated @5
+E[8192] ceil(): Passing null to parameter #1 ($num) of type int|float is deprecated @6
+E[8192] floor(): Passing null to parameter #1 ($num) of type int|float is deprecated @7
+E[8192] sqrt(): Passing null to parameter #1 ($num) of type float is deprecated @8
+E[8192] exp(): Passing null to parameter #1 ($num) of type float is deprecated @9
+E[8192] log(): Passing null to parameter #1 ($num) of type float is deprecated @10
+E[8192] log10(): Passing null to parameter #1 ($num) of type float is deprecated @11
+E[8192] sin(): Passing null to parameter #1 ($num) of type float is deprecated @12
+E[8192] cos(): Passing null to parameter #1 ($num) of type float is deprecated @13
+E[8192] tan(): Passing null to parameter #1 ($num) of type float is deprecated @14
+E[8192] acos(): Passing null to parameter #1 ($num) of type float is deprecated @15
+E[8192] asinh(): Passing null to parameter #1 ($num) of type float is deprecated @16
+E[8192] is_nan(): Passing null to parameter #1 ($num) of type float is deprecated @17
+E[8192] is_finite(): Passing null to parameter #1 ($num) of type float is deprecated @18
+E[8192] is_infinite(): Passing null to parameter #1 ($num) of type float is deprecated @19
+E[8192] deg2rad(): Passing null to parameter #1 ($num) of type float is deprecated @20
+E[8192] rad2deg(): Passing null to parameter #1 ($num) of type float is deprecated @21
+E[8192] dechex(): Passing null to parameter #1 ($num) of type int is deprecated @23
+E[8192] chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated @24
+E[8192] ord(): Passing null to parameter #1 ($character) of type string is deprecated @25
+E[8192] ord(): Providing an empty string is deprecated @25
+E[8192] expm1(): Passing null to parameter #1 ($num) of type float is deprecated @26
+E[8192] log1p(): Passing null to parameter #1 ($num) of type float is deprecated @27
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] intdiv(): Passing null to parameter #1 ($num1) of type int is deprecated @29
+E[8192] fmod(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] fdiv(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] atan2(): Passing null to parameter #1 ($y) of type float is deprecated @29
+E[8192] hypot(): Passing null to parameter #1 ($x) of type float is deprecated @29
+[0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,false,"0","\u0000",0,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,null,"10",null]
+0: [0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,true,"0","\u0000",48,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,0,"10",0]
+-0.0: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0.0,-0.0,-0.0,-0.0,1.0,0,0,-0.0,1.0,-0.0,1.5707963267948966,-0.0,false,true,false,-0.0,-0.0,true,"0","\u0000",45,-0.0,-0.0,-0.0,-0.0,-0.0,0,-0.0,0,0.0,0.0,-0.0,4.0,2,-0.0,"10",-0.0]
+-9223372036854775807-1: E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,0,0.0,0,0,-0.9999303766734422,0.011800076512800236,-84.73931296875567,0,-44.3614195558365,false,true,false,-1.6097821017949162e+17,-5.2846029059076024e+20,true,"8000000000000000","\u0000",45,-1.0,0,-9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,-3074457345618258602,-2.0,0,8.507059173023462e+37,0,-1.5707963267948966,9.223372036854776e+18,2,-9223372036854775808,"10",-9223372036854775808]
+2.5: E[8192] Implicit conversion from float 2.5 to int loses precision @23
+E[8192] Implicit conversion from float 2.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 2.5 to int loses precision @29
+[2.5,3.0,2.0,1.5811388300841898,12.182493960703473,0.9162907318741551,0.3979400086720376,0.5984721441039565,-0.8011436155469337,-0.7470222972386603,0,1.6472311463710958,false,true,false,0.04363323129985824,143.2394487827058,true,"2","\u0002",50,11.182493960703473,1.252762968495368,3.0,2.5,0.0,0,2.5,0,6.25,1.5811388300841898,1.1902899496825317,4.716990566028302,2.5,2,"10",2.5]
+NAN: E[2] unexpected NAN value was coerced to string @25
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,true,false,false,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",78,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",2,2,0,0]
+INF: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,false,false,true,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",73,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",0,2,0,0]
+'0x10': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",48,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given",2,"0x10","10","0x10"]
+3.5: E[8192] Implicit conversion from float 3.5 to int loses precision @23
+E[8192] Implicit conversion from float 3.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 3.5 to int loses precision @29
+[3.5,4.0,3.0,1.8708286933869707,33.11545195869231,1.252762968495368,0.5440680443502757,-0.35078322768961984,-0.9364566872907963,0.3745856401585947,0,1.9657204716496515,false,true,false,0.061086523819801536,200.53522829578816,true,"3","\u0003",51,32.11545195869231,1.5040773967762742,4.0,3.5,0.0,1,0.5,0,12.25,1.8708286933869707,1.2924966677897853,5.315072906367325,3.5,2,"10",3.5]
+4: [4,4.0,4.0,2.0,54.598150033144236,1.3862943611198906,0.6020599913279624,-0.7568024953079282,-0.6536436208636119,1.1578212823495775,0,2.0947125472611012,false,true,false,0.06981317007977318,229.1831180523293,true,"4","\u0004",52,53.598150033144236,1.6094379124341003,4.0,4.0,0.0,1,1.0,0,16,2.0,1.3258176636680326,5.656854249492381,4,2,"10",4]
+-4.5: E[8192] Implicit conversion from float -4.5 to int loses precision @23
+E[8192] Implicit conversion from float -4.5 to int loses precision @24
+E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float -4.5 to int loses precision @29
+[4.5,-4.0,-5.0,0,0.011108996538242306,0,0,0.977530117665097,-0.2107957994307797,-4.637332054551185,0,-2.209347708615334,false,true,false,-0.07853981633974483,-257.8310078088704,true,"fffffffffffffffc",null,45,-0.9888910034617577,0,-5.0,-4.5,-0.0,-1,-1.5,0,20.25,0,-1.3521273809209546,6.020797289396148,2,-4.5,"10",-4.5]
+'9': [9,9.0,9.0,3.0,8103.083927575384,2.1972245773362196,0.9542425094393249,0.4121184852417566,-0.9111302618846769,-0.45231565944180985,0,2.8934439858858716,false,true,false,0.15707963267948966,515.6620156177408,true,"9","\t",57,8102.083927575384,2.302585092994046,9.0,9.0,10.0,3,0.0,0,81,3.0,1.460139105621001,9.848857801796104,"9",2,"10","9"]
+'1e2': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[100.0,100.0,100.0,10.0,2.6881171418161356e+43,4.605170185988092,2.0,-0.5063656411097588,0.8623188722876839,-0.5872139151569291,0,5.298342365610589,false,true,false,1.7453292519943295,5729.577951308232,true,"64","d",49,2.6881171418161356e+43,4.61512051684126,100.0,100.0,100.0,33,1.0,0,10000.0,10.0,1.5607966601082315,100.07996802557443,"1e2",2,"1e2","1e2"]
+' 16': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",32,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642," 16",2," 16"," 16"]
+'16 ': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[16,16.0,16.0,4.0,8886110.520507872,2.772588722239781,1.2041199826559248,-0.2879033166650653,-0.9576594803233847,0.3006322420239034,0,3.466711037884725,false,true,false,0.2792526803190927,916.7324722093172,true,"10","\u0010",49,8886109.520507872,2.833213344056216,16.0,16.0,20.0,5,1.0,0,256,4.0,1.5083775167989393,16.492422502470642,"16 ",2,"16 ","16 "]
+'abc': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",97,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given","abc",2,"abc","abc"]
+true: [1,1.0,1.0,1.0,2.718281828459045,0.0,0.0,0.8414709848078965,0.5403023058681398,1.5574077246549023,0.0,0.881373587019543,false,true,false,0.017453292519943295,57.29577951308232,false,"1","\u0001",49,1.718281828459045,0.6931471805599453,1.0,1.0,0.0,0,1.0,0,1,1.0,0.7853981633974483,4.123105625617661,true,2,true,true]
+NULL: E[8192] abs(): Passing null to parameter #1 ($num) of type int|float is deprecated @5
+E[8192] ceil(): Passing null to parameter #1 ($num) of type int|float is deprecated @6
+E[8192] floor(): Passing null to parameter #1 ($num) of type int|float is deprecated @7
+E[8192] sqrt(): Passing null to parameter #1 ($num) of type float is deprecated @8
+E[8192] exp(): Passing null to parameter #1 ($num) of type float is deprecated @9
+E[8192] log(): Passing null to parameter #1 ($num) of type float is deprecated @10
+E[8192] log10(): Passing null to parameter #1 ($num) of type float is deprecated @11
+E[8192] sin(): Passing null to parameter #1 ($num) of type float is deprecated @12
+E[8192] cos(): Passing null to parameter #1 ($num) of type float is deprecated @13
+E[8192] tan(): Passing null to parameter #1 ($num) of type float is deprecated @14
+E[8192] acos(): Passing null to parameter #1 ($num) of type float is deprecated @15
+E[8192] asinh(): Passing null to parameter #1 ($num) of type float is deprecated @16
+E[8192] is_nan(): Passing null to parameter #1 ($num) of type float is deprecated @17
+E[8192] is_finite(): Passing null to parameter #1 ($num) of type float is deprecated @18
+E[8192] is_infinite(): Passing null to parameter #1 ($num) of type float is deprecated @19
+E[8192] deg2rad(): Passing null to parameter #1 ($num) of type float is deprecated @20
+E[8192] rad2deg(): Passing null to parameter #1 ($num) of type float is deprecated @21
+E[8192] dechex(): Passing null to parameter #1 ($num) of type int is deprecated @23
+E[8192] chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated @24
+E[8192] ord(): Passing null to parameter #1 ($character) of type string is deprecated @25
+E[8192] ord(): Providing an empty string is deprecated @25
+E[8192] expm1(): Passing null to parameter #1 ($num) of type float is deprecated @26
+E[8192] log1p(): Passing null to parameter #1 ($num) of type float is deprecated @27
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] round(): Passing null to parameter #1 ($num) of type int|float is deprecated @28
+E[8192] intdiv(): Passing null to parameter #1 ($num1) of type int is deprecated @29
+E[8192] fmod(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] fdiv(): Passing null to parameter #1 ($num1) of type float is deprecated @29
+E[8192] atan2(): Passing null to parameter #1 ($y) of type float is deprecated @29
+E[8192] hypot(): Passing null to parameter #1 ($x) of type float is deprecated @29
+[0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,false,"0","\u0000",0,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,null,"10",null]
+0: [0,0.0,0.0,0.0,1.0,0,0,0.0,1.0,0.0,1.5707963267948966,0.0,false,true,false,0.0,0.0,true,"0","\u0000",48,0.0,0.0,0.0,0.0,0.0,0,0.0,0,0,0.0,0.0,4.0,2,0,"10",0]
+-0.0: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0.0,-0.0,-0.0,-0.0,1.0,0,0,-0.0,1.0,-0.0,1.5707963267948966,-0.0,false,true,false,-0.0,-0.0,true,"0","\u0000",45,-0.0,-0.0,-0.0,-0.0,-0.0,0,-0.0,0,0.0,0.0,-0.0,4.0,2,-0.0,"10",-0.0]
+-9223372036854775807-1: E[8192] chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,0,0.0,0,0,-0.9999303766734422,0.011800076512800236,-84.73931296875567,0,-44.3614195558365,false,true,false,-1.6097821017949162e+17,-5.2846029059076024e+20,true,"8000000000000000","\u0000",45,-1.0,0,-9.223372036854776e+18,-9.223372036854776e+18,-9.223372036854776e+18,-3074457345618258602,-2.0,0,8.507059173023462e+37,0,-1.5707963267948966,9.223372036854776e+18,2,-9223372036854775808,"10",-9223372036854775808]
+2.5: E[8192] Implicit conversion from float 2.5 to int loses precision @23
+E[8192] Implicit conversion from float 2.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 2.5 to int loses precision @29
+[2.5,3.0,2.0,1.5811388300841898,12.182493960703473,0.9162907318741551,0.3979400086720376,0.5984721441039565,-0.8011436155469337,-0.7470222972386603,0,1.6472311463710958,false,true,false,0.04363323129985824,143.2394487827058,true,"2","\u0002",50,11.182493960703473,1.252762968495368,3.0,2.5,0.0,0,2.5,0,6.25,1.5811388300841898,1.1902899496825317,4.716990566028302,2.5,2,"10",2.5]
+NAN: E[2] unexpected NAN value was coerced to string @25
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,true,false,false,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",78,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",2,2,0,0]
+INF: E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+[0,0,0,0,0,0,0,0,0,0,0,0,false,false,true,0,0,true,"TypeError: dechex(): Argument #1 ($num) must be of type int, float given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, float given",73,0,0,0,0,0,"TypeError: intdiv(): Argument #1 ($num1) must be of type int, float given",0,2,0,0]
+'0x10': E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+["TypeError: abs(): Argument #1 ($num) must be of type int|float, string given","TypeError: ceil(): Argument #1 ($num) must be of type int|float, string given","TypeError: floor(): Argument #1 ($num) must be of type int|float, string given","TypeError: sqrt(): Argument #1 ($num) must be of type float, string given","TypeError: exp(): Argument #1 ($num) must be of type float, string given","TypeError: log(): Argument #1 ($num) must be of type float, string given","TypeError: log10(): Argument #1 ($num) must be of type float, string given","TypeError: sin(): Argument #1 ($num) must be of type float, string given","TypeError: cos(): Argument #1 ($num) must be of type float, string given","TypeError: tan(): Argument #1 ($num) must be of type float, string given","TypeError: acos(): Argument #1 ($num) must be of type float, string given","TypeError: asinh(): Argument #1 ($num) must be of type float, string given","TypeError: is_nan(): Argument #1 ($num) must be of type float, string given","TypeError: is_finite(): Argument #1 ($num) must be of type float, string given","TypeError: is_infinite(): Argument #1 ($num) must be of type float, string given","TypeError: deg2rad(): Argument #1 ($num) must be of type float, string given","TypeError: rad2deg(): Argument #1 ($num) must be of type float, string given",false,"TypeError: dechex(): Argument #1 ($num) must be of type int, string given","TypeError: chr(): Argument #1 ($codepoint) must be of type int, string given",48,"TypeError: expm1(): Argument #1 ($num) must be of type float, string given","TypeError: log1p(): Argument #1 ($num) must be of type float, string given","round(): Argument #1 ($num) must be of type int|float, string given","TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given",2,"0x10","10","0x10"]
+3.5: E[8192] Implicit conversion from float 3.5 to int loses precision @23
+E[8192] Implicit conversion from float 3.5 to int loses precision @24
+E[8192] ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @25
+E[8192] Implicit conversion from float 3.5 to int loses precision @29
+[3.5,4.0,3.0,1.8708286933869707,33.11545195869231,1.252762968495368,0.5440680443502757,-0.35078322768961984,-0.9364566872907963,0.3745856401585947,0,1.9657204716496515,false,true,false,0.061086523819801536,200.53522829578816,true,"3","\u0003",51,32.11545195869231,1.5040773967762742,4.0,3.5,0.0,1,0.5,0,12.25,1.8708286933869707,1.2924966677897853,5.315072906367325,3.5,2,"10",3.5]
+array (
+  0 => 'abc',
+  1 => '  abc  ',
+  2 => '  abc  ',
+  3 => 'abc  ',
+  4 => '  abc',
+  5 => 2,
+  6 => false,
+  7 => 'bc  ',
+  8 => '  a',
+  9 => ' abc  ',
+  10 => ' ',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => true,
+  15 => false,
+  16 => '  abc  ',
+  17 => '  ABC  ',
+  18 => '  xyc  ',
+  19 => '  Zc  ',
+  20 => '  ccc  ',
+  21 => ' - -a-b-c- - -x',
+  22 => '/p/  abc  ',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '  a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'abc',
+  1 => '  abc  ',
+  2 => '  abc  ',
+  3 => 'abc  ',
+  4 => '  abc',
+  5 => 2,
+  6 => false,
+  7 => 'bc  ',
+  8 => '  a',
+  9 => ' abc  ',
+  10 => ' ',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => true,
+  15 => false,
+  16 => '  abc  ',
+  17 => '  ABC  ',
+  18 => '  xyc  ',
+  19 => '  Zc  ',
+  20 => '  ccc  ',
+  21 => ' - -a-b-c- - -x',
+  22 => '/p/  abc  ',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '  a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'abc',
+  1 => '  abc  ',
+  2 => '  abc  ',
+  3 => 'abc  ',
+  4 => '  abc',
+  5 => 2,
+  6 => false,
+  7 => 'bc  ',
+  8 => '  a',
+  9 => ' abc  ',
+  10 => ' ',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => true,
+  15 => false,
+  16 => '  abc  ',
+  17 => '  ABC  ',
+  18 => '  xyc  ',
+  19 => '  Zc  ',
+  20 => '  ccc  ',
+  21 => ' - -a-b-c- - -x',
+  22 => '/p/  abc  ',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '  a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'abcx',
+  1 => 'x
+',
+  2 => 'abc',
+  3 => 'abcx
+',
+  4 => 'abcx',
+  5 => 0,
+  6 => false,
+  7 => 'bcx
+',
+  8 => 'a',
+  9 => 'bcx
+',
+  10 => 'x',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => 'abcx
+',
+  17 => 'ABCX
+',
+  18 => 'xycx
+',
+  19 => 'Zcx
+',
+  20 => 'cccx
+',
+  21 => 'a-b-c-x-
+-x',
+  22 => '/p/abcx
+',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'abcx',
+  1 => 'x
+',
+  2 => 'abc',
+  3 => 'abcx
+',
+  4 => 'abcx',
+  5 => 0,
+  6 => false,
+  7 => 'bcx
+',
+  8 => 'a',
+  9 => 'bcx
+',
+  10 => 'x',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => 'abcx
+',
+  17 => 'ABCX
+',
+  18 => 'xycx
+',
+  19 => 'Zcx
+',
+  20 => 'cccx
+',
+  21 => 'a-b-c-x-
+-x',
+  22 => '/p/abcx
+',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'abcx',
+  1 => 'x
+',
+  2 => 'abc',
+  3 => 'abcx
+',
+  4 => 'abcx',
+  5 => 0,
+  6 => false,
+  7 => 'bcx
+',
+  8 => 'a',
+  9 => 'bcx
+',
+  10 => 'x',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => 'abcx
+',
+  17 => 'ABCX
+',
+  18 => 'xycx
+',
+  19 => 'Zcx
+',
+  20 => 'cccx
+',
+  21 => 'a-b-c-x-
+-x',
+  22 => '/p/abcx
+',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'a',
+    1 => 'a',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '00a1b',
+  1 => '00a1',
+  2 => '00a1b',
+  3 => 'a1b',
+  4 => '00a1b',
+  5 => 2,
+  6 => false,
+  7 => 'b',
+  8 => '00a1',
+  9 => '0a1b',
+  10 => '1',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '00a1b',
+  17 => '00A1B',
+  18 => '00x1y',
+  19 => '00AA1b',
+  20 => '00c1c',
+  21 => '0-0-a-1-b-x',
+  22 => '/p/00a1b',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '0',
+    1 => '0',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '00a1b',
+  1 => '00a1',
+  2 => '00a1b',
+  3 => 'a1b',
+  4 => '00a1b',
+  5 => 2,
+  6 => false,
+  7 => 'b',
+  8 => '00a1',
+  9 => '0a1b',
+  10 => '1',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '00a1b',
+  17 => '00A1B',
+  18 => '00x1y',
+  19 => '00AA1b',
+  20 => '00c1c',
+  21 => '0-0-a-1-b-x',
+  22 => '/p/00a1b',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '0',
+    1 => '0',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '00a1b',
+  1 => '00a1',
+  2 => '00a1b',
+  3 => 'a1b',
+  4 => '00a1b',
+  5 => 2,
+  6 => false,
+  7 => 'b',
+  8 => '00a1',
+  9 => '0a1b',
+  10 => '1',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '00a1b',
+  17 => '00A1B',
+  18 => '00x1y',
+  19 => '00AA1b',
+  20 => '00c1c',
+  21 => '0-0-a-1-b-x',
+  22 => '/p/00a1b',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '0',
+    1 => '0',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'ABCabc',
+  1 => 'ABC',
+  2 => 'ABCabc',
+  3 => 'ABCabc',
+  4 => 'ABCabc',
+  5 => 3,
+  6 => false,
+  7 => 'bc',
+  8 => 'ABCa',
+  9 => 'BCabc',
+  10 => 'b',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => true,
+  16 => 'abcabc',
+  17 => 'ABCABC',
+  18 => 'ABCxyc',
+  19 => 'ABCZc',
+  20 => 'ABCccc',
+  21 => 'A-B-C-a-b-c-x',
+  22 => '/p/ABCabc',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'ABCabc',
+  1 => 'ABC',
+  2 => 'ABCabc',
+  3 => 'ABCabc',
+  4 => 'ABCabc',
+  5 => 3,
+  6 => false,
+  7 => 'bc',
+  8 => 'ABCa',
+  9 => 'BCabc',
+  10 => 'b',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => true,
+  16 => 'abcabc',
+  17 => 'ABCABC',
+  18 => 'ABCxyc',
+  19 => 'ABCZc',
+  20 => 'ABCccc',
+  21 => 'A-B-C-a-b-c-x',
+  22 => '/p/ABCabc',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'ABCabc',
+  1 => 'ABC',
+  2 => 'ABCabc',
+  3 => 'ABCabc',
+  4 => 'ABCabc',
+  5 => 3,
+  6 => false,
+  7 => 'bc',
+  8 => 'ABCa',
+  9 => 'BCabc',
+  10 => 'b',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => true,
+  16 => 'abcabc',
+  17 => 'ABCABC',
+  18 => 'ABCxyc',
+  19 => 'ABCZc',
+  20 => 'ABCccc',
+  21 => 'A-B-C-a-b-c-x',
+  22 => '/p/ABCabc',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => 'A',
+    1 => 'A',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'a',
+  1 => '',
+  2 => 'a',
+  3 => 'a',
+  4 => 'a',
+  5 => 0,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'a',
+  1 => '',
+  2 => 'a',
+  3 => 'a',
+  4 => 'a',
+  5 => 0,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => 'a',
+  1 => '',
+  2 => 'a',
+  3 => 'a',
+  4 => 'a',
+  5 => 0,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '0',
+  1 => '0',
+  2 => '0',
+  3 => '',
+  4 => '0',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '0',
+  1 => '0',
+  2 => '0',
+  3 => '',
+  4 => '0',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '0',
+  1 => '0',
+  2 => '0',
+  3 => '',
+  4 => '0',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1.5',
+  1 => '1.5',
+  2 => '1.5',
+  3 => '1.5',
+  4 => '1.5',
+  5 => false,
+  6 => false,
+  7 => false,
+  8 => false,
+  9 => '.5',
+  10 => '.',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '1.5',
+  17 => '1.5',
+  18 => '1.5',
+  19 => '1.5',
+  20 => '1.5',
+  21 => '1-.-5-x',
+  22 => '/p/1.5',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '1',
+    1 => '1',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1.5',
+  1 => '1.5',
+  2 => '1.5',
+  3 => '1.5',
+  4 => '1.5',
+  5 => false,
+  6 => false,
+  7 => false,
+  8 => false,
+  9 => '.5',
+  10 => '.',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '1.5',
+  17 => '1.5',
+  18 => '1.5',
+  19 => '1.5',
+  20 => '1.5',
+  21 => '1-.-5-x',
+  22 => '/p/1.5',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '1',
+    1 => '1',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1.5',
+  1 => '1.5',
+  2 => '1.5',
+  3 => '1.5',
+  4 => '1.5',
+  5 => false,
+  6 => false,
+  7 => false,
+  8 => false,
+  9 => '.5',
+  10 => '.',
+  11 => '',
+  12 => '',
+  13 => true,
+  14 => false,
+  15 => false,
+  16 => '1.5',
+  17 => '1.5',
+  18 => '1.5',
+  19 => '1.5',
+  20 => '1.5',
+  21 => '1-.-5-x',
+  22 => '/p/1.5',
+  23 => false,
+  24 => false,
+  25 => false,
+  26 => 1,
+  27 => 
+  array (
+    0 => '1',
+    1 => '1',
+  ),
+  28 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] rtrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] ltrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] chop(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @45
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] rtrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] ltrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] chop(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @45
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] trim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] rtrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] ltrim(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] chop(): Passing null to parameter #1 ($string) of type string is deprecated @36
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @37
+E[8192] strpos(): Passing null to parameter #1 ($haystack) of type string is deprecated @45
+array (
+  0 => '',
+  1 => '',
+  2 => '',
+  3 => '',
+  4 => '',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1',
+  1 => '1',
+  2 => '1',
+  3 => '1',
+  4 => '1',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1',
+  1 => '1',
+  2 => '1',
+  3 => '1',
+  4 => '1',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)
+array (
+  0 => '1',
+  1 => '1',
+  2 => '1',
+  3 => '1',
+  4 => '1',
+  5 => false,
+  6 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+  7 => 'ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)',
+)

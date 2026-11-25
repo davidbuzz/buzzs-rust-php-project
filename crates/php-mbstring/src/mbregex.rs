@@ -294,6 +294,15 @@ impl crate::MbState {
     pub fn regex_defaults(&self) -> (u32, Syntax) {
         (self.regex.default_options, self.regex.default_syntax)
     }
+
+    /// Sets the default regex options and syntax without the checks of
+    /// [`Self::mb_regex_set_options`]: a module global carried from the
+    /// thread's previous state into a new one (`PHP_GINIT(mb_regex)` runs
+    /// once per thread, not per request).
+    pub fn set_regex_defaults(&mut self, (options, syntax): (u32, Syntax)) {
+        self.regex.default_options = options;
+        self.regex.default_syntax = syntax;
+    }
 }
 
 #[cfg(test)]
@@ -307,6 +316,9 @@ mod tests {
         assert_eq!(st.mb_regex_set_options(None).unwrap(), "pr");
         assert_eq!(st.mb_regex_set_options(Some(b"ixz")).unwrap(), "pr");
         assert_eq!(st.mb_regex_set_options(None).unwrap(), "ixz");
+        let mut fresh = MbState::new();
+        fresh.set_regex_defaults(st.regex_defaults());
+        assert_eq!(fresh.mb_regex_set_options(None).unwrap(), "ixz");
         assert_eq!(
             st.mb_regex_set_options(Some(b"Q")).unwrap_err().to_string(),
             "Option \"Q\" is not supported"

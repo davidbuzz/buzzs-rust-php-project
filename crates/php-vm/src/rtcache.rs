@@ -107,17 +107,55 @@ pub struct RuntimeCache {
     static_calls: RefCell<Vec<Vec<MemberSlot>>>,
     /// Global variable resolutions, by place id.
     pub(crate) globals: RefCell<Vec<GlobalSlot>>,
+    /// `Defined` results, by name literal ([`DefinedSlot`]).
+    defined: RefCell<Vec<DefinedSlot>>,
+}
+
+/// A cached `ZEND_DEFINED` result, php-src's `CACHED_PTR(extended_value)`
+/// of that op: the constant found (`CACHE_PTR` of the constant), or not
+/// found while the constant table had a given number of entries
+/// (`ENCODE_SPECIAL_CACHE_NUM(zend_hash_num_elements(EG(zend_constants)))`:
+/// any `define()` since makes the slot a miss).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DefinedSlot {
+    /// Not resolved yet.
+    #[default]
+    Empty,
+    /// The constant exists.
+    Found,
+    /// Not defined while the constant table had this many entries.
+    Absent(usize),
 }
 
 impl RuntimeCache {
+    /// Whether no lookup is cached: the op array did not run since the
+    /// last [`clear`](Self::clear) (or never resolved anything).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.consts.borrow().is_empty()
+            && self.class_consts.borrow().is_empty()
+            && self.static_props.borrow().is_empty()
+            && self.static_prop_entries.borrow().is_empty()
+            && self.static_calls.borrow().is_empty()
+            && self.globals.borrow().is_empty()
+            && self.defined.borrow().is_empty()
+    }
+
     /// Clears all cached lookups so an op array carries no request state.
+    /// The op arrays of a cached script are cleared at every request that
+    /// includes it, most of them never ran since: an empty cache is only
+    /// looked at.
     pub fn clear(&self) {
+        if self.is_empty() {
+            return;
+        }
         self.consts.borrow_mut().clear();
         self.class_consts.borrow_mut().clear();
         self.static_props.borrow_mut().clear();
         self.static_prop_entries.borrow_mut().clear();
         self.static_calls.borrow_mut().clear();
         self.globals.borrow_mut().clear();
+        self.defined.borrow_mut().clear();
     }
 }
 
@@ -820,19 +858,74 @@ impl Vm {
                 ConstSlot::Never
             };
         }
+        // The name with its namespace lowercased (`zend_register_constant`'s
+        // key): found once, it stays found, and it comes before the
+        // fallback.
+        if let std::borrow::Cow::Owned(k) = crate::classlink::constant_key(n.as_bytes()) {
+            if let Some((key, v)) = self.constants.get_key_value(k.as_slice()) {
+                return if cacheable(key, v) {
+                    ConstSlot::Direct(v.clone())
+                } else {
+                    ConstSlot::Never
+                };
+            }
+        }
         let Some(f) = fallback.and_then(|fb| self.rt_lit_str(fb)) else {
-            return ConstSlot::Never;
+            // A qualified name found with its namespace in another case
+            // ([`Vm::find_global_constant`]): it stays found.
+            return match self.find_global_constant(n.as_bytes()) {
+                Some((key, v)) if cacheable(key, v) => ConstSlot::Direct(v.clone()),
+                _ => ConstSlot::Never,
+            };
         };
         match self.constants.get(&f) {
             Some(v) if cacheable(&f, v) => ConstSlot::Fallback {
                 value: v.clone(),
                 epoch: self.constants.len(),
             },
-            // Not cacheable, or found otherwise (the case-insensitive
-            // namespace lookup): every fetch stays uncached, which also
-            // sees a namespaced constant defined later.
+            // Not cacheable, or found by the namespace-case scan after the
+            // fallback missed: every fetch stays uncached, which also sees a
+            // namespaced constant defined later.
             _ => ConstSlot::Never,
         }
+    }
+
+    // ------------------------------------------------------------------
+    // defined() (ZEND_DEFINED)
+    // ------------------------------------------------------------------
+
+    /// `ZEND_DEFINED`'s `CACHED_PTR` hit for the name literal `name` of
+    /// the running frame's op array: `Some(true)` once the constant was
+    /// found, `Some(false)` while it was not found and no constant has
+    /// been defined since, `None` (look it up: [`Vm::defined_fill`])
+    /// otherwise.
+    #[inline]
+    pub(crate) fn defined_hit(&self, name: u32) -> Option<bool> {
+        let cache = self.frame().code.rt_cache.defined.try_borrow().ok()?;
+        match *cache.get(name as usize)? {
+            DefinedSlot::Found => Some(true),
+            DefinedSlot::Absent(n) if n == self.constants.len() => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Fills the `ZEND_DEFINED` slot of name literal `name` with the
+    /// answer of a lookup of the constant `n`, as php-src does
+    /// (`zend_quick_check_constant` caches a found constant; a miss
+    /// caches the table's size). `SID` is left uncached: the session
+    /// extension removes and redefines it during a request.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn defined_fill(&self, name: u32, n: &ZStr, found: bool) {
+        if n.as_bytes() == b"SID" {
+            return;
+        }
+        let slot = if found {
+            DefinedSlot::Found
+        } else {
+            DefinedSlot::Absent(self.constants.len())
+        };
+        put(&self.frame().code.rt_cache.defined, name as usize, slot);
     }
 
     // ------------------------------------------------------------------

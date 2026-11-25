@@ -1,5 +1,9 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/ftp/ftp.c. Similarity metric to original: 31%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Andrew Skalski <askalski@chek.com>
+//            Stefan Esser <sesser@php.net> (resume functions)
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The FTP connection (`ftpbuf_t`) and every protocol operation of
 //! `ext/ftp/ftp.c`, ported with its reply-code checks, buffer sizes and
 //! failure paths.

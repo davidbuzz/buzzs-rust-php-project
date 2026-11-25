@@ -1,0 +1,10 @@
+Files in this directory are copied unchanged from php-src ext/openssl/tests
+(commit cb90f9a237757209ecd2e67a7e0c950f36ba6ea1). Copyright © The PHP Group
+and Contributors. BSD-3-Clause; see LICENSES/php-src-BSD-3-Clause.txt. Not a
+copy: cipher_tests.txt was written here from the test vectors of php-src
+ext/openssl/tests/cipher_tests.inc. Some of the copied files hold data of
+others: cve2013_4073.pem is a certificate of the Python Software Foundation,
+bug64802.pem a certificate of rdio.com issued by COMODO CA Limited,
+bug65698.crt the Certum Level II CA certificate of Unizeto Technologies S.A.,
+and openssl.cnf has the form of OpenSSL's sample configuration file; this
+notice does not state a licence for them beyond php-src's.

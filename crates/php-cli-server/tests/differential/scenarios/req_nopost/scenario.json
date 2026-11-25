@@ -1,0 +1,68 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "args": [
+  "-d",
+  "enable_post_data_reading=0"
+ ],
+ "requests": [
+  {
+   "path": "/dump.php?ok=1",
+   "method": "POST",
+   "headers": [
+    [
+     "Content-Type",
+     "application/x-www-form-urlencoded"
+    ]
+   ],
+   "body": "a=1"
+  },
+  {
+   "path": "/dump.php",
+   "method": "POST",
+   "headers": [
+    [
+     "Content-Type",
+     "application/x-www-form-urlencoded"
+    ],
+    [
+     "Transfer-Encoding",
+     "chunked"
+    ]
+   ],
+   "body": "3\r\na=1\r\n4\r\n&b=2\r\n0\r\n\r\n"
+  },
+  {
+   "path": "/dump.php",
+   "method": "POST",
+   "headers": [
+    [
+     "Content-Type",
+     "application/x-www-form-urlencoded"
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ]
+   ],
+   "body": "a=1"
+  },
+  {
+   "path": "/dump.php",
+   "method": "POST",
+   "headers": [
+    [
+     "Content-Type",
+     "multipart/form-data; boundary=B"
+    ]
+   ],
+   "body": "--B\r\nContent-Disposition: form-data; name=\"a[b][c][d]\"\r\n\r\n1\r\n--B\r\nContent-Disposition: form-data; name=\"x\"; filename=\"../../etc/passwd\"\r\n\r\np\r\n--B\r\nContent-Disposition: form-data; name=\"y\"; filename=\"C:\\\\dir\\\\f.txt\"\r\n\r\np\r\n--B\r\nContent-Disposition: form-data; name=\"z\"\r\n\r\n\r\n--B--\r\n"
+  },
+  {
+   "path": "/dump.php?after=1"
+  }
+ ]
+}

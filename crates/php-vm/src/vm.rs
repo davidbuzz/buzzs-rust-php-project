@@ -428,6 +428,11 @@ pub struct PendingCall {
     pub dynamic: bool,
 }
 
+/// How many argument records [`CallBufs::args_pool`] keeps: the depth of
+/// nested builtin calls (a callback's builtin call inside `array_map()`)
+/// served without allocating.
+const ARGS_POOL: usize = 8;
+
 /// Reusable buffers of the call protocol (see [`Vm::call_bufs`]).
 #[derive(Debug, Default)]
 pub(crate) struct CallBufs {
@@ -437,6 +442,21 @@ pub(crate) struct CallBufs {
     pub(crate) values: Vec<Vec<Value>>,
     /// ZPP passed-flag vectors.
     pub(crate) passed: Vec<Vec<bool>>,
+    /// The value vector lent to the handler of the newest builtin call
+    /// ([`CallBufs::take_values`]): taken and put back whole, three words
+    /// each way, where a pool `pop` and an out-of-line `push` cost ~30
+    /// instructions a call. Empty (no capacity) while lent; a nested call
+    /// meanwhile takes from [`CallBufs::values`].
+    pub(crate) lent_values: Vec<Value>,
+    /// The passed-flag vector lent alongside [`CallBufs::lent_values`].
+    pub(crate) lent_passed: Vec<bool>,
+    /// Boxed argument records for the tape's internal call
+    /// (`exec/tape/calls.rs`, `call_native`; [`CallBufs::take_args`]):
+    /// one is taken whole for a call, one pointer each way, its two
+    /// vectors keeping their capacity, where lending the vectors one by
+    /// one and building the record on the stack cost ~105 instructions a
+    /// call. A nested call takes the next one.
+    pub(crate) args_pool: Vec<Box<crate::func::Args>>,
     /// Prewarmed and pooled user function frames.
     pub(crate) user_frames: Vec<Frame>,
     /// The run-time cache of `ZEND_INIT_METHOD_CALL`.
@@ -452,6 +472,9 @@ impl CallBufs {
             args: Vec::with_capacity(128),
             values: Vec::with_capacity(16),
             passed: Vec::with_capacity(16),
+            lent_values: Vec::with_capacity(8),
+            lent_passed: Vec::with_capacity(8),
+            args_pool: Vec::with_capacity(ARGS_POOL),
             user_frames: Vec::with_capacity(8),
             methods: crate::call::MethodCache::default(),
         };
@@ -460,8 +483,106 @@ impl CallBufs {
             b.values.push(Vec::with_capacity(8));
             b.passed.push(Vec::with_capacity(8));
             b.user_frames.push(Frame::new_pooled(empty_code.clone()));
+            b.args_pool.push(CallBufs::new_args());
         }
         b
+    }
+
+    /// An empty argument record for a builtin call, taken whole from the
+    /// pool ([`CallBufs::args_pool`]); a new one when the calls in progress
+    /// hold them all.
+    #[inline]
+    pub(crate) fn take_args(&mut self) -> Box<crate::func::Args> {
+        self.args_pool.pop().unwrap_or_else(CallBufs::new_args)
+    }
+
+    /// Gives back a record [`CallBufs::take_args`] lent, emptied by the
+    /// caller (`Args::release_in_place`).
+    #[inline]
+    pub(crate) fn put_args(&mut self, a: Box<crate::func::Args>) {
+        debug_assert!(a.values.is_empty(), "the values were released");
+        if self.args_pool.len() < ARGS_POOL {
+            self.args_pool.push(a);
+        } else {
+            CallBufs::drop_args(a);
+        }
+    }
+
+    /// A record with room for eight arguments. It outlives the request,
+    /// as php-src's VM stack does: its memory is not the request's
+    /// (`memory_get_usage()`).
+    #[cold]
+    #[inline(never)]
+    fn new_args() -> Box<crate::func::Args> {
+        php_memlimit::persistent(|| {
+            Box::new(crate::func::Args {
+                values: Vec::with_capacity(8),
+                passed: Vec::with_capacity(8),
+                ..crate::func::Args::default()
+            })
+        })
+    }
+
+    /// Releases a record the full pool has no room for.
+    #[cold]
+    #[inline(never)]
+    fn drop_args(a: Box<crate::func::Args>) {
+        php_memlimit::persistent(|| drop(a));
+    }
+
+    /// An empty value vector for a builtin's [`crate::func::Args`]: the
+    /// lent one when it is home, else one from the pool (a nested call's,
+    /// or the lent one was kept by a handler), else a new one.
+    #[inline]
+    pub(crate) fn take_values(&mut self) -> Vec<Value> {
+        if self.lent_values.capacity() != 0 {
+            std::mem::take(&mut self.lent_values)
+        } else {
+            self.values.pop().unwrap_or_default()
+        }
+    }
+
+    /// An empty passed-flag vector, as [`CallBufs::take_values`].
+    #[inline]
+    pub(crate) fn take_passed(&mut self) -> Vec<bool> {
+        if self.lent_passed.capacity() != 0 {
+            std::mem::take(&mut self.lent_passed)
+        } else {
+            self.passed.pop().unwrap_or_default()
+        }
+    }
+
+    /// Gives back a value vector [`CallBufs::take_values`] lent, emptied
+    /// by the caller (its values released in their order): home when home
+    /// is free, else to the pool, as `Vm::put_val_vec` returns one.
+    #[inline]
+    pub(crate) fn put_values(&mut self, v: Vec<Value>) {
+        debug_assert!(v.is_empty(), "the values were released");
+        let cap = v.capacity();
+        if cap == 0 || cap > 256 {
+            return;
+        }
+        if self.lent_values.capacity() == 0 {
+            // The empty vector there owns nothing.
+            std::mem::forget(std::mem::replace(&mut self.lent_values, v));
+        } else if self.values.len() < 4 {
+            self.values.push(v);
+        }
+    }
+
+    /// Gives back a passed-flag vector, as [`CallBufs::put_values`].
+    #[inline]
+    pub(crate) fn put_passed(&mut self, mut v: Vec<bool>) {
+        let cap = v.capacity();
+        if cap == 0 || cap > 256 {
+            return;
+        }
+        v.clear();
+        if self.lent_passed.capacity() == 0 {
+            std::mem::forget(std::mem::replace(&mut self.lent_passed, v));
+        } else if self.passed.len() < 4 {
+            self.passed.push(v);
+        }
     }
 }
 
@@ -854,7 +975,7 @@ impl FrameStack {
             {
                 f.reinit_same_call(code, kind);
             } else {
-                f.reinit_for_call(code.clone(), kind);
+                f.reinit_for_call(code, kind);
             }
         } else {
             self.vec.push(Frame::new(code.clone(), kind));
@@ -934,6 +1055,21 @@ impl FrameStack {
         if self.live > 0 {
             let last_idx = self.live - 1;
             self.vec[last_idx].clear_for_reuse(empty_code);
+            self.pop_cleared_top();
+        }
+    }
+
+    /// [`FrameStack::release_top`] of a returning frame, with what
+    /// [`crate::gc::frame_released`] records first, the calling frame's
+    /// `$this` taken from the frame below ([`Frame::release_returning`]).
+    #[inline]
+    pub(crate) fn release_top_returning(&mut self, empty_code: &Rc<OpArray>) {
+        if self.live > 0 {
+            let (callers, rest) = self.vec.split_at_mut(self.live - 1);
+            if let Some(frame) = rest.first_mut() {
+                let caller_this = callers.last().and_then(|c| c.this.as_ref());
+                frame.release_returning(caller_this, empty_code);
+            }
             self.pop_cleared_top();
         }
     }
@@ -1182,13 +1318,21 @@ pub struct Frame {
     /// Made current by the tape's call protocol (`exec::tape::calls`),
     /// which leaves every field but the slots, the passed arguments and the
     /// resume state as [`Frame::clear_for_reuse`] leaves them: released by
-    /// [`Frame::release_direct`].
+    /// [`Frame::release_returning`].
     pub(crate) direct: bool,
     /// The passed-argument count of a frame the tape's call protocol made
     /// current (`ZEND_CALL_NUM_ARGS`): its arguments are all in their
     /// compiled variables, so `args` stays empty instead of holding a
     /// `None` per argument. See [`Frame::num_args`].
     pub(crate) direct_argc: u32,
+    /// Released by [`Frame::release_returning`] and untouched since: every
+    /// field is in its released state, the slot vectors are sized for the
+    /// code of `ufunc`, which the frame still holds (`keeps_function`),
+    /// and the variable store is empty ([`Frame::is_released_for`]). A
+    /// call of that same function readies it with nothing left to do
+    /// (`exec::tape::calls::ready_frame`). Cleared by every other release
+    /// and by every readying.
+    pub(crate) released_direct: bool,
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -1244,6 +1388,30 @@ fn clear_arg_buffer(buffer: &mut Vec<Option<Value>>) {
     unsafe { buffer.set_len(0) };
 }
 
+/// [`clear_arg_buffer`] of a returning builtin's frame
+/// ([`Frame::release_native`]): every entry holds a sent argument, which
+/// the caller's variable usually still holds too, so each is released as
+/// [`release_cv`] releases a compiled variable (a handle that is not the
+/// last decremented inline, without `Value`'s out-of-line drop glue: ~30
+/// instructions an argument), front to back.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per tape builtin call
+fn clear_native_args(buffer: &mut Vec<Option<Value>>) {
+    if buffer.capacity() > 256 {
+        *buffer = Vec::new();
+        return;
+    }
+    for arg in &mut *buffer {
+        if let Some(v) = arg.take() {
+            release_cv(v);
+        }
+    }
+    // SAFETY: every element is `None` now, which owns nothing, so cutting
+    // the length to zero forgets no value (the elements are initialised
+    // and `0 <= capacity`).
+    unsafe { buffer.set_len(0) };
+}
+
 /// Empties an `Option` field of a frame being recycled. Only a set field is
 /// written: storing `None` over an unknown value calls the payload's
 /// out-of-line `drop_in_place` (an object handle's) even when it was
@@ -1253,6 +1421,53 @@ fn clear_arg_buffer(buffer: &mut Vec<Option<Value>>) {
 fn clear_opt<T>(slot: &mut Option<T>) {
     if slot.is_some() {
         *slot = None;
+    }
+}
+
+/// Empties an object-handle field (`$this`, the closure) of a frame
+/// being recycled: a handle that is not the object's last is released
+/// inline (`GC_DELREF`), without the call into `Option<Obj>`'s
+/// out-of-line drop glue (~18 instructions a method or closure return);
+/// the last one, whose release may run a destructor, is left to that glue
+/// in place, as [`clear_opt`] leaves it (the field still holds the handle
+/// while it is released).
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice per direct return
+fn release_obj_field(slot: &mut Option<Obj>) {
+    let last = match slot.as_ref() {
+        None => return,
+        Some(o) => o.refcount() <= 1,
+    };
+    if last {
+        release_last_obj_field(slot);
+    } else if let Some(o) = slot.take() {
+        drop(o);
+    }
+}
+
+/// [`release_obj_field`] of an object's last handle, out of line.
+#[cold]
+#[inline(never)]
+fn release_last_obj_field(slot: &mut Option<Obj>) {
+    *slot = None;
+}
+
+/// Releases a value taken out of a compiled variable of a frame being
+/// released (`i_free_compiled_variables`): like [`release_slot`], and a
+/// string, or a handle of an object, array or reference that is not the
+/// last, is released inline, its count decremented (`GC_DELREF`), without
+/// the call into `Value`'s out-of-line drop glue and its dispatch on the
+/// tag again. A last handle, which frees, is left to the drop glue.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per compiled variable of a return
+fn release_cv(v: Value) {
+    match v {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => std::mem::forget(v),
+        Value::Str(s) => drop(s),
+        Value::Object(o) if o.refcount() > 1 => drop(o),
+        Value::Array(a) if a.refcount() > 1 => drop(a),
+        Value::Reference(r) if r.refcount() > 1 => drop(r),
+        other => drop(other),
     }
 }
 
@@ -1272,6 +1487,44 @@ fn release_slot(v: Value) {
     }
 }
 
+/// Releases a compiled variable of a returning frame in place
+/// (`i_free_compiled_variables`, with its `gc_check_possible_root`): the
+/// tag is tested where the value is, so a scalar costs the store of the
+/// undefined state and nothing else (no move of the value to the stack,
+/// no dispatch on its tag again, as [`release_cv`] after `take` did), a
+/// string an inline count decrement, and an array, an object or a
+/// reference one call ([`release_rooted_cv`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per compiled variable of a return
+fn release_cv_in_place(slot: &mut Option<Value>) {
+    match slot {
+        None => {}
+        Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // Owns nothing: the value is forgotten, not dropped.
+            std::mem::forget(slot.take());
+        }
+        Some(Value::Str(_)) => match slot.take() {
+            Some(Value::Str(s)) => drop(s),
+            // Not reached: the slot held a string just above.
+            other => drop(other),
+        },
+        Some(_) => release_rooted_cv(slot),
+    }
+}
+
+/// [`release_cv_in_place`] of an array, an object or a reference: what
+/// `crate::gc::cvs_released` records for it ([`crate::gc::possible_root`]:
+/// a handle released to a non-zero count, or the elements of an array
+/// whose last handle goes), then its release. Out of line: the call is
+/// that of `possible_root` it replaces.
+#[inline(never)]
+fn release_rooted_cv(slot: &mut Option<Value>) {
+    if let Some(v) = slot.take() {
+        crate::gc::possible_root(&v);
+        release_cv(v);
+    }
+}
+
 /// Empties `v` and fills it with `n` values made by `make` (the
 /// temporaries, iterators, finally slots and compiled variables of one
 /// function, in a pooled frame buffer that usually has the capacity
@@ -1285,6 +1538,18 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
     if n != 0 {
         // `resize_with` stores the length once, after the loop; a `push`
         // per element stored it every time (~9 instructions an element).
+        v.resize_with(n, make);
+    }
+}
+
+/// Cuts or grows `v`, whose elements are all in their released state, to
+/// `n` elements, making the new ones with `make`: the ones kept are not
+/// written ([`Frame::reinit_for_call`]).
+#[inline]
+fn fit_released<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
+    if v.len() > n {
+        v.truncate(n);
+    } else if v.len() < n {
         v.resize_with(n, make);
     }
 }
@@ -1363,6 +1628,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -1411,6 +1677,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
     }
 
     /// Clears a frame for pool reuse while retaining its compiled code and buffer sizes.
@@ -1453,6 +1720,49 @@ impl Frame {
         self.clear_rest_for_reuse(empty_code, shared);
     }
 
+    /// [`Frame::clear_for_reuse`] of a frame a prepared call readied and
+    /// never entered (`exec::tape::calls::materialize`, the call turned
+    /// back into a pending one, which took the arguments sent into its
+    /// compiled variables and the `$this`, scopes and closure readied
+    /// with it): such a frame holds nothing, and when it still holds the
+    /// function as a released frame keeps it (`keeps_function`), it is in
+    /// exactly the state [`Frame::release_returning`] leaves, so it is marked
+    /// so ([`Frame::released_direct`]) and the next call of that function
+    /// in this slot readies nothing. The fields readying and sending could
+    /// have set are tested; anything else (a frame that was entered, a
+    /// function not kept) takes the full release. The full release of
+    /// such an empty frame walked every slot and field again (~100
+    /// instructions for each call whose argument started another call:
+    /// `f(g($x))`).
+    #[inline]
+    pub(crate) fn release_unentered(&mut self, empty_code: &Rc<OpArray>) {
+        if self.kind == FrameKind::Function
+            && !self.direct
+            && self.ip == 0
+            && !self.symtab_attached
+            && self.this.is_none()
+            && self.closure.is_none()
+            && self.scope.is_none()
+            && self.called.is_none()
+            && self.args.is_empty()
+            && self.named.is_empty()
+            && self.calls.is_empty()
+            && self.silence_saved.is_empty()
+            && matches!(self.ret, RetTarget::Discard)
+            && !self.is_ctor
+            && self.keeps_function()
+        {
+            debug_assert!(self.slots_released());
+            debug_assert!(self
+                .ufunc
+                .as_ref()
+                .is_some_and(|uf| self.is_released_for(uf)));
+            self.released_direct = true;
+            return;
+        }
+        self.clear_for_reuse(empty_code);
+    }
+
     /// [`Frame::clear_for_reuse`] of a builtin frame (the one
     /// [`FrameStack::push_builtin`] readied), whose variable store is
     /// either its own (kept from a pooled user frame, and emptied here) or
@@ -1491,6 +1801,7 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn reinit_for_builtin(&mut self, empty_code: &Rc<OpArray>) {
+        self.released_direct = false;
         self.kind = FrameKind::Builtin;
         if !self.tmps.is_empty() {
             self.tmps.clear();
@@ -1550,6 +1861,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -1607,7 +1919,7 @@ impl Frame {
         }
         for slot in &mut self.cvs {
             if let Some(old) = slot.as_mut().take() {
-                release_slot(old);
+                release_cv(old);
             }
         }
         self.symtab_attached = false;
@@ -1679,6 +1991,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
     }
 
     /// [`Frame::clear_for_reuse`] of a frame the tape's call protocol made
@@ -1691,9 +2004,33 @@ impl Frame {
     /// more behind (a symbol table attached or used, a caught exception
     /// held, an `@` still open, a pending call, a function nothing else
     /// holds): the full `clear_for_reuse` then runs.
+    ///
+    /// For the tests of the released mark: a return goes through
+    /// [`Frame::release_returning`], which also records the possible roots.
+    #[cfg(test)]
+    pub(crate) fn release_direct(&mut self) -> bool {
+        if !self.direct_releasable() {
+            return false;
+        }
+        // In `clear_for_reuse`'s order: the temporaries, the compiled
+        // variables, the passed arguments.
+        self.release_direct_tmps();
+        for slot in &mut self.cvs {
+            if let Some(old) = slot.as_mut().take() {
+                release_cv(old);
+            }
+        }
+        self.release_direct_args();
+        self.release_direct_rest();
+        true
+    }
+
+    /// The tests of [`Frame::release_returning`]: whether the frame is a
+    /// directly entered one whose code left nothing behind but its slots,
+    /// passed arguments and call handles. Changes nothing.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
-    pub(crate) fn release_direct(&mut self) -> bool {
+    fn direct_releasable(&mut self) -> bool {
         if !self.direct
             || self.symtab_attached
             || self.pending_exc.is_some()
@@ -1707,33 +2044,46 @@ impl Frame {
             return false;
         };
         let vs = rc_mut.get_mut();
-        if !vs.names.owned.is_empty() || vs.index.is_some() || vs.slots.iter().any(Option::is_some)
-        {
-            return false;
-        }
-        // In `clear_for_reuse`'s order: the temporaries, the compiled
-        // variables, the passed arguments.
+        vs.names.owned.is_empty() && vs.index.is_none() && !vs.slots.iter().any(Option::is_some)
+    }
+
+    /// [`Frame::release_returning`]'s release of the temporaries.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_tmps(&mut self) {
         for t in &mut self.tmps {
             release_slot(std::mem::take(t));
         }
-        for slot in &mut self.cvs {
-            if let Some(old) = slot.as_mut().take() {
-                release_slot(old);
-            }
-        }
-        // A direct frame's passed arguments are in its compiled variables:
-        // the buffer holds the `None` of each (`calls::enter`), so it is
-        // emptied here, as `clear_arg_buffer` would, without the call (the
-        // drop of any value it held runs as there).
+    }
+
+    /// [`Frame::release_returning`]'s release of the passed arguments.
+    ///
+    /// A direct frame's passed arguments are in its compiled variables
+    /// and the buffer is empty (`calls::enter` keeps the count in
+    /// `direct_argc`), except for a variadic call's extra arguments
+    /// (`calls::variadic_extras`): it is emptied here, as
+    /// `clear_arg_buffer` would, without the call (the drop of any value
+    /// it held runs as there). Tested first: `clear` of the empty buffer
+    /// still called the out-of-line slice drop glue (~12 instructions a
+    /// return).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_args(&mut self) {
         if self.args.capacity() > 256 {
             self.args = Vec::new();
-        } else {
+        } else if !self.args.is_empty() {
             self.args.clear();
         }
-        // A method's `$this` and scopes, a closure, in
-        // `clear_rest_for_reuse`'s order.
-        clear_opt(&mut self.this);
-        clear_opt(&mut self.closure);
+    }
+
+    /// The rest of [`Frame::release_returning`] once the slots and the passed
+    /// arguments are released: a method's `$this` and scopes, a closure,
+    /// in `clear_rest_for_reuse`'s order, and the call's fields.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    fn release_direct_rest(&mut self) {
+        release_obj_field(&mut self.this);
+        release_obj_field(&mut self.closure);
         self.ip = 0;
         clear_opt(&mut self.scope);
         clear_opt(&mut self.called);
@@ -1742,7 +2092,63 @@ impl Frame {
         self.caller_strict = false;
         self.direct = false;
         self.direct_argc = 0;
-        true
+        // Every field is in its released state now, and the function's
+        // handles and slot sizes are kept: the next call of the same
+        // function in this slot readies nothing (`calls::ready_frame`).
+        self.released_direct = true;
+    }
+
+    /// `zend_leave_helper` of a returning user frame in one step: what
+    /// [`crate::gc::frame_released`] records, then the release
+    /// ([`Frame::release_returning`], else [`Frame::clear_for_reuse`]).
+    /// `caller_this` is the calling frame's `$this`.
+    ///
+    /// A directly entered frame ([`Frame::direct_releasable`]) is released
+    /// in one pass over its compiled variables, as
+    /// `i_free_compiled_variables` releases them: a scalar is a tag test
+    /// and a store, a string an inline count decrement, and an array, an
+    /// object or a reference calls out once ([`release_rooted_cv`]: its
+    /// possible root, then its release), in variable order; then the
+    /// passed arguments, then the call's own handle (`$this`, a closure:
+    /// [`crate::gc::call_handle_released`], then its release), as
+    /// `zend_leave_helper` releases them after the variables. The roots
+    /// are buffered in php-src's order: variable order, then the call's
+    /// handle (a shared reference's root, which its release buffers, came
+    /// after the call's handle when every other root was buffered by a
+    /// walk before the release). That walk was a second pass over the
+    /// variables (~8 instructions a variable), and the
+    /// release moved each value to the stack and dispatched on its tag
+    /// again (~15). Destructors are queued by the release (no user code
+    /// runs in it), so nothing can observe the roots of the later
+    /// variables not being buffered yet.
+    ///
+    /// Any other frame takes the two steps: the roots of every variable
+    /// and of the call's handle (and of an attached symbol table's
+    /// values), then the release.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every return
+    pub(crate) fn release_returning(
+        &mut self,
+        caller_this: Option<&Obj>,
+        empty_code: &Rc<OpArray>,
+    ) {
+        if self.direct_releasable() {
+            self.release_direct_tmps();
+            for slot in &mut self.cvs {
+                release_cv_in_place(slot.as_mut());
+            }
+            self.release_direct_args();
+            crate::gc::call_handle_released(self, caller_this);
+            self.release_direct_rest();
+            return;
+        }
+        if self.symtab_attached {
+            crate::gc::frame_released(self, caller_this);
+        } else {
+            crate::gc::cvs_released(&self.cvs);
+            crate::gc::call_handle_released(self, caller_this);
+        }
+        self.clear_for_reuse(empty_code);
     }
 
     /// [`Frame::clear_builtin_for_reuse`] of the builtin frame the tape's
@@ -1753,7 +2159,12 @@ impl Frame {
     /// tested. `false`, having released nothing, when the handler left
     /// more behind (a pending call, a symbol table, an `@`, named
     /// arguments, a store of its own): the full release then runs.
-    #[inline]
+    ///
+    /// Always inline (its two callers, the tape's call and
+    /// `Vm::call_builtin_pooled`, run it once a call): out of line its
+    /// call, register saves and restores cost ~17 instructions a call.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     pub(crate) fn release_native(&mut self, empty_vars: &Rc<RefCell<VarStore>>) -> bool {
         if self.kind != FrameKind::Builtin
             || self.symtab_attached
@@ -1774,8 +2185,15 @@ impl Frame {
         {
             return false;
         }
-        clear_arg_buffer(&mut self.args);
-        clear_opt(&mut self.func);
+        clear_native_args(&mut self.args);
+        // The builtin's handle released in line (the function table holds
+        // the function too), where `Option<Func>`'s drop glue is an
+        // out-of-line call dispatching on the kind again.
+        match self.func.take() {
+            Some(Func::Builtin(b)) => drop(b),
+            None => {}
+            other => drop(other),
+        }
         clear_opt(&mut self.builtin_name);
         self.ip = 0;
         self.ret = RetTarget::Discard;
@@ -1786,6 +2204,7 @@ impl Frame {
         self.observer_hidden = false;
         self.direct = false;
         self.direct_argc = 0;
+        self.released_direct = false;
         true
     }
 
@@ -1833,6 +2252,45 @@ impl Frame {
         self.args.len().max(self.direct_argc as usize)
     }
 
+    /// Whether the frame is in the state [`Frame::release_returning`] leaves
+    /// for a later call of `uf` ([`Frame::released_direct`]): what
+    /// `calls::ready_frame` would otherwise set up for that call
+    /// (`reinit_same_call` of its code, the function handles) is already
+    /// so. For the debug assertion of that path.
+    pub(crate) fn is_released_for(&self, uf: &Rc<UserFunction>) -> bool {
+        let code = &uf.code;
+        let store_empty = self.vars.try_borrow().is_ok_and(|vs| {
+            vs.slots.iter().all(Option::is_none) && vs.index.is_none() && vs.names.owned.is_empty()
+        });
+        self.kind == FrameKind::Function
+            && self.ip == 0
+            && !self.direct
+            && self.direct_argc == 0
+            && !self.symtab_attached
+            && self.calls.is_empty()
+            && self.silence_saved.is_empty()
+            && self.args.is_empty()
+            && self.named.is_empty()
+            && self.this.is_none()
+            && self.closure.is_none()
+            && self.scope.is_none()
+            && self.called.is_none()
+            && self.generator.is_none()
+            && self.pending_exc.is_none()
+            && self.statics.is_none()
+            && !self.is_ctor
+            && matches!(self.ret, RetTarget::Discard)
+            && Rc::ptr_eq(&self.code, code)
+            && self.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf))
+            && matches!(&self.func, Some(Func::User(f)) if Rc::ptr_eq(f, uf))
+            && self.cvs.len() == code.cv_names.len()
+            && self.cvs.iter().all(CvSlot::is_none)
+            && self.tmps.len() == code.num_tmps as usize
+            && self.iters.len() == code.num_iters as usize
+            && self.fins.len() == code.num_finally as usize
+            && store_empty
+    }
+
     /// Whether a frame being recycled keeps its function handles (`func`,
     /// `ufunc` and `code`), so that the next call of the same function in
     /// this slot (a loop calling it) does not replace them: when they are
@@ -1861,6 +2319,7 @@ impl Frame {
     /// Re-initializes an existing frame when `cvs` and `tmps` already have the right lengths.
     #[inline(always)]
     pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
+        self.released_direct = false;
         self.kind = kind;
         self.ip = 0;
         // Empty after a return: `clear` would still call the out-of-line
@@ -1877,13 +2336,19 @@ impl Frame {
         }
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
-            for slot in vs.slots.iter_mut() {
-                *slot = None;
-            }
-            // Names kept shared with the previous code
-            // (`clear_for_reuse`) are not this code's:
-            // `attach_symbol_table` shares the new ones.
-            if !same_code {
+            if same_code {
+                for slot in vs.slots.iter_mut() {
+                    *slot = None;
+                }
+            } else {
+                // Names kept shared with the previous code
+                // (`clear_for_reuse`) are not this code's:
+                // `attach_symbol_table` shares the new ones, and sizes the
+                // slots for them (a store's slots run parallel to its
+                // names: the previous code may have had more variables).
+                if !vs.slots.is_empty() {
+                    vs.slots.clear();
+                }
                 clear_opt(&mut vs.names.shared);
             }
         } else {
@@ -1898,34 +2363,46 @@ impl Frame {
     /// Re-initializes a pooled frame for a new user function call, leaving
     /// the compiled variables empty for the caller to fill (the arguments
     /// move into them, [`crate::call`]'s `init_cvs`).
-    pub(crate) fn reinit_for_call(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.kind = kind;
-        self.ip = 0;
-        refill_with(&mut self.tmps, code.num_tmps as usize, || Value::Null);
-        refill_with(&mut self.iters, code.num_iters as usize, || None);
-        refill_with(&mut self.fins, code.num_finally as usize, || FinState::None);
-        self.calls.clear();
-        self.silence_saved.clear();
-        let ncv = code.cv_names.len();
-        refill_with(&mut self.cvs, ncv, || CvSlot::new(None));
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-            let vs = rc_mut.get_mut();
-            vs.slots.clear();
-            vs.names.share(&code);
-            vs.index = None;
-        } else {
-            let mut vs = VarStore::for_code(&code);
-            vs.slots.clear();
-            self.vars = Rc::new(RefCell::new(vs));
-        }
-        self.symtab_attached = false;
-        self.code = code;
+    ///
+    /// A pooled frame is released ([`Frame::slots_released`]: every
+    /// temporary holds `null`, every compiled variable, iterator and
+    /// finally state nothing), so only the lengths change: each slot vector
+    /// is cut or grown to the code's count, and the slots it keeps are not
+    /// written again (php-src's `i_init_func_execute_data` sets the
+    /// variables after the arguments to undefined and leaves the
+    /// temporaries alone). Emptying and refilling them cost ~250
+    /// instructions a call of another function than the one the frame
+    /// held (`Vec::clear` calls `Value`'s out-of-line drop glue for every
+    /// temporary). The rest is [`Frame::reinit_same_call`]'s, which leaves
+    /// the variable names to the first attach of a symbol table instead of
+    /// sharing them on every call (`VarNames::share`).
+    pub(crate) fn reinit_for_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
+        debug_assert!(self.slots_released());
+        fit_released(&mut self.tmps, code.num_tmps as usize, || Value::Null);
+        fit_released(&mut self.iters, code.num_iters as usize, || None);
+        fit_released(&mut self.fins, code.num_finally as usize, || FinState::None);
+        fit_released(&mut self.cvs, code.cv_names.len(), || CvSlot::new(None));
+        self.reinit_same_call(code, kind);
+    }
+
+    /// Whether every slot of the frame is in its released state: the
+    /// temporaries `null`, the compiled variables undefined, the foreach
+    /// iterators and finally states empty. Every release leaves a frame
+    /// so ([`Frame::release_returning`], [`Frame::clear_for_reuse`],
+    /// [`Frame::clear_builtin_for_reuse`], [`Frame::clear_for_pool`] and a
+    /// newly built frame); [`Frame::reinit_for_call`] relies on it. For
+    /// debug assertions.
+    pub(crate) fn slots_released(&self) -> bool {
+        self.tmps.iter().all(Value::is_null)
+            && self.cvs.iter().all(CvSlot::is_none)
+            && self.iters.iter().all(Option::is_none)
+            && self.fins.iter().all(|f| matches!(f, FinState::None))
     }
 
     /// Re-initializes a pooled frame for a new user function call, with
     /// every compiled variable undefined.
     pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.reinit_for_call(code.clone(), kind);
+        self.reinit_for_call(&code, kind);
         let ncv = self.code.cv_names.len();
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
@@ -2041,6 +2518,7 @@ impl Frame {
             observer_hidden: false,
             direct: false,
             direct_argc: 0,
+            released_direct: false,
         }
     }
 
@@ -2243,9 +2721,21 @@ impl Frame {
                 None => st.find_or_add(name.as_bytes()),
             };
             let idx = idx as usize;
-            if idx < st.slots.len() {
-                if let Some(old) = std::mem::replace(&mut st.slots[idx], Some(v.clone())) {
-                    crate::gc::release_duplicate(old);
+            if let Some(slot) = st.slots.get_mut(idx) {
+                // Every write of a compiled variable of an attached frame
+                // (the top level of an included file, a function that used
+                // `extract()`) comes here: a scalar is copied and the old
+                // scalar forgotten inline, without the out-of-line
+                // `Value::clone` and drop glue.
+                if let Some(old) = slot.replace(crate::call::clone_value(v)) {
+                    if matches!(
+                        old,
+                        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                    ) {
+                        std::mem::forget(old);
+                    } else {
+                        crate::gc::release_duplicate(old);
+                    }
                 }
             }
         }
@@ -2362,8 +2852,13 @@ pub struct Vm {
     pub exception_handlers: Vec<Value>,
     /// Included files (resolved paths), in order.
     pub included: Vec<ZStr>,
-    /// Set of included files.
-    pub included_set: HashSet<ZStr>,
+    /// Set of included files (`EG(included_files)`), probed by every
+    /// `include_once`/`require_once`: hashed with [`FxHasher`], as the
+    /// VM's name tables are, not SipHash (paths are the request's own,
+    /// not chosen keys an attacker can collide).
+    ///
+    /// [`FxHasher`]: crate::class::FxHasher
+    pub included_set: HashSet<ZStr, std::hash::BuildHasherDefault<crate::class::FxHasher>>,
     /// Registered class loaders, in call order
     /// (`zend_class_autoload_functions`).
     pub autoloaders: Vec<ClassLoader>,
@@ -2620,9 +3115,10 @@ pub struct Vm {
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.
     pub empty_vars: Rc<RefCell<VarStore>>,
-    /// Active `__get`/`__set`/`__isset`/`__unset` guards: (object handle,
-    /// property name, kind): [`crate::props::GuardSet`].
-    pub(crate) prop_guards: crate::props::GuardSet,
+    /// Active `__get`/`__set`/`__isset`/`__unset` guards and the
+    /// readonly reinitialization markers of a clone in progress
+    /// ([`PropGuards`]).
+    pub prop_guards: PropGuards,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
@@ -2694,20 +3190,184 @@ impl Vm {
         }
     }
 
-    /// Attaches the symbol table of the main frame if it is unattached,
-    /// syncing its CV slots to `self.globals`.
+    /// Whether the main script's frame is the newest frame of the global
+    /// scope: no top-level `include` or `eval` runs above it (those frames
+    /// share the global table and sit right above it, see
+    /// [`Vm::sync_global_frames`]). Only then are the main frame's compiled
+    /// variables the global variables' current values. php-src's symbol
+    /// table points at the slots of the global-scope frame that is running
+    /// (`zend_attach_symbol_table()` on entering an included file or an
+    /// `eval`, `zend_detach_symbol_table()` on leaving it): while one runs,
+    /// its variables are the current ones, mirrored into the table, and the
+    /// main frame's are older until it resumes.
+    #[inline]
+    pub(crate) fn main_is_global_top(&self) -> bool {
+        match self.frames.vec.get(1) {
+            Some(f) if self.frames.live > 1 => {
+                !std::ptr::eq(Rc::as_ptr(&f.vars), Rc::as_ptr(&self.globals))
+            }
+            _ => true,
+        }
+    }
+
+    /// The index of the newest frame of the global scope: the main
+    /// script's, or a top-level `include`/`eval` above it sharing the
+    /// global table. Those frames form the bottom of the stack (see
+    /// [`Vm::sync_global_frames`]). `None` when there is none.
+    #[inline]
+    fn global_scope_top(&self) -> Option<usize> {
+        let globals = Rc::as_ptr(&self.globals);
+        self.frames
+            .iter()
+            .take_while(|f| f.kind == FrameKind::Main || std::ptr::eq(Rc::as_ptr(&f.vars), globals))
+            .count()
+            .checked_sub(1)
+    }
+
+    /// Attaches the global symbol table to the newest frame of the global
+    /// scope ([`Vm::global_scope_top`]) if it is unattached, and syncs
+    /// that frame's CV slots into `self.globals`, before the table is read
+    /// or written by name.
+    ///
+    /// Only the newest one holds values the table may lack (a write of a
+    /// fast path that is not mirrored): each frame below it synchronised
+    /// its variables when it started the `include` or `eval` above it
+    /// (`Vm::op_include`) and has not run since, so its compiled variables
+    /// can only be older than the table. Copying the main frame's in here
+    /// while a top-level `eval()` ran above it put the main script's old
+    /// values back over the ones the `eval` had just written, which a
+    /// function called from it then read through `$GLOBALS`.
     #[inline]
     pub(crate) fn attach_globals_symbol_table(&mut self) {
-        if let Some(f) = self.frames.first_mut() {
-            if !f.symtab_attached
-                && (f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals))
-            {
+        let Some(top) = self.global_scope_top() else {
+            return;
+        };
+        if let Some(f) = self.frames.get_mut(top) {
+            if !f.symtab_attached {
                 f.attach_symbol_table();
             }
-            if f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals) {
-                f.sync_cvs_to_symtab();
-            }
+            f.sync_cvs_to_symtab();
         }
+    }
+
+    /// `ZEND_BIND_STATIC` of static variable `idx` into variable `cv` of
+    /// the current frame once the variable was initialised (the op's
+    /// branch that binds the stored reference and jumps over the
+    /// initialiser: `Op::BindStatic`'s `skip`), without the generic arm's
+    /// handle copies: the reference from the function's store
+    /// (`UserFunction::statics`, or a closure's own, `Frame::statics`),
+    /// bound as `Vm::cv_bind` binds it. The tape runs it in place
+    /// (`exec/tape.rs`, `run_vm_op`). `false`, having changed nothing,
+    /// when the slot is not initialised yet (or its store is in use): the
+    /// generic op runs.
+    #[inline(never)]
+    pub(crate) fn bind_static_cached(&mut self, cv: u32, idx: u32) -> bool {
+        let r = {
+            let Some(f) = self.frames.last() else {
+                return false;
+            };
+            let found = match (&f.statics, &f.ufunc) {
+                (Some(s), _) => s
+                    .try_borrow()
+                    .ok()
+                    .and_then(|b| b.get(idx as usize).cloned().flatten()),
+                (None, Some(uf)) => uf
+                    .statics
+                    .try_borrow()
+                    .ok()
+                    .and_then(|b| b.get(idx as usize).cloned().flatten()),
+                (None, None) => None,
+            };
+            let Some(r) = found else {
+                return false;
+            };
+            r
+        };
+        self.cv_bind(cv, Value::Reference(r));
+        true
+    }
+
+    /// `ZEND_BIND_GLOBAL` of `global $name` (`lit`, the name's literal in
+    /// the running code) into compiled variable `cv` of a function frame,
+    /// when its run-time cache slot is warm: the global slot the literal
+    /// found last time (`Vm::global_slot_cache`, filled by
+    /// `Vm::global_ref_lit`) still has that name and already holds a
+    /// reference, and the global table is attached to the newest frame of
+    /// the global scope ([`Vm::global_scope_top`], "the main frame" below:
+    /// the main script's, or a top-level `include`/`eval`). The reference
+    /// is bound as it is, as php-src binds `Z_REF_P` of the cached slot.
+    ///
+    /// The generic bind ([`Vm::attach_globals_symbol_table`]) first copies
+    /// every compiled variable of the main frame into the global table,
+    /// one comparison and possibly one store per variable on each
+    /// `global` statement. Only this name's slot matters for the bind, and
+    /// it is up to date when the main frame's own variable of that name
+    /// is undefined (the copy skips it) or holds the same reference (the
+    /// copy would change nothing); the other names stay as stale as the
+    /// table is between any two generic accesses, each of which refreshes
+    /// it first. `false`, nothing changed, otherwise: the generic bind
+    /// runs.
+    pub(crate) fn bind_global_cached(&mut self, cv: u32, lit: u32) -> bool {
+        if self.frames.len() < 2 {
+            return false;
+        }
+        let Some(top) = self.global_scope_top() else {
+            return false;
+        };
+        let r = {
+            // The frame the generic bind would synchronise.
+            let (Some(main), Some(cur)) = (self.frames.get(top), self.frames.last()) else {
+                return false;
+            };
+            if !main.symtab_attached
+                || !Rc::ptr_eq(&main.vars, &self.globals)
+                || !std::ptr::eq(main.symtab_slots_of, Rc::as_ptr(&main.vars))
+            {
+                return false;
+            }
+            let Some(Value::Str(name)) = cur.code.literals.get(lit as usize) else {
+                return false;
+            };
+            let bytes = name.as_bytes();
+            let addr = bytes.as_ptr() as usize;
+            let (ca, ci) =
+                self.global_slot_cache[(addr >> 3) & (crate::place::GLOBAL_SLOT_CACHE - 1)];
+            if ca != addr {
+                return false;
+            }
+            let idx = ci as usize;
+            let Ok(st) = self.globals.try_borrow() else {
+                return false;
+            };
+            if st.names.get(idx).is_none_or(|n| n.as_bytes() != bytes) {
+                return false;
+            }
+            let Some(Some(Value::Reference(r))) = st.slots.get(idx) else {
+                return false;
+            };
+            // The main frame's variable of this name, if it has one: the
+            // one whose recorded slot is `idx` (none recorded: each
+            // variable has the slot of its own number).
+            let names = &main.code.cv_names;
+            let main_cv = if main.symtab_slots.is_empty() {
+                (idx < names.len()).then_some(idx)
+            } else {
+                main.symtab_slots.iter().position(|&s| s as usize == idx)
+            };
+            if let Some(i) = main_cv {
+                if names.get(i).is_none_or(|n| n.as_bytes() != bytes) {
+                    return false;
+                }
+                match main.cvs.get(i).and_then(CvSlot::get) {
+                    None => {}
+                    Some(Value::Reference(m)) if PhpRef::ptr_eq(m, r) => {}
+                    Some(_) => return false,
+                }
+            }
+            r.clone()
+        };
+        self.cv_bind(cv, Value::Reference(r));
+        true
     }
 }
 
@@ -2715,7 +3375,7 @@ impl Vm {
 mod tests {
     use super::{Frame, FrameKind};
     use crate::opcode::OpArray;
-    use php_runtime::{Value, ZStr};
+    use php_runtime::{Obj, PhpRef, Value, ZStr};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -2842,6 +3502,80 @@ mod tests {
         assert!(Rc::ptr_eq(&f.code, &empty));
     }
 
+    /// `release_returning` releases what `clear_for_reuse` does (it adds
+    /// only the possible-root walk, which records nothing while the root
+    /// buffer is protected, as in a fresh thread), and so does
+    /// `release_top_returning` for the top frame, leaving the one below.
+    #[test]
+    fn release_returning_releases_like_clear_for_reuse() {
+        let empty = Rc::new(OpArray::default());
+        let s = ZStr::from("a string held by the frame");
+        let arr = php_runtime::ZArray::from_values(vec![Value::Int(1), Value::Str(s.clone())]);
+        let mut f = frame_with(&["a", "b", "c"]);
+        f.cvs[0].set(Some(Value::Str(s.clone())));
+        f.cvs[1].set(Some(Value::Array(arr)));
+        f.cvs[2].set(Some(Value::Reference(PhpRef::new(Value::Int(2)))));
+        f.tmps = vec![Value::Str(s.clone())];
+        assert_eq!(s.refcount(), 4);
+        f.release_returning(None, &empty);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(f.cvs.len(), 3);
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert!(f.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert!(Rc::ptr_eq(&f.code, &empty));
+
+        let mut stack = super::FrameStack::new();
+        let mut below = frame_with(&["x"]);
+        below.cvs[0].set(Some(Value::Str(s.clone())));
+        stack.push(below);
+        let mut top = frame_with(&["y"]);
+        top.cvs[0].set(Some(Value::Str(s.clone())));
+        stack.push(top);
+        assert_eq!(s.refcount(), 3);
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(s.refcount(), 2);
+        assert!(stack.last().is_some_and(|f| f.cvs[0].get().is_some()));
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(s.refcount(), 1);
+        // Nothing live: nothing to release.
+        stack.release_top_returning(&empty);
+        assert_eq!(stack.len(), 0);
+    }
+
+    /// `release_cv` releases one handle of each kind: the shared ones keep
+    /// their value with one count less, the last ones free it.
+    #[test]
+    fn release_cv_releases_shared_and_last_handles() {
+        let s = ZStr::from("a string held twice, not interned");
+        super::release_cv(Value::Str(s.clone()));
+        assert_eq!(s.refcount(), 1);
+        let a = php_runtime::ZArray::from_values(vec![Value::Str(s.clone())]);
+        assert_eq!(s.refcount(), 2);
+        super::release_cv(Value::Array(a.clone()));
+        assert_eq!(a.refcount(), 1);
+        super::release_cv(Value::Array(a));
+        assert_eq!(s.refcount(), 1);
+        let r = PhpRef::new(Value::Str(s.clone()));
+        super::release_cv(Value::Reference(r.clone()));
+        assert_eq!(r.refcount(), 1);
+        super::release_cv(Value::Reference(r));
+        assert_eq!(s.refcount(), 1);
+        let o = Obj::dummy("C");
+        let w = o.clone();
+        super::release_cv(Value::Object(o));
+        assert_eq!(w.refcount(), 1);
+        for v in [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(3),
+            Value::Float(0.5),
+        ] {
+            super::release_cv(v);
+        }
+    }
+
     fn user_function(code: Rc<OpArray>) -> Rc<crate::func::UserFunction> {
         Rc::new(crate::func::UserFunction {
             name: ZStr::from("f"),
@@ -2862,13 +3596,152 @@ mod tests {
         })
     }
 
+    /// `release_direct` marks the frame ready for the next call of the same
+    /// function (`calls::ready_frame` then sets nothing up), in exactly
+    /// the state `is_released_for` describes; any other readying or
+    /// release clears the mark.
+    #[test]
+    fn release_direct_marks_the_frame_ready_for_the_same_function() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray::default());
+        let uf = user_function(code.clone());
+        let other = user_function(Rc::new(OpArray::default()));
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        assert!(!f.released_direct);
+        // Only a frame the tape's protocol entered is released directly.
+        assert!(!f.release_direct());
+        assert!(!f.released_direct);
+        f.direct = true;
+        f.direct_argc = 1;
+        f.ret = super::RetTarget::Tmp(0);
+        f.ip = 3;
+        assert!(f.release_direct());
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        assert!(!f.is_released_for(&other));
+        f.reinit_same_call(&code, FrameKind::Function);
+        assert!(!f.released_direct);
+        f.direct = true;
+        assert!(f.release_direct());
+        assert!(f.released_direct);
+        f.reinit_for_call(&code, FrameKind::Function);
+        assert!(!f.released_direct);
+        f.direct = true;
+        assert!(f.release_direct());
+        f.clear_for_reuse(&empty);
+        assert!(!f.released_direct);
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        f.direct = true;
+        assert!(f.release_direct());
+        f.reinit_for_builtin(&empty);
+        assert!(!f.released_direct);
+    }
+
+    /// `release_returning` of a directly entered frame releases every
+    /// variable in one pass (scalars, a string, a shared array, a shared
+    /// reference, each released to its other holders' count), the
+    /// temporaries and the extra arguments, and leaves the frame in the
+    /// state `release_direct` leaves (`is_released_for`).
+    #[test]
+    fn release_returning_releases_a_direct_frame_in_one_pass() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: ["i", "f", "s", "a", "r", "u"]
+                .iter()
+                .map(|n| ZStr::from(*n))
+                .collect(),
+            num_tmps: 1,
+            ..OpArray::default()
+        });
+        let uf = user_function(code.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        f.direct = true;
+        f.direct_argc = 3;
+        f.ret = super::RetTarget::Tmp(0);
+        f.ip = 4;
+        let s = ZStr::from("a string held by the frame");
+        let arr = php_runtime::ZArray::from_values(vec![Value::Int(1), Value::Str(s.clone())]);
+        let held = Value::Array(arr);
+        let r = PhpRef::new(Value::Int(2));
+        f.cvs[0].set(Some(Value::Int(7)));
+        f.cvs[1].set(Some(Value::Float(1.5)));
+        f.cvs[2].set(Some(Value::Str(s.clone())));
+        f.cvs[3].set(Some(held.clone()));
+        f.cvs[4].set(Some(Value::Reference(r.clone())));
+        f.tmps[0] = Value::Str(s.clone());
+        f.args.push(Some(Value::Str(s.clone())));
+        assert_eq!(s.refcount(), 5);
+        assert_eq!(r.refcount(), 2);
+        f.release_returning(None, &empty);
+        assert_eq!(s.refcount(), 2, "the array keeps its element");
+        assert_eq!(r.refcount(), 1);
+        assert!(matches!(&held, Value::Array(a) if a.refcount() == 1));
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert!(f.tmps.iter().all(Value::is_null));
+        assert!(f.args.is_empty());
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        drop(held);
+        assert_eq!(s.refcount(), 1);
+    }
+
+    /// A frame a prepared call readied and never entered (the call turned
+    /// back into a pending one) is marked released for that function when
+    /// it keeps the function; with anything the readying left behind, or a
+    /// function nothing else holds, it is released in full.
+    #[test]
+    fn release_unentered_marks_a_readied_frame_released_for_its_function() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a"), ZStr::from("b")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let uf = user_function(code.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(&code, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        // An argument sent, then taken back by the turned-back call.
+        f.cvs[0].set(Some(Value::Int(1)));
+        drop(f.cvs[0].as_mut().take());
+        f.release_unentered(&empty);
+        assert!(f.released_direct);
+        assert!(f.is_released_for(&uf));
+        // A frame that went further than readying (a result target set):
+        // the full release.
+        f.reinit_same_call(&code, FrameKind::Function);
+        f.ret = super::RetTarget::Tmp(1);
+        let s = ZStr::from("held");
+        f.tmps[1] = Value::Str(s.clone());
+        f.release_unentered(&empty);
+        assert!(!f.released_direct);
+        assert_eq!(f.ret, super::RetTarget::Discard);
+        assert_eq!(s.refcount(), 1);
+        // A function only the frame holds is let go.
+        f.reinit_same_call(&code, FrameKind::Function);
+        drop(uf);
+        f.release_unentered(&empty);
+        assert!(!f.released_direct);
+        assert!(f.ufunc.is_none() && f.func.is_none());
+        assert!(Rc::ptr_eq(&f.code, &empty));
+    }
+
     #[test]
     fn clear_for_reuse_keeps_the_handles_of_a_function_held_elsewhere() {
         let empty = Rc::new(OpArray::default());
         let code = Rc::new(OpArray::default());
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
         f.clear_for_reuse(&empty);
@@ -2899,15 +3772,18 @@ mod tests {
         let code = named("a");
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         f.func = Some(crate::func::Func::User(uf.clone()));
         f.ufunc = Some(uf.clone());
-        // `code`, `uf.code`, `f.code` and the shared names.
+        // `code`, `uf.code` and `f.code`: the names are shared only by a
+        // symbol table's attach.
+        assert_eq!(Rc::strong_count(&code), 3);
+        f.attach_symbol_table();
         assert_eq!(Rc::strong_count(&code), 4);
         f.clear_for_reuse(&empty);
         assert_eq!(Rc::strong_count(&code), 4);
         // The same function again: nothing to share anew.
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         assert_eq!(Rc::strong_count(&code), 4);
         f.clear_for_reuse(&empty);
         // Another function of the same shape: its own names.
@@ -2920,6 +3796,96 @@ mod tests {
             Some(&b"b"[..])
         );
         assert_eq!(Rc::strong_count(&code), 2);
+    }
+
+    #[test]
+    fn argument_records_are_lent_whole_and_the_pool_keeps_eight() {
+        let code = Rc::new(OpArray::default());
+        let mut bufs = super::CallBufs::prewarmed(&code);
+        let prewarmed = bufs.args_pool.len();
+        assert_eq!(prewarmed, 4);
+        // Calls nested ten deep: the prewarmed records, then new ones.
+        let mut held: Vec<_> = (0..10).map(|_| bufs.take_args()).collect();
+        assert!(bufs.args_pool.is_empty());
+        for a in &held {
+            assert!(a.values.is_empty() && a.values.capacity() >= 8);
+            assert!(a.passed.is_empty() && a.passed.capacity() >= 8);
+        }
+        // Back in the reverse order; the pool keeps eight.
+        while let Some(a) = held.pop() {
+            bufs.put_args(a);
+        }
+        assert_eq!(bufs.args_pool.len(), super::ARGS_POOL);
+        // A record goes back with the capacity it has.
+        let mut a = bufs.take_args();
+        a.values.push(Value::Int(1));
+        a.passed.push(true);
+        a.release_in_place();
+        let ptr = a.values.as_ptr();
+        bufs.put_args(a);
+        assert_eq!(bufs.take_args().values.as_ptr(), ptr);
+    }
+
+    #[test]
+    fn lent_call_buffers_go_home_and_nested_calls_take_pooled_ones() {
+        let code = Rc::new(OpArray::default());
+        let mut bufs = super::CallBufs::prewarmed(&code);
+        let pooled = bufs.values.len();
+        // The first call borrows the lent pair.
+        let outer = bufs.take_values();
+        let outer_flags = bufs.take_passed();
+        assert_eq!(outer.capacity(), 8);
+        assert_eq!(bufs.lent_values.capacity(), 0);
+        assert_eq!(bufs.values.len(), pooled);
+        // A builtin called meanwhile (a callback's) takes a pooled pair.
+        let inner = bufs.take_values();
+        let inner_flags = bufs.take_passed();
+        assert_eq!(bufs.values.len(), pooled - 1);
+        assert_eq!(bufs.passed.len(), pooled - 1);
+        // The inner one returns first, and goes home; the outer one then
+        // finds home taken and goes to the pool.
+        bufs.put_values(inner);
+        bufs.put_passed(inner_flags);
+        assert_eq!(bufs.lent_values.capacity(), 8);
+        bufs.put_values(outer);
+        bufs.put_passed(outer_flags);
+        assert_eq!(bufs.values.len(), pooled);
+        assert_eq!(bufs.passed.len(), pooled);
+        // A vector a handler swapped for an empty one is not kept.
+        let kept = bufs.take_values();
+        bufs.put_values(Vec::new());
+        assert_eq!(bufs.lent_values.capacity(), 0);
+        assert_eq!(bufs.take_values().capacity(), 8);
+        drop(kept);
+        // Flags come back cleared.
+        let mut flags = bufs.take_passed();
+        flags.extend([true, false]);
+        bufs.put_passed(flags);
+        assert!(bufs.take_passed().is_empty());
+    }
+
+    #[test]
+    fn clear_native_args_releases_every_argument_front_to_back() {
+        let s = ZStr::from("a sent string");
+        // (Not `ZArray::new()`: the empty array is one shared table, which
+        // has a holder of its own.)
+        let a = php_runtime::ZArray::from_values([Value::Int(1)]);
+        let held = a.clone();
+        let mut args = Vec::with_capacity(8);
+        args.push(Some(Value::Str(s.clone())));
+        args.push(Some(Value::Array(held)));
+        args.push(Some(Value::Int(4)));
+        args.push(None);
+        assert_eq!(a.refcount(), 2);
+        super::clear_native_args(&mut args);
+        assert!(args.is_empty());
+        assert_eq!(args.capacity(), 8);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(a.refcount(), 1);
+        // The last handle of an array is released too.
+        args.push(Some(Value::Array(php_runtime::ZArray::new())));
+        super::clear_native_args(&mut args);
+        assert!(args.is_empty());
     }
 
     #[test]
@@ -3087,6 +4053,75 @@ mod tests {
         assert!(v.iter().all(|x| matches!(x, Value::Int(2))));
     }
 
+    /// Two functions of different shapes alternating in one pooled frame
+    /// (the next call at a depth calling another function): each entry
+    /// cuts or grows the slot vectors to the code's counts, keeps their
+    /// buffers, and finds every slot released; the variable names follow
+    /// the code that attaches a table.
+    #[test]
+    fn reinit_for_call_fits_the_slots_of_alternating_functions() {
+        let empty = Rc::new(OpArray::default());
+        let big = Rc::new(OpArray {
+            cv_names: ["a", "b", "c", "d"].map(ZStr::from).to_vec(),
+            num_tmps: 6,
+            num_iters: 2,
+            num_finally: 1,
+            ..OpArray::default()
+        });
+        let small = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("x")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let mut f = Frame::new_pooled(empty.clone());
+        for round in 0..3 {
+            f.reinit_for_call(&big, FrameKind::Function);
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (4, 6, 2, 1)
+            );
+            assert!(f.slots_released());
+            let tmps_at = f.tmps.as_ptr();
+            let s = ZStr::from(format!("v{round}").as_str());
+            f.tmps[5] = Value::Str(s.clone());
+            f.cvs[3].set(Some(Value::Str(s.clone())));
+            f.attach_symbol_table();
+            assert_eq!(
+                f.vars
+                    .borrow()
+                    .names
+                    .iter()
+                    .map(ZStr::as_bytes)
+                    .collect::<Vec<_>>(),
+                [&b"a"[..], b"b", b"c", b"d"]
+            );
+            f.clear_for_reuse(&empty);
+            assert_eq!(s.refcount(), 1);
+            assert!(f.slots_released());
+            f.reinit_for_call(&small, FrameKind::Function);
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (1, 2, 0, 0)
+            );
+            assert_eq!(f.tmps.as_ptr(), tmps_at);
+            assert!(f.slots_released());
+            assert!(Rc::ptr_eq(&f.code, &small));
+            {
+                let vars = f.vars.borrow();
+                assert!(vars.slots.is_empty() && vars.names.is_empty());
+            }
+            f.cvs[0].set(Some(Value::Int(round)));
+            f.attach_symbol_table();
+            {
+                let vars = f.vars.borrow();
+                assert_eq!(vars.names.len(), 1);
+                assert_eq!(vars.slots.len(), 1);
+                assert!(matches!(vars.slots[0], Some(Value::Int(r)) if r == round));
+            }
+            f.clear_for_reuse(&empty);
+        }
+    }
+
     #[test]
     fn reinit_for_call_leaves_the_compiled_variables_to_the_caller() {
         let empty = Rc::new(OpArray::default());
@@ -3098,17 +4133,20 @@ mod tests {
             ..OpArray::default()
         });
         let mut f = Frame::new_pooled(empty.clone());
-        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.reinit_for_call(&code, FrameKind::Function);
         assert_eq!(f.tmps.len(), 3);
         assert_eq!(f.iters.len(), 1);
         assert_eq!(f.fins.len(), 1);
         assert_eq!(f.kind, FrameKind::Function);
         assert!(Rc::ptr_eq(&f.code, &code));
         {
+            // The names wait for a symbol table's attach.
             let vars = f.vars.borrow();
             assert!(vars.slots.is_empty());
-            assert_eq!(vars.names.len(), 2);
+            assert!(vars.names.is_empty());
         }
+        f.attach_symbol_table();
+        assert_eq!(f.vars.borrow().names.len(), 2);
         // `reinit_for_user` fills them as undefined.
         f.clear_for_pool(&empty);
         f.reinit_for_user(code.clone(), FrameKind::Function);
@@ -3145,5 +4183,86 @@ mod tests {
         assert!(!f.caller_strict);
         assert!(f.tmps.is_empty() && f.args.is_empty() && f.named.is_empty());
         assert!(f.vars.borrow().slots.is_empty());
+    }
+}
+
+/// The property guards in effect: php-src's `zend_get_property_guard`
+/// (`Zend/zend_object_handlers.c`), which keeps, per object, a flag word
+/// for the name of a magic access in progress (`IN_GET`, `IN_SET`,
+/// `IN_ISSET`, `IN_UNSET`) and a table only when several names are in
+/// flight, plus the `IS_PROP_REINITABLE` state of a readonly property
+/// during `__clone()`. Here one list holds (object handle, property name,
+/// kind) for every guard in effect, innermost last: a magic access pushes
+/// its guard and removes it when the method returns, and only the
+/// accesses in progress are on it (a handful at most), so a push, a
+/// compare of the handle and kind first, and a removal from the end cost
+/// a few instructions where a hash set hashed the name twice.
+#[derive(Debug, Default)]
+pub struct PropGuards {
+    /// The guards in effect, innermost last.
+    active: Vec<(u32, ZStr, u8)>,
+}
+
+impl PropGuards {
+    /// Whether no guard is in effect.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
+    }
+
+    /// Whether the guard `kind` of `name` on the object `handle` is in
+    /// effect.
+    #[inline]
+    #[must_use]
+    pub fn contains(&self, handle: u32, name: &ZStr, kind: u8) -> bool {
+        self.active
+            .iter()
+            .any(|(h, n, k)| *h == handle && *k == kind && n.as_bytes() == name.as_bytes())
+    }
+
+    /// Puts the guard `kind` of `name` on the object `handle` in effect.
+    #[inline]
+    pub fn insert(&mut self, handle: u32, name: ZStr, kind: u8) {
+        self.active.push((handle, name, kind));
+    }
+
+    /// Ends the innermost guard `kind` of `name` on the object `handle`
+    /// (the last one put in effect: magic accesses nest, and a fiber
+    /// suspended inside one may end it out of order). Nothing when none is
+    /// in effect.
+    #[inline]
+    pub fn remove(&mut self, handle: u32, name: &ZStr, kind: u8) {
+        if let Some(i) = self
+            .active
+            .iter()
+            .rposition(|(h, n, k)| *h == handle && *k == kind && n.as_bytes() == name.as_bytes())
+        {
+            self.active.remove(i);
+        }
+    }
+
+    /// Keeps only the guards `keep` accepts.
+    pub fn retain(&mut self, keep: impl FnMut(&(u32, ZStr, u8)) -> bool) {
+        self.active.retain(keep);
+    }
+
+    /// The guards in effect, outermost first.
+    pub fn iter(&self) -> std::slice::Iter<'_, (u32, ZStr, u8)> {
+        self.active.iter()
+    }
+
+    /// Ends every guard (request shutdown).
+    pub fn clear(&mut self) {
+        self.active.clear();
+    }
+}
+
+impl<'a> IntoIterator for &'a PropGuards {
+    type Item = &'a (u32, ZStr, u8);
+    type IntoIter = std::slice::Iter<'a, (u32, ZStr, u8)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.active.iter()
     }
 }

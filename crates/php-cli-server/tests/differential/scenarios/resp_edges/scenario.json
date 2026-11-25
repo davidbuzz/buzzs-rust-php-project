@@ -1,0 +1,45 @@
+{
+ "modes": [
+  "server",
+  "cgi",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/e.php?m=cb_throw"
+  },
+  {
+   "path": "/e.php?m=cb_twice"
+  },
+  {
+   "path": "/e.php?m=shutdown_hdr"
+  },
+  {
+   "path": "/e.php?m=shutdown_hdr_out"
+  },
+  {
+   "path": "/e.php?m=cookie_late"
+  },
+  {
+   "path": "/e.php?m=cookie_bad"
+  },
+  {
+   "path": "/e.php?m=destructor"
+  },
+  {
+   "path": "/e.php?m=ob_shutdown"
+  },
+  {
+   "path": "/e.php?m=exit_in_ob"
+  },
+  {
+   "path": "/e.php?m=status_then_exit"
+  },
+  {
+   "path": "/e.php?m=loc_exit"
+  },
+  {
+   "path": "/e.php?m="
+  }
+ ]
+}

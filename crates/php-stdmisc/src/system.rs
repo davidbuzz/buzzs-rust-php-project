@@ -84,7 +84,14 @@ impl EnvState {
         }
         let eq = setting.iter().position(|&c| c == b'=');
         let key = &setting[..eq.unwrap_or(setting.len())];
-        self.entries.retain(|(k, _)| k != key);
+        // `zend_hash_del(&BG(putenv_ht), pe.key)`: an earlier `putenv()` of
+        // this name in the request is undone first
+        // (`php_putenv_destructor`), so the value recorded below is the
+        // one from before the request, whatever was set in between.
+        if let Some(i) = self.entries.iter().position(|(k, _)| k == key) {
+            let (k, prev) = self.entries.remove(i);
+            restore(&k, prev.as_deref());
+        }
         let previous = sys::getenv(key);
         let ok = match eq {
             None => {
@@ -105,16 +112,23 @@ impl EnvState {
     /// Request shutdown: restores the variables changed by `putenv()`.
     pub fn request_shutdown(&mut self) {
         for (key, prev) in self.entries.drain(..) {
-            match prev {
-                Some(v) => {
-                    let _ = sys::setenv(&key, &v);
-                }
-                None => sys::unsetenv(&key),
-            }
-            if key.eq_ignore_ascii_case(b"TZ") {
-                sys::tzset();
-            }
+            restore(&key, prev.as_deref());
         }
+    }
+}
+
+/// `php_putenv_destructor()`: puts back the value `key` had before the
+/// request's `putenv()` of it (`None`: it was not set), and has libc read
+/// `TZ` again when that is the variable.
+fn restore(key: &[u8], prev: Option<&[u8]>) {
+    match prev {
+        Some(v) => {
+            let _ = sys::setenv(key, v);
+        }
+        None => sys::unsetenv(key),
+    }
+    if key.eq_ignore_ascii_case(b"TZ") {
+        sys::tzset();
     }
 }
 

@@ -1,0 +1,23 @@
+{
+ "modes": [
+  "server",
+  "fcgi"
+ ],
+ "requests": [
+  {
+   "path": "/a.php"
+  },
+  {
+   "path": "/a.php?seed=5&loc=de_DE.UTF-8&er=1&gc=1&bt=1&ch=1&xml=1&mb=1&tz=1&ctx=1"
+  },
+  {
+   "path": "/a.php"
+  },
+  {
+   "path": "/a.php?seed=5"
+  },
+  {
+   "path": "/a.php"
+  }
+ ]
+}

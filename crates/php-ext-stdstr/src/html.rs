@@ -3,6 +3,9 @@
 //! `ext/standard/html.c`: `htmlspecialchars()`, `htmlentities()` and
 //! their decoders, `get_html_translation_table()`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use php_runtime::{Value, ZStr};
 use php_stdstr::error::Notices;
 use php_stdstr::html;
@@ -11,18 +14,40 @@ use php_vm::Vm;
 
 use crate::{assoc, bytes, emit};
 
-/// The charset hint of an `?string $encoding` argument at index `n`:
-/// the argument if non-empty, else `internal_encoding`, else
-/// `default_charset` (`get_default_charset()`).
-fn charset_hint(vm: &Vm, arg: Option<&ZStr>) -> Option<Vec<u8>> {
-    let internal = vm.ini_string("internal_encoding");
-    let default = vm.ini_string("default_charset");
-    html::effective_charset_hint(
-        arg.map(ZStr::as_bytes),
-        internal.as_deref(),
-        default.as_deref(),
-    )
-    .map(<[u8]>::to_vec)
+thread_local! {
+    /// The charset hint of a call without `$encoding`
+    /// (`get_default_charset()`) and the INI generation it was worked out
+    /// for: php-src reads `PG(internal_encoding)` and `SG(default_charset)`
+    /// from globals, where reading both settings here copied each into a
+    /// new vector on every call. Process memory, like the INI values it
+    /// mirrors (`php_memlimit::persistent`).
+    static DEFAULT_HINT: RefCell<(u64, Option<Rc<[u8]>>)> = const { RefCell::new((u64::MAX, None)) };
+}
+
+/// The charset hint of an `?string $encoding` argument: the argument if
+/// non-empty, else `internal_encoding`, else `default_charset`
+/// (`get_default_charset()`), the last two worked out once per INI
+/// generation. The caller drops the hint before anything can run user
+/// code (a notice's error handler may change the settings).
+fn charset_hint(vm: &Vm, arg: Option<&ZStr>) -> Option<Rc<[u8]>> {
+    if let Some(h) = html::effective_charset_hint(arg.map(ZStr::as_bytes), None, None) {
+        return Some(Rc::from(h));
+    }
+    let generation = vm.ini.generation();
+    DEFAULT_HINT.with(|cell| {
+        let mut c = cell.borrow_mut();
+        if c.0 != generation {
+            let hint = html::effective_charset_hint(
+                None,
+                vm.ini.get("internal_encoding"),
+                vm.ini.get("default_charset"),
+            );
+            php_memlimit::persistent(|| {
+                *c = (generation, hint.map(Rc::from));
+            });
+        }
+        c.1.clone()
+    })
 }
 
 fn flags(a: &Args, n: usize) -> i64 {
@@ -37,16 +62,24 @@ fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let enc = a.opt(2).map(|_| a.str(2));
     let cs = charset_hint(vm, enc.as_ref());
     let double = !a.has(3) || a.bool(3);
-    let input = a.str(0);
-    let mut n = Notices::new();
-    let r = html::htmlspecialchars(input.as_bytes(), flags(a, 1), cs.as_deref(), double, &mut n);
-    emit(vm, n)?;
-    // php_escape_html_entities_ex() returns the input itself when nothing
-    // needed encoding.
-    if r == input.as_bytes() {
-        return Ok(Value::Str(input));
+    let input = a.zstr(0);
+    // `RETURN_EMPTY_STRING()`: the interned empty string.
+    if input.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
     }
-    Ok(bytes(r))
+    let mut n = Notices::new();
+    let r =
+        html::htmlspecialchars_cow(input.as_bytes(), flags(a, 1), cs.as_deref(), double, &mut n);
+    drop(cs);
+    // escape_html_entities() returns the input itself when nothing needs
+    // encoding (`zend_string_copy`), found by its verbatim prefix without
+    // building a copy to compare.
+    let out = match r {
+        std::borrow::Cow::Borrowed(_) => ZStr::clone(&input),
+        std::borrow::Cow::Owned(v) => ZStr::from(v),
+    };
+    emit(vm, n)?;
+    Ok(Value::Str(out))
 }
 
 fn htmlentities(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -61,6 +94,7 @@ fn htmlentities(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         double,
         &mut n,
     );
+    drop(cs);
     emit(vm, n)?;
     Ok(bytes(r))
 }
@@ -77,6 +111,7 @@ fn html_entity_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cs = charset_hint(vm, enc.as_ref());
     let mut n = Notices::new();
     let r = html::html_entity_decode(a.str(0).as_bytes(), flags(a, 1), cs.as_deref(), &mut n);
+    drop(cs);
     emit(vm, n)?;
     Ok(bytes(r))
 }
@@ -95,6 +130,7 @@ fn get_html_translation_table(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cs = charset_hint(vm, Some(&enc));
     let mut n = Notices::new();
     let r = html::get_html_translation_table(table, flags(a, 1), cs.as_deref(), &mut n);
+    drop(cs);
     emit(vm, n)?;
     Ok(assoc(r.into_iter().map(|(k, v)| (ZStr::from(k), bytes(v)))))
 }

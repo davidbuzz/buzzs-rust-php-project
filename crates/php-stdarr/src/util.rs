@@ -11,8 +11,11 @@ use php_runtime::{
 /// functions): references held only by the source array are unwrapped,
 /// shared references stay shared.
 #[must_use]
+#[inline]
 pub fn copy_elem(v: &Value) -> Value {
     match v {
+        // A number is copied without the out-of-line `Value::clone`.
+        Value::Int(i) => Value::Int(*i),
         Value::Reference(r) if r.refcount() == 1 => r.get(),
         other => other.clone(),
     }
@@ -97,6 +100,43 @@ pub fn take_array(r: &PhpRef, func: &str, n: usize, name: &str) -> RtResult<ZArr
 /// Stores an array back into a by-reference parameter.
 pub fn put_array(r: &PhpRef, a: ZArray) {
     r.set(Value::Array(a));
+}
+
+/// Runs `f` on the array held by `r` where it lies, under the reference's
+/// borrow (`Z_PARAM_ARRAY_EX(stack, 0, 1)`: the zval is separated and
+/// written in place). Only for an `f` that calls nothing back (no user
+/// code, no diagnostic, no destructor) while it works on the table:
+/// taking the array out of the reference and storing it back
+/// ([`with_array`]) cost two `PhpRef::set` calls, ~130 instructions of an
+/// `array_pop()`.
+///
+/// # Errors
+/// `func(): Argument #n ($name) must be of type array, X given` when `r`
+/// holds no array.
+pub fn with_array_in_place<R>(
+    r: &PhpRef,
+    func: &str,
+    n: usize,
+    name: &str,
+    f: impl FnOnce(&mut ZArray) -> R,
+) -> RtResult<R> {
+    let mut slot = r.borrow_mut();
+    match &mut *slot {
+        Value::Array(a) => Ok(f(a)),
+        other => Err(not_array_error(func, n, Some(name), other)),
+    }
+}
+
+/// `ZVAL_COPY_DEREF` of a value already owned: the value itself, or a
+/// copy of what a reference points at ([`deref`] without copying a plain
+/// value and dropping the original).
+#[must_use]
+#[inline]
+pub fn deref_owned(v: Value) -> Value {
+    match v {
+        Value::Reference(r) => r.get(),
+        v => v,
+    }
 }
 
 /// Runs `f` on the array held by `r` (see [`take_array`]), always storing it

@@ -1,5 +1,13 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src sapi/cgi/cgi_main.c. Similarity metric to original: 14%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@lerdorf.on.ca>
+//            Stig Bakken <ssb@php.net>
+//            Zeev Suraski <zeev@php.net>
+//            FastCGI: Ben Mansell <php@slimyhorror.com>
+//            Shane Caraveo <shane@caraveo.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The `php-cgi` binary: the CGI/1.1 and `FastCGI` SAPI (ref:
 //! `sapi/cgi/cgi_main.c`, `main/fastcgi.c`).
 //!
@@ -34,6 +42,8 @@ mod fastcgi;
 #[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
+#[path = "../main_stack.rs"]
+mod main_stack;
 #[allow(dead_code)]
 #[path = "../memcap.rs"]
 mod memcap;
@@ -280,6 +290,14 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    // php-src's huge pages: only with USE_ZEND_ALLOC_HUGE_PAGES set (first,
+    // before the heap grows).
+    php_memlimit::set_huge_pages(php_memlimit::huge_pages_from_env(
+        std::env::var_os("USE_ZEND_ALLOC_HUGE_PAGES")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+    ));
+    let on_main_thread = main_stack::ensure(&argv);
     // The request heap: `memory_limit` accounting and the address-space
     // cap, as in the `php` binary.
     memcap::limit_memory();
@@ -297,8 +315,14 @@ fn main() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-    // The VM runs on a thread with a large stack (deep recursion); the
-    // signals go to it (see `mask_process_signals`).
+    // The VM runs on the main thread, as in C: the process stays
+    // single-threaded, so `PHP_FCGI_CHILDREN` children fork from a
+    // single-threaded parent.
+    if on_main_thread {
+        finish(run(&argv));
+    }
+    // Fallback: a thread with a large stack (deep recursion); the signals
+    // go to it (see `mask_process_signals`).
     sys::mask_process_signals(true);
     let status = std::thread::Builder::new()
         .stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX))
@@ -546,11 +570,15 @@ fn run(argv: &[Vec<u8>]) -> i32 {
                     start = std::time::Instant::now();
                 }
                 drop(vm);
+                // Each `-T` run is a request of its own, with a fresh
+                // objects store and collector.
+                php_vm::reset::release_dropped_vm_objects();
                 continue;
             }
             repeats -= 1;
             if repeats > 0 {
                 drop(vm);
+                php_vm::reset::release_dropped_vm_objects();
                 continue;
             }
         }
@@ -742,6 +770,12 @@ fn fastcgi_main(
         }
     }
     let mgmt = fastcgi::MgmtVars::new(children_str.as_deref());
+    if children > 0 {
+        // The parent makes the children's VM before it forks them: module
+        // startup runs once, and the children share its pages
+        // copy-on-write (each takes it for its first request).
+        request::adopt_worker_vm(request::prepare_worker_vm(cfg, &[], None));
+    }
     if children > 0
         && sys::prefork(u32::try_from(children).unwrap_or(u32::MAX)) == sys::Role::Parent
     {

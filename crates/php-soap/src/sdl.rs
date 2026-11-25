@@ -1,5 +1,10 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/soap/php_sdl.h. Similarity metric to original: 17%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Brad Lafountain <rodif_bl@yahoo.com>
+//            Shane Caraveo <shane@caraveo.com>
+//            Dmitry Stogov <dmitry@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The service description model (`php_sdl.h`): WSDL functions, bindings,
 //! messages and the XML Schema type registry, plus the encoder lookups of
 //! `php_sdl.c` (`get_encoder`, `get_encoder_ex`, `get_element`, …).

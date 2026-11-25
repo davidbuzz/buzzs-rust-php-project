@@ -45,6 +45,8 @@ pub struct RefBox {
     /// The [`WEAK_COUNT`] bits: the number of [`WeakRef`] handles, plus one
     /// held by the strong handles collectively while any exists (as in
     /// `Rc`). The [`HAS_META`] bit: the reference has an entry in [`META`].
+    /// The [`BUFFERED`] bit: the reference is in the cycle collector's
+    /// possible-root buffer ([`crate::ref_roots`]; php-src: `GC_INFO`).
     pub weak: Cell<u32>,
     /// Dropped when the last strong handle goes; the allocation itself stays
     /// until the last weak handle goes.
@@ -87,8 +89,15 @@ impl RefBox {
 /// [`META`] (php-src: `ZEND_REF_HAS_TYPE_SOURCES`, a non-null `sources`).
 const HAS_META: u32 = 1 << 31;
 
+/// The bit of [`RefBox::weak`] set while the reference is in the cycle
+/// collector's possible-root buffer ([`crate::ref_roots`]), held there by a
+/// [`WeakRef`] (php-src: a non-zero `GC_INFO`, the root buffer slot). The
+/// buffer's weak handle keeps the allocation, so the bit stays readable
+/// until the buffer lets go of it, which clears it first.
+const BUFFERED: u32 = 1 << 30;
+
 /// The weak count's bits of [`RefBox::weak`].
-const WEAK_COUNT: u32 = HAS_META - 1;
+const WEAK_COUNT: u32 = BUFFERED - 1;
 
 /// A PHP reference (`zend_reference`): a shared mutable slot holding a value.
 ///
@@ -265,6 +274,14 @@ impl PhpRef {
         self.set_meta(Some(source));
     }
 
+    /// Whether the reference is in the cycle collector's possible-root
+    /// buffer (`GC_INFO(ref) != 0`): one load and test.
+    #[inline]
+    #[must_use]
+    pub(crate) fn is_buffered(&self) -> bool {
+        self.inner().weak.get() & BUFFERED != 0
+    }
+
     /// A weak handle (for the cycle collector's root buffer).
     pub(crate) fn downgrade(&self) -> WeakRef {
         inc_weak(&self.inner().weak);
@@ -362,6 +379,14 @@ unsafe fn release_last(ptr: NonNull<RefBox>) {
             unsafe { release_meta_and_weak(self.0) }
         }
     }
+    // SAFETY: the allocation is alive (the strong handles' collective weak
+    // count); a reference to the count word only.
+    let buffered = unsafe { &(*ptr.as_ptr()).weak }.get() & BUFFERED != 0;
+    if buffered {
+        // `GC_REMOVE_FROM_BUFFER`: its root buffer slot is free again (the
+        // dead entry itself goes when the buffer is next emptied).
+        crate::ref_roots::buffered_freed();
+    }
     let rest = Rest(ptr);
     // SAFETY: no strong handle is left, so nothing else reaches the value;
     // weak handles only touch the count words (`upgrade` sees the zero
@@ -421,6 +446,7 @@ unsafe fn release_weak(ptr: NonNull<RefBox>) {
     word.set(n);
     if n & WEAK_COUNT == 0 {
         debug_assert_eq!(n & HAS_META, 0, "metadata outlived its reference");
+        debug_assert_eq!(n & BUFFERED, 0, "root buffer let go without clearing");
         // SAFETY: no handle of any kind is left and the value is dropped;
         // the box was allocated by `Box::new` in `PhpRef::new`, and
         // `ManuallyDrop` keeps `Box`'s drop glue off the value.
@@ -482,6 +508,23 @@ impl WeakRef {
     #[must_use]
     pub(crate) fn addr(&self) -> usize {
         addr_of(self.ptr)
+    }
+
+    /// Whether the reference's [`BUFFERED`] bit is set (also readable once
+    /// the reference is freed, while this handle exists).
+    #[inline]
+    #[must_use]
+    pub(crate) fn is_buffered(&self) -> bool {
+        self.weak().get() & BUFFERED != 0
+    }
+
+    /// Sets or clears the reference's [`BUFFERED`] bit: the possible-root
+    /// buffer, which holds this handle, has taken or let go of it.
+    #[inline]
+    pub(crate) fn set_buffered(&self, on: bool) {
+        let word = self.weak();
+        let n = word.get();
+        word.set(if on { n | BUFFERED } else { n & !BUFFERED });
     }
 }
 
@@ -745,6 +788,9 @@ mod tests {
         let word = Cell::new(HAS_META | 5);
         inc_weak(&word);
         assert_eq!(word.get(), HAS_META | 6);
+        let word = Cell::new(HAS_META | BUFFERED | 5);
+        inc_weak(&word);
+        assert_eq!(word.get(), HAS_META | BUFFERED | 6);
         let word = Cell::new(WEAK_COUNT - 1);
         inc_weak(&word);
         assert_eq!(word.get(), WEAK_COUNT);
@@ -767,6 +813,33 @@ mod tests {
         fn drop(&mut self) {
             self.0.set(self.0.get() + 1);
         }
+    }
+
+    /// The buffered bit is shared by every handle, leaves the counts and
+    /// the metadata bit alone, and stays readable through a weak handle
+    /// after the reference is freed.
+    #[test]
+    fn buffered_bit_is_independent_of_counts_and_meta() {
+        let r = PhpRef::new(Value::Int(1));
+        let r2 = r.clone();
+        assert!(!r.is_buffered());
+        let w = r.downgrade();
+        w.set_buffered(true);
+        assert!(r.is_buffered() && r2.is_buffered() && w.is_buffered());
+        r.set_meta(Some(Rc::new(1u8)));
+        assert!(r.is_buffered());
+        let w2 = w.clone();
+        drop(w2);
+        assert!(r.is_buffered());
+        assert_eq!(r.refcount(), 2);
+        r.set_meta(None);
+        assert!(r.is_buffered());
+        drop((r, r2));
+        assert_eq!(w.strong_count(), 0);
+        assert!(w.is_buffered());
+        w.set_buffered(false);
+        assert!(!w.is_buffered());
+        assert!(w.upgrade().is_none());
     }
 
     #[test]

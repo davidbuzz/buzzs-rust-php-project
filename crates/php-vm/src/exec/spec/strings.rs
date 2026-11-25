@@ -25,7 +25,7 @@
 use crate::opcode::Operand;
 use crate::vm::{CvSlot, Frame};
 use php_runtime::convert::long_to_zstr;
-use php_runtime::string::{long_str_len, ZStrBuf};
+use php_runtime::string::{class_capacity, long_str_len, ZStrBuf};
 use php_runtime::{Value, ZStr};
 
 /// The value operand `op` of frame `f` holds when it is a string or an
@@ -78,20 +78,41 @@ fn consume_tmp(f: &mut Frame, op: Operand) {
     }
 }
 
+/// The parts of a rope whose values [`rope_in`] keeps between its passes;
+/// a longer rope reads them again.
+const ROPE_PARTS: usize = 8;
+
 /// [`Op::Rope`](crate::opcode::Op::Rope) when every part is a string or an
 /// integer ([`peek_str_int`]): the parts are measured, copied into one
-/// exactly sized string, and the temporaries among them released. `None`,
+/// string of the result's size class, and the temporaries among them
+/// released. `None`,
 /// nothing changed, otherwise.
 #[inline]
 pub(in crate::exec) fn rope_in(f: &mut Frame, lits: &[Value], parts: &[Operand]) -> Option<ZStr> {
+    // The parts as the first pass finds them (`ROPE_ADD` keeps them in
+    // the op line's temporaries), so that the copy does not classify the
+    // operands again.
+    let mut seen: [Option<&Value>; ROPE_PARTS] = [None; ROPE_PARTS];
     let mut len = 0usize;
-    for &p in parts {
-        len = len.saturating_add(part_len(peek_str_int(f, lits, p)?));
+    for (i, &p) in parts.iter().enumerate() {
+        let v = peek_str_int(f, lits, p)?;
+        len = len.saturating_add(part_len(v));
+        if let Some(slot) = seen.get_mut(i) {
+            *slot = Some(v);
+        }
     }
-    let mut out = ZStrBuf::with_capacity(len);
-    for &p in parts {
-        if let Some(v) = peek_str_int(f, lits, p) {
+    // One allocation, of the size class of the result (`ROPE_END`'s
+    // `zend_string_alloc`), so a concatenation onto it grows in place.
+    let mut out = ZStrBuf::with_capacity(class_capacity(len));
+    if parts.len() <= ROPE_PARTS {
+        for v in seen.iter().take(parts.len()).flatten() {
             push_part(&mut out, v);
+        }
+    } else {
+        for &p in parts {
+            if let Some(v) = peek_str_int(f, lits, p) {
+                push_part(&mut out, v);
+            }
         }
     }
     for &p in parts {
@@ -128,12 +149,18 @@ pub(in crate::exec) fn concat_in(
                     t.clone()
                 } else if t.is_empty() && !matches!(b, Operand::Lit(_)) {
                     s
-                } else if t.is_empty() {
+                } else if t.is_empty() && (s.refcount() != 1 || s.is_interned()) {
+                    // An empty LITERAL on the right is not `ZEND_CONCAT`'s
+                    // shortcut (`OP2_TYPE != IS_CONST`): a left string
+                    // somebody else holds, or an interned one, is copied
+                    // into a new string (`zend_string_alloc` + `memcpy`):
+                    // `$row['k'] . ''` is written to separate a value. One
+                    // nobody else holds is extended by nothing and stays.
                     ZStr::concat_str(&s, t)
                 } else {
-                    s.concat_owned_str(t)
+                    s.concat_owned_str_spare(t)
                 }),
-                Some(Value::Int(i)) => Ok(s.concat_owned_long(*i)),
+                Some(Value::Int(i)) => Ok(s.concat_owned_long_spare(*i)),
                 // Unreachable (checked above, and `b` cannot be the
                 // temporary just taken): the string goes back.
                 _ => Err(s),
@@ -160,11 +187,12 @@ pub(in crate::exec) fn concat_in(
             } else if t.is_empty() && !matches!(b, Operand::Lit(_)) {
                 s.clone()
             } else {
-                ZStr::concat_str(s, t)
+                ZStr::concat_str_spare(s, t)
             }
         }
         _ => {
-            let mut out = ZStrBuf::with_capacity(part_len(x).saturating_add(part_len(y)));
+            let len = part_len(x).saturating_add(part_len(y));
+            let mut out = ZStrBuf::with_capacity(class_capacity(len));
             push_part(&mut out, x);
             push_part(&mut out, y);
             out.finish()

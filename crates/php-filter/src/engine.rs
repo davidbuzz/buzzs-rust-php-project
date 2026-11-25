@@ -1,5 +1,11 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
-// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+// Derived from php-src ext/filter/filter.c. Similarity metric to original: 38%
+//   Copyright © The PHP Group and Contributors.
+//   Authors: Rasmus Lerdorf <rasmus@php.net>
+//            Derick Rethans <derick@php.net>
+//            Pierre-A. Joye <pierre@php.net>
+//            Ilia Alshanetsky <iliaa@php.net>
+// Rust port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// SPDX-License-Identifier: BSD-3-Clause
 //! The filter engine of `filter.c`: `php_zval_filter`, the recursive
 //! application over arrays, `php_filter_call`, `php_filter_array_handler`
 //! and the PHP-level functions.

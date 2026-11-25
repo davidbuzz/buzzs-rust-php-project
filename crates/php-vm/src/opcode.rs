@@ -575,6 +575,29 @@ pub enum Op {
     SendNamed { name: u32, src: ArgSrc },
     /// Performs the pending call.
     DoCall { dst: Option<u32> },
+    /// `ZEND_INIT_USER_CALL` (`zend_compile_func_cuf` /
+    /// `zend_compile_func_cufa`, `Zend/zend_compile.c`): starts a call of
+    /// the callable `callee` for a `call_user_func()` (`array: false`) or
+    /// `call_user_func_array()` written by name, resolved like the
+    /// builtin's `Z_PARAM_FUNC` (`zend_is_callable`), whose `TypeError`
+    /// names the builtin. The call is dynamic (`ZEND_CALL_DYNAMIC`); its
+    /// arguments follow as [`Op::SendUser`]s or one [`Op::SendArray`],
+    /// then a [`Op::DoCall`].
+    InitUserCall { callee: Operand, array: bool },
+    /// `ZEND_SEND_USER`: argument `n` (1-based) of a `call_user_func()`
+    /// by value; a by-reference parameter gets it with the "must be passed
+    /// by reference, value given" warning.
+    SendUser { src: Operand, n: u32 },
+    /// `ZEND_SEND_ARRAY`: the elements of the array `src` as the
+    /// arguments of a `call_user_func_array()`, string keys as named
+    /// arguments, references kept for by-reference parameters. With `len`
+    /// not [`Operand::Unused`] (the argument was `array_slice($a, skip,
+    /// len)`), only that slice of the elements, all positional.
+    SendArray {
+        src: Operand,
+        len: Operand,
+        skip: u32,
+    },
     /// Turns the pending call into a closure (`f(...)`).
     CallableConvert {
         dst: u32,
@@ -1393,9 +1416,25 @@ pub const PREFER_REF: u32 = 1 << 31;
 /// does in php-src, so the VM neither checks nor coerces it.
 pub const UNCHECKED_TYPE: u32 = 1 << 30;
 
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@zpp-number float $x`: arginfo declares `float`, the C function
+/// parses with `Z_PARAM_NUMBER` (`number_format()`'s `$num`), so
+/// [`ParamInfo::ty`] holds the parsed `int|float` (what the VM checks
+/// and what a `TypeError` names) and [`ParamInfo::arginfo_type`] gives
+/// back `float` (what the null deprecation names).
+pub const ZPP_NUMBER: u32 = 1 << 29;
+
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@zpp-not-null ?string $x`: arginfo declares the type nullable, the C
+/// function parses without `_OR_NULL` (`strtr()`'s `$to`), so
+/// [`ParamInfo::ty`] holds the type without `null` (null is deprecated
+/// in weak mode, a `TypeError` names `string`) and
+/// [`ParamInfo::arginfo_type`] gives back `?string`.
+pub const ZPP_NOT_NULL: u32 = 1 << 28;
+
 /// The [`ParamInfo::promote`] bits that mark native parameters rather than
 /// constructor promotion.
-pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE;
+pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE | ZPP_NUMBER | ZPP_NOT_NULL;
 
 /// Information about one declared parameter.
 #[derive(Clone, Debug)]
@@ -1421,6 +1460,29 @@ pub struct ParamInfo {
     pub default_expr: Option<crate::class::ConstExpr>,
     /// Attributes.
     pub attributes: Vec<crate::class::AttributeInfo>,
+}
+
+impl ParamInfo {
+    /// The type the parameter's arginfo declares: [`ParamInfo::ty`] (the
+    /// type the function parses with) unless a `@zpp-*` marker
+    /// ([`ZPP_NUMBER`], [`ZPP_NOT_NULL`]) made the two differ. php-src
+    /// names the arginfo type in the null-to-scalar deprecation
+    /// (`zend_null_arg_deprecated` reads `arg_info->type`) and in
+    /// Reflection, the parsed one in a zpp `TypeError`.
+    pub fn arginfo_type(&self) -> Option<std::borrow::Cow<'_, TypeDecl>> {
+        let ty = self.ty.as_ref()?;
+        if self.promote & (ZPP_NUMBER | ZPP_NOT_NULL) == 0 {
+            return Some(std::borrow::Cow::Borrowed(ty));
+        }
+        let mut declared = ty.clone();
+        if self.promote & ZPP_NUMBER != 0 {
+            declared.mask &= !crate::types::mask::LONG;
+        }
+        if self.promote & ZPP_NOT_NULL != 0 {
+            declared.mask |= crate::types::mask::NULL;
+        }
+        Some(std::borrow::Cow::Owned(declared))
+    }
 }
 
 /// One `static $name = init;` declaration ([`OpArray::static_vars`]).
@@ -1683,15 +1745,28 @@ impl OpArray {
 
     /// Clears run-time caches so this op array carries no request state.
     pub fn clear_runtime_caches(&self) {
+        // Most op arrays of a large script never ran since they were last
+        // cleared (a request calls few of the functions it declares): an
+        // empty cache is left alone instead of being borrowed and cleared.
+        //
         // A JIT trace that inlined a call resolved it through
-        // `fcall_cache`: clearing it means a later call at the same site
-        // can resolve to a different function (see `jit.rs`).
+        // `fcall_cache`, and one may pin a run-time cache entry (a static
+        // property cell, a folded constant): clearing them means a later
+        // run of the same site can resolve to something else, and the
+        // trace checks this version (see `jit.rs`).
         crate::func::bump_func_table_version();
-        self.fcall_cache.borrow_mut().clear();
-        self.class_cache.borrow_mut().clear();
+        clear_if_used(&self.fcall_cache);
+        clear_if_used(&self.class_cache);
         self.rt_cache.clear();
-        self.prop_cache.borrow_mut().clear();
-        self.method_cache.borrow_mut().clear();
+        clear_if_used(&self.prop_cache);
+        clear_if_used(&self.method_cache);
+    }
+}
+
+/// Empties a run-time cache unless it is empty already.
+fn clear_if_used<T>(cache: &RefCell<Vec<T>>) {
+    if !cache.borrow().is_empty() {
+        cache.borrow_mut().clear();
     }
 }
 

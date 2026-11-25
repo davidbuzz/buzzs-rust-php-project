@@ -277,3 +277,29 @@ fn html_errors_escape_docref_messages_once() {
         "{out}"
     );
 }
+
+/// `php_error_cb` under `html_errors`: only an `E_ERROR` or `E_PARSE`
+/// message (an uncaught exception's) is HTML-escaped; a warning raised by
+/// the engine or by `trigger_error()` prints as raised. Expected from
+/// php8.5 with `-d html_errors=1`.
+#[test]
+fn html_errors_escape_only_fatal_messages() {
+    let out = run(
+        "<?php\ntrigger_error(\"u <w>&\", E_USER_WARNING);\n$a = []; echo $a[\"<k>\"];\nthrow new Exception(\"<e>\");\n",
+        &[("html_errors", "1"), ("display_errors", "1")],
+    );
+    assert!(
+        out.contains("<b>Warning</b>:  u <w>& in <b>t.php</b> on line <b>2</b><br />"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "<b>Warning</b>:  Undefined array key \"<k>\" in <b>t.php</b> on line <b>3</b><br />"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("<b>Fatal error</b>:  Uncaught Exception: &lt;e&gt; in t.php:4"),
+        "{out}"
+    );
+}

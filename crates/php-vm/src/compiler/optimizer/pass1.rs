@@ -524,10 +524,7 @@ fn is_typecheck_fn(name: &[u8]) -> bool {
         b"is_null"
             | b"is_bool"
             | b"is_int"
-            | b"is_integer"
-            | b"is_long"
             | b"is_float"
-            | b"is_double"
             | b"is_string"
             | b"is_array"
             | b"is_object"
@@ -535,32 +532,6 @@ fn is_typecheck_fn(name: &[u8]) -> bool {
             | b"is_scalar"
             | b"is_numeric"
     )
-}
-
-fn is_php_whitespace(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\0' | 0x0B)
-}
-
-fn trim_bytes<'a>(mut s: &'a [u8], left: bool, right: bool) -> &'a [u8] {
-    if left {
-        while let Some((&first, rest)) = s.split_first() {
-            if is_php_whitespace(first) {
-                s = rest;
-            } else {
-                break;
-            }
-        }
-    }
-    if right {
-        while let Some((&last, rest)) = s.split_last() {
-            if is_php_whitespace(last) {
-                s = rest;
-            } else {
-                break;
-            }
-        }
-    }
-    s
 }
 
 fn hex_digit(b: u8) -> Option<u8> {
@@ -595,20 +566,32 @@ fn bin2hex(s: &[u8]) -> Vec<u8> {
     out
 }
 
-#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+/// The result of the call of the builtin `name` (lower case) with the
+/// literal arguments `args`, when it is exactly what the run-time call
+/// returns and the call would report nothing (sccp.c `ct_eval_func_call`
+/// discards an evaluation that raised a warning, notice or deprecation or
+/// threw, and never evaluates a deprecated function). Only exact argument
+/// types fold, so neither coercion nor `strict_types` is involved; the
+/// one-argument calls the handlers answer without a frame use the same
+/// code as those handlers ([`crate::special::quick_eval`]: `ord()` of one
+/// byte, `chr()` of 0..=255, `trim()` with php-src master's default list).
+/// Deprecated aliases (`is_double()`, `is_integer()`, `is_long()`,
+/// `doubleval()`, deprecated since 8.6) are never evaluated.
+#[allow(clippy::too_many_lines)]
 fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
     if super::is_disabled_function(name) {
         return None;
     }
-    match name {
-        b"strlen" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Int(s.len() as i64));
-                }
-            }
-            None
+    if let ([arg], Some((id, _))) = (args, crate::special::quick_id(name)) {
+        if let Some(v) = crate::special::quick_eval(id, arg) {
+            return Some(v);
         }
+    }
+    match name {
+        b"strlen" => match args {
+            [Value::Str(s)] => Some(Value::Int(i64::try_from(s.len()).ok()?)),
+            _ => None,
+        },
         // `@compile-time-eval` in `zend_builtin_functions.stub.php`.
         b"zend_version" => args
             .is_empty()
@@ -624,346 +607,151 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
             ))),
             _ => None,
         },
-        b"chr" => {
-            if args.len() == 1 {
-                if let Value::Int(n) = args[0] {
-                    return Some(Value::Str(ZStr::from(vec![(*n & 0xff) as u8])));
-                }
-            }
-            None
-        }
-        b"ord" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    let b = if s.is_empty() {
-                        0
-                    } else {
-                        s.as_bytes()[0] as i64
-                    };
-                    return Some(Value::Int(b));
-                }
-            }
-            None
-        }
-        b"abs" => {
-            if args.len() == 1 {
-                match args[0] {
-                    Value::Int(n) => {
-                        return Some(if *n == i64::MIN {
-                            Value::Float(-(*n as f64))
-                        } else {
-                            Value::Int(n.abs())
-                        });
-                    }
-                    Value::Float(f) => return Some(Value::Float(f.abs())),
-                    _ => {}
-                }
-            }
-            None
-        }
-        b"min" => {
-            if args.len() >= 2 {
-                let mut min_val = args[0];
-                for arg in &args[1..] {
-                    let mut ctx = CollectingContext::new();
-                    if let Ok(true) = php_runtime::ops::is_smaller(arg, min_val, &mut ctx) {
-                        if ctx.diagnostics.is_empty() {
-                            min_val = arg;
-                        } else {
-                            return None;
-                        }
-                    } else if !ctx.diagnostics.is_empty() {
-                        return None;
-                    }
-                }
-                return Some((*min_val).clone());
-            }
-            None
-        }
-        b"max" => {
-            if args.len() >= 2 {
-                let mut max_val = args[0];
-                for arg in &args[1..] {
-                    let mut ctx = CollectingContext::new();
-                    if let Ok(true) = php_runtime::ops::is_smaller(max_val, arg, &mut ctx) {
-                        if ctx.diagnostics.is_empty() {
-                            max_val = arg;
-                        } else {
-                            return None;
-                        }
-                    } else if !ctx.diagnostics.is_empty() {
-                        return None;
-                    }
-                }
-                return Some((*max_val).clone());
-            }
-            None
-        }
-        b"is_null" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Null)))
-            } else {
-                None
-            }
-        }
-        b"is_bool" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Bool(_))))
-            } else {
-                None
-            }
-        }
-        b"is_int" | b"is_integer" | b"is_long" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Int(_))))
-            } else {
-                None
-            }
-        }
-        b"is_float" | b"is_double" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Float(_))))
-            } else {
-                None
-            }
-        }
-        b"is_string" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Str(_))))
-            } else {
-                None
-            }
-        }
-        b"is_array" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Array(_))))
-            } else {
-                None
-            }
-        }
-        b"is_object" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Object(_))))
-            } else {
-                None
-            }
-        }
-        b"is_resource" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(args[0], Value::Resource(_))))
-            } else {
-                None
-            }
-        }
-        b"is_scalar" => {
-            if args.len() == 1 {
-                Some(Value::Bool(matches!(
-                    args[0],
-                    Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
-                )))
-            } else {
-                None
-            }
-        }
-        b"is_numeric" => {
-            if args.len() == 1 {
-                let is_num = match args[0] {
-                    Value::Int(_) | Value::Float(_) => true,
-                    Value::Str(s) => php_runtime::numeric::is_numeric(s.as_bytes()),
-                    _ => false,
+        // `abs(PHP_INT_MIN)` is the float `-(float) PHP_INT_MIN`, silently
+        // (the other ints and floats are answered by `quick_eval`).
+        #[allow(clippy::cast_precision_loss)]
+        b"abs" => match args {
+            [Value::Int(i64::MIN)] => Some(Value::Float(-(i64::MIN as f64))),
+            _ => None,
+        },
+        // Of ints only: `min()` keeps the second of two equal values and
+        // `max()` the first, which for ints cannot be told apart, while a
+        // mix of types (`min(1, "1")`, `min(1.0, 1)`) or two zero floats
+        // of different signs can.
+        b"min" | b"max" => {
+            let mut best = match args.first() {
+                Some(Value::Int(i)) if args.len() >= 2 => *i,
+                _ => return None,
+            };
+            for arg in &args[1..] {
+                let Value::Int(i) = arg else {
+                    return None;
                 };
-                Some(Value::Bool(is_num))
-            } else {
-                None
+                best = if name == b"min" {
+                    best.min(*i)
+                } else {
+                    best.max(*i)
+                };
             }
+            Some(Value::Int(best))
         }
-        b"boolval" => {
-            if args.len() == 1 {
-                fold_cast(CastKind::Bool, args[0])
-            } else {
-                None
+        b"is_null" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Null))),
+            _ => None,
+        },
+        b"is_bool" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Bool(_)))),
+            _ => None,
+        },
+        b"is_int" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Int(_)))),
+            _ => None,
+        },
+        b"is_float" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Float(_)))),
+            _ => None,
+        },
+        b"is_string" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Str(_)))),
+            _ => None,
+        },
+        b"is_array" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Array(_)))),
+            _ => None,
+        },
+        b"is_object" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Object(_)))),
+            _ => None,
+        },
+        b"is_resource" => match args {
+            [v] => Some(Value::Bool(matches!(v, Value::Resource(_)))),
+            _ => None,
+        },
+        b"is_scalar" => match args {
+            [v] => Some(Value::Bool(matches!(
+                v,
+                Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            ))),
+            _ => None,
+        },
+        b"is_numeric" => match args {
+            [v] => Some(Value::Bool(match v {
+                Value::Int(_) | Value::Float(_) => true,
+                Value::Str(s) => php_runtime::numeric::is_numeric(s.as_bytes()),
+                _ => false,
+            })),
+            _ => None,
+        },
+        b"boolval" => match args {
+            [v] => fold_cast(CastKind::Bool, v),
+            _ => None,
+        },
+        b"intval" => match args {
+            [v] => fold_cast(CastKind::Int, v),
+            _ => None,
+        },
+        b"floatval" => match args {
+            [v] => fold_cast(CastKind::Float, v),
+            _ => None,
+        },
+        b"strval" => match args {
+            [v] => fold_cast(CastKind::String, v),
+            _ => None,
+        },
+        // The alias of `rtrim()` (`quick_eval` answers `rtrim` itself),
+        // with the same default list.
+        b"chop" => match args {
+            [Value::Str(s)] => {
+                let mut notices = php_stdstr::error::Notices::new();
+                let r = php_stdstr::transform::trim(
+                    s.as_bytes(),
+                    None,
+                    php_stdstr::transform::TrimMode::Right,
+                    &mut notices,
+                );
+                notices.is_empty().then(|| Value::Str(ZStr::from(r)))
             }
-        }
-        b"intval" => {
-            if args.len() == 1 {
-                fold_cast(CastKind::Int, args[0])
-            } else {
-                None
+            _ => None,
+        },
+        b"bin2hex" => match args {
+            [Value::Str(s)] => Some(Value::Str(ZStr::from(bin2hex(s.as_bytes())))),
+            _ => None,
+        },
+        // An odd length or a non-hex digit warns and gives false: left to
+        // the call.
+        b"hex2bin" => match args {
+            [Value::Str(s)] => Some(Value::Str(ZStr::from(hex2bin(s.as_bytes())?))),
+            _ => None,
+        },
+        b"substr" => match args {
+            [Value::Str(st), Value::Int(offset)]
+            | [Value::Str(st), Value::Int(offset), Value::Null] => Some(Value::Str(ZStr::from(
+                php_stdstr::search::substr(st.as_bytes(), *offset, None),
+            ))),
+            [Value::Str(st), Value::Int(offset), Value::Int(len)] => Some(Value::Str(ZStr::from(
+                php_stdstr::search::substr(st.as_bytes(), *offset, Some(*len)),
+            ))),
+            _ => None,
+        },
+        // sccp.c `can_ct_eval_func_call`: a result under 64 KiB (a negative
+        // count throws).
+        b"str_repeat" => match args {
+            [Value::Str(s), Value::Int(times)] => {
+                let times = usize::try_from(*times).ok()?;
+                let total = s.len().checked_mul(times)?;
+                (total < 64 * 1024).then(|| Value::Str(ZStr::from(s.as_bytes().repeat(times))))
             }
-        }
-        b"floatval" | b"doubleval" => {
-            if args.len() == 1 {
-                fold_cast(CastKind::Float, args[0])
-            } else {
-                None
+            _ => None,
+        },
+        b"intdiv" => match args {
+            [Value::Int(a), Value::Int(b)] if *b != 0 && !(*a == i64::MIN && *b == -1) => {
+                Some(Value::Int(*a / *b))
             }
-        }
-        b"strval" => {
-            if args.len() == 1 {
-                fold_cast(CastKind::String, args[0])
-            } else {
-                None
-            }
-        }
-        b"strtolower" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(s.as_bytes().to_ascii_lowercase())));
-                }
-            }
-            None
-        }
-        b"strtoupper" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(s.as_bytes().to_ascii_uppercase())));
-                }
-            }
-            None
-        }
-        b"trim" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), true, true))));
-                }
-            }
-            None
-        }
-        b"ltrim" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(trim_bytes(
-                        s.as_bytes(),
-                        true,
-                        false,
-                    ))));
-                }
-            }
-            None
-        }
-        b"rtrim" | b"chop" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(trim_bytes(
-                        s.as_bytes(),
-                        false,
-                        true,
-                    ))));
-                }
-            }
-            None
-        }
-        b"bin2hex" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(bin2hex(s.as_bytes()))));
-                }
-            }
-            None
-        }
-        b"hex2bin" => {
-            if args.len() == 1 {
-                if let Value::Str(s) = args[0] {
-                    if let Some(decoded) = hex2bin(s.as_bytes()) {
-                        return Some(Value::Str(ZStr::from(decoded)));
-                    }
-                }
-            }
-            None
-        }
-        b"substr" => {
-            if args.len() == 2 || args.len() == 3 {
-                if let (Value::Str(st), Value::Int(offset)) = (args[0], args[1]) {
-                    let len = if args.len() == 3 {
-                        if let Value::Int(l) = args[2] {
-                            Some(*l)
-                        } else {
-                            return None;
-                        }
-                    } else {
-                        None
-                    };
-                    let sub = php_stdstr::search::substr(st.as_bytes(), *offset, len);
-                    return Some(Value::Str(ZStr::from(sub)));
-                }
-            }
-            None
-        }
-        b"str_repeat" => {
-            if args.len() == 2 {
-                if let (Value::Str(s), Value::Int(times)) = (args[0], args[1]) {
-                    if *times >= 0 && *times <= 10000 {
-                        let repeated = s.as_bytes().repeat(*times as usize);
-                        return Some(Value::Str(ZStr::from(repeated)));
-                    }
-                }
-            }
-            None
-        }
-        b"sqrt" => {
-            if args.len() == 1 {
-                match args[0] {
-                    Value::Int(n) if *n >= 0 => {
-                        return Some(Value::Float((*n as f64).sqrt()));
-                    }
-                    Value::Float(f) if *f >= 0.0 => return Some(Value::Float(f.sqrt())),
-                    _ => {}
-                }
-            }
-            None
-        }
-        b"floor" => {
-            if args.len() == 1 {
-                match args[0] {
-                    Value::Int(n) => {
-                        return Some(Value::Float(*n as f64));
-                    }
-                    Value::Float(f) => return Some(Value::Float(f.floor())),
-                    _ => {}
-                }
-            }
-            None
-        }
-        b"ceil" => {
-            if args.len() == 1 {
-                match args[0] {
-                    Value::Int(n) => {
-                        return Some(Value::Float(*n as f64));
-                    }
-                    Value::Float(f) => return Some(Value::Float(f.ceil())),
-                    _ => {}
-                }
-            }
-            None
-        }
-        b"round" => {
-            if args.len() == 1 {
-                match args[0] {
-                    Value::Int(n) => {
-                        return Some(Value::Float(*n as f64));
-                    }
-                    Value::Float(f) => return Some(Value::Float(f.round())),
-                    _ => {}
-                }
-            }
-            None
-        }
-        b"intdiv" => {
-            if args.len() == 2 {
-                if let (Value::Int(a), Value::Int(b)) = (args[0], args[1]) {
-                    if *b != 0 && !(*a == i64::MIN && *b == -1) {
-                        return Some(Value::Int(*a / *b));
-                    }
-                }
-            }
-            None
-        }
-        b"pi" => {
-            if args.is_empty() {
-                return Some(Value::Float(std::f64::consts::PI));
-            }
-            None
-        }
+            _ => None,
+        },
+        b"pi" => args
+            .is_empty()
+            .then_some(Value::Float(std::f64::consts::PI)),
         _ => None,
     }
 }
@@ -1172,5 +960,114 @@ mod tests {
         // `dirname($p, 0)` throws a ValueError at run time.
         assert_eq!(dir(&[&p, &Value::Int(0)]), None);
         assert_eq!(dir(&[&Value::Int(1)]), None);
+    }
+
+    fn bstr(b: &[u8]) -> Value {
+        Value::Str(ZStr::from(b))
+    }
+
+    fn eval_bytes(name: &[u8], args: &[&Value]) -> Option<Vec<u8>> {
+        match evaluate_pure_builtin(name, args) {
+            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            _ => None,
+        }
+    }
+
+    /// [`evaluate_pure_builtin`] as its `Debug` text (`Value` has no
+    /// `PartialEq`).
+    fn ev(name: &[u8], args: &[&Value]) -> Option<String> {
+        evaluate_pure_builtin(name, args).map(|v| format!("{v:?}"))
+    }
+
+    fn dbg(v: Value) -> Option<String> {
+        Some(format!("{v:?}"))
+    }
+
+    /// A call that reports something at run time is left to the call:
+    /// `chr(256)`, `chr(-1)`, `ord('')` and `ord('Hello')` deprecate
+    /// (chr_out_of_range.phpt, ord_not_1_byte.phpt), and the deprecated
+    /// aliases deprecate themselves (is_float_alias.phpt,
+    /// is_int_aliases.phpt). Expectations from `/usr/bin/php8.5`.
+    #[test]
+    fn calls_with_diagnostics_are_not_evaluated() {
+        assert_eq!(ev(b"chr", &[&Value::Int(256)]), None);
+        assert_eq!(ev(b"chr", &[&Value::Int(-1)]), None);
+        assert_eq!(eval_bytes(b"chr", &[&Value::Int(65)]), Some(b"A".to_vec()));
+        assert_eq!(eval_bytes(b"chr", &[&Value::Int(255)]), Some(vec![255]));
+        assert_eq!(ev(b"ord", &[&bstr(b"")]), None);
+        assert_eq!(ev(b"ord", &[&bstr(b"Hello")]), None);
+        assert_eq!(ev(b"ord", &[&bstr(b"A")]), dbg(Value::Int(65)));
+        let aliases: [&[u8]; 4] = [b"is_double", b"is_integer", b"is_long", b"doubleval"];
+        for alias in aliases {
+            assert_eq!(ev(alias, &[&Value::Int(1)]), None);
+            assert!(!is_typecheck_fn(alias));
+        }
+        assert_eq!(
+            ev(b"is_float", &[&Value::Float(1.0)]),
+            dbg(Value::Bool(true))
+        );
+        assert_eq!(ev(b"is_int", &[&Value::Int(1)]), dbg(Value::Bool(true)));
+        // `strlen(null)` deprecates (TypeError under strict_types).
+        assert_eq!(ev(b"strlen", &[&Value::Null]), None);
+        assert_eq!(ev(b"strlen", &[&Value::Int(12)]), None);
+        assert_eq!(ev(b"strlen", &[&bstr(b"abc")]), dbg(Value::Int(3)));
+        // An invalid hex string warns.
+        assert_eq!(ev(b"hex2bin", &[&bstr(b"abc")]), None);
+        assert_eq!(ev(b"hex2bin", &[&bstr(b"zz")]), None);
+        assert_eq!(
+            eval_bytes(b"hex2bin", &[&bstr(b"4142")]),
+            Some(b"AB".to_vec())
+        );
+    }
+
+    /// php-src master's default trim list is " \f\t\n\r\v\0" (form feed
+    /// since 8.4); trim.phpt.
+    #[test]
+    fn trim_strips_the_run_time_list() {
+        let s = bstr(b"\x0c\t\n\r\x0b\0 x \x0c\0");
+        assert_eq!(eval_bytes(b"trim", &[&s]), Some(b"x".to_vec()));
+        assert_eq!(eval_bytes(b"ltrim", &[&s]), Some(b"x \x0c\0".to_vec()));
+        assert_eq!(
+            eval_bytes(b"rtrim", &[&s]),
+            Some(b"\x0c\t\n\r\x0b\0 x".to_vec())
+        );
+        assert_eq!(
+            eval_bytes(b"chop", &[&s]),
+            Some(b"\x0c\t\n\r\x0b\0 x".to_vec())
+        );
+        assert_eq!(ev(b"trim", &[&Value::Int(1)]), None);
+    }
+
+    /// `min()`/`max()` of equal values of different types return one of
+    /// them by position (`min(1, "1")` is "1", `min(1.0, 1)` is 1 in
+    /// php8.5): only ints are evaluated.
+    #[test]
+    fn min_max_fold_ints_only() {
+        let (one, s1, f1) = (Value::Int(1), bstr(b"1"), Value::Float(1.0));
+        assert_eq!(ev(b"min", &[&one, &s1]), None);
+        assert_eq!(ev(b"min", &[&f1, &one]), None);
+        assert_eq!(ev(b"max", &[&one, &f1]), None);
+        assert_eq!(
+            ev(b"min", &[&Value::Int(3), &one, &Value::Int(2)]),
+            dbg(Value::Int(1))
+        );
+        assert_eq!(
+            ev(b"max", &[&Value::Int(3), &one, &Value::Int(5)]),
+            dbg(Value::Int(5))
+        );
+        assert_eq!(ev(b"max", &[&one]), None);
+    }
+
+    /// sccp.c `can_ct_eval_func_call`: `str_repeat()` folds only below
+    /// 64 KiB, and a negative count throws.
+    #[test]
+    fn str_repeat_is_bounded() {
+        let ab = bstr(b"ab");
+        assert_eq!(
+            eval_bytes(b"str_repeat", &[&ab, &Value::Int(3)]),
+            Some(b"ababab".to_vec())
+        );
+        assert_eq!(ev(b"str_repeat", &[&ab, &Value::Int(40_000)]), None);
+        assert_eq!(ev(b"str_repeat", &[&ab, &Value::Int(-1)]), None);
     }
 }

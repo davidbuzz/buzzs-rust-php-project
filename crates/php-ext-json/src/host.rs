@@ -51,12 +51,47 @@ pub(crate) fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
 /// The VM seen through [`RuntimeContext`] + [`JsonHost`].
 pub(crate) struct VmJsonHost<'a> {
     vm: &'a mut Vm,
-    input_len: usize,
 }
 
 impl<'a> VmJsonHost<'a> {
-    pub(crate) fn new(vm: &'a mut Vm, input_len: usize) -> Self {
-        VmJsonHost { vm, input_len }
+    pub(crate) fn new(vm: &'a mut Vm) -> Self {
+        VmJsonHost { vm }
+    }
+}
+
+/// The error a refused reservation returns to stop the encoder: the
+/// violation is recorded in `php-memlimit`, and the binding returns before
+/// this reaches [`rt_throw`] (the VM raises "Allowed memory size of %zu
+/// bytes exhausted" after the call, `RETURN_OOM()`).
+pub(crate) fn out_of_memory() -> RuntimeError {
+    RuntimeError::Fatal(String::new())
+}
+
+/// [`JsonHost::json_reserve`] over `php-memlimit`: grows `buf` for
+/// `additional` more bytes by [`php_json::memory::grow_output`], each
+/// growth checked first (`zend_mm_realloc_huge` checks the growth against
+/// `memory_limit` and reports the whole new block size). Returns `false`,
+/// with the violation recorded, when it does not fit.
+pub(crate) fn reserve_output(buf: &mut Vec<u8>, additional: usize) -> bool {
+    match php_json::memory::grow_output(
+        buf.capacity(),
+        buf.len(),
+        additional,
+        php_memlimit::would_fit,
+    ) {
+        Ok(cap) => {
+            buf.reserve_exact(cap - buf.len());
+            true
+        }
+        // The growth did not fit, so the full block cannot either: this
+        // records the violation with php-src's figure.
+        Err(tried) => {
+            if php_memlimit::try_reserve(tried).is_err() {
+                return false;
+            }
+            buf.reserve_exact(additional);
+            true
+        }
     }
 }
 
@@ -122,15 +157,17 @@ impl RuntimeContext for VmJsonHost<'_> {
 }
 
 impl JsonHost for VmJsonHost<'_> {
+    #[inline]
     fn json_reserve(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
-        if additional > buf.capacity() - buf.len() {
-            let output = buf.len().saturating_add(additional);
-            if let Err(t) = super::check_memory(self.vm, self.input_len, output) {
-                return Err(to_rt(self.vm, t));
-            }
-            buf.reserve(additional);
+        if additional <= buf.capacity() - buf.len() || reserve_output(buf, additional) {
+            Ok(())
+        } else {
+            Err(out_of_memory())
         }
-        Ok(())
+    }
+
+    fn json_try_reserve(&mut self, bytes: usize) -> bool {
+        php_vm::try_reserve_memory(bytes)
     }
 
     fn is_json_serializable(&mut self, obj: &Obj) -> bool {

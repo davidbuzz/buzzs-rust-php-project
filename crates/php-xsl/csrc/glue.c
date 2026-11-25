@@ -1,4 +1,24 @@
 /*
+ * Derived from php-src ext/xsl/xsltprocessor.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Authors: Christian Stocker <chregu@php.net>
+ *            Rob Richards <rrichards@php.net>
+ * Derived from php-src ext/xsl/php_xsl.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Author: Christian Stocker <chregu@php.net>
+ * Derived from php-src ext/libxml/libxml.c
+ *   Copyright © The PHP Group and Contributors.
+ *   Authors: Shane Caraveo <shane@php.net>
+ *            Wez Furlong <wez@thebrainroom.com>
+ * Derived from php-src ext/libxml/php_libxml.h
+ *   Copyright © The PHP Group and Contributors.
+ *   Authors: Shane Caraveo <shane@php.net>
+ *            Wez Furlong <wez@thebrainroom.com>
+ * Port: Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+/*
  * C glue for php-xsl.
  *
  * 1. libxslt and libxml2 report errors through printf-style *variadic*

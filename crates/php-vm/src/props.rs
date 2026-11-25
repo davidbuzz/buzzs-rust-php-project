@@ -15,71 +15,6 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
-/// The active `__get`/`__set`/`__isset`/`__unset` guards (`zend_get_property_guard`)
-/// and the readonly reinitialization markers of objects being cloned: (object
-/// handle, property name, kind) as a set. It only ever holds the guards of
-/// the magic accesses in progress (and a clone's markers until it is
-/// done), a handful at most, so a vector searched from its end costs less
-/// than hashing the name for every access (one insert and one removal per
-/// `__get` call).
-#[derive(Debug, Default)]
-pub struct GuardSet(Vec<(u32, ZStr, u8)>);
-
-impl GuardSet {
-    /// Whether no guard is active.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn position(&self, key: &(u32, ZStr, u8)) -> Option<usize> {
-        self.0
-            .iter()
-            .rposition(|k| k.0 == key.0 && k.2 == key.2 && k.1 == key.1)
-    }
-
-    /// Whether `key` is in the set.
-    #[inline]
-    pub fn contains(&self, key: &(u32, ZStr, u8)) -> bool {
-        !self.0.is_empty() && self.position(key).is_some()
-    }
-
-    /// Adds `key`; `false` when it was there already.
-    pub fn insert(&mut self, key: (u32, ZStr, u8)) -> bool {
-        if self.contains(&key) {
-            return false;
-        }
-        self.0.push(key);
-        true
-    }
-
-    /// Removes `key`; `false` when it was not there.
-    pub fn remove(&mut self, key: &(u32, ZStr, u8)) -> bool {
-        match self.position(key) {
-            Some(i) => {
-                self.0.swap_remove(i);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Keeps the guards `f` accepts.
-    pub fn retain(&mut self, f: impl FnMut(&(u32, ZStr, u8)) -> bool) {
-        self.0.retain(f);
-    }
-
-    /// The guards, in no particular order.
-    pub fn iter(&self) -> impl Iterator<Item = &(u32, ZStr, u8)> {
-        self.0.iter()
-    }
-
-    /// Removes every guard (request shutdown).
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-}
-
 /// Class flags that make `new` fail (`object_init_ex` checks them in one
 /// test before reporting which one applies).
 const NOT_INSTANTIABLE: u32 =
@@ -298,13 +233,12 @@ impl Vm {
         if self.prop_guards.is_empty() {
             return false;
         }
-        self.prop_guards.contains(&(o.handle(), name.clone(), kind))
+        self.prop_guards.contains(o.handle(), name, kind)
             || object::data(o).lazy.borrow().as_ref().is_some_and(|info| {
                 info.proxy
                     && info.initialized
                     && info.instance.as_ref().is_some_and(|instance| {
-                        self.prop_guards
-                            .contains(&(instance.handle(), name.clone(), kind))
+                        self.prop_guards.contains(instance.handle(), name, kind)
                     })
             })
             // A proxy's guard covers its instance: the frames' `$this` are
@@ -329,9 +263,7 @@ impl Vm {
                                     .as_ref()
                                     .is_some_and(|instance| Obj::ptr_eq(instance, o))
                         })
-                        && self
-                            .prop_guards
-                            .contains(&(this.handle(), name.clone(), kind))
+                        && self.prop_guards.contains(this.handle(), name, kind)
                 })
     }
 
@@ -342,17 +274,17 @@ impl Vm {
         kind: u8,
         f: impl FnOnce(&mut Vm) -> VmResult<T>,
     ) -> VmResult<T> {
-        let key = (o.handle(), name.clone(), kind);
-        self.prop_guards.insert(key.clone());
+        let handle = o.handle();
+        self.prop_guards.insert(handle, name.clone(), kind);
         let r = f(self);
-        self.prop_guards.remove(&key);
+        self.prop_guards.remove(handle, name, kind);
         r
     }
 
     fn call_magic_get(&mut self, o: &Obj, name: &ZStr) -> VmResult<Value> {
         let m = object::class_of(o).magic.get.clone().expect("__get");
         self.with_guard(o, name, G_GET, |vm| {
-            vm.call_method_n(o, &m, [Value::Str(name.clone())])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
         })
     }
 
@@ -516,10 +448,9 @@ impl Vm {
     pub(crate) fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
         let data = object::data(o);
         let cls = &data.class;
-        let pi = cls.prop_map.get(name)?;
-        if pi.flags != flags::PUBLIC || pi.hooks.is_some() || (write && pi.ty.is_some()) {
-            return None;
-        }
+        // The class and object tests first: they decide every object of
+        // a class with a parent, hooks or a magic property method (the
+        // `__get` path) without the hash lookup of the name.
         if cls.parent.is_some()
             || cls.hooks.is_some()
             || cls.magic.get.is_some()
@@ -531,12 +462,152 @@ impl Vm {
         {
             return None;
         }
+        let pi = cls.prop_map.get(name)?;
+        if pi.flags != flags::PUBLIC || pi.hooks.is_some() || (write && pi.ty.is_some()) {
+            return None;
+        }
         let slot = pi.slot as usize;
         match data.slots.borrow().get(slot) {
             Some(Some(value)) if !matches!(value, Value::Reference(_)) => Some(slot),
             Some(None) if write && cls.magic.set.is_none() => Some(slot),
             _ => None,
         }
+    }
+
+    /// The slot of the declared property `name` of `o` that `$o->$name`
+    /// (a name held by a variable) reads (`write` false) or assigns
+    /// without any further dispatch, as the frame's scope `scope` sees it:
+    /// `zend_get_property_offset`'s answer (`Zend/zend_object_handlers.c`)
+    /// for a declared, non-static, non-hooked property accessible from
+    /// `scope` — public, or any declared by `scope` itself when that is
+    /// the object's class — holding a value that is not a reference; for a
+    /// write also untyped, not readonly and without asymmetric
+    /// visibility, or unset in a class without `__set`. Mirrors
+    /// [`Vm::lookup_prop`]: when the scope is another class that declares
+    /// a private property of that name, `None` (the scope's own property
+    /// may be the one meant). `None` sends the access to the generic path.
+    pub(crate) fn dyn_prop_slot(
+        o: &Obj,
+        name: &ZStr,
+        write: bool,
+        scope: Option<&Rc<Class>>,
+    ) -> Option<usize> {
+        let data = object::data(o);
+        let cls = &data.class;
+        if cls.hooks.is_some() || data.lazy.borrow().is_some() {
+            return None;
+        }
+        let pi = cls.prop_map.get(name)?;
+        let own_scope = scope.is_some_and(|s| Rc::ptr_eq(s, cls));
+        if !own_scope {
+            if scope.is_some_and(|s| {
+                s.prop_map
+                    .get(name)
+                    .is_some_and(|sp| sp.visibility() == flags::PRIVATE)
+            }) {
+                return None;
+            }
+            if pi.visibility() != flags::PUBLIC {
+                return None;
+            }
+        } else if pi.visibility() == flags::PRIVATE
+            && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes())
+        {
+            return None;
+        }
+        let blocked = flags::STATIC
+            | flags::VIRTUAL
+            | if write {
+                flags::READONLY | flags::SET_MASK
+            } else {
+                0
+            };
+        if pi.flags & blocked != 0 || pi.hooks.is_some() || (write && pi.ty.is_some()) {
+            return None;
+        }
+        let slot = pi.slot as usize;
+        match data.slots.borrow().get(slot) {
+            Some(Some(value)) if !matches!(value, Value::Reference(_)) => Some(slot),
+            Some(None) if write && cls.magic.set.is_none() => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// The object and property name of a `$this->$name` / `$cv->$name`
+    /// place of the running frame (`pid`): the name a variable holds as a
+    /// string, the object the frame's `$this` or a variable holds
+    /// directly.
+    fn dyn_prop_target(&self, pid: crate::opcode::PlaceId) -> Option<(Obj, ZStr)> {
+        use crate::opcode::{Operand, PlaceBase, Seg};
+        let f = self.frame();
+        let p = f.code.places.get(pid as usize)?;
+        let [Seg::Prop(Operand::Cv(n))] = p.segs.as_slice() else {
+            return None;
+        };
+        let Some(Value::Str(name)) = f.cvs.get(*n as usize).and_then(crate::vm::CvSlot::get) else {
+            return None;
+        };
+        let obj = match p.base {
+            PlaceBase::This => f.this.clone()?,
+            PlaceBase::Cv(c) => match f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some((obj, name.clone()))
+    }
+
+    /// `$this->$name` / `$cv->$name` read (`Fetch` of the place `pid` in
+    /// `Read` or `Is` mode) of a declared property ([`Vm::dyn_prop_slot`]),
+    /// without the generic place walk. `None`: nothing done.
+    pub(crate) fn fetch_dyn_prop_fast(
+        &mut self,
+        pid: crate::opcode::PlaceId,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        if mode == FetchMode::List {
+            return None;
+        }
+        let (o, name) = self.dyn_prop_target(pid)?;
+        let slot = Self::dyn_prop_slot(&o, &name, false, self.frame().scope.as_ref())?;
+        let slots = object::data(&o).slots.borrow();
+        slots.get(slot).cloned().flatten()
+    }
+
+    /// `$this->$name = v` / `$cv->$name = v` (`Assign` to the place `pid`)
+    /// of a declared property ([`Vm::dyn_prop_slot`]), as
+    /// `write_property_ex` stores into a plain slot. `Err(v)`: nothing
+    /// done, the value handed back.
+    pub(crate) fn assign_dyn_prop_fast(
+        &mut self,
+        pid: crate::opcode::PlaceId,
+        v: Value,
+    ) -> Result<Value, Value> {
+        if matches!(v, Value::Reference(_)) {
+            return Err(v);
+        }
+        let Some((o, name)) = self.dyn_prop_target(pid) else {
+            return Err(v);
+        };
+        let Some(slot) = Self::dyn_prop_slot(&o, &name, true, self.frame().scope.as_ref()) else {
+            return Err(v);
+        };
+        let data = object::data(&o);
+        let mut slots = data.slots.borrow_mut();
+        let Some(cell) = slots.get_mut(slot) else {
+            return Err(v);
+        };
+        let old = cell.replace(v.clone());
+        drop(slots);
+        data.set_slot_unset(slot, false);
+        if let Some(old) = &old {
+            if !old.is_plain() {
+                crate::gc::possible_root(old);
+            }
+        }
+        drop(old);
+        Ok(v)
     }
 
     /// Reads `$o->name`.
@@ -551,6 +622,9 @@ impl Vm {
             return Ok(object::data(o).slots.borrow()[slot]
                 .clone()
                 .expect("initialized slot"));
+        }
+        if self.reads_through_magic(o, name, mode) {
+            return self.magic_read(o, name, mode);
         }
         if object::data(o).lazy.borrow().is_some()
             && !object::class_of(o).prop_map.contains_key(name)
@@ -673,6 +747,46 @@ impl Vm {
         }
     }
 
+    /// Whether a read of `$o->name` is one the rest of [`Vm::read_property`]
+    /// would hand to [`Vm::magic_read`] without doing anything else first:
+    /// a class with `__get` and no native handlers, an object that is not
+    /// lazy, a name that is neither mangled nor empty, declared neither as
+    /// an instance nor as a static property of the class or the calling
+    /// scope (`lookup_prop` finds nothing, `undeclared_prop_check` raises
+    /// nothing), absent from the object's dynamic properties, with no guard
+    /// on it (`zend_std_read_property` reaching `zend_std_call_getter`).
+    /// The usual `__get` case gets there after a few lookups instead of
+    /// the property lookup's whole ladder.
+    fn reads_through_magic(&self, o: &Obj, name: &ZStr, mode: FetchMode) -> bool {
+        let data = object::data(o);
+        let cls = &data.class;
+        if cls.magic.get.is_none() || cls.hooks.is_some() || data.lazy.borrow().is_some() {
+            return false;
+        }
+        let b = name.as_bytes();
+        if b.first().is_none_or(|&c| c == 0)
+            || cls.prop_map.contains_key(name)
+            || cls.find_static(b).is_some()
+        {
+            return false;
+        }
+        if let Some(s) = self.scope() {
+            if !Rc::ptr_eq(&s, cls) && (s.prop_map.contains_key(name) || s.find_static(b).is_some())
+            {
+                return false;
+            }
+        }
+        if data
+            .dynamic
+            .borrow()
+            .as_ref()
+            .is_some_and(|table| table.contains_key(&ArrayKey::Str(name.clone())))
+        {
+            return false;
+        }
+        self.has_read_magic(o, name, mode)
+    }
+
     /// Whether a read may go to `__get()` (or, for `isset`-style fetches,
     /// to `__isset()`).
     fn has_read_magic(&self, o: &Obj, name: &ZStr, mode: FetchMode) -> bool {
@@ -789,7 +903,7 @@ impl Vm {
         if mode == FetchMode::Is && self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
             let r = self.with_guard(o, name, G_ISSET, |vm| {
-                vm.call_method_n(o, &m, [Value::Str(name.clone())])
+                vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
             })?;
             if !self.to_bool(&r)? {
                 return Ok(Value::Null);
@@ -952,17 +1066,17 @@ impl Vm {
     /// once (`IS_PROP_REINITABLE`).
     pub(crate) fn readonly_locked(&self, o: &Obj, pi: &PropInfo) -> bool {
         object::data(o).flags.get() & oflags::CLONING == 0
-            || self
-                .prop_guards
-                .contains(&(o.handle(), pi.name.clone(), G_REINIT))
+            || self.prop_guards.contains(o.handle(), &pi.name, G_REINIT)
     }
 
     /// Clears `IS_PROP_REINITABLE` after a readonly property was written
     /// during cloning.
     fn consume_reinit(&mut self, o: &Obj, pi: &PropInfo) {
         if pi.flags & flags::READONLY != 0 && object::data(o).flags.get() & oflags::CLONING != 0 {
-            self.prop_guards
-                .insert((o.handle(), pi.name.clone(), G_REINIT));
+            if !self.prop_guards.contains(o.handle(), &pi.name, G_REINIT) {
+                self.prop_guards
+                    .insert(o.handle(), pi.name.clone(), G_REINIT);
+            }
         }
     }
 
@@ -1468,7 +1582,7 @@ impl Vm {
     fn magic_write(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
         let m = object::class_of(o).magic.set.clone().expect("__set");
         self.with_guard(o, name, G_SET, |vm| {
-            vm.call_method_n(o, &m, [Value::Str(name.clone()), v.clone()])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone()), v.clone()])
         })?;
         Ok(v)
     }
@@ -1494,9 +1608,7 @@ impl Vm {
         // The slot of the real instance (a lazy proxy forwards).
         let lazy_target = self.lazy_object_for_write(o, name)?;
         if !Obj::ptr_eq(o, &lazy_target)
-            && !self
-                .prop_guards
-                .contains(&(o.handle(), name.clone(), G_GET))
+            && !self.prop_guards.contains(o.handle(), name, G_GET)
             && self.guard_active(&lazy_target, name, G_GET)
             && !object::class_of(&lazy_target).prop_map.contains_key(name)
             && !object::data(&lazy_target)
@@ -2038,7 +2150,7 @@ impl Vm {
     fn magic_unset(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
         let m = object::class_of(o).magic.unset.clone().expect("__unset");
         self.with_guard(o, name, G_UNSET, |vm| {
-            vm.call_method_n(o, &m, [Value::Str(name.clone())])
+            vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])
         })?;
         Ok(())
     }
@@ -2209,24 +2321,29 @@ impl Vm {
         }
         if self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
-            let r = self.with_guard(o, name, G_ISSET, |vm| {
-                vm.call_method_n(o, &m, [Value::Str(name.clone())])
-            })?;
-            let set = self.to_bool(&r)?;
-            if !empty {
-                return Ok(set);
-            }
-            if !set {
-                return Ok(true);
-            }
-            if let Some(v) = self.materialised_prop(o, name) {
-                return Ok(!self.to_bool(&v)?);
-            }
-            if self.has_magic(o, name, G_GET) {
-                let v = self.call_magic_get(o, name)?;
-                return Ok(!self.to_bool(&v.deref())?);
-            }
-            return Ok(true);
+            // `zend_std_has_property` keeps `IN_ISSET` set until it is done,
+            // so for `empty()` the `__get()` it calls after a true
+            // `__isset()` runs inside the isset guard: a `??` or `isset()`
+            // of the same property in that `__get()` does not call
+            // `__isset()` again.
+            return self.with_guard(o, name, G_ISSET, |vm| {
+                let r = vm.call_known_method(o, &m, &mut [Value::Str(name.clone())])?;
+                let set = vm.to_bool(&r)?;
+                if !empty {
+                    return Ok(set);
+                }
+                if !set {
+                    return Ok(true);
+                }
+                if let Some(v) = vm.materialised_prop(o, name) {
+                    return Ok(!vm.to_bool(&v)?);
+                }
+                if vm.has_magic(o, name, G_GET) {
+                    let v = vm.call_magic_get(o, name)?;
+                    return Ok(!vm.to_bool(&v.deref())?);
+                }
+                Ok(true)
+            });
         }
         Ok(empty)
     }
