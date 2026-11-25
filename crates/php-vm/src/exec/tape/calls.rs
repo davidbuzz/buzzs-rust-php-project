@@ -2734,8 +2734,10 @@ pub(super) fn call_native(
     // The handler's copies of the arguments (php-src's handler reads them
     // in the frame), then the declared defaults of the omitted trailing
     // parameters, not marked as passed.
-    let mut values = vm.call_bufs.values.pop().unwrap_or_default();
-    let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
+    // The two vectors are lent whole for the call (`CallBufs::take_values`;
+    // a nested builtin call meanwhile takes pooled ones).
+    let mut values = vm.call_bufs.take_values();
+    let mut passed = vm.call_bufs.take_passed();
     // A `match`, not `map_or(Value::Null, ..)`: that builds the null
     // first and drops it (an out-of-line drop call per argument). One
     // `extend` of the frame's slice and one `resize` store each length
@@ -2894,24 +2896,9 @@ fn release_native_args(vm: &mut Vm, args: Args) {
         called,
         func,
     } = args;
-    for v in values.drain(..) {
-        if matches!(
-            v,
-            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
-        ) {
-            std::mem::forget(v);
-        } else {
-            drop(v);
-        }
-    }
-    passed.clear();
-    let bufs = &mut vm.call_bufs;
-    if values.capacity() > 0 && values.capacity() <= 256 && bufs.values.len() < 4 {
-        bufs.values.push(values);
-    }
-    if passed.capacity() > 0 && passed.capacity() <= 256 && bufs.passed.len() < 4 {
-        bufs.passed.push(passed);
-    }
+    release_values(&mut values);
+    vm.call_bufs.put_values(values);
+    vm.call_bufs.put_passed(passed);
     // An empty vector that never allocated owns nothing.
     if named.capacity() == 0 {
         std::mem::forget(named);
@@ -2929,6 +2916,27 @@ fn release_native_args(vm: &mut Vm, args: Args) {
         std::mem::forget(called);
     }
     drop(func);
+}
+
+/// Empties a handler's argument copies front to back, as `Vec::clear`
+/// releases them, without a `Drain` (whose out-of-line drop cost ~22
+/// instructions a call) and without the out-of-line drop of a scalar:
+/// each value is taken out (a `Null` left behind owns nothing), released,
+/// and the length cut to zero once.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per tape builtin call
+fn release_values(values: &mut Vec<Value>) {
+    for slot in values.iter_mut() {
+        if !matches!(
+            slot,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            drop(std::mem::take(slot));
+        }
+    }
+    // Every element is a scalar now, which `clear`'s drop loop passes
+    // over with a tag test each.
+    values.clear();
 }
 
 /// After a builtin call [`send_ref`] sent a variable to by reference

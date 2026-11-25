@@ -437,6 +437,14 @@ pub(crate) struct CallBufs {
     pub(crate) values: Vec<Vec<Value>>,
     /// ZPP passed-flag vectors.
     pub(crate) passed: Vec<Vec<bool>>,
+    /// The value vector lent to the handler of the newest builtin call
+    /// ([`CallBufs::take_values`]): taken and put back whole, three words
+    /// each way, where a pool `pop` and an out-of-line `push` cost ~30
+    /// instructions a call. Empty (no capacity) while lent; a nested call
+    /// meanwhile takes from [`CallBufs::values`].
+    pub(crate) lent_values: Vec<Value>,
+    /// The passed-flag vector lent alongside [`CallBufs::lent_values`].
+    pub(crate) lent_passed: Vec<bool>,
     /// Prewarmed and pooled user function frames.
     pub(crate) user_frames: Vec<Frame>,
     /// The run-time cache of `ZEND_INIT_METHOD_CALL`.
@@ -452,6 +460,8 @@ impl CallBufs {
             args: Vec::with_capacity(128),
             values: Vec::with_capacity(16),
             passed: Vec::with_capacity(16),
+            lent_values: Vec::with_capacity(8),
+            lent_passed: Vec::with_capacity(8),
             user_frames: Vec::with_capacity(8),
             methods: crate::call::MethodCache::default(),
         };
@@ -462,6 +472,61 @@ impl CallBufs {
             b.user_frames.push(Frame::new_pooled(empty_code.clone()));
         }
         b
+    }
+
+    /// An empty value vector for a builtin's [`crate::func::Args`]: the
+    /// lent one when it is home, else one from the pool (a nested call's,
+    /// or the lent one was kept by a handler), else a new one.
+    #[inline]
+    pub(crate) fn take_values(&mut self) -> Vec<Value> {
+        if self.lent_values.capacity() != 0 {
+            std::mem::take(&mut self.lent_values)
+        } else {
+            self.values.pop().unwrap_or_default()
+        }
+    }
+
+    /// An empty passed-flag vector, as [`CallBufs::take_values`].
+    #[inline]
+    pub(crate) fn take_passed(&mut self) -> Vec<bool> {
+        if self.lent_passed.capacity() != 0 {
+            std::mem::take(&mut self.lent_passed)
+        } else {
+            self.passed.pop().unwrap_or_default()
+        }
+    }
+
+    /// Gives back a value vector [`CallBufs::take_values`] lent, emptied
+    /// by the caller (its values released in their order): home when home
+    /// is free, else to the pool, as `Vm::put_val_vec` returns one.
+    #[inline]
+    pub(crate) fn put_values(&mut self, v: Vec<Value>) {
+        debug_assert!(v.is_empty(), "the values were released");
+        let cap = v.capacity();
+        if cap == 0 || cap > 256 {
+            return;
+        }
+        if self.lent_values.capacity() == 0 {
+            // The empty vector there owns nothing.
+            std::mem::forget(std::mem::replace(&mut self.lent_values, v));
+        } else if self.values.len() < 4 {
+            self.values.push(v);
+        }
+    }
+
+    /// Gives back a passed-flag vector, as [`CallBufs::put_values`].
+    #[inline]
+    pub(crate) fn put_passed(&mut self, mut v: Vec<bool>) {
+        let cap = v.capacity();
+        if cap == 0 || cap > 256 {
+            return;
+        }
+        v.clear();
+        if self.lent_passed.capacity() == 0 {
+            std::mem::forget(std::mem::replace(&mut self.lent_passed, v));
+        } else if self.passed.len() < 4 {
+            self.passed.push(v);
+        }
     }
 }
 
@@ -3491,6 +3556,44 @@ mod tests {
             Some(&b"b"[..])
         );
         assert_eq!(Rc::strong_count(&code), 2);
+    }
+
+    #[test]
+    fn lent_call_buffers_go_home_and_nested_calls_take_pooled_ones() {
+        let code = Rc::new(OpArray::default());
+        let mut bufs = super::CallBufs::prewarmed(&code);
+        let pooled = bufs.values.len();
+        // The first call borrows the lent pair.
+        let outer = bufs.take_values();
+        let outer_flags = bufs.take_passed();
+        assert_eq!(outer.capacity(), 8);
+        assert_eq!(bufs.lent_values.capacity(), 0);
+        assert_eq!(bufs.values.len(), pooled);
+        // A builtin called meanwhile (a callback's) takes a pooled pair.
+        let inner = bufs.take_values();
+        let inner_flags = bufs.take_passed();
+        assert_eq!(bufs.values.len(), pooled - 1);
+        assert_eq!(bufs.passed.len(), pooled - 1);
+        // The inner one returns first, and goes home; the outer one then
+        // finds home taken and goes to the pool.
+        bufs.put_values(inner);
+        bufs.put_passed(inner_flags);
+        assert_eq!(bufs.lent_values.capacity(), 8);
+        bufs.put_values(outer);
+        bufs.put_passed(outer_flags);
+        assert_eq!(bufs.values.len(), pooled);
+        assert_eq!(bufs.passed.len(), pooled);
+        // A vector a handler swapped for an empty one is not kept.
+        let kept = bufs.take_values();
+        bufs.put_values(Vec::new());
+        assert_eq!(bufs.lent_values.capacity(), 0);
+        assert_eq!(bufs.take_values().capacity(), 8);
+        drop(kept);
+        // Flags come back cleared.
+        let mut flags = bufs.take_passed();
+        flags.extend([true, false]);
+        bufs.put_passed(flags);
+        assert!(bufs.take_passed().is_empty());
     }
 
     #[test]
