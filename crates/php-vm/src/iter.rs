@@ -447,10 +447,15 @@ impl Vm {
                     match &mut *held {
                         Value::Array(arr) => {
                             let table = arr.make_mut();
+                            // The key only when the loop has a variable
+                            // for it (a string key is a copy).
                             table.iterator_fetch(id).and_then(|pos| {
-                                let key = table.key_value_at(pos)?;
+                                let k = match key {
+                                    Some(_) => Some(table.key_value_at(pos)?),
+                                    None => None,
+                                };
                                 let slot = table.at_mut(pos)?;
-                                Some((key, slot.make_ref()))
+                                Some((k, slot.make_ref()))
                             })
                         }
                         Value::Object(_) => None,
@@ -469,7 +474,7 @@ impl Vm {
                 match item {
                     Some((k, rf)) => {
                         self.set_tmp(val, Value::Reference(rf));
-                        if let Some(kt) = key {
+                        if let (Some(kt), Some(k)) = (key, k) {
                             self.set_tmp(kt, k);
                         }
                         Ok(true)
@@ -1001,4 +1006,69 @@ fn nul_dynamic_prop_ref(o: &Obj, name: &ZStr) -> Option<PhpRef> {
         .as_mut()
         .and_then(|t| t.get_mut(&ArrayKey::Str(name.clone())))
         .map(Value::make_ref)
+}
+
+/// `ZEND_FE_FETCH_RW` of a by-reference `foreach` over an array held by
+/// the iterated variable's reference ([`ForeachIter::ArrayRef`]), as the
+/// frame-local loop runs it: the array the reference holds is separated
+/// when shared (`SEPARATE_ARRAY`, a copy that runs no user code), the
+/// next element from the iterator's position is made a reference in place
+/// (`ZVAL_MAKE_REF`: one already held by reference is shared) and that
+/// reference goes to temporary `val`, the element's key to `key` when the
+/// loop has a key variable. `Some(true)` with the element fetched,
+/// `Some(false)` at the end (the loop jumps out). `None`, nothing changed,
+/// for everything the generic [`Vm::op_fe_fetch`] does: other iterators
+/// (objects, `Iterator`s, generators), a variable the loop body overwrote
+/// with a non-array (a warning), and result slots whose old value's
+/// release could run a destructor or the cycle collector.
+#[inline(never)]
+pub(crate) fn fe_fetch_ref_in(
+    f: &mut crate::vm::Frame,
+    iter: u32,
+    val: u32,
+    key: Option<u32>,
+) -> Option<bool> {
+    let free = |v: Option<&Value>| {
+        matches!(
+            v,
+            Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
+        )
+    };
+    if !free(f.tmps.get(val as usize)) || key.is_some_and(|k| !free(f.tmps.get(k as usize))) {
+        return None;
+    }
+    // The iterators and the temporaries are borrowed apart.
+    let tmps = &mut f.tmps;
+    let Some(Some(ForeachIter::ArrayRef { r, id })) = f.iters.get(iter as usize) else {
+        return None;
+    };
+    let (k, rf) = {
+        let mut held = r.try_borrow_mut()?;
+        let Value::Array(arr) = &mut *held else {
+            return None;
+        };
+        let table = arr.make_mut();
+        let Some(pos) = table.iterator_fetch(*id) else {
+            return Some(false);
+        };
+        let k = match key {
+            Some(_) => table.key_value_at(pos),
+            None => None,
+        };
+        let Some(slot) = table.at_mut(pos) else {
+            // Unreachable: `iterator_fetch` returns a used position.
+            return Some(false);
+        };
+        (k, slot.make_ref())
+    };
+    if let Some(slot) = tmps.get_mut(val as usize) {
+        // Null, a scalar or a string (checked above): no destructor.
+        drop(std::mem::replace(slot, Value::Reference(rf)));
+    }
+    if let (Some(kt), Some(k)) = (key, k) {
+        if let Some(slot) = tmps.get_mut(kt as usize) {
+            drop(std::mem::replace(slot, k));
+        }
+    }
+    Some(true)
 }

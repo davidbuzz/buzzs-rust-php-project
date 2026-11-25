@@ -81,6 +81,30 @@ pub(in crate::exec) fn step_ref(f: &mut Frame, ops: &[Op], lits: &[Value], at: u
             b,
             dst,
         } => done(bin_ref(f, lits, kind, a, b, dst), next),
+        // The result goes to `dst`; the `AssignCv` after the op stores it
+        // (as the lean paths do for a result they do not store
+        // themselves).
+        Op::BinAssignCv {
+            op: kind,
+            a,
+            b,
+            dst,
+            ..
+        }
+        | Op::BinAssignCvCmpJmp {
+            op: kind,
+            a,
+            b,
+            dst,
+            ..
+        }
+        | Op::BinAssignCvJmp {
+            op: kind,
+            a,
+            b,
+            dst,
+            ..
+        } => done(bin_ref(f, lits, kind, a, b, dst), next),
         Op::JmpZ(Operand::Cv(cv), t) => match truth_ref(f, cv) {
             Some(false) => t as usize,
             Some(true) => next,

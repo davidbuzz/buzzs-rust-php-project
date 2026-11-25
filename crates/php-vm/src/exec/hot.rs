@@ -971,7 +971,12 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 }
             }
             Some(false) => ip = end as usize,
-            None => return DECLINED,
+            // `foreach` by reference over an array (`ZEND_FE_FETCH_RW`).
+            None => match crate::iter::fe_fetch_ref_in(f, iter, val, key) {
+                Some(true) => {}
+                Some(false) => ip = end as usize,
+                None => return DECLINED,
+            },
         },
         // `FE_RESET_R` of an array, and `FE_FREE` of its iterator.
         Op::FeReset {
