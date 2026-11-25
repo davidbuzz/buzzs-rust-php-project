@@ -434,7 +434,7 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     if let Err(status) = preload::startup(&cfg) {
         return status;
     }
-    do_cli(argv, &cfg)
+    startup::final_status(do_cli(argv, &cfg))
 }
 
 /// `context.mode` (`php_cli.h`; the order matters).

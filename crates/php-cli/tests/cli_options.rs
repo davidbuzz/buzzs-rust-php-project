@@ -223,3 +223,27 @@ fn script_encoding_without_multibyte_keeps_the_default() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn invalid_startup_mail_cr_lf_mode_is_fatal_but_runs() {
+    let d = temp_dir("crlf");
+    let out = php_in(
+        &d,
+        &[
+            "-d",
+            "mail.cr_lf_mode=abc",
+            "-r",
+            "var_dump(ini_get('mail.cr_lf_mode'));",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(255));
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "\nFatal error: PHP Startup: Invalid value \"abc\" for mail.cr_lf_mode. Must be one of: \
+         \"crlf\", \"lf\", \"mixed\", \"os\" in Unknown on line 0\nstring(4) \"crlf\"\n"
+    );
+    let out = php_in(&d, &["-d", "mail.cr_lf_mode=", "-r", "echo 1;"]);
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"1");
+    let _ = std::fs::remove_dir_all(&d);
+}

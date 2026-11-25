@@ -888,7 +888,24 @@ impl IniRegistry {
                 (IniTyped::None, None)
             }
             ModifyHandler::MailCrLfMode => {
-                if !matches!(v, b"crlf" | b"lf" | b"mixed" | b"os") {
+                // OnUpdateMailCrLfMode (main/main.c): an empty value is
+                // accepted; a bad one is an E_WARNING at runtime and an
+                // E_ERROR at the other stages, silent at deactivation.
+                if !v.is_empty() && !matches!(v, b"crlf" | b"lf" | b"mixed" | b"os") {
+                    if stage != Stage::Deactivate {
+                        let level = if stage == Stage::Runtime {
+                            ErrorLevel::WARNING
+                        } else {
+                            ErrorLevel::ERROR
+                        };
+                        diag.report(Diagnostic::docref(
+                            level,
+                            format!(
+                                "Invalid value \"{}\" for mail.cr_lf_mode. Must be one of: \"crlf\", \"lf\", \"mixed\", \"os\"",
+                                String::from_utf8_lossy(v)
+                            ),
+                        ));
+                    }
                     return Err(());
                 }
                 (IniTyped::None, None)
@@ -1613,6 +1630,23 @@ mod tests {
             "ini_set(): Directive 'report_memleaks' is deprecated"
         );
         assert!(!r.get_bool("report_memleaks"));
+    }
+
+    #[test]
+    fn mail_cr_lf_mode_rejects_unknown_modes() {
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core([("mail.cr_lf_mode".to_string(), b"abc".to_vec())], &mut d);
+        assert_eq!(r.get("mail.cr_lf_mode"), Some(&b"crlf"[..]));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].level, ErrorLevel::ERROR);
+        assert_eq!(
+            d[0].message,
+            "Invalid value \"abc\" for mail.cr_lf_mode. Must be one of: \"crlf\", \"lf\", \"mixed\", \"os\""
+        );
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let r = IniRegistry::with_core([("mail.cr_lf_mode".to_string(), Vec::<u8>::new())], &mut d);
+        assert_eq!(r.get("mail.cr_lf_mode"), Some(&b""[..]));
+        assert!(d.is_empty());
     }
 
     #[test]
