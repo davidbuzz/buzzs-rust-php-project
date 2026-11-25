@@ -315,3 +315,20 @@ case("c-ini-constants", ["-c", "{d}/my.ini", "-r", "var_dump(get_cfg_var('a'), g
      files={"my.ini": "a = E_ALL\nb = ~E_DEPRECATED\nc = E_WARNING|E_NOTICE\n"}, nomem=True)
 case("c-memory-limit-dump", ["-c", "{d}/my.ini", "-r", "var_dump(ini_get_all('core')['memory_limit']);"], files={"my.ini": "memory_limit=33M\n"}, nomem=True)
 case("i-n-keys", N + ["-i"])
+
+# --- sweep: every directive both builds register under -n (sweep-keys.txt;
+# left out: paths, memory and stack sizes, extensions only one build has)
+import os as _os
+with open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "sweep-keys.txt")) as _f:
+    SWEEP_KEYS = [l.strip() for l in _f if l.strip()]
+SWEEP_VALUES = ["abc", "-1", "1M", "", "On", "0x1F"]
+for _k in SWEEP_KEYS:
+    _get = ("var_dump(ini_get('%s')); $a = ini_get_all(null)['%s']; "
+            "var_dump($a['global_value'], $a['access']);" % (_k, _k))
+    for _i, _v in enumerate(SWEEP_VALUES):
+        case(f"sweep-d-{_k}-{_i}", N + ["-d", f"{_k}={_v}", "-r", _get])
+    _set = "".join("var_dump(@ini_set('%s', '%s'), ini_get('%s'));" % (_k, _v, _k)
+                   for _v in SWEEP_VALUES)
+    case(f"sweep-set-{_k}", N + ["-r", _set + "ini_restore('%s'); var_dump(ini_get('%s'));" % (_k, _k)])
+    _setw = "".join("ini_set('%s', '%s');" % (_k, _v) for _v in SWEEP_VALUES)
+    case(f"sweep-setwarn-{_k}", N + ["-d", "error_reporting=-1", "-r", _setw])
