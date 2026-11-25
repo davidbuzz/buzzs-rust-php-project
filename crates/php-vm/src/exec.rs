@@ -1133,7 +1133,11 @@ impl Vm {
                 Err(t) => Some(Err(t)),
             };
         }
-        if !switched {
+        // The base frame's own `return`, also after the tape made calls
+        // from it and came back (`switched`: `code` is the current frame's,
+        // reloaded above; a method native code calls whose body calls
+        // another, `offsetSet()` calling `$this->set()`).
+        if self.frames.len() == base + 1 {
             if let Some(Op::Return { val }) = code.ops.get(next) {
                 // `Vm::run`'s `Return` arm after the tape declined it.
                 if let Some(flow) = self.return_at_base(*val, base, next + 1) {
