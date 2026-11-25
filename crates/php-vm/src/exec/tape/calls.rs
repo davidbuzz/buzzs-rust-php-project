@@ -1420,7 +1420,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         // A builtin the tape does not call goes the generic way without
         // its handle being copied first.
         if let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func {
-            if b.plain_call() == PlainCall::No {
+            if b.plain_call_upto().0 == PlainCall::No {
                 return None;
             }
         }
@@ -1433,18 +1433,15 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
             (Callee::User(uf), limit)
         }
         Func::Builtin(b) => {
-            let kind = b.plain_call();
+            // Plain up to the first by-reference parameter (`first_ref`):
+            // `send` stops there, and an argument at it is sent by
+            // reference (`send_ref`) or the call becomes the generic one.
+            let (kind, first_ref) = b.plain_call_upto();
             // A pooled frame's argument buffer is empty.
             if kind == PlainCall::No || !frame.args.is_empty() {
                 return None;
             }
-            // Past the declared parameters only into a variadic one (else
-            // the generic call reports the count).
-            let limit = if b.flags & flags::VARIADIC != 0 {
-                MAX_ARGS
-            } else {
-                b.signature().params.len().min(MAX_ARGS)
-            };
+            let limit = native_limit(&b).min(first_ref);
             (Callee::Native(b, kind), limit)
         }
     };
@@ -1457,6 +1454,17 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         closure: false,
         ctor: false,
     })
+}
+
+/// How many arguments a prepared call of builtin `b` takes: past the
+/// declared parameters only into a variadic one (else the generic call
+/// reports the count), at most [`MAX_ARGS`].
+fn native_limit(b: &Builtin) -> usize {
+    if b.flags & flags::VARIADIC != 0 {
+        MAX_ARGS
+    } else {
+        b.signature().params.len().min(MAX_ARGS)
+    }
 }
 
 /// `ZEND_INIT_FCALL` of a call [`CALL_QUICK`] marks (`f(<expression>)` of
@@ -2421,8 +2429,12 @@ pub(super) fn call_native(
             let (Some(v), Some(p)) = (arg, sig.params.get(i).or(sig.params.last())) else {
                 return Err(prep);
             };
+            // A by-reference parameter's type is the handler's to check
+            // (`Z_PARAM_ARRAY_EX(.., 0, 1)` of `array_pop()`), as in
+            // `call_builtin_impl`.
             if let Some(ty) = &p.ty {
-                if p.promote & crate::opcode::UNCHECKED_TYPE == 0
+                if !p.by_ref
+                    && p.promote & crate::opcode::UNCHECKED_TYPE == 0
                     && !ty.is_mixed()
                     && !accepts_without_coercion(ty.mask, v)
                 {

@@ -518,8 +518,13 @@ pub struct Builtin {
     /// The stub text `sig` is parsed from.
     text: StubText,
     /// [`Builtin::plain_call`], once worked out: [`PLAIN_UNKNOWN`],
-    /// [`PLAIN_NO`], [`PLAIN_NAMED`] or [`PLAIN_UNNAMED`].
+    /// [`PLAIN_NO`], [`PLAIN_NAMED`], [`PLAIN_UNNAMED`] or
+    /// [`PLAIN_NAMED_REF`].
     plain: Cell<u8>,
+    /// The position of the first by-reference parameter
+    /// ([`Builtin::plain_call_upto`]), [`NO_REF_PARAM`] when there is none;
+    /// worked out with `plain`.
+    first_ref: Cell<u8>,
 }
 
 /// [`Builtin::plain_call`] not worked out yet.
@@ -533,6 +538,13 @@ const PLAIN_NAMED: u8 = 2;
 /// callback's own call (`zend_compile_func_cuf`), so no frame of theirs
 /// shows in a backtrace.
 const PLAIN_UNNAMED: u8 = 3;
+/// [`PLAIN_NAMED`] for a function with a by-reference parameter: a plain
+/// call only while the call's arguments stop before it
+/// ([`Builtin::plain_call_upto`]); [`Builtin::plain_call`] answers
+/// [`PlainCall::No`] for it.
+const PLAIN_NAMED_REF: u8 = 4;
+/// [`Builtin::first_ref`] of a function without by-reference parameters.
+const NO_REF_PARAM: u8 = u8::MAX;
 
 /// How a call by name of a builtin can run on the tape ([`Builtin::plain_call`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -555,6 +567,7 @@ impl Builtin {
             sig: OnceCell::from(sig),
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
+            first_ref: Cell::new(NO_REF_PARAM),
         }
     }
 
@@ -573,6 +586,7 @@ impl Builtin {
             sig: OnceCell::new(),
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
+            first_ref: Cell::new(NO_REF_PARAM),
         }
     }
 
@@ -585,6 +599,7 @@ impl Builtin {
             sig: OnceCell::new(),
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
+            first_ref: Cell::new(NO_REF_PARAM),
         }
     }
 
@@ -617,32 +632,70 @@ impl Builtin {
         match self.plain.get() {
             PLAIN_NAMED => PlainCall::Named,
             PLAIN_UNNAMED => PlainCall::Unnamed,
-            PLAIN_NO => PlainCall::No,
-            _ => self.plain_call_slow(),
+            PLAIN_NO | PLAIN_NAMED_REF => PlainCall::No,
+            _ => {
+                self.plain_call_slow();
+                self.plain_call()
+            }
+        }
+    }
+
+    /// [`Builtin::plain_call`] decided per call rather than per function:
+    /// the answer for a call whose arguments stop before the returned
+    /// position, the first by-reference parameter's (`usize::MAX` when
+    /// there is none). php-src's `ZEND_SEND_VAL`/`ZEND_SEND_VAR` of the
+    /// arguments before it are the same whatever comes after them, so
+    /// `preg_match($re, $s)` or `str_replace($a, $b, $c)` is as plain as
+    /// `strlen($s)`; an argument at or past the position is sent by
+    /// reference (`ZEND_SEND_REF`, `calls::send_ref`) or the call is not
+    /// plain. Worked out once.
+    #[inline]
+    pub(crate) fn plain_call_upto(&self) -> (PlainCall, usize) {
+        match self.plain.get() {
+            PLAIN_NAMED => (PlainCall::Named, usize::MAX),
+            PLAIN_UNNAMED => (PlainCall::Unnamed, usize::MAX),
+            PLAIN_NAMED_REF => (PlainCall::Named, usize::from(self.first_ref.get())),
+            PLAIN_NO => (PlainCall::No, usize::MAX),
+            _ => {
+                self.plain_call_slow();
+                self.plain_call_upto()
+            }
+        }
+    }
+
+    /// Whether the parameter at `pos` is by reference (a position past the
+    /// declared ones: the variadic one's), and whether it is
+    /// `ZEND_ARG_SEND_PREFER_REF` (by reference when the argument is a
+    /// variable, by value otherwise).
+    #[inline]
+    pub(crate) fn param_ref_at(&self, pos: usize) -> (bool, bool) {
+        let ps = &self.signature().params;
+        match ps.get(pos).or_else(|| ps.last().filter(|l| l.variadic)) {
+            Some(p) if p.by_ref => (true, p.promote & crate::opcode::PREFER_REF != 0),
+            _ => (false, false),
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn plain_call_slow(&self) -> PlainCall {
-        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
-            && !self.signature().params.iter().any(|p| p.by_ref);
-        let kind = if !plain {
-            PlainCall::No
+    fn plain_call_slow(&self) {
+        let first_ref = self.signature().params.iter().position(|p| p.by_ref);
+        let code = if self.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            PLAIN_NO
+        } else if let Some(pos) = first_ref {
+            // A position past `u8::MAX - 1` (none is) is never reached.
+            self.first_ref
+                .set(u8::try_from(pos).unwrap_or(NO_REF_PARAM - 1));
+            PLAIN_NAMED_REF
         } else if matches!(
             self.name.as_bytes(),
             b"call_user_func" | b"call_user_func_array"
         ) {
-            PlainCall::Unnamed
+            PLAIN_UNNAMED
         } else {
-            PlainCall::Named
+            PLAIN_NAMED
         };
-        self.plain.set(match kind {
-            PlainCall::No => PLAIN_NO,
-            PlainCall::Named => PLAIN_NAMED,
-            PlainCall::Unnamed => PLAIN_UNNAMED,
-        });
-        kind
+        self.plain.set(code);
     }
 
     /// Parses the stub text. The tables are persistent in php-src
@@ -945,5 +998,72 @@ impl Args {
             .as_ref()
             .and_then(|f| std::str::from_utf8(f.name.as_bytes()).ok())
             .unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod plain_call_tests {
+    use super::{flags, Args, Builtin, PlainCall};
+    use crate::{Vm, VmResult};
+    use php_runtime::{Value, ZStr};
+
+    fn handler(_: &mut Vm, _: &mut Args) -> VmResult<Value> {
+        Ok(Value::Null)
+    }
+
+    fn builtin(stub: &str, fl: u32) -> Builtin {
+        let name = stub.split('(').next().unwrap_or_default();
+        Builtin::from_stub(ZStr::from(name), stub, fl, handler)
+    }
+
+    #[test]
+    fn by_value_functions_are_plain_whole() {
+        let b = builtin("strlen(string $string): int", 0);
+        assert_eq!(b.plain_call(), PlainCall::Named);
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, usize::MAX));
+        let b = builtin(
+            "call_user_func(callable $callback, mixed ...$args): mixed",
+            flags::VARIADIC,
+        );
+        assert_eq!(b.plain_call_upto(), (PlainCall::Unnamed, usize::MAX));
+    }
+
+    #[test]
+    fn by_reference_functions_are_plain_up_to_the_first_reference() {
+        let b = builtin(
+            "preg_match(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
+            0,
+        );
+        // Asked first through the per-call answer, then the per-function one.
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 2));
+        assert_eq!(b.plain_call(), PlainCall::No);
+        assert_eq!(b.param_ref_at(1), (false, false));
+        assert_eq!(b.param_ref_at(2), (true, false));
+        assert_eq!(b.param_ref_at(3), (false, false));
+        let b = builtin("array_pop(array &$array): mixed", 0);
+        assert_eq!(b.plain_call(), PlainCall::No);
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 0));
+        let b = builtin("f(array|object $array): mixed", 0);
+        assert_eq!(b.param_ref_at(0), (false, false));
+        let b = builtin("g(@prefer-ref array|object &$array): mixed", 0);
+        assert_eq!(b.param_ref_at(0), (true, true));
+    }
+
+    #[test]
+    fn a_variadic_by_reference_parameter_covers_every_later_position() {
+        let b = builtin(
+            "sscanf(string $string, string $format, mixed &...$vars): array|int|null",
+            flags::VARIADIC,
+        );
+        assert_eq!(b.plain_call_upto(), (PlainCall::Named, 2));
+        assert_eq!(b.param_ref_at(2), (true, false));
+        assert_eq!(b.param_ref_at(5), (true, false));
+    }
+
+    #[test]
+    fn deprecated_functions_are_never_plain() {
+        let b = builtin("f(array &$a): void", flags::DEPRECATED);
+        assert_eq!(b.plain_call_upto(), (PlainCall::No, usize::MAX));
+        assert_eq!(b.plain_call(), PlainCall::No);
     }
 }
