@@ -2324,6 +2324,7 @@ fn run_call(
 /// A function of its own, and small: inside [`run_call`], whose frame the
 /// calls' many paths make large, each of these reads paid for all of it.
 #[inline(never)]
+#[allow(clippy::too_many_lines)] // one short arm per op
 fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
     match ops.get(at) {
         // `ZEND_ASSERT_CHECK`, as `Vm::run`'s arm makes it: with
