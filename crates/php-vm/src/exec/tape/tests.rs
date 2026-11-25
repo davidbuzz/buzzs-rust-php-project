@@ -71,7 +71,8 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         // The call instructions also take ops `Vm::run` runs itself
-        // (`InitMethodCall`), and so do the instructions of the ops the
+        // (`InitMethodCall`, `InitUserCall` and its `SendUser`s and
+        // `SendArray`), and so do the instructions of the ops the
         // tape runs with the VM at hand (a frameless call, a read through
         // the global scope).
         // An array literal's ops are `Vm::run`'s too, and its table and
@@ -79,6 +80,7 @@ fn check(code: &OpArray) -> Box<[Inst]> {
         if !matches!(
             inst.op,
             TOp::CallInit
+                | TOp::CallSend
                 | TOp::VmOp
                 | TOp::FramelessQ
                 | TOp::IncDecStatic
@@ -1302,6 +1304,127 @@ fn builtin_calls() {
     assert_eq!(
         run(BUILTIN_CALLS),
         "abab|Ba|8|abab|abab|Ba|8|abab|abab|Ba|8|abab\n"
+    );
+}
+
+const USER_CALLS: &str = r#"<?php
+function z() { return 'z'; }
+function add($a, $b = 10) { return $a + $b; }
+class K { function m($x) { return "m$x"; } static function s($x) { return "s$x"; } function __invoke($x) { return "i$x"; } }
+function f($cb, $args, $o, $up) {
+    $r = [];
+    $k = 'k';
+    $cl = function ($x) use ($k) { return "$k$x"; };
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = call_user_func($cb, $i);
+        $r[] = call_user_func_array($cb, $args);
+        $r[] = call_user_func_array($cb, [$i, $i]);
+        $r[] = call_user_func_array('z', []);
+        $r[] = call_user_func([$o, 'm'], $i);
+        $r[] = call_user_func([$o, 's'], $i + 1);
+        $r[] = call_user_func($cl, $i);
+        $r[] = call_user_func($o, $i);
+        $r[] = call_user_func($up, "a$i");
+        $r[] = call_user_func_array($up, ["b$i"]);
+    }
+    return implode("|", $r);
+}
+try { echo f('add', [1, 2], new K, 'strtoupper'), "\n"; } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function g($cb, $o) {
+    $r = [];
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = call_user_func($cb, $i, 1, 2);
+        $r[] = call_user_func_array($cb, ['b' => $i, 'a' => 1]);
+        $r[] = call_user_func($cb, call_user_func($cb, $i));
+        $r[] = call_user_func([$o, 'm'], $i);
+    }
+    return implode("|", $r);
+}
+echo g('add', new K), "\n";
+function w() { return call_user_func_array('add', array_slice(func_get_args(), 1)); }
+echo w(0, 1), w(0, 1, 2), "\n";
+"#;
+
+/// The call instructions of `code`'s `InitUserCall`s, `SendUser`s and
+/// `SendArray`s, in op order.
+fn user_call_insts(code: &OpArray, tape: &[Inst]) -> Vec<(&'static str, TOp)> {
+    code.ops
+        .iter()
+        .zip(tape)
+        .filter_map(|(op, inst)| {
+            let name = match op {
+                Op::InitUserCall { .. } => "init",
+                Op::SendUser { .. } => "user",
+                Op::SendArray { .. } => "array",
+                _ => return None,
+            };
+            Some((name, inst.op))
+        })
+        .collect()
+}
+
+/// The op array among `arrays` whose compiled variables include `name`.
+fn with_cv<'a>(arrays: &'a [Rc<OpArray>], name: &str) -> &'a OpArray {
+    arrays
+        .iter()
+        .find(|c| c.cv_names.iter().any(|n| n.as_bytes() == name.as_bytes()))
+        .expect("an op array with that variable")
+}
+
+/// `call_user_func[_array]()` written by name starts as a call
+/// instruction, its arguments as call sends, when nothing between it and
+/// its `DoCall` starts another call (`calls::user_call_stays_prepared`);
+/// a callback call as an argument and the `array_slice()` form keep the
+/// generic ops. The prepared calls (functions by name, methods, static
+/// methods through an object, closures with bound variables, invokable
+/// objects, builtins by a variable name, arrays of arguments, an empty
+/// one) and the ones handed back (more arguments than parameters, named
+/// arguments, nested callbacks) come out as in php-src.
+#[test]
+fn user_calls() {
+    let arrays = op_arrays(USER_CALLS);
+    for code in &arrays {
+        check(code);
+    }
+    let f = with_cv(&arrays, "up");
+    let insts = user_call_insts(f, &check(f));
+    assert!(insts.len() >= 16, "{insts:?}");
+    for (name, op) in &insts {
+        let want = if *name == "init" {
+            TOp::CallInit
+        } else {
+            TOp::CallSend
+        };
+        assert_eq!(*op, want, "{insts:?}");
+    }
+    // `g`: the outer call of `call_user_func($cb, call_user_func($cb, $i))`
+    // is generic, the inner one prepared.
+    let has = |c: &OpArray, name: &[u8]| c.cv_names.iter().any(|n| n.as_bytes() == name);
+    let g = arrays
+        .iter()
+        .find(|c| has(c, b"o") && !has(c, b"up"))
+        .expect("g");
+    let insts = user_call_insts(g, &check(g));
+    let generic = insts
+        .iter()
+        .filter(|(name, op)| *name == "init" && *op == TOp::Exit)
+        .count();
+    assert_eq!(generic, 1, "{insts:?}");
+    // `w`: the `array_slice()` form.
+    for code in &arrays {
+        for (i, op) in code.ops.iter().enumerate() {
+            if let Op::SendArray { len, .. } = op {
+                if *len != crate::opcode::Operand::Unused {
+                    assert_eq!(check(code)[i].op, TOp::Exit, "op {i}: {op:?}");
+                }
+            }
+        }
+    }
+    assert_eq!(
+        run(USER_CALLS),
+        "10|3|0|z|m0|s1|k0|i0|A0|B0|11|3|2|z|m1|s2|k1|i1|A1|B1|12|3|4|z|m2|s3|k2|i2|A2|B2\n\
+         1|1|20|m0|2|2|21|m1|3|3|22|m2\n\
+         113\n"
     );
 }
 

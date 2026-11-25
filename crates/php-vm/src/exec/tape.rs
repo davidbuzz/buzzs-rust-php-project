@@ -2339,6 +2339,34 @@ fn run_call(
                 DECLINED
             };
         }
+        // `call_user_func[_array]()` written by name: not hot ops, so a
+        // call not prepared here is the generic op's in `Vm::run`.
+        Some(&Op::InitUserCall { callee, .. }) => {
+            flush(vm, prep);
+            return init_user_call(vm, prep, callee, ops, at);
+        }
+        Some(&Op::SendUser { src, n }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_user(vm, call, src, n) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
+        }
+        Some(&Op::SendArray {
+            src,
+            len: Operand::Unused,
+            skip: 0,
+        }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send_array(vm, call, src) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+            return DECLINED;
+        }
         Some(Op::Send { src }) => {
             if let Some(call) = prep.as_mut() {
                 if let Some(id) = call.quick_id() {
@@ -2671,6 +2699,20 @@ fn send_and_enter(
     at: usize,
 ) -> usize {
     let next = send_following(vm, &mut call, ops, at);
+    enter_after_sends(vm, prep, call, ops, next)
+}
+
+/// The rest of [`send_and_enter`] once the arguments are passed: the call
+/// made when the op at `next` is its `DoCall`, else kept in `prep`.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one copy per kind of call start
+fn enter_after_sends(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    mut call: calls::Prepared,
+    ops: &[Op],
+    next: usize,
+) -> usize {
     if let Some(&Op::DoCall { dst }) = ops.get(next) {
         if call.is_native() {
             // `ZEND_DO_ICALL` at once (as the loop's `DoCall` arm runs it).
@@ -2714,6 +2756,42 @@ fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize
         next += 1;
     }
     next
+}
+
+/// `ZEND_INIT_USER_CALL` of `callee` at `at` ([`run_call`]): the call
+/// prepared on the call site's cache hit ([`calls::prepare_user_call`]),
+/// its `SendUser`s / `SendArray` right after it passed and the call made
+/// at its `DoCall` as [`send_and_enter`] makes other calls; [`DECLINED`],
+/// nothing changed, on a miss (the generic op in `Vm::run`). Out of line:
+/// `run_call`'s other arms keep their frame.
+#[inline(never)]
+fn init_user_call(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    callee: Operand,
+    ops: &[Op],
+    at: usize,
+) -> usize {
+    let Some(mut call) = calls::prepare_user_call(vm, callee, at) else {
+        return DECLINED;
+    };
+    let mut next = at + 1;
+    loop {
+        let sent = match ops.get(next) {
+            Some(&Op::SendUser { src, n }) => calls::send_user(vm, &mut call, src, n),
+            Some(&Op::SendArray {
+                src,
+                len: Operand::Unused,
+                skip: 0,
+            }) => calls::send_array(vm, &mut call, src),
+            _ => false,
+        };
+        if !sent {
+            break;
+        }
+        next += 1;
+    }
+    enter_after_sends(vm, prep, call, ops, next)
 }
 
 mod calls;
