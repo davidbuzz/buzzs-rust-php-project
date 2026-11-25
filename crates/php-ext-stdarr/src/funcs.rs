@@ -625,7 +625,7 @@ pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_filter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = a.array(0);
+    let h = a.array_ref(0);
     let cbv = a.at(1);
     let mode = int_or(a, 2, sa::ARRAY_FILTER_USE_VALUE);
     let r = if cbv.is_null() {

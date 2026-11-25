@@ -348,13 +348,43 @@ pub fn array_filter<C: RuntimeContext + ?Sized>(
                 };
                 r.to_bool(ctx)?
             }
-            None => v.to_bool(ctx)?,
+            None => is_true(ctx, v)?,
         };
         if keep {
-            let _ = out.add(k.clone(), copy_elem(v));
+            add_new(&mut out, k, copy_elem(v));
         }
     }
     Ok(ZArray::from_table(out))
+}
+
+/// `zend_is_true()` with the common scalars decided inline (a float, which
+/// may warn about NaN, and everything else take [`Value::to_bool`]).
+#[inline]
+fn is_true<C: RuntimeContext + ?Sized>(ctx: &mut C, v: &Value) -> RtResult<bool> {
+    Ok(match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Int(i) => *i != 0,
+        Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+        other => other.to_bool(ctx)?,
+    })
+}
+
+/// `zend_hash_index_add_new` / `zend_hash_add_new` of a kept element: an
+/// integer key that is the next index of a list with room is appended in
+/// place ([`HashTable::lean_push`]); anything else takes the general add,
+/// which makes the table on the first element as php-src does.
+#[inline]
+fn add_new(out: &mut HashTable, k: &ArrayKey, v: Value) {
+    if let ArrayKey::Int(i) = k {
+        if *i == out.next_index() {
+            if let Err(v) = out.lean_push(v) {
+                let _ = out.add(k.clone(), v);
+            }
+            return;
+        }
+    }
+    let _ = out.add(k.clone(), v);
 }
 
 /// `array_reduce(array $array, callable $callback, mixed $initial = null): mixed`.

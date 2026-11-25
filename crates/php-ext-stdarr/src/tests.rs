@@ -660,3 +660,26 @@ fn array_search_positions_and_strings() {
         "array(0=>3,1=>false,2=>0,3=>1,4=>0,5=>1,)array(0=>9,1=>'k',2=>false,)array(0=>2,1=>3,2=>false,3=>false,)array(0=>1,1=>1,2=>true,3=>1,4=>0,)"
     );
 }
+
+/// `array_filter()` without a callback decides the common scalars inline
+/// and appends kept list elements in place: every falsy and truthy kind,
+/// keys kept with holes, the next index after the call, a reference
+/// element, keys out of order, the callback forms, and NaN
+/// (`/usr/bin/php8.5 -n`).
+#[test]
+fn array_filter_truthiness_and_keys() {
+    let out = run(
+        r#"function show($a) { $s = ''; foreach ($a as $k => $v) { $s .= var_export($k, true) . '=' . (is_array($v) ? 'A' : var_export($v, true)) . ','; } return $s . '|'; }
+        echo show(array_filter(['a', '', 'b', '0', 'c', 0, 1, null, false, true, [], [0], 0.0, 'x' => 'X', -1, '00', ' ']));
+        echo show(array_filter([0, 0, 'a', 'b'])), show(array_filter([])), show(array_filter([0, '']));
+        $l = [1, 2, 3]; unset($l[1]); echo show(array_filter($l)); $r = array_filter($l); $r[] = 9; echo show($r);
+        $x = 1; echo show(array_filter([&$x, 0]));
+        echo show(array_filter([5 => 1, 2 => 2, 0 => 3]));
+        echo show(array_filter([1, 2, 3, 4], fn($v) => $v % 2)), show(array_filter(['a' => 1, 'b' => 2], fn($k) => $k == 'b', ARRAY_FILTER_USE_KEY));
+        echo show(@array_filter([NAN, 0.0, 1.5]));"#,
+    );
+    assert_eq!(
+        out,
+        "0='a',2='b',4='c',6=1,9=true,11=A,'x'='X',13=-1,14='00',15=' ',|2='a',3='b',|||0=1,2=3,|0=1,2=3,3=9,|0=1,|5=1,2=2,0=3,|0=1,2=3,|'b'=2,|0=NAN,2=1.5,|"
+    );
+}
