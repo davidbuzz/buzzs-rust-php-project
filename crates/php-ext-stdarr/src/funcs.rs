@@ -750,7 +750,10 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut sym = forbid_dynamic_call(vm, a)?;
     let vals = rest(a, 0);
-    for v in &vals {
+    // Only an array of names nests: a name (the usual argument) has depth
+    // 0, which every stack budget allows, so the two INI reads of the
+    // budget are skipped for it (~340 instructions a name).
+    for v in vals.iter().filter(|v| stack::may_nest(v)) {
         stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
     }
     let r = sa::symbols::compact(vm, &mut sym, &vals);
