@@ -299,7 +299,11 @@ impl UserFunction {
             s = self.compute_near();
             self.call_shape.near.set(s);
         }
-        (s != NEAR_NO).then(|| usize::from(s - 1))
+        if s == NEAR_NO {
+            None
+        } else {
+            Some(usize::from(s - 1))
+        }
     }
 
     #[cold]
