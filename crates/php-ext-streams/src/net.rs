@@ -744,7 +744,7 @@ fn stream_socket_get_crypto_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value>
     Ok(Value::Int(st))
 }
 
-fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
+fn sockaddr_name(fd: RawFd, remote: bool) -> Option<Vec<u8>> {
     // SAFETY: zeroed sockaddr_storage is a valid out-parameter.
     let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).ok()?;
@@ -760,29 +760,40 @@ fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
     if rc != 0 {
         return None;
     }
+    sockaddr_text(&ss, len)
+}
+
+/// The text form of the first `len` bytes of `ss`
+/// (`php_network_populate_name_from_sockaddr()`, main/network.c):
+/// `ip:port`, `[ip6]:port`, or a Unix socket's path, an abstract name
+/// keeping its leading NUL and the length the kernel gave.
+fn sockaddr_text(ss: &libc::sockaddr_storage, len: libc::socklen_t) -> Option<Vec<u8>> {
     match i32::from(ss.ss_family) {
         libc::AF_INET => {
             // SAFETY: family is AF_INET so the storage holds a sockaddr_in.
-            let sin = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_in>() };
+            let sin = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_in>() };
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
-            Some(format!("{ip}:{}", u16::from_be(sin.sin_port)))
+            Some(format!("{ip}:{}", u16::from_be(sin.sin_port)).into_bytes())
         }
         libc::AF_INET6 => {
             // SAFETY: family is AF_INET6 so the storage holds a sockaddr_in6.
-            let sin = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_in6>() };
+            let sin = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_in6>() };
             let ip = std::net::Ipv6Addr::from(sin.sin6_addr.s6_addr);
-            Some(format!("[{ip}]:{}", u16::from_be(sin.sin6_port)))
+            Some(format!("[{ip}]:{}", u16::from_be(sin.sin6_port)).into_bytes())
         }
         libc::AF_UNIX => {
             // SAFETY: family is AF_UNIX so the storage holds a sockaddr_un.
-            let sun = unsafe { &*std::ptr::addr_of!(ss).cast::<libc::sockaddr_un>() };
-            let path: Vec<u8> = sun
-                .sun_path
-                .iter()
-                .take_while(|&&c| c != 0)
-                .map(|&c| c.to_ne_bytes()[0])
-                .collect();
-            Some(String::from_utf8_lossy(&path).into_owned())
+            let sun = unsafe { &*std::ptr::from_ref(ss).cast::<libc::sockaddr_un>() };
+            let path = sun.sun_path.iter().map(|&c| c.to_ne_bytes()[0]);
+            Some(if sun.sun_path[0] == 0 {
+                // Abstract: `sl - sizeof(sa_family_t)` bytes.
+                let n = usize::try_from(len)
+                    .unwrap_or(0)
+                    .saturating_sub(std::mem::size_of::<libc::sa_family_t>());
+                path.take(n).collect()
+            } else {
+                path.take_while(|&c| c != 0).collect()
+            })
         }
         _ => None,
     }
@@ -812,7 +823,7 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let owned = unsafe { OwnedFd::from_raw_fd(nfd) };
     let label = cell.get().map_or("tcp_socket", |s| s.ops_label());
     if a.has(2) {
-        let peer = sockaddr_name(nfd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
+        let peer = sockaddr_name(nfd, true).map_or(Value::Null, bytes);
         a.set_ref(2, peer);
     }
     let listener_ctx = cell.get().and_then(|s| s.context.clone());
@@ -867,7 +878,7 @@ fn stream_socket_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let name = fd.and_then(|fd| sockaddr_name(fd, remote));
     Ok(match name {
-        Some(n) if !n.is_empty() => bytes(n.as_bytes()),
+        Some(n) if !n.is_empty() => bytes(n),
         _ => Value::Bool(false),
     })
 }
@@ -937,15 +948,39 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let mut buf = vec![0u8; usize::try_from(len).unwrap_or(0)];
-    // SAFETY: `buf` is valid for `buf.len()` bytes.
-    let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), flags) };
+    // `sock_recvfrom()` (main/streams/xp_socket.c): with `$address`,
+    // recvfrom() reports the sender, which is how a server answers an
+    // unconnected UDP peer; an empty address (a connected TCP socket's)
+    // is "".
+    // SAFETY: zeroed sockaddr_storage is a valid out-parameter.
+    let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut sl =
+        libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).unwrap_or(0);
+    // SAFETY: `buf` is valid for `buf.len()` bytes; `ss`/`sl` describe a
+    // sockaddr_storage that outlives the call.
+    let n = unsafe {
+        libc::recvfrom(
+            fd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            flags,
+            std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
+            &raw mut sl,
+        )
+    };
     if n < 0 {
         return Ok(Value::Bool(false));
     }
     buf.truncate(usize::try_from(n).unwrap_or(0));
     if a.has(3) {
-        let peer = sockaddr_name(fd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
-        a.set_ref(3, peer);
+        let peer = if sl == 0 {
+            Some(Vec::new())
+        } else {
+            sockaddr_text(&ss, sl)
+        };
+        if let Some(p) = peer {
+            a.set_ref(3, bytes(p));
+        }
     }
     Ok(bytes(buf))
 }
