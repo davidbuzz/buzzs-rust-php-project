@@ -874,11 +874,14 @@ pub(super) unsafe fn free_tmp(frame: *mut Frame, inst: &Inst) -> bool {
 /// class does not cast it. `None`, nothing changed, for anything else.
 #[inline(never)]
 pub(super) fn rc_tmp_truth(slot: &mut Value) -> Option<bool> {
-    match &*slot {
-        Value::Str(_) => {}
-        Value::Array(a) if a.refcount() > 1 || a.is_empty() => {}
-        Value::Object(o) if o.refcount() > 1 => {}
-        _ => return None,
+    let releasable = match &*slot {
+        Value::Str(_) => true,
+        Value::Array(a) => a.refcount() > 1 || a.is_empty(),
+        Value::Object(o) => o.refcount() > 1,
+        _ => false,
+    };
+    if !releasable {
+        return None;
     }
     let truth = plain_truth(slot)?;
     *slot = Value::Null;
@@ -1160,13 +1163,16 @@ fn lower_eq_lit(code: &OpArray, i: usize) -> Option<Inst> {
         (s, Operand::Lit(l)) | (Operand::Lit(l), s) if !matches!(s, Operand::Lit(_)) => (s, l),
         _ => return None,
     };
-    match code.literals.get(l as usize)? {
-        Value::Null | Value::Bool(_) => {}
-        Value::Array(x) if x.is_empty() => {}
-        Value::Str(s)
-            if ident
-                || php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_none() => {}
-        _ => return None,
+    let usable = match code.literals.get(l as usize)? {
+        Value::Null | Value::Bool(_) => true,
+        Value::Array(x) => x.is_empty(),
+        Value::Str(s) => {
+            ident || php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_none()
+        }
+        _ => false,
+    };
+    if !usable {
+        return None;
     }
     let (kind, fa) = match slot {
         Operand::Cv(cv) => (EQ_CV, cv_off(code, cv)?),
@@ -1288,11 +1294,14 @@ unsafe fn eq_lit_result<const K: u8>(st: St, inst: &Inst) -> Option<bool> {
         _ => {
             // SAFETY: `a` is a validated temporary offset.
             let slot = unsafe { tmp_slot(st, inst.a) };
-            match &*slot {
-                Value::Array(x) if x.refcount() <= 1 && !x.is_empty() => return None,
-                Value::Object(o) if o.refcount() <= 1 => return None,
-                Value::Resource(_) => return None,
-                _ => {}
+            let frees_more = match &*slot {
+                Value::Array(x) => x.refcount() <= 1 && !x.is_empty(),
+                Value::Object(o) => o.refcount() <= 1,
+                Value::Resource(_) => true,
+                _ => false,
+            };
+            if frees_more {
+                return None;
             }
             let same = eq_lit(slot, lit, ident)?;
             if !is_scalar(slot) {
