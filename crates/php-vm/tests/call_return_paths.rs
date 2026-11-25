@@ -247,3 +247,41 @@ D gone
 "#
     );
 }
+
+/// Calls of functions with `static` variables from code whose symbol
+/// table is attached (`extract()`, `eval()`, `$$name` at the top level),
+/// which makes its calls through `Vm::push_simple_ucall`.
+#[test]
+fn static_variable_calls_from_attached_frames() {
+    assert_eq!(
+        run(r#"<?php
+function counter() { static $n = 0; return ++$n; }
+class M { static function s($a) { static $acc = ''; $acc .= $a; return $acc; } }
+function attached() {
+    extract(['seed' => 5]);
+    for ($i = 0; $i < 4; $i++) { $c = counter(); $s = M::s($i); echo $c, ' ', $s, ' ', $seed, "\n"; }
+    return compact('c', 's');
+}
+print_r(attached());
+$code = 'for ($j = 0; $j < 2; $j++) { echo counter(), M::s("e"), "\n"; }';
+eval($code);
+$vn = 'dyn';
+$$vn = 'x';
+for ($k = 0; $k < 2; $k++) { echo counter(), ' ', $dyn, "\n"; }
+"#),
+        r#"1 0 5
+2 01 5
+3 012 5
+4 0123 5
+Array
+(
+    [c] => 4
+    [s] => 0123
+)
+50123e
+60123ee
+7 x
+8 x
+"#
+    );
+}

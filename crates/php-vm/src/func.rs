@@ -170,8 +170,6 @@ pub struct CallShape {
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
     first_ops: [Cell<u32>; FIRST_OPS],
-    /// [`UserFunction::plain_params`]; filled with `kind`.
-    plain_params: Cell<u32>,
     /// The machine code of a function compiled whole (`exec/tape/jit.rs`,
     /// "whole functions": a pure int function, its recursion included): 0
     /// while its plain calls are being counted, 1 once it was refused,
@@ -251,17 +249,6 @@ impl UserFunction {
         let s = self.compute_call_shape();
         self.call_shape.kind.set(s);
         s
-    }
-
-    /// How many arguments a plain call (`Vm::push_simple_ucall`) passes
-    /// at most: one per parameter (a function with a variadic parameter
-    /// is not plain, see [`CallShape::NOT_PLAIN`]). Read from the call
-    /// shape: valid once [`UserFunction::call_shape`] found a plain
-    /// declaration (each plain path asks that first).
-    #[inline]
-    pub(crate) fn plain_params(&self) -> usize {
-        debug_assert!(self.call_shape.kind.get() > CallShape::NOT_PLAIN);
-        self.call_shape.plain_params.get() as usize
     }
 
     /// Where a plain call (`Vm::push_simple_ucall`) of this function with
@@ -348,15 +335,14 @@ impl UserFunction {
             || self.params.len() > self.code.cv_names.len()
             // A variadic parameter too: the plain paths of the JIT and the
             // tape's whole-function calls bind every parameter from an
-            // argument (`plain_params` is then the parameter count).
+            // argument (a plain call passes at most one per parameter).
             || self.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return CallShape::NOT_PLAIN;
         }
-        let Ok(plain) = u32::try_from(self.params.len()) else {
+        if u32::try_from(self.params.len()).is_err() {
             return CallShape::NOT_PLAIN;
-        };
-        self.call_shape.plain_params.set(plain);
+        }
         for (n, slot) in self.call_shape.first_ops.iter().enumerate() {
             slot.set(first_op_after_recv(&self.code, n));
         }

@@ -1423,49 +1423,12 @@ pub(super) fn quick_send(
 /// Whether a call of `uf` by name or as a method may be prepared: a
 /// declaration that makes a plain call ([`UserFunction::call_shape`]), or
 /// one whose only difference from that is its static variables
-/// ([`statics_only`]). One load and compare for every plain function.
+/// (`crate::call::statics_only`). One load and compare for every plain
+/// function.
 #[inline(always)]
 #[allow(clippy::inline_always)] // every prepared call
 fn prepares(uf: &UserFunction) -> bool {
-    uf.call_shape() != CallShape::NOT_PLAIN || statics_only(uf)
-}
-
-/// A function or method that would make a plain call but for its `static`
-/// variables (`function f() { static $n = 0; return ++$n; }`): such calls
-/// took the generic `InitFCall`/`Send`/`DoCall` (`Vm::push_user_call`),
-/// about a thousand instructions more per call. php-src makes no
-/// difference between them at the call: the static variables live with
-/// the function (`ZEND_MAP_PTR(op_array->static_variables_ptr)`), and
-/// `ZEND_BIND_STATIC` binds them from there when the body runs.
-///
-/// The same holds here: a frame of such a function never holds the
-/// variables (`Frame::statics` is only set for a closure, whose variables
-/// are its object's, and closures are excluded); `Vm::static_slot` and
-/// `Vm::static_init` read the function's own store
-/// (`UserFunction::statics`) through `Frame::ufunc`, which the prepared
-/// frame holds as the generic call's does ([`ready_frame`]). At the
-/// return, `Frame::keeps_function` declines a function with statics, so
-/// the frame drops its handles as after a generic call. Typed parameters
-/// are left to the generic call: [`enter`] checks the arguments only for
-/// the shape that says so (`CallShape::TYPED`). The JIT and the tape's
-/// whole-function paths still see `CallShape::NOT_PLAIN` and keep away.
-#[cold]
-#[inline(never)]
-fn statics_only(uf: &UserFunction) -> bool {
-    uf.code.num_statics != 0
-        && uf.flags
-            & (flags::DEPRECATED
-                | flags::NODISCARD
-                | flags::NO_BODY
-                | flags::GENERATOR
-                | flags::CLOSURE)
-            == 0
-        && uf.code.num_finally == 0
-        && uf.params.len() <= uf.code.cv_names.len()
-        && uf
-            .params
-            .iter()
-            .all(|p| !p.variadic && !p.by_ref && p.ty.as_ref().is_none_or(|t| t.is_mixed()))
+    uf.call_shape() != CallShape::NOT_PLAIN || crate::call::statics_only(uf)
 }
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
