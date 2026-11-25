@@ -1985,7 +1985,25 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     // slots are sized for its code and no symbol table is attached
     // (`usable` holds without the test).
     let mut fresh = false;
+    // Whether a call or return just changed the current frame: its resume
+    // point and code are read below from the frame the loop looks up
+    // anyway (`LOAD_OPLINE()`), instead of a lookup of their own at each
+    // switch (two lookups of the top frame per switch cost ~13
+    // instructions each).
+    let mut reload = false;
     'frames: loop {
+        let Some(f) = vm.frames.last_mut() else {
+            if reload {
+                return (0, LEFT);
+            }
+            flush(vm, &mut prep);
+            return (ip | switched, NO_SAFE_POINT);
+        };
+        if reload {
+            reload = false;
+            ip = f.ip;
+            code = Rc::as_ptr(&f.code);
+        }
         // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
         // them held by the current frame, so its heap block stays where it
         // is while that frame is current. Until the next call or return
@@ -1996,10 +2014,6 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         let c: &OpArray = unsafe { &*code };
         let ops: &[Op] = &c.ops;
         let lits: &[Value] = &c.literals;
-        let Some(f) = vm.frames.last_mut() else {
-            flush(vm, &mut prep);
-            return (ip | switched, NO_SAFE_POINT);
-        };
         let at = if fresh || usable(f, c) {
             fresh = false;
             let tape: &[Inst] = c.tape.get(c);
@@ -2067,11 +2081,7 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             if crate::interrupt::safe_point_due() {
                                 return (0, LEFT);
                             }
-                            let Some(f) = vm.frames.last() else {
-                                return (0, LEFT);
-                            };
-                            ip = f.ip;
-                            code = Rc::as_ptr(&f.code);
+                            reload = true;
                             continue 'frames;
                         }
                         let Some(f) = vm.frames.last_mut() else {
@@ -2292,12 +2302,9 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         if crate::interrupt::safe_point_due() {
             return (0, LEFT);
         }
-        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does.
-        let Some(f) = vm.frames.last() else {
-            return (0, LEFT);
-        };
-        ip = f.ip;
-        code = Rc::as_ptr(&f.code);
+        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does: at
+        // the top of the loop.
+        reload = true;
     }
 }
 
