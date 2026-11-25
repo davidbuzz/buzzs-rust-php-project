@@ -1280,11 +1280,14 @@ fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<
 /// plain variable's test stays small.
 #[inline(never)]
 fn isset_place_in(f: &mut Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<bool> {
-    let p = f.code.places.get(place as usize)?;
-    match p.base {
-        crate::opcode::PlaceBase::Value(_) => spec::isset_tmp_dims_in(f, place, empty),
-        _ => None,
+    let tmp_base = matches!(
+        f.code.places.get(place as usize)?.base,
+        crate::opcode::PlaceBase::Value(_)
+    );
+    if tmp_base {
+        return spec::isset_tmp_dims_in(f, place, empty);
     }
+    None
 }
 
 /// Copies compiled variable `cv`'s new value into the attached symbol
