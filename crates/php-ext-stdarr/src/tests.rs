@@ -743,11 +743,20 @@ fn set_operations_reflect_their_stub_types() {
         ))
     };
     assert_eq!(sig("array_diff"), "array $array, array ...$arrays req=1");
-    assert_eq!(sig("array_intersect_key"), "array $array, array ...$arrays req=1");
-    assert_eq!(sig("array_replace"), "array $array, array ...$replacements req=1");
+    assert_eq!(
+        sig("array_intersect_key"),
+        "array $array, array ...$arrays req=1"
+    );
+    assert_eq!(
+        sig("array_replace"),
+        "array $array, array ...$replacements req=1"
+    );
     assert_eq!(sig("array_merge_recursive"), "array ...$arrays req=0");
     assert_eq!(sig("array_udiff"), "array $array,  ...$rest req=1");
-    assert_eq!(sig("array_uintersect_uassoc"), "array $array,  ...$rest req=1");
+    assert_eq!(
+        sig("array_uintersect_uassoc"),
+        "array $array,  ...$rest req=1"
+    );
 }
 
 #[test]
