@@ -1272,6 +1272,25 @@ fn clear_opt<T>(slot: &mut Option<T>) {
     }
 }
 
+/// Releases a value taken out of a compiled variable of a frame being
+/// released (`i_free_compiled_variables`): like [`release_slot`], and a
+/// string, or a handle of an object, array or reference that is not the
+/// last, is released inline, its count decremented (`GC_DELREF`), without
+/// the call into `Value`'s out-of-line drop glue and its dispatch on the
+/// tag again. A last handle, which frees, is left to the drop glue.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per compiled variable of a return
+fn release_cv(v: Value) {
+    match v {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => std::mem::forget(v),
+        Value::Str(s) => drop(s),
+        Value::Object(o) if o.refcount() > 1 => drop(o),
+        Value::Array(a) if a.refcount() > 1 => drop(a),
+        Value::Reference(r) if r.refcount() > 1 => drop(r),
+        other => drop(other),
+    }
+}
+
 /// Releases a value taken out of a recycled frame's slot: scalars own
 /// nothing and are forgotten (no `drop_in_place` call); anything else is
 /// dropped as before.
@@ -1623,7 +1642,7 @@ impl Frame {
         }
         for slot in &mut self.cvs {
             if let Some(old) = slot.as_mut().take() {
-                release_slot(old);
+                release_cv(old);
             }
         }
         self.symtab_attached = false;
@@ -1734,7 +1753,7 @@ impl Frame {
         }
         for slot in &mut self.cvs {
             if let Some(old) = slot.as_mut().take() {
-                release_slot(old);
+                release_cv(old);
             }
         }
         // A direct frame's passed arguments are in its compiled variables:
@@ -2942,7 +2961,7 @@ impl Vm {
 mod tests {
     use super::{Frame, FrameKind};
     use crate::opcode::OpArray;
-    use php_runtime::{Value, ZStr};
+    use php_runtime::{Obj, PhpRef, Value, ZStr};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -3109,6 +3128,38 @@ mod tests {
         // Nothing live: nothing to release.
         stack.release_top_returning(&empty);
         assert_eq!(stack.len(), 0);
+    }
+
+    /// `release_cv` releases one handle of each kind: the shared ones keep
+    /// their value with one count less, the last ones free it.
+    #[test]
+    fn release_cv_releases_shared_and_last_handles() {
+        let s = ZStr::from("a string held twice, not interned");
+        super::release_cv(Value::Str(s.clone()));
+        assert_eq!(s.refcount(), 1);
+        let a = php_runtime::ZArray::from_values(vec![Value::Str(s.clone())]);
+        assert_eq!(s.refcount(), 2);
+        super::release_cv(Value::Array(a.clone()));
+        assert_eq!(a.refcount(), 1);
+        super::release_cv(Value::Array(a));
+        assert_eq!(s.refcount(), 1);
+        let r = PhpRef::new(Value::Str(s.clone()));
+        super::release_cv(Value::Reference(r.clone()));
+        assert_eq!(r.refcount(), 1);
+        super::release_cv(Value::Reference(r));
+        assert_eq!(s.refcount(), 1);
+        let o = Obj::dummy("C");
+        let w = o.clone();
+        super::release_cv(Value::Object(o));
+        assert_eq!(w.refcount(), 1);
+        for v in [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(3),
+            Value::Float(0.5),
+        ] {
+            super::release_cv(v);
+        }
     }
 
     fn user_function(code: Rc<OpArray>) -> Rc<crate::func::UserFunction> {
