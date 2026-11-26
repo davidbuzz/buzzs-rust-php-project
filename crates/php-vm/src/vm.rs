@@ -1321,8 +1321,16 @@ pub struct Frame {
     pub cvs: Vec<CvSlot>,
     /// Whether a symbol table has been attached.
     pub symtab_attached: bool,
-    /// Variables / attached symbol table.
-    pub vars: Rc<RefCell<VarStore>>,
+    /// Variables / attached symbol table. Reached through [`Frame::vars`],
+    /// which marks the store as looked at (`vars_used`); only the frame's
+    /// own readying and release read the field itself.
+    pub(crate) vars_store: Rc<RefCell<VarStore>>,
+    /// Whether anything has reached the variable store since the frame
+    /// was readied ([`Frame::vars`], [`Frame::set_vars`]). Unset, the
+    /// store is as the readying left it: this frame's alone, without
+    /// values, own names or a name index, so a return has nothing to test
+    /// or release there (three loads and a loop a call otherwise).
+    pub(crate) vars_used: std::cell::Cell<bool>,
     /// Arguments as passed (positional; `None` = skipped, or already moved
     /// into its compiled variable when the frame was pushed).
     pub args: Vec<Option<Value>>,
@@ -1704,6 +1712,22 @@ impl Frame {
         self.cold.get_or_insert_with(Box::default)
     }
 
+    /// The variable store (the attached symbol table, or the frame's
+    /// own). Marks it as looked at: what the caller does with the handle
+    /// is not followed.
+    #[inline]
+    pub fn vars(&self) -> &Rc<RefCell<VarStore>> {
+        self.vars_used.set(true);
+        &self.vars_store
+    }
+
+    /// Replaces the variable store, returning the old one.
+    #[inline]
+    pub fn set_vars(&mut self, vars: Rc<RefCell<VarStore>>) -> Rc<RefCell<VarStore>> {
+        self.vars_used.set(true);
+        std::mem::replace(&mut self.vars_store, vars)
+    }
+
     /// Whether the frame carries the rare state ([`FrameCold`]).
     #[inline]
     #[must_use]
@@ -1813,7 +1837,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs: Vec::with_capacity(8),
             symtab_attached: false,
-            vars: Rc::new(RefCell::new(VarStore {
+            vars_used: std::cell::Cell::new(true),
+            vars_store: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
                 index: None,
@@ -1864,13 +1889,13 @@ impl Frame {
         clear_frame_buffer(&mut self.calls);
         clear_frame_buffer(&mut self.cvs);
         self.symtab_attached = false;
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
             vs.names.clear();
             vs.index = None;
         } else {
-            self.vars = Rc::new(RefCell::new(VarStore::default()));
+            drop(self.set_vars(Rc::new(RefCell::new(VarStore::default()))));
         }
         self.clear_cold_named();
         clear_frame_buffer(&mut self.args);
@@ -1923,7 +1948,7 @@ impl Frame {
     #[inline]
     pub fn clear_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
         self.clear_slots_for_reuse();
-        let shared = if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        let shared = if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
             // The shared names are dropped in `clear_rest_for_reuse`, with
@@ -1936,7 +1961,7 @@ impl Frame {
                 Some(_) => SharedNames::Other,
             }
         } else {
-            self.vars = Rc::new(RefCell::new(VarStore::default()));
+            drop(self.set_vars(Rc::new(RefCell::new(VarStore::default()))));
             SharedNames::None
         };
         self.clear_rest_for_reuse(empty_code, shared);
@@ -1999,13 +2024,13 @@ impl Frame {
     ) {
         // Empty unless the handler used them: nothing to loop over.
         self.clear_slots_for_reuse();
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
             vs.names.clear();
             clear_opt(&mut vs.index);
-        } else if !Rc::ptr_eq(&self.vars, empty_vars) {
-            self.vars = empty_vars.clone();
+        } else if !Rc::ptr_eq(&self.vars_store, empty_vars) {
+            drop(self.set_vars(empty_vars.clone()));
         }
         self.clear_rest_for_reuse(empty_code, SharedNames::Unknown);
     }
@@ -2054,7 +2079,8 @@ impl Frame {
             calls: Vec::new(),
             cvs: Vec::new(),
             symtab_attached: false,
-            vars: empty_vars.clone(),
+            vars_used: std::cell::Cell::new(true),
+            vars_store: empty_vars.clone(),
             args: Vec::new(),
             this: None,
             closure: None,
@@ -2112,10 +2138,10 @@ impl Frame {
         }
         // Only a store of its own that holds nothing (one kept from a
         // pooled frame, its slots cleared) is given back.
-        let own_and_empty = Rc::get_mut(&mut self.vars)
+        let own_and_empty = Rc::get_mut(&mut self.vars_store)
             .is_some_and(|rc_mut| rc_mut.get_mut().slots.iter().all(Option::is_none));
         if own_and_empty {
-            self.vars = empty_vars.clone();
+            drop(self.set_vars(empty_vars.clone()));
         }
     }
 
@@ -2167,7 +2193,7 @@ impl Frame {
             // (`reinit_same_call`, `reinit_for_call`). Known to be none or
             // the code's already (the common case): the store is left alone.
             if !matches!(shared, SharedNames::None | SharedNames::Code) {
-                if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
                     let names = &mut rc_mut.get_mut().names;
                     if names
                         .shared
@@ -2180,7 +2206,7 @@ impl Frame {
             }
         } else {
             if shared != SharedNames::None {
-                if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
                     clear_opt(&mut rc_mut.get_mut().names.shared);
                 }
             }
@@ -2253,7 +2279,25 @@ impl Frame {
         {
             return false;
         }
-        let Some(rc_mut) = Rc::get_mut(&mut self.vars) else {
+        // The variable store: untouched since the frame was readied
+        // (`vars_used`), it is as a release leaves it.
+        if !self.vars_used.get() {
+            debug_assert!(self.vars_store_is_clean());
+            return true;
+        }
+        if !self.vars_store_is_clean() {
+            return false;
+        }
+        self.vars_used.set(false);
+        true
+    }
+
+    /// Whether the variable store is this frame's alone and holds no
+    /// value, no names of its own and no name index: what `vars_used`
+    /// unset stands for.
+    #[inline]
+    fn vars_store_is_clean(&mut self) -> bool {
+        let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) else {
             return false;
         };
         let vs = rc_mut.get_mut();
@@ -2402,7 +2446,7 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of `release_native`
     fn holds_empty_store(&mut self) -> bool {
-        Rc::get_mut(&mut self.vars).is_some_and(|rc| {
+        Rc::get_mut(&mut self.vars_store).is_some_and(|rc| {
             let vs = rc.get_mut();
             vs.slots.is_empty()
                 && vs.names.shared.is_none()
@@ -2445,7 +2489,7 @@ impl Frame {
             || self.statics.is_some()
             || !self.tmps.is_empty()
             || !self.cvs.is_empty()
-            || !(Rc::ptr_eq(&self.vars, empty_vars) || self.holds_empty_store())
+            || !(Rc::ptr_eq(&self.vars_store, empty_vars) || self.holds_empty_store())
         {
             return false;
         }
@@ -2528,7 +2572,7 @@ impl Frame {
     /// so. For the debug assertion of that path.
     pub(crate) fn is_released_for(&self, uf: &Rc<UserFunction>) -> bool {
         let code = &uf.code;
-        let store_empty = self.vars.try_borrow().is_ok_and(|vs| {
+        let store_empty = self.vars_store.try_borrow().is_ok_and(|vs| {
             vs.slots.iter().all(Option::is_none) && vs.index.is_none() && vs.names.owned.is_empty()
         });
         self.kind == FrameKind::Function
@@ -2602,7 +2646,7 @@ impl Frame {
         if !same_code {
             self.code = code.clone();
         }
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
             if same_code {
                 for slot in vs.slots.iter_mut() {
@@ -2624,7 +2668,7 @@ impl Frame {
             // VM's `empty_vars` (`Frame::clear_builtin_for_reuse`): a
             // function without compiled variables passes the size checks
             // and must not write into that store.
-            self.vars = Rc::new(RefCell::new(VarStore::default()));
+            drop(self.set_vars(Rc::new(RefCell::new(VarStore::default()))));
         }
     }
 
@@ -2672,7 +2716,7 @@ impl Frame {
     pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
         self.reinit_for_call(&code, kind);
         let ncv = self.code.cv_names.len();
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
             vs.slots.clear();
             vs.names.share(&code);
@@ -2680,7 +2724,7 @@ impl Frame {
         } else {
             let mut vs = VarStore::for_code(&code);
             refill_with(&mut vs.slots, ncv, || None);
-            self.vars = Rc::new(RefCell::new(vs));
+            drop(self.set_vars(Rc::new(RefCell::new(vs))));
         }
     }
 
@@ -2758,7 +2802,8 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs,
             symtab_attached,
-            vars,
+            vars_used: std::cell::Cell::new(true),
+            vars_store: vars,
             args: Vec::with_capacity(8),
             this: None,
             closure: None,
@@ -2804,7 +2849,8 @@ impl Frame {
             return;
         }
         self.symtab_attached = true;
-        let mut st = self.vars.borrow_mut();
+        self.vars_used.set(true);
+        let mut st = self.vars_store.borrow_mut();
         if st.names.is_empty() {
             st.names.share(&self.code);
             if st.slots.len() < self.code.cv_names.len() {
@@ -2828,7 +2874,7 @@ impl Frame {
             }
         }
         drop(st);
-        let table = Rc::as_ptr(&self.vars);
+        let table = Rc::as_ptr(&self.vars_store);
         let cold = self.cold_mut();
         cold.symtab_slots = symtab_slots;
         cold.symtab_slots_of = table;
@@ -2849,8 +2895,9 @@ impl Frame {
         }
         self.symtab_attached = false;
         let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
-        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
-        let mut st = self.vars.borrow_mut();
+        self.vars_used.set(true);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars_store));
+        let mut st = self.vars_store.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             let Some(idx) = mapped_slot(symtab_slots, valid, &mut st, i, name) else {
                 continue;
@@ -2875,8 +2922,9 @@ impl Frame {
             return;
         }
         let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
-        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
-        let mut st = self.vars.borrow_mut();
+        self.vars_used.set(true);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars_store));
+        let mut st = self.vars_store.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = mapped_slot(symtab_slots, valid, &mut st, i, name) {
                 let Some(cv) = self.cvs.get_mut(i) else {
@@ -2901,8 +2949,9 @@ impl Frame {
             return;
         }
         let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
-        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
-        let mut st = self.vars.borrow_mut();
+        self.vars_used.set(true);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars_store));
+        let mut st = self.vars_store.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = mapped_slot(symtab_slots, valid, &mut st, i, name) {
                 let slot = slot as usize;
@@ -2941,8 +2990,9 @@ impl Frame {
     fn unsync_cv_from_symtab_slow(&self, cv: u32) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
-            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
-            let mut st = self.vars.borrow_mut();
+            self.vars_used.set(true);
+            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars_store));
+            let mut st = self.vars_store.borrow_mut();
             let idx = mapped_slot(symtab_slots, valid, &mut st, cv as usize, name);
             if let Some(idx) = idx {
                 let idx = idx as usize;
@@ -2960,8 +3010,9 @@ impl Frame {
     /// [`Frame::sync_from_symbol_table`].
     #[inline]
     pub fn clear_cv_for_symtab_slot(&mut self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
-        if self.symtab_attached && Rc::ptr_eq(store, &self.vars) {
-            let st = self.vars.borrow();
+        self.vars_used.set(true);
+        if self.symtab_attached && Rc::ptr_eq(store, &self.vars_store) {
+            let st = self.vars_store.borrow();
             if let Some(name) = st.names.get(sym_idx) {
                 if self
                     .code
@@ -3003,8 +3054,9 @@ impl Frame {
     fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
-            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
-            let mut st = self.vars.borrow_mut();
+            self.vars_used.set(true);
+            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars_store));
+            let mut st = self.vars_store.borrow_mut();
             let idx = match mapped_slot(symtab_slots, valid, &mut st, cv as usize, name) {
                 Some(i) => i,
                 None => st.find_or_add(name.as_bytes()),
@@ -3439,7 +3491,7 @@ impl Vm {
         let f = self.frames.get_mut(idx)?;
         f.attach_symbol_table();
         f.sync_cvs_to_symtab();
-        Some(f.vars.clone())
+        Some(f.vars().clone())
     }
 
     /// Refreshes the compiled variables of every frame attached to the global
@@ -3460,7 +3512,7 @@ impl Vm {
             .frames
             .iter_mut()
             .take(running)
-            .take_while(|f| f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &globals))
+            .take_while(|f| f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars_store, &globals))
         {
             if f.symtab_attached {
                 f.sync_from_symbol_table();
@@ -3479,7 +3531,7 @@ impl Vm {
     /// (php-src's attached tables hold `IS_INDIRECT` slots into the CVs).
     pub fn sync_symbol_table_writes(&mut self, vars: &Rc<RefCell<VarStore>>) {
         for f in &mut self.frames {
-            if f.symtab_attached && Rc::ptr_eq(&f.vars, vars) {
+            if f.symtab_attached && Rc::ptr_eq(&f.vars_store, vars) {
                 f.sync_from_symbol_table();
             }
         }
@@ -3499,7 +3551,7 @@ impl Vm {
     pub(crate) fn main_is_global_top(&self) -> bool {
         match self.frames.vec.get(1) {
             Some(f) if self.frames.live > 1 => {
-                !std::ptr::eq(Rc::as_ptr(&f.vars), Rc::as_ptr(&self.globals))
+                !std::ptr::eq(Rc::as_ptr(&f.vars_store), Rc::as_ptr(&self.globals))
             }
             _ => true,
         }
@@ -3514,7 +3566,9 @@ impl Vm {
         let globals = Rc::as_ptr(&self.globals);
         self.frames
             .iter()
-            .take_while(|f| f.kind == FrameKind::Main || std::ptr::eq(Rc::as_ptr(&f.vars), globals))
+            .take_while(|f| {
+                f.kind == FrameKind::Main || std::ptr::eq(Rc::as_ptr(&f.vars_store), globals)
+            })
             .count()
             .checked_sub(1)
     }
@@ -3615,8 +3669,8 @@ impl Vm {
                 return false;
             };
             if !main.symtab_attached
-                || !Rc::ptr_eq(&main.vars, &self.globals)
-                || !std::ptr::eq(symtab_map(&main.cold).1, Rc::as_ptr(&main.vars))
+                || !Rc::ptr_eq(&main.vars_store, &self.globals)
+                || !std::ptr::eq(symtab_map(&main.cold).1, Rc::as_ptr(&main.vars_store))
             {
                 return false;
             }
@@ -3710,30 +3764,30 @@ mod tests {
         // Attached: the table holds a second handle of the array.
         assert_eq!(arr.refcount(), 3);
         // A write through the table (`write_place` on its slot) ...
-        f.vars.borrow_mut().slots[1] = Some(Value::Int(5));
+        f.vars().borrow_mut().slots[1] = Some(Value::Int(5));
         // ... and a variable only the table has.
-        let extra = f.vars.borrow_mut().find_or_add(b"extra");
-        f.vars.borrow_mut().slots[extra as usize] = Some(Value::Int(9));
+        let extra = f.vars().borrow_mut().find_or_add(b"extra");
+        f.vars().borrow_mut().slots[extra as usize] = Some(Value::Int(9));
         f.detach_symbol_table();
         assert!(!f.symtab_attached);
         // The table's values moved into the CVs; it keeps no duplicate.
         assert_eq!(arr.refcount(), 2);
         assert_eq!(as_int(f.cvs[1].get()), Some(5));
         assert!(f.cvs[2].is_none());
-        let st = f.vars.borrow();
+        let st = f.vars().borrow();
         assert!(st.slots[..3].iter().all(Option::is_none));
         assert!(matches!(st.slots[extra as usize], Some(Value::Int(9))));
         drop(st);
         // Detaching again is a no-op; attaching copies the CVs back in.
         f.detach_symbol_table();
         f.attach_symbol_table();
-        assert!(matches!(f.vars.borrow().slots[1], Some(Value::Int(5))));
+        assert!(matches!(f.vars().borrow().slots[1], Some(Value::Int(5))));
     }
 
     #[test]
     fn find_cv_uses_the_position_when_the_names_line_up() {
         let f = frame_with(&["a", "b"]);
-        let mut st = f.vars.borrow_mut();
+        let mut st = f.vars().borrow_mut();
         assert_eq!(st.find_cv(1, b"b"), Some(1));
         // Not at that position: looked up by name.
         assert_eq!(st.find_cv(0, b"b"), Some(1));
@@ -4088,7 +4142,7 @@ mod tests {
         f.cvs[0].set(Some(Value::Int(7)));
         f.attach_symbol_table();
         assert_eq!(
-            f.vars.borrow().names.first().map(ZStr::as_bytes),
+            f.vars().borrow().names.first().map(ZStr::as_bytes),
             Some(&b"b"[..])
         );
         assert_eq!(Rc::strong_count(&code), 2);
@@ -4263,17 +4317,17 @@ mod tests {
         let mut stack = super::FrameStack::new();
         // A fresh builtin frame shares `empty_vars`.
         assert!(Rc::ptr_eq(
-            &stack.push_builtin(&empty, &empty_vars).vars,
+            stack.push_builtin(&empty, &empty_vars).vars(),
             &empty_vars
         ));
         stack.release_builtin_top(&empty, &empty_vars);
-        assert!(Rc::ptr_eq(&stack.vec[0].vars, &empty_vars));
+        assert!(Rc::ptr_eq(&stack.vec[0].vars_store, &empty_vars));
         // A function without variables or temporaries passes the size
         // checks of `push_in_place` and must not write into the shared store.
         let code = Rc::new(OpArray::default());
         stack.push_in_place(&code, FrameKind::Function);
-        assert!(!Rc::ptr_eq(&stack.vec[0].vars, &empty_vars));
-        assert_eq!(Rc::strong_count(&stack.vec[0].vars), 1);
+        assert!(!Rc::ptr_eq(&stack.vec[0].vars_store, &empty_vars));
+        assert_eq!(Rc::strong_count(&stack.vec[0].vars_store), 1);
     }
 
     #[test]
@@ -4294,7 +4348,7 @@ mod tests {
         let f = &stack.vec[0];
         assert_eq!(f.tmps.capacity(), 0);
         assert_eq!(f.cvs.capacity(), 0);
-        assert!(Rc::ptr_eq(&f.vars, &empty_vars));
+        assert!(Rc::ptr_eq(&f.vars_store, &empty_vars));
     }
 
     #[test]
@@ -4383,7 +4437,7 @@ mod tests {
             f.cvs[3].set(Some(Value::Str(s.clone())));
             f.attach_symbol_table();
             assert_eq!(
-                f.vars
+                f.vars()
                     .borrow()
                     .names
                     .iter()
@@ -4403,13 +4457,13 @@ mod tests {
             assert!(f.slots_released());
             assert!(Rc::ptr_eq(&f.code, &small));
             {
-                let vars = f.vars.borrow();
+                let vars = f.vars().borrow();
                 assert!(vars.slots.is_empty() && vars.names.is_empty());
             }
             f.cvs[0].set(Some(Value::Int(round)));
             f.attach_symbol_table();
             {
-                let vars = f.vars.borrow();
+                let vars = f.vars().borrow();
                 assert_eq!(vars.names.len(), 1);
                 assert_eq!(vars.slots.len(), 1);
                 assert!(matches!(vars.slots[0], Some(Value::Int(r)) if r == round));
@@ -4437,16 +4491,16 @@ mod tests {
         assert!(Rc::ptr_eq(&f.code, &code));
         {
             // The names wait for a symbol table's attach.
-            let vars = f.vars.borrow();
+            let vars = f.vars().borrow();
             assert!(vars.slots.is_empty());
             assert!(vars.names.is_empty());
         }
         f.attach_symbol_table();
-        assert_eq!(f.vars.borrow().names.len(), 2);
+        assert_eq!(f.vars().borrow().names.len(), 2);
         // `reinit_for_user` fills them as undefined.
         f.clear_for_pool(&empty);
         f.reinit_for_user(code.clone(), FrameKind::Function);
-        let vars = f.vars.borrow();
+        let vars = f.vars().borrow();
         assert_eq!(vars.slots.len(), 2);
         assert!(vars.slots.iter().all(Option::is_none));
     }
@@ -4462,7 +4516,7 @@ mod tests {
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_user(code.clone(), FrameKind::Function);
         let s = ZStr::from("value");
-        f.vars.borrow_mut().slots[0] = Some(Value::Str(s.clone()));
+        f.vars().borrow_mut().slots[0] = Some(Value::Str(s.clone()));
         f.tmps[0] = Value::Str(s.clone());
         f.args.push(Some(Value::Str(s.clone())));
         f.cold_mut()
@@ -4480,7 +4534,7 @@ mod tests {
         assert_eq!(f.ret, super::RetTarget::Discard);
         assert!(!f.caller_strict);
         assert!(f.tmps.is_empty() && f.args.is_empty() && f.named().is_empty());
-        assert!(f.vars.borrow().slots.is_empty());
+        assert!(f.vars().borrow().slots.is_empty());
     }
 }
 

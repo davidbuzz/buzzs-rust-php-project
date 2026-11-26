@@ -1728,7 +1728,8 @@ impl Vm {
             return None;
         }
         let p = f.code.places.get(pid as usize)?;
-        matches!(p.base, PlaceBase::Cv(_)).then_some((self.frames.len() - 1, Rc::as_ptr(&f.vars)))
+        matches!(p.base, PlaceBase::Cv(_))
+            .then_some((self.frames.len() - 1, Rc::as_ptr(&f.vars_store)))
     }
 
     /// The base of a read (`place_fetch`, `place_isset`) of compiled
@@ -1791,7 +1792,7 @@ impl Vm {
         if let Some(f) = self.frames.get_mut(fidx) {
             // The same frame (a fiber switch inside the access could have
             // moved the stack): otherwise the table just stays attached.
-            if std::ptr::eq(Rc::as_ptr(&f.vars), vars)
+            if std::ptr::eq(Rc::as_ptr(&f.vars_store), vars)
                 && matches!(
                     f.kind,
                     crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
@@ -1825,7 +1826,7 @@ impl Vm {
             || self
                 .frames
                 .first()
-                .is_some_and(|f| Rc::ptr_eq(&f.vars, store))
+                .is_some_and(|f| Rc::ptr_eq(&f.vars_store, store))
     }
 
     /// Drops the handles that compiled variables keep on slot `idx` of
@@ -1853,12 +1854,9 @@ impl Vm {
             return;
         }
         let running = self.frames.len().saturating_sub(1);
-        for f in self
-            .frames
-            .iter_mut()
-            .take(running)
-            .take_while(|f| f.kind == crate::vm::FrameKind::Main || Rc::ptr_eq(&f.vars, store))
-        {
+        for f in self.frames.iter_mut().take(running).take_while(|f| {
+            f.kind == crate::vm::FrameKind::Main || Rc::ptr_eq(&f.vars_store, store)
+        }) {
             if f.symtab_attached {
                 f.clear_cv_for_symtab_slot(store, idx);
             }
@@ -1937,7 +1935,7 @@ impl Vm {
             return None;
         }
         let code = f.code.clone();
-        let vars = Rc::as_ptr(&f.vars);
+        let vars = Rc::as_ptr(&f.vars_store);
         let slot = f.cvs.get_mut(cv as usize)?;
         let (r, wrapped) = match slot.get()? {
             Value::Reference(r) => (r.clone(), false),
@@ -1997,7 +1995,7 @@ impl Vm {
         let Some(f) = self
             .frames
             .get_mut(frame)
-            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars_store), vars))
         else {
             return;
         };
@@ -2342,7 +2340,7 @@ impl Vm {
         let Some(f) = self.frames.last() else {
             return Err(v);
         };
-        let vars = Rc::as_ptr(&f.vars);
+        let vars = Rc::as_ptr(&f.vars_store);
         let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
             Some(cur) => cur.deref(),
             None => return Err(v),
@@ -2366,7 +2364,7 @@ impl Vm {
         let Some(f) = self
             .frames
             .last_mut()
-            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars_store), vars))
         else {
             return Ok(Ok(nv));
         };
@@ -2583,12 +2581,12 @@ impl Vm {
                 }
                 let f = self.frame();
                 let idx = if let Some(name) = f.code.cv_names.get(*cv as usize) {
-                    let mut st = f.vars.borrow_mut();
+                    let mut st = f.vars().borrow_mut();
                     st.find_or_add_cv(*cv as usize, name.as_bytes()) as usize
                 } else {
                     *cv as usize
                 };
-                RBase::Var(f.vars.clone(), idx)
+                RBase::Var(f.vars().clone(), idx)
             }
             PlaceBase::VarVar(op) => {
                 let n = self.read(*op)?;
@@ -2607,7 +2605,7 @@ impl Vm {
                     }
                 } else {
                     self.frame_mut().attach_symbol_table();
-                    let vars = self.frame().vars.clone();
+                    let vars = self.frame().vars().clone();
                     let idx = if write {
                         Some(vars.borrow_mut().find_or_add(n.as_bytes()))
                     } else {
@@ -2752,7 +2750,7 @@ impl Vm {
             // table's older values back into them.
             let table = Rc::clone(&self.globals);
             let f = self.frame_mut();
-            if f.symtab_attached && Rc::ptr_eq(&f.vars, &table) {
+            if f.symtab_attached && Rc::ptr_eq(&f.vars_store, &table) {
                 f.sync_cvs_to_symtab();
             }
         }
@@ -3096,7 +3094,7 @@ impl Vm {
         let held = self
             .frames
             .last()
-            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars), vars))
+            .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars_store), vars))
             .and_then(|f| f.cvs.get(cv as usize))
             .and_then(|slot| match slot.get() {
                 Some(Value::Reference(r)) => Some(r.clone()),
@@ -3297,7 +3295,7 @@ impl Vm {
     fn global_ref_mirrors(&self, name: &ZStr, r: &PhpRef) -> usize {
         self.frames
             .iter()
-            .filter(|f| Rc::ptr_eq(&f.vars, &self.globals))
+            .filter(|f| Rc::ptr_eq(&f.vars_store, &self.globals))
             .filter(|f| {
                 f.code
                     .cv_names
@@ -3320,7 +3318,7 @@ impl Vm {
             |v: Option<&Value>| matches!(v, Some(Value::Array(a)) if ZArray::ptr_eq(a, arr));
         let mut n = 0;
         for f in self.frames.iter().filter(|f| f.symtab_attached) {
-            let Ok(mut st) = f.vars.try_borrow_mut() else {
+            let Ok(mut st) = f.vars().try_borrow_mut() else {
                 continue;
             };
             for (i, name) in f.code.cv_names.iter().enumerate() {

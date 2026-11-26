@@ -735,7 +735,7 @@ impl Vm {
                 {
                     f.cvs[idx].set(Some(v.clone()));
                 }
-                let mut vars = f.vars.borrow_mut();
+                let mut vars = f.vars().borrow_mut();
                 if let Some(idx) = vars
                     .names
                     .iter()

@@ -221,7 +221,7 @@ fn frame(v: &mut GcVisitor<'_>, f: &Frame) {
         }
     }
     if f.symtab_attached {
-        var_store(v, &f.vars);
+        var_store(v, &f.vars_store);
     }
     v.values(&f.tmps);
     for it in f.iters.iter().flatten() {

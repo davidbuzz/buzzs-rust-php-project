@@ -63,7 +63,7 @@ pub(crate) fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
     if uf.params.iter().any(|p| p.variadic) {
         return None;
     }
-    if !f.vars.try_borrow().ok()?.slots.is_empty() {
+    if !f.vars_store.try_borrow().ok()?.slots.is_empty() {
         return None;
     }
     let nparams = uf.params.len();
@@ -1956,7 +1956,7 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.frames[idx].attach_symbol_table();
     vm.frames[idx].sync_cvs_to_symtab();
     let frame = &vm.frames[idx];
-    let vars = frame.vars.borrow();
+    let vars = frame.vars().borrow();
     // `zend_array_dup`: check ownership before copying the symbol-table slots.
     // The frame's CV of the same name mirrors its slot (php-src's slot is
     // `IS_INDIRECT`), so a reference held by both counts once.
@@ -1991,7 +1991,7 @@ fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     vm.frames[idx].attach_symbol_table();
     let mut out = HashTable::new();
-    let vars = vm.frames[idx].vars.clone();
+    let vars = vm.frames[idx].vars().clone();
     fn add(
         vm: &mut Vm,
         vars: &std::rc::Rc<std::cell::RefCell<crate::vm::VarStore>>,
@@ -2068,7 +2068,7 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let refs = flags_v & 256 != 0;
     let mode = flags_v & 0xff;
     vm.frames[idx].attach_symbol_table();
-    let vars = vm.frames[idx].vars.clone();
+    let vars = vm.frames[idx].vars().clone();
     let mut n = 0;
     for (k, v) in arr.iter() {
         let ArrayKey::Str(name) = k else {

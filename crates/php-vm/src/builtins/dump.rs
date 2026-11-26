@@ -567,7 +567,7 @@ fn class_handles(vm: &Vm) -> ClassHandles {
         if !f.symtab_attached {
             continue;
         }
-        let Ok(mut st) = f.vars.try_borrow_mut() else {
+        let Ok(mut st) = f.vars().try_borrow_mut() else {
             continue;
         };
         for (i, name) in f.code.cv_names.iter().enumerate() {

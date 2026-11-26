@@ -3752,7 +3752,7 @@ impl Vm {
         } else {
             None
         };
-        let is_main = Rc::ptr_eq(&self.frames[fidx].vars, &self.globals)
+        let is_main = Rc::ptr_eq(&self.frames[fidx].vars_store, &self.globals)
             || self.frames[fidx].kind == crate::vm::FrameKind::Main;
         if is_main && fidx <= base {
             self.frames[fidx].attach_symbol_table();

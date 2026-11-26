@@ -53,7 +53,7 @@ impl CallerSymbols {
         }
         if f.kind == FrameKind::Function && !f.symtab_attached {
             return Some(CallerSymbols {
-                vars: f.vars.clone(),
+                vars: f.vars().clone(),
                 frame: idx,
                 direct: true,
             });
@@ -80,7 +80,7 @@ impl CallerSymbols {
                 .frames
                 .get(self.frame)
                 .filter(|f| f.symtab_attached)
-                .map(|f| f.vars.clone());
+                .map(|f| f.vars().clone());
             if let Some(vars) = attached {
                 vm.sync_symbol_table_writes(&vars);
             }
@@ -113,7 +113,7 @@ impl CallerSymbols {
         }
         vm.frames
             .get_mut(self.frame)
-            .filter(|f| !f.symtab_attached && Rc::ptr_eq(&f.vars, &self.vars))
+            .filter(|f| !f.symtab_attached && Rc::ptr_eq(f.vars(), &self.vars))
     }
 
     /// Leaves slot-by-slot access: the caller's table is attached and
