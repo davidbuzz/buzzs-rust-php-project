@@ -228,6 +228,14 @@ pub(crate) fn is_abstract(c: &Class) -> bool {
     c.flags & cflags::EXPLICIT_ABSTRACT != 0
         || (c.flags & cflags::ABSTRACT != 0 && !c.is_interface())
         || c.methods.values().any(|m| m.is_abstract())
+        // An abstract property hook is an abstract method
+        // (`zend_compile_property_hooks()` sets the flag too).
+        || c.props.iter().any(|p| {
+            c.prop_map.get(&p.name).is_some_and(|x| std::rc::Rc::ptr_eq(x, p))
+                && p.hooks
+                    .as_ref()
+                    .is_some_and(|h| h.abstract_get || h.abstract_set)
+        })
 }
 
 rc_bool!(rc_is_interface, |c| c.is_interface());

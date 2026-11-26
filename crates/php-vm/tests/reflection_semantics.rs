@@ -32,6 +32,46 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
+/// The properties an interface declares are the properties of what
+/// implements or extends it (`do_interface_implementation()`), listed
+/// after its own; an interface with a hooked property is abstract; and a
+/// backed property that implements an abstract one comes in the class's
+/// own declaration order, after the inherited backed ones. Expected
+/// output from php8.5.
+#[test]
+fn interface_properties_are_inherited() {
+    assert_eq!(
+        run(r"<?php
+interface HookedInterface { public string $foo { get; } }
+interface Wider extends HookedInterface { public int $n { get; set; } }
+abstract class AbstractHooked implements HookedInterface {
+    abstract public string $bar { get; }
+    public int $backed = 1;
+}
+abstract class Both extends AbstractHooked implements Wider {}
+class Concrete extends AbstractHooked { public string $foo = 'Foo'; public string $bar = 'Bar'; }
+foreach (['HookedInterface', 'Wider', 'AbstractHooked', 'Both', 'Concrete'] as $c) {
+    $r = new ReflectionClass($c);
+    echo $c, ':';
+    foreach ($r->getProperties() as $p) {
+        echo ' ', $p->class, '::$', $p->getName(), $p->isAbstract() ? ' abstract' : '', $p->isVirtual() ? ' virtual' : '', ',';
+    }
+    echo PHP_EOL, '  ', $r->isAbstract() ? 'abstract' : 'concrete', ', foo ', property_exists($c, 'foo') ? 'of ' . $r->getProperty('foo')->getDeclaringClass()->getName() : 'missing', PHP_EOL;
+}
+foreach (get_object_vars(new Concrete) as $k => $v) { echo $k, '=', $v, ' '; }
+echo PHP_EOL;
+class Missing implements HookedInterface {}
+"),
+        "HookedInterface: HookedInterface::$foo abstract virtual,\n  abstract, foo of HookedInterface\n\
+         Wider: Wider::$n abstract virtual, HookedInterface::$foo abstract virtual,\n  abstract, foo of HookedInterface\n\
+         AbstractHooked: AbstractHooked::$bar abstract virtual, AbstractHooked::$backed, HookedInterface::$foo abstract virtual,\n  abstract, foo of HookedInterface\n\
+         Both: AbstractHooked::$bar abstract virtual, AbstractHooked::$backed, HookedInterface::$foo abstract virtual, Wider::$n abstract virtual,\n  abstract, foo of HookedInterface\n\
+         Concrete: Concrete::$foo, Concrete::$bar, AbstractHooked::$backed,\n  concrete, foo of Concrete\n\
+         backed=1 foo=Foo bar=Bar \n\
+         \nFatal error: Class Missing contains 1 abstract method and must therefore be declared abstract or implement the remaining method (HookedInterface::$foo::get) in t.php on line 20\nStack trace:\n#0 {main}\n"
+    );
+}
+
 /// bug49719.phpt / `property_exists.phpt`: a parent's private property is
 /// not a property of the subclass.
 #[test]

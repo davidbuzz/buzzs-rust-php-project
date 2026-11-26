@@ -3496,7 +3496,16 @@ fn build_class(
                             ));
                         }
                     }
-                    e.slot
+                    // `do_inherit_property()` gives the child the parent's
+                    // offset unless the parent's property is virtual: a
+                    // backed property that implements a virtual one (an
+                    // abstract hooked property, an interface's) has a slot
+                    // of its own, in the child's declaration order.
+                    if e.is_virtual() && pd.flags & flags::VIRTUAL == 0 {
+                        u32::try_from(props.len()).unwrap_or(0)
+                    } else {
+                        e.slot
+                    }
                 }
             }
             None => u32::try_from(props.len()).unwrap_or(0),
@@ -3590,6 +3599,25 @@ fn build_class(
             props.push(pi.clone());
         }
         prop_map.insert(pd.name.clone(), pi);
+    }
+    // `do_interface_implementation()`: a property an interface declares
+    // (abstract, hooked) that the class does not have is the class's too,
+    // as the interface declared it (`do_inherit_property()`):
+    // `property_exists()` and reflection find it, after the class's own
+    // and its parent's. An interface takes those of the interfaces it
+    // extends the same way.
+    for interface in &interfaces {
+        for inherited in &interface.props {
+            if prop_map.contains_key(&inherited.name) {
+                continue;
+            }
+            let pi = Rc::new(PropInfo {
+                slot: u32::try_from(props.len()).unwrap_or(0),
+                ..(**inherited).clone()
+            });
+            props.push(pi.clone());
+            prop_map.insert(pi.name.clone(), pi);
+        }
     }
     // Private props of this class must be accessible by name too.
 
