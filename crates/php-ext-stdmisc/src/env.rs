@@ -6,14 +6,13 @@
 
 use crate::ctx::{global, RtExt};
 use php_runtime::{Value, ZArray, ZStr};
-use php_stdmisc::system::{self, ConnectionState, EnvState, PageInfo};
+use php_stdmisc::system::{self, EnvState, PageInfo};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
 
 thread_local! {
     static ENV: RefCell<EnvState> = RefCell::new(EnvState::default());
-    static CONNECTION: RefCell<ConnectionState> = RefCell::new(ConnectionState::default());
 }
 
 fn getenv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -176,39 +175,6 @@ fn time_sleep_until(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .map(Value::Bool)
 }
 
-#[allow(clippy::unnecessary_wraps)] // native handler signature
-fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(
-        CONNECTION.with(|c| c.borrow().connection_aborted()) != 0,
-    ))
-}
-
-#[allow(clippy::unnecessary_wraps)] // native handler signature
-fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(
-        CONNECTION.with(|c| c.borrow().connection_status()),
-    ))
-}
-
-/// `ignore_user_abort($enable)`: returns the previous setting (`bool` in
-/// php-src master: `RETURN_BOOL(old_setting)`), updating
-/// the `ignore_user_abort` INI entry.
-#[allow(clippy::unnecessary_wraps)] // native handler signature
-fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let old = vm.ini_bool("ignore_user_abort");
-    if let Some(v) = a.opt(0) {
-        let enable = matches!(v, Value::Bool(true));
-        let mut sink: Vec<php_support::Diagnostic> = Vec::new();
-        let _ = vm.ini.ini_set(
-            "ignore_user_abort",
-            if enable { b"1" } else { b"0" },
-            &mut sink,
-        );
-        CONNECTION.with(|c| c.borrow_mut().ignore_user_abort(Some(enable)));
-    }
-    Ok(Value::Bool(old))
-}
-
 fn getopt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let short = a.str(0);
     let long: Option<ZArray> = a.has(1).then(|| a.array(1));
@@ -271,11 +237,18 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         time_nanosleep,
     )
     .function_static("time_sleep_until(float $timestamp): bool", time_sleep_until)
-    .function_static("connection_aborted(): bool", connection_aborted)
-    .function_static("connection_status(): int", connection_status)
+    // The connection state is every SAPI's (`php_vm::connection`).
+    .function_static(
+        "connection_aborted(): bool",
+        php_vm::connection::connection_aborted,
+    )
+    .function_static(
+        "connection_status(): int",
+        php_vm::connection::connection_status,
+    )
     .function_static(
         "ignore_user_abort(?bool $enable = null): bool",
-        ignore_user_abort,
+        php_vm::connection::ignore_user_abort,
     )
     .function_static(
         "getopt(string $short_options, array $long_options = [], &$rest_index = null): array|false",

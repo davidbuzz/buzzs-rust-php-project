@@ -38,7 +38,7 @@
 //! (`$output`, `$pipes`, `$rest_index`, ...) are returned as values.
 //! Request-scoped state lives in small structs the VM keeps per request
 //! ([`system::EnvState`], [`locale::LocaleState`], [`net::SyslogState`],
-//! [`misc::AssertState`], [`system::ConnectionState`]).
+//! [`misc::AssertState`]).
 //!
 //! All `unsafe` code is confined to [`sys`].
 

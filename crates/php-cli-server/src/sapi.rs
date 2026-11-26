@@ -89,8 +89,6 @@ pub struct RequestCtx {
     pub headers: RefCell<SapiHeaders>,
     /// Method, protocol and default content type.
     pub facts: RefCell<HeaderFacts>,
-    /// The connection failed (`PHP_CONNECTION_ABORTED`).
-    pub aborted: Cell<bool>,
     /// `client->headers_written`.
     pub headers_written: Cell<bool>,
     /// `sapi_cli_server_discard_headers` is in effect.
@@ -220,7 +218,6 @@ impl RequestCtx {
             client_addr,
             headers: RefCell::new(SapiHeaders::new()),
             facts: RefCell::new(facts),
-            aborted: Cell::new(false),
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
@@ -247,7 +244,6 @@ impl RequestCtx {
             client_addr: String::new(),
             headers: RefCell::new(SapiHeaders::new()),
             facts: RefCell::new(facts),
-            aborted: Cell::new(false),
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
@@ -281,7 +277,7 @@ impl RequestCtx {
 
     /// `php_cli_server_client_send_through()`.
     fn send_through(&self, data: &[u8]) {
-        if self.aborted.get() {
+        if php_sapi::connection::aborted() {
             return;
         }
         let ok = match (&self.stream, &self.fcgi) {
@@ -295,7 +291,8 @@ impl RequestCtx {
             (None, None) => std::io::stdout().write_all(data).is_ok(),
         };
         if !ok {
-            self.aborted.set(true);
+            // `php_handle_aborted_connection()`, finished by the VM.
+            php_vm::connection::note_abort(None);
         }
     }
 
@@ -320,7 +317,7 @@ impl RequestCtx {
             }
         };
         self.send_through(&head);
-        if self.aborted.get() {
+        if php_sapi::connection::aborted() {
             // SAPI_HEADER_SEND_FAILED resets SG(headers_sent).
             self.headers.borrow_mut().sent = false;
         }
@@ -328,7 +325,7 @@ impl RequestCtx {
 
     /// `sapi_cli_server_ub_write()` after the output layer: headers first.
     pub fn write(&self, data: &[u8]) {
-        if data.is_empty() || self.aborted.get() {
+        if data.is_empty() || php_sapi::connection::aborted() {
             return;
         }
         self.send_headers();
@@ -698,13 +695,15 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `sapi_cgi_flush` only flushes standard output: what the output layer
 /// still buffers (`output_buffering`) stays there, and so do the headers,
 /// which a later `header()` may still change.
-#[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.flush_stdout();
     let ctx = CURRENT.with(|c| c.borrow().clone());
-    if let Some(ctx) = ctx.as_ref().filter(|c| c.cgi.is_some() && c.fcgi.is_none()) {
+    if ctx
+        .as_ref()
+        .is_some_and(|c| c.cgi.is_some() && c.fcgi.is_none())
+    {
         if std::io::Write::flush(&mut std::io::stdout()).is_err() {
-            ctx.aborted.set(true);
+            php_vm::connection::handle_aborted_connection(vm)?;
         }
         return Ok(Value::Null);
     }
@@ -713,7 +712,7 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ctx.send_headers();
         if let Some(fcgi) = &ctx.fcgi {
             if !fcgi.flush() {
-                ctx.aborted.set(true);
+                php_vm::connection::handle_aborted_connection(vm)?;
             }
         }
     }
@@ -818,11 +817,11 @@ fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         let mut line = a.str(0).as_bytes().to_vec();
         line.push(b'\n');
-        let fcgi = current().and_then(|c| c.fcgi.clone().map(|f| (c, f)));
+        let fcgi = current().and_then(|c| c.fcgi.clone());
         match fcgi {
-            Some((ctx, f)) if vm.ini_bool("fastcgi.logging") => {
+            Some(f) if vm.ini_bool("fastcgi.logging") => {
                 if !f.stderr(&line) {
-                    ctx.aborted.set(true);
+                    php_vm::connection::handle_aborted_connection(vm)?;
                 }
             }
             _ => {
@@ -875,16 +874,6 @@ fn getenv_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     orig.map_or(Ok(Value::Bool(false)), |f| f(vm, a))
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(i64::from(ctx_or(false, |c| c.aborted.get()))))
 }
 
 /// `error_log()`: type 0 without an `error_log` file goes to the console
@@ -1112,8 +1101,14 @@ impl Extension for CliServerModule {
             .function_static("flush(): void", flush)
             .function_static("php_sapi_name(): string|false", sapi_name)
             .function_static("getmypid(): int|false", getmypid)
-            .function_static("connection_aborted(): bool", connection_aborted)
-            .function_static("connection_status(): int", connection_status)
+            .function_static(
+                "connection_aborted(): bool",
+                php_vm::connection::connection_aborted,
+            )
+            .function_static(
+                "connection_status(): int",
+                php_vm::connection::connection_status,
+            )
             .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
                 log,

@@ -5,7 +5,8 @@
 //! `sys_getloadavg`, `getmypid`/`getmyuid`/`getmygid`/`getmyinode`/
 //! `getlastmod`, `getrusage`, `microtime`/`gettimeofday`/`hrtime`,
 //! `sleep`/`usleep`/`time_nanosleep`/`time_sleep_until`, `ftok`,
-//! `connection_*`/`ignore_user_abort` state.
+//! the `CONNECTION_*` constants (the connection state is every SAPI's:
+//! `php_sapi::connection`).
 
 use php_runtime::{
     ArrayKey, ErrorLevel, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
@@ -459,36 +460,3 @@ pub const CONNECTION_CONSTANTS: &[(&str, i64)] = &[
     ("CONNECTION_NORMAL", 0),
     ("CONNECTION_TIMEOUT", 2),
 ];
-
-/// Connection state (`PG(connection_status)`, `PG(ignore_user_abort)`).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ConnectionState {
-    /// `connection_status()` bits.
-    pub status: i64,
-    /// The `ignore_user_abort` setting.
-    pub ignore_user_abort: bool,
-}
-
-impl ConnectionState {
-    /// `connection_aborted()`.
-    #[must_use]
-    pub fn connection_aborted(&self) -> i64 {
-        self.status & 1
-    }
-
-    /// `connection_status()`.
-    #[must_use]
-    pub fn connection_status(&self) -> i64 {
-        self.status
-    }
-
-    /// `ignore_user_abort($enable)`: returns the previous setting (as an
-    /// int); `None` only queries.
-    pub fn ignore_user_abort(&mut self, enable: Option<bool>) -> i64 {
-        let old = i64::from(self.ignore_user_abort);
-        if let Some(e) = enable {
-            self.ignore_user_abort = e;
-        }
-        old
-    }
-}

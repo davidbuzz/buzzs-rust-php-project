@@ -310,38 +310,25 @@ fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value("apache2handler"))
 }
 
-/// `connection_aborted()`: `PG(connection_status) & PHP_CONNECTION_ABORTED`
-/// — set by a failed write or flush, not by polling the connection.
+/// `connection_aborted()`: `PG(connection_status) & PHP_CONNECTION_ABORTED`,
+/// with an abort `r->connection->aborted` shows recorded first.
 #[allow(clippy::unnecessary_wraps)]
 fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
+    let status = ctx_or(
+        php_sapi::connection::status(),
+        RequestCtx::connection_status,
+    );
+    Ok(Value::Bool(status & php_sapi::connection::ABORTED != 0))
 }
 
 /// `connection_status()`: `PG(connection_status)` (`NORMAL`, `ABORTED`,
 /// `TIMEOUT` bits).
 #[allow(clippy::unnecessary_wraps)]
 fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(ctx_or(0, RequestCtx::connection_status)))
-}
-
-/// `ignore_user_abort()`: `zend_alter_ini_entry_chars(..., PHP_INI_USER,
-/// PHP_INI_STAGE_RUNTIME)`, returning the old setting.
-#[allow(clippy::unnecessary_wraps)]
-fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let old = vm.ini_bool("ignore_user_abort");
-    if let Some(v) = a.opt(0) {
-        let on = matches!(v, Value::Bool(true));
-        let mut sink: Vec<php_support::Diagnostic> = Vec::new();
-        let _ = vm.ini.alter(
-            "ignore_user_abort",
-            if on { b"1" } else { b"0" },
-            Access::USER,
-            Stage::Runtime,
-            false,
-            &mut sink,
-        );
-    }
-    Ok(Value::Bool(old))
+    Ok(Value::Int(ctx_or(
+        php_sapi::connection::status(),
+        RequestCtx::connection_status,
+    )))
 }
 
 /// Re-reads the SAPI's cached INI values after a runtime change (the
@@ -690,7 +677,7 @@ impl Extension for Apache2Handler {
             .function_static("php_sapi_name(): string|false", php_sapi_name)
             .function_static("connection_aborted(): bool", connection_aborted)
             .function_static("connection_status(): int", connection_status)
-            .function_static("ignore_user_abort(?bool $enable = null): bool", ignore_user_abort)
+            .function_static("ignore_user_abort(?bool $enable = null): bool", php_vm::connection::ignore_user_abort)
             .function_static("set_time_limit(int $seconds): bool", set_time_limit)
             .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
