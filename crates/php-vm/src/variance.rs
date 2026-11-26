@@ -1097,6 +1097,24 @@ fn check_hook_variance(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
     }
 }
 
+/// The interfaces a user class declaration names (`implements`, or `extends`
+/// for an interface), plus the ones an enum gets implicitly. `None` for a
+/// class without a declaration, or when a name does not resolve.
+fn named_interfaces(vm: &Vm, cls: &Rc<Class>) -> Option<Vec<Rc<Class>>> {
+    let decl = cls.decl.as_ref()?;
+    let mut out: Vec<Rc<Class>> = Vec::with_capacity(decl.interfaces.len() + 2);
+    for n in &decl.interfaces {
+        out.push(vm.find_class(n.as_bytes())?);
+    }
+    if cls.is_enum() {
+        out.push(vm.find_class(b"UnitEnum")?);
+        if cls.backing.is_some() {
+            out.push(vm.find_class(b"BackedEnum")?);
+        }
+    }
+    Some(out)
+}
+
 /// Checks the overriding methods of a freshly linked class against their
 /// parent and interface prototypes.
 pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
@@ -1113,6 +1131,12 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
         return;
     }
     let mut protos: Vec<(Rc<Method>, Rc<Method>)> = Vec::new();
+    // `zend_do_implement_interfaces` runs `do_interface_implementation` only
+    // for the interfaces the declaration names. Each of those already holds
+    // the methods of the interfaces it extends, with its own overrides in
+    // place, so a method is checked against `I::current()` where `I extends
+    // Iterator` redeclares it, and not against `Iterator::current()` again.
+    let named = named_interfaces(vm, cls);
     for lc in &cls.method_order {
         let m = &cls.methods[lc];
         if !Rc::ptr_eq(&m.scope(), cls) {
@@ -1125,7 +1149,13 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
                 }
             }
         }
-        for i in &cls.interfaces {
+        // A constructor keeps the full list: its prototype may be an
+        // interface only the parent names (see below).
+        let ifaces = match &named {
+            Some(n) if lc.as_bytes() != b"__construct" => n,
+            _ => &cls.interfaces,
+        };
+        for i in ifaces {
             // `zend_do_inherit_interfaces`: an interface the parent already
             // implements is not checked again (the parent's methods were).
             // Constructors are the exception: a concrete parent constructor
