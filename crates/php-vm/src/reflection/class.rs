@@ -196,6 +196,14 @@ fn rc_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rc_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(this_class(vm, a)?.name.clone()))
 }
+/// [`rc_get_name`] as a [`GetterFn`](crate::func::GetterFn).
+fn rc_name_of(o: &Obj) -> Option<Value> {
+    crate::object::internal::<Refl, _>(o, |r| match r {
+        Refl::Class { cls, .. } => Some(Value::Str(cls.name.clone())),
+        _ => None,
+    })
+    .flatten()
+}
 fn rc_get_short_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(super::short_name(&this_class(vm, a)?.name)))
 }
@@ -1179,7 +1187,7 @@ pub(crate) fn func_name(f: &Func) -> ZStr {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn register(vm: &mut Vm) {
     use super::lazy as lz;
-    ClassBuilder::new("ReflectionClass")
+    let cls = ClassBuilder::new("ReflectionClass")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
@@ -1412,6 +1420,7 @@ pub(crate) fn register(vm: &mut Vm) {
             rc_get_attributes,
         )
         .register(vm);
+    super::set_getters(&cls, &[("getname", rc_name_of)]);
     ClassBuilder::new("ReflectionObject")
         .extends(vm, "ReflectionClass")
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)

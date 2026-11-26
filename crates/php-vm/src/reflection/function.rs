@@ -14,7 +14,7 @@ use crate::func::{flags, Args, Func, Method};
 use crate::object;
 use crate::types::TypeDecl;
 use crate::vm::{PendingCall, Vm, VmResult};
-use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// Internal methods whose return type is tentative (`@tentative-return-type`
@@ -1037,7 +1037,7 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers `ReflectionFunctionAbstract`.
 pub(crate) fn register_abstract(vm: &mut Vm) {
-    ClassBuilder::new("ReflectionFunctionAbstract")
+    let cls = ClassBuilder::new("ReflectionFunctionAbstract")
         .hooks(super::constant::hooks())
         .flags(
             cflags::ABSTRACT
@@ -1153,6 +1153,51 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             rf_get_attributes,
         )
         .register(vm);
+    // (Inherited by `ReflectionFunction` and `ReflectionMethod`.)
+    super::set_getters(
+        &cls,
+        &[("getname", rf_name_of), ("isstatic", rf_is_static_of)],
+    );
+}
+
+/// [`with_this_fn`](super::with_this_fn) for a [`GetterFn`]: `f` of the
+/// function `o` reflects, `None` for another kind of reflection state.
+fn with_fn_of<R>(o: &Obj, f: impl FnOnce(&FnRef) -> R) -> Option<R> {
+    crate::object::internal::<Refl, _>(o, |r| match r {
+        Refl::Function(func) => Some(f(func)),
+        _ => None,
+    })
+    .flatten()
+}
+
+/// [`rf_get_name`] as a [`GetterFn`].
+fn rf_name_of(o: &Obj) -> Option<Value> {
+    with_fn_of(o, |f| Value::Str(f.name()))
+}
+
+/// [`rf_is_static`] as a [`GetterFn`].
+fn rf_is_static_of(o: &Obj) -> Option<Value> {
+    with_fn_of(o, |f| Value::Bool(f.flags() & flags::STATIC != 0))
+}
+
+/// The [`rm_bool!`] tests as [`GetterFn`]s.
+fn rm_flag_of(o: &Obj, flag: u32) -> Option<Value> {
+    with_fn_of(o, |f| Value::Bool(f.flags() & flag != 0))
+}
+fn rm_is_public_of(o: &Obj) -> Option<Value> {
+    rm_flag_of(o, flags::PUBLIC)
+}
+fn rm_is_private_of(o: &Obj) -> Option<Value> {
+    rm_flag_of(o, flags::PRIVATE)
+}
+fn rm_is_protected_of(o: &Obj) -> Option<Value> {
+    rm_flag_of(o, flags::PROTECTED)
+}
+fn rm_is_abstract_of(o: &Obj) -> Option<Value> {
+    rm_flag_of(o, flags::ABSTRACT)
+}
+fn rm_is_final_of(o: &Obj) -> Option<Value> {
+    rm_flag_of(o, flags::FINAL)
 }
 
 /// Registers `ReflectionFunction`.
@@ -1173,7 +1218,7 @@ pub(crate) fn register_function(vm: &mut Vm) {
 
 /// Registers `ReflectionMethod`.
 pub(crate) fn register_method(vm: &mut Vm) {
-    ClassBuilder::new("ReflectionMethod")
+    let cls = ClassBuilder::new("ReflectionMethod")
         .extends(vm, "ReflectionFunctionAbstract")
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("class", RO, Some("string"), None)
@@ -1258,4 +1303,14 @@ pub(crate) fn register_method(vm: &mut Vm) {
             rm_set_accessible,
         )
         .register(vm);
+    super::set_getters(
+        &cls,
+        &[
+            ("ispublic", rm_is_public_of),
+            ("isprivate", rm_is_private_of),
+            ("isprotected", rm_is_protected_of),
+            ("isabstract", rm_is_abstract_of),
+            ("isfinal", rm_is_final_of),
+        ],
+    );
 }

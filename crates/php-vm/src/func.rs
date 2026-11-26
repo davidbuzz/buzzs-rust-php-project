@@ -492,6 +492,13 @@ pub(crate) fn first_op_after_recv(code: &OpArray, n: usize) -> u32 {
 /// The handler of a builtin function.
 pub type BuiltinFn = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 
+/// A pure method's result read from its object alone, for a call without
+/// arguments (`ReflectionMethod::getName()`): what the handler returns, or
+/// `None` where the handler is to run (its error, another kind of state).
+/// The tape's call of a pure method takes it without building the call's
+/// [`Args`] (`exec::tape::calls::pure_method_now`).
+pub type GetterFn = fn(&php_runtime::Obj) -> Option<Value>;
+
 /// The parsed part of a builtin's stub signature (`zend_internal_arg_info`).
 #[derive(Clone, Debug, Default)]
 pub struct Signature {
@@ -567,6 +574,8 @@ pub struct Builtin {
     /// (`SORT_STRING`, `Class::CONST`, `UNKNOWN`), by position
     /// ([`Builtin::cached_default`]): filled on first use.
     named_defaults: RefCell<Vec<NamedDefault>>,
+    /// [`Builtin::getter`], when the method has one.
+    getter: Cell<Option<GetterFn>>,
 }
 
 /// One parameter's entry of [`Builtin::cached_default`].
@@ -687,7 +696,20 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
+    }
+
+    /// The method's [`GetterFn`], if it has one.
+    #[inline]
+    pub(crate) fn getter(&self) -> Option<GetterFn> {
+        self.getter.get()
+    }
+
+    /// Gives the method the [`GetterFn`] `g`, which must answer as its
+    /// handler does for a call without arguments.
+    pub(crate) fn set_getter(&self, g: GetterFn) {
+        self.getter.set(Some(g));
     }
 
     /// A builtin whose signature is parsed from the static stub `text` on
@@ -710,6 +732,7 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
     }
 
@@ -727,6 +750,7 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
     }
 

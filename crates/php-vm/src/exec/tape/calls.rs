@@ -2119,7 +2119,7 @@ pub(super) fn pure_method_now(
             _ => return None,
         }
     };
-    let (o, b, cls) = {
+    let picked = {
         let caller = vm.frames.last()?;
         let o = match obj {
             Operand::Cv(cv) if !caller.symtab_attached => {
@@ -2148,7 +2148,24 @@ pub(super) fn pure_method_now(
         if is_static || b.flags & flags::PURE == 0 || !pure_args(&b, n) {
             return None;
         }
-        (o.clone(), b, Rc::clone(cls))
+        // A getter without arguments (`$m->getName()`): its result read
+        // from the object, without the call's `Args` (`Builtin::getter`).
+        let got = if n == 0 {
+            b.getter().and_then(|getter| getter(o))
+        } else {
+            None
+        };
+        match got {
+            Some(value) => Err(value),
+            None => Ok((o.clone(), b, Rc::clone(cls))),
+        }
+    };
+    let (o, b, cls) = match picked {
+        Ok(found) => found,
+        Err(value) => {
+            vm.frames.last_mut()?.ip = done;
+            return pure_method_done(vm, obj, dst, done, value);
+        }
     };
     let sig = b.signature();
     let nparams = sig.params.len();
@@ -2226,7 +2243,18 @@ pub(super) fn pure_method_now(
         vm.put_val_vec(values);
         vm.put_bool_vec(passed);
     }
-    let v = r.ok()?;
+    pure_method_done(vm, obj, dst, done, r.ok()?)
+}
+
+/// The end of [`pure_method_now`]'s call: a temporary `$this` released,
+/// the result `value` stored, the op after the `DoCall` (`done`) returned.
+fn pure_method_done(
+    vm: &mut Vm,
+    obj: Operand,
+    dst: Option<u32>,
+    done: usize,
+    value: Value,
+) -> Option<usize> {
     let caller = vm.frames.last_mut()?;
     if let Operand::Tmp(t) = obj {
         if let Some(slot) = caller.tmps.get_mut(t as usize) {
@@ -2234,8 +2262,8 @@ pub(super) fn pure_method_now(
         }
     }
     match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
-        Some(slot) => crate::exec::spec::put_tmp(slot, v),
-        None => drop(v),
+        Some(slot) => crate::exec::spec::put_tmp(slot, value),
+        None => drop(value),
     }
     Some(done)
 }

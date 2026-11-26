@@ -439,6 +439,19 @@ pub(crate) fn new_refl(
     new_refl_of(vm, &cls, r, name, cname)
 }
 
+/// Gives the native methods `(lowercase name, getter)` of `cls` their
+/// [`GetterFn`](crate::func::GetterFn)s (see [`crate::func::Builtin::getter`]).
+pub(crate) fn set_getters(cls: &Rc<Class>, list: &[(&str, crate::func::GetterFn)]) {
+    for (lc, g) in list {
+        if let Some(m) = cls.methods.get(&ZStr::from(*lc)) {
+            if let Func::Builtin(b) = &m.func {
+                debug_assert!(b.flags & crate::func::flags::PURE != 0);
+                b.set_getter(*g);
+            }
+        }
+    }
+}
+
 /// The reflection class named `class`, for [`new_refl_of`].
 pub(crate) fn refl_class(vm: &mut Vm, class: &str) -> VmResult<Rc<Class>> {
     vm.find_class(class.as_bytes())

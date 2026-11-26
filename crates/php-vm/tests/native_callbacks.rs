@@ -1397,3 +1397,47 @@ true
 "#
     );
 }
+
+/// Reflection getters answered from the object without a call's `Args`
+/// (`Builtin::getter`): `getName()`, `isStatic()` and the visibility,
+/// abstract and final tests of methods (also trait aliases with another
+/// visibility, `__call` trampolines), functions and closures, class names
+/// of anonymous classes and enums; user subclasses with and without the
+/// parent constructor or overriding `getName()`, and a call with an
+/// argument. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn reflection_getters() {
+    assert_eq!(
+        run(r#"<?php
+namespace G;
+trait T { public function tm() {} public static function ts() {} }
+abstract class A { use T { tm as protected tmp; ts as private tsp; } abstract function ab(); final public static function fs() {} private function pv() {} public function __call($n, $a) {} }
+enum E: string { case X = 'x'; public function en() {} }
+class MyRM extends \ReflectionMethod {} class MyRM2 extends \ReflectionMethod { public function getName(): string { return 'mine'; } }
+class NoCtor extends \ReflectionMethod { public function __construct() {} }
+function f() {}
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    foreach ((new \ReflectionClass(A::class))->getMethods() as $m) {
+      echo $m->getName(), ':', (int)$m->isStatic(), (int)$m->isPublic(), (int)$m->isPrivate(), (int)$m->isProtected(), (int)$m->isAbstract(), (int)$m->isFinal(), ' ';
+    }
+    echo (new \ReflectionFunction('G\f'))->getName(), ' ', (new \ReflectionFunction(fn() => 1))->getName(), ' ';
+    $c = new class {}; echo strlen((new \ReflectionClass($c))->getName()) > 10 ? 'anon' : '?', ' ', (new \ReflectionObject($c))->isAnonymous() ? 'A' : '', ' ';
+    echo (new \ReflectionEnum(E::class))->getName(), ' ', (new \ReflectionClass(E::class))->getName(), ' ', (new \ReflectionMethod(E::class, 'en'))->getName(), ' ';
+    try { $t = new \ReflectionMethod(A::class, 'magicx'); echo $t->getName(); } catch (\ReflectionException $e) { echo $e->getMessage(), ' '; }
+    $t = new \ReflectionMethod(\Closure::fromCallable([new class { function __call($n, $a) {} }, 'magic']), '__invoke'); echo $t->getName(), (int)$t->isPublic(), (int)$t->isStatic(), ' ';
+    echo (new MyRM(A::class, 'fs'))->getName(), ' ', (new MyRM2(A::class, 'fs'))->getName(), ' ';
+    try { echo (new NoCtor)->getName(); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo (new NoCtor)->isStatic(); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo (new \ReflectionMethod(A::class, 'fs'))->getName(1); } catch (\ArgumentCountError $e) { echo $e->getMessage(), ' '; }
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"ab:010010 fs:110001 pv:001000 __call:010000 tmp:000100 tm:010000 tsp:101000 ts:110000 G\f {closure:G\run():14} anon A G\E G\E en Method G\A::magicx() does not exist __invoke10 fs mine Internal error: Failed to retrieve the reflection object Internal error: Failed to retrieve the reflection object ReflectionFunctionAbstract::getName() expects exactly 0 arguments, 1 given 
+ab:010010 fs:110001 pv:001000 __call:010000 tmp:000100 tm:010000 tsp:101000 ts:110000 G\f {closure:G\run():14} anon A G\E G\E en Method G\A::magicx() does not exist __invoke10 fs mine Internal error: Failed to retrieve the reflection object Internal error: Failed to retrieve the reflection object ReflectionFunctionAbstract::getName() expects exactly 0 arguments, 1 given 
+ab:010010 fs:110001 pv:001000 __call:010000 tmp:000100 tm:010000 tsp:101000 ts:110000 G\f {closure:G\run():14} anon A G\E G\E en Method G\A::magicx() does not exist __invoke10 fs mine Internal error: Failed to retrieve the reflection object Internal error: Failed to retrieve the reflection object ReflectionFunctionAbstract::getName() expects exactly 0 arguments, 1 given 
+"#
+    );
+}
