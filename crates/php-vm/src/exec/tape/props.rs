@@ -489,27 +489,8 @@ unsafe fn incdec_prop(frame: *mut Frame, inst: &Inst) -> bool {
     f.prop_incdec_hit(place, kind, dst)
 }
 
-/// The value of the property of place `pid` on a cache hit: its plainest
-/// case (`Frame::prop_read_plain`: a declared slot of an object the base
-/// holds directly) inline, the rest of `read_hit` (a dynamic property, a
-/// reference in the slot or the base) out of line.
-#[inline(always)]
-#[allow(clippy::inline_always)] // one copy in each read handler
-fn read_prop(f: &Frame, pid: crate::opcode::PlaceId) -> Option<php_runtime::Value> {
-    match f.prop_read_plain(pid) {
-        Some(v) => Some(v),
-        None => read_hit_slow(f, pid),
-    }
-}
-
-/// `read_hit`, out of line from [`read_prop`].
-#[inline(never)]
-fn read_hit_slow(f: &Frame, pid: crate::opcode::PlaceId) -> Option<php_runtime::Value> {
-    read_hit(f, pid)
-}
-
 /// `Op::FetchObjProp` (`ZEND_FETCH_OBJ_R` / `_IS` on a cache hit) into
-/// its temporary `b`: [`read_prop`], the hit `prop_op_in` takes, without
+/// its temporary `b`: `fetch_prop_lean`, the hit `prop_op_in` takes, without
 /// going through the op. Declines a miss (the generic op: magic, a
 /// lazy object, an uninitialized or undeclared property).
 ///
@@ -528,10 +509,10 @@ pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
 /// The hits [`fetch_prop`]'s lean form leaves (a dynamic property, a
 /// reference in the slot or the base, a temporary holding a value to
 /// release), out of line.
-#[cold]
 #[inline(never)]
 fn fetch_prop_cold(f: &mut Frame, inst: &Inst) -> bool {
-    let Some(v) = read_prop(f, inst.a) else {
+    // (The plain read was just tried: the general hit.)
+    let Some(v) = read_hit(f, inst.a) else {
         return false;
     };
     store_fetched_in(f, inst.b, None, v);
@@ -665,10 +646,9 @@ pub(super) unsafe fn fetch_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
 }
 
 /// The hits [`fetch_prop_to`]'s lean form leaves, as [`fetch_prop_cold`].
-#[cold]
 #[inline(never)]
 fn fetch_prop_to_cold(f: &mut Frame, inst: &Inst) -> Br {
-    let Some(v) = read_prop(f, inst.a) else {
+    let Some(v) = read_hit(f, inst.a) else {
         return Br::Decline;
     };
     if store_fetched_in(f, inst.b, Some(inst.d), v) {
