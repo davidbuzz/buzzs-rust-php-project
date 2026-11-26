@@ -492,7 +492,7 @@ pub(in crate::exec) fn fetch_prop_dim_lean(
 }
 
 /// `$this->name` / `$cv->name` read on a property cache hit in its
-/// plainest form ([`read_plain`]: a declared, initialized slot holding a
+/// plainest form (a declared, initialized slot holding a
 /// value, not a reference, of an object the base holds directly) with the
 /// store folded in ([`store_copy_lean`]): the value is copied from the
 /// slot into the destination while the slots are borrowed. `None`, nothing
@@ -1321,23 +1321,6 @@ fn plain_obj(f: &Frame, base: u32, class: usize) -> Option<&ObjectData> {
     Some(od)
 }
 
-/// `ZEND_FETCH_OBJ_R` on a cache hit in its plainest form: a declared,
-/// initialized slot holding a value (not a reference) of an object the
-/// base holds directly, copied. `None` for anything else, which
-/// [`read_hit`] then tries.
-#[inline(always)]
-fn read_plain(f: &Frame, pid: PlaceId) -> Option<Value> {
-    let (class, slot, base, _) = plain_key(f, pid, PC_READ)?;
-    let od = plain_obj(f, base, class)?;
-    let slots = od.slots.try_borrow().ok()?;
-    let v = match slots.get(slot)? {
-        Some(Value::Reference(_)) | None => None,
-        Some(v) => Some(copy_value(v)),
-    };
-    drop(slots);
-    v
-}
-
 /// `ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a cache hit in its
 /// plainest form: the value (not a reference, of a type the property
 /// takes as-is) replaces the value (not a reference) of an initialized
@@ -1443,13 +1426,6 @@ fn incdec_op(f: &mut Frame, pid: PlaceId, kind: IncDecKind, dst: Option<u32>) ->
 /// a re-export: each is the arm [`prop_op_in`] runs for its op, with the
 /// plainest hit tried first inline and the rest of the hit out of line.
 impl Frame {
-    /// `$o->p` read on a cache hit in its plainest form ([`read_plain`]);
-    /// the caller tries [`read_hit`] on `None`.
-    #[inline(always)]
-    pub(in crate::exec) fn prop_read_plain(&self, pid: PlaceId) -> Option<Value> {
-        read_plain(self, pid)
-    }
-
     /// `$o->p = v` on a cache hit ([`assign_plain`], else [`assign_hit`]),
     /// exactly as [`prop_op_in`]'s `AssignObjProp` arm.
     #[inline(always)]
