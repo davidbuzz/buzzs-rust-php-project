@@ -204,6 +204,51 @@ fn close(g: &Obj) {
         d.send_target = None;
     });
     detach(g);
+    // Nothing is left for `zend_generator_dtor_storage` to do (no frame,
+    // no `finally` to run, detached from its delegation tree): the object
+    // is freed with its last handle instead of being queued for the
+    // destructor call (`ObjectData::release_last`), which a `foreach` over
+    // a generator that ran to its end paid every time (a frame for the
+    // `dtor_obj` handler, the queue, the safe point).
+    if let Some(d) = g.downcast_ref::<object::ObjectData>() {
+        d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+    }
+}
+
+/// `zend_generator_dtor_storage` of a generator whose last handle is
+/// being released, when it needs neither the VM nor a call: the generator
+/// is not running or lent, is outside any delegation tree, has no call in
+/// preparation and is not suspended inside a `try` with a `finally`. Its
+/// frame is closed in place ([`close`]) and `true` returned: the object
+/// is then freed at once instead of being queued for the destructor call.
+/// `false`, nothing changed, for anything else (`Vm::gen_destroy`'s).
+pub(crate) fn close_on_release(g: &Obj) -> bool {
+    let Some(d) = g.downcast_ref::<object::ObjectData>() else {
+        return false;
+    };
+    // The state is being worked on (a release from inside the generator).
+    if d.internal.try_borrow_mut().is_err() {
+        return false;
+    }
+    let simple = with(g, |d| {
+        d.state != GenState::Running
+            && !d.lent
+            && d.parent.is_none()
+            && d.children.is_empty()
+            && d.frame.as_ref().is_none_or(|f| {
+                let ip = u32::try_from(f.ip.saturating_sub(1)).unwrap_or(u32::MAX);
+                f.calls.is_empty()
+                    && !f.code.try_table.iter().any(|e| {
+                        e.finally
+                            .is_some_and(|(_, fs, _)| ip >= e.try_start && ip < fs)
+                    })
+            })
+    })
+    .unwrap_or(false);
+    if simple {
+        close(g);
+    }
+    simple
 }
 
 /// Marks a generator as finished (its frame was unwound by an exception).
