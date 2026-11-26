@@ -533,12 +533,11 @@ impl Vm {
     }
 
     /// opcache compiles (and optimizes) this request's scripts: it is on
-    /// for this SAPI, or caches to files only.
+    /// for this SAPI (`accel_startup()` stops at "Opcode Caching is
+    /// disabled for CLI" whatever `opcache.file_cache_only` says).
     fn opcache_optimizes(&self) -> bool {
         self.ini.get_bool("opcache.enable")
-            && (!self.sapi_is_cli()
-                || self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
+            && (!self.sapi_is_cli() || self.ini.get_bool("opcache.enable_cli"))
     }
 
     /// `opcache.opt_debug_level` asks for the op arrays of the scripts

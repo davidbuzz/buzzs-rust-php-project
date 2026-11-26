@@ -1146,7 +1146,12 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     let dirs = Directives::current(vm);
     let file_cache_only = dirs.file_cache_only;
     ensure_system_id(vm);
-    if !dirs.enable || (!dirs.for_sapi && !file_cache_only) {
+    // `accel_startup()` gives up before it looks at the file cache when
+    // the SAPI is the CLI and `opcache.enable_cli` is off ("Opcode Caching
+    // is disabled for CLI"): `opcache.file_cache_only` does not turn the
+    // cache on for it. (It did here: a script that rewrote its include got
+    // the first copy back from the file cache with `enable_cli=0`.)
+    if !dirs.enable || !dirs.for_sapi {
         return None;
     }
     // The index the processes forked from this one share (opened before
@@ -1900,8 +1905,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     sync_preload_stats();
     let filename_z = a.str(0);
 
-    let enabled = vm.ini_bool("opcache.enable")
-        && (enabled_for_sapi(vm) || vm.ini_bool("opcache.file_cache_only"));
+    let enabled = vm.ini_bool("opcache.enable") && enabled_for_sapi(vm);
     if !enabled {
         let (file, line) = vm.current_location();
         let file_s = file.to_string_lossy();
