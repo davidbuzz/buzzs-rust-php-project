@@ -46,7 +46,7 @@ Security vulnerabilities are not reported in issues: see [SECURITY.md](SECURITY.
 ## Building
 
 Install the latest stable Rust first: see "Installing Rust" in the [README](README.md)
-(minimum 1.85, no maximum).
+(minimum 1.88, no maximum).
 
 ```sh
 cargo build -p php-cli -p phpt-runner            # target/debug/php and the runner

@@ -113,7 +113,7 @@ optimization log these came from, with its landed-change tables, is git history:
   runs through those ~8 layers whatever any one function does — no micro-trim
   below moved Laravel, and on stable Rust a tape op cannot be its own function
   for free (`become` and `preserve_none` are unstable; the workspace is stable,
-  `rust-version = 1.85`). Either a nightly toolchain for guaranteed tail calls —
+  `rust-version = 1.88`). Either a nightly toolchain for guaranteed tail calls —
   each op its own function with its own register allocation, as CPython 3.14's
   interpreter — or a baseline JIT: warm functions compiled once by a fast
   template compiler (the trace JIT's ~1M instructions per loop is too slow for a

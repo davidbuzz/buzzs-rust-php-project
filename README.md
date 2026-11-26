@@ -64,7 +64,7 @@ reason.
 
 Versions:
 
-- **Minimum:** Rust 1.85 (`rust-version` in `Cargo.toml`; `cargo` refuses to build with an
+- **Minimum:** Rust 1.88 (`rust-version` in `Cargo.toml`; `cargo` refuses to build with an
   older compiler).
 - **Maximum:** none.
 - **What CI builds with:** 1.95.0 in the gating jobs (`.github/matrix.php`), and the latest
