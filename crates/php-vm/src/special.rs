@@ -977,7 +977,7 @@ pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
         (b"substr", 2 | 3) => QUICK_SUBSTR,
         (b"max", 2) => QUICK_MAX,
         (b"min", 2) => QUICK_MIN,
-        (b"in_array", 3) => QUICK_IN_ARRAY,
+        (b"in_array", 2 | 3) => QUICK_IN_ARRAY,
         (b"str_contains", 2) => QUICK_STR_CONTAINS,
         (b"str_starts_with", 2) => QUICK_STR_STARTS,
         (b"str_ends_with", 2) => QUICK_STR_ENDS,
@@ -1050,13 +1050,13 @@ pub(crate) fn quick_eval_2(id: u8, a: &Value, b: &Value) -> Option<Value> {
             Bool(search::str_starts_with(h.as_bytes(), n.as_bytes()))
         }
         (QUICK_STR_ENDS, Str(h), Str(n)) => Bool(search::str_ends_with(h.as_bytes(), n.as_bytes())),
+        (QUICK_IN_ARRAY, needle, Value::Array(haystack)) => Bool(in_array_loose(needle, haystack)?),
         _ => return None,
     })
 }
 
 /// [`quick_eval_2`] for three arguments: `None` as there, and for an offset
-/// outside the haystack (the handler's `ValueError`) and a loose
-/// `in_array()`.
+/// outside the haystack (the handler's `ValueError`).
 pub(crate) fn quick_eval_3(id: u8, first: &Value, second: &Value, third: &Value) -> Option<Value> {
     use php_stdstr::search;
     use Value::{Array, Bool, Int, Null, Str};
@@ -1068,6 +1068,9 @@ pub(crate) fn quick_eval_3(id: u8, first: &Value, second: &Value, third: &Value)
         (QUICK_SUBSTR, Str(s), Int(offset), Int(length)) => quick_substr(s, *offset, Some(*length)),
         (QUICK_IN_ARRAY, needle, Array(haystack), Bool(true)) => {
             Bool(in_array_identical(needle, haystack)?)
+        }
+        (QUICK_IN_ARRAY, needle, Array(haystack), Bool(false)) => {
+            Bool(in_array_loose(needle, haystack)?)
         }
         _ => return None,
     })
@@ -1121,6 +1124,51 @@ fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
         }
     }
     Some(false)
+}
+
+/// A loose `in_array()` (`==`) where no element needs a conversion: a
+/// string needle among strings (`zend_fast_equal_strings`: the same
+/// string, else equal bytes when either starts above `'9'`, so neither can
+/// be numeric, else the numeric comparison of `zendi_smart_str_equals`),
+/// an int needle among ints. `None` for any other needle or element
+/// (references included): the handler compares those.
+fn in_array_loose(needle: &Value, haystack: &ZArray) -> Option<bool> {
+    match needle {
+        Value::Str(n) => {
+            let x = n.as_bytes();
+            let x_text = x.first().is_some_and(|&c| c > b'9');
+            for v in haystack.values() {
+                let Value::Str(s) = v else {
+                    return None;
+                };
+                if ZStr::ptr_eq(n, s) {
+                    return Some(true);
+                }
+                let y = s.as_bytes();
+                let equal = if x_text || y.first().is_some_and(|&c| c > b'9') {
+                    x == y
+                } else {
+                    php_runtime::ops::smart_streq(x, y)
+                };
+                if equal {
+                    return Some(true);
+                }
+            }
+            Some(false)
+        }
+        Value::Int(i) => {
+            for v in haystack.values() {
+                let Value::Int(j) = v else {
+                    return None;
+                };
+                if i == j {
+                    return Some(true);
+                }
+            }
+            Some(false)
+        }
+        _ => None,
+    }
 }
 
 /// [`in_array_identical`] of the string `needle`: `zend_string_equals`
@@ -2407,6 +2455,12 @@ mod tests {
                 Value::Str(ZStr::from("")),
             ]))
         };
+        // Strings only.
+        let strs = |vals: &[&str]| {
+            Value::Array(php_runtime::ZArray::from_values(
+                vals.iter().map(|v| Value::Str(ZStr::from(*v))),
+            ))
+        };
         let t = Value::Bool(true);
         // A string by its bytes (two handles of one content may differ in
         // what else they record).
@@ -2472,6 +2526,18 @@ mod tests {
             ("in_array", vec![s("r"), letters(), t.clone()]),
             ("in_array", vec![s("1"), letters(), t.clone()]),
             ("in_array", vec![s("d"), ints(), t.clone()]),
+            // A loose `in_array()` of strings among strings, ints among
+            // ints (numeric strings compare as numbers).
+            ("in_array", vec![Value::Int(1), ints(), Value::Bool(false)]),
+            ("in_array", vec![Value::Int(9), ints()]),
+            ("in_array", vec![s("r"), strs(&["a", "bc", "r", ""])]),
+            (
+                "in_array",
+                vec![s("x"), strs(&["a", "bc"]), Value::Bool(false)],
+            ),
+            ("in_array", vec![s("1e0"), strs(&["a", "1"])]),
+            ("in_array", vec![s(" 1"), strs(&["01"])]),
+            ("in_array", vec![s("1"), strs(&[])]),
             ("str_contains", vec![s("hello"), s("ell")]),
             ("str_contains", vec![s("hello"), s("")]),
             ("str_contains", vec![s("hello"), s("elx")]),
@@ -2526,7 +2592,8 @@ mod tests {
             ("max", vec![Value::Int(1), Value::Float(2.0)]),
             ("max", vec![s("a"), s("b")]),
             ("min", vec![Value::Float(1.0), Value::Int(2)]),
-            ("in_array", vec![Value::Int(1), ints(), Value::Bool(false)]),
+            ("in_array", vec![s("1"), ints(), Value::Bool(false)]),
+            ("in_array", vec![Value::Int(1), letters()]),
             ("in_array", vec![ints(), ints(), t.clone()]),
             ("str_contains", vec![s("abc"), Value::Int(1)]),
         ];
@@ -2537,7 +2604,7 @@ mod tests {
             assert!(quick_eval_n(id, &refs).is_none(), "{name} {args:?}");
         }
         // Other arities and functions have no id.
-        for (name, argc) in [("max", 3), ("in_array", 2), ("strpos", 4), ("trim", 2)] {
+        for (name, argc) in [("max", 3), ("in_array", 4), ("strpos", 4), ("trim", 2)] {
             assert!(quick_id_n(name.as_bytes(), argc).is_none(), "{name}/{argc}");
         }
         assert_eq!(quick_id_n(b"ord", 1), super::quick_id(b"ord"));

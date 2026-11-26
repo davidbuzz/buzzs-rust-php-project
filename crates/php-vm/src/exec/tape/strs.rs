@@ -104,9 +104,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         // behind an op that stands at its call's `InitFCall`, to the next
         // op for one that stands at the `DoCall` (arguments computed
         // first).
-        // (Not a namespaced call: its name is checked when it runs, in
-        // `Vm::frameless_icall_op`.)
-        Op::FramelessICall(ref fc) if fc.ns.is_none() => {
+        // A namespaced call (`ZEND_JMP_FRAMELESS`: `in_array()` in
+        // `namespace App`) is checked in its call site's slot, where the
+        // site keeps the global fallback it resolved to on its first,
+        // generic run (`Vm::frameless_icall_op`); until then, or when a
+        // namespaced function took the name, the row declines.
+        Op::FramelessICall(ref fc) => {
             let argc = usize::from(fc.argc);
             let Some(Value::Str(lc)) = code.literals.get(fc.name as usize) else {
                 return None;
@@ -133,7 +136,14 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             let after = u32::try_from(i + 1 + fc.tail()).ok()?;
             // (A 64-bit word: no instruction on a target whose `usize` is
             // narrower.)
-            let p = (u64::from(fc.name) << Q_CACHE_SHIFT)
+            let slot = match fc.ns {
+                None => fc.name,
+                Some(_) => u32::try_from(code.literals.len() + i + 1).ok()?,
+            };
+            if u64::from(slot) >= 1 << (64 - Q_CACHE_SHIFT) {
+                return None;
+            }
+            let p = (u64::from(slot) << Q_CACHE_SHIFT)
                 | (u64::from(class) << Q_CLASS_SHIFT)
                 | u64::from(dst(fc.dst)?);
             Inst {
