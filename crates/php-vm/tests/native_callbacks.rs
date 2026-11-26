@@ -1099,3 +1099,42 @@ Abc[2,X,1] kid>W\KidbQcs:magic:1 late2 load(W\Nope) Class "W\Nope" not found Cal
 "#
     );
 }
+
+/// `getAttributes()` filters: by name (a leading `\` matches nothing, as
+/// `zend_get_attribute_str`), by `IS_INSTANCEOF`, none matching (the
+/// shared empty array, still a value of its own), repeated attributes,
+/// and the flag and class errors. Expected output: `/usr/bin/php8.5`
+/// (8.5.13).
+#[test]
+fn attribute_filters() {
+    assert_eq!(
+        run(r#"<?php
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)] class Boot { function __construct(public $v = 0) {} }
+#[Attribute] class Init {} class Sub extends Boot {}
+#[Boot(1)] #[Boot(2)] #[Init] class M { function a() {} #[Boot(3)] function c() {} #[Sub] function d() {} }
+$r = new ReflectionClass('M');
+foreach ($r->getMethods() as $m) {
+  $all = $m->getAttributes(); $b = $m->getAttributes(Boot::class); $io = $m->getAttributes(Boot::class, ReflectionAttribute::IS_INSTANCEOF);
+  echo $m->getName(), ' ', count($all), count($b), count($io), ' ', var_export($b === [], true), ' ', implode(',', array_map(fn($a) => $a->getName(), $io)), "\n";
+  $b[] = 'x'; echo count($b), ' ', count($m->getAttributes(Boot::class)), "\n";
+}
+foreach ($r->getAttributes() as $a) echo $a->getName(), $a->isRepeated() ? 'R' : '', ' ', json_encode($a->getArguments()), "\n";
+echo count($r->getAttributes('nope')), count($r->getAttributes('\Boot')), "\n";
+try { $r->getAttributes(Boot::class, 5); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { $r->getAttributes('Missing', ReflectionAttribute::IS_INSTANCEOF); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        r#"a 000 true 
+1 0
+c 111 false Boot
+2 1
+d 101 true Sub
+1 0
+BootR [1]
+BootR [2]
+Init []
+00
+ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Class "Missing" not found
+"#
+    );
+}
