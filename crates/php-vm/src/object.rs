@@ -695,6 +695,13 @@ impl ObjectData {
         if self.flags.get() & oflags::DESTRUCTED != 0 || !self.class.has_destructor() {
             return;
         }
+        // A generator with nothing to unwind is closed here, without the
+        // destructor call.
+        if self.class.internal == crate::class::InternalKind::Generator
+            && crate::generator::close_on_release(this)
+        {
+            return;
+        }
         queue_destructor(self, this);
     }
 }

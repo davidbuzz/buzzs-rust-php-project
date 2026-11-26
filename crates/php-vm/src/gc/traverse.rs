@@ -169,13 +169,20 @@ pub(crate) fn root_frame(f: &Frame) {
 /// never offered to the collector once a run had seen it alive: a callback
 /// (`function () use ($parser)`) kept in a registry and dropped later.
 pub(crate) fn root_native_state(state: &dyn Any) {
-    if let Some(f) = lookup(state.type_id()) {
-        let mut v = GcVisitor {
-            graph: None,
-            from: super::graph::NONE,
-        };
-        f(state, &mut v);
-    }
+    // The traversal runs under the registry's borrow (it registers
+    // nothing): no handle of the function is taken for the call, which
+    // every closure and generator freed would pay.
+    let _ = REGISTRY.try_with(|r| {
+        if let Ok(r) = r.try_borrow() {
+            if let Some(f) = r.get(&state.type_id()) {
+                let mut v = GcVisitor {
+                    graph: None,
+                    from: super::graph::NONE,
+                };
+                f(state, &mut v);
+            }
+        }
+    });
 }
 
 /// Native object state whose references the collector can enumerate (the
