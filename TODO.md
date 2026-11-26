@@ -323,6 +323,18 @@ optimization log these came from, with its landed-change tables, is git history:
   - Not ours to fix: php-src master warns that a class implementing
     `SessionHandlerInterface` lacks `create_sid()` (8.5 does not), and a Symfony 8.1
     application in debug mode turns that warning into an exception.
+- [ ] **Object numbers after a container of mixed objects is released** (27 Nov). A
+  destructor runs at the executor's next safe point, not inside the release, so an object
+  with `__destruct()` gives its number back after the objects without one that were
+  released with it: `class B { function __destruct() {} } class A {}` then, with numbers 1
+  and 2 free, `$arr = [new B, new A]; unset($arr); $x = new stdClass; $y = new stdClass;`
+  gives `$x` number 1 under C and 2 under ours. Seen through `var_dump()` and
+  `spl_object_id()`. A closure or an object holding the last reference to one such
+  object is in C's order already.
+- [ ] **A default expression is printed as written, not folded** (27 Nov):
+  `ReflectionParameter::__toString()` shows `[!true, ~1, +1, -PHP_INT_MAX]` where C, whose
+  compiler folds the constant parts, shows `[false, -2, 1, -PHP_INT_MAX]`
+  (`reflection/export.rs`, `export_const_expr_in`).
 - [ ] **Reflection of internal functions against C** (27 Nov;
   `crates/php-cli/tests/differential/refldiff.py` dumps every parameter of every internal
   function and method under both and compares). Of 5,594 parameters both know, 154 differ
