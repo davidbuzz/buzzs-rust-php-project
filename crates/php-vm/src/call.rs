@@ -3661,6 +3661,12 @@ impl Vm {
         if caller.calls.len() != calls_len || frame.args.len() != 1 {
             return None;
         }
+        // The names are global functions': a method of the same name
+        // (`BcMath\Number::sqrt($scale)`, readied with its `$this` and
+        // scopes) is not one of them.
+        if frame.this.is_some() || frame.called.is_some() || frame.scope.is_some() {
+            return None;
+        }
         let v = match frame.args[0].as_ref()? {
             Value::Reference(r) => fast_eval(id, &*r.try_borrow()?)?,
             val => fast_eval(id, val)?,
@@ -3749,6 +3755,15 @@ pub(crate) mod fe {
     pub(crate) const ABS: u8 = 13;
     pub(crate) const ORD: u8 = 14;
     pub(crate) const CHR: u8 = 15;
+    pub(crate) const IS_ITERABLE: u8 = 16;
+    pub(crate) const IS_COUNTABLE: u8 = 17;
+    pub(crate) const GETTYPE: u8 = 18;
+    pub(crate) const GET_CLASS: u8 = 19;
+    pub(crate) const SPL_OBJECT_ID: u8 = 20;
+    pub(crate) const ARRAY_IS_LIST: u8 = 21;
+    /// The last of the ids above (`special::QUICK_FAST` adds them to its
+    /// own range).
+    pub(crate) const LAST: u8 = ARRAY_IS_LIST;
     /// A math function of [`super::float_builtin_eval`]: this plus its
     /// [`super::ff`] id.
     pub(crate) const FLOAT_BASE: u8 = 64;
@@ -3772,6 +3787,12 @@ pub(crate) fn fast_eval_id(name: &[u8]) -> u8 {
         b"abs" => fe::ABS,
         b"ord" => fe::ORD,
         b"chr" => fe::CHR,
+        b"is_iterable" => fe::IS_ITERABLE,
+        b"is_countable" => fe::IS_COUNTABLE,
+        b"gettype" => fe::GETTYPE,
+        b"get_class" => fe::GET_CLASS,
+        b"spl_object_id" => fe::SPL_OBJECT_ID,
+        b"array_is_list" => fe::ARRAY_IS_LIST,
         _ => float_fn_id(name).map_or(fe::NONE, |f| fe::FLOAT_BASE + f),
     }
 }
@@ -3859,6 +3880,34 @@ pub(crate) fn fast_eval(id: u8, val: &Value) -> Option<Value> {
             Value::Int(c) => u8::try_from(*c)
                 .ok()
                 .map(|c| Value::Str(ZStr::from_byte(c))),
+            _ => None,
+        },
+        // `is_iterable()`, `is_countable()` (`mixed`): an array, or an
+        // object of a class implementing the interface.
+        fe::IS_ITERABLE | fe::IS_COUNTABLE => Some(Value::Bool(match val {
+            Value::Array(_) => true,
+            Value::Object(o) => {
+                crate::object::class_of(o).instance_of_name(if id == fe::IS_ITERABLE {
+                    b"traversable"
+                } else {
+                    b"countable"
+                })
+            }
+            _ => false,
+        })),
+        fe::GETTYPE => Some(Value::Str(ZStr::from(val.legacy_type_name()))),
+        // The ones taking an object, or an array: any other argument is
+        // the handler's to refuse (its `TypeError`).
+        fe::GET_CLASS => match val {
+            Value::Object(o) => Some(Value::Str(crate::object::class_of(o).name.clone())),
+            _ => None,
+        },
+        fe::SPL_OBJECT_ID => match val {
+            Value::Object(o) => Some(Value::Int(i64::from(o.handle()))),
+            _ => None,
+        },
+        fe::ARRAY_IS_LIST => match val {
+            Value::Array(a) => Some(Value::Bool(a.is_list())),
             _ => None,
         },
         id if id >= fe::FLOAT_BASE => float_fn_eval(id - fe::FLOAT_BASE, val),

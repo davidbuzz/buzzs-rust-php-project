@@ -415,6 +415,10 @@ mod fl {
     /// array (a float or `null` key can warn or deprecate, another type
     /// throws).
     pub(super) const KEY_EXISTS: u32 = 26;
+    /// `get_class()`, `spl_object_id()` of an object (anything else is
+    /// refused by the parameter's type): answered without a handler
+    /// ([`crate::call::fast_eval`]), like the type tests.
+    pub(super) const OBJECT_ARG: u32 = 27;
 }
 
 /// The frameless-call class bits ([`flags::FRAMELESS`]) of the builtin
@@ -449,9 +453,11 @@ pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
         b"pi" => fl::PI,
         b"is_int" | b"is_integer" | b"is_long" | b"is_string" | b"is_array" | b"is_bool"
         | b"is_null" | b"is_float" | b"is_double" | b"is_object" | b"is_resource"
-        | b"is_scalar" => fl::TYPE_TEST,
+        | b"is_scalar" | b"is_iterable" | b"is_countable" | b"gettype" => fl::TYPE_TEST,
         b"strlen" => fl::STRLEN,
-        b"count" | b"sizeof" => fl::COUNT,
+        // (`array_is_list()`: of an array only, as `count()`.)
+        b"count" | b"sizeof" | b"array_is_list" => fl::COUNT,
+        b"get_class" | b"spl_object_id" => fl::OBJECT_ARG,
         b"array_key_exists" | b"key_exists" => fl::KEY_EXISTS,
         _ => return 0,
     };
@@ -558,6 +564,7 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
         )
         | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))])
         | (fl::TYPE_TEST, [Some(_)])
+        | (fl::OBJECT_ARG, [Some(Value::Object(_))])
         | (fl::COUNT, [Some(Array(_))])
         | (fl::KEY_EXISTS, [Some(Str(_) | Int(_)), Some(Array(_))]) => true,
         (fl::TRIM, [Some(Str(_)), Some(Str(chars))]) => !has_char_range(chars.as_bytes()),
@@ -624,6 +631,7 @@ fn inline_class(class: u32) -> bool {
     matches!(
         class,
         fl::TYPE_TEST
+            | fl::OBJECT_ARG
             | fl::STRLEN
             | fl::COUNT
             | fl::CASE
@@ -644,7 +652,7 @@ fn inline_class(class: u32) -> bool {
 pub(crate) fn frameless_arity(lc: &[u8], argc: usize) -> bool {
     match frameless_flags(lc) >> flags::FRAMELESS_SHIFT {
         0 => false,
-        fl::TYPE_TEST | fl::STRLEN | fl::COUNT => argc == 1,
+        fl::TYPE_TEST | fl::OBJECT_ARG | fl::STRLEN | fl::COUNT => argc == 1,
         fl::KEY_EXISTS => argc == 2,
         _ => true,
     }
@@ -660,6 +668,7 @@ fn frameless_arg1(class: u32, v: &Value) -> bool {
         | (fl::DECHEX, Int(_))
         | (fl::CASE | fl::TRIM | fl::DIRNAME | fl::STRLEN, Str(_))
         | (fl::TYPE_TEST, _)
+        | (fl::OBJECT_ARG, Value::Object(_))
         | (fl::COUNT, Array(_)) => true,
         (fl::IS_NUMERIC, v) => is_scalar(v),
         (fl::ORD, Str(s)) => s.len() == 1,
@@ -801,7 +810,7 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
-        (fl::TYPE_TEST | fl::STRLEN | fl::COUNT, v) => {
+        (fl::TYPE_TEST | fl::OBJECT_ARG | fl::STRLEN | fl::COUNT, v) => {
             crate::call::fast_eval(crate::call::fast_eval_id(name), v)
         }
         (fl::TRIM | fl::CASE, v @ Value::Str(_)) => quick_eval(quick_id(name)?.0, v),
@@ -852,7 +861,7 @@ pub(crate) const QUICK_FAST: u8 = 0x60;
 const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
 const _: () = assert!(QUICK_UPPER < QUICK_STRPOS);
 const _: () = assert!(QUICK_KEY_EXISTS < QUICK_FAST);
-const _: () = assert!(QUICK_FAST + crate::call::fe::CHR < 0x7f);
+const _: () = assert!(QUICK_FAST + crate::call::fe::LAST < 0x7f);
 
 /// The id of the builtin named `lc` (lower case) when its one-argument
 /// call needs no handler ([`frameless_inline`]), with its frameless class:
@@ -889,7 +898,10 @@ pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
 /// evaluates constant calls with (php-src's sccp does not fold these).
 fn quick_fast_id(lc: &[u8]) -> Option<(u8, u32)> {
     let class = frameless_flags(lc) >> flags::FRAMELESS_SHIFT;
-    if !matches!(class, fl::TYPE_TEST | fl::STRLEN | fl::COUNT) {
+    if !matches!(
+        class,
+        fl::TYPE_TEST | fl::OBJECT_ARG | fl::STRLEN | fl::COUNT
+    ) {
         return None;
     }
     match crate::call::fast_eval_id(lc) {
@@ -935,7 +947,7 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
             _,
         ) => None,
         // (A reference is the handler's: the tests answer of its value.)
-        (id, v) if (QUICK_FAST..=QUICK_FAST + crate::call::fe::CHR).contains(&id) => {
+        (id, v) if (QUICK_FAST..=QUICK_FAST + crate::call::fe::LAST).contains(&id) => {
             if matches!(v, Value::Reference(_)) {
                 return None;
             }
@@ -1819,7 +1831,7 @@ impl Vm {
                 return None;
             }
             match class {
-                fl::TYPE_TEST | fl::STRLEN | fl::COUNT => {
+                fl::TYPE_TEST | fl::OBJECT_ARG | fl::STRLEN | fl::COUNT => {
                     crate::call::fast_eval(b.fast_eval_id(), arg)?
                 }
                 _ => frameless_inline(b.name.as_bytes(), class, Some(arg))?,
