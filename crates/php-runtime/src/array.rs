@@ -370,6 +370,24 @@ fn release_element(slot: Option<Value>) {
     }
 }
 
+/// [`release_element`] for the value of a hash bucket: a string or an
+/// array gives its count back in line (`zend_string_release`,
+/// `GC_DELREF`; the block is freed out of line when this was the last
+/// handle) instead of through `Value`'s drop glue. See
+/// [`dup_bucket_value`] for why the packed lists keep the plain form.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test per element of a released table
+fn release_bucket_value(slot: Option<Value>) {
+    match slot {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            std::mem::forget(slot);
+        }
+        Some(Value::Str(s)) => drop(s),
+        Some(Value::Array(a)) => drop(a),
+        Some(v) => drop(v),
+    }
+}
+
 impl Drop for HashTable {
     /// `zend_array_destroy`: a buffered array leaves the root buffer first
     /// (`GC_REMOVE_FROM_BUFFER`, one test of the mark otherwise), then the
@@ -390,7 +408,7 @@ impl Drop for HashTable {
             }
             Store::Hash(data) => {
                 for bucket in data.buckets {
-                    release_element(bucket.val);
+                    release_bucket_value(bucket.val);
                     if let ArrayKey::Str(key) = bucket.key {
                         drop(key);
                     }
@@ -3512,6 +3530,35 @@ fn dup_slot(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
     }
 }
 
+/// [`dup_slot`] for the value of a hash bucket: a string or an array is
+/// shared with one count in line (`Z_ADDREF`) instead of through
+/// [`dup_other`]'s call and second match. The keyed arrays an application
+/// copies are small and mostly hold strings and arrays (about seven
+/// elements a copy on a framework page): 9,001 instructions became 6,822
+/// for copying and freeing 64 string values, 2,258 became 1,983 for 8.
+/// Not for packed lists: with these arms in their loop a list of ints
+/// cost 13 instructions an element more (the tag test became a jump
+/// through a table).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per element of a copied table
+#[allow(clippy::ref_option)] // the slot itself is read (`ptr::read`), as in `dup_slot`
+fn dup_bucket_value(slot: &Option<Value>, table: *const HashTable) -> Option<Value> {
+    // One match over the four cases: nested in [`dup_slot`]'s (the scalar
+    // test after these two) an int value cost 12 instructions more.
+    match slot {
+        Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            // SAFETY: as in `dup_slot`: a null, bool, int or float owns no
+            // allocation and has no drop glue, so its bits are a second,
+            // independent value; `ptr::read` is a typed copy of a valid,
+            // initialised `Option<Value>` behind a shared reference.
+            unsafe { std::ptr::read(slot) }
+        }
+        Some(Value::Str(s)) => Some(Value::Str(s.clone())),
+        Some(Value::Array(a)) => Some(Value::Array(a.clone())),
+        _ => dup_other(slot, table),
+    }
+}
+
 /// [`dup_slot`] for a hole or a refcounted element of the table at
 /// `table`: a reference held only by the source (refcount 1) is unwrapped
 /// into its value, unless it refers to that table itself; anything else is
@@ -3583,7 +3630,7 @@ impl Clone for HashTable {
                 // a copy is re-linked below, so lookups in it work.
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| Bucket {
-                    val: dup_slot(&b.val, self_ptr),
+                    val: dup_bucket_value(&b.val, self_ptr),
                     key: b.key.clone(),
                     next: b.next,
                 }));
@@ -3596,7 +3643,7 @@ impl Clone for HashTable {
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
                     Some(_) => Bucket {
-                        val: dup_slot(&b.val, self_ptr),
+                        val: dup_bucket_value(&b.val, self_ptr),
                         key: b.key.clone(),
                         next: INVALID,
                     },
