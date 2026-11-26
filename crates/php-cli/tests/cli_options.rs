@@ -464,3 +464,30 @@ fn failed_stdout_write_aborts_with_255() {
     assert_eq!(status.and_then(|s| s.code()), Some(255));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--repeat`: a child the script forked ends with its run ("Don't repeat
+/// fork()ed processes.", `pid == getpid()` in sapi/cli/php_cli.c). It used
+/// to go on with the parent's remaining repeats, printing the marker and
+/// forking again (ext/pcntl/tests/001.phpt and bug73783.phpt under
+/// upstream's REPEAT variant). Expected output from php8.5.
+#[test]
+fn repeat_does_not_repeat_forked_children() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("repeat-fork-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("f.php"),
+        "<?php\n$pid = pcntl_fork();\nif ($pid === 0) { exit; }\n\
+         pcntl_waitpid($pid, $status);\necho \"parent\\n\";\n",
+    )
+    .unwrap();
+    let out = php_in(&dir, &["-n", "--repeat", "3", "f.php"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Executing for the first time...\nparent\n\
+         Finished execution, repeating...\nparent\n\
+         Finished execution, repeating...\nparent\n"
+    );
+}

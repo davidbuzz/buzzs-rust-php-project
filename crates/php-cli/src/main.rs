@@ -593,6 +593,8 @@ fn do_cli_requests(argv: &[Vec<u8>], cfg: &Config) -> i32 {
         }
     }
     let mut repeats = req.repeats;
+    // "Don't repeat fork()ed processes." (`pid == getpid()` in do_cli()).
+    let pid = std::process::id();
     if repeats > 1 {
         out(b"Executing for the first time...\n");
     }
@@ -632,7 +634,10 @@ fn do_cli_requests(argv: &[Vec<u8>], cfg: &Config) -> i32 {
             continue;
         }
         repeats -= 1;
-        if repeats > 0 {
+        // A child the script forked ends with its run: it used to go on
+        // with the parent's remaining repeats, each printing the marker
+        // and forking children of its own.
+        if repeats > 0 && std::process::id() == pid {
             out(b"Finished execution, repeating...\n");
             continue;
         }
