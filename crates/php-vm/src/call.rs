@@ -6521,6 +6521,19 @@ pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slo
     true
 }
 
+/// Whether call site `slot`'s method cache holds a user function (for
+/// whatever class it saw last): the paths that only take a builtin have
+/// nothing to try there, and skip their own lookup.
+#[inline]
+pub(crate) fn method_site_holds_user(code: &crate::opcode::OpArray, slot: usize) -> bool {
+    code.method_cache.try_borrow().is_ok_and(|cache| {
+        matches!(
+            cache.get(slot),
+            Some(Some(e)) if matches!(e.func.func, crate::opcode::CachedFuncKind::User(_))
+        )
+    })
+}
+
 /// A method call site's cached resolution for an object of the class at
 /// `cls_addr` called from the scope at `scope_addr` (the method, its
 /// declaring scope, whether it is static), when the site's

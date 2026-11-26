@@ -160,6 +160,77 @@ pub struct UserFunction {
     pub call_shape: CallShape,
 }
 
+/// What a user method does when its whole body is one `return` of
+/// something that needs no frame to read ([`accessor_shape`]).
+pub(crate) enum Accessor {
+    /// `return $this->name;`: the place of the read in the method's code.
+    Prop(u32),
+    /// `return <literal>;`: the literal's index in the method's code.
+    Lit(u32),
+}
+
+/// The [`Accessor`] of `uf` ([`UserFunction::accessor`] caches it), when its code is exactly one of the shapes
+/// and nothing about its declaration needs a call to happen: no
+/// parameter, not static, abstract, a generator or returning by
+/// reference, and neither `#[\Deprecated]` nor `#[\NoDiscard]` (both
+/// report at the call). The ops after the `return` are the implicit
+/// `return;` the compiler appends.
+fn accessor_shape(uf: &UserFunction) -> Option<Accessor> {
+    use crate::opcode::{Op, Operand};
+    const REFUSED: u32 = flags::STATIC
+        | flags::ABSTRACT
+        | flags::GENERATOR
+        | flags::RETURN_REF
+        | flags::DEPRECATED
+        | flags::NODISCARD
+        | flags::NO_BODY;
+    if uf.flags & REFUSED != 0 || !uf.params.is_empty() {
+        return None;
+    }
+    let ops = &uf.code.ops;
+    let tail_is_return = |from: usize| {
+        ops.get(from..).is_some_and(|rest| {
+            rest.iter().all(|op| {
+                matches!(
+                    op,
+                    Op::Nop
+                        | Op::Return {
+                            val: Operand::Unused
+                        }
+                )
+            })
+        })
+    };
+    match (ops.first()?, ops.get(1)) {
+        (
+            &Op::FetchObjProp {
+                place,
+                dst,
+                to: None,
+                mode: crate::opcode::FetchMode::Read,
+            },
+            Some(&Op::Return {
+                val: Operand::Tmp(t),
+            }),
+        ) if t == dst && tail_is_return(2) => {
+            let p = uf.code.places.get(place as usize)?;
+            let plain = matches!(p.base, crate::opcode::PlaceBase::This)
+                && matches!(
+                    p.segs.as_slice(),
+                    [crate::opcode::Seg::Prop(Operand::Lit(_))]
+                );
+            plain.then_some(Accessor::Prop(place))
+        }
+        (
+            &Op::Return {
+                val: Operand::Lit(l),
+            },
+            _,
+        ) if tail_is_return(1) => Some(Accessor::Lit(l)),
+        _ => None,
+    }
+}
+
 /// [`UserFunction::call_shape`]'s answer, cached in the function: whether
 /// the declaration rules out the plain call path of `Vm::push_simple_ucall`
 /// whatever the arguments, and whether the arguments' types must be checked
@@ -172,6 +243,11 @@ pub struct UserFunction {
 /// of once per call.
 #[derive(Debug, Default)]
 pub struct CallShape {
+    /// [`UserFunction::accessor`]'s answer: 0 not worked out yet, 1 no
+    /// accessor, 2 a property read (its place in `accessor_arg`), 3 a
+    /// literal (its index there).
+    accessor: Cell<u8>,
+    accessor_arg: Cell<u32>,
     kind: Cell<u8>,
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
@@ -254,6 +330,33 @@ impl fmt::Debug for UserFunction {
 }
 
 impl UserFunction {
+    /// What the method does when its body is one frameless `return`
+    /// ([`Accessor`]), worked out on the first call and cached: the code
+    /// and the flags do not change once the function is shared.
+    #[inline]
+    pub(crate) fn accessor(&self) -> Option<Accessor> {
+        match self.call_shape.accessor.get() {
+            1 => None,
+            2 => Some(Accessor::Prop(self.call_shape.accessor_arg.get())),
+            3 => Some(Accessor::Lit(self.call_shape.accessor_arg.get())),
+            _ => self.find_accessor(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn find_accessor(&self) -> Option<Accessor> {
+        let found = accessor_shape(self);
+        let (state, arg) = match found {
+            None => (1, 0),
+            Some(Accessor::Prop(place)) => (2, place),
+            Some(Accessor::Lit(l)) => (3, l),
+        };
+        self.call_shape.accessor_arg.set(arg);
+        self.call_shape.accessor.set(state);
+        found
+    }
+
     /// The plain-call shape of the declaration ([`CallShape`]): computed
     /// from the flags, the op array's slot counts and the parameters on the
     /// first call and cached, as none of them changes once the function is
