@@ -1086,8 +1086,16 @@ struct StaticInfo {
 thread_local! {
     /// Typed static properties by cell address (the place walk only sees
     /// the cell).
-    static STATIC_INFO: RefCell<std::collections::HashMap<usize, Rc<StaticInfo>>> =
-        RefCell::new(std::collections::HashMap::new());
+    ///
+    /// Keyed by an address: hashed with `FxHash` (the default SipHash
+    /// cost every fetch of a typed static property ~60 instructions).
+    static STATIC_INFO: RefCell<rustc_hash::FxHashMap<usize, Rc<StaticInfo>>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
+    /// The size of `STATIC_INFO` past which the entries of freed cells
+    /// are dropped at the next insertion (twice what the last sweep
+    /// left): a test runner that resets static properties between tests
+    /// makes new cells all the time, and the map only grew.
+    static STATIC_INFO_SWEEP: Cell<usize> = const { Cell::new(256) };
 }
 
 /// Resets typed reference state and static property caches for a new request.
@@ -1095,6 +1103,7 @@ pub(crate) fn reset() {
     INCDEC_OVERFLOW.with(|c| c.set(None));
     DEFERRED_ARG_WRITES.with(|d| d.borrow_mut().clear());
     STATIC_INFO.with(|m| m.borrow_mut().clear());
+    STATIC_INFO_SWEEP.with(|c| c.set(256));
 }
 
 fn cell_key(cell: &Rc<RefCell<Value>>) -> usize {
@@ -1114,6 +1123,10 @@ pub(crate) fn note_static_prop(sp: &StaticProp) {
             .get(&key)
             .is_none_or(|i| !i.cell.upgrade().is_some_and(|c| Rc::ptr_eq(&c, &sp.cell)));
         if fresh {
+            if m.len() >= STATIC_INFO_SWEEP.with(Cell::get) {
+                m.retain(|_, i| i.cell.strong_count() != 0);
+                STATIC_INFO_SWEEP.with(|c| c.set((m.len() * 2).max(256)));
+            }
             let ty = sp.ty.clone().unwrap_or_default();
             m.insert(
                 key,
@@ -1135,6 +1148,33 @@ fn static_info(cell: &Rc<RefCell<Value>>) -> Option<Rc<StaticInfo>> {
             .filter(|i| i.cell.upgrade().is_some_and(|c| Rc::ptr_eq(&c, cell)))
             .cloned()
     })
+}
+
+/// The builtin type bits a value may have to be stored as it is in the
+/// typed static property behind `cell` (`place::propcache::accepts`), and
+/// the lower-case name of the one class its type names, an instance of
+/// which is stored as it is too: its declared type's, when a plain store
+/// is all `zend_verify_property_type` would do for such a value (no
+/// coercion). `(0, None)` for a property with a set visibility of its own
+/// or `readonly`, and for a cell that is no noted typed property. A null
+/// is taken only once the property is initialized (it is what an
+/// uninitialized one holds, and the full write marks it initialized).
+pub(crate) fn static_accept(cell: &Rc<RefCell<Value>>) -> (u32, Option<ZStr>) {
+    let Some(info) = static_info(cell) else {
+        return (0, None);
+    };
+    if info.prop.flags & (crate::func::flags::READONLY | crate::func::flags::SET_MASK) != 0 {
+        return (0, None);
+    }
+    let Some(ty) = info.prop.ty.as_ref() else {
+        return (0, None);
+    };
+    let bits = if info.init.get() {
+        ty.mask
+    } else {
+        ty.mask & !mask::NULL
+    };
+    (bits, crate::place::propcache::single_class_name(ty))
 }
 
 impl StaticInfo {

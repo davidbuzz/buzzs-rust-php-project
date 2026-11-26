@@ -61,7 +61,7 @@ for ($i = 0; $i < 4; $i++) { echo $n->sqrt(2), " ", $n->round(1), " ", $n->floor
     assert_eq!(out, "4.00 16.0 16\n".repeat(4));
 }
 
-const SOURCE: &str = r##"<?php
+const SOURCE: &str = r#"<?php
 namespace App;
 class It implements \IteratorAggregate, \Countable { function getIterator(): \Iterator { return new \ArrayIterator([]); } function count(): int { return 0; } }
 enum E { case A; }
@@ -85,9 +85,9 @@ class K { function gettype($x) { return "method $x"; } static function get_class
 $k = new K; for ($i = 0; $i < 3; $i++) { echo $k->gettype(1), ' ', K::get_class(2), ' ', $k->is_iterable([]), "\n"; }
 function gettype($x) { return 'ns gettype'; }
 for ($i = 0; $i < 3; $i++) { echo gettype(1), ' ', \gettype(1), "\n"; }
-"##;
+"#;
 
-const EXPECTED: &str = r##"round 0
+const EXPECTED: &str = r#"round 0
 -- arr
 bool(true)
 bool(true)
@@ -723,4 +723,4 @@ method 1 static 2 mine
 ns gettype integer
 ns gettype integer
 ns gettype integer
-"##;
+"#;

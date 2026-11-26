@@ -210,10 +210,10 @@ fn static_cell_isset(cell: &RefCell<Value>, empty: bool) -> Option<bool> {
 }
 
 /// [`Op::AssignStaticProp`] on a hit of the place's fast entry, on the
-/// running frame `f` alone: `Vm::assign_static_prop_fast` (an untyped
-/// property holding a scalar or string gets a scalar or string value; the
-/// old value's release has no side effect). `false`, nothing changed,
-/// otherwise.
+/// running frame `f` alone: an untyped property, or a typed one whose
+/// type takes the value as it is (never a null, see
+/// `typed_refs::static_accept`), holding no reference, gets a scalar, a
+/// string, an array or an object. `false`, nothing changed, otherwise.
 ///
 /// [`Op::AssignStaticProp`]: crate::opcode::Op::AssignStaticProp
 #[inline(always)]
@@ -224,28 +224,47 @@ pub(in crate::exec) fn assign_static_prop_in(
     val: Operand,
     dst: Option<u32>,
 ) -> bool {
-    let cell = match static_prop_entry_in(f, pid, |e| Some(e.fast_plain.then(|| e.cell.clone()))) {
-        Some(Some(cell)) => cell,
-        // A typed property: the write needs the type check.
-        Some(None) => return false,
-        None => match static_place_cell_in(f, pid) {
-            Some((cell, false)) => cell,
-            _ => return false,
-        },
-    };
-    let Some(v) = plain_value_in(f, val) else {
-        return false;
+    // (A typed property: a value its type takes as it is, `e.accept`;
+    // the first write fills the entry through the full write.)
+    let hit = static_prop_entry_in(f, pid, |e| {
+        // A scalar, a string, an array or an object (`ZVAL_COPY` of the
+        // `OP_DATA` operand): static caches and registries store those.
+        let v = super::dim_value_in(f, val)?;
+        let takes = crate::place::propcache::accepts(e.accept, &v)
+            || match (&v, &e.class_lc) {
+                // `?Foo`: an instance of the class.
+                (Value::Object(o), Some(lc)) if !e.fast_plain => {
+                    crate::object::class_of(o).instance_of_name(lc.as_bytes())
+                }
+                _ => false,
+            };
+        takes.then(|| (e.cell.clone(), v))
+    });
+    let (cell, v) = if let Some(hit) = hit {
+        hit
+    } else {
+        // No entry yet: filled now, and an untyped property written.
+        let Some((cell, false)) = static_place_cell_in(f, pid) else {
+            return false;
+        };
+        let Some(v) = super::dim_value_in(f, val) else {
+            return false;
+        };
+        (cell, v)
     };
     let Ok(mut slot) = cell.try_borrow_mut() else {
         return false;
     };
-    if !is_plain_value(&slot) {
+    // (A reference there is written through, by the full write.)
+    if matches!(&*slot, Value::Reference(_)) {
         return false;
     }
     let keep = dst.map(|_| v.clone());
     let old = std::mem::replace(&mut *slot, v);
     drop(slot);
-    drop(old);
+    // Released once nothing is borrowed, offered to the collector first
+    // (`zval_ptr_dtor`), as a property's old value is.
+    crate::exec::release_slot_value(Some(old));
     // The OP_DATA temporary is consumed.
     if let Operand::Tmp(t) = val {
         if let Some(s) = f.tmps.get_mut(t as usize) {
@@ -277,12 +296,13 @@ pub(in crate::exec) fn incdec_static_prop_in(
     if dst.is_some_and(|d| d as usize >= f.tmps.len()) {
         return false;
     }
-    let cell = match static_prop_entry_in(f, pid, |e| Some(e.fast_plain.then(|| e.cell.clone()))) {
-        Some(Some(cell)) => cell,
-        // A typed property: the result needs the type check.
-        Some(None) => return false,
+    // (A typed property: an int stays an int and a float a float, which
+    // its type must take, `e.accept`.)
+    let (cell, accept) = match static_prop_entry_in(f, pid, |e| Some((e.cell.clone(), e.accept))) {
+        Some((_, 0)) => return false,
+        Some(hit) => hit,
         None => match static_place_cell_in(f, pid) {
-            Some((cell, false)) => cell,
+            Some((cell, false)) => (cell, u32::MAX),
             _ => return false,
         },
     };
@@ -290,6 +310,9 @@ pub(in crate::exec) fn incdec_static_prop_in(
         let Ok(mut slot) = cell.try_borrow_mut() else {
             return false;
         };
+        if !crate::place::propcache::accepts(accept, &slot) {
+            return false;
+        }
         match &mut *slot {
             Value::Int(cur) => {
                 let old = *cur;

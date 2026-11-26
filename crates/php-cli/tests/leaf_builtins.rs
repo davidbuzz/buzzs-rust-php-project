@@ -56,7 +56,7 @@ fn leaf_builtins_do_what_the_framed_call_does() {
     assert_eq!(run(SOURCE), EXPECTED);
 }
 
-const SOURCE: &str = r##"<?php
+const SOURCE: &str = r#"<?php
 namespace App;
 trait T {} interface I {} class P { use T; private function priv() {} function pub() {} } class C extends P implements I { function __toString() { return 'C!'; } }
 enum E { case A; }
@@ -90,9 +90,9 @@ class K { function explode($a, $b) { return "method"; } static function time() {
 $k = new K; for ($i = 0; $i < 3; $i++) { echo $k->explode(',', 'a,b'), ' ', K::time(), "\n"; }
 function ucfirst($x) { return 'ns ucfirst'; }
 for ($i = 0; $i < 3; $i++) { echo ucfirst('a'), ' ', \ucfirst('a'), "\n"; }
-"##;
+"#;
 
-const EXPECTED: &str = r##"round 0
+const EXPECTED: &str = r#"round 0
 bool(true)
 bool(true)
 bool(false)
@@ -894,4 +894,4 @@ method static time
 ns ucfirst A
 ns ucfirst A
 ns ucfirst A
-"##;
+"#;

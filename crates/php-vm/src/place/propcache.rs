@@ -261,7 +261,7 @@ pub(crate) fn accepts(accept: u32, value: &Value) -> bool {
 
 /// The lower-case class name of a property type naming exactly one class
 /// (`Foo`, `?Foo`, `Foo|int`), other than `self`/`parent`/`static`.
-fn single_class_name(ty: &TypeDecl) -> Option<ZStr> {
+pub(crate) fn single_class_name(ty: &TypeDecl) -> Option<ZStr> {
     if !ty.intersections.is_empty() || ty.classes.len() != 1 {
         return None;
     }
