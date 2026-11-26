@@ -105,3 +105,19 @@ fn number_property_isset_empty_and_reference() {
         "bool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nstring(1) \"1\"\n"
     );
 }
+
+/// A method that shares its name with a global function the engine
+/// evaluates without its handler (`sqrt()`, `floor()`) is still the
+/// method on every call of a call site, not only the first: the second
+/// `$n->sqrt(1)` used to be answered by the global `sqrt()` (a float).
+/// Expected output from php8.5.
+#[test]
+fn methods_named_like_quick_functions_stay_methods() {
+    assert_eq!(
+        run(
+            r"function f($n) { for ($i = 0; $i < 3; $i++) { echo $n->sqrt(1), ',', $n->floor(), ',', $n->pow(2), ';'; } }
+            f(new BcMath\Number('6.25'));"
+        ),
+        "2.5,6,39.0625;2.5,6,39.0625;2.5,6,39.0625;"
+    );
+}

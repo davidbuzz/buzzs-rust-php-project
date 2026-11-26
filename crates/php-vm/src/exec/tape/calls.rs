@@ -3420,15 +3420,17 @@ pub(super) fn call_native(
         }
     }
     // A one-argument call `Vm::fast_builtin_call` evaluates without the
-    // handler (`is_string()`, `count()`, ...): the same, in place.
-    if prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
+    // handler (`is_string()`, `count()`, ...): the same, in place. The ids
+    // are global functions', found by name: a method of the same name
+    // (`BcMath\Number::sqrt()`) is not one of them, as there.
+    if prep.fcall && prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
         if let Some(r) = vm.fast_eval_prepared(b, prep.calls_len, dst, caller_ip) {
             return Ok(r);
         }
     }
     // `ZEND_FRAMELESS_ICALL_n`: a function with a frameless class, called
     // on the caller's frame when its arguments allow it.
-    if b.flags & flags::FRAMELESS != 0 {
+    if prep.fcall && b.flags & flags::FRAMELESS != 0 {
         if let Some(r) = vm.frameless_icall_prepared(b, prep.n, prep.calls_len, dst, caller_ip) {
             return Ok(r);
         }
