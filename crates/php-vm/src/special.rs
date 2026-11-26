@@ -845,8 +845,14 @@ pub(crate) const QUICK_RTRIM: u8 = 0x46;
 pub(crate) const QUICK_LOWER: u8 = 0x47;
 /// [`quick_id`] of `strtoupper()`.
 pub(crate) const QUICK_UPPER: u8 = 0x48;
+/// The first [`quick_id`] of the type tests, `strlen()` and `count()`:
+/// this plus their [`crate::call::fe`] id, answered by
+/// [`crate::call::fast_eval`] as [`frameless_inline`] answers them.
+pub(crate) const QUICK_FAST: u8 = 0x60;
 const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
 const _: () = assert!(QUICK_UPPER < QUICK_STRPOS);
+const _: () = assert!(QUICK_KEY_EXISTS < QUICK_FAST);
+const _: () = assert!(QUICK_FAST + crate::call::fe::CHR < 0x7f);
 
 /// The id of the builtin named `lc` (lower case) when its one-argument
 /// call needs no handler ([`frameless_inline`]), with its frameless class:
@@ -874,6 +880,22 @@ pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
         _ => return None,
     };
     Some((id, class))
+}
+
+/// The tape's [`quick_id_n`] of `is_null()`, `is_array()`, ...,
+/// `strlen()` and `count()` (namespaced calls of these are frameless
+/// calls; a global one compiles to its own op): [`QUICK_FAST`] plus the
+/// [`crate::call::fe`] id. Not [`quick_id`]'s, which the optimizer also
+/// evaluates constant calls with (php-src's sccp does not fold these).
+fn quick_fast_id(lc: &[u8]) -> Option<(u8, u32)> {
+    let class = frameless_flags(lc) >> flags::FRAMELESS_SHIFT;
+    if !matches!(class, fl::TYPE_TEST | fl::STRLEN | fl::COUNT) {
+        return None;
+    }
+    match crate::call::fast_eval_id(lc) {
+        crate::call::fe::NONE => None,
+        f => Some((QUICK_FAST + f, class)),
+    }
 }
 
 /// Whether the flags of a builtin name frameless class `class` and nothing
@@ -912,6 +934,13 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
             | QUICK_RTRIM | QUICK_LOWER | QUICK_UPPER,
             _,
         ) => None,
+        // (A reference is the handler's: the tests answer of its value.)
+        (id, v) if (QUICK_FAST..=QUICK_FAST + crate::call::fe::CHR).contains(&id) => {
+            if matches!(v, Value::Reference(_)) {
+                return None;
+            }
+            crate::call::fast_eval(id - QUICK_FAST, v)
+        }
         (id, v) => crate::call::float_fn_eval(id, v),
     }
 }
@@ -963,6 +992,8 @@ pub(crate) const QUICK_STR_CONTAINS: u8 = 0x55;
 pub(crate) const QUICK_STR_STARTS: u8 = 0x56;
 /// [`quick_id_n`] of `str_ends_with()`.
 pub(crate) const QUICK_STR_ENDS: u8 = 0x57;
+/// [`quick_id_n`] of `array_key_exists()`.
+pub(crate) const QUICK_KEY_EXISTS: u8 = 0x58;
 
 /// The id of the builtin named `lc` (lower case) when its call with `argc`
 /// arguments can be answered without its handler ([`quick_eval_n`]), with
@@ -970,7 +1001,7 @@ pub(crate) const QUICK_STR_ENDS: u8 = 0x57;
 /// name (`exec/tape/strs.rs`). `None` for every other call.
 pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
     if argc == 1 {
-        return quick_id(lc);
+        return quick_id(lc).or_else(|| quick_fast_id(lc));
     }
     let id = match (lc, argc) {
         (b"strpos", 2 | 3) => QUICK_STRPOS,
@@ -981,6 +1012,7 @@ pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
         (b"str_contains", 2) => QUICK_STR_CONTAINS,
         (b"str_starts_with", 2) => QUICK_STR_STARTS,
         (b"str_ends_with", 2) => QUICK_STR_ENDS,
+        (b"array_key_exists", 2) => QUICK_KEY_EXISTS,
         _ => return None,
     };
     Some((id, frameless_flags(lc) >> flags::FRAMELESS_SHIFT))
@@ -1051,6 +1083,10 @@ pub(crate) fn quick_eval_2(id: u8, a: &Value, b: &Value) -> Option<Value> {
         }
         (QUICK_STR_ENDS, Str(h), Str(n)) => Bool(search::str_ends_with(h.as_bytes(), n.as_bytes())),
         (QUICK_IN_ARRAY, needle, Value::Array(haystack)) => Bool(in_array_loose(needle, haystack)?),
+        // (As `frameless_many`'s: a string key by the symbol table's rules,
+        // `"1"` finding the int key.)
+        (QUICK_KEY_EXISTS, Str(k), Value::Array(a)) => Bool(a.get_sym_zstr(k).is_some()),
+        (QUICK_KEY_EXISTS, Int(k), Value::Array(a)) => Bool(a.get_int(*k).is_some()),
         _ => return None,
     })
 }
