@@ -1288,6 +1288,7 @@ impl Compiler<'_> {
         cd: &ast::ClassDecl,
         top_level: bool,
     ) -> CResult<()> {
+        self.class_stmt_top_level = top_level;
         let idx = self.compile_class_decl(cd, false)?;
         if top_level && self.can_early_bind(idx) {
             self.hoisted_classes.push(idx);
@@ -1354,6 +1355,9 @@ impl Compiler<'_> {
         cd: &ast::ClassDecl,
         is_anon: bool,
     ) -> CResult<u32> {
+        // Taken at once: a class compiled while this one's body is (an
+        // anonymous class in a method) is not the statement's.
+        let top_level = std::mem::take(&mut self.class_stmt_top_level) && !is_anon;
         let kind = match cd.kind {
             ast::ClassKind::Class => ClassKind::Class,
             ast::ClassKind::Interface => ClassKind::Interface,
@@ -1543,7 +1547,7 @@ impl Compiler<'_> {
         let decl = ClassDecl {
             name,
             kind,
-            flags: cflag,
+            flags: cflag | if top_level { cflags::TOP_LEVEL } else { 0 },
             parent,
             interfaces,
             traits,

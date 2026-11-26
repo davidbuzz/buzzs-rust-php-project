@@ -64,6 +64,11 @@ pub mod cflags {
     /// `@strict-properties` internal class: creating a dynamic property is
     /// an `Error` (`ZEND_ACC_NO_DYNAMIC_PROPERTIES`).
     pub const NO_DYNAMIC_PROPERTIES: u32 = 1 << 14;
+    /// Declared in its file's top-level statement list
+    /// (`ZEND_ACC_TOP_LEVEL`): not inside an `if`, a loop, a function or
+    /// another block. Preloading links only these (and anonymous classes)
+    /// when the preload script has run.
+    pub const TOP_LEVEL: u32 = 1 << 15;
 }
 
 /// An attribute applied to a declaration (for Reflection).

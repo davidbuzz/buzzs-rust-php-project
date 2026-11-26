@@ -545,6 +545,9 @@ pub(crate) struct Compiler<'f> {
     pub classes: Vec<ClassCtx>,
     pub hoisted_functions: Vec<u32>,
     pub hoisted_classes: Vec<u32>,
+    /// Set by `compile_class_stmt` for the declaration it compiles next:
+    /// whether the statement is in the file's top-level statement list.
+    pub(crate) class_stmt_top_level: bool,
     pub warnings: Vec<(i64, String, u32)>,
     pub anon_counter: u32,
     pub opts: CompileOptions,
@@ -828,6 +831,7 @@ impl<'f> Compiler<'f> {
             classes: Vec::new(),
             hoisted_functions: Vec::new(),
             hoisted_classes: Vec::new(),
+            class_stmt_top_level: false,
             warnings: Vec::new(),
             anon_counter: opts.anon_base,
             stack: stack::StackModel::new(opts.stack_limit),

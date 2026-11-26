@@ -92,7 +92,9 @@ impl Vm {
         if unlinked_decl(bytes).is_some() {
             return Ok(None);
         }
-        self.autoload(&ZStr::from(bytes), &lc)?;
+        if !self.declare_installing(&lc)? {
+            self.autoload(&ZStr::from(bytes), &lc)?;
+        }
         let c = self.classes.get(&lc).cloned();
         note_lookup(&lc, c.as_ref());
         Ok(c)

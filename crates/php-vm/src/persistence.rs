@@ -9,7 +9,7 @@
 use crate::class::{cflags, AttributeInfo, ClassDecl, ConstExpr, PropHooks};
 use crate::compiler::CompiledUnit;
 use crate::func::{Func, UserFunction};
-use crate::opcode::{DeclTable, Op, OpArray, ParamInfo};
+use crate::opcode::{DeclTable, OpArray, ParamInfo};
 use crate::{Throw, Vm, VmResult};
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
@@ -41,31 +41,9 @@ thread_local! {
     static PRELOADING: Cell<bool> = const { Cell::new(false) };
     /// The declarations installed from the preload image.
     static PRELOADED: RefCell<Option<Preloaded>> = const { RefCell::new(None) };
-}
-
-/// Indexes (into the unit's declaration table) of the class declarations
-/// in the unit's top-level statement list (`ZEND_ACC_TOP_LEVEL`): the
-/// `DeclareClass` ops of the main op array that no jump crosses. A
-/// declaration inside an `if`, a loop, a `switch` or a `try` is crossed
-/// by the jump around its block (or back over it).
-fn top_level_classes(code: &OpArray) -> Vec<u32> {
-    let mut spans: Vec<(usize, usize)> = Vec::new();
-    for (at, op) in code.ops.iter().enumerate() {
-        crate::compiler::optimizer::for_each_label(op, |t| {
-            let target = *t as usize;
-            spans.push((at.min(target), at.max(target)));
-        });
-    }
-    code.ops
-        .iter()
-        .enumerate()
-        .filter_map(|(at, op)| match op {
-            Op::DeclareClass(idx) if !spans.iter().any(|&(lo, hi)| lo < at && at < hi) => {
-                Some(*idx)
-            }
-            _ => None,
-        })
-        .collect()
+    /// While `install_persistent_declarations` runs: the image's classes
+    /// not declared yet, by lowercase name.
+    static INSTALLING: RefCell<HashMap<ZStr, Rc<ClassDecl>>> = RefCell::new(HashMap::new());
 }
 
 /// The name of a class as `%s` prints it: an anonymous class's name ends
@@ -478,12 +456,11 @@ impl Vm {
         let mut candidates: Vec<Rc<ClassDecl>> = Vec::new();
         let mut seen: HashSet<usize> = HashSet::new();
         for unit in &units {
-            let top = top_level_classes(&unit.main.code);
             let mut found: Vec<Rc<ClassDecl>> = Vec::new();
-            for (i, decl) in unit.decls.classes.borrow().iter().enumerate() {
-                let anonymous = decl.flags & cflags::ANON != 0;
-                let top_level = u32::try_from(i).is_ok_and(|i| top.contains(&i));
-                if (anonymous || top_level) && seen.insert(Rc::as_ptr(decl) as usize) {
+            for decl in unit.decls.classes.borrow().iter() {
+                // `ZEND_ACC_TOP_LEVEL | ZEND_ACC_ANON_CLASS` (preload_link()).
+                let wanted = decl.flags & (cflags::ANON | cflags::TOP_LEVEL) != 0;
+                if wanted && seen.insert(Rc::as_ptr(decl) as usize) {
                     found.push(decl.clone());
                 }
             }
@@ -694,6 +671,20 @@ impl Vm {
         })
     }
 
+    /// Declares the class of the preloaded image named `lc`, when the
+    /// image is being installed and has not reached it yet: whether it
+    /// did. A class installed before it needs it, e.g. to check a return
+    /// type against the parent's, as when preloading linked it; php-src's
+    /// preloaded classes are linked already, these are linked again in
+    /// each request, where no autoloader is registered yet.
+    pub(crate) fn declare_installing(&mut self, lc: &ZStr) -> VmResult<bool> {
+        let Some(decl) = INSTALLING.with(|m| m.borrow_mut().remove(lc)) else {
+            return Ok(false);
+        };
+        self.declare_class(&decl, false)?;
+        Ok(true)
+    }
+
     /// Installs startup declarations, without executing any startup code,
     /// into a fresh request VM. All function statics and runtime caches are
     /// independent of both the startup executor and other request VMs.
@@ -725,12 +716,23 @@ impl Vm {
         // Linking diagnostics were reported by the preload request; opcache
         // installs the linked classes without repeating them.
         let error_reporting = std::mem::replace(&mut self.error_reporting, 0);
+        INSTALLING.with(|m| {
+            let mut m = m.borrow_mut();
+            m.clear();
+            for class in &classes {
+                if class.flags & cflags::ANON == 0 {
+                    m.insert(class.name.to_ascii_lowercase(), class.clone());
+                }
+            }
+        });
         let linked = self.without_declared_observer(|vm| -> VmResult<()> {
             let declare = |vm: &mut Vm, class: &Rc<ClassDecl>| -> VmResult<()> {
-                if vm.classes.contains_key(&class.name.to_ascii_lowercase()) {
+                let lc = class.name.to_ascii_lowercase();
+                INSTALLING.with(|m| m.borrow_mut().remove(&lc));
+                if vm.classes.contains_key(&lc) {
                     return Ok(());
                 }
-                let anonymous = class.flags & crate::class::cflags::ANON != 0;
+                let anonymous = class.flags & cflags::ANON != 0;
                 vm.declare_class(class, anonymous).map(|_| ())
             };
             if persistent.install_order.is_empty() {
@@ -764,6 +766,7 @@ impl Vm {
             }
             Ok(())
         });
+        INSTALLING.with(|m| m.borrow_mut().clear());
         self.error_reporting = error_reporting;
         linked?;
         for (alias, name) in &persistent.aliases {

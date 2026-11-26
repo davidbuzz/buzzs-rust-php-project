@@ -138,11 +138,25 @@ echo "done\n";
 /// directory) in a fresh VM holding the preloaded declarations. Returns
 /// both requests' output, with the directory written as `{DIR}`.
 fn preload_file_then_run(name: &str, preload: &str, request: &str) -> String {
+    preload_files_then_run(name, preload, &[], request)
+}
+
+/// [`preload_file_then_run`] with more files (name, source) beside the
+/// preload script, for it to include.
+fn preload_files_then_run(
+    name: &str,
+    preload: &str,
+    others: &[(&str, &str)],
+    request: &str,
+) -> String {
     let dir = std::env::temp_dir().join(format!("phprust-preload-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let dir = std::fs::canonicalize(&dir).expect("temp dir path");
     let path = dir.join("pre.php");
     std::fs::write(&path, preload).expect("preload file");
+    for (file, source) in others {
+        std::fs::write(dir.join(file), source).expect("included file");
+    }
     let dir_str = dir.to_string_lossy().into_owned();
     let path_z = ZStr::from(path.to_string_lossy().as_ref());
     let sink = Sink::default();
@@ -311,6 +325,81 @@ var_dump(class_exists('A', false), class_exists('B', false), class_exists('L', f
          \nWarning: Can't preload unlinked class B: Unknown parent Missing in {DIR}/pre.php on line 5\n\
          \nWarning: Can't preload unlinked class L: Declaration of L::m($x) must be compatible with K::m() in {DIR}/pre.php on line 7\n\
          bool(true)\nbool(false)\nbool(false)\nint(1)\n"
+    );
+}
+
+/// A file that declares one name in both branches of an `if` (how
+/// libraries pick between two versions of a class): the branch that ran
+/// declared it, and the other declaration, which is not in the file's
+/// top-level statement list (`ZEND_ACC_TOP_LEVEL`), is left alone, also
+/// when it is the file's last statement (expected output from php-src
+/// with opcache).
+#[test]
+fn a_declaration_in_the_branch_not_taken_is_not_preloaded() {
+    assert_eq!(
+        preload_file_then_run(
+            "branches",
+            r"<?php
+echo 'preloading', PHP_EOL;
+if (! class_exists(Missing::class)) {
+    trait Impl
+    {
+        public function which(): string
+        {
+            return 'first';
+        }
+    }
+} else {
+    trait Impl
+    {
+        public function which(): string
+        {
+            return 'second';
+        }
+    }
+}
+",
+            r"<?php
+class User { use Impl; }
+var_dump(trait_exists('Impl', false), (new User)->which());
+",
+        ),
+        "preloading\nbool(true)\nstring(5) \"first\"\n"
+    );
+}
+
+/// A preloaded class whose method returns a class the image lists after
+/// it (an autoloader loaded that class while the first was linked): the
+/// request, which has no autoloader yet, holds both, in the order
+/// `preload_sort_classes()` gives (expected output from php-src with
+/// opcache).
+#[test]
+fn a_preloaded_class_finds_the_later_class_its_return_type_names() {
+    assert_eq!(
+        preload_files_then_run(
+            "variance",
+            r#"<?php
+spl_autoload_register(function ($c) { require __DIR__ . "/$c.php"; });
+interface_exists('Child');
+"#,
+            &[
+                (
+                    "Child.php",
+                    "<?php interface Child extends Base { function get(): B; }"
+                ),
+                (
+                    "Base.php",
+                    "<?php interface Base { function get(): BaseB; }"
+                ),
+                ("B.php", "<?php interface B extends BaseB {}"),
+                ("BaseB.php", "<?php interface BaseB {}"),
+            ],
+            r"<?php
+var_dump(interface_exists('Child', false), interface_exists('B', false));
+echo implode(',', array_slice(get_declared_interfaces(), -4)), PHP_EOL;
+",
+        ),
+        "bool(true)\nbool(true)\nBase,Child,BaseB,B\n"
     );
 }
 
