@@ -40,7 +40,10 @@ use std::rc::Rc;
 
 /// Receives the references held by an object's native state.
 pub struct GcVisitor<'a> {
-    graph: &'a mut Graph,
+    /// The candidate graph a collection builds; `None` when the state is
+    /// being freed and what it owns is offered as possible roots instead
+    /// ([`root_native_state`]).
+    graph: Option<&'a mut Graph>,
     from: u32,
 }
 
@@ -52,38 +55,59 @@ impl std::fmt::Debug for GcVisitor<'_> {
 
 impl<'a> GcVisitor<'a> {
     pub(super) fn new(graph: &'a mut Graph, from: u32) -> Self {
-        GcVisitor { graph, from }
+        GcVisitor {
+            graph: Some(graph),
+            from,
+        }
     }
 
     /// A value owned by the state (scalars and strings are ignored).
     pub fn value(&mut self, v: &Value) {
-        self.graph.edge(v);
+        match &mut self.graph {
+            Some(g) => g.edge(v),
+            None => super::possible_root(v),
+        }
     }
 
     /// Several owned values.
     pub fn values<'v>(&mut self, vs: impl IntoIterator<Item = &'v Value>) {
         for v in vs {
-            self.graph.edge(v);
+            self.value(v);
         }
     }
 
     /// An owned object handle.
     pub fn obj(&mut self, o: &Obj) {
-        if let Some(t) = self.graph.intern_obj(o) {
-            self.graph.link(t);
+        match &mut self.graph {
+            Some(g) => {
+                if let Some(t) = g.intern_obj(o) {
+                    g.link(t);
+                }
+            }
+            None => super::possible_root_obj(o),
         }
     }
 
     /// An owned array handle.
     pub fn array(&mut self, a: &ZArray) {
-        let t = self.graph.intern_arr(a);
-        self.graph.link(t);
+        match &mut self.graph {
+            Some(g) => {
+                let t = g.intern_arr(a);
+                g.link(t);
+            }
+            None => super::possible_root_array(a),
+        }
     }
 
     /// An owned reference handle.
     pub fn reference(&mut self, r: &PhpRef) {
-        let t = self.graph.intern_ref(r);
-        self.graph.link(t);
+        match &mut self.graph {
+            Some(g) => {
+                let t = g.intern_ref(r);
+                g.link(t);
+            }
+            None => super::possible_root_ref(r),
+        }
     }
 
     /// The values of a hash table stored inline in the state.
@@ -94,7 +118,10 @@ impl<'a> GcVisitor<'a> {
     /// An entry whose value is kept alive only while both this object and
     /// the (weakly held) `key` object are alive — a `WeakMap` entry.
     pub fn weak_entry(&mut self, key: &ObjWeak, v: &Value) {
-        self.graph.cond_edge(self.from, key, v);
+        match &mut self.graph {
+            Some(g) => g.cond_edge(self.from, key, v),
+            None => super::possible_root(v),
+        }
     }
 
     /// The values held by a suspended frame (generator or fiber) the
@@ -111,7 +138,32 @@ impl<'a> GcVisitor<'a> {
     /// Declares that the state holds references that cannot be reported
     /// (e.g. a native stack): the object is kept alive.
     pub fn opaque(&mut self) {
-        self.graph.pin(self.from);
+        if let Some(g) = &mut self.graph {
+            g.pin(self.from);
+        }
+    }
+}
+
+/// `zval_ptr_dtor` of everything the native state `state` of an object
+/// being freed owns (a closure's bound variables and `$this`, a suspended
+/// generator's frame, the storage of an `ArrayObject` or
+/// `SplObjectStorage`): each value that stays referenced becomes a
+/// possible root, as php-src's `free_obj` handlers make it
+/// (`zend_closure_free_storage`, `zend_generator_free_storage`,
+/// `spl_array_object_free_storage`, ...). Called before the state is
+/// dropped, while it still owns its handles. State of a type without a
+/// traversal is left alone.
+///
+/// Without it a cycle whose last outside holder was such an object was
+/// never offered to the collector once a run had seen it alive: a callback
+/// (`function () use ($parser)`) kept in a registry and dropped later.
+pub(crate) fn root_native_state(state: &dyn Any) {
+    if let Some(f) = lookup(state.type_id()) {
+        let mut v = GcVisitor {
+            graph: None,
+            from: super::graph::NONE,
+        };
+        f(state, &mut v);
     }
 }
 
