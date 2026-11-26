@@ -1517,3 +1517,53 @@ echo $out, "\n";
 "#
     );
 }
+
+/// Namespaced type tests, `strlen()`, `count()` and `array_key_exists()`
+/// as the tape's quick rows: every type, an undefined variable, a variable
+/// holding a reference (the handler's), `Countable` objects, the
+/// `TypeError`s and the null key's deprecation. Expected output:
+/// `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn namespaced_type_tests() {
+    assert_eq!(
+        run(r#"<?php
+namespace T;
+class C implements \Countable { function count(): int { return 7; } }
+function types($v) { return (int)is_null($v) . (int)is_array($v) . (int)is_bool($v) . (int)is_float($v) . (int)is_string($v) . (int)is_object($v) . (int)is_scalar($v) . (int)is_int($v) . (int)is_resource($v); }
+function run() {
+  $o = [];
+  foreach ([null, [], [1], true, 1.5, 'x', '', new \stdClass, 3] as $v) $o[] = types($v);
+  $o[] = (int)is_null($undef);
+  $r = 5; $ref = &$r; $o[] = (int)is_int($ref) . (int)is_null($ref);
+  $o[] = count([1, 2]); $o[] = count(new C);
+  try { $o[] = count('abc'); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+  try { $o[] = count(null); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+  $o[] = strlen('abcd'); $o[] = strlen(12345); $o[] = @strlen(null);
+  try { $o[] = strlen([]); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+  $a = ['a' => 1, 1 => null, '' => 2];
+  $o[] = (int)array_key_exists('a', $a) . (int)array_key_exists('1', $a) . (int)array_key_exists(1, $a) . (int)array_key_exists('b', $a) . (int)array_key_exists(2, $a);
+  $o[] = (int)array_key_exists(null, $a) . (int)@array_key_exists(1.5, $a) . (int)array_key_exists(true, $a);
+  try { $o[] = array_key_exists('a', new \stdClass); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+  $k = 'a'; $kr = &$k; $o[] = (int)array_key_exists($kr, $a);
+  return json_encode($o);
+}
+for ($i = 0; $i < 3; $i++) { $out = run(); if ($i == 0) echo $out, "\n"; }
+echo $out, "\n";
+"#),
+        r#"
+Warning: Undefined variable $undef in t.php on line 8
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+["100000000","010000000","010000000","001000100","000100100","000010100","000010100","000001000","000000110",1,"10",2,7,"count(): Argument #1 ($value) must be of type Countable|array, string given","count(): Argument #1 ($value) must be of type Countable|array, null given",4,5,0,"strlen(): Argument #1 ($string) must be of type string, array given","11100","111","array_key_exists(): Argument #2 ($array) must be of type array, stdClass given",1]
+
+Warning: Undefined variable $undef in t.php on line 8
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+
+Warning: Undefined variable $undef in t.php on line 8
+
+Deprecated: Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead in t.php on line 17
+["100000000","010000000","010000000","001000100","000100100","000010100","000010100","000001000","000000110",1,"10",2,7,"count(): Argument #1 ($value) must be of type Countable|array, string given","count(): Argument #1 ($value) must be of type Countable|array, null given",4,5,0,"strlen(): Argument #1 ($string) must be of type string, array given","11100","111","array_key_exists(): Argument #2 ($array) must be of type array, stdClass given",1]
+"#
+    );
+}
