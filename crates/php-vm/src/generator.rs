@@ -297,7 +297,7 @@ impl Vm {
         // notification reads it; otherwise update once, after the pop.
         let mut update = Some(update);
         if self.observer.enabled {
-            if let Some(g) = self.frame().generator.clone() {
+            if let Some(g) = self.frame().generator().cloned() {
                 if let Some(u) = update.take() {
                     with(&g, u);
                 }
@@ -307,7 +307,10 @@ impl Vm {
         }
         // The frame moves straight from the stack into the generator (one
         // copy, no intermediate moves through closures).
-        let g = self.frames.last_mut().and_then(|f| f.generator.take());
+        let g = self
+            .frames
+            .last_mut()
+            .and_then(|f| f.cold_opt_mut()?.generator.take());
         match g {
             Some(g) => {
                 let (frames, empty_code, empty_vars) =
@@ -336,7 +339,7 @@ impl Vm {
     }
 
     fn running_generator(&self) -> Option<Obj> {
-        self.frame().generator.clone()
+        self.frame().generator().cloned()
     }
 
     /// `ZEND_YIELD`.
@@ -681,7 +684,7 @@ impl Vm {
             close(g);
             return exc.map_or(Ok(()), |e| Err(Throw::Exception(e)));
         };
-        frame.generator = Some(g.clone());
+        frame.cold_mut().generator = Some(g.clone());
         let spare = self.frames.push_boxed(frame);
         if spare.is_some() {
             with(g, |d| d.spare = spare);

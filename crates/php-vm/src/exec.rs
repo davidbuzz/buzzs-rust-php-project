@@ -1231,11 +1231,11 @@ impl Vm {
             }
             let fidx = self.frames.len() - 1;
             let f = self.frames.last_mut().expect("frame");
-            if !f.silence_saved.is_empty() {
+            if !f.silence_saved().is_empty() {
                 // `cleanup_live_vars` for ZEND_LIVE_SILENCE ranges
                 // (Zend/zend_execute.c): each pending `@` restores its
                 // saved mask only while the current one is still silenced.
-                let saved = std::mem::take(&mut f.silence_saved);
+                let saved = std::mem::take(&mut f.cold_mut().silence_saved);
                 for old in saved.into_iter().rev() {
                     self.error_reporting = silence_restore(self.error_reporting, old);
                 }
@@ -1275,7 +1275,7 @@ impl Vm {
                             Ok(e) => e,
                             Err(t) => return Err(self.abandon_unwinding(t, base)),
                         };
-                        self.frame_mut().pending_exc = Some(exc);
+                        self.frame_mut().cold_mut().pending_exc = Some(exc);
                         return Ok(());
                     }
                 }
@@ -1329,7 +1329,7 @@ impl Vm {
                 // `i_free_compiled_variables`: released values may be
                 // cycle roots (and may fill the root buffer).
                 crate::gc::frame_released(p, self.frames.last().and_then(|c| c.this.as_ref()));
-                if let Some(g) = &p.generator {
+                if let Some(g) = p.generator() {
                     crate::generator::mark_finished(g);
                 }
                 // `zend_object_store_ctor_failed`: an object whose
@@ -2838,7 +2838,7 @@ impl Vm {
                         return Err(self.op_throw(v));
                     }
                     Op::Catch { classes, cv, next } => {
-                        let exc = self.frame().pending_exc.clone();
+                        let exc = self.frame().pending_exc().cloned();
                         let Some(exc) = exc else {
                             ip = *next as usize;
                             continue;
@@ -2852,7 +2852,9 @@ impl Vm {
                             }
                         }
                         if matched {
-                            self.frame_mut().pending_exc = None;
+                            if let Some(c) = self.frame_mut().cold_opt_mut() {
+                                c.pending_exc = None;
+                            }
                             if let Some(cv) = cv {
                                 if let Some((r, v)) = self.cv_assign(*cv, Value::Object(exc)) {
                                     self.assign_ref_strict(&r, v)?;
@@ -2864,7 +2866,10 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Rethrow => {
-                        let exc = self.frame_mut().pending_exc.take();
+                        let exc = self
+                            .frame_mut()
+                            .cold_opt_mut()
+                            .and_then(|c| c.pending_exc.take());
                         match exc {
                             Some(e) => return Err(Throw::Exception(e)),
                             None => Flow::Next,
@@ -2892,7 +2897,7 @@ impl Vm {
                     }
                     Op::BeginSilence { dst } => {
                         let old = self.error_reporting;
-                        self.frame_mut().silence_saved.push(old);
+                        self.frame_mut().cold_mut().silence_saved.push(old);
                         self.set_tmp(*dst, Value::Int(old));
                         // ZEND_BEGIN_SILENCE: fatal errors are never silenced,
                         // and an already-silenced mask is left alone.
@@ -2903,7 +2908,9 @@ impl Vm {
                     }
                     Op::EndSilence { saved } => {
                         let v = self.read(*saved)?;
-                        self.frame_mut().silence_saved.pop();
+                        if let Some(c) = self.frame_mut().cold_opt_mut() {
+                            c.silence_saved.pop();
+                        }
                         if let Value::Int(old) = v {
                             self.error_reporting = silence_restore(self.error_reporting, old);
                         }
@@ -3726,9 +3733,9 @@ impl Vm {
         let mut v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
-        if self.frames[fidx].generator.is_some() {
+        if self.frames[fidx].generator().is_some() {
             let frame = self.frames.pop().expect("frame");
-            if let Some(g) = &frame.generator {
+            if let Some(g) = frame.generator() {
                 crate::generator::finish_with(g, v);
             }
             drop(frame);
