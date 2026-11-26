@@ -38,7 +38,7 @@
 )]
 
 mod attribute;
-mod class;
+pub(crate) mod class;
 mod constant;
 mod export;
 mod function;

@@ -1147,6 +1147,7 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
             }
         }
     }
+    let inherited = interface_method_protos(vm, cls);
     for (m, mut pm) in protos {
         let mut ps = pm.scope();
         let is_ctor = m.name.eq_ignore_ascii_case(b"__construct");
@@ -1175,7 +1176,70 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
             proto: pm,
         };
         if out.record(vm, cls, ob) {
-            break;
+            return;
         }
     }
+    for (m, pm) in inherited {
+        let (ms, ps) = (m.scope(), pm.scope());
+        let ob = Obligation {
+            child_name: display_name(&ms.name),
+            child_scope: ms,
+            child: m,
+            proto_name: display_name(&ps.name),
+            proto_scope: ps,
+            proto: pm,
+        };
+        if out.record(vm, cls, ob) {
+            return;
+        }
+    }
+}
+
+/// `do_interface_implementation` for the methods a class takes from its
+/// interfaces rather than declaring them: the method of the first interface
+/// in `ce->interfaces` order is the one the class gets, and it is checked
+/// against the same method of each later interface. `interface D extends
+/// P, Sy` is an error where `Sy::get()` narrows `P::get()`, since `D` then
+/// holds `P::get()`; `extends Sy, P` is not.
+fn interface_method_protos(vm: &Vm, cls: &Rc<Class>) -> Vec<(Rc<Method>, Rc<Method>)> {
+    let mut out: Vec<(Rc<Method>, Rc<Method>)> = Vec::new();
+    let mut order: Option<Vec<Rc<Class>>> = None;
+    for lc in &cls.method_order {
+        let m = &cls.methods[lc];
+        if Rc::ptr_eq(&m.scope(), cls) || !m.scope().is_interface() {
+            continue;
+        }
+        if cls
+            .parent
+            .as_ref()
+            .and_then(|p| p.methods.get(lc))
+            .is_some_and(|pm| Rc::ptr_eq(pm, m))
+        {
+            continue;
+        }
+        if !cls
+            .interfaces
+            .iter()
+            .any(|i| i.methods.get(lc).is_some_and(|im| !Rc::ptr_eq(im, m)))
+        {
+            continue;
+        }
+        let order =
+            order.get_or_insert_with(|| crate::reflection::class::interfaces_order(vm, cls));
+        // Only the interfaces after the one the method came from.
+        let Some(from) = order
+            .iter()
+            .position(|i| i.methods.get(lc).is_some_and(|im| Rc::ptr_eq(im, m)))
+        else {
+            continue;
+        };
+        for i in &order[from + 1..] {
+            if let Some(im) = i.methods.get(lc) {
+                if !Rc::ptr_eq(im, m) && !out.iter().any(|(_, p)| Rc::ptr_eq(p, im)) {
+                    out.push((m.clone(), im.clone()));
+                }
+            }
+        }
+    }
+    out
 }
