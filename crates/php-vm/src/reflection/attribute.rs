@@ -56,6 +56,21 @@ pub(crate) fn attributes_array_decl(
         Some(Value::Int(i)) => i,
         _ => 0,
     };
+    // Called without its frame (the tape's pure method call, whose caller
+    // is the current frame: `exec::tape::calls::pure_method_now`,
+    // `call_pure`): only what needs no autoloading and makes no exception
+    // is answered here. Anything else gives the decline below, which those
+    // callers drop (nothing has changed) before making the call with its
+    // frame, where the class is autoloaded and the error made as usual.
+    let frameless = vm
+        .frames
+        .last()
+        .is_some_and(|f| f.kind != crate::vm::FrameKind::Builtin);
+    // (Never seen outside the pure calls, which drop every error.)
+    let decline = || Err(crate::vm::Throw::Fatal);
+    if fl & !2 != 0 && frameless {
+        return decline();
+    }
     if fl & !2 != 0 {
         return Err(vm.make_throw(
             "ValueError",
@@ -68,7 +83,15 @@ pub(crate) fn attributes_array_decl(
     let mut base: Option<Rc<Class>> = None;
     let mut name = name;
     if let (Some(n), true) = (&name, fl & 2 != 0) {
-        match vm.lookup_class(n)? {
+        let found = if frameless {
+            match vm.find_class(n.as_bytes()) {
+                Some(c) => Some(c),
+                None => return decline(),
+            }
+        } else {
+            vm.lookup_class(n)?
+        };
+        match found {
             Some(c) => base = Some(c),
             None => {
                 return Err(vm.make_throw(
@@ -90,7 +113,15 @@ pub(crate) fn attributes_array_decl(
                 continue;
             }
         } else if let Some(b) = &base {
-            match vm.lookup_class(&at.name)? {
+            let found = if frameless {
+                match vm.find_class(at.name.as_bytes()) {
+                    Some(c) => Some(c),
+                    None => return decline(),
+                }
+            } else {
+                vm.lookup_class(&at.name)?
+            };
+            match found {
                 Some(ac) if ac.is_subclass_of(b) => {}
                 _ => continue,
             }

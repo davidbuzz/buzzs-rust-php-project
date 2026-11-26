@@ -3720,11 +3720,12 @@ fn unwrap_sent_refs(vm: &mut Vm, live: usize, held: &[Value]) {
 }
 
 /// Whether a call of pure builtin `b` with `n` arguments is pure: always,
-/// but for `getAttributes()`, whose `$flags` with
-/// `ReflectionAttribute::IS_INSTANCEOF` look the filter class up (an
-/// autoloader runs user code): pure with at most the name.
+/// for `getAttributes()` with at most its two parameters (`$flags` with
+/// `ReflectionAttribute::IS_INSTANCEOF` look classes up, which may
+/// autoload: called without its frame, the handler declines whatever is
+/// not loaded yet, `reflection::attribute::attributes_array_decl`).
 fn pure_args(b: &Builtin, n: usize) -> bool {
-    n <= 1 || !b.name.as_bytes().eq_ignore_ascii_case(b"getattributes")
+    n <= 2 || !b.name.as_bytes().eq_ignore_ascii_case(b"getattributes")
 }
 
 /// The prepared call of a pure builtin method `b` ([`flags::PURE`]) made

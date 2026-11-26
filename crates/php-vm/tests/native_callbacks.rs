@@ -1918,3 +1918,46 @@ Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php
 "#
     );
 }
+
+/// `getAttributes($name, ReflectionAttribute::IS_INSTANCEOF)` answered
+/// without the call's frame for loaded classes, declining to the framed
+/// call (which autoloads and makes the errors) for a filter or attribute
+/// class not loaded yet, an unknown class and bad flags; parameters,
+/// methods, functions and classes; object ids unchanged. Expected output:
+/// `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn attribute_filters_by_class() {
+    assert_eq!(
+        run(r#"<?php
+namespace A;
+spl_autoload_register(function ($c) { echo "load($c) "; if ($c === 'A\Late') eval('namespace A; #[\Attribute] class Late implements Ctx {}'); if ($c === 'A\LateBase') eval('namespace A; interface LateBase {}'); });
+interface Ctx {}
+#[\Attribute] class Inject implements Ctx { function __construct(public $v = 1) {} }
+#[\Attribute] class Other {}
+class Dep {}
+class S { public function __construct(#[Inject(5)] Dep $d, #[Other] $o, $plain, #[Late] $late = null) {} #[Inject] public function m() {} }
+#[Inject] function f() {}
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    foreach ((new \ReflectionMethod(S::class, '__construct'))->getParameters() as $p) {
+      $a = $p->getAttributes(Ctx::class, \ReflectionAttribute::IS_INSTANCEOF);
+      echo $p->getName(), ':', count($a), isset($a[0]) ? $a[0]->getName() : '-', ' ';
+      echo count($p->getAttributes(Other::class)), count($p->getAttributes(Inject::class, 0)), ' ';
+    }
+    echo count((new \ReflectionMethod(S::class, 'm'))->getAttributes(Ctx::class, \ReflectionAttribute::IS_INSTANCEOF)), ' ';
+    echo count((new \ReflectionFunction('A\f'))->getAttributes(Ctx::class, 2)), ' ';
+    echo count((new \ReflectionClass(S::class))->getAttributes(Ctx::class, 2)), ' ';
+    echo count((new \ReflectionParameter([S::class, '__construct'], 'plain'))->getAttributes(LateBase::class, 2)), ' ';
+    try { (new \ReflectionParameter([S::class, '__construct'], 'plain'))->getAttributes('A\Nope', 2); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { (new \ReflectionParameter([S::class, '__construct'], 'd'))->getAttributes(Ctx::class, 3); } catch (\ValueError $e) { echo $e->getMessage(), ' '; }
+    $x = new \stdClass; echo spl_object_id($x), "\n";
+  }
+}
+run();
+"#),
+        r#"d:1A\Inject 01 o:0- 10 plain:0- 00 load(A\Late) late:1A\Late 00 1 1 0 load(A\LateBase) 0 load(A\Nope) Class "A\Nope" not found ReflectionParameter::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag 4
+d:1A\Inject 01 o:0- 10 plain:0- 00 late:1A\Late 00 1 1 0 0 load(A\Nope) Class "A\Nope" not found ReflectionParameter::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag 8
+d:1A\Inject 01 o:0- 10 plain:0- 00 late:1A\Late 00 1 1 0 0 load(A\Nope) Class "A\Nope" not found ReflectionParameter::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag 7
+"#
+    );
+}
