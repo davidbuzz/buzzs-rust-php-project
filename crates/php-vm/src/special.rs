@@ -21,7 +21,7 @@ use crate::call::forget_unallocated;
 use crate::compiler::SPECIAL_BUILTINS;
 use crate::func::{flags, Args, Builtin, Func};
 use crate::object;
-use crate::opcode::{FramelessCall, Operand};
+use crate::opcode::{FramelessCall, Op, Operand, PlaceId};
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
@@ -219,6 +219,61 @@ impl Vm {
             }
         }
         Ok(false)
+    }
+
+    /// `array_key_exists($key, $GLOBALS)` at its `ZEND_FETCH_GLOBALS`: when
+    /// the op after the read of `$GLOBALS` (place `place`, into temporary
+    /// `dst`) is the `ZEND_ARRAY_KEY_EXISTS` that consumes it and its key is
+    /// a string or an int, the answer is the symbol table's
+    /// (`Vm::fetch_global_by_key_optional`: a variable that is set, null
+    /// included) and both ops are done: the caller skips the second. The
+    /// copy of the whole table php-src makes for the read
+    /// (`zend_proptable_to_symtable`) is what MediaWiki's
+    /// `GlobalVarConfig::has()` paid on every call. `false`, nothing
+    /// changed, for anything else (the key's diagnostics are the op's).
+    pub(crate) fn globals_key_exists_ahead(
+        &mut self,
+        place: PlaceId,
+        dst: u32,
+        next: Option<&Op>,
+    ) -> bool {
+        let Some(&Op::KeyExists {
+            key,
+            array: Operand::Tmp(t),
+            dst: result,
+        }) = next
+        else {
+            return false;
+        };
+        if t != dst {
+            return false;
+        }
+        let f = self.frame();
+        let bare_globals = f.code.places.get(place as usize).is_some_and(|p| {
+            matches!(p.base, crate::opcode::PlaceBase::GlobalsArray) && p.segs.is_empty()
+        });
+        if !bare_globals {
+            return false;
+        }
+        let k = match key {
+            Operand::Cv(cv) => f
+                .cvs
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)
+                .cloned(),
+            Operand::Tmp(x) | Operand::TmpKeep(x) => f.tmps.get(x as usize).cloned(),
+            Operand::Lit(l) => f.code.literals.get(l as usize).cloned(),
+            Operand::Unused => None,
+        };
+        let Some(k @ (Value::Str(_) | Value::Int(_))) = k else {
+            return false;
+        };
+        let found = self.fetch_global_by_key_optional(&k).is_some();
+        if let Operand::Tmp(x) = key {
+            self.set_tmp(x, Value::Null);
+        }
+        self.set_dst(result, Value::Bool(found));
+        true
     }
 
     /// `ZEND_ARRAY_KEY_EXISTS`: both operands are read without the

@@ -1691,7 +1691,14 @@ impl Vm {
                         // (`exec/hot.rs`): a declined one runs as its generic op.
                         Op::Fetch { place, mode, dst } => {
                             if *mode == FetchMode::Read {
-                                if let Some(v) = self.fetch_place_fast(*place) {
+                                // `array_key_exists($k, $GLOBALS)`: answered
+                                // from the symbol table, the op after done
+                                // with it.
+                                if matches!(ops.get(ip), Some(Op::KeyExists { .. }))
+                                    && self.globals_key_exists_ahead(*place, *dst, ops.get(ip))
+                                {
+                                    ip += 1;
+                                } else if let Some(v) = self.fetch_place_fast(*place) {
                                     self.set_tmp(*dst, v);
                                 } else {
                                     break 'slow;
