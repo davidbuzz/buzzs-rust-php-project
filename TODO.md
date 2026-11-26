@@ -323,6 +323,23 @@ optimization log these came from, with its landed-change tables, is git history:
   - Not ours to fix: php-src master warns that a class implementing
     `SessionHandlerInterface` lacks `create_sid()` (8.5 does not), and a Symfony 8.1
     application in debug mode turns that warning into an exception.
+- [ ] **Reflection of internal functions against C** (27 Nov;
+  `crates/php-cli/tests/differential/refldiff.py` dumps every parameter of every internal
+  function and method under both and compares). Of 5,594 parameters both know, 154 differ
+  from PHP 8.5 (some will be php-src master's own changes: to be separated). A generator of
+  test doubles or proxies reads exactly this; a missing default made one declare
+  `SplFileInfo::setFileClass()` incompatibly and ended a framework's test run (the
+  `X::class` defaults are fixed).
+  - 77 defaults shown as their value where C shows the stub's text (`int $flags = 0` for
+    `= SORT_REGULAR`, `= 4096` for `= FilesystemIterator::KEY_AS_PATHNAME |
+    FilesystemIterator::CURRENT_AS_FILEINFO | ...`), with `isDefaultValueConstant()` false:
+    the SPL binding (`php-ext-spl/src/dispatch.rs`, `signature()`) evaluates each stub
+    default and writes the literal back. Passing the stub's text through needs the VM's
+    signature parser checked for quoted commas and escapes (`","`, `"\\"`), and `A|B`
+    printed as gen_stub prints it (`A | B`: Phar's too).
+  - 53 types (`mixed` where C has `BcMath\Number|string|int`, ...), names or optionality.
+  - 18 with no default where C has one (`fgetcsv()`'s `string $separator = ","` is
+    `UNKNOWN` in ours), and 6 strings in single quotes where the stub has double.
 - [ ] SAPIs (from PR #9, whose `php-sapi` crate gave every SAPI one `RequestInfo`): the
   SAPI-internal request structs (the CLI's `Request`, CGI's `RequestInfo`, the built-in
   server's `Request`, Apache's accessors) still exist; move them onto `RequestInfo` with a
