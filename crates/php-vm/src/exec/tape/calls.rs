@@ -2000,7 +2000,13 @@ pub(crate) fn push_method_from_native(
 /// for it with its `$this` (moved out of a temporary, else a copy; none
 /// for a static method) and scopes, and the call is prepared. `None`,
 /// having changed nothing, otherwise.
-pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -> Option<Prepared> {
+pub(super) fn prepare_method(
+    vm: &mut Vm,
+    obj: Operand,
+    lit: u32,
+    slot: usize,
+    resolved: Option<MethodEntry>,
+) -> Option<Prepared> {
     if vm.observer.enabled {
         return None;
     }
@@ -2033,8 +2039,11 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     }
     let cls_addr = Rc::as_ptr(cls) as usize;
     let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-    let (func, scope, is_static) =
-        crate::call::method_entry_hit(&caller.code, slot, cls_addr, scope_addr, lit)?;
+    // (`resolved`: the same lookup, made by `accessor_now` just before.)
+    let (func, scope, is_static) = match resolved {
+        Some(found) => found,
+        None => crate::call::method_entry_hit(&caller.code, slot, cls_addr, scope_addr, lit)?,
+    };
     let uf = match func {
         Func::User(uf) => uf,
         Func::Builtin(b) => {
@@ -2095,15 +2104,6 @@ pub(super) fn pure_method_now(
 ) -> Option<usize> {
     // (A pending interrupt is the usual call's to service, after it.)
     if vm.observer.enabled || crate::interrupt::safe_point_due() {
-        return None;
-    }
-    // A site that calls a user method: nothing to try (the scan of the
-    // sends and the lookup below cost every such call ~100 instructions).
-    if vm
-        .frames
-        .last()
-        .is_some_and(|f| crate::call::method_site_holds_user(&f.code, at))
-    {
         return None;
     }
     let mut sends = [Operand::Unused; MAX_ARGS];
@@ -2257,22 +2257,86 @@ pub(super) fn pure_method_now(
     pure_method_done(vm, obj, dst, done, r.ok()?)
 }
 
-/// `$obj->name()` of a user method that is an accessor
-/// ([`accessor_shape`]: `return $this->prop;` or `return <literal>;`),
-/// `ZEND_INIT_METHOD_CALL` at `at` followed directly by its `DoCall`: on
-/// the method cache hit [`prepare_method`] takes, the value is read and
-/// stored as the call's result without a frame. Nothing in such a body
-/// can be observed from inside it (no diagnostic, no user code, no
-/// backtrace): a literal is copied; a property is read through the
-/// method's own property cache, on the hit its `FETCH_OBJ_R` takes (a
-/// declared, initialized slot of an object of the cached class, read in
-/// the method's scope, holding no reference), which the first, framed
-/// call of the method fills. A declared return type must take the value
-/// as it is. Returns the op after the `DoCall`; `None`, nothing changed,
-/// for anything else (the call is made the usual way).
+/// The value a call of the accessor method `uf` ([`UserFunction::accessor`]:
+/// `return $this->prop;` or `return <literal>;`) returns for the object
+/// `od` of the class at `cls_addr`, read without a frame; `scope` is the
+/// method's class scope. Nothing in such a body can be observed from
+/// inside it (no diagnostic, no user code, no backtrace): a literal is
+/// copied; a property is read through the method's own property cache,
+/// on the hit its `FETCH_OBJ_R` takes (a declared, initialized slot of an
+/// object of the cached class, read in the method's scope, holding no
+/// reference), which the first, framed call of the method fills. A
+/// declared return type must take the value as it is. `None` for
+/// anything else: the call is made.
 ///
 /// A tenth of the user calls of MediaWiki's integration tests are such
 /// getters, each of which paid a whole call (~1,000 instructions).
+#[inline]
+fn accessor_read(
+    uf: &UserFunction,
+    acc: Accessor,
+    od: &crate::object::ObjectData,
+    cls_addr: usize,
+    scope: Option<&Rc<crate::class::Class>>,
+) -> Option<Value> {
+    let value = match acc {
+        Accessor::Lit(l) => clone_value(uf.code.literals.get(l as usize)?),
+        Accessor::Prop(place) => {
+            // The method's own `FETCH_OBJ_R` cache entry, as
+            // `spec::props::read_plain` tests it in the method's frame.
+            let slot = {
+                let cache = uf.code.prop_cache.try_borrow().ok()?;
+                let e = cache.get(place as usize)?;
+                let method_scope = scope.map_or(0, |s| Rc::as_ptr(s) as usize);
+                if e.class_addr != cls_addr
+                    || e.scope_addr != method_scope
+                    || e.base != crate::opcode::PROP_CACHE_THIS
+                    || e.flags & (crate::place::propcache::PC_READ | PC_DYN)
+                        != crate::place::propcache::PC_READ
+                {
+                    return None;
+                }
+                e.slot as usize
+            };
+            if !od.not_lazy() {
+                return None;
+            }
+            let slots = od.slots.try_borrow().ok()?;
+            match slots.get(slot)? {
+                Some(Value::Reference(_)) | None => return None,
+                Some(v) => clone_value(v),
+            }
+        }
+    };
+    if let Some(ty) = &uf.return_type {
+        if !crate::call::param_accepts(ty, &value) {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+/// A method call site's cache hit (`call::method_entry_hit`): the method,
+/// its class scope, whether it is static.
+pub(super) type MethodEntry = (Func, Option<Rc<crate::class::Class>>, bool);
+
+/// What [`accessor_now`] found at a method call site.
+pub(super) enum MethodNow {
+    /// The call is done: the op to go on at.
+    Done(usize),
+    /// The site's cache hit, which is no accessor here: [`prepare_method`]
+    /// takes it instead of looking it up again.
+    Resolved(MethodEntry),
+    /// Anything else, nothing changed.
+    Unknown,
+}
+
+/// `$obj->name()` of a user method that is an accessor
+/// ([`UserFunction::accessor`]), `ZEND_INIT_METHOD_CALL` at `at` followed
+/// directly by its `DoCall`: on the method cache hit [`prepare_method`]
+/// takes, the value is read ([`accessor_read`]) and stored as the call's
+/// result without a frame; the op after the `DoCall` is where execution
+/// goes on. A pending interrupt is the usual call's to service, after it.
 pub(super) fn accessor_now(
     vm: &mut Vm,
     ops: &[Op],
@@ -2283,13 +2347,57 @@ pub(super) fn accessor_now(
     let Some(&Op::DoCall { dst }) = ops.get(at + 1) else {
         return MethodNow::Unknown;
     };
-    // (A pending interrupt is the usual call's to service, after it.)
     if vm.observer.enabled || crate::interrupt::safe_point_due() {
         return MethodNow::Unknown;
     }
-    let mut user = false;
-    match accessor_value(vm, obj, lit, at, &mut user) {
-        Some(value) => {
+    let found = {
+        let Some(caller) = vm.frames.last() else {
+            return MethodNow::Unknown;
+        };
+        let o = match obj {
+            Operand::Cv(cv) if !caller.symtab_attached => {
+                match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                    Some(Value::Object(o)) => o,
+                    _ => return MethodNow::Unknown,
+                }
+            }
+            Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+                Some(Value::Object(o)) => o,
+                _ => return MethodNow::Unknown,
+            },
+            Operand::Unused => match caller.this.as_ref() {
+                Some(o) => o,
+                None => return MethodNow::Unknown,
+            },
+            _ => return MethodNow::Unknown,
+        };
+        let Some(od) = o.downcast_ref::<crate::object::ObjectData>() else {
+            return MethodNow::Unknown;
+        };
+        let cls = &od.class;
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return MethodNow::Unknown;
+        }
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let Some(entry) =
+            crate::call::method_entry_hit(&caller.code, at, cls_addr, scope_addr, lit)
+        else {
+            return MethodNow::Unknown;
+        };
+        let value = match &entry {
+            (Func::User(uf), scope, false) => uf
+                .accessor()
+                .and_then(|acc| accessor_read(uf, acc, od, cls_addr, scope.as_ref())),
+            _ => None,
+        };
+        match value {
+            Some(value) => Ok(value),
+            None => Err(entry),
+        }
+    };
+    match found {
+        Ok(value) => {
             let done = at + 2;
             if let Some(f) = vm.frames.last_mut() {
                 f.ip = done;
@@ -2299,94 +2407,7 @@ pub(super) fn accessor_now(
                 None => MethodNow::Unknown,
             }
         }
-        None if user => MethodNow::User,
-        None => MethodNow::Unknown,
-    }
-}
-
-/// What [`accessor_now`] found at a method call site.
-pub(super) enum MethodNow {
-    /// The call is done: the op to go on at.
-    Done(usize),
-    /// The site's cached method is a user function that is no accessor
-    /// here: the call is prepared the usual way (a pure builtin's path
-    /// has nothing to try).
-    User,
-    /// Anything else, nothing changed.
-    Unknown,
-}
-
-/// The value [`accessor_now`]'s call returns, read without a frame;
-/// `user` is set once the site's method is known to be a user function.
-#[inline]
-fn accessor_value(vm: &Vm, obj: Operand, lit: u32, at: usize, user: &mut bool) -> Option<Value> {
-    {
-        let caller = vm.frames.last()?;
-        let o = match obj {
-            Operand::Cv(cv) if !caller.symtab_attached => {
-                match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                    Some(Value::Object(o)) => o,
-                    _ => return None,
-                }
-            }
-            Operand::Tmp(t) => match caller.tmps.get(t as usize) {
-                Some(Value::Object(o)) => o,
-                _ => return None,
-            },
-            Operand::Unused => caller.this.as_ref()?,
-            _ => return None,
-        };
-        let od = o.downcast_ref::<crate::object::ObjectData>()?;
-        let cls = &od.class;
-        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
-            return None;
-        }
-        let cls_addr = Rc::as_ptr(cls) as usize;
-        let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-        let (func, scope, is_static) =
-            crate::call::method_entry_hit(&caller.code, at, cls_addr, scope_addr, lit)?;
-        let Func::User(uf) = func else {
-            return None;
-        };
-        *user = true;
-        if is_static {
-            return None;
-        }
-        let value = match uf.accessor()? {
-            Accessor::Lit(l) => clone_value(uf.code.literals.get(l as usize)?),
-            Accessor::Prop(place) => {
-                // The method's own `FETCH_OBJ_R` cache entry, as
-                // `spec::props::read_plain` tests it in the method's frame.
-                let slot = {
-                    let cache = uf.code.prop_cache.try_borrow().ok()?;
-                    let e = cache.get(place as usize)?;
-                    let method_scope = scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-                    if e.class_addr != cls_addr
-                        || e.scope_addr != method_scope
-                        || e.base != crate::opcode::PROP_CACHE_THIS
-                        || e.flags & (crate::place::propcache::PC_READ | PC_DYN)
-                            != crate::place::propcache::PC_READ
-                    {
-                        return None;
-                    }
-                    e.slot as usize
-                };
-                if !od.not_lazy() {
-                    return None;
-                }
-                let slots = od.slots.try_borrow().ok()?;
-                match slots.get(slot)? {
-                    Some(Value::Reference(_)) | None => return None,
-                    Some(v) => clone_value(v),
-                }
-            }
-        };
-        if let Some(ty) = &uf.return_type {
-            if !crate::call::param_accepts(ty, &value) {
-                return None;
-            }
-        }
-        Some(value)
+        Err(entry) => MethodNow::Resolved(entry),
     }
 }
 
