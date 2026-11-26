@@ -456,6 +456,98 @@ fn memory_limit_is_enforced_for_large_results() {
     );
 }
 
+/// `explode()` with every kind of limit, one- and two-byte separators
+/// (counted in one pass for the memory check), empty and unsplit input;
+/// `implode()` reading its pieces in place: strings, numbers, booleans,
+/// null, a `__toString()` object, references, an array piece, one and
+/// no pieces; lists from `str_split()` and appending after `explode()`.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn explode_and_implode_pieces() {
+    let out = run(
+        r#"foreach ([[',', 'a,b,,c,'], [',', ''], [',', 'abc'], ['::', 'a::b::::c'], ['ab', 'ab'], ['x', 'xxx']] as [$d, $s]) {
+    foreach ([PHP_INT_MAX, 2, 1, 0, -1, -2, -10] as $l) { $p = explode($d, $s, $l); $c = 0; foreach ($p as $_) { $c++; } echo $c, '[', implode('|', $p), '] '; } echo "\n";
+}
+class S { function __toString(): string { return 'S!'; } }
+$x = 'ref'; $n = 5; $arr = ['a', 1, 1.5, true, false, null, new S, &$x, &$n, -7];
+var_dump(implode(',', $arr), implode($arr), implode('', []), implode('-', ['only']), implode('-', [&$x]), implode(', ', [1, 2, 3]));
+echo @implode(',', [[1], 'b']), "\n";
+var_dump(str_split('abcdefg', 3));
+$e = explode(',', 'a,b'); $e[] = 'c'; var_dump($e);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"5[a|b||c|] 2[a|b,,c,] 1[a,b,,c,] 1[a,b,,c,] 4[a|b||c] 3[a|b|] 0[] 
+1[] 1[] 1[] 1[] 0[] 0[] 0[] 
+1[abc] 1[abc] 1[abc] 1[abc] 0[] 0[] 0[] 
+4[a|b||c] 2[a|b::::c] 1[a::b::::c] 1[a::b::::c] 3[a|b|] 2[a|b] 0[] 
+2[|] 2[|] 1[ab] 1[ab] 1[] 0[] 0[] 
+4[|||] 2[|xx] 1[xxx] 1[xxx] 3[||] 2[|] 0[] 
+string(23) "a,1,1.5,1,,,S!,ref,5,-7"
+string(14) "a11.51S!ref5-7"
+string(0) ""
+string(4) "only"
+string(3) "ref"
+string(7) "1, 2, 3"
+Array,b
+array(3) {
+  [0]=>
+  string(3) "abc"
+  [1]=>
+  string(3) "def"
+  [2]=>
+  string(1) "g"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+"#
+    );
+}
+
+/// Byte searches (`memchr` a word at a time) behind `strpos()`,
+/// `strrpos()`, `substr_count()`, `str_contains()`, `strstr()`,
+/// `str_replace()` and `explode()`: empty, short and long subjects,
+/// matches at and around each eight-byte step, bytes 0x00, 0x01, 0x7f,
+/// 0x80 and 0xff, missing needles, offsets. Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn byte_searches() {
+    let out = run(
+        r#"$hs = ['', 'a', 'abcdefgh', 'abcdefghi', str_repeat('x', 17) . 'y', "\x00\x80\xff\x7f\x01" . str_repeat("\x80", 20) . "\x00", str_repeat('ab', 40) . 'needle' . str_repeat('cd', 9)];
+$ns = ['a', 'y', "\x00", "\x80", "\xff", "\x7f", "\x01", 'needle', 'cd', 'zz', 'ab'];
+foreach ($hs as $h) { $line = []; foreach ($ns as $n) { $line[] = var_export(strpos($h, $n), true) . '/' . var_export(strrpos($h, $n), true) . '/' . substr_count($h, $n) . '/' . (str_contains($h, $n) ? 1 : 0) . '/' . strlen((string) strstr($h, $n)) . '/' . strlen(str_replace($n, '<>', $h)); } echo implode(' ', $line), "\n"; }
+foreach (['a,b,,c,', ',', ',,', 'abc', str_repeat('a,', 20)] as $s) { foreach ([PHP_INT_MAX, 3, 1, 0, -1, -3] as $l) { $p = explode(',', $s, $l); $c = 0; foreach ($p as $_) { $c++; } echo $c, '[', implode('|', $p), '] '; } echo "\n"; }
+var_dump(strpos('abc', 'c', 1), stripos('ABCdef', 'd'), strpos(str_repeat('z', 30) . 'q', 'q', 5));
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0 false/false/0/0/0/0
+0/0/1/1/1/2 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1 false/false/0/0/0/1
+0/0/1/1/8/9 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 false/false/0/0/0/8 2/2/1/1/6/8 false/false/0/0/0/8 0/0/1/1/8/8
+0/0/1/1/9/10 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 false/false/0/0/0/9 2/2/1/1/7/9 false/false/0/0/0/9 0/0/1/1/9/9
+false/false/0/0/0/18 17/17/1/1/1/19 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18 false/false/0/0/0/18
+false/false/0/0/0/26 false/false/0/0/0/26 0/25/2/1/26/28 1/24/21/1/25/47 2/2/1/1/24/27 3/3/1/1/23/27 4/4/1/1/22/27 false/false/0/0/0/26 false/false/0/0/0/26 false/false/0/0/0/26 false/false/0/0/0/26
+0/78/40/1/104/144 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 false/false/0/0/0/104 80/80/1/1/24/100 86/102/9/1/18/104 false/false/0/0/0/104 0/78/40/1/104/104
+5[a|b||c|] 3[a|b|,c,] 1[a,b,,c,] 1[a,b,,c,] 4[a|b||c] 2[a|b] 
+2[|] 2[|] 1[,] 1[,] 1[] 0[] 
+3[||] 3[||] 1[,,] 1[,,] 2[|] 0[] 
+1[abc] 1[abc] 1[abc] 1[abc] 0[] 0[] 
+21[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|] 3[a|a|a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 1[a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 1[a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,] 20[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a] 18[a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a|a] 
+int(2)
+int(3)
+int(30)
+"#
+    );
+}
+
 /// `strspn()`/`strcspn()` read `$length` in place: `null`, a negative and
 /// a positive length, none, and a `TypeError` (`/usr/bin/php8.5 -n`).
 #[test]

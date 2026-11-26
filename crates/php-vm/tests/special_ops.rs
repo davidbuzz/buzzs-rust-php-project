@@ -267,14 +267,16 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
     assert!(with
         .iter()
         .any(|o| matches!(o, Op::GetCalledClass { dst: Some(_) })));
-    // `count($y, 1)`, the `is_integer` alias and two-argument `get_class`
-    // remain calls.
+    // `count($y, 1)` and two-argument `get_class` remain calls; the
+    // `is_integer` alias is a frameless call (its own ops run while it is
+    // deprecated).
     assert_eq!(
         with.iter()
             .filter(|o| matches!(o, Op::DoCall { .. }))
             .count(),
-        3
+        2
     );
+    assert!(with.iter().any(|o| matches!(o, Op::FramelessICall(_))));
     let without = ops(src, 0);
     assert!(!without.iter().any(|o| matches!(
         o,
@@ -285,10 +287,13 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
             | Op::GetClass { .. }
             | Op::GetCalledClass { .. }
     )));
+    // Every one remains a call (the one-argument type tests, `strlen()` and
+    // `count()` as frameless calls, which run their own ops unless the
+    // builtin is there).
     assert_eq!(
         without
             .iter()
-            .filter(|o| matches!(o, Op::DoCall { .. }))
+            .filter(|o| matches!(o, Op::DoCall { .. } | Op::FramelessICall(_)))
             .count(),
         11
     );
@@ -357,8 +362,10 @@ echo $f(1), "\n";
     assert_eq!(status, 0, "{output}");
     // Coerced arguments and dynamic calls push the builtin frame. `abs()`
     // of an int or a float is answered without the handler (and without a
-    // frame: `frameless_inline`), so it shows its real result, not "F".
-    assert_eq!(output, "12.5BB\n1B\nF:falseF:trueB:false\nB\n");
+    // frame: `frameless_inline`), so it shows its real result, not "F";
+    // so does `substr()` once its name is in the run-time cache (`x`: the
+    // first call fills the cache, its handler run frameless).
+    assert_eq!(output, "12.5BB\n1B\nF:falsexB:false\nB\n");
 }
 
 #[test]
@@ -402,13 +409,14 @@ fn defined_in_array_array_key_exists_chr_ord_compile_by_their_literals() {
             .count(),
         1
     );
-    // The other calls stay calls. The fifteen of frameless builtins are
-    // still one `FramelessICall` each: the fusion goes by the name (php-src
-    // compiles the internal function's calls so), and the op runs the call
-    // ops it replaced when the function is not that builtin at run time.
+    // The other calls stay calls. The sixteen of frameless builtins
+    // (`array_key_exists()` among them) are still one `FramelessICall`
+    // each: the fusion goes by the name (php-src compiles the internal
+    // function's calls so), and the op runs the call ops it replaced when
+    // the function is not that builtin at run time.
     let calls = |pred: fn(&Op) -> bool| without.iter().filter(|o| pred(o)).count();
-    assert_eq!(calls(|o| matches!(o, Op::DoCall { .. })), 7);
-    assert_eq!(calls(|o| matches!(o, Op::FramelessICall(_))), 15);
+    assert_eq!(calls(|o| matches!(o, Op::DoCall { .. })), 6);
+    assert_eq!(calls(|o| matches!(o, Op::FramelessICall(_))), 16);
 }
 
 #[test]

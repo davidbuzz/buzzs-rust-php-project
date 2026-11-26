@@ -1881,6 +1881,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         }));
     }
     tape.push(Inst::plain(TOp::Exit));
+    dims::shape_literals(code, &mut tape);
     calls::number_new_sites(&mut tape);
     // Entering the tape costs a call, a look at the frame and the way back
     // (about what one unspecialised hot op costs): worth it at a
@@ -2395,6 +2396,16 @@ fn run_call(
     inst: &Inst,
 ) -> usize {
     match ops.get(at) {
+        Some(&Op::InitFCall {
+            name,
+            fallback: Some(_),
+            ..
+        }) => {
+            flush(vm, prep);
+            if let Some(call) = calls::prepare_ns(vm, name, lits.len() + at + 1) {
+                return send_and_enter(vm, prep, call, ops, at);
+            }
+        }
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
             // `f(<expression>)` of a builtin that needs no handler: nothing
@@ -2414,6 +2425,12 @@ fn run_call(
             name: Operand::Lit(lit),
         }) => {
             flush(vm, prep);
+            // A pure builtin method with arguments at hand
+            // (`$m->getName()`, `$m->getAttributes(A::class)`): called at
+            // once, past its `DoCall`.
+            if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
+                return next;
+            }
             if let Some(call) = calls::prepare_method(vm, obj, lit, at) {
                 return send_and_enter(vm, prep, call, ops, at);
             }
@@ -2564,8 +2581,37 @@ fn run_call(
 /// A function of its own, and small: inside [`run_call`], whose frame the
 /// calls' many paths make large, each of these reads paid for all of it.
 #[inline(never)]
+#[allow(clippy::too_many_lines)] // one short arm per op
 fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
     match ops.get(at) {
+        // `ZEND_ASSERT_CHECK`, as `Vm::run`'s arm makes it: with
+        // assertions off at run time, `true` and past the assertion.
+        Some(&Op::InstanceOf {
+            a: Operand::Cv(a),
+            class: ClassSpec::Dyn(Operand::Cv(b)),
+            dst,
+        }) => match vm.instanceof_cv_fast(a, b) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        },
+        Some(Op::FetchClassName { class, dst, .. }) => match vm.class_name_fast(class) {
+            Some(v) => {
+                vm.set_tmp(*dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        Some(&Op::AssertCheck { dst, skip }) => {
+            if crate::builtins::assert_ini(vm).0 == 1 {
+                at + 1
+            } else {
+                vm.set_tmp(dst, Value::Bool(true));
+                skip as usize
+            }
+        }
         // A global variable by name: its run-time cache hit, the value
         // into the temporary or straight into the variable of the
         // `AssignCv` folded behind the op (then skipped).

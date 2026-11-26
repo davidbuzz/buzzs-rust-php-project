@@ -14,10 +14,37 @@ use crate::transform::{len_i64, to_usize};
 
 /// `zend_memnstr()`: offset of the first occurrence of `needle` in
 /// `haystack` (an empty needle matches at 0).
+/// `memchr()`: offset of the first `b` in `hay`, eight bytes a step
+/// (a word compared at once: a zero byte of `word ^ b·0x01…01` is a
+/// match, the lowest one the first). The C engine's `memchr` is the C
+/// library's vectorised one; a byte-at-a-time scan was the bulk of
+/// `str_replace()`, `explode()` and `strpos()` on longer subjects.
+#[must_use]
+pub fn find_byte(hay: &[u8], b: u8) -> Option<usize> {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let pat = LO * u64::from(b);
+    let mut chunks = hay.chunks_exact(8);
+    let mut off = 0;
+    for c in &mut chunks {
+        let w = u64::from_le_bytes(<[u8; 8]>::try_from(c).unwrap_or_default()) ^ pat;
+        let z = w.wrapping_sub(LO) & !w & HI;
+        if z != 0 {
+            return Some(off + (z.trailing_zeros() / 8) as usize);
+        }
+        off += 8;
+    }
+    chunks
+        .remainder()
+        .iter()
+        .position(|&c| c == b)
+        .map(|i| off + i)
+}
+
 pub fn memnstr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     match needle.len() {
         0 => Some(0),
-        1 => haystack.iter().position(|&c| c == needle[0]),
+        1 => find_byte(haystack, needle[0]),
         n if n > haystack.len() => None,
         n => {
             // `zend_memnstr()`: scan for the first byte, then check the
@@ -26,7 +53,7 @@ pub fn memnstr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
             let end = haystack.len() - n;
             let mut i = 0;
             while i <= end {
-                i += haystack[i..=end].iter().position(|&c| c == first)?;
+                i += find_byte(&haystack[i..=end], first)?;
                 if haystack[i + n - 1] == last && &haystack[i..i + n] == needle {
                     return Some(i);
                 }
@@ -444,14 +471,28 @@ pub fn explode_slices<'a>(delim: &[u8], s: &'a [u8], limit: i64) -> StdResult<Ve
     }
     let mut pieces: Vec<&[u8]> = Vec::new();
     let mut p = 0;
-    while let Some(r) = memnstr(&s[p..], delim) {
-        // With a positive limit the last element holds the unsplit
-        // remainder.
-        if limit > 1 && len_i64(pieces.len()) == limit - 1 {
-            break;
+    if let [d] = delim {
+        // One byte: one walk over the string (a search per piece costs
+        // more than it saves for the short pieces this mostly splits).
+        for (i, &c) in s.iter().enumerate() {
+            if c == *d {
+                if limit > 1 && len_i64(pieces.len()) == limit - 1 {
+                    break;
+                }
+                pieces.push(&s[p..i]);
+                p = i + 1;
+            }
         }
-        pieces.push(&s[p..p + r]);
-        p += r + delim.len();
+    } else {
+        while let Some(r) = memnstr(&s[p..], delim) {
+            // With a positive limit the last element holds the unsplit
+            // remainder.
+            if limit > 1 && len_i64(pieces.len()) == limit - 1 {
+                break;
+            }
+            pieces.push(&s[p..p + r]);
+            p += r + delim.len();
+        }
     }
     pieces.push(&s[p..]);
     if limit < 0 {
@@ -571,6 +612,46 @@ impl Strtok {
 
 #[cfg(test)]
 mod tests {
+
+    /// `find_byte` finds what `position` finds at every offset and length
+    /// around the eight-byte steps, for bytes whose words carry and
+    /// borrow (0x00, 0x01, 0x7f, 0x80, 0xff) and repeated matches.
+    #[test]
+    fn find_byte_matches_position() {
+        let base: Vec<u8> = (0u8..=255)
+            .cycle()
+            .take(300)
+            .map(|b| b.wrapping_mul(37))
+            .collect();
+        for b in [0x00u8, 0x01, 0x7f, 0x80, 0xff, b'a'] {
+            for len in 0..40 {
+                for at in 0..len {
+                    let mut hay: Vec<u8> = base[..len]
+                        .iter()
+                        .map(|&c| if c == b { c ^ 1 } else { c })
+                        .collect();
+                    hay[at] = b;
+                    if at + 3 < len {
+                        hay[at + 3] = b;
+                    }
+                    assert_eq!(
+                        super::find_byte(&hay, b),
+                        Some(at),
+                        "b={b} len={len} at={at}"
+                    );
+                }
+                let hay: Vec<u8> = base[..len]
+                    .iter()
+                    .map(|&c| if c == b { c ^ 1 } else { c })
+                    .collect();
+                assert_eq!(super::find_byte(&hay, b), None);
+            }
+        }
+        assert_eq!(
+            super::find_byte(&base, base[299]),
+            base.iter().position(|&c| c == base[299])
+        );
+    }
     use super::*;
 
     #[test]

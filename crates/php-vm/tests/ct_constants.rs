@@ -109,3 +109,57 @@ var_dump(PHP_INT_MAX + 1, MY_C * 2, strlen(PHP_EOL));
 "#);
     assert_eq!(out, "float(9.223372036854776E+18)\nint(10)\nint(1)\n");
 }
+
+/// `zend_eval_const_expr` folds `__LINE__`, `__FILE__`, `__DIR__`,
+/// `__NAMESPACE__` and (outside a trait) `__CLASS__`
+/// (`zend_try_ct_eval_magic_const`), so an array literal built from them is
+/// one compile-time array (`zend_try_ct_eval_array`), not an `INIT_ARRAY`
+/// and one `ADD_ARRAY_ELEMENT` per element: Composer's class map
+/// (`__DIR__ . '/..' . '/x.php'`, ~18k elements in a Laravel app) was
+/// rebuilt element by element on every include.
+#[test]
+fn magic_constants_fold_into_compile_time_arrays() {
+    use php_runtime::{Value, ZStr};
+    use php_vm::compiler::{compile, CompileOptions};
+    let src = b"<?php namespace N;\n$a = [__DIR__ . '/..' . '/x.php', __LINE__, __FILE__, __NAMESPACE__, 'k' => __CLASS__];\n";
+    let program = php_parser::parse(src, &php_parser::ParseOptions::default()).expect("parses");
+    let opts = CompileOptions {
+        filename: ZStr::from("/srv/app/t.php"),
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(&src[..]), opts).expect("compiles");
+    let code = &unit.main.code;
+    assert!(
+        !code
+            .ops
+            .iter()
+            .any(|op| matches!(op, php_vm::opcode::Op::InitArray { .. })),
+        "{:?}",
+        code.ops
+    );
+    let arr = code
+        .literals
+        .iter()
+        .find_map(|v| match v {
+            Value::Array(a) => Some(a.clone()),
+            _ => None,
+        })
+        .expect("an array literal");
+    let vals: Vec<String> = arr.values().map(|v| format!("{v:?}")).collect();
+    let want: Vec<String> = [
+        Value::Str(ZStr::from("/srv/app/../x.php")),
+        Value::Int(2),
+        Value::Str(ZStr::from("/srv/app/t.php")),
+        Value::Str(ZStr::from("N")),
+        Value::Str(ZStr::from("")),
+    ]
+    .iter()
+    .map(|v| format!("{v:?}"))
+    .collect();
+    assert_eq!(vals, want);
+    // `__CLASS__` of a trait method stays the using class, at run time.
+    assert_eq!(
+        run("<?php trait T { function f() { return [__CLASS__, __LINE__]; } } class B { use T; } echo implode(',', (new B)->f());"),
+        "B,1"
+    );
+}

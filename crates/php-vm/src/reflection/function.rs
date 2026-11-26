@@ -1046,11 +1046,23 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         .method("inNamespace(): bool", PUB, rf_in_ns)
         .method("isClosure(): bool", PUB, rf_is_closure)
         .method("isDeprecated(): bool", PUB, rf_is_deprecated)
-        .method("isInternal(): bool", PUB, rf_is_internal)
-        .method("isUserDefined(): bool", PUB, rf_is_user)
+        .method(
+            "isInternal(): bool",
+            PUB | crate::func::flags::PURE,
+            rf_is_internal,
+        )
+        .method(
+            "isUserDefined(): bool",
+            PUB | crate::func::flags::PURE,
+            rf_is_user,
+        )
         .method("isGenerator(): bool", PUB, rf_is_generator)
-        .method("isVariadic(): bool", PUB, rf_is_variadic)
-        .method("isStatic(): bool", PUB, rf_is_static)
+        .method(
+            "isVariadic(): bool",
+            PUB | crate::func::flags::PURE,
+            rf_is_variadic,
+        )
+        .method("isStatic(): bool", PUB | flags::PURE, rf_is_static)
         .method("getClosureThis(): ?object", PUB, rf_get_closure_this)
         .method(
             "getClosureScopeClass(): ?ReflectionClass",
@@ -1080,17 +1092,45 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
             rf_get_extension_name,
         )
         .method("getFileName(): string|false", PUB, rf_get_file_name)
-        .method("getName(): string", PUB, rf_get_name)
-        .method("getNamespaceName(): string", PUB, rf_get_ns)
-        .method("getNumberOfParameters(): int", PUB, rf_num_params)
-        .method("getNumberOfRequiredParameters(): int", PUB, rf_num_required)
-        .method("getParameters(): array", PUB, rf_get_parameters)
-        .method("getShortName(): string", PUB, rf_get_short_name)
+        .method("getName(): string", PUB | flags::PURE, rf_get_name)
+        .method(
+            "getNamespaceName(): string",
+            PUB | crate::func::flags::PURE,
+            rf_get_ns,
+        )
+        .method(
+            "getNumberOfParameters(): int",
+            PUB | crate::func::flags::PURE,
+            rf_num_params,
+        )
+        .method(
+            "getNumberOfRequiredParameters(): int",
+            PUB | crate::func::flags::PURE,
+            rf_num_required,
+        )
+        .method(
+            "getParameters(): array",
+            PUB | crate::func::flags::PURE,
+            rf_get_parameters,
+        )
+        .method(
+            "getShortName(): string",
+            PUB | flags::PURE,
+            rf_get_short_name,
+        )
         .method("getStartLine(): int|false", PUB, rf_get_start_line)
         .method("getStaticVariables(): array", PUB, rf_get_static_variables)
         .method("returnsReference(): bool", PUB, rf_returns_ref)
-        .method("hasReturnType(): bool", PUB, rf_has_return_type)
-        .method("getReturnType(): ?ReflectionType", PUB, rf_get_return_type)
+        .method(
+            "hasReturnType(): bool",
+            PUB | crate::func::flags::PURE,
+            rf_has_return_type,
+        )
+        .method(
+            "getReturnType(): ?ReflectionType",
+            PUB | crate::func::flags::PURE,
+            rf_get_return_type,
+        )
         .method(
             "hasTentativeReturnType(): bool",
             PUB,
@@ -1103,7 +1143,8 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         )
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
-            PUB,
+            // Pure with at most a name (`calls::pure_args`).
+            PUB | crate::func::flags::PURE,
             rf_get_attributes,
         )
         .register(vm);
@@ -1148,19 +1189,47 @@ pub(crate) fn register_method(vm: &mut Vm) {
             rm_create_from_method_name,
         )
         .method("__toString(): string", PUB, rf_to_string)
-        .method("isPublic(): bool", PUB, rm_is_public)
-        .method("isPrivate(): bool", PUB, rm_is_private)
-        .method("isProtected(): bool", PUB, rm_is_protected)
-        .method("isAbstract(): bool", PUB, rm_is_abstract)
-        .method("isFinal(): bool", PUB, rm_is_final)
-        .method("isConstructor(): bool", PUB, rm_is_ctor)
+        .method(
+            "isPublic(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_public,
+        )
+        .method(
+            "isPrivate(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_private,
+        )
+        .method(
+            "isProtected(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_protected,
+        )
+        .method(
+            "isAbstract(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_abstract,
+        )
+        .method(
+            "isFinal(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_final,
+        )
+        .method(
+            "isConstructor(): bool",
+            PUB | crate::func::flags::PURE,
+            rm_is_ctor,
+        )
         .method("isDestructor(): bool", PUB, rm_is_dtor)
         .method(
             "getClosure(?object $object = null): Closure",
             PUB,
             rm_get_closure,
         )
-        .method("getModifiers(): int", PUB, rm_get_modifiers)
+        .method(
+            "getModifiers(): int",
+            PUB | crate::func::flags::PURE,
+            rm_get_modifiers,
+        )
         .method(
             "invoke(mixed $object = UNKNOWN, mixed ...$args): mixed",
             PUB,

@@ -1411,7 +1411,7 @@ fn debug_print_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `!ASSERTG(active) || EG(assertions) <= 0`: only dynamic calls reach
     // here with assertions disabled (compiled calls skip the call).
-    if !vm.ini.get_bool("assert.active") || vm.ini.get_long("zend.assertions") <= 0 {
+    if !assert_ini(vm).1 {
         return Ok(Value::Bool(true));
     }
     let v = a.at(0);
@@ -3114,6 +3114,29 @@ mod ini_get_tests {
         assert!(!long.is_interned());
         assert_eq!(long.len(), INI_SHARED_MAX + 1);
     }
+}
+
+thread_local! {
+    /// [`assert_ini`]'s answer and the INI generation it is for.
+    static ASSERT_INI: std::cell::Cell<(u64, i64, bool)> = const { std::cell::Cell::new((0, 0, false)) };
+}
+
+/// `zend.assertions`, and whether `assert()` checks anything
+/// (`assert.active` and `zend.assertions` above 0): read from the INI
+/// registry once per change of its values (`IniRegistry::generation`,
+/// process-unique), as each `assert()` asked for them by name.
+pub(crate) fn assert_ini(vm: &Vm) -> (i64, bool) {
+    let generation = vm.ini.generation();
+    ASSERT_INI.with(|c| {
+        let (g, level, on) = c.get();
+        if g == generation && g != 0 {
+            return (level, on);
+        }
+        let level = vm.ini.get_long("zend.assertions");
+        let on = vm.ini.get_bool("assert.active") && level > 0;
+        c.set((generation, level, on));
+        (level, on)
+    })
 }
 
 #[cfg(test)]

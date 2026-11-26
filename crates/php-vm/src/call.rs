@@ -3518,6 +3518,45 @@ impl Vm {
         result
     }
 
+    /// [`Vm::fast_builtin_call`] of a prepared one-argument call of `b`
+    /// (`exec/tape/calls.rs`, `call_native`): the argument sent into the
+    /// pooled frame is evaluated without the handler, as the frameless call
+    /// of `Vm::frameless_icall_prepared` evaluates its quick functions, the
+    /// caller's resume point saved (`SAVE_OPLINE`), the argument released
+    /// and the result stored in `dst`. `None`, nothing changed, when the
+    /// function needs its handler for the argument.
+    pub(crate) fn fast_eval_prepared(
+        &mut self,
+        b: &Builtin,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        if b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let id = b.fast_eval_id();
+        let live = self.frames.live;
+        let (callers, pool) = self.frames.vec.split_at_mut(live);
+        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+            return None;
+        };
+        if caller.calls.len() != calls_len || frame.args.len() != 1 {
+            return None;
+        }
+        let v = match frame.args[0].as_ref()? {
+            Value::Reference(r) => fast_eval(id, &*r.try_borrow()?)?,
+            val => fast_eval(id, val)?,
+        };
+        caller.ip = caller_ip;
+        frame.args.clear();
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        self.put_call_result(dst, v);
+        Some(Ok(()))
+    }
+
     /// Fast path for single-argument builtin calls matching deterministic type
     /// predicates (`is_int`, `is_string`, `is_array`, etc.) or scalar functions
     /// (`strlen`, `count`). Avoids full call-frame setup and parameter reflection.
@@ -3527,7 +3566,9 @@ impl Vm {
         b: &Builtin,
         call: &mut PendingCall,
     ) -> Option<VmResult<Value>> {
-        if b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+        let id = b.fast_eval_id();
+        if id == fe::NONE
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
             || call.has_named
             || !call.named.is_empty()
             || call.is_ctor
@@ -3550,9 +3591,9 @@ impl Vm {
         let res = match raw {
             Value::Reference(r) => {
                 let borrowed = r.try_borrow()?;
-                fast_builtin_eval(b.name.as_bytes(), &borrowed)?
+                fast_eval(id, &borrowed)?
             }
-            val => fast_builtin_eval(b.name.as_bytes(), val)?,
+            val => fast_eval(id, val)?,
         };
         if let Err(e) = self.check_interrupt() {
             return Some(Err(e));
@@ -3569,50 +3610,133 @@ impl Vm {
     }
 }
 
-#[inline]
-fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+/// The functions [`fast_builtin_call`](Vm::fast_builtin_call) evaluates
+/// without their handlers, by the id [`fast_eval_id`] gives their names
+/// (kept by each [`Builtin`]: `Builtin::fast_eval_id`), so a call matches
+/// one byte instead of the name against each of them.
+pub(crate) mod fe {
+    /// Not one of them.
+    pub(crate) const NONE: u8 = 0;
+    pub(crate) const IS_INT: u8 = 1;
+    pub(crate) const IS_STRING: u8 = 2;
+    pub(crate) const IS_ARRAY: u8 = 3;
+    pub(crate) const IS_BOOL: u8 = 4;
+    pub(crate) const IS_NULL: u8 = 5;
+    pub(crate) const IS_FLOAT: u8 = 6;
+    pub(crate) const IS_OBJECT: u8 = 7;
+    pub(crate) const IS_RESOURCE: u8 = 8;
+    pub(crate) const IS_SCALAR: u8 = 9;
+    pub(crate) const IS_NUMERIC: u8 = 10;
+    pub(crate) const STRLEN: u8 = 11;
+    pub(crate) const COUNT: u8 = 12;
+    pub(crate) const ABS: u8 = 13;
+    pub(crate) const ORD: u8 = 14;
+    pub(crate) const CHR: u8 = 15;
+    /// A math function of [`super::float_builtin_eval`]: this plus its
+    /// [`super::ff`] id.
+    pub(crate) const FLOAT_BASE: u8 = 64;
+}
+
+/// The [`fe`] id of the builtin named `name`.
+pub(crate) fn fast_eval_id(name: &[u8]) -> u8 {
     match name {
-        b"is_int" | b"is_integer" | b"is_long" => Some(Value::Bool(matches!(val, Value::Int(_)))),
-        b"is_string" => Some(Value::Bool(matches!(val, Value::Str(_)))),
-        b"is_array" => Some(Value::Bool(matches!(val, Value::Array(_)))),
-        b"is_bool" => Some(Value::Bool(matches!(val, Value::Bool(_)))),
-        b"is_null" => Some(Value::Bool(matches!(val, Value::Null))),
-        b"is_float" | b"is_double" | b"is_real" => {
-            Some(Value::Bool(matches!(val, Value::Float(_))))
+        b"is_int" | b"is_integer" | b"is_long" => fe::IS_INT,
+        b"is_string" => fe::IS_STRING,
+        b"is_array" => fe::IS_ARRAY,
+        b"is_bool" => fe::IS_BOOL,
+        b"is_null" => fe::IS_NULL,
+        b"is_float" | b"is_double" | b"is_real" => fe::IS_FLOAT,
+        b"is_object" => fe::IS_OBJECT,
+        b"is_resource" => fe::IS_RESOURCE,
+        b"is_scalar" => fe::IS_SCALAR,
+        b"is_numeric" => fe::IS_NUMERIC,
+        b"strlen" => fe::STRLEN,
+        b"count" | b"sizeof" => fe::COUNT,
+        b"abs" => fe::ABS,
+        b"ord" => fe::ORD,
+        b"chr" => fe::CHR,
+        _ => float_fn_id(name).map_or(fe::NONE, |f| fe::FLOAT_BASE + f),
+    }
+}
+
+/// Whether `n` arguments of a call made from native code go in `call`'s
+/// inline buffer ([`Vm::give_args`]): a user function with neither a
+/// by-reference nor a variadic parameter, so that `push_user_call` takes
+/// its plain branch (which only takes inline arguments).
+fn inline_args_fit(call: &PendingCall, n: usize) -> bool {
+    match &call.func {
+        Func::User(uf) => {
+            n <= call.inline_args.len()
+                && call.magic_name.is_none()
+                && !uf.params.iter().any(|p| p.by_ref || p.variadic)
         }
-        b"is_object" => Some(Value::Bool(matches!(val, Value::Object(_)))),
-        b"is_resource" => Some(Value::Bool(
+        Func::Builtin(_) => false,
+    }
+}
+
+/// Puts `args` into `call`'s inline buffer, dereferenced (as
+/// `call_pending_ex` dereferences them); [`inline_args_fit`] said they fit.
+fn fill_inline_args(call: &mut PendingCall, args: impl IntoIterator<Item = Value>) {
+    let mut n = 0u8;
+    for (slot, v) in call.inline_args.iter_mut().zip(args) {
+        *slot = Some(match v {
+            Value::Reference(r) => r.get(),
+            v => v,
+        });
+        n += 1;
+    }
+    call.inline_count = n;
+}
+
+#[cfg(test)]
+fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    fast_eval(fast_eval_id(name), val)
+}
+
+/// What the builtin with [`fe`] id `id` returns for `val`, when its handler
+/// reports nothing for it; `None` otherwise (the handler runs).
+#[inline]
+pub(crate) fn fast_eval(id: u8, val: &Value) -> Option<Value> {
+    match id {
+        fe::IS_INT => Some(Value::Bool(matches!(val, Value::Int(_)))),
+        fe::IS_STRING => Some(Value::Bool(matches!(val, Value::Str(_)))),
+        fe::IS_ARRAY => Some(Value::Bool(matches!(val, Value::Array(_)))),
+        fe::IS_BOOL => Some(Value::Bool(matches!(val, Value::Bool(_)))),
+        fe::IS_NULL => Some(Value::Bool(matches!(val, Value::Null))),
+        fe::IS_FLOAT => Some(Value::Bool(matches!(val, Value::Float(_)))),
+        fe::IS_OBJECT => Some(Value::Bool(matches!(val, Value::Object(_)))),
+        fe::IS_RESOURCE => Some(Value::Bool(
             matches!(val, Value::Resource(r) if !r.is_closed()),
         )),
-        b"is_scalar" => Some(Value::Bool(matches!(
+        fe::IS_SCALAR => Some(Value::Bool(matches!(
             val,
             Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_)
         ))),
-        b"is_numeric" => Some(Value::Bool(match val {
+        fe::IS_NUMERIC => Some(Value::Bool(match val {
             Value::Int(_) | Value::Float(_) => true,
             Value::Str(s) => {
                 php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some()
             }
             _ => false,
         })),
-        b"strlen" => match val {
+        fe::STRLEN => match val {
             Value::Str(s) => Some(Value::Int(i64::try_from(s.len()).unwrap_or(i64::MAX))),
             _ => None,
         },
-        b"count" | b"sizeof" => match val {
+        fe::COUNT => match val {
             Value::Array(a) => Some(Value::Int(i64::try_from(a.len()).unwrap_or(i64::MAX))),
             _ => None,
         },
-        b"abs" => match val {
+        fe::ABS => match val {
             Value::Int(i) if *i != i64::MIN => Some(Value::Int(i.abs())),
             Value::Float(f) => Some(Value::Float(f.abs())),
             _ => None,
         },
-        b"ord" => match val {
+        fe::ORD => match val {
             Value::Str(s) if s.len() == 1 => Some(Value::Int(i64::from(s.as_bytes()[0]))),
             _ => None,
         },
-        b"chr" => match val {
+        fe::CHR => match val {
             // The shared one-character string (`ZSTR_CHAR`), as the
             // handler returns it.
             Value::Int(c) => u8::try_from(*c)
@@ -3620,7 +3744,8 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
                 .map(|c| Value::Str(ZStr::from_byte(c))),
             _ => None,
         },
-        _ => float_builtin_eval(name, val),
+        id if id >= fe::FLOAT_BASE => float_fn_eval(id - fe::FLOAT_BASE, val),
+        _ => None,
     }
 }
 
@@ -3764,6 +3889,30 @@ pub(crate) fn float_fn_eval(id: u8, val: &Value) -> Option<Value> {
         _ => return None,
     };
     Some(Value::Float(r))
+}
+
+/// The method of `cls` named `name` (any case), looked up by its lower-case
+/// name; a short name is lowered on the stack (`offsetGet`, `current` and
+/// the others the engine calls by name, each call: a `String` each time
+/// before).
+fn method_by_name(cls: &Class, name: &str) -> Option<Rc<Method>> {
+    let b = name.as_bytes();
+    if !b.iter().any(u8::is_ascii_uppercase) {
+        return cls.methods.get(b).cloned();
+    }
+    let mut buf = [0u8; 32];
+    match buf.get_mut(..b.len()) {
+        Some(lc) => {
+            for (d, c) in lc.iter_mut().zip(b) {
+                *d = c.to_ascii_lowercase();
+            }
+            cls.methods.get(&*lc).cloned()
+        }
+        None => cls
+            .methods
+            .get(name.to_ascii_lowercase().as_bytes())
+            .cloned(),
+    }
 }
 
 impl Vm {
@@ -5308,6 +5457,9 @@ impl Vm {
                 }
             }
         }
+        if let Some(r) = self.call_prepared_direct(template, args) {
+            return r;
+        }
         // `call_pending` for a by-value user callee: the interrupt check,
         // dereferenced arguments, the deprecation, then the frame.
         self.check_interrupt()?;
@@ -5346,6 +5498,87 @@ impl Vm {
         }
     }
 
+    /// [`Vm::call_prepared`] of a plain user callee (`usort()`'s comparator,
+    /// `array_map()`'s callback when it is not compiled whole), made as the
+    /// pending call it builds would be but without it: the interrupt
+    /// check, the frame as `push_user_call`'s plain branch sets it up (the
+    /// template's `$this`, scope and called class, the arguments in their
+    /// compiled variables, the `RECV`s of passed parameters skipped, a
+    /// closure's bound variables after them), then the nested execution.
+    /// `None`, having changed nothing, for anything that branch does not
+    /// take (see [`Vm::enter_method_direct`]; also a constructor) or a
+    /// reference argument: the pending call is then made.
+    fn call_prepared_direct(
+        &mut self,
+        template: &PendingCall,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        let Func::User(uf) = &template.func else {
+            return None;
+        };
+        let n = args.len();
+        if template.is_ctor
+            || uf.flags & flags::DEPRECATED != 0
+            || uf.is_generator()
+            || uf.code.num_statics != 0
+            || uf.code.num_finally != 0
+            || self.has_observers()
+            || n < uf.required as usize
+            || n > uf.params.len()
+            || self.frames.len() > 50_000
+            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return None;
+        }
+        for (p, v) in uf.params.iter().zip(args.iter()) {
+            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+                return None;
+            }
+        }
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let uf = Rc::clone(uf);
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+        let frame = &mut self.frames[idx];
+        frame.this.clone_from(&template.this);
+        frame.scope.clone_from(&template.scope);
+        frame.called.clone_from(&template.called);
+        frame.ret = RetTarget::Discard;
+        frame.caller_strict = template.strict;
+        frame.called_from_internal = true;
+        frame.is_ctor = false;
+        frame.args.clear();
+        frame.args.resize(n, None);
+        for (i, v) in args.iter_mut().enumerate() {
+            if let Some(slot) = frame.cvs.get_mut(i) {
+                slot.set(Some(std::mem::take(v)));
+            }
+        }
+        let mut first_op = 0;
+        for i in 0..n {
+            match uf.code.ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => break,
+            }
+        }
+        frame.ip = first_op;
+        frame.func = Some(Func::User(Rc::clone(&uf)));
+        frame.ufunc = Some(uf);
+        if let Some(c) = &template.closure {
+            self.bind_closure_vars(idx, c);
+            self.frames[idx].closure = Some(c.clone());
+        }
+        let base = self.frames.len() - 1;
+        Some(match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
+    }
+
     /// [`Vm::call_prepared`] of a user function whose whole body runs as
     /// machine code (`exec::tape::jit::native_call`: a pure int function,
     /// counted and compiled there once it is called often enough): a plain
@@ -5368,6 +5601,7 @@ impl Vm {
             || self.observer.enabled
             || uf.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
             || uf.call_shape() == crate::func::CallShape::NOT_PLAIN
+            || uf.flags & flags::VARIADIC != 0
         {
             return None;
         }
@@ -5416,7 +5650,22 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
+        let mut args = args;
         if named.is_empty() {
+            // Positional arguments only, to a resolution that carries
+            // nothing else (`call_user_func("f", $x)`):
+            // [`Vm::call_prepared`]'s direct frame for a plain user callee.
+            if call.args.is_empty()
+                && call.inline_count == 0
+                && call.named.is_empty()
+                && !call.has_named
+                && call.pfa.is_none()
+                && call.magic_name.is_none()
+            {
+                if let Some(r) = self.call_prepared_direct(&call, &mut args) {
+                    return r;
+                }
+            }
             // `Vm::call_resolved`: positional arguments only.
             self.fill_call_args(&mut call, args);
             return self.call_pending(call);
@@ -5476,8 +5725,45 @@ impl Vm {
             return r;
         }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
-        self.fill_call_args(&mut call, args);
+        self.give_args(&mut call, args);
         self.call_pending(call)
+    }
+
+    /// [`Vm::call_method`] with a fixed number of arguments (`__get()`,
+    /// `__set()`, `offsetGet()`, `offsetSet()`, ...): they go straight into
+    /// the call's inline buffer, without the vector a `vec![...]` of them
+    /// allocated and freed on every call; a callee that takes them by
+    /// reference or as variadics gets them in the argument buffer.
+    pub(crate) fn call_method_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        mut args: [Value; N],
+    ) -> VmResult<Value> {
+        if let Some(r) = self.enter_method_direct(o, m, &mut args) {
+            return r;
+        }
+        let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
+        if inline_args_fit(&call, N) {
+            fill_inline_args(&mut call, args);
+        } else {
+            self.give_args(&mut call, Vec::from(args));
+        }
+        self.call_pending(call)
+    }
+
+    /// Puts the arguments of a call made from native code (`offsetGet()`,
+    /// `__get()`, `__toString()`, ...) into `call`: inline, dereferenced
+    /// (as `call_pending_ex` dereferences them), for a user function with
+    /// neither a by-reference nor a variadic parameter, so that
+    /// `push_user_call` takes its plain branch (which only takes inline
+    /// arguments); in the argument buffer otherwise.
+    fn give_args(&mut self, call: &mut PendingCall, args: Vec<Value>) {
+        if inline_args_fit(call, args.len()) {
+            fill_inline_args(call, args);
+            return;
+        }
+        self.fill_call_args(call, args);
     }
 
     /// Calls a method by name (with `__call` fallback), dereferencing the
@@ -5507,6 +5793,33 @@ impl Vm {
         };
         self.fill_call_args(&mut call, args);
         self.call_pending(call)
+    }
+
+    /// [`Vm::call_method_name`] with a fixed number of arguments: a method
+    /// the class has goes through [`Vm::call_method_n`] (no argument
+    /// vector, the direct path for a plain user method); `__call` takes the
+    /// generic call.
+    pub(crate) fn call_method_name_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: [Value; N],
+    ) -> VmResult<Value> {
+        Ok(self.call_method_name_raw_n(o, name, args)?.deref())
+    }
+
+    /// [`Vm::call_method_name_raw`] with a fixed number of arguments (see
+    /// [`Vm::call_method_name_n`]).
+    pub(crate) fn call_method_name_raw_n<const N: usize>(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: [Value; N],
+    ) -> VmResult<Value> {
+        match method_by_name(object::class_of(o), name) {
+            Some(m) => self.call_method_n(o, &m, args),
+            None => self.call_method_name_raw(o, name, Vec::from(args)),
+        }
     }
 
     /// Calls a method by name with possibly undefined arguments (`None` is

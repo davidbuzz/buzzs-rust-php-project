@@ -1961,6 +1961,30 @@ fn new_with_arguments_at_hand_is_one_instruction() {
     assert_eq!(run(NEW_WITH_ARGUMENTS), "int(58)\n");
 }
 
+/// Only an array literal's first element carries the literal's size and
+/// key kind (the element that makes its table: `literal_shape`); the later
+/// ones carry none, so decoding a literal costs its length once, not once
+/// per element (an 18k-entry Composer class map took a second).
+#[test]
+fn only_the_first_element_carries_the_literal_shape() {
+    let arrays = op_arrays(
+        "<?php function f($v) { return ['a' => $v, 'b' => $v, 'c' => $v . 'x', 'd' => $v]; }",
+    );
+    let code = arrays
+        .iter()
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::InitArray { .. })))
+        .expect("a literal");
+    let tape = check(code);
+    let shapes: Vec<u32> = code
+        .ops
+        .iter()
+        .enumerate()
+        .filter(|(i, op)| matches!(op, Op::ArrayAdd { .. }) && tape[*i].op == TOp::ArrayAddT)
+        .map(|(i, _)| tape[i].d)
+        .collect();
+    assert_eq!(shapes, vec![4, 0, 0, 0]);
+}
+
 const LITERAL_ASSIGNMENTS: &str = r#"<?php
 function f() {
   $out = '';

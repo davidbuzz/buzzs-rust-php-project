@@ -6,7 +6,7 @@ use crate::func::Func;
 use crate::object;
 use crate::opcode::{BinKind, CastKind, FetchMode, Op, Operand, PlaceId, UnKind};
 use crate::vm::{CvSlot, FinState, Frame, PendingCall, RetTarget, Throw, Vm, VmResult};
-use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
+use php_runtime::{ops, BinaryOp, ErrorLevel, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 #[cfg(test)]
@@ -451,6 +451,124 @@ impl Vm {
         })
     }
 
+    /// The object `$cv` holds and its method `lc` (`offsetset`,
+    /// `offsetget`, `offsetexists`) when its class is a user class all the
+    /// way up implementing `ArrayAccess` and that method is a user one, and
+    /// the offset operand `dim` is at hand (a literal, a temporary or a
+    /// defined variable): the object dimensions [`Vm::assign_dim_array_access`]
+    /// and [`Vm::fetch_dim_array_access`] dispatch themselves. An internal
+    /// ancestor (`ArrayObject`, `SplObjectStorage`) has dimension handlers
+    /// of its own.
+    fn array_access_target(
+        &self,
+        cv: u32,
+        dim: Operand,
+        lc: &[u8],
+    ) -> Option<(Obj, Rc<crate::func::Method>)> {
+        let f = self.frame();
+        let obj = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(Value::Object(o)) => o.clone(),
+            _ => return None,
+        };
+        let m = {
+            let cls = crate::object::class_of(&obj);
+            let mut c = Some(cls);
+            while let Some(k) = c {
+                if k.flags & crate::class::cflags::INTERNAL != 0 {
+                    return None;
+                }
+                c = k.parent.as_ref();
+            }
+            if !cls.instance_of_name(b"arrayaccess") {
+                return None;
+            }
+            let m = cls.methods.get(lc)?;
+            if !matches!(m.func, Func::User(_)) {
+                return None;
+            }
+            m.clone()
+        };
+        let dim_ok = match dim {
+            Operand::Cv(d) => f
+                .cvs
+                .get(d as usize)
+                .and_then(crate::vm::CvSlot::get)
+                .is_some(),
+            Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Lit(_) => true,
+            Operand::Unused => false,
+        };
+        dim_ok.then_some((obj, m))
+    }
+
+    /// `$cv[$dim] = $val` of an object (`zend_assign_to_object_dim` ->
+    /// `zend_std_write_dimension`): the class's user `offsetSet()`
+    /// ([`Vm::array_access_target`]) called with the offset (dereferenced)
+    /// and the value, as `zend_call_known_instance_method_with_2_params`
+    /// calls it, without the generic place walk. Only a value at hand
+    /// qualifies (a literal, a temporary or a defined variable holding no
+    /// reference to null, false or an array: [`Vm::read_cv_op_data`]);
+    /// `Ok(false)`, nothing changed, leaves every other case to the walk.
+    #[inline(never)]
+    fn assign_dim_array_access(&mut self, cv: u32, dim: Operand, val: Operand) -> VmResult<bool> {
+        let Some((obj, m)) = self.array_access_target(cv, dim, b"offsetset") else {
+            return Ok(false);
+        };
+        let v = match val {
+            Operand::Cv(c) => match self.read_cv_op_data(c) {
+                CvOpData::Value(v) => v,
+                CvOpData::Deferred | CvOpData::Undefined => return Ok(false),
+            },
+            other => {
+                let v = self.read(other)?;
+                self.copy_on_assign(v)
+            }
+        };
+        // `ZVAL_COPY_DEREF(&tmp_offset, offset)`.
+        let key = self.read(dim)?.deref();
+        self.call_method_n(&obj, &m, [key, v])?;
+        Ok(true)
+    }
+
+    /// `$cv[$dim]` read of an object (`zend_std_read_dimension`): the
+    /// class's user `offsetGet()` ([`Vm::array_access_target`]) called with
+    /// the offset (dereferenced), and in `Is` mode (`??`) its
+    /// `offsetExists()` first, a false answer giving `null` without the
+    /// `offsetGet()` call. The result is stored as the fetch stores it.
+    /// `Ok(None)`, nothing changed, leaves every other case to the walk.
+    #[inline(never)]
+    fn fetch_dim_array_access(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    ) -> VmResult<Option<bool>> {
+        if !matches!(mode, FetchMode::Read | FetchMode::Is) {
+            return Ok(None);
+        }
+        let Some((obj, get)) = self.array_access_target(cv, dim, b"offsetget") else {
+            return Ok(None);
+        };
+        let exists = if mode == FetchMode::Is {
+            match self.array_access_target(cv, dim, b"offsetexists") {
+                Some((_, m)) => Some(m),
+                None => return Ok(None),
+            }
+        } else {
+            None
+        };
+        let key = self.read(dim)?.deref();
+        if let Some(m) = exists {
+            let r = self.call_method_n(&obj, &m, [key.clone()])?;
+            if !self.to_bool(&r)? {
+                return Ok(Some(self.store_fetched(dst, to, Value::Null)));
+            }
+        }
+        let v = self.call_method_n(&obj, &get, [key])?.deref();
+        Ok(Some(self.store_fetched(dst, to, v)))
+    }
+
     /// The undefined compiled variable `val` of `place op= val` when the
     /// walk reads it: `place` ends in a dimension
     /// ([`Vm::place_assign_op_undef_cv`]).
@@ -524,6 +642,126 @@ impl Vm {
         None
     }
 
+    /// `$cv += $array` (`ZEND_ASSIGN_OP` with `ZEND_ADD` of two arrays:
+    /// `add_function_array`) without the place walk: the variable's array
+    /// is taken out, separated only if shared, given the operand's keys it
+    /// lacks (`zend_hash_merge` without overwriting, as `array_union`
+    /// does) and put back; `$a += $a` leaves it as it is. The variable is a
+    /// plain array (no reference) of a frame without an attached symbol
+    /// table, the operand a literal, a variable or a temporary (consumed)
+    /// holding an array. The result, when used, is a copy in `dst`.
+    /// `false`, nothing changed, otherwise (the generic op).
+    fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        if f.symtab_attached {
+            return false;
+        }
+        let other = match val {
+            Operand::Lit(l) => f.code.literals.get(l as usize),
+            Operand::Cv(c) if c != cv => f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            _ => None,
+        };
+        let Some(Value::Array(other)) = other else {
+            return false;
+        };
+        let other = other.clone();
+        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+            return false;
+        };
+        let Some(Value::Array(mine)) = slot.as_mut().as_mut() else {
+            return false;
+        };
+        if !php_runtime::ZArray::ptr_eq(mine, &other) {
+            mine.make_mut().merge(&other, false);
+        }
+        let result = dst.map(|_| Value::Array(mine.clone()));
+        drop(other);
+        if let Operand::Tmp(t) = val {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        if let (Some(d), Some(r)) = (dst, result) {
+            self.set_tmp(d, r);
+        }
+        true
+    }
+
+    /// `isset(A::$p[k])` (`isset` true) or the read of `A::$p[k]` without
+    /// the place walk: the static property's cell from the member cache
+    /// (`Vm::static_prop_cached`: the class resolved and the access checked
+    /// as when it was filled), holding an array; `k` a literal, a defined
+    /// variable or a temporary (consumed) that is a string or an int (looked up as an offset: a
+    /// numeric string finds its int key). The read gives the element,
+    /// dereferenced, when it exists. `None`, nothing changed, for anything
+    /// else (another place, a miss of the cache, a reference or non-array
+    /// property, another key type, a missing element to read: the generic
+    /// op, with its diagnostics).
+    pub(crate) fn static_dim_fast(&mut self, place: PlaceId, isset: bool) -> Option<Value> {
+        use crate::opcode::{PlaceBase, Seg};
+        let f = self.frames.last()?;
+        let p = f.code.places.get(place as usize)?;
+        let (
+            PlaceBase::StaticProp {
+                class,
+                name: Operand::Lit(l),
+            },
+            [Seg::Dim(dim)],
+        ) = (&p.base, p.segs.as_slice())
+        else {
+            return None;
+        };
+        if f.symtab_attached {
+            return None;
+        }
+        let dim = *dim;
+        let key = match dim {
+            Operand::Lit(i) => f.code.literals.get(i as usize)?,
+            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            _ => return None,
+        };
+        let (cell, _) = self.static_prop_cached(class, *l)?;
+        let held = cell.try_borrow().ok()?;
+        let Value::Array(arr) = &*held else {
+            return None;
+        };
+        let found = match key {
+            Value::Str(s) => arr.get_sym_zstr(s),
+            Value::Int(i) => arr.get_int(*i),
+            _ => return None,
+        };
+        let v = match found {
+            Some(Value::Reference(r)) => {
+                let inner = r.try_borrow()?;
+                if isset {
+                    Value::Bool(!matches!(*inner, Value::Null))
+                } else {
+                    crate::call::clone_value(&inner)
+                }
+            }
+            Some(v) if isset => Value::Bool(!matches!(v, Value::Null)),
+            Some(v) => crate::call::clone_value(v),
+            None if isset => Value::Bool(false),
+            None => return None,
+        };
+        drop(held);
+        // A temporary offset is consumed, as the generic walk's read of it.
+        if let Operand::Tmp(t) = dim {
+            if let Some(slot) = self
+                .frames
+                .last_mut()
+                .and_then(|f| f.tmps.get_mut(t as usize))
+            {
+                drop(std::mem::take(slot));
+            }
+        }
+        Some(v)
+    }
+
     /// Fast path for reading places directly: direct auto-globals (`$_GET`)
     /// without breaking to the generic place fetcher.
     #[inline(always)]
@@ -536,9 +774,11 @@ impl Vm {
         let kind = {
             let f = self.frames.last()?;
             let p = f.code.places.get(place as usize)?;
-            if !p.segs.is_empty() {
-                FastKind::None
-            } else {
+            // `A::$p[k]` (`ZEND_FETCH_STATIC_PROP_R` + `ZEND_FETCH_DIM_R`).
+            if !p.segs.is_empty() && matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. }) {
+                return self.static_dim_fast(place, false);
+            }
+            if p.segs.is_empty() {
                 match &p.base {
                     crate::opcode::PlaceBase::Global(crate::opcode::Operand::Lit(lit)) => {
                         let val = f.code.literals.get(*lit as usize)?;
@@ -560,6 +800,8 @@ impl Vm {
                     }
                     _ => FastKind::None,
                 }
+            } else {
+                FastKind::None
             }
         };
         let (idx, val) = match kind {
@@ -1918,10 +2160,25 @@ impl Vm {
                     // Also the generic form of the specialised `FetchDimCv` /
                     // `FetchDimsCv` whose fast path did not apply (the
                     // `AssignCv` folded into them then runs as its own op).
-                    Op::Fetch { place, mode, dst }
-                    | Op::FetchDimCv {
-                        place, dst, mode, ..
+                    Op::FetchDimCv {
+                        cv,
+                        dim,
+                        place,
+                        dst,
+                        to,
+                        mode,
+                    } => {
+                        match self.fetch_dim_array_access(*cv, *dim, *dst, *to, *mode)? {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => {
+                                let v = self.place_fetch(*place, *mode)?;
+                                self.set_tmp(*dst, v);
+                            }
+                        }
+                        Flow::Next
                     }
+                    Op::Fetch { place, mode, dst }
                     | Op::FetchDimsCv {
                         place, dst, mode, ..
                     }
@@ -1944,8 +2201,11 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Isset { place, dst } => {
-                        let v = self.place_isset(*place, false)?;
-                        self.set_tmp(*dst, Value::Bool(v));
+                        let v = match self.static_dim_fast(*place, true) {
+                            Some(v) => v,
+                            None => Value::Bool(self.place_isset(*place, false)?),
+                        };
+                        self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::Empty { place, dst } => {
@@ -2042,7 +2302,12 @@ impl Vm {
                     // The call ops an `Op::FramelessICall` replaced, one
                     // after the other (the `Nop`s after it follow).
                     Op::FramelessICall(fc) => {
-                        self.op_init_fcall(fc.name, None, fc.display)?;
+                        // A namespaced call's own `InitFCall` (its name
+                        // first, then the global fallback).
+                        match fc.ns {
+                            Some(ns) => self.op_init_fcall(ns, Some(fc.name), fc.display)?,
+                            None => self.op_init_fcall(fc.name, None, fc.display)?,
+                        }
                         for src in &fc.args[..usize::from(fc.argc).min(3)] {
                             self.op_send(src, None)?;
                         }
@@ -2302,11 +2567,22 @@ impl Vm {
                         dst,
                         const_expr,
                     } => {
-                        let v = self.op_fetch_class_name(class, *const_expr)?;
+                        let v = match self.class_name_fast(class) {
+                            Some(v) => v,
+                            None => self.op_fetch_class_name(class, *const_expr)?,
+                        };
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::InstanceOf { a, class, dst } => {
+                        if let (Operand::Cv(av), crate::opcode::ClassSpec::Dyn(Operand::Cv(bv))) =
+                            (a, class)
+                        {
+                            if let Some(r) = self.instanceof_cv_fast(*av, *bv) {
+                                self.set_tmp(*dst, Value::Bool(r));
+                                continue 'ops;
+                            }
+                        }
                         let v = self.read(*a)?;
                         let r = self.op_instanceof(&v, class)?;
                         self.set_tmp(*dst, Value::Bool(r));
@@ -2707,12 +2983,16 @@ impl Vm {
                         Flow::Next
                     }
                     Op::AssignOpCv {
+                        cv,
                         op,
                         val,
                         dst,
                         place,
-                        ..
                     } => {
+                        if *op == php_runtime::BinaryOp::Add && self.array_union_cv(*cv, *val, *dst)
+                        {
+                            continue 'ops;
+                        }
                         let v = self.read(*val)?;
                         let r = self.place_assign_op(*place, *op, v)?;
                         self.set_dst(*dst, r);
@@ -2736,7 +3016,18 @@ impl Vm {
                         self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
                     }
-                    Op::AssignDimCv { val, place, .. } | Op::AssignDimsCv { val, place, .. } => {
+                    Op::AssignDimCv {
+                        cv,
+                        dim,
+                        val,
+                        place,
+                    } => {
+                        if !self.assign_dim_array_access(*cv, *dim, *val)? {
+                            self.assign_place_unused(*place, *val)?;
+                        }
+                        Flow::Next
+                    }
+                    Op::AssignDimsCv { val, place, .. } => {
                         self.assign_place_unused(*place, *val)?;
                         Flow::Next
                     }
@@ -2753,7 +3044,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::AssertCheck { dst, skip } => {
-                        let a = self.ini.get_long("zend.assertions");
+                        let a = crate::builtins::assert_ini(self).0;
                         if a != 1 {
                             self.set_tmp(*dst, Value::Bool(true));
                             ip = *skip as usize;

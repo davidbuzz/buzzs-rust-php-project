@@ -412,14 +412,26 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .implements(vm, &["Stringable"])
         .method("__clone(): void", PRIV, clone_error)
-        .method("allowsNull(): bool", PUB, rt_allows_null)
+        .method(
+            "allowsNull(): bool",
+            PUB | crate::func::flags::PURE,
+            rt_allows_null,
+        )
         .method("__toString(): string", PUB, rt_to_string)
         .register(vm);
     ClassBuilder::new("ReflectionNamedType")
         .extends(vm, "ReflectionType")
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
-        .method("getName(): string", PUB, rt_get_name)
-        .method("isBuiltin(): bool", PUB, rt_is_builtin)
+        .method(
+            "getName(): string",
+            PUB | crate::func::flags::PURE,
+            rt_get_name,
+        )
+        .method(
+            "isBuiltin(): bool",
+            PUB | crate::func::flags::PURE,
+            rt_is_builtin,
+        )
         .register(vm);
     ClassBuilder::new("ReflectionUnionType")
         .extends(vm, "ReflectionType")

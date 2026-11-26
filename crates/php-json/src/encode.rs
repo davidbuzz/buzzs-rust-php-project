@@ -155,8 +155,21 @@ impl<'h> Encoder<'h> {
         }
     }
 
+    /// The host is asked only when `buf` must grow (its memory check and
+    /// the growth): what fits in the spare capacity is written at once,
+    /// without a dynamic call per piece.
+    #[inline]
     fn reserve_output(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
+        if additional <= buf.capacity() - buf.len() {
+            return Ok(());
+        }
         self.host.json_reserve(buf, additional)
+    }
+
+    /// Appends the decimal digits of `i` (`smart_str_append_long`).
+    fn append_long(&mut self, buf: &mut Vec<u8>, i: i64) -> RtResult<()> {
+        let mut digits = [0u8; php_runtime::string::LONG_MAX_LEN];
+        self.append_output(buf, php_runtime::string::format_long(i, &mut digits))
     }
 
     fn append_output(&mut self, buf: &mut Vec<u8>, bytes: &[u8]) -> RtResult<()> {
@@ -193,7 +206,7 @@ impl<'h> Encoder<'h> {
             Value::Null => self.append_output(buf, b"null")?,
             Value::Bool(true) => self.append_output(buf, b"true")?,
             Value::Bool(false) => self.append_output(buf, b"false")?,
-            Value::Int(i) => self.append_output(buf, i.to_string().as_bytes())?,
+            Value::Int(i) => self.append_long(buf, *i)?,
             Value::Float(d) => {
                 if d.is_finite() {
                     self.append_output(buf, format_double(*d, self.precision, options).as_bytes())?;
@@ -381,7 +394,7 @@ impl<'h> Encoder<'h> {
                         self.pretty_char(buf, options, b'\n')?;
                         self.pretty_indent(buf, options)?;
                         self.push_output(buf, b'"')?;
-                        self.append_output(buf, i.to_string().as_bytes())?;
+                        self.append_long(buf, *i)?;
                         self.push_output(buf, b'"')?;
                     }
                 }
@@ -420,7 +433,7 @@ impl<'h> Encoder<'h> {
         if options & NUMERIC_CHECK != 0 {
             match is_numeric_string(s, false) {
                 Some(Number::Int(i)) => {
-                    self.append_output(buf, i.to_string().as_bytes())?;
+                    self.append_long(buf, i)?;
                     return Ok(true);
                 }
                 Some(Number::Float(d)) if d.is_finite() => {

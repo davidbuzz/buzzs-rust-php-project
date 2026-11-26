@@ -14,3 +14,8 @@ libc = "0.2"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The `php` binary's allocator, so `examples/parse_files` measures what the
+# CLI pays.
+php-memlimit = { path = "../php-memlimit" }

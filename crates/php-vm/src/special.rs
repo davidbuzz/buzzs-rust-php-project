@@ -402,6 +402,19 @@ mod fl {
     pub(super) const INTDIV: u32 = 21;
     /// `pi()`.
     pub(super) const PI: u32 = 22;
+    /// The type tests (`is_int()`, `is_string()`, `is_null()`, ...) of any
+    /// value: answered without a handler ([`crate::call::fast_eval`]).
+    /// php-src calls them with frames; nothing they do can see one.
+    pub(super) const TYPE_TEST: u32 = 23;
+    /// `strlen()` of a string (another type is coerced or rejected).
+    pub(super) const STRLEN: u32 = 24;
+    /// `count()`, `sizeof()` of an array (a `Countable` object calls its
+    /// `count()`).
+    pub(super) const COUNT: u32 = 25;
+    /// `array_key_exists()` (`key_exists()`) of a string or int key in an
+    /// array (a float or `null` key can warn or deprecate, another type
+    /// throws).
+    pub(super) const KEY_EXISTS: u32 = 26;
 }
 
 /// The frameless-call class bits ([`flags::FRAMELESS`]) of the builtin
@@ -434,6 +447,12 @@ pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
         b"round" => fl::ROUND,
         b"intdiv" => fl::INTDIV,
         b"pi" => fl::PI,
+        b"is_int" | b"is_integer" | b"is_long" | b"is_string" | b"is_array" | b"is_bool"
+        | b"is_null" | b"is_float" | b"is_double" | b"is_object" | b"is_resource"
+        | b"is_scalar" => fl::TYPE_TEST,
+        b"strlen" => fl::STRLEN,
+        b"count" | b"sizeof" => fl::COUNT,
+        b"array_key_exists" | b"key_exists" => fl::KEY_EXISTS,
         _ => return 0,
     };
     class << flags::FRAMELESS_SHIFT
@@ -530,14 +549,17 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
         | (fl::ROUND, [Some(Int(_) | Float(_)), Some(Int(_))])
         | (fl::PI, [])
         | (fl::DECHEX, [Some(Int(_))])
-        | (fl::CASE | fl::TRIM | fl::DIRNAME, [Some(Str(_))])
+        | (fl::CASE | fl::TRIM | fl::DIRNAME | fl::STRLEN, [Some(Str(_))])
         | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Some(Str(_)), Some(Str(_))])
         | (fl::STRSTR, [Some(Str(_)), Some(Str(_)), Some(Bool(_))])
         | (
             fl::SUBSTR,
             [Some(Str(_)), Some(Int(_))] | [Some(Str(_)), Some(Int(_)), Some(Int(_) | Null)],
         )
-        | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))]) => true,
+        | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))])
+        | (fl::TYPE_TEST, [Some(_)])
+        | (fl::COUNT, [Some(Array(_))])
+        | (fl::KEY_EXISTS, [Some(Str(_) | Int(_)), Some(Array(_))]) => true,
         (fl::TRIM, [Some(Str(_)), Some(Str(chars))]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Some(Str(_)), Some(Int(levels))]) => *levels >= 1,
         (fl::IS_NUMERIC, [Some(v)]) => is_scalar(v),
@@ -559,6 +581,89 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
         (fl::INTDIV, [Some(Int(dividend)), Some(Int(divisor))]) => {
             *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
         }
+        _ => false,
+    }
+}
+
+/// [`frameless_args`] of two or three arguments read in place: the same
+/// shapes, without the arguments copied into slots first.
+fn frameless_args_ref(class: u32, args: &[&Value]) -> bool {
+    use Value::{Array, Bool, Float, Int, Null, Str};
+    match (class, args) {
+        (fl::FLOAT2, [Int(_) | Float(_), Int(_) | Float(_)])
+        | (fl::ROUND, [Int(_) | Float(_), Int(_)])
+        | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Str(_), Str(_)])
+        | (fl::STRSTR, [Str(_), Str(_), Bool(_)])
+        | (fl::SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
+        | (fl::STRTR, [Str(_), Str(_), Str(_)])
+        | (fl::KEY_EXISTS, [Str(_) | Int(_), Array(_)]) => true,
+        (fl::TRIM, [Str(_), Str(chars)]) => !has_char_range(chars.as_bytes()),
+        (fl::DIRNAME, [Str(_), Int(levels)]) => *levels >= 1,
+        (fl::STRPOS, [Str(haystack), Str(_), Int(offset)]) => {
+            offset_within(haystack.len(), *offset)
+        }
+        (fl::MIN_MAX, [a, b]) => is_scalar(a) && is_scalar(b),
+        (fl::IN_ARRAY, [needle, Array(haystack)]) => {
+            is_scalar(needle) && loose_comparisons_silent(haystack)
+        }
+        (fl::IN_ARRAY, [needle, Array(haystack), Bool(strict)]) => {
+            is_scalar(needle) && (*strict || loose_comparisons_silent(haystack))
+        }
+        (fl::STR_REPLACE, [Str(search), Str(replace), Str(_)]) => replace.len() <= search.len(),
+        (fl::INTDIV, [Int(dividend), Int(divisor)]) => {
+            *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
+        }
+        _ => false,
+    }
+}
+
+/// The frameless classes whose one-argument call [`frameless_inline`]
+/// answers without a handler.
+#[inline]
+fn inline_class(class: u32) -> bool {
+    matches!(
+        class,
+        fl::TYPE_TEST
+            | fl::STRLEN
+            | fl::COUNT
+            | fl::CASE
+            | fl::ABS
+            | fl::ORD
+            | fl::CHR
+            | fl::DECHEX
+            | fl::FLOAT
+            | fl::LOG
+            | fl::ROUND
+    )
+}
+
+/// Whether a call of frameless class `class` with `argc` arguments can
+/// ever run in place (the classes added for namespaced calls take exactly
+/// one): calls that cannot keep their own ops at compile time, which the
+/// tape prepares (`count($a, COUNT_RECURSIVE)`).
+pub(crate) fn frameless_arity(lc: &[u8], argc: usize) -> bool {
+    match frameless_flags(lc) >> flags::FRAMELESS_SHIFT {
+        0 => false,
+        fl::TYPE_TEST | fl::STRLEN | fl::COUNT => argc == 1,
+        fl::KEY_EXISTS => argc == 2,
+        _ => true,
+    }
+}
+
+/// [`frameless_args`] of one argument, read in place (`[Some(v)]`): the
+/// same shapes, without the argument copied into a slot first.
+#[inline]
+fn frameless_arg1(class: u32, v: &Value) -> bool {
+    use Value::{Array, Float, Int, Str};
+    match (class, v) {
+        (fl::ABS | fl::FLOAT | fl::LOG | fl::ROUND, Int(_) | Float(_))
+        | (fl::DECHEX, Int(_))
+        | (fl::CASE | fl::TRIM | fl::DIRNAME | fl::STRLEN, Str(_))
+        | (fl::TYPE_TEST, _)
+        | (fl::COUNT, Array(_)) => true,
+        (fl::IS_NUMERIC, v) => is_scalar(v),
+        (fl::ORD, Str(s)) => s.len() == 1,
+        (fl::CHR, Int(c)) => (0..=255).contains(c),
         _ => false,
     }
 }
@@ -681,7 +786,9 @@ impl Vm {
 /// one-byte string, `chr()` of 0..=255 (the shared one-character string,
 /// `ZSTR_CHAR`, as the handler returns it), and the one-argument math
 /// functions of classes `FLOAT`, `LOG` and `ROUND` (function `name`; see
-/// [`crate::call::float_builtin_eval`]). `arg` already has the shape
+/// [`crate::call::float_builtin_eval`]), `strtolower()` and `strtoupper()`
+/// of a string, and the type tests, `strlen()` and `count()`
+/// ([`crate::call::fast_eval`]). `arg` already has the shape
 /// [`frameless_args`] accepts for `class`; `None` for every other call.
 #[inline]
 fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Value> {
@@ -694,6 +801,9 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
             .map(|c| Value::Str(ZStr::from_byte(c))),
         (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
+        (fl::TYPE_TEST | fl::STRLEN | fl::COUNT, v) => {
+            crate::call::fast_eval(crate::call::fast_eval_id(name), v)
+        }
         (fl::TRIM | fl::CASE, v @ Value::Str(_)) => quick_eval(quick_id(name)?.0, v),
         _ => None,
     }
@@ -1048,6 +1158,7 @@ impl Vm {
     /// and while observers are enabled (they see every internal call).
     /// `dst` is the call's result temporary (`pending_call_dst`).
     #[inline]
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_in_place(&mut self, dst: Option<u32>) -> Option<VmResult<Value>> {
         if self.observer.enabled {
             return None;
@@ -1065,6 +1176,29 @@ impl Vm {
         let sent = call.inline_args.get(..n)?;
         if !call.args.is_empty() || !plain_call(call) || !frameless_args(class, sent) {
             return None;
+        }
+        // `in_array()`, `array_key_exists()` and the `str_contains()`
+        // family: answered by
+        // [`Vm::frameless_two`], the pending call popped as the handler's
+        // call would pop it (its argument buffer back to the pool).
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST | fl::KEY_EXISTS) && (2..=3).contains(&n) {
+            let b = Rc::clone(b);
+            let mut sent: [Option<Value>; 3] = [None, None, None];
+            for (slot, arg) in sent.iter_mut().zip(call.inline_args[..n].iter_mut()) {
+                *slot = arg.take();
+            }
+            let PendingCall { args: spare, .. } = frame.calls.pop()?;
+            let refs = [sent[0].as_ref(), sent[1].as_ref(), sent[2].as_ref()];
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &refs[..n]) else {
+                unreachable!("frameless_two answers the arguments frameless_args accepts")
+            };
+            drop(sent);
+            drop(b);
+            let r = r.and_then(|v| self.check_interrupt().map(|()| v));
+            if spare.capacity() > 0 {
+                self.put_arg_vec(spare);
+            }
+            return Some(r);
         }
         let quick = if n == 1 {
             frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
@@ -1228,6 +1362,7 @@ impl Vm {
     /// tape then makes it with the builtin's frame). `calls_len` is the
     /// number of pending calls the caller had when the call was prepared:
     /// the call is its newest.
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_prepared(
         &mut self,
         b: &Rc<Builtin>,
@@ -1260,6 +1395,30 @@ impl Vm {
         if let Some(v) = quick {
             // The argument: a number or a string (no side effect).
             frame.args.clear();
+            if let Err(e) = self.check_interrupt() {
+                return Some(Err(e));
+            }
+            self.put_call_result(dst, v);
+            return Some(Ok(()));
+        }
+        // `in_array()`, `array_key_exists()` and the `str_contains()`
+        // family, whose accepted
+        // arguments [`Vm::frameless_two`] always answers: taken out of the
+        // frame, as the handler's call would leave it.
+        if matches!(class, fl::IN_ARRAY | fl::STR_TEST | fl::KEY_EXISTS) && (2..=3).contains(&n) {
+            let mut sent: [Option<Value>; 3] = [None, None, None];
+            for (slot, arg) in sent.iter_mut().zip(frame.args.drain(..)) {
+                *slot = arg;
+            }
+            let refs = [sent[0].as_ref(), sent[1].as_ref(), sent[2].as_ref()];
+            let Some(r) = self.frameless_two(b.name.as_bytes(), class, &refs[..n]) else {
+                unreachable!("frameless_two answers the arguments frameless_args accepts")
+            };
+            drop(sent);
+            let v = match r {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }
@@ -1329,7 +1488,7 @@ impl Vm {
     /// `Result::map` (which came out of line: ~33 instructions a call).
     #[inline(always)]
     #[allow(clippy::inline_always)] // once per frameless call site
-    fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
+    pub(crate) fn put_call_result(&mut self, dst: Option<u32>, v: Value) {
         match dst {
             Some(d) => {
                 let Some(slot) = self
@@ -1365,6 +1524,240 @@ impl Vm {
 }
 
 impl Vm {
+    /// The handler of a two- or three-argument frameless call evaluated
+    /// without the handler's argument and result vectors: `in_array()`,
+    /// `array_key_exists()` and the `str_contains()` family, as their handlers
+    /// compute them (`php_stdarr::basic::in_array`, `php_stdstr::search`),
+    /// for arguments [`frameless_args`] accepted for `class`. `None` for
+    /// every other call (the handler then runs).
+    #[inline]
+    fn frameless_two(
+        &mut self,
+        name: &[u8],
+        class: u32,
+        args: &[Option<&Value>],
+    ) -> Option<VmResult<Value>> {
+        use php_stdstr::search;
+        match (class, args) {
+            (fl::STR_TEST, [Some(Value::Str(h)), Some(Value::Str(n))]) => {
+                let (h, n) = (h.as_bytes(), n.as_bytes());
+                let r = match name {
+                    b"str_contains" => search::str_contains(h, n),
+                    b"str_starts_with" => search::str_starts_with(h, n),
+                    b"str_ends_with" => search::str_ends_with(h, n),
+                    _ => return None,
+                };
+                Some(Ok(Value::Bool(r)))
+            }
+            (fl::IN_ARRAY, [Some(needle), Some(Value::Array(haystack))]) => Some(
+                php_stdarr::basic::in_array(self, needle, haystack, false)
+                    .map(Value::Bool)
+                    .map_err(|e| self.rt_throw(e)),
+            ),
+            // `array_key_exists()`'s lookups (a numeric string finds its int
+            // key), by the key's cached hash.
+            (fl::KEY_EXISTS, [Some(Value::Str(k)), Some(Value::Array(a))]) => {
+                Some(Ok(Value::Bool(a.get_sym_zstr(k).is_some())))
+            }
+            (fl::KEY_EXISTS, [Some(Value::Int(k)), Some(Value::Array(a))]) => {
+                Some(Ok(Value::Bool(a.get_int(*k).is_some())))
+            }
+            (
+                fl::IN_ARRAY,
+                [Some(needle), Some(Value::Array(haystack)), Some(Value::Bool(strict))],
+            ) => Some(
+                php_stdarr::basic::in_array(self, needle, haystack, *strict)
+                    .map(Value::Bool)
+                    .map_err(|e| self.rt_throw(e)),
+            ),
+            _ => None,
+        }
+    }
+
+    /// [`Vm::frameless_icall_op`] of a two- or three-argument call of
+    /// builtin `b` (frameless class `class`) answered without a handler,
+    /// the arguments read in place (literals, variables or temporaries that
+    /// are no references, of a shape [`frameless_args_ref`] accepts): the
+    /// `str_*` tests and `array_key_exists()` ([`Vm::frameless_two`]'s
+    /// lookups), `strpos()`, `substr()`, `max()`, `min()` and strict
+    /// `in_array()` (`quick_eval_2`/`_3`), and loose `in_array()` (with
+    /// copies of its two arguments: it compares with the VM at hand). The
+    /// result is computed before anything changes; then the temporaries
+    /// are released, the resume point saved, the interrupt checked and the
+    /// result stored. `None`, nothing changed, otherwise.
+    #[inline]
+    fn frameless_many(
+        &mut self,
+        b: &Builtin,
+        class: u32,
+        fc: &FramelessCall,
+        ip: usize,
+    ) -> Option<VmResult<()>> {
+        enum Got {
+            Done(Value),
+            InArray(Value, Value, bool),
+        }
+        let n = usize::from(fc.argc).min(3);
+        let name = b.name.as_bytes();
+        let got = {
+            let frame = self.frames.last()?;
+            let mut refs: [&Value; 3] = [&Value::Null; 3];
+            for (slot, operand) in refs.iter_mut().zip(&fc.vals[..n]) {
+                let v = match *operand {
+                    Operand::Lit(l) => frame.code.literals.get(l as usize)?,
+                    Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
+                    Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                    _ => return None,
+                };
+                if matches!(v, Value::Reference(_)) {
+                    return None;
+                }
+                *slot = v;
+            }
+            let args = &refs[..n];
+            if !frameless_args_ref(class, args) {
+                return None;
+            }
+            match (class, args) {
+                (fl::STR_TEST, [Value::Str(h), Value::Str(nd)]) => {
+                    let (h, nd) = (h.as_bytes(), nd.as_bytes());
+                    Got::Done(Value::Bool(match name {
+                        b"str_contains" => php_stdstr::search::str_contains(h, nd),
+                        b"str_starts_with" => php_stdstr::search::str_starts_with(h, nd),
+                        b"str_ends_with" => php_stdstr::search::str_ends_with(h, nd),
+                        _ => return None,
+                    }))
+                }
+                (fl::KEY_EXISTS, [Value::Str(k), Value::Array(a)]) => {
+                    Got::Done(Value::Bool(a.get_sym_zstr(k).is_some()))
+                }
+                (fl::KEY_EXISTS, [Value::Int(k), Value::Array(a)]) => {
+                    Got::Done(Value::Bool(a.get_int(*k).is_some()))
+                }
+                (fl::IN_ARRAY, [needle, haystack] | [needle, haystack, Value::Bool(false)]) => {
+                    Got::InArray((*needle).clone(), (*haystack).clone(), false)
+                }
+                _ => {
+                    let (id, _) = quick_id_n(name, n)?;
+                    Got::Done(match args {
+                        [a, b2] => quick_eval_2(id, a, b2)?,
+                        [a, b2, c] => quick_eval_3(id, a, b2, c)?,
+                        _ => return None,
+                    })
+                }
+            }
+        };
+        let v = match got {
+            Got::Done(v) => v,
+            Got::InArray(needle, Value::Array(h), strict) => {
+                match php_stdarr::basic::in_array(self, &needle, &h, strict) {
+                    Ok(found) => Value::Bool(found),
+                    Err(e) => return Some(Err(self.rt_throw(e))),
+                }
+            }
+            Got::InArray(..) => return None,
+        };
+        let frame = self.frames.last_mut()?;
+        // Temporary arguments are consumed (their `Send`s would have moved
+        // them).
+        for operand in &fc.vals[..n] {
+            if let Operand::Tmp(t) = *operand {
+                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                    drop(std::mem::take(slot));
+                }
+            }
+        }
+        frame.ip = ip;
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        if let Some(d) = fc.dst {
+            self.set_tmp(d, v);
+        }
+        Some(Ok(()))
+    }
+
+    /// [`Vm::frameless_icall_op`] of a one-argument call of builtin `b`
+    /// (frameless class `class`, one [`inline_class`] names) answered
+    /// without a handler ([`frameless_inline`]: the type tests, `strlen()`,
+    /// `count()`, `abs()`, `ord()`, `chr()`, the math functions, ...), the
+    /// argument read in place: a literal, a variable or a temporary that is
+    /// no reference, of a shape [`frameless_arg1`] accepts. The result is
+    /// computed before anything changes; then the temporary is released,
+    /// the resume point saved, the interrupt checked and the result
+    /// stored. `None`, nothing changed, otherwise: the general path runs.
+    #[inline]
+    fn frameless_one(
+        &mut self,
+        b: &Builtin,
+        class: u32,
+        fc: &FramelessCall,
+        ip: usize,
+    ) -> Option<VmResult<()>> {
+        let v = {
+            let frame = self.frames.last()?;
+            let arg = match fc.vals[0] {
+                Operand::Lit(l) => frame.code.literals.get(l as usize)?,
+                Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
+                Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                _ => return None,
+            };
+            if matches!(arg, Value::Reference(_)) || !frameless_arg1(class, arg) {
+                return None;
+            }
+            match class {
+                fl::TYPE_TEST | fl::STRLEN | fl::COUNT => {
+                    crate::call::fast_eval(b.fast_eval_id(), arg)?
+                }
+                _ => frameless_inline(b.name.as_bytes(), class, Some(arg))?,
+            }
+        };
+        let frame = self.frames.last_mut()?;
+        // A temporary argument is consumed (its `Send` would have moved it).
+        if let Operand::Tmp(t) = fc.vals[0] {
+            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        frame.ip = ip;
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        if let Some(d) = fc.dst {
+            self.set_tmp(d, v);
+        }
+        Some(Ok(()))
+    }
+
+    /// The first run of a namespaced frameless call site
+    /// ([`FramelessCall::ns`]): as its `InitFCall` would resolve it
+    /// (`Vm::op_init_fcall`). A namespaced function cached for the name or
+    /// declared is the call's (`None`: the call's own ops run and resolve
+    /// it, as when no function of either name exists); otherwise the global function, cached in the site's slot
+    /// `slot` for the rest of the request, as `ZEND_JMP_FRAMELESS` and
+    /// `ZEND_INIT_NS_FCALL_BY_NAME` cache their outcome.
+    #[cold]
+    #[inline(never)]
+    fn frameless_ns_first_run(&mut self, ns: u32, global: u32, slot: usize) -> Option<Func> {
+        let code = Rc::clone(&self.frame().code);
+        let by_literal = code.fcall_cache.borrow().get(ns as usize).is_some_and(|c| {
+            c.as_ref()
+                .and_then(crate::opcode::CachedFunc::get)
+                .is_some()
+        });
+        if by_literal || self.functions.contains_key(&self.lit_str(ns)) {
+            return None;
+        }
+        let func = self.functions.get(&self.lit_str(global)).cloned()?;
+        let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+        let mut cache = code.fcall_cache.borrow_mut();
+        if cache.len() <= slot {
+            crate::rtcache::grow_slots(&mut cache, size, || None);
+        }
+        cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
+        Some(func)
+    }
+
     /// [`Op::FramelessICall`](crate::opcode::Op::FramelessICall) in
     /// place (`ZEND_FRAMELESS_ICALL_n`): when the call site resolved to a
     /// builtin with a frameless class (its run-time cache entry, filled by
@@ -1384,6 +1777,7 @@ impl Vm {
     /// while observers are enabled: the op then runs the call's ops
     /// (`INIT_FCALL`, `SEND`s, `DO_ICALL`) one after the other.
     #[inline]
+    #[allow(clippy::too_many_lines)] // one call's steps in the handler's order
     pub(crate) fn frameless_icall_op(
         &mut self,
         fc: &FramelessCall,
@@ -1398,22 +1792,61 @@ impl Vm {
         }
         // The builtin's handle straight from its cache entry, tested
         // before it is copied (`CachedFunc::get` built a `Func` first).
-        let b = {
-            let cache = frame.code.fcall_cache.borrow();
-            let Some(Some(entry)) = cache.get(fc.name as usize) else {
-                return None;
-            };
-            let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
-                return None;
-            };
-            if b.flags & flags::FRAMELESS == 0
-                || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
-            {
-                return None;
+        let b = match fc.ns {
+            None => {
+                let cache = frame.code.fcall_cache.borrow();
+                let Some(Some(entry)) = cache.get(fc.name as usize) else {
+                    return None;
+                };
+                let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+                    return None;
+                };
+                if b.flags & flags::FRAMELESS == 0
+                    || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+                {
+                    return None;
+                }
+                Rc::clone(b)
             }
-            Rc::clone(b)
+            // `ZEND_JMP_FRAMELESS`: the call site's slot, where its
+            // `InitFCall` keeps the global fallback it resolved to
+            // (`Vm::op_init_fcall`, at the same `ip`), decided on the site's
+            // first run as there.
+            Some(ns) => {
+                let slot = frame.code.literals.len() + ip;
+                let site = frame
+                    .code
+                    .fcall_cache
+                    .borrow()
+                    .get(slot)
+                    .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+                let site = match site {
+                    Some(f) => f,
+                    None => self.frameless_ns_first_run(ns, fc.name, slot)?,
+                };
+                let Func::Builtin(b) = site else {
+                    return None;
+                };
+                if b.flags & flags::FRAMELESS == 0
+                    || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+                {
+                    return None;
+                }
+                b
+            }
         };
         let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if fc.argc == 1 && inline_class(class) {
+            if let Some(r) = self.frameless_one(&b, class, fc, ip) {
+                return Some(r);
+            }
+        }
+        if fc.argc >= 2 {
+            if let Some(r) = self.frameless_many(&b, class, fc, ip) {
+                return Some(r);
+            }
+        }
+        let frame = self.frames.last_mut()?;
         let n = usize::from(fc.argc).min(3);
         // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
         // written once, where the handler reads it: a literal's copy, a
@@ -1465,15 +1898,35 @@ impl Vm {
             }
         }
         frame.ip = ip;
-        let quick = if n == 1 {
-            frameless_inline(b.name.as_bytes(), class, args.values.first())
-        } else {
-            None
+        let quick = match n {
+            1 => frameless_inline(b.name.as_bytes(), class, args.values.first()).map(Ok),
+            // `in_array()`, `array_key_exists()` and the `str_*` tests,
+            // then what the tape's quick rows answer for global names
+            // (`strpos()`, `substr()`, `max()`, `min()`, strict `in_array()`:
+            // `quick_eval_2`/`_3`, `None` for shapes they do not take).
+            2 | 3 => {
+                let sent = [args.values.first(), args.values.get(1), args.values.get(2)];
+                self.frameless_two(b.name.as_bytes(), class, &sent[..n])
+                    .or_else(|| {
+                        let (id, _) = quick_id_n(b.name.as_bytes(), n)?;
+                        let v = match &args.values[..] {
+                            [a, b] => quick_eval_2(id, a, b),
+                            [a, b, c] => quick_eval_3(id, a, b, c),
+                            _ => None,
+                        }?;
+                        Some(Ok(v))
+                    })
+            }
+            _ => None,
         };
         if let Some(v) = quick {
             drop(b);
             args.values.clear();
             self.call_bufs.put_args(args);
+            let v = match v {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
             if let Err(e) = self.check_interrupt() {
                 return Some(Err(e));
             }
@@ -1529,7 +1982,83 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
-    use super::{fl, frameless_args, frameless_call, frameless_flags, frameless_inline};
+    use super::{
+        fl, frameless_arg1, frameless_args, frameless_args_ref, frameless_call, frameless_flags,
+        frameless_inline,
+    };
+
+    /// The two- and three-argument shape test read in place accepts
+    /// exactly what `frameless_args` accepts, for every class.
+    #[test]
+    fn frameless_args_ref_is_frameless_args() {
+        use php_runtime::{ZArray, ZStr};
+        let values = [
+            Value::Null,
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(2),
+            Value::Int(i64::MIN),
+            Value::Float(1.5),
+            Value::Str(ZStr::from("")),
+            Value::Str(ZStr::from("ab")),
+            Value::Str(ZStr::from("a..z")),
+            Value::Array(ZArray::new()),
+            Value::Array(ZArray::from_values([Value::Int(1)])),
+        ];
+        for class in 0..32 {
+            for a in &values {
+                for b in &values {
+                    assert_eq!(
+                        frameless_args_ref(class, &[a, b]),
+                        frameless_args(class, &[Some(a.clone()), Some(b.clone())]),
+                        "class {class}: {a:?}, {b:?}"
+                    );
+                    for c in &values {
+                        assert_eq!(
+                            frameless_args_ref(class, &[a, b, c]),
+                            frameless_args(
+                                class,
+                                &[Some(a.clone()), Some(b.clone()), Some(c.clone())]
+                            ),
+                            "class {class}: {a:?}, {b:?}, {c:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The one-argument shape test read in place accepts exactly what
+    /// `frameless_args` accepts of one argument, for every class.
+    #[test]
+    fn frameless_arg1_is_frameless_args_of_one() {
+        use php_runtime::{ZArray, ZStr};
+        let values = [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(255),
+            Value::Int(256),
+            Value::Int(i64::MIN),
+            Value::Float(1.5),
+            Value::Str(ZStr::from("")),
+            Value::Str(ZStr::from("a")),
+            Value::Str(ZStr::from("ab")),
+            Value::Array(ZArray::new()),
+        ];
+        for class in 0..32 {
+            for v in &values {
+                assert_eq!(
+                    frameless_arg1(class, v),
+                    frameless_args(class, &[Some(v.clone())]),
+                    "class {class}, {v:?}"
+                );
+            }
+        }
+    }
 
     /// `trim()`, `ltrim()`, `rtrim()`, `strtolower()` and `strtoupper()` of
     /// one string, answered without the handler, return what the handler
@@ -2036,7 +2565,9 @@ mod tests {
         assert_eq!(class_of("abs"), fl::ABS);
         assert_eq!(class_of("strtolower"), fl::CASE);
         assert_eq!(class_of("unrelated"), 0);
-        assert_eq!(class_of("strlen"), 0);
+        assert_eq!(class_of("strlen"), fl::STRLEN);
+        assert_eq!(class_of("is_string"), fl::TYPE_TEST);
+        assert_eq!(class_of("count"), fl::COUNT);
         // Distinct, non-zero classes that fit the five flag bits.
         let names: &[&[u8]] = &[
             b"abs",
@@ -2061,6 +2592,10 @@ mod tests {
             b"round",
             b"intdiv",
             b"pi",
+            b"is_string",
+            b"strlen",
+            b"count",
+            b"array_key_exists",
         ];
         let mut seen = Vec::new();
         for name in names {

@@ -193,3 +193,64 @@ fn native_stack_allows_encoding_beyond_default_nesting_limit() {
         .join()
         .expect("JSON stack thread");
 }
+
+/// `json_encode()` asks its host for room only when the output grows,
+/// and writes integers without `to_string()`: every flag that changes
+/// what is written, integer extremes and keys, floats, escapes and
+/// Unicode, invalid UTF-8 with and without partial output or
+/// substitution, the depth error, and outputs long enough to grow the
+/// buffer many times. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn encoded_output_and_growth() {
+    let out = run(
+        r#"$o = new stdClass; $o->{'0'} = 'zero'; $o->b = [PHP_INT_MIN, PHP_INT_MAX, -1, 0, 1.5, -0.0, 1e25];
+$a = [1 => 'a', 5 => "q\"/\\\n\t<>&'é\u{2028}😀", 'k' => [], 'e' => new stdClass, 'n' => null, 't' => true, 'o' => $o, 'nums' => ['12', '-3', '1.5e3', 'x1']];
+foreach ([0, JSON_PRETTY_PRINT, JSON_FORCE_OBJECT, JSON_NUMERIC_CHECK, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES, JSON_UNESCAPED_UNICODE, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_LINE_TERMINATORS] as $f) { echo json_encode($a, $f), "\n"; }
+var_dump(json_encode(["bad\xff", 'ok'], JSON_PARTIAL_OUTPUT_ON_ERROR), json_last_error_msg(), json_encode("bad\xff"), json_encode(["x\xffy"], JSON_INVALID_UTF8_SUBSTITUTE), json_encode([[[1]]], 0, 2), json_last_error_msg());
+echo strlen(json_encode((function () { $r = []; for ($i = 1; $i <= 5000; $i++) { $r[] = $i; } return $r; })())), ' ', strlen(json_encode((function () { $s = ''; for ($i = 0; $i < 3000; $i++) { $s .= 'ab"c'; } return $s; })())), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"1":"a","5":"q\"\/\\\n\t<>&'\u00e9\u2028\ud83d\ude00","k":[],"e":{},"n":null,"t":true,"o":{"0":"zero","b":[-9223372036854775808,9223372036854775807,-1,0,1.5,-0,1.0e+25]},"nums":["12","-3","1.5e3","x1"]}
+{
+    "1": "a",
+    "5": "q\"\/\\\n\t<>&'\u00e9\u2028\ud83d\ude00",
+    "k": [],
+    "e": {},
+    "n": null,
+    "t": true,
+    "o": {
+        "0": "zero",
+        "b": [
+            -9223372036854775808,
+            9223372036854775807,
+            -1,
+            0,
+            1.5,
+            -0,
+            1.0e+25
+        ]
+    },
+    "nums": [
+        "12",
+        "-3",
+        "1.5e3",
+        "x1"
+    ]
+}
+{"1":"a","5":"q\"\/\\\n\t<>&'\u00e9\u2028\ud83d\ude00","k":{},"e":{},"n":null,"t":true,"o":{"0":"zero","b":{"0":-9223372036854775808,"1":9223372036854775807,"2":-1,"3":0,"4":1.5,"5":-0,"6":1.0e+25}},"nums":{"0":"12","1":"-3","2":"1.5e3","3":"x1"}}
+{"1":"a","5":"q\"\/\\\n\t<>&'\u00e9\u2028\ud83d\ude00","k":[],"e":{},"n":null,"t":true,"o":{"0":"zero","b":[-9223372036854775808,9223372036854775807,-1,0,1.5,-0,1.0e+25]},"nums":[12,-3,1500,"x1"]}
+{"1":"a","5":"q\u0022/\\\n\t\u003C\u003E\u0026\u0027\u00e9\u2028\ud83d\ude00","k":[],"e":{},"n":null,"t":true,"o":{"0":"zero","b":[-9223372036854775808,9223372036854775807,-1,0,1.5,-0,1.0e+25]},"nums":["12","-3","1.5e3","x1"]}
+{"1":"a","5":"q\"\/\\\n\t<>&'é\u2028😀","k":[],"e":{},"n":null,"t":true,"o":{"0":"zero","b":[-9223372036854775808,9223372036854775807,-1,0,1.5,-0,1.0e+25]},"nums":["12","-3","1.5e3","x1"]}
+{"1":"a","5":"q\"\/\\\n\t<>&'é 😀","k":[],"e":{},"n":null,"t":true,"o":{"0":"zero","b":[-9223372036854775808,9223372036854775807,-1,0,1.5,-0,1.0e+25]},"nums":["12","-3","1.5e3","x1"]}
+string(11) "[null,"ok"]"
+string(56) "Malformed UTF-8 characters, possibly incorrectly encoded"
+bool(false)
+string(12) "["x\ufffdy"]"
+bool(false)
+string(28) "Maximum stack depth exceeded"
+23894 15002
+"#
+    );
+}

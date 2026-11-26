@@ -126,9 +126,23 @@ fn same_callable(a: &Value, b: &Value) -> bool {
 
 /// Whether the method `lc` of `cls` is implemented in user code.
 fn is_user_method(cls: &Rc<Class>, name: &str) -> bool {
-    let lc = name.to_ascii_lowercase();
-    cls.find_method(lc.as_bytes())
-        .is_some_and(|m| matches!(m.func, Func::User(_)))
+    // An internal class has no user methods (most iterators asked about
+    // on every step are `ArrayIterator`s themselves, not subclasses).
+    if cls.flags & php_vm::class::cflags::INTERNAL != 0 {
+        return false;
+    }
+    let b = name.as_bytes();
+    let mut buf = [0u8; 32];
+    let found = match buf.get_mut(..b.len()) {
+        Some(lc) => {
+            for (d, c) in lc.iter_mut().zip(b) {
+                *d = c.to_ascii_lowercase();
+            }
+            cls.find_method(lc)
+        }
+        None => cls.find_method(name.to_ascii_lowercase().as_bytes()),
+    };
+    found.is_some_and(|m| matches!(m.func, Func::User(_)))
 }
 
 /// `"\0Class\0name"` / `"\0*\0name"` / `"name"`.

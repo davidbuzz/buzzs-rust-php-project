@@ -806,13 +806,13 @@ fn assigned_cv(next: Option<&Op>, dst: u32) -> Option<u32> {
 
 /// php-src's `ZEND_FRAMELESS_ICALL_n` (`zend_compile_frameless_icall`),
 /// after [`specialise`]: the call of a builtin with a frameless class
-/// ([`crate::special::frameless_flags`]) by a name without a namespace
-/// fallback, whose 1..=3 positional arguments are literals or plain
+/// ([`crate::special::frameless_flags`]), by its global name or as the
+/// global fallback of a namespaced one, whose 1..=3 positional arguments are literals or plain
 /// compiled variables sent right after its `InitFCall`, all on one line,
 /// becomes one [`Op::FramelessICall`]; its `Send`s and `DoCall` become
 /// `Nop`s (the op count, jump targets and lines stay). A namespaced
-/// unqualified name keeps its call ops (php-src's `ZEND_JMP_FRAMELESS`
-/// branch). The op runs the call in place when it can, and the ops it
+/// unqualified name is fused too, checked when it runs (php-src's
+/// `ZEND_JMP_FRAMELESS` branch, [`FramelessCall::ns`]). The op runs the call in place when it can, and the ops it
 /// replaced otherwise, at the same line; the opcache dump expands it back
 /// ([`unfuse_frameless_calls`]).
 ///
@@ -956,11 +956,18 @@ fn jump_target_of(op: &Op) -> Option<u32> {
 fn spread_frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
     let Op::InitFCall {
         name,
-        fallback: None,
+        fallback,
         display,
     } = oa.ops[i]
     else {
         return None;
+    };
+    // A namespaced unqualified name (`in_array()` in `namespace App`): the
+    // global fallback is the frameless function, the namespaced name is
+    // checked when the call runs (`FramelessCall::ns`).
+    let (name, ns) = match fallback {
+        Some(fb) => (fb, Some(name)),
+        None => (name, None),
     };
     let Some(Value::Str(lc)) = oa.literals.get(name as usize) else {
         return None;
@@ -1047,9 +1054,13 @@ fn spread_frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, us
             return None;
         }
     }
+    if !crate::special::frameless_arity(lc.as_bytes(), argc) {
+        return None;
+    }
     let back = |from: usize| u32::try_from(end - from).ok();
     let fc = FramelessCall {
         name,
+        ns,
         display,
         args,
         vals,
@@ -1070,11 +1081,18 @@ fn spread_frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, us
 fn frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
     let Op::InitFCall {
         name,
-        fallback: None,
+        fallback,
         display,
     } = oa.ops[i]
     else {
         return None;
+    };
+    // A namespaced unqualified name (`in_array()` in `namespace App`): the
+    // global fallback is the frameless function, the namespaced name is
+    // checked when the call runs (`FramelessCall::ns`).
+    let (name, ns) = match fallback {
+        Some(fb) => (fb, Some(name)),
+        None => (name, None),
     };
     let Some(Value::Str(lc)) = oa.literals.get(name as usize) else {
         return None;
@@ -1104,8 +1122,12 @@ fn frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
                 argc += 1;
             }
             Op::DoCall { dst } if argc > 0 => {
+                if !crate::special::frameless_arity(lc.as_bytes(), argc) {
+                    return None;
+                }
                 let fc = FramelessCall {
                     name,
+                    ns,
                     display,
                     args,
                     vals,
@@ -1137,10 +1159,17 @@ pub(crate) fn unfuse_frameless_calls(ops: &[Op]) -> std::borrow::Cow<'_, [Op]> {
             continue;
         };
         let n = usize::from(fc.argc);
-        let init = Op::InitFCall {
-            name: fc.name,
-            fallback: None,
-            display: fc.display,
+        let init = match fc.ns {
+            Some(ns) => Op::InitFCall {
+                name: ns,
+                fallback: Some(fc.name),
+                display: fc.display,
+            },
+            None => Op::InitFCall {
+                name: fc.name,
+                fallback: None,
+                display: fc.display,
+            },
         };
         if fc.init_back != 0 {
             // The op stands at the `DoCall`; the others where they stood.
@@ -1332,9 +1361,26 @@ mod tests {
         assert!(matches!(back[i + 2], Op::Send { .. }));
         assert!(matches!(back[i + 3], Op::DoCall { .. }));
         assert_eq!(back.len(), ops.len());
+        // A namespaced unqualified name (`ZEND_JMP_FRAMELESS` in php-src):
+        // fused with its namespaced name, which the dump's expansion puts
+        // back as the `InitFCall`'s with the global fallback.
+        let ops = main_ops("<?php namespace N; $s = 'a'; strpos($s, 'a');");
+        let at = ops
+            .iter()
+            .position(|op| matches!(op, Op::FramelessICall(fc) if fc.ns.is_some()))
+            .expect("a namespaced frameless call");
+        let back = super::unfuse_frameless_calls(&ops);
+        assert!(
+            matches!(
+                back[at],
+                Op::InitFCall {
+                    fallback: Some(_),
+                    ..
+                }
+            ),
+            "{back:?}"
+        );
         for src in [
-            // A namespaced unqualified name (`ZEND_JMP_FRAMELESS` in php-src).
-            "<?php namespace N; $s = 'a'; strpos($s, 'a');",
             // A variable sent before another argument is computed, to a
             // function php-src calls with `SEND`s (the variable is copied
             // where it stands).

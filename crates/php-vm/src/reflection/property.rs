@@ -791,7 +791,7 @@ fn magic_get_readable(
 ) -> VmResult<bool> {
     if ce.magic.get.is_some() {
         if let (Some(o), Some(isset)) = (obj, ce.magic.isset.clone()) {
-            let r = vm.call_method(o, &isset, vec![Value::Str(name.clone())])?;
+            let r = vm.call_method_n(o, &isset, [Value::Str(name.clone())])?;
             return vm.to_bool(&r);
         }
         return Ok(true);
@@ -998,7 +998,7 @@ pub(crate) fn register(vm: &mut Vm) {
             rp_construct,
         )
         .method("__toString(): string", PUB, rp_to_string)
-        .method("getName(): string", PUB, rp_get_name)
+        .method("getName(): string", PUB | flags::PURE, rp_get_name)
         .method("getMangledName(): string", PUB, rp_get_mangled_name)
         .method("getValue(?object $object = null): mixed", PUB, rp_get_value)
         .method(
@@ -1033,7 +1033,7 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("isProtected(): bool", PUB, rp_is_protected)
         .method("isPrivateSet(): bool", PUB, rp_is_private_set)
         .method("isProtectedSet(): bool", PUB, rp_is_protected_set)
-        .method("isStatic(): bool", PUB, rp_is_static)
+        .method("isStatic(): bool", PUB | flags::PURE, rp_is_static)
         .method("isReadOnly(): bool", PUB, rp_is_readonly)
         .method("isDefault(): bool", PUB, rp_is_default)
         .method("isDynamic(): bool", PUB, rp_is_dynamic)

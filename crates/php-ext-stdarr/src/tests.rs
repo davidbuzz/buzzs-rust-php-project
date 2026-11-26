@@ -509,6 +509,642 @@ class B extends A {
     );
 }
 
+/// By-reference arguments of builtins called from namespaced code, which
+/// the tape prepares (`ZEND_SEND_REF` of a variable binds a reference in
+/// place): sorts and pointer functions on plain variables, references and
+/// globals; a dimension, `array_multisort()`'s prefer-reference
+/// parameters, a literal (Error) and a call result (notice) take the
+/// generic send. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn by_reference_arguments_of_prepared_calls() {
+    let src = r#"namespace App;
+function f() { return [3, 1, 2]; }
+function run() {
+    for ($i = 0; $i < 2; $i++) {
+        $arr = [3, 1, 2]; sort($arr); var_dump($arr);
+        $r = [5, 4]; $ref = &$r; rsort($ref); var_dump($r);
+        $q = [1, 2, 3]; var_dump(array_shift($q), $q, end($q), key($q), reset($q));
+        $data = ['a' => [2, 1]]; sort($data['a']); var_dump($data);
+        $ar1 = [3, 1]; $ar2 = ['c', 'a']; array_multisort($ar1, $ar2); var_dump($ar1, $ar2);
+        try { sort([3, 2]); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        $t = end(f()); var_dump($t);
+    }
+}
+run();
+$g = [9, 8]; sort($g); var_dump($g, $GLOBALS['g']);
+function gl() { global $g; rsort($g); }
+gl(); var_dump($g);
+"#;
+    let expected = r#"array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(4)
+}
+int(1)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+int(3)
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+}
+Error: sort(): Argument #1 ($array) could not be passed by reference
+
+Notice: Only variables should be passed by reference in test.php on line 12
+int(2)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(4)
+}
+int(1)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+int(3)
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "c"
+}
+Error: sort(): Argument #1 ($array) could not be passed by reference
+
+Notice: Only variables should be passed by reference in test.php on line 12
+int(2)
+array(2) {
+  [0]=>
+  int(8)
+  [1]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  int(8)
+  [1]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(8)
+}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `in_array()` of a string needle (its own loop: equal bytes, unless both
+/// strings may be numeric) and the general comparison: numeric strings,
+/// leading whitespace, mixed element types, a reference, arrays, strict and
+/// loose, with `array_search()` alongside. Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn in_array_string_needles() {
+    let src = r#"$x = "ref";
+$hay = ["abc", "10", "1e1", " 10", "0", "", null, 0, 1.5, true, false, [1], "ABC", &$x, "007", "7", "-0", ".5", "0.5"];
+$needles = ["abc", "ABC", "10", "1e1", "010", " 10", "10 ", "0", "", "ref", "7", "0x1A", "-0", "0.0", ".5", "0.50", "true", "1.5", "nope", 10, 0, null, true, false, 1.5, [1]];
+foreach ($needles as $n) {
+    echo var_export($n, true), ': ', var_export(in_array($n, $hay), true), ' ', var_export(in_array($n, $hay, true), true), ' ', var_export(array_search($n, $hay), true), "\n";
+}
+$strs = ["b", "a", "c"];
+var_dump(in_array("a", $strs), in_array("a", ["x" => "a"]), in_array("9", ["9.0"]), in_array("9.0", ["9"]), in_array("abc", ["abc\0"]));
+"#;
+    let expected = r#"'abc': true true 0
+'ABC': true true 9
+'10': true true 1
+'1e1': true true 1
+'010': true false 1
+' 10': true true 1
+'10 ': true false 1
+'0': true true 4
+'': true true 5
+'ref': true true 9
+'7': true true 9
+'0x1A': true false 9
+'-0': true true 4
+'0.0': true false 4
+'.5': true true 9
+'0.50': true false 9
+'true': true false 9
+'1.5': true false 8
+'nope': true false 9
+10: true false 1
+0: true true 4
+NULL: true true 5
+true: true true 0
+false: true true 4
+1.5: true true 8
+array (
+  0 => 1,
+): true true 9
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `array_merge()` of lists only appends their values in one go: a list
+/// with a hole, a reference shared or not, nested arrays, empty lists, a
+/// string key among the lists, appending after the result and a list with
+/// sparse integer keys. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn array_merge_of_lists() {
+    let src = r#"$a = [1, 2, 3]; unset($a[1]); $b = [4, [5]]; $x = 9; $r = [&$x, 7]; $e = [];
+var_dump(array_merge($a, $b), array_merge($a, $r, $b, $e), array_merge($e, $e), array_merge([1], ['k' => 2], [3]));
+$m = array_merge($r, [8]); $m[0] = 'changed'; var_dump($x, $m);
+$big = array_merge(range(1, 3), range(4, 6), range(7, 9)); $big[] = 10; var_dump(count($big), array_key_last($big));
+$h = [5 => 'a', 9 => 'b']; var_dump(array_merge($h, [1]));
+"#;
+    let expected = r#"array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+  [2]=>
+  int(4)
+  [3]=>
+  array(1) {
+    [0]=>
+    int(5)
+  }
+}
+array(6) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+  [2]=>
+  &int(9)
+  [3]=>
+  int(7)
+  [4]=>
+  int(4)
+  [5]=>
+  array(1) {
+    [0]=>
+    int(5)
+  }
+}
+array(0) {
+}
+array(3) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+string(7) "changed"
+array(3) {
+  [0]=>
+  &string(7) "changed"
+  [1]=>
+  int(7)
+  [2]=>
+  int(8)
+}
+int(10)
+int(9)
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  int(1)
+}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `array_keys()` without a filter, `array_slice()` of a list and
+/// `array_values()` fill their lists in one go: hash and holed lists, a
+/// filter loose and strict, slices with and without kept keys, past the
+/// end, of references, and appending after the result. Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn lists_filled_in_one_go() {
+    let src = r"$h = ['a' => 1, 5 => 2, 'b' => [3], -7 => 4]; $p = [1, 2, 3, 4, 5]; unset($p[2]); $x = 1; $r = [&$x, 2];
+var_dump(array_keys($h), array_keys($p), array_keys($h, 2), array_keys($p, '2', true));
+var_dump(array_slice($p, 1, 2), array_slice($p, -2), array_slice($p, 0, 10, true), array_slice($p, 1, 2, true), array_slice($h, 1, 2), array_slice($h, 1, 2, true), array_slice($p, 9), array_slice($r, 0, 1));
+var_dump(array_values($h), array_values($p), array_values($r)); $v = array_values($r); $v[0] = 9; var_dump($x);
+$k = array_keys($p); $k[] = 'n'; var_dump(array_key_last($k));
+";
+    let expected = r#"array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  int(5)
+  [2]=>
+  string(1) "b"
+  [3]=>
+  int(-7)
+}
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+}
+array(1) {
+  [0]=>
+  int(5)
+}
+array(0) {
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+}
+array(2) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(5)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [3]=>
+  int(4)
+  [4]=>
+  int(5)
+}
+array(2) {
+  [1]=>
+  int(2)
+  [3]=>
+  int(4)
+}
+array(2) {
+  [0]=>
+  int(2)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [5]=>
+  int(2)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  &int(1)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+  [3]=>
+  int(4)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(4)
+  [3]=>
+  int(5)
+}
+array(2) {
+  [0]=>
+  &int(1)
+  [1]=>
+  int(2)
+}
+int(9)
+int(4)
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `array_unique()` keeps a table of the strings themselves; numeric,
+/// empty and case-differing strings, numbers, booleans, null and a
+/// reference among them, and the other flags. `array_column()` makes its
+/// keys once and reads rows in place: arrays, a reference to one, an
+/// object (public, private and magic properties), rows missing the
+/// column, float, bool and numeric-string index keys and an array one.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn unique_strings_and_columns() {
+    let src = r#"$x = 'b'; $u = ['1', '01', '1.0', 1, 1.0, true, null, '', false, 'a', 'A', 'a', &$x, 'b', 0, '0', ' 1', 9 => 'z', 'k' => 'z'];
+var_dump(array_unique($u), array_unique($u, SORT_REGULAR), array_unique([3, '3', 3.0]), array_unique(['x' => [1], 'y' => 'Array'], SORT_STRING));
+class R { public $id = 7; public $n = 'pub'; private $p = 'priv'; function __get($k) { return "magic $k"; } function __isset($k) { return $k === 'm'; } }
+$row = ['id' => 2, 'n' => 'two', 1 => 'one-int', '5' => 'five'];
+$rows = [['id' => 1, 'n' => 'one'], &$row, ['n' => 'no-id'], ['id' => 1.9, 'n' => 'float id'], ['id' => true, 'n' => 'bool id'], ['id' => '07', 'n' => 'str id'], new R, 'scalar', ['id' => 3]];
+var_dump(array_column($rows, 'n'), array_column($rows, 'n', 'id'), array_column($rows, null, 'id'), array_column($rows, 1), array_column($rows, '5'), array_column($rows, 'p'), array_column($rows, 'm'));
+try { array_column([['id' => [1], 'n' => 'x']], 'n', 'id'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    let expected = r#"
+Warning: Array to string conversion in test.php on line 3
+array(10) {
+  [0]=>
+  string(1) "1"
+  [1]=>
+  string(2) "01"
+  [2]=>
+  string(3) "1.0"
+  [6]=>
+  NULL
+  [9]=>
+  string(1) "z"
+  [10]=>
+  string(1) "A"
+  [11]=>
+  string(1) "a"
+  [12]=>
+  &string(1) "b"
+  [14]=>
+  int(0)
+  [16]=>
+  string(2) " 1"
+}
+array(7) {
+  [0]=>
+  string(1) "1"
+  [5]=>
+  bool(true)
+  [6]=>
+  NULL
+  [8]=>
+  bool(false)
+  [10]=>
+  string(1) "A"
+  [11]=>
+  string(1) "a"
+  [12]=>
+  &string(1) "b"
+}
+array(1) {
+  [0]=>
+  int(3)
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+
+Deprecated: Implicit conversion from float 1.9 to int loses precision in test.php on line 7
+
+Deprecated: Implicit conversion from float 1.9 to int loses precision in test.php on line 7
+array(7) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(3) "two"
+  [2]=>
+  string(5) "no-id"
+  [3]=>
+  string(8) "float id"
+  [4]=>
+  string(7) "bool id"
+  [5]=>
+  string(6) "str id"
+  [6]=>
+  string(3) "pub"
+}
+array(5) {
+  [1]=>
+  string(7) "bool id"
+  [2]=>
+  string(3) "two"
+  [3]=>
+  string(5) "no-id"
+  ["07"]=>
+  string(6) "str id"
+  [7]=>
+  string(3) "pub"
+}
+array(6) {
+  [1]=>
+  array(2) {
+    ["id"]=>
+    bool(true)
+    ["n"]=>
+    string(7) "bool id"
+  }
+  [2]=>
+  array(4) {
+    ["id"]=>
+    int(2)
+    ["n"]=>
+    string(3) "two"
+    [1]=>
+    string(7) "one-int"
+    [5]=>
+    string(4) "five"
+  }
+  [3]=>
+  array(1) {
+    ["id"]=>
+    int(3)
+  }
+  ["07"]=>
+  array(2) {
+    ["id"]=>
+    string(2) "07"
+    ["n"]=>
+    string(6) "str id"
+  }
+  [7]=>
+  object(R)#1 (3) {
+    ["id"]=>
+    int(7)
+    ["n"]=>
+    string(3) "pub"
+    ["p":"R":private]=>
+    string(4) "priv"
+  }
+  [8]=>
+  string(6) "scalar"
+}
+array(1) {
+  [0]=>
+  string(7) "one-int"
+}
+array(1) {
+  [0]=>
+  string(4) "five"
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  string(7) "magic m"
+}
+Cannot access offset of type array on array
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// Callbacks called from array functions, the direct frame path among
+/// them: closures with by-value and by-reference `use`, `$this`-bound
+/// and static closures, method and `Class::method` callables, typed
+/// parameters that coerce or reject, static variables, a throwing
+/// comparator, by-reference `array_walk()`, first-class callables,
+/// defaults, a deprecated function, generators and a backtrace from a
+/// callback. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn callbacks_from_array_functions() {
+    let src = r#"$a = [3, 1, 2, 5, 4];
+$calls = 0; $w = 10;
+usort($a, function ($x, $y) use (&$calls, $w) { $calls++; return ($x <=> $y) * ($w > 5 ? 1 : -1); }); echo implode(',', $a), " $calls\n";
+class K { public $dir = -1; function sorter() { return function ($x, $y) { return $this->dir * ($x <=> $y); }; } static function cmp($x, $y) { return $y <=> $x; } function m($x) { return $x * 2; } }
+$b = [1, 3, 2]; usort($b, (new K)->sorter()); echo implode(',', $b), "\n";
+$b = [1, 3, 2]; usort($b, ['K', 'cmp']); echo implode(',', $b), "\n";
+$b = [1, 3, 2]; usort($b, 'K::cmp'); echo implode(',', $b), "\n";
+echo implode(',', array_map([new K, 'm'], [1, 2])), "\n";
+echo implode(',', array_map(fn(int $x) => $x + 1, ['5', 6, 7.0])), "\n";
+try { array_map(fn(int $x) => $x, ['abc']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo implode(',', array_map(function ($x) { static $n = 0; return $x . ++$n; }, ['a', 'b'])), "\n";
+try { usort($a, function ($x, $y) { throw new RuntimeException("in cmp"); }); } catch (RuntimeException $e) { echo $e->getMessage(), ' ', $e->getLine(), "\n"; }
+$arr = [1, 2]; array_walk($arr, function (&$v, $k) { $v *= 10; }); echo implode(',', $arr), "\n";
+echo implode(',', array_map(strtoupper(...), ['x', 'y'])), "\n";
+function dflt($x, $y = 'd') { return "$x$y"; } echo implode(',', array_map('dflt', [1, 2])), "\n";
+#[\Deprecated] function old($x) { return $x; } echo implode(',', array_map('old', [1])), "\n";
+echo implode(',', array_filter([1, 2, 3, 4], function ($v) { return $v % 2 == 0; })), "\n";
+$s = static fn($x, $y) => $x <=> $y; $c = [2, 1]; usort($c, $s); echo implode(',', $c), "\n";
+$ref = 5; $byref = [1]; echo implode(',', array_map(fn($x) => $x + $ref, $byref)), "\n";
+uasort($a, fn($x, $y) => $x - $y); var_export($a); echo "\n";
+uksort($a, function (int $x, int $y): int { return $y - $x; }); var_export($a); echo "\n";
+function gen($x) { yield $x; } foreach (array_map('gen', [1]) as $g) { echo get_class($g), "\n"; }
+echo implode(',', array_map(function ($x) { return debug_backtrace()[1]['function']; }, [1])), "\n";
+"#;
+    let expected = r#"1,2,3,4,5 6
+3,2,1
+3,2,1
+3,2,1
+2,4
+6,7,8
+{closure:test.php:11}(): Argument #1 ($x) must be of type int, string given
+a1,b2
+in cmp 13
+10,20
+X,Y
+1d,2d
+
+Deprecated: Function old() is deprecated in test.php on line 17
+1
+2,4
+1,2
+6
+array (
+  0 => 1,
+  1 => 2,
+  2 => 3,
+  3 => 4,
+  4 => 5,
+)
+array (
+  4 => 5,
+  3 => 4,
+  2 => 3,
+  1 => 2,
+  0 => 1,
+)
+Generator
+array_map
+"#;
+    assert_eq!(run(src), expected);
+}
+
 /// `compact()` and `extract()` in a function read and write its variables
 /// in their slots, a variable `extract()` defines (`$made`) included, and
 /// `get_defined_vars()` sees them all (`/usr/bin/php8.5 -n`:

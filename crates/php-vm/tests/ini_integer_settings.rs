@@ -92,3 +92,49 @@ fn serialize_precision_values_dump_as_in_php_8_5() {
         );
     }
 }
+
+/// `assert()` reads `zend.assertions` and `assert.active` once per change
+/// of the INI values: `ini_set()` of either, back and forth, takes effect
+/// at the next assertion, its check (`ZEND_ASSERT_CHECK`) included.
+/// Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn assert_follows_ini_changes() {
+    let src = r#"<?php
+function t($label) {
+    for ($i = 0; $i < 2; $i++) {
+        try { assert($i > 5, "custom $label $i"); echo "$label: passed $i\n"; } catch (AssertionError $e) { echo "$label: ", $e->getMessage(), "\n"; }
+        try { $r = assert(false); echo "$label r=", var_export($r, true), "\n"; } catch (AssertionError $e) { echo "$label: ", $e->getMessage(), "\n"; }
+    }
+}
+t('on');
+ini_set('zend.assertions', 0); t('off');
+ini_set('zend.assertions', 1); t('on-again');
+@ini_set('assert.active', 0); t('inactive');
+@ini_set('assert.active', 1); t('active');
+var_dump(ini_get('zend.assertions'), ini_get('assert.active'));
+"#;
+    let expected = r#"on: custom on 0
+on: assert(false)
+on: custom on 1
+on: assert(false)
+off: passed 0
+off r=true
+off: passed 1
+off r=true
+on-again: custom on-again 0
+on-again: assert(false)
+on-again: custom on-again 1
+on-again: assert(false)
+inactive: passed 0
+inactive r=true
+inactive: passed 1
+inactive r=true
+active: custom active 0
+active: assert(false)
+active: custom active 1
+active: assert(false)
+string(1) "1"
+string(1) "1"
+"#;
+    assert_eq!(run_with("zend.assertions", "1", src), expected);
+}

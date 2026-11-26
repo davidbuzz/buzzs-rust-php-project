@@ -19,7 +19,7 @@ use php_runtime::{
     ArrayKey, ErrorLevel, Obj, ObjectDump, ObjectKind, PropertyPurpose, PropertySlot,
     RuntimeContext, Value,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -295,12 +295,28 @@ fn resource_internal_refs(r: &php_runtime::Resource) -> usize {
     RESOURCE_REFS.with(std::cell::Cell::get).map_or(0, |f| f(r))
 }
 
-/// The usable stack in bytes (`zend.max_allowed_stack_size -
-/// zend.reserved_stack_size`).
+thread_local! {
+    /// [`stack_budget`]'s answer and the INI generation it is for.
+    static STACK_BUDGET: Cell<(u64, i64)> = const { Cell::new((0, 0)) };
+}
+
+/// The stack `zend.max_allowed_stack_size` less `zend.reserved_stack_size`
+/// leaves, in bytes: read from the INI registry once per change of its values
+/// (`IniRegistry::generation`), as every printed or serialized value
+/// asked for both by name.
 fn stack_budget(vm: &Vm) -> i64 {
-    let max = vm.ini_long("zend.max_allowed_stack_size");
-    let max = if max <= 0 { DEFAULT_STACK } else { max };
-    (max - vm.ini_long("zend.reserved_stack_size").max(0)).max(FRAME_BYTES)
+    let generation = vm.ini.generation();
+    STACK_BUDGET.with(|c| {
+        let (g, budget) = c.get();
+        if g == generation && g != 0 {
+            return budget;
+        }
+        let max = vm.ini_long("zend.max_allowed_stack_size");
+        let max = if max <= 0 { DEFAULT_STACK } else { max };
+        let budget = (max - vm.ini_long("zend.reserved_stack_size").max(0)).max(FRAME_BYTES);
+        c.set((generation, budget));
+        budget
+    })
 }
 
 /// The nesting a native recursion of `frame_bytes` a level reaches before

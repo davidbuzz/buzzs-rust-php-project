@@ -36,6 +36,12 @@ pub mod flags {
     pub const PRIVATE: u32 = 1 << 2;
     /// Visibility mask.
     pub const VISIBILITY: u32 = PUBLIC | PROTECTED | PRIVATE;
+    /// A builtin method whose handler only reads its object and arguments
+    /// (calls no user code, looks at no frame, changes nothing before it
+    /// can fail): the tape calls it without a frame of its own, and on an
+    /// error makes the call again with its frame (`exec/tape/calls.rs`,
+    /// `call_pure`). Kept out of the method's own flags.
+    pub const PURE: u32 = 1 << 3;
     /// `static`
     pub const STATIC: u32 = 1 << 4;
     /// `final`
@@ -521,6 +527,9 @@ pub struct Builtin {
     /// [`PLAIN_NO`], [`PLAIN_NAMED`], [`PLAIN_UNNAMED`] or
     /// [`PLAIN_NAMED_REF`].
     plain: Cell<u8>,
+    /// [`Builtin::fast_eval_id`] plus one, once worked out
+    /// ([`FAST_UNKNOWN`] before).
+    fast: Cell<u8>,
     /// The position of the first by-reference parameter
     /// ([`Builtin::plain_call_upto`]), [`NO_REF_PARAM`] when there is none;
     /// worked out with `plain`.
@@ -550,6 +559,8 @@ pub(crate) enum NamedDefault {
 
 /// [`Builtin::plain_call`] not worked out yet.
 const PLAIN_UNKNOWN: u8 = 0;
+/// [`Builtin::fast_eval_id`] not worked out yet.
+const FAST_UNKNOWN: u8 = 0;
 /// Not a plain call.
 const PLAIN_NO: u8 = 1;
 /// A plain call whose frame carries the function's name.
@@ -646,6 +657,7 @@ impl Builtin {
             sig: OnceCell::from(sig),
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
+            fast: Cell::new(FAST_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -668,6 +680,7 @@ impl Builtin {
             sig: OnceCell::new(),
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
+            fast: Cell::new(FAST_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -684,6 +697,7 @@ impl Builtin {
             sig: OnceCell::new(),
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
+            fast: Cell::new(FAST_UNKNOWN),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -695,8 +709,9 @@ impl Builtin {
     pub(crate) fn renamed(&self, name: ZStr) -> Self {
         Builtin {
             name,
-            // Depends on the name.
+            // Depend on the name.
             plain: Cell::new(PLAIN_UNKNOWN),
+            fast: Cell::new(FAST_UNKNOWN),
             ..self.clone()
         }
     }
@@ -761,6 +776,21 @@ impl Builtin {
             PLAIN_NAMED => PlainCall::Named,
             PLAIN_UNNAMED => PlainCall::Unnamed,
             _ => PlainCall::No,
+        }
+    }
+
+    /// The id under which a one-argument call of this function may be
+    /// evaluated without its handler (`crate::call::fe`; `fe::NONE`
+    /// otherwise). Worked out once, from the name.
+    #[inline]
+    pub(crate) fn fast_eval_id(&self) -> u8 {
+        match self.fast.get() {
+            FAST_UNKNOWN => {
+                let id = crate::call::fast_eval_id(self.name.as_bytes());
+                self.fast.set(id + 1);
+                id
+            }
+            f => f - 1,
         }
     }
 

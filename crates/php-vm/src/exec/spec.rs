@@ -44,7 +44,7 @@ use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 mod casts;
 mod dims;
 mod dyncalls;
-mod props;
+pub(in crate::exec) mod props;
 mod refs;
 mod static_dims;
 mod statics;

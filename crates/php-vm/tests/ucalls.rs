@@ -822,3 +822,654 @@ for ($i = 0; $i < 2; $i++) {
     let line = "1,[2],8,xy,NULL,6 9,[2],8,xy,NULL,6 9,8,8,xy,NULL,6 9,8,7,xy,NULL,6 9,8,7,6,NULL,6 9,8,7,6,5,6 9,8,7,6,5,4\n123120\n";
     assert_eq!(run(source), line.repeat(2));
 }
+
+/// A call of a function with a trailing variadic parameter is prepared on
+/// the tape like any plain call; the arguments past the bound parameters
+/// wait in the frame's argument buffer for its `RECV_VARIADIC` (with its
+/// type check), `func_get_args()` and the backtrace's `args`. Expected
+/// output: php-src's (PHP 8.4 CLI).
+#[test]
+fn variadic_calls_with_extra_arguments_take_the_plain_path() {
+    let src = r#"<?php
+class D {
+    static function t(string $p, string $l, mixed ...$args) { return $p . $l . '|' . implode(',', $args) . '|' . func_num_args() . '|' . implode(',', func_get_args()); }
+    function m($a, int ...$n) { return $a . ':' . implode('+', $n); }
+}
+function f($a, ...$r) { return count($r) . ':' . count(debug_backtrace()[0]['args']); }
+function run() {
+    $d = new D;
+    for ($i = 0; $i < 3; $i++) {
+        echo D::t('p', 'l'), ' ', D::t('p', 'l', $i), ' ', D::t('p', 'l', $i, 'x', 'y', 'z'), "\n";
+        echo $d->m('a'), ' ', $d->m('b', 1, 2, 3), ' ', f(1), ' ', f(1, [2], 'three'), "\n";
+        try { $d->m('c', 1, 'x'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+run();
+"#;
+    let expected = r"pl||2|p,l pl|0|3|p,l,0 pl|0,x,y,z|6|p,l,0,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+pl||2|p,l pl|1|3|p,l,1 pl|1,x,y,z|6|p,l,1,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+pl||2|p,l pl|2|3|p,l,2 pl|2,x,y,z|6|p,l,2,x,y,z
+a: b:1+2+3 0:1 2:3
+D::m(): Argument #3 must be of type int, string given, called in t.php on line 12
+";
+    assert_eq!(run(src), expected);
+}
+
+/// Unqualified calls from namespaced code (`ZEND_INIT_NS_FCALL_BY_NAME`)
+/// are prepared on the tape when the call site's cache resolves them:
+/// builtins evaluated without their handler (`is_string()`, `count()`),
+/// others with their frame (errors, `func_num_args()`), user functions
+/// with extra arguments, and a site that resolved the global function
+/// keeps it after the namespaced one is declared. Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+fn namespaced_unqualified_calls_are_prepared() {
+    let src = r#"<?php
+namespace App;
+function f($x, ...$r) { return $x . '|' . count($r) . '|' . func_num_args(); }
+function run() {
+    $s = "abc"; $a = [3, 1, 2]; $r = &$s; $o = new \stdClass;
+    for ($i = 0; $i < 3; $i++) {
+        echo var_export([is_string($s), is_string($r), is_array($a), count($a), strlen($s), is_object($o), is_numeric("12"), count([]), is_int($i)], true), "\n";
+        echo f($i), ' ', f($i, 1, 2), ' ', implode(",", $a), "\n";
+        try { count($s); } catch (\TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+        try { strlen(); } catch (\ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+        if ($i == 1) { eval('namespace App; function strlen($x) { return "mine"; }'); }
+        echo strlen('xyz'), "\n";
+    }
+}
+run();
+"#;
+    let expected = r"array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+0|0|1 0|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+1|0|1 1|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+array (
+  0 => true,
+  1 => true,
+  2 => true,
+  3 => 3,
+  4 => 3,
+  5 => true,
+  6 => true,
+  7 => 0,
+  8 => true,
+)
+2|0|1 2|2|3 3,1,2
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, string given
+strlen() expects exactly 1 argument, 0 given
+3
+";
+    assert_eq!(run(src), expected);
+}
+
+/// A prepared call binds the literal defaults of the parameters it does
+/// not pass (`RECV_INIT` + its literal), and leaves the others to their
+/// `RECV_INIT`: typed, nullable, array and constant defaults, an int
+/// default of a float parameter (coerced), `new` in a default, a
+/// by-reference and a variadic parameter, `func_get_args()` and traces
+/// (which show only the passed arguments). Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // a script and its expected output
+fn prepared_calls_bind_literal_defaults() {
+    let src = r#"<?php
+namespace App;
+class K { public function __construct(public int $v = 7) {} }
+function d1($a, int $b = 2, ?string $c = null, array $d = [1, 2], float $f = 1, $e = PHP_INT_MAX, $o = new K, string $s = "x") {
+    return [func_num_args(), func_get_args(), $a, $b, $c, $d, $f, $e, $o->v, $s];
+}
+function d2($a, &$r = 5) { $r++; return $r; }
+function d3(int $x = 5, ...$rest) { return [$x, $rest, func_num_args()]; }
+function d4($a = M_PI, $b = __LINE__, $c = \PHP_VERSION_ID > 0) { return [$a, $b, $c]; }
+function tr($a, $b = 'def') { return (new \Exception)->getTrace()[0]['args']; }
+class C { public function m($p, $q = 'q') { return $p . $q; } public static function s($p = 1, $q = [3]) { return [$p, $q]; } }
+function run() {
+    $c = new C;
+    for ($i = 0; $i < 3; $i++) {
+        var_dump(d1($i), d1($i, 5), d1($i, 5, 'c'));
+        $z = 1; var_dump(d2($i), d2($i, $z), $z);
+        var_dump(d3(), d3(9), d3(9, 8, 7));
+        var_dump(d4(), tr(1), tr(1, 2), $c->m('p'), C::s(), C::s(2));
+        try { d1(); } catch (\ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+run();
+"#;
+    let expected = r#"array(10) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+  [2]=>
+  int(0)
+  [3]=>
+  int(2)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(0)
+    [1]=>
+    int(5)
+  }
+  [2]=>
+  int(0)
+  [3]=>
+  int(5)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(3)
+  [1]=>
+  array(3) {
+    [0]=>
+    int(0)
+    [1]=>
+    int(5)
+    [2]=>
+    string(1) "c"
+  }
+  [2]=>
+  int(0)
+  [3]=>
+  int(5)
+  [4]=>
+  string(1) "c"
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+int(6)
+int(2)
+int(2)
+array(3) {
+  [0]=>
+  int(5)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(0)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(1)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(8)
+    [1]=>
+    int(7)
+  }
+  [2]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  float(3.141592653589793)
+  [1]=>
+  int(9)
+  [2]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(2) "pq"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+Too few arguments to function App\d1(), 0 passed in t.php on line 19 and at least 1 expected
+array(10) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  [2]=>
+  int(1)
+  [3]=>
+  int(2)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(5)
+  }
+  [2]=>
+  int(1)
+  [3]=>
+  int(5)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(3)
+  [1]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(5)
+    [2]=>
+    string(1) "c"
+  }
+  [2]=>
+  int(1)
+  [3]=>
+  int(5)
+  [4]=>
+  string(1) "c"
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+int(6)
+int(2)
+int(2)
+array(3) {
+  [0]=>
+  int(5)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(0)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(1)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(8)
+    [1]=>
+    int(7)
+  }
+  [2]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  float(3.141592653589793)
+  [1]=>
+  int(9)
+  [2]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(2) "pq"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+Too few arguments to function App\d1(), 0 passed in t.php on line 19 and at least 1 expected
+array(10) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+  [2]=>
+  int(2)
+  [3]=>
+  int(2)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(5)
+  }
+  [2]=>
+  int(2)
+  [3]=>
+  int(5)
+  [4]=>
+  NULL
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+array(10) {
+  [0]=>
+  int(3)
+  [1]=>
+  array(3) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(5)
+    [2]=>
+    string(1) "c"
+  }
+  [2]=>
+  int(2)
+  [3]=>
+  int(5)
+  [4]=>
+  string(1) "c"
+  [5]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  float(1)
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  int(7)
+  [9]=>
+  string(1) "x"
+}
+int(6)
+int(2)
+int(2)
+array(3) {
+  [0]=>
+  int(5)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(0)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  int(1)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(8)
+    [1]=>
+    int(7)
+  }
+  [2]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  float(3.141592653589793)
+  [1]=>
+  int(9)
+  [2]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(2) "pq"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+Too few arguments to function App\d1(), 0 passed in t.php on line 19 and at least 1 expected
+"#;
+    assert_eq!(run(src), expected);
+}

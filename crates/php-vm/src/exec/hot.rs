@@ -1342,6 +1342,30 @@ pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8)
 #[inline(always)]
 #[allow(clippy::inline_always)]
 pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+    // `ZEND_INSTANCEOF` of anything but an object is false, the class not
+    // looked at (a class never loaded, `$array instanceof Enumerable` in
+    // `Arr::exists()`, left every such test to the generic op).
+    let is_obj = |v: &Value| match v {
+        Value::Object(_) => true,
+        Value::Reference(r) => r
+            .try_borrow()
+            .is_none_or(|v| matches!(*v, Value::Object(_))),
+        _ => false,
+    };
+    let operand_is_obj = match a {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            is_obj(f.cvs.get(cv as usize).and_then(CvSlot::get)?)
+        }
+        Operand::Lit(i) => is_obj(lits.get(i as usize)?),
+        Operand::TmpKeep(t) | Operand::Tmp(t) => is_obj(f.tmps.get(t as usize)?),
+        Operand::Cv(_) | Operand::Unused => return None,
+    };
+    if !operand_is_obj {
+        if let Operand::Tmp(t) = a {
+            discard_unrooted(Some(std::mem::take(f.tmps.get_mut(t as usize)?)));
+        }
+        return Some(false);
+    }
     let cls = f
         .code
         .class_cache

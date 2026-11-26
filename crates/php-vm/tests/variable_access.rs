@@ -387,3 +387,318 @@ var_dump($a);
          Err: Automatic conversion of false to array is deprecated\nstring(0) \"\"\n"
     );
 }
+
+/// `$cv[$k] ?? $d` of an offset the array lacks is `null` on the tape
+/// (`ZEND_FETCH_DIM_IS`): string, int and integer-string offsets,
+/// through a reference, a present `null` element, string offsets and an
+/// undefined variable (the generic fetch). Expected output: php-src's
+/// (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_element_is_null() {
+    let src = r#"<?php
+function t() {
+    $a = ['k' => 1, 5 => 'five', '7' => 'seven', 'n' => null];
+    $r = &$a;
+    $s = 'str';
+    $keys = ['k', 'z', 5, 6, '5', '7', 7, 'n', '', '08'];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($keys as $key) {
+            echo var_export($a[$key] ?? 'D', true), ' ', var_export($r[$key] ?? 'D', true), ' ';
+            $v = $a[$key] ?? 'D';
+            echo var_export($v, true), "\n";
+        }
+        echo var_export($a['z'] ?? null, true), var_export($a[99] ?? 0, true), var_export($s[1] ?? 'D', true), var_export($s[9] ?? 'D', true), var_export($s['x'] ?? 'D', true), "\n";
+        echo var_export($undef['x'] ?? 'U', true), var_export($a[true] ?? 'B', true), "\n";
+        $k = 'dyn' . $i;
+        echo var_export($a[$k] ?? 'T', true), var_export($a['k' . ''] ?? 'T', true), "\n";
+    }
+}
+t();
+"#;
+    let expected = r#"1 1 1
+'D' 'D' 'D'
+'five' 'five' 'five'
+'D' 'D' 'D'
+'five' 'five' 'five'
+'seven' 'seven' 'seven'
+'seven' 'seven' 'seven'
+'D' 'D' 'D'
+'D' 'D' 'D'
+'D' 'D' 'D'
+NULL0't''D''D'
+'U''B'
+'T'1
+1 1 1
+'D' 'D' 'D'
+'five' 'five' 'five'
+'D' 'D' 'D'
+'five' 'five' 'five'
+'seven' 'seven' 'seven'
+'seven' 'seven' 'seven'
+'D' 'D' 'D'
+'D' 'D' 'D'
+'D' 'D' 'D'
+NULL0't''D''D'
+'U''B'
+'T'1
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `$o->p[$k] ?? $d` of an element the array property lacks is `null` on
+/// the property cache's path (`ZEND_FETCH_OBJ_IS` + `ZEND_FETCH_DIM_IS`):
+/// public, private (from its class and a subclass) and referenced
+/// properties, a null or uninitialized typed property, an `ArrayAccess`
+/// object, `__get`. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_property_element_is_null() {
+    let src = r#"<?php
+class AA implements ArrayAccess { function offsetExists($o): bool { echo "exists($o) "; return $o === 'k'; } function offsetGet($o): mixed { echo "get($o) "; return 'aa'; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+class P {
+    public $a = ['k' => 1, 5 => 'five', 'n' => null];
+    private $priv = ['k' => 'p'];
+    public $nul = null;
+    public array $typed;
+    public $aa;
+    public $ref;
+    function __construct() { $this->aa = new AA; $x = ['k' => 'r']; $this->ref = &$x; }
+    function t() {
+        $keys = ['k', 'z', 5, '5', 'n', 6];
+        foreach ($keys as $k) {
+            echo var_export($this->a[$k] ?? 'D', true), var_export($this->priv[$k] ?? 'D', true), var_export($this->ref[$k] ?? 'D', true), ' ';
+        }
+        echo "\n", var_export($this->nul['k'] ?? 'N', true), var_export($this->typed['k'] ?? 'T', true), var_export($this->aa['k'] ?? 'A', true), var_export($this->aa['z'] ?? 'A', true), var_export($this->undef['k'] ?? 'U', true), "\n";
+    }
+}
+class Q extends P { function u() { return [$this->a['z'] ?? 'qd', $this->priv['k'] ?? 'nopriv']; } }
+class M { public $a = []; function __get($n) { echo "__get($n) "; return ['k' => 'm']; } }
+function run() {
+    $p = new P; $q = new Q; $m = new M;
+    for ($i = 0; $i < 2; $i++) {
+        $p->t(); var_export($q->u()); echo "\n";
+        echo var_export($p->a['z'] ?? 'out', true), var_export($m->zz['k'] ?? 'M', true), var_export($m->a['k'] ?? 'MA', true), "\n";
+        $p->a['z'] = $i; echo var_export($p->a['z'] ?? 'set', true), "\n"; unset($p->a['z']);
+    }
+}
+run();
+"#;
+    let expected = r#"1'p''r' 'D''D''D' 'five''D''D' 'five''D''D' 'D''D''D' 'D''D''D' 
+'N''T'exists(k) get(k) 'aa'exists(z) 'A''U'
+array (
+  0 => 'qd',
+  1 => 'nopriv',
+)
+'out'__get(zz) 'm''MA'
+0
+1'p''r' 'D''D''D' 'five''D''D' 'five''D''D' 'D''D''D' 'D''D''D' 
+'N''T'exists(k) get(k) 'aa'exists(z) 'A''U'
+array (
+  0 => 'qd',
+  1 => 'nopriv',
+)
+'out'__get(zz) 'm''MA'
+1
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `$cv[$a][$b] ?? $d` of an element missing on the way is `null` on the
+/// tape (a chain of `ZEND_FETCH_DIM_IS`): missing outer and inner keys,
+/// a `null` element or variable on the way, int and integer-string keys,
+/// references, a string on the way (the generic fetch). Expected output:
+/// php-src's (PHP 8.4 CLI).
+#[test]
+fn coalesce_of_a_missing_nested_element_is_null() {
+    let src = r#"<?php
+function t() {
+    $o = new stdClass; $o->p = 1;
+    $inner = ['y' => 'iy'];
+    $a = ['x' => ['k' => 1, 'n' => null, 's' => 'str', 'o' => $o, 3 => [4 => 'deep']], 'nul' => null, 'r' => &$inner, 'e' => []];
+    $r = &$a;
+    $paths = [['x','k'], ['x','z'], ['y','z'], ['nul','z'], ['x','n'], ['x', 3], ['x', '3'], ['e', 0]];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($paths as [$p, $q]) {
+            echo var_export($a[$p][$q] ?? 'D', true), var_export($r[$p][$q] ?? 'D', true), ' ';
+        }
+        echo "\n", var_export($a['x'][3][4] ?? 'D', true), var_export($a['x'][3][5] ?? 'D', true), var_export($a['x']['n']['q'] ?? 'D', true), var_export($a['x']['s'][0] ?? 'D', true), var_export($a['x']['s']['q'] ?? 'D', true), var_export($a['r']['y'] ?? 'D', true), var_export($a['r']['z'] ?? 'D', true), var_export($undef['a']['b'] ?? 'U', true), "\n";
+    }
+}
+t();
+"#;
+    let expected = r#"11 'D''D' 'D''D' 'D''D' 'D''D' array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) 'D''D' 
+'deep''D''D''s''D''iy''D''U'
+11 'D''D' 'D''D' 'D''D' 'D''D' array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) array (
+  4 => 'deep',
+)array (
+  4 => 'deep',
+) 'D''D' 
+'deep''D''D''s''D''iy''D''U'
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `$cv[$k] = $v` and `$cv[$k]` (also under `??`) of an object of a user
+/// `ArrayAccess` class call its `offsetSet()` / `offsetGet()` (and
+/// `offsetExists()`) directly (`zend_std_write_dimension`,
+/// `zend_std_read_dimension`): offsets passed as written (int, string,
+/// integer string, bool, a variable), an inherited implementation, a
+/// by-reference `offsetGet()`, an exception, an undefined value, the
+/// assignment's result; appends, `isset`/`empty`/`unset` and nested writes
+/// keep the general path. Expected output: php-src's (PHP 8.4 CLI).
+#[test]
+#[allow(clippy::too_many_lines)] // a script and its expected output
+fn array_access_dimensions_call_the_methods_directly() {
+    let src = r#"<?php
+class A implements ArrayAccess {
+    public $d = [];
+    function offsetExists($o): bool { echo "exists(", var_export($o, true), ") "; return isset($this->d[$o]); }
+    function offsetGet($o): mixed { echo "get(", var_export($o, true), ") "; if ($o === 'throw') throw new Exception("boom"); return $this->d[$o] ?? null; }
+    function offsetSet($o, $v): void { echo "set(", var_export($o, true), ",", var_export($v, true), ") "; if ($o === null) { $this->d[] = $v; } else { $this->d[$o] = $v; } }
+    function offsetUnset($o): void { echo "unset(", var_export($o, true), ") "; unset($this->d[$o]); }
+}
+class B extends A {}
+class R implements ArrayAccess { private $d = ['x' => [1]]; function offsetExists($o): bool { return true; } function &offsetGet($o): mixed { return $this->d[$o]; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+function run() {
+    $a = new A; $b = new B; $r = new R; $s = 'k'; $f = 1.5; $o = new stdClass; $ref = &$a;
+    for ($i = 0; $i < 2; $i++) {
+        $a['k'] = $i; $a[1] = 'one'; $a['1'] = 'str1'; $a[$s] = 'via'; $a[true] = 't'; $a[$i + 10] = [$i]; $a[] = 'app'; $ref['r'] = 'byref';
+        echo "\n";
+        var_dump($a['k'], $a[1], $a['nope'] ?? 'dflt', $a['k'] ?? 'dflt', $b['z'] ?? 'bz');
+        $b['x'] = $a; echo "\n";
+        try { $a['throw']; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+        $x = $r['x']; var_dump($x);
+        $v = 5; $w = ($a['w'] = $v); var_dump($w);
+        $a['u'] = $undefined;
+        echo "\n";
+        var_dump(isset($a['k']), empty($a['k']));
+        unset($a['k']);
+        echo "\n";
+        $a['n']['m'] = 1;
+        echo "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"set('k',0) set(1,'one') set('1','str1') set('k','via') set(true,'t') set(10,array (
+  0 => 0,
+)) set(NULL,'app') set('r','byref') 
+get('k') get(1) exists('nope') exists('k') get('k') exists('z') string(3) "via"
+string(1) "t"
+string(4) "dflt"
+string(3) "via"
+string(2) "bz"
+set('x',\A::__set_state(array(
+   'd' => 
+  array (
+    'k' => 'via',
+    1 => 't',
+    10 => 
+    array (
+      0 => 0,
+    ),
+    11 => 'app',
+    'r' => 'byref',
+  ),
+))) 
+get('throw') caught boom
+array(1) {
+  [0]=>
+  int(1)
+}
+set('w',5) int(5)
+
+Warning: Undefined variable $undefined in t.php on line 21
+set('u',NULL) 
+exists('k') exists('k') get('k') bool(true)
+bool(false)
+unset('k') 
+get('n') 
+Notice: Indirect modification of overloaded element of A has no effect in t.php on line 26
+
+set('k',1) set(1,'one') set('1','str1') set('k','via') set(true,'t') set(11,array (
+  0 => 1,
+)) set(NULL,'app') set('r','byref') 
+get('k') get(1) exists('nope') exists('k') get('k') exists('z') string(3) "via"
+string(1) "t"
+string(4) "dflt"
+string(3) "via"
+string(2) "bz"
+set('x',\A::__set_state(array(
+   'd' => 
+  array (
+    1 => 't',
+    10 => 
+    array (
+      0 => 0,
+    ),
+    11 => 
+    array (
+      0 => 1,
+    ),
+    'r' => 'byref',
+    'w' => 5,
+    'u' => NULL,
+    'k' => 'via',
+    12 => 'app',
+  ),
+))) 
+get('throw') caught boom
+array(1) {
+  [0]=>
+  int(1)
+}
+set('w',5) int(5)
+
+Warning: Undefined variable $undefined in t.php on line 21
+set('u',NULL) 
+exists('k') exists('k') get('k') bool(true)
+bool(false)
+unset('k') 
+get('n') 
+Notice: Indirect modification of overloaded element of A has no effect in t.php on line 26
+
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `instanceof` of anything but an object is false without the class
+/// being looked at (`ZEND_INSTANCEOF`): arrays, scalars, null, a
+/// reference and a call result against an interface, a class never
+/// declared and an interface never used. Expected output: php-src's (PHP
+/// 8.4 CLI).
+#[test]
+fn instanceof_of_a_non_object_is_false() {
+    let src = r#"<?php
+namespace App;
+interface Nope {}
+class A implements \ArrayAccess { function offsetExists($o): bool { return false; } function offsetGet($o): mixed { return null; } function offsetSet($o, $v): void {} function offsetUnset($o): void {} }
+function f() { return [1]; }
+function run() {
+    $vals = [[1], 'str', 1, null, 1.5, true, new A, new \stdClass];
+    $ref = &$vals[0];
+    for ($i = 0; $i < 2; $i++) {
+        foreach ($vals as $v) {
+            echo var_export($v instanceof \ArrayAccess, true), var_export($v instanceof Missing, true), var_export($v instanceof Nope, true), ' ';
+        }
+        echo var_export($ref instanceof Missing, true), var_export(f() instanceof Missing2, true), var_export(new A instanceof \ArrayAccess, true), "\n";
+    }
+}
+run();
+"#;
+    let expected = r#"falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse truefalsefalse falsefalsefalse falsefalsetrue
+falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse falsefalsefalse truefalsefalse falsefalsefalse falsefalsetrue
+"#;
+    assert_eq!(run(src), expected);
+}

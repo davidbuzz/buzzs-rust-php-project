@@ -125,14 +125,11 @@ pub fn array_is_list(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let key = a.at(0);
     let h = a.array(1);
+    // (A call by its global name with two positional arguments is compiled
+    // to the ZEND_ARRAY_KEY_EXISTS opcode, whose error for an illegal key
+    // differs; every call that reaches the function, namespaced, named,
+    // spread or dynamic, reports the function's.)
     let f = a.func_name_str();
-    // A call by its literal name compiles to ZEND_ARRAY_KEY_EXISTS, whose
-    // error for an illegal key ("Cannot access offset of type array on
-    // array") the VM raises without calling this handler. The handler is
-    // what every other call reaches (`$f()`, `call_user_func()`, an
-    // unqualified call in a namespace, unpacked or named arguments), and
-    // its `zend_argument_type_error` names the parameter (ref:
-    // ext/standard/array.c `PHP_FUNCTION(array_key_exists)`).
     let r = sa::basic::array_key_exists(vm, f, &key, &h);
     Ok(Value::Bool(rt(vm, r)?))
 }

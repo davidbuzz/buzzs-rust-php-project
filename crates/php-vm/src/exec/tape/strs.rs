@@ -50,6 +50,7 @@ pub(super) const Q_CLASS_SHIFT: u32 = 32;
 pub(super) const Q_CACHE_SHIFT: u32 = 37;
 
 /// The specialised instruction of the op at `i` when this family has one.
+#[allow(clippy::too_many_lines)] // one arm per op of the family
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     let dst = |d: Option<u32>| match d {
@@ -103,7 +104,9 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         // behind an op that stands at its call's `InitFCall`, to the next
         // op for one that stands at the `DoCall` (arguments computed
         // first).
-        Op::FramelessICall(ref fc) => {
+        // (Not a namespaced call: its name is checked when it runs, in
+        // `Vm::frameless_icall_op`.)
+        Op::FramelessICall(ref fc) if fc.ns.is_none() => {
             let argc = usize::from(fc.argc);
             let Some(Value::Str(lc)) = code.literals.get(fc.name as usize) else {
                 return None;

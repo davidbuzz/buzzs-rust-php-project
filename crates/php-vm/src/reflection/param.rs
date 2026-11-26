@@ -638,8 +638,16 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .method("__toString(): string", PUB, rp_to_string)
         .method("getDocComment(): string|false", PUB, rp_get_doc_comment)
-        .method("getName(): string", PUB, rp_get_name)
-        .method("isPassedByReference(): bool", PUB, rp_by_ref)
+        .method(
+            "getName(): string",
+            PUB | crate::func::flags::PURE,
+            rp_get_name,
+        )
+        .method(
+            "isPassedByReference(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_by_ref,
+        )
         .method("canBePassedByValue(): bool", PUB, rp_by_val)
         .method(
             "getDeclaringFunction(): ReflectionFunctionAbstract",
@@ -652,14 +660,38 @@ pub(crate) fn register(vm: &mut Vm) {
             rp_get_declaring_class,
         )
         .method("getClass(): ?ReflectionClass", PUB, rp_get_class)
-        .method("hasType(): bool", PUB, rp_has_type)
-        .method("getType(): ?ReflectionType", PUB, rp_get_type)
+        .method(
+            "hasType(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_has_type,
+        )
+        .method(
+            "getType(): ?ReflectionType",
+            PUB | crate::func::flags::PURE,
+            rp_get_type,
+        )
         .method("isArray(): bool", PUB, rp_is_array_dep)
         .method("isCallable(): bool", PUB, rp_is_callable_dep)
-        .method("allowsNull(): bool", PUB, rp_allows_null)
-        .method("getPosition(): int", PUB, rp_get_position)
-        .method("isOptional(): bool", PUB, rp_is_optional)
-        .method("isDefaultValueAvailable(): bool", PUB, rp_has_default)
+        .method(
+            "allowsNull(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_allows_null,
+        )
+        .method(
+            "getPosition(): int",
+            PUB | crate::func::flags::PURE,
+            rp_get_position,
+        )
+        .method(
+            "isOptional(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_is_optional,
+        )
+        .method(
+            "isDefaultValueAvailable(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_has_default,
+        )
         .method("getDefaultValue(): mixed", PUB, rp_get_default)
         .method(
             "isDefaultValueConstant(): bool",
@@ -671,7 +703,11 @@ pub(crate) fn register(vm: &mut Vm) {
             PUB,
             rp_get_default_constant_name,
         )
-        .method("isVariadic(): bool", PUB, rp_is_variadic)
+        .method(
+            "isVariadic(): bool",
+            PUB | crate::func::flags::PURE,
+            rp_is_variadic,
+        )
         .method("isPromoted(): bool", PUB, rp_is_promoted)
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
