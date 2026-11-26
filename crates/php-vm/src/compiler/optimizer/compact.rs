@@ -8,7 +8,8 @@
 //! - Pass 13: Remove unused variables (ZEND_OPTIMIZER_PASS_13)
 
 use super::{
-    def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, OptContext,
+    def_tmp, for_each_label_mut, for_each_operand, for_each_operand_mut, for_each_place_operand,
+    for_each_place_operand_mut, OptContext,
 };
 use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, Place, PlaceBase, Seg};
 use php_runtime::Value;
@@ -112,16 +113,15 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
 
     // Mark all read temporaries
     for op in &op_array.ops {
-        let mut op_clone = op.clone();
-        for_each_operand_mut(&mut op_clone, |operand| match operand {
+        for_each_operand(op, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => mark_tmp(*t),
             _ => {}
         });
         if let Some(t) = def_tmp(op) {
             mark_tmp(t);
         }
-        if let Some(t) = super::array_build_tmp_mut(&mut op_clone) {
-            mark_tmp(*t);
+        if let Some(t) = super::array_build_tmp(op) {
+            mark_tmp(t);
         }
         // `FE_FETCH` writes its value (and key) temporaries through raw
         // fields that neither `def_tmp` nor `for_each_operand_mut` visit.
@@ -134,8 +134,7 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
     }
 
     for place in &op_array.places {
-        let mut place_clone = place.clone();
-        for_each_place_operand_mut(&mut place_clone, |operand| match operand {
+        for_each_place_operand(place, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => mark_tmp(*t),
             _ => {}
         });
@@ -570,79 +569,116 @@ pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32
 // Pass 12 & Pass 13: Variable compaction and dead variable removal
 // -----------------------------------------------------------------------------
 
-/// Iterates mutably over all CV indices referenced by instruction `op`.
-pub(crate) fn for_each_cv_mut(op: &mut Op, mut f: impl FnMut(&mut u32)) {
-    // 1. All Operand::Cv in instruction operands
-    for_each_operand_mut(op, |operand| {
-        if let Operand::Cv(cv) = operand {
-            f(cv);
-        }
-    });
+/// Generates a CV-index visitor over `&Op` or `&mut Op` from one body.
+macro_rules! cv_visitor {
+    ($(#[$doc:meta])* $name:ident, $operands:ident, $($m:tt)*) => {
+        $(#[$doc])*
+        pub(crate) fn $name(op: & $($m)* Op, mut f: impl FnMut(& $($m)* u32)) {
+            // 1. All Operand::Cv in instruction operands
+            $operands(op, |operand| {
+                if let Operand::Cv(cv) = operand {
+                    f(cv);
+                }
+            });
 
-    // 2. Direct CV fields in instructions
-    match op {
-        Op::AssignCv { cv, .. }
-        | Op::Global { cv, .. }
-        | Op::BindStatic { cv, .. }
-        | Op::InitStatic { cv, .. }
-        | Op::Recv { cv, .. }
-        | Op::RecvInit { cv, .. }
-        | Op::RecvDefault { cv, .. }
-        | Op::RecvVariadic { cv, .. }
-        | Op::BinAssignCv { cv, .. }
-        | Op::BinAssignCvCmpJmp { cv, .. }
-        | Op::BinAssignCvJmp { cv, .. }
-        | Op::IncDecCv { cv, .. }
-        | Op::AssignOpCv { cv, .. }
-        | Op::AssignOpCvCmpJmp { cv, .. }
-        | Op::AssignOpCvJmp { cv, .. }
-        | Op::AssignOpDimCv { cv, .. }
-        | Op::IncDecDimCv { cv, .. }
-        | Op::IssetDimCv { cv, .. }
-        | Op::AssignDimCv { cv, .. }
-        | Op::ConcatCv { cv, .. }
-        | Op::AssignDimsCv { cv, .. }
-        | Op::AssignOpDimsCv { cv, .. }
-        | Op::IncDecCvCmpJmp { cv, .. } => f(cv),
+            // 2. Direct CV fields in instructions
+            match op {
+                Op::AssignCv { cv, .. }
+                | Op::Global { cv, .. }
+                | Op::BindStatic { cv, .. }
+                | Op::InitStatic { cv, .. }
+                | Op::Recv { cv, .. }
+                | Op::RecvInit { cv, .. }
+                | Op::RecvDefault { cv, .. }
+                | Op::RecvVariadic { cv, .. }
+                | Op::BinAssignCv { cv, .. }
+                | Op::BinAssignCvCmpJmp { cv, .. }
+                | Op::BinAssignCvJmp { cv, .. }
+                | Op::IncDecCv { cv, .. }
+                | Op::AssignOpCv { cv, .. }
+                | Op::AssignOpCvCmpJmp { cv, .. }
+                | Op::AssignOpCvJmp { cv, .. }
+                | Op::AssignOpDimCv { cv, .. }
+                | Op::IncDecDimCv { cv, .. }
+                | Op::IssetDimCv { cv, .. }
+                | Op::AssignDimCv { cv, .. }
+                | Op::ConcatCv { cv, .. }
+                | Op::AssignDimsCv { cv, .. }
+                | Op::AssignOpDimsCv { cv, .. }
+                | Op::IncDecCvCmpJmp { cv, .. } => f(cv),
 
-        Op::Catch { cv, .. } => {
-            if let Some(c) = cv {
-                f(c);
+                Op::Catch { cv, .. } => {
+                    if let Some(c) = cv {
+                        f(c);
+                    }
+                }
+                Op::FetchDimCv { cv, to, .. } | Op::FetchDimsCv { cv, to, .. } => {
+                    f(cv);
+                    if let Some(t) = to {
+                        f(t);
+                    }
+                }
+                Op::FetchStaticProp { to, .. }
+                | Op::FetchGlobal { to, .. }
+                | Op::FetchObjProp { to, .. }
+                | Op::FetchObjPropDim { to, .. }
+                | Op::Abs { to, .. } => {
+                    if let Some(t) = to {
+                        f(t);
+                    }
+                }
+                Op::FetchConstTo { to, .. } | Op::FetchClassConstTo { to, .. } => {
+                    f(to);
+                }
+                _ => {}
             }
         }
-        Op::FetchDimCv { cv, to, .. } | Op::FetchDimsCv { cv, to, .. } => {
-            f(cv);
-            if let Some(t) = to {
-                f(t);
-            }
-        }
-        Op::FetchStaticProp { to, .. }
-        | Op::FetchGlobal { to, .. }
-        | Op::FetchObjProp { to, .. }
-        | Op::FetchObjPropDim { to, .. }
-        | Op::Abs { to, .. } => {
-            if let Some(t) = to {
-                f(t);
-            }
-        }
-        Op::FetchConstTo { to, .. } | Op::FetchClassConstTo { to, .. } => {
-            f(to);
-        }
-        _ => {}
-    }
+    };
 }
 
-/// Iterates mutably over all CV indices referenced by place `place`.
-pub(crate) fn for_each_place_cv_mut(place: &mut Place, mut f: impl FnMut(&mut u32)) {
-    if let PlaceBase::Cv(cv) = &mut place.base {
-        f(cv);
-    }
-    for_each_place_operand_mut(place, |operand| {
-        if let Operand::Cv(cv) = operand {
-            f(cv);
+cv_visitor!(
+    /// Iterates mutably over all CV indices referenced by instruction `op`.
+    for_each_cv_mut,
+    for_each_operand_mut,
+    mut
+);
+cv_visitor!(
+    /// Iterates over all CV indices referenced by instruction `op` (what
+    /// [`for_each_cv_mut`] visits), without cloning it.
+    for_each_cv,
+    for_each_operand,
+);
+
+/// Generates a place CV-index visitor over `&Place` or `&mut Place` from
+/// one body.
+macro_rules! place_cv_visitor {
+    ($(#[$doc:meta])* $name:ident, $operands:ident, $($m:tt)*) => {
+        $(#[$doc])*
+        pub(crate) fn $name(place: & $($m)* Place, mut f: impl FnMut(& $($m)* u32)) {
+            if let PlaceBase::Cv(cv) = & $($m)* place.base {
+                f(cv);
+            }
+            $operands(place, |operand| {
+                if let Operand::Cv(cv) = operand {
+                    f(cv);
+                }
+            });
         }
-    });
+    };
 }
+
+place_cv_visitor!(
+    /// Iterates mutably over all CV indices referenced by place `place`.
+    for_each_place_cv_mut,
+    for_each_place_operand_mut,
+    mut
+);
+place_cv_visitor!(
+    /// Iterates over all CV indices referenced by place `place` (what
+    /// [`for_each_place_cv_mut`] visits), without cloning it.
+    for_each_place_cv,
+    for_each_place_operand,
+);
 
 /// Whether the op array contains dynamic variable access constructs like
 /// `compact`, `extract`, `get_defined_vars`, variable variables, superglobals, or include/eval.
@@ -875,6 +911,8 @@ fn build_is_inert(
 /// base. (Not meaningful with dynamic variable access, which the callers
 /// rule out.)
 fn never_written(op_array: &OpArray, mut stable: Vec<bool>) -> Vec<bool> {
+    // Reused per op: the CVs it mentions, and those it reads.
+    let (mut mentioned, mut read) = (Vec::new(), Vec::new());
     for op in &op_array.ops {
         if matches!(
             op,
@@ -883,15 +921,15 @@ fn never_written(op_array: &OpArray, mut stable: Vec<bool>) -> Vec<bool> {
             continue;
         }
         // Every mention that is not a plain operand read may write.
-        let mut mentioned = Vec::new();
-        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
-        let mut read = Vec::new();
-        for_each_operand_mut(&mut op.clone(), |operand| {
+        mentioned.clear();
+        for_each_cv(op, |c| mentioned.push(*c));
+        read.clear();
+        for_each_operand(op, |operand| {
             if let Operand::Cv(c) = operand {
                 read.push(*c);
             }
         });
-        for c in mentioned {
+        for &c in &mentioned {
             if let Some(i) = read.iter().position(|&r| r == c) {
                 read.swap_remove(i);
             } else if let Some(slot) = stable.get_mut(c as usize) {
@@ -923,16 +961,18 @@ fn single_assignments(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<bool> {
     {
         *slot = true;
     }
+    // Reused per op: the CVs it mentions, and those it reads.
+    let (mut mentioned, mut read) = (Vec::new(), Vec::new());
     for op in &op_array.ops {
-        let mut mentioned = Vec::new();
-        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
-        let mut read = Vec::new();
-        for_each_operand_mut(&mut op.clone(), |operand| {
+        mentioned.clear();
+        for_each_cv(op, |c| mentioned.push(*c));
+        read.clear();
+        for_each_operand(op, |operand| {
             if let Operand::Cv(c) = operand {
                 read.push(*c);
             }
         });
-        for c in mentioned {
+        for &c in &mentioned {
             if let Some(i) = read.iter().position(|&r| r == c) {
                 read.swap_remove(i);
             } else if matches!(op, Op::AssignCv { cv, .. } if *cv == c) {
@@ -1002,6 +1042,8 @@ fn scalar_array_vars(
     // Per place: the ops naming it, and how many of them are element
     // stores of scalars.
     let mut named = vec![(0u32, 0u32); op_array.places.len()];
+    // Reused per op: the CVs it mentions, and those it reads.
+    let (mut mentioned, mut read) = (Vec::new(), Vec::new());
     for op in &op_array.ops {
         let scalar_store = match op {
             Op::Assign {
@@ -1033,15 +1075,15 @@ fn scalar_array_vars(
             }
         });
         // Every mention that is not a plain operand read may write.
-        let mut mentioned = Vec::new();
-        for_each_cv_mut(&mut op.clone(), |c| mentioned.push(*c));
-        let mut read = Vec::new();
-        for_each_operand_mut(&mut op.clone(), |operand| {
+        mentioned.clear();
+        for_each_cv(op, |c| mentioned.push(*c));
+        read.clear();
+        for_each_operand(op, |operand| {
             if let Operand::Cv(c) = operand {
                 read.push(*c);
             }
         });
-        for c in mentioned {
+        for &c in &mentioned {
             if let Some(i) = read.iter().position(|&r| r == c) {
                 read.swap_remove(i);
             } else {
@@ -1135,7 +1177,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             Op::ArrayAdd { arr, key, .. } if *arr == t => {
                 key.as_ref().is_none_or(|k| !may_be_last_key(k))
             }
-            other => super::array_build_tmp_mut(&mut other.clone()).is_none_or(|a| *a != t),
+            other => super::array_build_tmp(other).is_none_or(|a| a != t),
         })
     };
     // The variables whose array always has room for an append: every
@@ -1201,7 +1243,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // runs in a loop.
     let mut back_edges = Vec::new();
     for (j, op) in op_array.ops.iter().enumerate() {
-        super::for_each_label_mut(&mut op.clone(), |l| {
+        super::for_each_label(op, |l| {
             if (*l as usize) <= j {
                 back_edges.push((*l as usize, j));
             }
@@ -1267,8 +1309,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
 
     // Count reads from ops
     for op in &op_array.ops {
-        let mut op_clone = op.clone();
-        for_each_operand_mut(&mut op_clone, |operand| {
+        for_each_operand(op, |operand| {
             if let Operand::Cv(cv) = operand {
                 if let Some(c) = read_counts.get_mut(*cv as usize) {
                     *c += 1;
@@ -1417,8 +1458,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             }
         }
 
-        let mut place_clone = place.clone();
-        for_each_place_operand_mut(&mut place_clone, |operand| {
+        for_each_place_operand(place, |operand| {
             if let Operand::Cv(cv) = operand {
                 if let Some(c) = read_counts.get_mut(*cv as usize) {
                     *c += 1;
@@ -1651,8 +1691,7 @@ pub(crate) fn compact_cvs(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool 
 
     // Ops
     for op in &op_array.ops {
-        let mut op_clone = op.clone();
-        for_each_cv_mut(&mut op_clone, |c| {
+        for_each_cv(op, |c| {
             if let Some(r) = is_referenced.get_mut(*c as usize) {
                 *r = true;
             }
@@ -1661,8 +1700,7 @@ pub(crate) fn compact_cvs(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool 
 
     // Places
     for place in &op_array.places {
-        let mut place_clone = place.clone();
-        for_each_place_cv_mut(&mut place_clone, |c| {
+        for_each_place_cv(place, |c| {
             if let Some(r) = is_referenced.get_mut(*c as usize) {
                 *r = true;
             }

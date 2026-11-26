@@ -51,8 +51,7 @@ thread_local! {
 fn top_level_classes(code: &OpArray) -> Vec<u32> {
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for (at, op) in code.ops.iter().enumerate() {
-        let mut op = op.clone();
-        crate::compiler::optimizer::for_each_label_mut(&mut op, |t| {
+        crate::compiler::optimizer::for_each_label(op, |t| {
             let target = *t as usize;
             spans.push((at.min(target), at.max(target)));
         });

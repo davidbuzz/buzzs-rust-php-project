@@ -10,7 +10,7 @@
 //! - Unused `static` variables with a constant initializer: their
 //!   `BindStatic`/`InitStatic` go (php-src's DCE drops such a `BIND_STATIC`).
 
-use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
+use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label, for_each_label_mut};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{ArgSrc, BinKind, CastKind, Label, Op, OpArray, Operand, UnKind};
 use php_runtime::{Value, ZStr};
@@ -25,9 +25,8 @@ pub(crate) fn find_leaders(op_array: &OpArray) -> Vec<bool> {
     leaders[0] = true;
 
     for (i, op) in op_array.ops.iter().enumerate() {
-        let mut op_clone = op.clone();
         let mut branches = false;
-        for_each_label_mut(&mut op_clone, |lbl| {
+        for_each_label(op, |lbl| {
             branches = true;
             if (*lbl as usize) <= len {
                 leaders[*lbl as usize] = true;
@@ -198,7 +197,7 @@ fn skipped_chain(op_array: &OpArray, from: usize, end: usize, dst: u32) -> bool 
         }
         if !inside(j) {
             let mut enters = false;
-            for_each_label_mut(&mut op.clone(), |t| {
+            for_each_label(op, |t| {
                 enters |= (*t as usize) > from && (*t as usize) <= end;
             });
             if enters {
@@ -225,7 +224,7 @@ fn only_use(op_array: &OpArray, t: u32) -> Option<usize> {
     }
     op_array.ops.iter().position(|op| {
         let mut reads = false;
-        super::for_each_operand_mut(&mut op.clone(), |o| {
+        super::for_each_operand(op, |o| {
             reads |= matches!(o, Operand::Tmp(x) | Operand::TmpKeep(x) if *x == t);
         });
         reads
@@ -781,16 +780,16 @@ fn plain_def_dst_mut(op: &mut Op) -> Option<&mut u32> {
 /// Whether op `at` reads temporary `t` (an operand or one of its place's).
 fn reads_tmp(op_array: &OpArray, at: usize, t: u32) -> bool {
     let mut hit = false;
-    let mut check = |o: &mut Operand| {
+    let mut check = |o: &Operand| {
         if matches!(o, Operand::Tmp(u) | Operand::TmpKeep(u) if *u == t) {
             hit = true;
         }
     };
-    let mut op = op_array.ops[at].clone();
-    super::for_each_operand_mut(&mut op, &mut check);
+    let op = &op_array.ops[at];
+    super::for_each_operand(op, &mut check);
     if let Op::Isset { place, .. } | Op::Empty { place, .. } = op {
-        if let Some(p) = op_array.places.get(place as usize) {
-            super::for_each_place_operand_mut(&mut p.clone(), &mut check);
+        if let Some(p) = op_array.places.get(*place as usize) {
+            super::for_each_place_operand(p, &mut check);
         }
     }
     hit
@@ -916,22 +915,22 @@ pub(crate) fn remove_unused_const_statics(op_array: &mut OpArray, bound_cv_prefi
     let own: std::collections::HashSet<usize> =
         candidates.iter().flat_map(|c| [c.1, c.2]).collect();
     let mut used = vec![false; op_array.cv_names.len()];
-    let mut mark = |cv: &mut u32| {
+    let mut mark = |cv: &u32| {
         if let Some(u) = used.get_mut(*cv as usize) {
             *u = true;
         }
     };
     for (at, op) in op_array.ops.iter().enumerate() {
         if !own.contains(&at) {
-            super::compact::for_each_cv_mut(&mut op.clone(), &mut mark);
+            super::compact::for_each_cv(op, &mut mark);
         }
     }
     for place in &op_array.places {
-        super::compact::for_each_place_cv_mut(&mut place.clone(), &mut mark);
+        super::compact::for_each_place_cv(place, &mut mark);
     }
     for f in op_array.decls.functions.borrow().iter() {
         for u in &f.uses {
-            mark(&mut u.parent_cv.clone());
+            mark(&u.parent_cv);
         }
     }
     let mut changed = false;

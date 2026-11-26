@@ -12,7 +12,10 @@
 //!   analysis over basic blocks, propagating constants across block boundaries and joins.
 
 use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
-use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut, OptContext};
+use super::{
+    add_or_find_literal, for_each_operand_mut, for_each_place_operand, for_each_place_operand_mut,
+    OptContext,
+};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{
     type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, Op, OpArray, Operand,
@@ -599,8 +602,7 @@ fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
     }
     let own = single_dim_store(op, places).map(|(cv, _)| cv);
     let mut named = Vec::new();
-    let mut op = op.clone();
-    super::compact::for_each_cv_mut(&mut op, |c| named.push(*c));
+    super::compact::for_each_cv(op, |c| named.push(*c));
     for c in named {
         if Some(c) != own {
             if let Some(slot) = cur_state.get_mut(c as usize) {
@@ -857,7 +859,7 @@ fn names_tmp(op: &Op, places: &[Place], t: u32) -> bool {
     for_each_operand_mut(&mut op, |o| named |= is(o));
     super::compact::for_each_op_place(&op, |p| {
         if let Some(place) = places.get(p as usize) {
-            for_each_place_operand_mut(&mut place.clone(), |o| named |= is(o));
+            for_each_place_operand(place, |o| named |= is(o));
         }
     });
     named
@@ -1516,8 +1518,7 @@ fn fold_const_array_builds(
         let targets = jump_targets.get_or_insert_with(|| {
             let mut v = vec![false; op_array.ops.len() + 1];
             for op in &op_array.ops {
-                let mut op = op.clone();
-                super::for_each_label_mut(&mut op, |l| {
+                super::for_each_label(op, |l| {
                     if let Some(slot) = v.get_mut(*l as usize) {
                         *slot = true;
                     }
@@ -2892,13 +2893,13 @@ const MAYBE_UNDEF: u16 = 0x100;
 /// target, `RECV`, ...) and the base of a place it does not only read.
 fn written_cvs(op: &Op, places: &[Place]) -> Vec<u32> {
     let mut reads = Vec::new();
-    super::for_each_operand_mut(&mut op.clone(), |o| {
+    super::for_each_operand(op, |o| {
         if let Operand::Cv(c) = o {
             reads.push(*c);
         }
     });
     let mut out = Vec::new();
-    super::compact::for_each_cv_mut(&mut op.clone(), |c| {
+    super::compact::for_each_cv(op, |c| {
         if let Some(at) = reads.iter().position(|r| r == c) {
             reads.swap_remove(at);
         } else {
@@ -3023,8 +3024,7 @@ fn narrow_type_checks(op_array: &mut OpArray) -> bool {
         let mut succ: Vec<(usize, Option<(u32, u16)>)> = Vec::new();
         let edges = type_check_edges(&op_array.ops, start, end);
         if let Some(l) = last {
-            let mut op = op_array.ops[l].clone();
-            super::for_each_label_mut(&mut op, |t| {
+            super::for_each_label(&op_array.ops[l], |t| {
                 let narrowed = edges.map(|(_, c, _, on_target)| (c, on_target));
                 succ.push((block_of[(*t as usize).min(len)], narrowed));
             });
@@ -3123,8 +3123,7 @@ fn fold_equal_literal_arms(op_array: &mut OpArray) -> bool {
     let len = op_array.ops.len();
     let mut targeted = vec![0u32; len + 1];
     for op in &op_array.ops {
-        let mut op = op.clone();
-        super::for_each_label_mut(&mut op, |l| {
+        super::for_each_label(op, |l| {
             if let Some(n) = targeted.get_mut(*l as usize) {
                 *n += 1;
             }
