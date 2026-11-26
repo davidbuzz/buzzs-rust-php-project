@@ -2051,6 +2051,7 @@ impl Frame {
         debug_assert!(self.slots_released());
         self.released_direct = false;
         self.kind = FrameKind::Builtin;
+        debug_assert!(self.slots_released());
         // The slots of the user function called in this frame before are
         // released (they own nothing) and are cut as
         // [`Frame::reinit_for_call`] cuts them: `clear` ran the drop glue
@@ -2489,7 +2490,15 @@ impl Frame {
             || self.statics.is_some()
             || !self.tmps.is_empty()
             || !self.cvs.is_empty()
-            || !(Rc::ptr_eq(&self.vars_store, empty_vars) || self.holds_empty_store())
+            // The VM's shared empty store, or the frame's own that
+            // nothing reached (`vars_used`) or that is found empty: the
+            // one a user function's call left at this depth, which the
+            // next one takes again (releasing it here, through the full
+            // release, cost this call ~260 instructions and the next
+            // user call a new store).
+            || !(Rc::ptr_eq(&self.vars_store, empty_vars)
+                || !self.vars_used.get()
+                || self.holds_empty_store())
         {
             return false;
         }
