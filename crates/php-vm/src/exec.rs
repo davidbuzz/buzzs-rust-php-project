@@ -3930,7 +3930,7 @@ fn release_object(old: php_runtime::Obj) {
 
 /// [`release_slot_value`] of an array, object or reference.
 #[inline(never)]
-fn release_rooted(old: Option<Value>) {
+pub(super) fn release_rooted(old: Option<Value>) {
     if let Some(old) = &old {
         crate::gc::possible_root(old);
     }

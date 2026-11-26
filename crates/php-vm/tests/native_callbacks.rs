@@ -1369,3 +1369,31 @@ fnonelatef f! a load(CC\Missing) Class "CC\Missing" not found Cannot access priv
 "#
     );
 }
+
+/// `foreach` over arrays of objects and arrays: the loop variable's old
+/// object or array is released after the new value is stored (the order
+/// destructors print in), temporaries' elements, by-value copies of array
+/// elements. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn foreach_over_objects_releases_in_order() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~{$this->n} "; } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $a = [new D('a'), new D('b'), [1], new D('c')]; foreach ($a as $k => $m) { echo is_object($m) ? $m->n : 'arr', ' '; } unset($a); echo "| ";
+    foreach ([new D('t1'), new D('t2')] as $m) { echo $m->n, ' '; } echo "| "; unset($m);
+    $b = [[1, 2], [3]]; foreach ($b as $x) { $x[] = 9; } echo count($b[0]), ' ';
+    $o = [new D('k1')]; foreach ($o as $m) {} $o = null; echo "| "; $m = null; echo "\n";
+  }
+  echo json_encode(gc_status()['roots'] >= 0), "\n";
+}
+run();
+"#),
+        r#"a b arr c ~a ~b | ~c t1 t2 ~t1 | ~t2 2 | ~k1 
+a b arr c ~a ~b | ~c t1 t2 ~t1 | ~t2 2 | ~k1 
+a b arr c ~a ~b | ~c t1 t2 ~t1 | ~t2 2 | ~k1 
+true
+"#
+    );
+}

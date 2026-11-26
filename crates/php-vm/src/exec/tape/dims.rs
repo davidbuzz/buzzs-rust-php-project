@@ -3200,9 +3200,9 @@ fn fe_fetch_into(f: &mut Frame, inst: &Inst, with_key: bool) -> Br {
         *pos = p + 1;
         (v, None)
     };
-    fe_assign(f, inst.b, inst.p as u32, v);
+    fe_assign(f, inst.b, v);
     if let Some(k) = k {
-        fe_assign(f, inst.d, (inst.p >> 32) as u32, k);
+        fe_assign(f, inst.d, k);
     }
     Br::Fall
 }
@@ -3223,23 +3223,25 @@ fn copy_deref(v: &Value) -> Value {
 
 /// The assignment of a fetched value to a loop variable that is no
 /// reference (`zend_assign_to_variable`): over nothing, a scalar or a
-/// string the value is stored and an old string released; an array or an
-/// object is released by the assignment itself (`hot::assign_cv_in`, from
-/// the temporary `tmp` the unfused ops use: a possible root, a destructor).
+/// string the value is stored and an old string released; an old array or
+/// object is released after the store (`release_rooted`: a possible root,
+/// a destructor).
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of `fe_fetch_into`
-fn fe_assign(f: &mut Frame, cv: u32, tmp: u32, v: Value) {
+fn fe_assign(f: &mut Frame, cv: u32, v: Value) {
     let rooted = matches!(
         f.cvs.get(cv as usize).and_then(CvSlot::get),
         Some(Value::Array(_) | Value::Object(_))
     );
     if rooted {
-        if let Some(slot) = f.tmps.get_mut(tmp as usize) {
-            put_tmp(slot, v);
-            // Never refused here: the variable holds an array or an object
-            // and no symbol table is attached, the value is no reference.
-            let assigned = crate::exec::hot::assign_cv_in(f, cv, Operand::Tmp(tmp), None);
-            debug_assert!(assigned);
+        // `hot::assign_cv_in`'s store, without the temporary's round trip:
+        // the variable holds an array or an object, no symbol table is
+        // attached (`fe_fetch_into` tested both), the value is no
+        // reference. The new value is stored first, then the old one
+        // released (a possible root, or a destructor that may run).
+        if let Some(slot) = f.cvs.get_mut(cv as usize) {
+            let old = slot.set(Some(v));
+            crate::exec::release_rooted(old);
         }
     } else if let Some(slot) = f.cvs.get_mut(cv as usize) {
         match slot.set(Some(v)) {
