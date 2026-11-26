@@ -1837,6 +1837,28 @@ impl HashTable {
         self.index_insert_slow(h, val, Mode::Update).map(|_| ())
     }
 
+    /// `zend_hash_add_new` of a string key that is no integer in digits
+    /// ([`ArrayKey::surely_str`]) and that the caller knows to be absent:
+    /// the element is appended without the probe for an existing key (a
+    /// copy of a table whose keys are unique, such as the symbol table
+    /// behind `$GLOBALS`). In a table with room it is a bucket and its
+    /// index entry; initialisation and growth are
+    /// [`HashTable::str_insert_slow`]'s.
+    #[inline]
+    pub fn add_new_str(&mut self, key: ZStr, val: Value) {
+        let ts = self.table_size;
+        if let Store::Hash(d) = &mut self.store {
+            if d.buckets.len() < ts as usize {
+                d.append(ts, ArrayKey::Str(key), val);
+                self.num_elements += 1;
+                return;
+            }
+        }
+        // (Never an error: a new key is only refused in `Mode::Add` when
+        // it exists.)
+        let _ = self.str_insert_slow(key, val, Mode::Update);
+    }
+
     /// `$a[key] = val` of a plain value (a scalar or a string) for a string
     /// offset with symbol-table semantics (`zend_symtable_update`: `"12"` is
     /// the int key 12): one probe of the table, then the store over a plain
