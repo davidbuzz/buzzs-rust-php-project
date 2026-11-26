@@ -64,12 +64,13 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     frame.tmps.resize(1024, Value::Str(value.clone()));
     frame.args.resize(1024, Some(Value::Str(value.clone())));
     frame
+        .cold_mut()
         .named
         .resize(1024, (value.clone(), Value::Str(value.clone())));
     frame.iters.resize_with(1024, || None);
     frame.fins.resize(1024, php_vm::vm::FinState::None);
     frame.calls.reserve(1024);
-    frame.silence_saved.resize(1024, 1);
+    frame.cold_mut().silence_saved.resize(1024, 1);
     {
         let mut vars = frame.vars.borrow_mut();
         vars.slots.resize(1024, Some(Value::Str(value.clone())));
@@ -79,11 +80,12 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     let object = php_vm::object::new_object(class, Vec::new());
     frame.this = Some(object.clone());
     frame.closure = Some(object.clone());
-    frame.generator = Some(object.clone());
-    frame.pending_exc = Some(object.clone());
+    frame.cold_mut().generator = Some(object.clone());
+    frame.cold_mut().pending_exc = Some(object.clone());
     frame.tmps.push(Value::Object(object.clone()));
     frame.args.push(Some(Value::Object(object.clone())));
     frame
+        .cold_mut()
         .named
         .push((ZStr::from("object"), Value::Object(object.clone())));
     frame
@@ -96,11 +98,11 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     assert_eq!(object.refcount(), 1);
     assert_eq!(frame.tmps.capacity(), 0);
     assert_eq!(frame.args.capacity(), 0);
-    assert_eq!(frame.named.capacity(), 0);
+    // The named arguments and the `@` masks went with the rare state.
+    assert!(!frame.has_cold());
     assert_eq!(frame.iters.capacity(), 0);
     assert_eq!(frame.fins.capacity(), 0);
     assert_eq!(frame.calls.capacity(), 0);
-    assert_eq!(frame.silence_saved.capacity(), 0);
     assert_eq!(frame.vars.borrow().slots.capacity(), 0);
     assert_eq!(frame.vars.borrow().names.capacity(), 0);
     frame.reinit_for_user(vm.empty_code.clone(), FrameKind::Function);

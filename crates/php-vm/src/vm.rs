@@ -146,6 +146,19 @@ fn mapped_slot(
     }
 }
 
+/// The attached table's slot of each compiled variable
+/// ([`FrameCold::symtab_slots`]) of a frame with the rare state `cold`,
+/// and the table they are of (null: none). On the field, so that the
+/// frame's slots stay free to change.
+#[inline]
+#[allow(clippy::borrowed_box, clippy::ref_option)] // the frame's field as it is
+fn symtab_map(cold: &Option<Box<FrameCold>>) -> (&[u32], *const RefCell<VarStore>) {
+    match cold {
+        Some(c) => (&c.symtab_slots, c.symtab_slots_of),
+        None => (&[], std::ptr::null()),
+    }
+}
+
 /// Whether `a` and `b` are the same handle (or equal scalars): a frame's
 /// compiled variable that already holds its symbol-table slot's value.
 #[inline]
@@ -595,8 +608,8 @@ impl PendingCall {
             scope: None,
             called: None,
             args: Vec::new(),
-            named: Vec::new(),
             closure: None,
+            named: Vec::new(),
             magic_name: None,
             has_named: false,
             direct: false,
@@ -1243,6 +1256,57 @@ impl<'a> IntoIterator for &'a mut FrameStack {
     }
 }
 
+/// What few frames carry, behind one pointer of the [`Frame`]
+/// ([`Frame::cold`]): a call with extra named arguments, a generator's
+/// frame, one that caught an exception, one with an `@` open, and a frame
+/// attached to a symbol table whose slots it has mapped.
+#[derive(Debug)]
+pub struct FrameCold {
+    /// Extra named args.
+    pub named: Vec<(ZStr, Value)>,
+    /// The generator this frame belongs to.
+    pub generator: Option<Obj>,
+    /// The exception being matched by `Catch` ops.
+    pub pending_exc: Option<Obj>,
+    /// The `error_reporting` masks saved by the `@` operators active in
+    /// this frame (`ZEND_BEGIN_SILENCE`), restored when an exception
+    /// leaves them.
+    pub silence_saved: Vec<i64>,
+    /// The attached table's slot of each compiled variable, as
+    /// [`Frame::attach_symbol_table`] found them, for the table at
+    /// `symtab_slots_of` (a table's slots never move while it lives): an
+    /// included file's variables are not where the global table has its
+    /// names, and each synchronisation would look them up by name.
+    pub(crate) symtab_slots: Vec<u32>,
+    pub(crate) symtab_slots_of: *const RefCell<VarStore>,
+}
+
+impl Default for FrameCold {
+    fn default() -> Self {
+        FrameCold {
+            named: Vec::new(),
+            generator: None,
+            pending_exc: None,
+            silence_saved: Vec::new(),
+            symtab_slots: Vec::new(),
+            symtab_slots_of: std::ptr::null(),
+        }
+    }
+}
+
+impl FrameCold {
+    /// Whether nothing is held: the frame could do without it.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.named.is_empty()
+            && self.generator.is_none()
+            && self.pending_exc.is_none()
+            && self.silence_saved.is_empty()
+            && self.symtab_slots.is_empty()
+            && self.symtab_slots_of.is_null()
+    }
+}
+
 #[derive(Debug)]
 pub struct Frame {
     /// Temporaries.
@@ -1257,17 +1321,8 @@ pub struct Frame {
     pub cvs: Vec<CvSlot>,
     /// Whether a symbol table has been attached.
     pub symtab_attached: bool,
-    /// The attached table's slot of each compiled variable, as
-    /// [`Frame::attach_symbol_table`] found them, for the table at
-    /// `symtab_slots_of` (a table's slots never move while it lives): an
-    /// included file's variables are not where the global table has its
-    /// names, and each synchronisation would look them up by name.
-    pub(crate) symtab_slots: Vec<u32>,
-    pub(crate) symtab_slots_of: *const RefCell<VarStore>,
     /// Variables / attached symbol table.
     pub vars: Rc<RefCell<VarStore>>,
-    /// Extra named args.
-    pub named: Vec<(ZStr, Value)>,
     /// Arguments as passed (positional; `None` = skipped, or already moved
     /// into its compiled variable when the frame was pushed).
     pub args: Vec<Option<Value>>,
@@ -1275,10 +1330,6 @@ pub struct Frame {
     pub this: Option<Obj>,
     /// The closure being executed.
     pub closure: Option<Obj>,
-    /// The generator this frame belongs to.
-    pub generator: Option<Obj>,
-    /// The exception being matched by `Catch` ops.
-    pub pending_exc: Option<Obj>,
     /// Static variable storage for this call (closures have their own).
     pub statics: Option<Rc<RefCell<Vec<Option<PhpRef>>>>>,
     /// The function (None for top-level code).
@@ -1299,10 +1350,21 @@ pub struct Frame {
     pub kind: FrameKind,
     /// Whether this is a constructor call (`new` result is the object).
     pub is_ctor: bool,
-    /// The `error_reporting` masks saved by the `@` operators active in
-    /// this frame (`ZEND_BEGIN_SILENCE`), restored when an exception
-    /// leaves them.
-    pub silence_saved: Vec<i64>,
+    /// The state only rare frames have ([`FrameCold`]): `None` in a plain
+    /// call's frame, so readying, testing and releasing one touch a single
+    /// word for all of it (php-src keeps the like in `call_info` flags and
+    /// side tables: `ZEND_CALL_HAS_EXTRA_NAMED_PARAMS`,
+    /// `ZEND_CALL_GENERATOR`, the silence temporaries). Set through
+    /// [`Frame::cold_mut`]; read through the accessors of the same names.
+    ///
+    /// The box outlives its use: a frame that needed it once keeps it,
+    /// emptied, for the next call in its slot (as it kept the buffers when
+    /// they were fields: an `@` in a loop's callee allocates once, and
+    /// `memory_get_usage()` does not move), and `cold_used` says whether
+    /// it holds anything. Not in use, it is empty.
+    pub(crate) cold: Option<Box<FrameCold>>,
+    /// Whether `cold` is in use: the one test of the rare state.
+    pub(crate) cold_used: bool,
     /// Builtin being executed (for backtraces).
     pub builtin_name: Option<ZStr>,
     /// Original method name for `__call` frames.
@@ -1635,6 +1697,113 @@ pub(crate) fn move_last_frame(from: &mut Vec<Frame>, to: &mut Vec<Frame>) -> boo
 }
 
 impl Frame {
+    /// The rare state, created empty when the frame has none yet.
+    #[inline]
+    pub fn cold_mut(&mut self) -> &mut FrameCold {
+        self.cold_used = true;
+        self.cold.get_or_insert_with(Box::default)
+    }
+
+    /// Whether the frame carries the rare state ([`FrameCold`]).
+    #[inline]
+    #[must_use]
+    pub fn has_cold(&self) -> bool {
+        self.cold_used
+    }
+
+    /// The rare state, when the frame has it.
+    #[inline]
+    fn cold_opt(&self) -> Option<&FrameCold> {
+        if self.cold_used {
+            self.cold.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// The rare state to change, when the frame has it.
+    #[inline]
+    pub(crate) fn cold_opt_mut(&mut self) -> Option<&mut FrameCold> {
+        if self.cold_used {
+            self.cold.as_deref_mut()
+        } else {
+            None
+        }
+    }
+
+    /// Extra named arguments of the call (`extra_named_params`).
+    #[inline]
+    #[must_use]
+    pub fn named(&self) -> &[(ZStr, Value)] {
+        match self.cold_opt() {
+            Some(c) => &c.named,
+            None => &[],
+        }
+    }
+
+    /// The generator this frame belongs to.
+    #[inline]
+    #[must_use]
+    pub fn generator(&self) -> Option<&Obj> {
+        self.cold_opt()?.generator.as_ref()
+    }
+
+    /// The exception being matched by `Catch` ops.
+    #[inline]
+    #[must_use]
+    pub fn pending_exc(&self) -> Option<&Obj> {
+        self.cold_opt()?.pending_exc.as_ref()
+    }
+
+    /// The `error_reporting` masks saved by the `@` operators open in this
+    /// frame, oldest first.
+    #[inline]
+    #[must_use]
+    pub fn silence_saved(&self) -> &[i64] {
+        match self.cold_opt() {
+            Some(c) => &c.silence_saved,
+            None => &[],
+        }
+    }
+
+    /// Marks the rare state unused when it holds nothing; whether the
+    /// frame has none now.
+    #[cold]
+    #[inline(never)]
+    fn drop_empty_cold(&mut self) -> bool {
+        if self.cold.as_ref().is_none_or(|c| c.is_empty()) {
+            self.cold_used = false;
+        }
+        !self.cold_used
+    }
+
+    /// Empties what is left of the rare state (in the order the fields
+    /// were released as the frame's own: named arguments, generator,
+    /// caught exception, `@` masks) and marks it unused; the box stays
+    /// for the slot's next call, without oversized buffers.
+    #[cold]
+    #[inline(never)]
+    fn reset_cold(&mut self) {
+        if let Some(c) = &mut self.cold {
+            clear_frame_buffer(&mut c.named);
+            c.generator = None;
+            c.pending_exc = None;
+            clear_frame_buffer(&mut c.silence_saved);
+            clear_frame_buffer(&mut c.symtab_slots);
+            c.symtab_slots_of = std::ptr::null();
+        }
+        self.cold_used = false;
+    }
+
+    /// The extra named arguments of [`Frame::clear_for_reuse`].
+    #[cold]
+    #[inline(never)]
+    fn clear_cold_named(&mut self) {
+        if let Some(c) = &mut self.cold {
+            clear_frame_buffer(&mut c.named);
+        }
+    }
+
     /// Creates a pre-allocated empty frame for the pool.
     pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
         Frame {
@@ -1644,19 +1813,14 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs: Vec::with_capacity(8),
             symtab_attached: false,
-            symtab_slots: Vec::new(),
-            symtab_slots_of: std::ptr::null(),
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
                 index: None,
             })),
-            named: Vec::with_capacity(4),
             args: Vec::with_capacity(8),
             this: None,
             closure: None,
-            generator: None,
-            pending_exc: None,
             statics: None,
             func: None,
             ufunc: None,
@@ -1667,7 +1831,14 @@ impl Frame {
             ret: RetTarget::Discard,
             kind: FrameKind::Function,
             is_ctor: false,
-            silence_saved: Vec::with_capacity(2),
+            // Allocated with the frame, as its buffers were: the first
+            // `@` or named argument in the slot allocates nothing.
+            cold: Some(Box::new(FrameCold {
+                named: Vec::with_capacity(4),
+                silence_saved: Vec::with_capacity(2),
+                ..FrameCold::default()
+            })),
+            cold_used: false,
             builtin_name: None,
             magic_name: None,
             caller_strict: false,
@@ -1701,12 +1872,14 @@ impl Frame {
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
-        clear_frame_buffer(&mut self.named);
+        self.clear_cold_named();
         clear_frame_buffer(&mut self.args);
         self.this = None;
         self.closure = None;
-        self.generator = None;
-        self.pending_exc = None;
+        if let Some(c) = &mut self.cold {
+            c.generator = None;
+            c.pending_exc = None;
+        }
         self.statics = None;
         self.func = None;
         self.ufunc = None;
@@ -1716,7 +1889,8 @@ impl Frame {
         self.called = None;
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
-        clear_frame_buffer(&mut self.silence_saved);
+        self.cold = None;
+        self.cold_used = false;
         self.builtin_name = None;
         self.magic_name = None;
         self.caller_strict = false;
@@ -1793,9 +1967,9 @@ impl Frame {
             && self.scope.is_none()
             && self.called.is_none()
             && self.args.is_empty()
-            && self.named.is_empty()
+            && self.named().is_empty()
             && self.calls.is_empty()
-            && self.silence_saved.is_empty()
+            && self.silence_saved().is_empty()
             && matches!(self.ret, RetTarget::Discard)
             && !self.is_ctor
             && self.keeps_function()
@@ -1880,15 +2054,10 @@ impl Frame {
             calls: Vec::new(),
             cvs: Vec::new(),
             symtab_attached: false,
-            symtab_slots: Vec::new(),
-            symtab_slots_of: std::ptr::null(),
             vars: empty_vars.clone(),
-            named: Vec::new(),
             args: Vec::new(),
             this: None,
             closure: None,
-            generator: None,
-            pending_exc: None,
             statics: None,
             func: None,
             ufunc: None,
@@ -1899,7 +2068,8 @@ impl Frame {
             ret: RetTarget::Discard,
             kind: FrameKind::Builtin,
             is_ctor: false,
-            silence_saved: Vec::new(),
+            cold: None,
+            cold_used: false,
             builtin_name: None,
             magic_name: None,
             caller_strict: false,
@@ -1933,8 +2103,9 @@ impl Frame {
         if self.cvs.iter().all(CvSlot::is_none) {
             self.cvs = Vec::new();
         }
-        shrink(&mut self.named);
-        shrink(&mut self.silence_saved);
+        if self.drop_empty_cold() {
+            self.cold = None;
+        }
         // The passed-argument buffer an earlier user call left behind.
         if self.args.iter().all(Option::is_none) {
             self.args = Vec::new();
@@ -1978,15 +2149,15 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every return
     fn clear_rest_for_reuse(&mut self, empty_code: &Rc<OpArray>, shared: SharedNames) {
-        if !self.named.is_empty() || self.named.capacity() > 256 {
-            clear_frame_buffer(&mut self.named);
+        if self.cold_used {
+            self.clear_cold_named();
         }
         clear_arg_buffer(&mut self.args);
         clear_opt(&mut self.this);
         clear_opt(&mut self.closure);
         // Generator, caught exception and static variables: one test for
         // the three fields a plain call leaves empty.
-        if self.generator.is_some() || self.pending_exc.is_some() || self.statics.is_some() {
+        if self.cold_used || self.statics.is_some() {
             self.clear_rare_handles();
         }
         if self.keeps_function() {
@@ -2025,11 +2196,7 @@ impl Frame {
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
         // `@` masks, builtin and `__call` names: one test for the three.
-        if !self.silence_saved.is_empty()
-            || self.builtin_name.is_some()
-            || self.magic_name.is_some()
-            || self.silence_saved.capacity() > 256
-        {
+        if self.cold_used || self.builtin_name.is_some() || self.magic_name.is_some() {
             self.clear_rare_names();
         }
         self.caller_strict = false;
@@ -2080,8 +2247,7 @@ impl Frame {
     fn direct_releasable(&mut self) -> bool {
         if !self.direct
             || self.symtab_attached
-            || self.pending_exc.is_some()
-            || !self.silence_saved.is_empty()
+            || (self.cold_used && !self.drop_empty_cold())
             || !self.calls.is_empty()
             || !self.keeps_function()
         {
@@ -2270,15 +2436,12 @@ impl Frame {
         if self.kind != FrameKind::Builtin
             || self.symtab_attached
             || !self.calls.is_empty()
-            || !self.named.is_empty()
-            || !self.silence_saved.is_empty()
+            || self.cold_used
             || self.magic_name.is_some()
             || self.this.is_some()
             || self.closure.is_some()
             || self.scope.is_some()
             || self.called.is_some()
-            || self.generator.is_some()
-            || self.pending_exc.is_some()
             || self.statics.is_some()
             || !self.tmps.is_empty()
             || !self.cvs.is_empty()
@@ -2330,8 +2493,10 @@ impl Frame {
     #[cold]
     #[inline(never)]
     fn clear_rare_handles(&mut self) {
-        clear_opt(&mut self.generator);
-        clear_opt(&mut self.pending_exc);
+        if let Some(c) = &mut self.cold {
+            clear_opt(&mut c.generator);
+            clear_opt(&mut c.pending_exc);
+        }
         clear_opt(&mut self.statics);
     }
 
@@ -2340,7 +2505,10 @@ impl Frame {
     #[cold]
     #[inline(never)]
     fn clear_rare_names(&mut self) {
-        clear_frame_buffer(&mut self.silence_saved);
+        // (The `@` masks and the symbol-table map: what is left of it.)
+        if self.cold_used {
+            self.reset_cold();
+        }
         clear_opt(&mut self.builtin_name);
         clear_opt(&mut self.magic_name);
     }
@@ -2369,15 +2537,12 @@ impl Frame {
             && self.direct_argc == 0
             && !self.symtab_attached
             && self.calls.is_empty()
-            && self.silence_saved.is_empty()
+            && !self.cold_used
             && self.args.is_empty()
-            && self.named.is_empty()
             && self.this.is_none()
             && self.closure.is_none()
             && self.scope.is_none()
             && self.called.is_none()
-            && self.generator.is_none()
-            && self.pending_exc.is_none()
             && self.statics.is_none()
             && !self.is_ctor
             && matches!(self.ret, RetTarget::Discard)
@@ -2428,7 +2593,9 @@ impl Frame {
         if !self.calls.is_empty() {
             self.calls.clear();
         }
-        self.silence_saved.clear();
+        if self.cold_used {
+            self.reset_cold();
+        }
         self.symtab_attached = false;
         // A recycled frame may still hold this code (`keeps_function`).
         let same_code = Rc::ptr_eq(&self.code, code);
@@ -2591,15 +2758,10 @@ impl Frame {
             calls: Vec::with_capacity(4),
             cvs,
             symtab_attached,
-            symtab_slots,
-            symtab_slots_of,
             vars,
-            named: Vec::new(),
             args: Vec::with_capacity(8),
             this: None,
             closure: None,
-            generator: None,
-            pending_exc: None,
             statics: None,
             func: None,
             ufunc: None,
@@ -2610,7 +2772,19 @@ impl Frame {
             ret: RetTarget::Discard,
             kind,
             is_ctor: false,
-            silence_saved: Vec::new(),
+            // A script's frame has the rare state from the start, like its
+            // symbol-table entries above: the first generic access of a
+            // variable must not allocate (bug79881, `memory_get_usage()`).
+            cold_used: add_names || !symtab_slots.is_empty() || !symtab_slots_of.is_null(),
+            cold: if !add_names && symtab_slots.is_empty() && symtab_slots_of.is_null() {
+                None
+            } else {
+                Some(Box::new(FrameCold {
+                    symtab_slots,
+                    symtab_slots_of,
+                    ..FrameCold::default()
+                }))
+            },
             builtin_name: None,
             magic_name: None,
             caller_strict: false,
@@ -2637,11 +2811,15 @@ impl Frame {
                 st.slots.resize(self.code.cv_names.len(), None);
             }
         }
-        self.symtab_slots.clear();
-        self.symtab_slots_of = Rc::as_ptr(&self.vars);
+        let mut symtab_slots = self
+            .cold
+            .as_mut()
+            .map(|c| std::mem::take(&mut c.symtab_slots))
+            .unwrap_or_default();
+        symtab_slots.clear();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             let slot = st.find_or_add_cv(i, name.as_bytes());
-            record_slot(&mut self.symtab_slots, i, slot, self.code.cv_names.len());
+            record_slot(&mut symtab_slots, i, slot, self.code.cv_names.len());
             let slot = slot as usize;
             if slot < st.slots.len() {
                 if let Some(val) = self.cvs.get(i).and_then(CvSlot::get) {
@@ -2649,6 +2827,11 @@ impl Frame {
                 }
             }
         }
+        drop(st);
+        let table = Rc::as_ptr(&self.vars);
+        let cold = self.cold_mut();
+        cold.symtab_slots = symtab_slots;
+        cold.symtab_slots_of = table;
     }
 
     /// Undoes an [`Frame::attach_symbol_table`] that only a generic
@@ -2665,10 +2848,11 @@ impl Frame {
             return;
         }
         self.symtab_attached = false;
-        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
+        let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let Some(idx) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) else {
+            let Some(idx) = mapped_slot(symtab_slots, valid, &mut st, i, name) else {
                 continue;
             };
             let Some(sv) = st.slots.get_mut(idx as usize) else {
@@ -2690,10 +2874,11 @@ impl Frame {
         if !self.symtab_attached {
             return;
         }
-        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
+        let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
+            if let Some(slot) = mapped_slot(symtab_slots, valid, &mut st, i, name) {
                 let Some(cv) = self.cvs.get_mut(i) else {
                     continue;
                 };
@@ -2715,10 +2900,11 @@ impl Frame {
         if !self.symtab_attached {
             return;
         }
-        let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
+        let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
+        let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = mapped_slot(&self.symtab_slots, valid, &mut st, i, name) {
+            if let Some(slot) = mapped_slot(symtab_slots, valid, &mut st, i, name) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     // A CV that is `None` was never assigned in this frame
@@ -2754,9 +2940,10 @@ impl Frame {
     #[inline(never)]
     fn unsync_cv_from_symtab_slow(&self, cv: u32) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
-            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
+            let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
+            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name);
+            let idx = mapped_slot(symtab_slots, valid, &mut st, cv as usize, name);
             if let Some(idx) = idx {
                 let idx = idx as usize;
                 if idx < st.slots.len() {
@@ -2815,9 +3002,10 @@ impl Frame {
     #[inline(never)]
     fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
-            let valid = std::ptr::eq(self.symtab_slots_of, Rc::as_ptr(&self.vars));
+            let (symtab_slots, symtab_slots_of) = symtab_map(&self.cold);
+            let valid = std::ptr::eq(symtab_slots_of, Rc::as_ptr(&self.vars));
             let mut st = self.vars.borrow_mut();
-            let idx = match mapped_slot(&self.symtab_slots, valid, &mut st, cv as usize, name) {
+            let idx = match mapped_slot(symtab_slots, valid, &mut st, cv as usize, name) {
                 Some(i) => i,
                 None => st.find_or_add(name.as_bytes()),
             };
@@ -3428,7 +3616,7 @@ impl Vm {
             };
             if !main.symtab_attached
                 || !Rc::ptr_eq(&main.vars, &self.globals)
-                || !std::ptr::eq(main.symtab_slots_of, Rc::as_ptr(&main.vars))
+                || !std::ptr::eq(symtab_map(&main.cold).1, Rc::as_ptr(&main.vars))
             {
                 return false;
             }
@@ -3456,10 +3644,11 @@ impl Vm {
             // one whose recorded slot is `idx` (none recorded: each
             // variable has the slot of its own number).
             let names = &main.code.cv_names;
-            let main_cv = if main.symtab_slots.is_empty() {
+            let main_slots = symtab_map(&main.cold).0;
+            let main_cv = if main_slots.is_empty() {
                 (idx < names.len()).then_some(idx)
             } else {
-                main.symtab_slots.iter().position(|&s| s as usize == idx)
+                main_slots.iter().position(|&s| s as usize == idx)
             };
             if let Some(i) = main_cv {
                 if names.get(i).is_none_or(|n| n.as_bytes() != bytes) {
@@ -4276,7 +4465,9 @@ mod tests {
         f.vars.borrow_mut().slots[0] = Some(Value::Str(s.clone()));
         f.tmps[0] = Value::Str(s.clone());
         f.args.push(Some(Value::Str(s.clone())));
-        f.named.push((ZStr::from("n"), Value::Str(s.clone())));
+        f.cold_mut()
+            .named
+            .push((ZStr::from("n"), Value::Str(s.clone())));
         f.ip = 5;
         f.ret = super::RetTarget::Tmp(2);
         f.caller_strict = true;
@@ -4288,7 +4479,7 @@ mod tests {
         assert_eq!(f.ip, 0);
         assert_eq!(f.ret, super::RetTarget::Discard);
         assert!(!f.caller_strict);
-        assert!(f.tmps.is_empty() && f.args.is_empty() && f.named.is_empty());
+        assert!(f.tmps.is_empty() && f.args.is_empty() && f.named().is_empty());
         assert!(f.vars.borrow().slots.is_empty());
     }
 }

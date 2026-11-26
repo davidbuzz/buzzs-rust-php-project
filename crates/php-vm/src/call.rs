@@ -2541,7 +2541,7 @@ impl Vm {
             let frame = rest.first_mut()?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
-                || frame.generator.is_some()
+                || frame.generator().is_some()
                 || Rc::ptr_eq(&frame.vars, &self.globals)
             {
                 return None;
@@ -2760,7 +2760,7 @@ impl Vm {
             let frame = rest.first_mut()?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
-                || frame.generator.is_some()
+                || frame.generator().is_some()
                 || Rc::ptr_eq(&frame.vars, &self.globals)
             {
                 return None;
@@ -3332,7 +3332,7 @@ impl Vm {
                     }
                     _ => {
                         if !named.is_empty() {
-                            f.named = named;
+                            f.cold_mut().named = named;
                         }
                         // The frame takes the call's argument buffer (the
                         // extra arguments stay in it); its own goes back to
@@ -3518,8 +3518,8 @@ impl Vm {
                 Some(v) => crate::func::copy_arg(v),
                 None => Value::Null,
             }));
-            if !frame.named.is_empty() {
-                frame.named.clear();
+            if !frame.named().is_empty() {
+                frame.cold_mut().named.clear();
             }
             set_opt(&mut frame.this, None);
             set_opt(&mut frame.closure, None);
@@ -4133,7 +4133,7 @@ impl Vm {
         let magic_name = self.magic_call_name.clone();
         let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
         if !call.named.is_empty() {
-            frame.named = call.named.clone();
+            frame.cold_mut().named = call.named.clone();
         }
         let spare_args = std::mem::replace(&mut frame.args, pushed_args);
         set_opt(&mut frame.this, call.this.clone());
@@ -5024,10 +5024,10 @@ impl Vm {
             self.frame_mut().args[i] = Some(v.clone());
             let _ = arr.push(v);
         }
-        for i in 0..self.frame().named.len() {
-            let (k, v) = self.frame().named[i].clone();
+        for i in 0..self.frame().named().len() {
+            let (k, v) = self.frame().named()[i].clone();
             let v = self.recv_check(n, v)?;
-            self.frame_mut().named[i].1 = v.clone();
+            self.frame_mut().cold_mut().named[i].1 = v.clone();
             arr.insert(ArrayKey::Str(k), v);
         }
         self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
@@ -5049,7 +5049,7 @@ impl Vm {
         let Some(uf) = f.ufunc.as_ref() else {
             return false;
         };
-        if !f.named.is_empty()
+        if !f.named().is_empty()
             || uf
                 .params
                 .get(n as usize)

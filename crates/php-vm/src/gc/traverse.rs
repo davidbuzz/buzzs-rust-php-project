@@ -242,14 +242,19 @@ fn frame(v: &mut GcVisitor<'_>, f: &Frame) {
     for c in &f.calls {
         pending_call(v, c);
     }
-    for o in [&f.this, &f.closure, &f.generator, &f.pending_exc]
-        .into_iter()
-        .flatten()
+    for o in [
+        f.this.as_ref(),
+        f.closure.as_ref(),
+        f.generator(),
+        f.pending_exc(),
+    ]
+    .into_iter()
+    .flatten()
     {
         v.obj(o);
     }
     v.values(f.args.iter().flatten());
-    v.values(f.named.iter().map(|(_, x)| x));
+    v.values(f.named().iter().map(|(_, x)| x));
     if let Some(s) = &f.statics {
         statics(v, s);
     }

@@ -361,11 +361,11 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
     let found = match suspended {
         Some(x) => x,
         None => {
-            let own = vm.frames.iter().rev().find(|f| {
-                f.generator
-                    .as_ref()
-                    .is_some_and(|x| x.handle() == g.handle())
-            });
+            let own = vm
+                .frames
+                .iter()
+                .rev()
+                .find(|f| f.generator().is_some_and(|x| x.handle() == g.handle()));
             match own {
                 Some(f) => Some(GenFrame::of(f)),
                 None => {
@@ -376,7 +376,7 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
                             .iter()
                             .rev()
                             .find(|f| {
-                                f.generator.is_none()
+                                f.generator().is_none()
                                     && f.func.as_ref().is_some_and(|x| Func::ptr_eq(x, &func))
                             })
                             .map(GenFrame::of)

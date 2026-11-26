@@ -564,7 +564,7 @@ impl Vm {
                     .is_some_and(|p| p.sensitive);
                 out.push((None, a.deref(), sensitive));
             }
-            for (key, value) in &f.named {
+            for (key, value) in f.named() {
                 let sensitive = params.last().is_some_and(|p| p.variadic && p.sensitive);
                 out.push((Some(key.clone()), value.deref(), sensitive));
             }
@@ -600,7 +600,7 @@ impl Vm {
                 for a in f.args.iter().skip(i).flatten() {
                     out.push((None, a.deref(), p.sensitive));
                 }
-                for (key, value) in &f.named {
+                for (key, value) in f.named() {
                     out.push((Some(key.clone()), value.deref(), p.sensitive));
                 }
                 return out;
