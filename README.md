@@ -185,6 +185,15 @@ This project follows php-src `master`, organizes extensions as per-extension cra
 and uses `.phpt` tests and per-workload instruction counts as its compatibility and
 performance measures.
 
+## Community
+
+**Rewrite It In Rust** is a Discord server for people re-implementing software in Rust —
+cleanroom rewrites, AI-assisted coding and crate makers. This project's work fits it well,
+and its Disboard listing carries the invite:
+[disboard.org/server/1563548271614627963][discord].
+
+[discord]: https://disboard.org/server/1563548271614627963
+
 ## Resource notes
 
 Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 6
