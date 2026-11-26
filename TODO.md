@@ -54,6 +54,18 @@ Last updated 26 Nov 2026.
 
 ## B. Performance beyond the benchmark inputs
 
+- [ ] **Make the profile-guided build the one that is measured and shipped** (the owner's
+  decision). `scripts/pgo-build.sh` (27 Nov, Rust 1.100.0, `4d54095d`) changes no source and
+  gives, against the plain release build: all 82 acceptance workloads within 1.10x of C
+  (`zend:hash1` 1.08, `suite:builtins` 1.06; the plain build has both at 1.12), their total
+  instructions 10.0% lower (7.95 G against 8.83 G), and one page of a large framework
+  application 8.8% lower with the repository's training and 12.6% lower with the
+  application's own pages as extra training (911.7 M against 1,043.4 M instructions per
+  request; CPU cycles about a sixth lower). The whole PHPT suite gives the same results on
+  its binaries. Open: whether `run-all-tests.sh` and the CI release jobs build this way
+  (two release builds and a training run instead of one build: about 20 minutes here),
+  and what the CI artifact of the item in D is.
+
 - [ ] The two workloads over the 8.5 goal: `suite:builtins` (1.15x: string builtins in a
   loop, see the Strings item below) and `zend:hash1` (1.12x: string keys built at run time
   and `isset()` on them); `zend:hash2` is at 1.09x.

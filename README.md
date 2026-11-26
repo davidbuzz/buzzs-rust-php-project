@@ -152,6 +152,31 @@ user-space instructions of 82 workloads against the counts recorded for C in
 (1.15x) and `zend:hash1` (1.12x) are over, where 8.5 is 9% and 3% cheaper than the 8.3
 the earlier goal came from. `perf/README.md` explains the instruction-count method.
 
+### Profile-guided build
+
+`scripts/pgo-build.sh` builds the release binaries twice. The first build is instrumented and
+runs the benchmarks above and eight php-src test folders (Zend, tests, ext/standard, spl, pcre,
+json, date, mbstring), with the JIT on and off; the second build is compiled with the record of
+how that code ran, so the compiler lays out and inlines the interpreter for the paths PHP code
+takes. The source is the same and so is the behaviour: the whole in-scope php-src suite gives
+the same results on these binaries as on the plain build.
+
+```sh
+rustup component add llvm-tools     # once: the compiler's llvm-profdata
+scripts/pgo-build.sh                # target/release/php, php-cgi and php-fpm, profile-guided
+```
+
+`PGO_TRAIN=<command>` adds a training step of your own, run with `PGO_PHP`, `PGO_PHP_CGI` and
+`PGO_PHP_FPM` set to the instrumented binaries: serving the pages of the application the build
+is for is the best training there is.
+
+Measured on 27 Nov 2026 (Rust 1.100.0, `4d54095d`) on one page of a large framework
+application, in user-space instructions per request: 1,043.4 M with the plain release build,
+951.2 M with the repository's training alone (8.8% fewer), 911.7 M with that application's
+pages added through `PGO_TRAIN` (12.6% fewer). CPU cycles, which are what the visitor waits
+for, fell by about a sixth in both cases. A later plain `cargo build --release` builds without
+the profile again.
+
 ## Reference source
 
 `modules/php-src/` is a READ-ONLY copy of https://github.com/php/php-src — the specification
