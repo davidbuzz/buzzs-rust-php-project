@@ -1311,6 +1311,17 @@ impl Vm {
             if let Some(lit) = relative {
                 self.cache_relative_static_site(class, lit, &hit);
             }
+            // The literal's entry is shared by every site naming the
+            // method: a site that first runs after another one filled it
+            // takes its own slot here (the one the tape's prepared static
+            // call reads), as the resolution below would.
+            if is_literal
+                && hit.this.is_none()
+                && !hit.called.is_trait()
+                && hit.func.flags() & flags::VISIBILITY == flags::PUBLIC
+            {
+                self.cache_static_site(&hit.func, Some(&hit.scope), Some(&hit.called));
+            }
             let crate::rtcache::StaticCallHit {
                 func,
                 this,

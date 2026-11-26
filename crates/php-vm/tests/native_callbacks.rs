@@ -1034,3 +1034,33 @@ App\P2App\Q 5 autoload(App\Nope) Class "App\Nope" not found Cannot instantiate a
 "#
     );
 }
+
+/// Static calls of one method from several sites (each site keeps its
+/// own resolution, also when another site resolved the method first):
+/// late static binding, protected and private methods from inside and
+/// outside their class, a trait's method. Expected output:
+/// `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn static_calls_from_several_sites() {
+    assert_eq!(
+        run(r#"<?php
+namespace V;
+class P { public static function who() { return static::class; } protected static function prot() { return 'prot'; } private static function priv() { return 'priv'; }
+  public static function viaSelf() { return self::prot() . self::priv(); } }
+class Q extends P { public static function call() { return P::prot() . P::who() . Q::who() . P::who() . static::who(); } }
+trait T { public static function t() { return static::class; } }
+class U { use T; }
+function f() { return P::who() . Q::who() . P::who() . U::t() . P::who(); }
+for ($i = 0; $i < 300; $i++) { $o = f() . Q::call() . P::viaSelf() . Q::call() . P::viaSelf(); }
+echo $o, "\n";
+try { P::prot(); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+function g() { try { return P::prot(); } catch (\Error $e) { return $e->getMessage(); } }
+function h() { return Q::call() . g() . g(); }
+for ($i = 0; $i < 300; $i++) { $o = h(); } echo $o, "\n";
+"#),
+        r#"V\PV\QV\PV\UV\PprotV\PV\QV\PV\QprotprivprotV\PV\QV\PV\Qprotpriv
+Call to protected method V\P::prot() from global scope
+protV\PV\QV\PV\QCall to protected method V\P::prot() from global scopeCall to protected method V\P::prot() from global scope
+"#
+    );
+}
