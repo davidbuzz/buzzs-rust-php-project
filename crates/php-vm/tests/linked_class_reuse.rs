@@ -187,3 +187,45 @@ fn a_kept_link_is_not_reused_when_what_it_looked_up_changed() {
     assert_eq!(run(&mut vm, &sink, "i2.php"), "1 f,g\n");
     assert_eq!(run(&mut vm, &sink, "i1.php"), "1 f\n");
 }
+
+/// The constant expressions of a cached script carry no request state
+/// either: their run-time caches are cleared with the code's, so a class
+/// constant read from a static property's default, a property's default,
+/// a parameter's default or an attribute argument resolves its class in
+/// each request again (autoloading it there), and the constant's private
+/// constants are read from its own class. A cache kept from the first
+/// request answered with that request's class, never declared in the
+/// next: "Cannot access private constant self::A".
+#[test]
+fn constant_expressions_of_a_cached_script_resolve_classes_every_request() {
+    Vm::set_compile_hook(compile_and_keep);
+    Vm::set_precompiled_hook(kept_unit);
+    let t = tree(
+        "constexpr",
+        &[
+            (
+                "Names.php",
+                "<?php\nnamespace C;\nfinal class Names { private const A = ['a' => 1]; private const B = ['b' => 2]; public const LIST = self::A + self::B; }\n",
+            ),
+            (
+                "Reader.php",
+                "<?php\nnamespace C;\n#[\\Attribute] class Tag { public function __construct(public $v) {} }\n#[Tag(Names::LIST)] class Reader { private static $names = Names::LIST; public $copy = Names::LIST; public static function get() { return self::$names; } public function pick($x = Names::LIST) { return $x; } }\n",
+            ),
+        ],
+    );
+    let main = format!(
+        "<?php\nspl_autoload_register(function ($c) {{ echo \"load($c) \"; @include '{}/' . substr($c, 2) . '.php'; }});\ntry {{ $r = new C\\Reader; echo count(C\\Reader::get()), count($r->copy), count($r->pick()), count((new ReflectionClass($r))->getAttributes()[0]->newInstance()->v), \"\\n\"; }} catch (Throwable $e) {{ echo get_class($e), ': ', $e->getMessage(), \"\\n\"; }}\n",
+        t.0.display()
+    );
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    for _ in 0..3 {
+        sink.0.borrow_mut().clear();
+        vm.run_script(main.as_bytes(), "index.php");
+        assert_eq!(
+            String::from_utf8_lossy(&sink.0.borrow()),
+            "load(C\\Reader) load(C\\Names) 2222\n"
+        );
+        vm.request_reset();
+    }
+}

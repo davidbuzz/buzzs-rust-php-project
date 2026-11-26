@@ -1474,19 +1474,80 @@ fn class_declared<V>(classes: &crate::class::NameMap<V>, name: &[u8]) -> bool {
 
 impl CompiledUnit {
     /// Clears run-time caches on all op arrays in this unit so the unit
-    /// carries no request state.
+    /// carries no request state: the main code, the functions and methods,
+    /// and the code of every constant expression (class constants,
+    /// property defaults, enum case values, parameter defaults, attribute
+    /// arguments) and property hook. A cache kept from an earlier request
+    /// would answer with that request's classes: a class constant read
+    /// from a property default (`private static $x = A::LIST;`) found the
+    /// earlier request's `A`, never declared in this one (no autoloading;
+    /// its private constants then not accessible from it).
     pub fn clear_runtime_caches(&self) {
-        self.main.code.clear_runtime_caches();
-        self.main.statics.borrow_mut().clear();
+        clear_function(&self.main);
         for f in self.decls.functions.borrow().iter() {
-            f.code.clear_runtime_caches();
-            f.statics.borrow_mut().clear();
+            clear_function(f);
         }
         for c in self.decls.classes.borrow().iter() {
-            for m in &c.methods {
-                m.func.code.clear_runtime_caches();
-                m.func.statics.borrow_mut().clear();
+            clear_attributes(&c.attributes);
+            for k in &c.consts {
+                clear_expr(&k.value);
+                clear_attributes(&k.attributes);
             }
+            for p in &c.props {
+                if let Some(e) = &p.default {
+                    clear_expr(e);
+                }
+                clear_attributes(&p.attributes);
+                if let Some(h) = &p.hooks {
+                    for f in [&h.get, &h.set].into_iter().flatten() {
+                        clear_function(f);
+                    }
+                }
+            }
+            for m in &c.methods {
+                clear_function(&m.func);
+            }
+            for (_, e, _) in &c.cases {
+                if let Some(e) = e {
+                    clear_expr(e);
+                }
+            }
+            for a in &c.case_attributes {
+                clear_attributes(a);
+            }
+        }
+        for a in self.decls.const_attributes.borrow().iter() {
+            clear_attributes(a);
+        }
+    }
+}
+
+/// [`CompiledUnit::clear_runtime_caches`] of a function: its code, its
+/// static variables, its parameters' defaults and attributes and its own.
+fn clear_function(f: &crate::func::UserFunction) {
+    f.code.clear_runtime_caches();
+    f.statics.borrow_mut().clear();
+    for p in &f.params {
+        if let Some(e) = &p.default_expr {
+            clear_expr(e);
+        }
+        clear_attributes(&p.attributes);
+    }
+    clear_attributes(&f.attributes);
+}
+
+/// [`CompiledUnit::clear_runtime_caches`] of a constant expression's code.
+fn clear_expr(e: &crate::class::ConstExpr) {
+    if let crate::class::ConstExpr::Code(code) = e {
+        code.clear_runtime_caches();
+    }
+}
+
+/// [`clear_expr`] of attribute arguments.
+fn clear_attributes(attrs: &[crate::class::AttributeInfo]) {
+    for a in attrs {
+        for (_, e) in &a.args {
+            clear_expr(e);
         }
     }
 }
