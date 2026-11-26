@@ -58,7 +58,9 @@ pub(super) use dims::{
     isset_dim_cv_in, isset_tmp_dims_in, key_exists_in,
 };
 pub(super) use dyncalls::init_dyn_method_call_in;
-pub(super) use props::{concat_prop_in, fetch_prop_dim_in, prop_op_in, read_hit};
+pub(super) use props::{
+    concat_prop_in, fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean, prop_op_in, read_hit,
+};
 pub(super) use refs::step_ref;
 pub(super) use static_dims::{assign_static_dims_in, fetch_static_dims_in, isset_static_dims_in};
 pub(super) use statics::{
