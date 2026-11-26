@@ -5641,9 +5641,45 @@ impl Vm {
 
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
+    /// `isset($GLOBALS[$name])` with the name in a variable or a literal
+    /// string (`ZEND_ISSET_ISEMPTY_VAR` on the global symbol table): the
+    /// variable's value straight from the table
+    /// ([`Vm::fetch_global_by_key_optional`]), without the place walk
+    /// (MediaWiki's `GlobalVarConfig` asks this for every setting it
+    /// reads). `None` for `empty()`, any other place or name.
+    fn isset_global_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
+        if empty {
+            return None;
+        }
+        let f = self.frame();
+        let p = f.code.places.get(pid as usize)?;
+        let PlaceBase::Global(name) = p.base else {
+            return None;
+        };
+        if !p.segs.is_empty() {
+            return None;
+        }
+        let k = match name {
+            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)?,
+            Operand::Lit(l) => f.code.literals.get(l as usize)?,
+            _ => return None,
+        };
+        if !matches!(k, Value::Str(_)) {
+            return None;
+        }
+        let k = k.clone();
+        Some(
+            self.fetch_global_by_key_optional(&k)
+                .is_some_and(|v| !v.is_null()),
+        )
+    }
+
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
         // `isset($this->p[$k][$j])` & co. on an array property: no walk.
         if let Some(r) = self.isset_prop_dims_fast(pid, empty) {
+            return Ok(r);
+        }
+        if let Some(r) = self.isset_global_fast(pid, empty) {
             return Ok(r);
         }
         let (single, head) = {
