@@ -608,11 +608,19 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // The "object not initialized" checks of `$obj->m()` run in the
     // `get_method` hook (see `hooks::get_method`).
     let _entry = crate::files::enter();
-    let file_obj = this
+    let state = this.as_ref().and_then(spl_state_of);
+    let file_obj = state
         .as_ref()
-        .and_then(spl_state_of)
-        .is_some_and(|st| crate::files::is_file_state(&st));
-    if file_obj {
+        .is_some_and(|st| crate::files::is_file_state(st));
+    // An iterator around another one may hold a directory or file iterator
+    // over a user stream wrapper, which it steps without a method call.
+    let wraps_files = !file_obj
+        && !callback_resolved
+        && php_streams::wrapper::has_volatile()
+        && state
+            .as_ref()
+            .is_some_and(|st| crate::files::is_wrapping_state(st));
+    if file_obj || wraps_files {
         // Streams of SplFileObject & co. may be user wrappers: run with
         // the VM lent to the stream layer.
         return crate::files::run_bridged(vm, |host| {

@@ -201,6 +201,19 @@ pub fn run_bridged<R>(vm: &mut Vm, f: impl FnOnce(&mut dyn SplHost) -> RtResult<
     }
 }
 
+/// Whether `st` is the state of an iterator built around other iterators
+/// (`IteratorIterator` and its subclasses, `RecursiveIteratorIterator`).
+#[must_use]
+pub fn is_wrapping_state(st: &SplObject) -> bool {
+    st.with(|s| {
+        matches!(
+            s,
+            php_spl::SplState::DualIt(_) | php_spl::SplState::RecursiveIt(_)
+        )
+    })
+    .unwrap_or(false)
+}
+
 /// Whether `st` is the state of an `SplFileInfo`-family object.
 #[must_use]
 pub fn is_file_state(st: &SplObject) -> bool {
