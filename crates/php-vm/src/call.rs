@@ -690,6 +690,7 @@ impl Vm {
             is_static,
             name_lit: Some(lit),
             name: name.clone(),
+            accessor: std::cell::Cell::new(0),
         };
         let mut cache = f.code.method_cache.borrow_mut();
         if cache.len() <= slot {
@@ -804,6 +805,7 @@ impl Vm {
                         _ => None,
                     },
                     name: name.clone(),
+                    accessor: std::cell::Cell::new(0),
                 };
                 let mut cache = self.frame().code.method_cache.borrow_mut();
                 if cache.len() <= slot {
@@ -840,6 +842,7 @@ impl Vm {
                     _ => None,
                 },
                 name,
+                accessor: std::cell::Cell::new(0),
             };
             let mut cache = self.frame().code.method_cache.borrow_mut();
             if cache.len() <= slot {
@@ -1274,6 +1277,7 @@ impl Vm {
             is_static: hit.this.is_none(),
             name_lit: Some(lit),
             name: name.clone(),
+            accessor: std::cell::Cell::new(0),
         };
         let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
             return;
@@ -6548,17 +6552,65 @@ pub(crate) fn init_method_call_in(frame: &mut Frame, obj: Operand, lit: u32, slo
     true
 }
 
-/// Whether call site `slot`'s method cache holds a user function (for
-/// whatever class it saw last): the paths that only take a builtin have
-/// nothing to try there, and skip their own lookup.
+/// Call site `slot`'s method cache entry at a glance: whether it holds a
+/// user function, and its accessor mark
+/// ([`MethodCallCacheEntry::accessor`](crate::opcode::MethodCallCacheEntry::accessor);
+/// 0 for an unfilled site).
 #[inline]
-pub(crate) fn method_site_holds_user(code: &crate::opcode::OpArray, slot: usize) -> bool {
-    code.method_cache.try_borrow().is_ok_and(|cache| {
-        matches!(
-            cache.get(slot),
-            Some(Some(e)) if matches!(e.func.func, crate::opcode::CachedFuncKind::User(_))
-        )
-    })
+pub(crate) fn method_site_kind(code: &crate::opcode::OpArray, slot: usize) -> (bool, u8) {
+    match code.method_cache.try_borrow() {
+        Ok(cache) => match cache.get(slot) {
+            Some(Some(e)) => (
+                matches!(e.func.func, crate::opcode::CachedFuncKind::User(_)),
+                e.accessor.get(),
+            ),
+            _ => (false, 0),
+        },
+        Err(_) => (false, 1),
+    }
+}
+
+/// Call site `slot`'s method cache hit for the class at `cls_addr` in the
+/// calling scope `scope_addr` (the first entry only: no promotion of the
+/// second), when it holds a non-static user method named by literal `lit`:
+/// the method and the address of its class scope (0: none), without the
+/// handles [`method_entry_hit`] takes of the function's wrapper and the
+/// scope (a count up and down each, which an accessor answered without a
+/// frame has no use for).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the frameless getters' lookup, one caller
+pub(crate) fn method_site_user(
+    code: &crate::opcode::OpArray,
+    slot: usize,
+    cls_addr: usize,
+    scope_addr: usize,
+    lit: u32,
+) -> Option<(Rc<UserFunction>, usize)> {
+    let cache = code.method_cache.try_borrow().ok()?;
+    let e = cache.get(slot)?.as_ref()?;
+    if e.class_addr != cls_addr
+        || e.scope_addr != scope_addr
+        || e.name_lit != Some(lit)
+        || e.is_static
+    {
+        return None;
+    }
+    let crate::opcode::CachedFuncKind::User(weak) = &e.func.func else {
+        return None;
+    };
+    let method_scope = e.method_scope.as_ref().map_or(0, |w| w.as_ptr() as usize);
+    Some((weak.upgrade()?, method_scope))
+}
+
+/// Marks call site `slot`'s current entry as calling an accessor (2) or
+/// not (1), for [`method_site_kind`].
+#[inline]
+pub(crate) fn mark_method_site(code: &crate::opcode::OpArray, slot: usize, accessor: bool) {
+    if let Ok(cache) = code.method_cache.try_borrow() {
+        if let Some(Some(e)) = cache.get(slot) {
+            e.accessor.set(if accessor { 2 } else { 1 });
+        }
+    }
 }
 
 /// A method call site's cached resolution for an object of the class at
@@ -7385,6 +7437,7 @@ impl Vm {
                     is_static: call.this.is_none(),
                     name_lit: None,
                     name: m.clone(),
+                    accessor: std::cell::Cell::new(0),
                 };
                 let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
                     return;
@@ -7437,6 +7490,7 @@ impl Vm {
             is_static: true,
             name_lit: None,
             name: method,
+            accessor: std::cell::Cell::new(0),
         };
         let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
             return;

@@ -2451,10 +2451,20 @@ fn run_call(
             // A user method that only returns a property of `$this` or a
             // literal: its value, without the call. Its lookup of the
             // site's method is handed on.
-            let resolved = match calls::accessor_now(vm, ops, obj, lit, at) {
-                calls::MethodNow::Done(next) => return next,
-                calls::MethodNow::Resolved(entry) => Some(entry),
-                calls::MethodNow::Unknown => None,
+            // (Tried at a site until its first call settles what it
+            // calls, then only where that is an accessor.)
+            let (site_user, site_accessor) = vm
+                .frames
+                .last()
+                .map_or((false, 1), |f| crate::call::method_site_kind(&f.code, at));
+            let resolved = if site_accessor == 1 {
+                None
+            } else {
+                match calls::accessor_now(vm, ops, obj, lit, at, site_accessor == 2) {
+                    calls::MethodNow::Done(next) => return next,
+                    calls::MethodNow::Resolved(entry) => Some(entry),
+                    calls::MethodNow::Unknown => None,
+                }
             };
             // A pure builtin method with arguments at hand
             // (`$m->getName()`, `$m->getAttributes(A::class)`): called at
@@ -2463,10 +2473,7 @@ fn run_call(
             // every call.)
             let user_site = match &resolved {
                 Some((func, ..)) => matches!(func, crate::func::Func::User(_)),
-                None => vm
-                    .frames
-                    .last()
-                    .is_some_and(|f| crate::call::method_site_holds_user(&f.code, at)),
+                None => site_user,
             };
             if !user_site {
                 if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
