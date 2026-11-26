@@ -2451,8 +2451,16 @@ fn run_call(
             // A pure builtin method with arguments at hand
             // (`$m->getName()`, `$m->getAttributes(A::class)`): called at
             // once, past its `DoCall`.
-            if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
-                return next;
+            // A user method that only returns a property of `$this` or a
+            // literal: its value, without the call.
+            match calls::accessor_now(vm, ops, obj, lit, at) {
+                calls::MethodNow::Done(next) => return next,
+                calls::MethodNow::User => {}
+                calls::MethodNow::Unknown => {
+                    if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
+                        return next;
+                    }
+                }
             }
             if let Some(call) = calls::prepare_method(vm, obj, lit, at) {
                 return send_and_enter(vm, prep, call, ops, at);
