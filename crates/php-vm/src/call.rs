@@ -7134,12 +7134,18 @@ pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
     match v {
         Value::Object(o) if ty.intersections.is_empty() => {
             let class = object::class_of(o);
+            // A closure for `callable`: nothing to resolve.
+            if ty.mask & crate::types::mask::CALLABLE != 0
+                && crate::typecheck::is_closure_class(class)
+            {
+                return true;
+            }
             // The names lower-cased as the class table keys them
             // (`TypeDecl::classes` keeps them as written).
             ty.class_refs().classes.iter().any(|c| match c {
                 crate::types::ClassRef::Named(lc) => class.instance_of_name(lc.as_bytes()),
                 crate::types::ClassRef::Scope | crate::types::ClassRef::Parent => false,
-            })
+            }) || (!ty.classes.is_empty() && ty.alias_class_is(class))
         }
         _ => false,
     }

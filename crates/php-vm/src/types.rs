@@ -112,6 +112,13 @@ pub struct TypeDecl {
     /// [`Self::class_refs`], computed by the first runtime check of the
     /// finished declaration; cloned along, ignored by equality.
     pub lc_cache: OnceCell<ClassRefs>,
+    /// The class of the last object the full check accepted for this type
+    /// through a `class_alias()` name (`TypeDecl::learn_alias_class`):
+    /// the by-name tests of the plain call paths cannot see an alias, so
+    /// every call passing such an object took the generic path. Held
+    /// weakly, which pins the address compared. Cloned along, ignored by
+    /// equality.
+    pub alias_ok: std::cell::RefCell<Option<std::rc::Weak<crate::class::Class>>>,
 }
 
 impl fmt::Debug for TypeDecl {
@@ -139,6 +146,24 @@ impl PartialEq for TypeDecl {
 impl Eq for TypeDecl {}
 
 impl TypeDecl {
+    /// Records that objects of `cls` satisfy this type through an alias.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn learn_alias_class(&self, cls: &std::rc::Rc<crate::class::Class>) {
+        if let Ok(mut slot) = self.alias_ok.try_borrow_mut() {
+            *slot = Some(std::rc::Rc::downgrade(cls));
+        }
+    }
+
+    /// Whether `cls` is the class [`TypeDecl::learn_alias_class`] recorded.
+    #[inline]
+    pub(crate) fn alias_class_is(&self, cls: &std::rc::Rc<crate::class::Class>) -> bool {
+        self.alias_ok.try_borrow().is_ok_and(|slot| {
+            slot.as_ref()
+                .is_some_and(|w| std::ptr::eq(w.as_ptr(), std::rc::Rc::as_ptr(cls)))
+        })
+    }
+
     /// The class-like members lower-cased for the runtime check, computed
     /// once per declaration (php-src's `zend_type` names resolve through
     /// the class table's lower-case keys; `self`/`parent` through the
