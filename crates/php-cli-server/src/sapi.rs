@@ -178,6 +178,11 @@ pub trait FastCgiStreams: std::fmt::Debug {
     fn is_finished(&self) -> bool {
         false
     }
+    /// Whether the web server aborted the request or closed the connection
+    /// while the request runs; reads what it sent without waiting.
+    fn peer_gone(&self) -> bool {
+        false
+    }
     /// `fcgi_end()` and `fcgi_close(request, 0, 0)` for
     /// `fastcgi_finish_request()`: `false` when the request already ended.
     /// Output written afterwards is dropped.
@@ -1101,14 +1106,6 @@ impl Extension for CliServerModule {
             .function_static("flush(): void", flush)
             .function_static("php_sapi_name(): string|false", sapi_name)
             .function_static("getmypid(): int|false", getmypid)
-            .function_static(
-                "connection_aborted(): bool",
-                php_vm::connection::connection_aborted,
-            )
-            .function_static(
-                "connection_status(): int",
-                php_vm::connection::connection_status,
-            )
             .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
                 log,

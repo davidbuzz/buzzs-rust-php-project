@@ -32,6 +32,8 @@ mod main_stack;
 #[path = "../memcap.rs"]
 mod memcap;
 #[allow(dead_code)]
+#[path = "../cgi/peer_watch.rs"]
+mod peer_watch;
 #[path = "../cgi/request.rs"]
 mod request;
 #[path = "../startup.rs"]

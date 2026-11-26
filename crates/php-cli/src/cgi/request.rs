@@ -234,10 +234,13 @@ pub(crate) fn fastcgi_request(
         prepared.vm.log_hook = Some(Box::new(move |msg: &[u8]| {
             let mut line = msg.to_vec();
             line.push(b'\n');
-            let _ = c.stderr(&line);
+            if !c.stderr(&line) {
+                // `php_handle_aborted_connection()`, finished by the VM.
+                php_vm::connection::note_abort(None);
+            }
         }));
     }
-    let (_, mut vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
+    let mut vm = run_watched(prepared, &ctx, &server_cfg, conn);
     let done = RequestDone {
         exit_status: ctx.exit_status.get(),
         response_code: ctx.headers.borrow().response_code,
@@ -657,7 +660,46 @@ pub(crate) fn new_prepared_vm(cfg: &Config, ini: Vec<(String, String)>) -> Prepa
     let slot = Rc::new(RefCell::new(None));
     let mut vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
     configure(&mut vm, cfg);
+    vm.register_interrupt_handler(peer_interrupt);
+    // After `Vm::activate()`, which resets the connection status: an abort
+    // seen before it would be lost.
+    vm.startup_hooks.push(crate::peer_watch::start_for_request);
     PreparedVm { vm, slot }
+}
+
+/// `run_request` with the connection watched ([`crate::peer_watch`]): the
+/// body is read, so what the web server sends from now on is an abort, the
+/// end of the connection or a record for another request. The request's
+/// VM comes back.
+fn run_watched(
+    prepared: PreparedVm,
+    ctx: &Rc<RequestCtx>,
+    server_cfg: &php_cli_server::sapi::ServerConfig,
+    conn: &fastcgi::Connection,
+) -> Vm {
+    crate::peer_watch::arm_for_request(conn.raw_fd());
+    let (outcome, vm) = php_cli_server::sapi::run_request(prepared, ctx, server_cfg, false);
+    crate::peer_watch::end_request();
+    // Only the built-in server's router serves static files.
+    debug_assert_eq!(outcome, php_cli_server::sapi::Outcome::Done);
+    vm
+}
+
+/// The VM's interrupt handler for a `FastCGI` request: when the connection
+/// watch ([`crate::peer_watch`]) saw something, reads it; a web server that
+/// aborted the request or closed the connection is a gone client, as a
+/// failed write is (`php_handle_aborted_connection()`). Anything else was
+/// handled, and the watch goes on.
+fn peer_interrupt(vm: &mut Vm) -> VmResult<()> {
+    if crate::peer_watch::take_ready() {
+        let gone = php_cli_server::sapi::with_ctx(|c| c.fcgi.as_ref().map(|f| f.peer_gone()));
+        if gone == Some(Some(true)) {
+            php_sapi::connection::record_abort();
+        } else {
+            crate::peer_watch::rearm();
+        }
+    }
+    php_vm::connection::finish_pending_abort(vm)
 }
 
 /// What every VM of this binary gets after module startup.

@@ -25,6 +25,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 pub const VERSION_1: u8 = 1;
 /// `FCGI_BEGIN_REQUEST`.
 pub const BEGIN_REQUEST: u8 = 1;
+/// `FCGI_ABORT_REQUEST`.
+pub const ABORT_REQUEST: u8 = 2;
 /// `FCGI_END_REQUEST`.
 pub const END_REQUEST: u8 = 3;
 /// `FCGI_PARAMS`.
@@ -39,6 +41,11 @@ pub const STDERR: u8 = 7;
 pub const GET_VALUES: u8 = 9;
 /// `FCGI_GET_VALUES_RESULT`.
 pub const GET_VALUES_RESULT: u8 = 10;
+/// `FCGI_UNKNOWN_TYPE`.
+pub const UNKNOWN_TYPE: u8 = 11;
+/// `FCGI_CANT_MPX_CONN`: the `protocolStatus` of a request refused because
+/// the connection already carries one.
+pub const CANT_MPX_CONN: u8 = 1;
 /// `FCGI_RESPONDER`.
 pub const RESPONDER: u16 = 1;
 /// `FCGI_AUTHORIZER`.
@@ -68,7 +75,7 @@ pub fn set_logger(f: fn(i32, &str)) {
 
 /// `fcgi_log(FCGI_ERROR, ...)`: by default to standard error as given
 /// (some without a newline, as in php-src).
-fn log(msg: &str) {
+pub fn log(msg: &str) {
     match LOGGER.get() {
         Some(f) => f(LOG_ERROR, msg),
         None => {
@@ -439,6 +446,17 @@ impl MgmtVars {
     }
 }
 
+/// What [`Connection::check_peer`] found on the connection while its
+/// request runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    /// The web server still waits for the response.
+    Waiting,
+    /// The web server aborted the request (`FCGI_ABORT_REQUEST`) or closed
+    /// the connection.
+    Gone,
+}
+
 /// What [`Connection::read_request`] read.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Incoming {
@@ -465,6 +483,12 @@ pub struct Connection {
     out: RefCell<Vec<u8>>,
     /// Offset and type of the open record in `out` (`out_hdr`).
     out_hdr: Cell<Option<(usize, u8)>>,
+    /// Request ids refused with `FCGI_CANT_MPX_CONN` while a request ran:
+    /// their later records are skipped.
+    refused: RefCell<Vec<u16>>,
+    /// The management variables of the last [`Connection::read_request`],
+    /// for a `GET_VALUES` that comes while a request runs.
+    mgmt: RefCell<Option<MgmtVars>>,
 }
 
 impl Connection {
@@ -482,12 +506,19 @@ impl Connection {
             in_pad: Cell::new(0),
             out: RefCell::new(Vec::with_capacity(OUT_BUF + HEADER_LEN * 2)),
             out_hdr: Cell::new(None),
+            refused: RefCell::new(Vec::new()),
+            mgmt: RefCell::new(None),
         }
     }
 
     /// `fcgi_is_closed()`.
     pub fn is_closed(&self) -> bool {
         self.stream.borrow().is_none()
+    }
+
+    /// The socket, while the connection is open.
+    pub fn raw_fd(&self) -> Option<RawFd> {
+        self.stream.borrow().as_ref().map(Stream::raw_fd)
     }
 
     /// Whether the web server asked to keep the connection (`req->keep`).
@@ -534,18 +565,24 @@ impl Connection {
         self.in_len.set(0);
         self.out.borrow_mut().clear();
         self.out_hdr.set(None);
+        *self.mgmt.borrow_mut() = Some(mgmt.clone());
         let mut env = Env::new();
 
         let Some(mut hdr) = self.read_header() else {
             return Incoming::Failed;
         };
-        // The empty STDIN record that ended the previous request.
-        while hdr.kind == STDIN && hdr.len == 0 {
+        // The empty STDIN record that ended the previous request, and the
+        // rest of the requests refused while it ran.
+        while (hdr.kind == STDIN && hdr.len == 0) || self.is_refused(&hdr) {
+            if self.is_refused(&hdr) && !self.skip_content(&hdr) {
+                return Incoming::Failed;
+            }
             match self.read_header() {
                 Some(h) => hdr = h,
                 None => return Incoming::Failed,
             }
         }
+        self.refused.borrow_mut().clear();
         if hdr.len + hdr.padding > MAX_LENGTH {
             return Incoming::Failed;
         }
@@ -590,30 +627,177 @@ impl Connection {
             Incoming::Request(env)
         } else if hdr.kind == GET_VALUES {
             if !self.read_exact(&mut buf[..hdr.len + hdr.padding])
-                || !get_params(&mut env, &buf[..hdr.len])
+                || !self.answer_get_values(mgmt, &buf[..hdr.len])
             {
-                self.keep.set(false);
-                return Incoming::Failed;
-            }
-            // The asked names that are management variables, newest
-            // first (the order `req->env.list` visits them).
-            let mut body = Vec::new();
-            for (name, _) in env.iter().rev() {
-                let Some(value) = mgmt.get(name) else {
-                    continue;
-                };
-                if body.len() + 4 + 4 + name.len() + value.len() >= MAX_LENGTH {
-                    break;
-                }
-                encode_param(&mut body, name, value.as_bytes());
-            }
-            if !self.write_all(&record(GET_VALUES_RESULT, 0, &body)) {
                 self.keep.set(false);
                 return Incoming::Failed;
             }
             Incoming::Management
         } else {
             Incoming::Failed
+        }
+    }
+
+    /// Answers a `GET_VALUES` record with `content`: the asked names that
+    /// are management variables, newest first (the order `req->env.list`
+    /// visits them). `false` when the content is malformed or the answer
+    /// could not be sent.
+    fn answer_get_values(&self, mgmt: &MgmtVars, content: &[u8]) -> bool {
+        let mut env = Env::new();
+        if !get_params(&mut env, content) {
+            return false;
+        }
+        let mut body = Vec::new();
+        for entry in env.iter().rev() {
+            let name = &entry.0;
+            let Some(value) = mgmt.get(name) else {
+                continue;
+            };
+            // A name-value pair is two lengths, then the name and the value.
+            // A length takes 1 byte below 128 and 4 bytes from 128 on
+            // (`encode_param`); like php-src, this reserves 4 + 4 bytes, the
+            // most the two lengths take. The answer must fit one record:
+            // php-src's `buf` holds a header plus `FCGI_MAX_LENGTH` bytes.
+            if body.len() + 4 + 4 + name.len() + value.len() >= MAX_LENGTH {
+                break;
+            }
+            encode_param(&mut body, name, value.as_bytes());
+        }
+        self.write_all(&record(GET_VALUES_RESULT, 0, &body))
+    }
+
+    /// Whether `hdr` belongs to a request refused while another ran.
+    fn is_refused(&self, hdr: &Header) -> bool {
+        hdr.id != 0 && hdr.kind != BEGIN_REQUEST && self.refused.borrow().contains(&hdr.id)
+    }
+
+    /// Reads and drops the content and padding of the record `hdr` heads.
+    fn skip_content(&self, hdr: &Header) -> bool {
+        self.read_exact(&mut vec![0u8; hdr.len + hdr.padding])
+    }
+
+    /// While the request runs: reads the records the web server sent since
+    /// its body, without waiting for more. Not in php-src, which reads
+    /// nothing until the script ends; there a gone client shows only when
+    /// a write fails.
+    ///
+    /// - `FCGI_ABORT_REQUEST` for the request, or the end of the
+    ///   connection: [`Peer::Gone`]. After an abort the connection stays
+    ///   usable: the request still ends with `END_REQUEST`.
+    /// - `BEGIN_REQUEST` for another id: refused with `FCGI_CANT_MPX_CONN`
+    ///   (`FCGI_MPXS_CONNS` is 0), its later records skipped.
+    /// - `GET_VALUES`: answered; another management record:
+    ///   `FCGI_UNKNOWN_TYPE`.
+    ///
+    /// Only whole records are read, so this never blocks; inside a `STDIN`
+    /// record the script did not read to its end, only the end of the
+    /// connection is looked for.
+    pub fn check_peer(&self) -> Peer {
+        let Some(fd) = self.raw_fd() else {
+            return Peer::Gone;
+        };
+        loop {
+            if self.in_len.get() != 0 {
+                return self.partial(fd);
+            }
+            let mut head = [0u8; HEADER_LEN];
+            let waiting = match sys::peek(fd, &mut head) {
+                sys::Peeked::Bytes(n) => n,
+                sys::Peeked::Nothing => return Peer::Waiting,
+                sys::Peeked::Closed => return self.lost(),
+                sys::Peeked::Failed(errno) => return self.failed(errno),
+            };
+            if waiting < HEADER_LEN {
+                return self.partial(fd);
+            }
+            let hdr = Header::parse(head);
+            if hdr.version < VERSION_1 {
+                return self.lost();
+            }
+            let mut rec = vec![0u8; HEADER_LEN + hdr.len + hdr.padding];
+            let waiting = match sys::peek(fd, &mut rec) {
+                sys::Peeked::Bytes(n) => n,
+                sys::Peeked::Nothing => return self.partial(fd),
+                sys::Peeked::Closed => return self.lost(),
+                sys::Peeked::Failed(errno) => return self.failed(errno),
+            };
+            if waiting < rec.len() {
+                return self.partial(fd);
+            }
+            if !self.read_exact(&mut rec) {
+                return self.lost();
+            }
+            let content = &rec[HEADER_LEN..HEADER_LEN + hdr.len];
+            if !self.handle_record(&hdr, content) {
+                return if hdr.kind == ABORT_REQUEST {
+                    Peer::Gone
+                } else {
+                    self.lost()
+                };
+            }
+        }
+    }
+
+    /// One record [`Connection::check_peer`] read: `false` when the request
+    /// ends (its abort, or an answer that could not be sent).
+    fn handle_record(&self, hdr: &Header, content: &[u8]) -> bool {
+        let id = self.id.get();
+        if hdr.id == 0 {
+            if hdr.kind == GET_VALUES {
+                let mgmt = self.mgmt.borrow().clone();
+                return mgmt.is_some_and(|m| self.answer_get_values(&m, content));
+            }
+            let mut body = [0u8; 8];
+            body[0] = hdr.kind;
+            return self.write_all(&record(UNKNOWN_TYPE, 0, &body));
+        }
+        if hdr.id == id {
+            if hdr.kind == ABORT_REQUEST {
+                return false;
+            }
+            if hdr.kind == STDIN && content.is_empty() {
+                // The empty `STDIN` record that ends the body.
+                return true;
+            }
+        } else if hdr.kind == BEGIN_REQUEST {
+            let mut body = [0u8; 8];
+            body[4] = CANT_MPX_CONN;
+            self.refused.borrow_mut().push(hdr.id);
+            return self.write_all(&record(END_REQUEST, hdr.id, &body));
+        } else if self.is_refused(hdr) {
+            return true;
+        }
+        log(&format!(
+            "Skipped a FastCGI record of type {} for request {} while request {id} runs\n",
+            hdr.kind, hdr.id
+        ));
+        true
+    }
+
+    /// Reading the connection failed with `errno`: logged, and the
+    /// connection counts as lost.
+    fn failed(&self, errno: i32) -> Peer {
+        log(&format!(
+            "Reading the FastCGI connection while request {} runs failed: {}\n",
+            self.id.get(),
+            std::io::Error::from_raw_os_error(errno)
+        ));
+        self.lost()
+    }
+
+    /// The connection ended under the request: it cannot be kept.
+    fn lost(&self) -> Peer {
+        self.keep.set(false);
+        Peer::Gone
+    }
+
+    /// Part of a record arrived: the rest is waited for unless the web
+    /// server closed its side.
+    fn partial(&self, fd: RawFd) -> Peer {
+        if sys::peer_closed(fd) {
+            self.lost()
+        } else {
+            Peer::Waiting
         }
     }
 
@@ -778,6 +962,10 @@ impl Connection {
 }
 
 impl FastCgiStreams for Connection {
+    fn peer_gone(&self) -> bool {
+        self.check_peer() == Peer::Gone
+    }
+
     fn stdout(&self, data: &[u8]) -> bool {
         self.write_records(STDOUT, data)
     }

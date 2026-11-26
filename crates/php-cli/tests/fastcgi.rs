@@ -633,7 +633,7 @@ fn request_state_does_not_reach_the_next_request() {
 
 /// A page that keeps writing after the client left: the log shows how far
 /// it got, what the shutdown function saw, and that destructors ran.
-const ABORT_SCRIPT: &str = r#"<?php
+const ABORT_SCRIPT: &str = r"<?php
 $log = $_SERVER['ABORT_LOG'];
 if (isset($_GET['ignore'])) {
     ignore_user_abort(true);
@@ -649,7 +649,7 @@ for ($i = 0; $i < 200; $i++) {
     usleep(10000);
 }
 file_put_contents($log, 'completed;', FILE_APPEND);
-"#;
+";
 
 /// Requests [`ABORT_SCRIPT`] from `php-cgi -b`, reads the first output
 /// record, closes the connection and returns the script's log once the
@@ -723,4 +723,177 @@ fn ignore_user_abort_keeps_the_script_running() {
     let log = abort_after_first_output("ignore=1");
     assert!(log.starts_with("completed;"), "{log}");
     assert!(log.contains("shutdown:1:true;"), "{log}");
+}
+
+/// `FCGI_ABORT_REQUEST`.
+const ABORT_REQUEST: u8 = 2;
+
+/// A page that writes nothing while it waits about 4 seconds, unless
+/// `?quick`: an abort shows only when the web server's records are read
+/// while it runs.
+const QUIET_SCRIPT: &str = r"<?php
+$log = $_SERVER['ABORT_LOG'];
+register_shutdown_function(function () use ($log) {
+    file_put_contents($log, 'shutdown:' . connection_status() . ';', FILE_APPEND);
+});
+for ($i = 0; $i < (isset($_GET['quick']) ? 1 : 200); $i++) {
+    usleep(20000);
+}
+file_put_contents($log, 'completed;', FILE_APPEND);
+echo 'done';
+";
+
+/// `php-cgi -b` on a free port with [`QUIET_SCRIPT`]: the process, its
+/// address, the script and its log.
+fn quiet_server(dir: &TempDir) -> (Proc, String, PathBuf, PathBuf) {
+    let script = dir.0.join("quiet.php");
+    std::fs::write(&script, QUIET_SCRIPT).unwrap();
+    let port = free_port();
+    let mut child = Command::new(PHP_CGI)
+        .args(["-n", "-b", &format!("127.0.0.1:{port}")])
+        .env_remove("PHP_FCGI_CHILDREN")
+        .env_remove("PHP_FCGI_MAX_REQUESTS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    wait_for(&mut child, "php-cgi -b", || {
+        TcpStream::connect(&addr).is_ok()
+    })
+    .unwrap();
+    (Proc(child), addr, script, dir.0.join("quiet.log"))
+}
+
+/// The records of a request for `script` with `query`, kept alive.
+fn quiet_request(id: u16, script: &Path, log: &Path, query: &str) -> Vec<u8> {
+    let mut p = Vec::new();
+    for (k, v) in [
+        ("SCRIPT_FILENAME", script.to_str().unwrap()),
+        ("REQUEST_METHOD", "GET"),
+        ("QUERY_STRING", query),
+        ("ABORT_LOG", log.to_str().unwrap()),
+    ] {
+        pair(&mut p, k, v);
+    }
+    let mut wire = record(BEGIN_REQUEST, id, &[0, 1, 1, 0, 0, 0, 0, 0]);
+    wire.extend(record(PARAMS, id, &p));
+    wire.extend(record(PARAMS, id, b""));
+    wire.extend(record(STDIN, id, b""));
+    wire
+}
+
+/// Waits until the log holds `shutdown:`; how long that took.
+fn wait_for_shutdown(log: &Path, started: Instant) -> (String, Duration) {
+    loop {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if text.contains("shutdown:") {
+            return (text, started.elapsed());
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the script didn't end: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `FCGI_ABORT_REQUEST`: the script stops at its next
+/// safe point although it writes nothing, the request ends with
+/// `END_REQUEST`, and the kept connection serves the next request.
+#[test]
+fn an_abort_request_stops_a_quiet_script() {
+    let dir = TempDir::new("fcgi-abort-request");
+    let (server, addr, script, log) = quiet_server(&dir);
+    let mut s = TcpStream::connect(&addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    s.write_all(&quiet_request(1, &script, &log, "")).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    s.write_all(&record(ABORT_REQUEST, 1, b"")).unwrap();
+    let mut ended = false;
+    while let Some((kind, id, content)) = read_record(&mut s) {
+        assert_eq!(id, 1, "record for another request");
+        if kind == END_REQUEST {
+            assert_eq!(content, [0; 8], "FCGI_REQUEST_COMPLETE");
+            ended = true;
+            break;
+        }
+    }
+    assert!(ended, "END_REQUEST after the abort");
+    let (text, took) = wait_for_shutdown(&log, started);
+    assert_eq!(text, "shutdown:1;", "no `completed`");
+    assert!(took < Duration::from_secs(2), "the abort took {took:?}");
+
+    std::fs::remove_file(&log).unwrap();
+    s.write_all(&quiet_request(2, &script, &log, "quick=1"))
+        .unwrap();
+    let mut out = String::new();
+    while let Some((kind, id, content)) = read_record(&mut s) {
+        assert_eq!(id, 2, "record for another request");
+        match kind {
+            STDOUT => out.push_str(&String::from_utf8_lossy(&content)),
+            END_REQUEST => break,
+            kind => panic!("unexpected record type {kind}"),
+        }
+    }
+    assert!(
+        out.ends_with("done"),
+        "the kept connection serves on: {out:?}"
+    );
+    drop(server);
+}
+
+/// A web server that closes the connection without `FCGI_ABORT_REQUEST`
+/// (nginx, `HAProxy` without keep-conn): the script stops although it
+/// writes nothing.
+#[test]
+fn a_closed_connection_stops_a_quiet_script() {
+    let dir = TempDir::new("fcgi-abort-close");
+    let (server, addr, script, log) = quiet_server(&dir);
+    let mut s = TcpStream::connect(&addr).unwrap();
+    s.write_all(&quiet_request(1, &script, &log, "")).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    drop(s);
+    let (text, took) = wait_for_shutdown(&log, started);
+    assert_eq!(text, "shutdown:1;", "no `completed`");
+    assert!(took < Duration::from_secs(2), "the abort took {took:?}");
+    drop(server);
+}
+
+/// A second request on the connection while one runs: `FCGI_MPXS_CONNS`
+/// is 0, so it is refused with `FCGI_CANT_MPX_CONN` at once, and the first
+/// one runs to its end.
+#[test]
+fn a_second_request_on_the_connection_is_refused() {
+    let dir = TempDir::new("fcgi-mpx");
+    let (server, addr, script, log) = quiet_server(&dir);
+    let mut s = TcpStream::connect(&addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    s.write_all(&quiet_request(1, &script, &log, "")).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    s.write_all(&quiet_request(2, &script, &log, "quick=1"))
+        .unwrap();
+    let mut refused = None;
+    let mut out = String::new();
+    while let Some((kind, id, content)) = read_record(&mut s) {
+        match (kind, id) {
+            (END_REQUEST, 2) => refused = Some((content, started.elapsed())),
+            (STDOUT, 1) => out.push_str(&String::from_utf8_lossy(&content)),
+            (END_REQUEST, 1) => break,
+            other => panic!("unexpected record {other:?}"),
+        }
+    }
+    let (content, took) = refused.expect("END_REQUEST for request 2");
+    assert_eq!(content, [0, 0, 0, 0, 1, 0, 0, 0], "FCGI_CANT_MPX_CONN");
+    assert!(took < Duration::from_secs(2), "refused only after {took:?}");
+    assert!(out.ends_with("done"), "request 1 ran to its end: {out:?}");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "completed;shutdown:0;"
+    );
+    drop(server);
 }
