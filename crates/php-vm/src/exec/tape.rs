@@ -2425,6 +2425,11 @@ fn run_call(
             ..
         }) => {
             flush(vm, prep);
+            // A leaf builtin with plain arguments: called at once.
+            let site = lits.len() + at + 1;
+            if let Some(next) = calls::leaf_now(vm, ops, name, Some(site), at, CALLED, CALL_THREW) {
+                return next;
+            }
             if let Some(call) = calls::prepare_ns(vm, name, lits.len() + at + 1) {
                 return send_and_enter(vm, prep, call, ops, at);
             }
@@ -2438,6 +2443,9 @@ fn run_call(
                     *prep = Some(call);
                     return at + 1;
                 }
+            }
+            if let Some(next) = calls::leaf_now(vm, ops, name, None, at, CALLED, CALL_THREW) {
+                return next;
             }
             if let Some(call) = calls::prepare(vm, name) {
                 return send_and_enter(vm, prep, call, ops, at);

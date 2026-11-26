@@ -464,6 +464,144 @@ pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
     class << flags::FRAMELESS_SHIFT
 }
 
+/// The leaf classes ([`leaf_id`]): builtins outside php-src's frameless
+/// list that two framework test suites call most through a frame they
+/// have no use for (11.9M of 15.9M framed builtin calls).
+pub(crate) mod leaf {
+    pub(crate) const NONE: u8 = 0;
+    /// `defined()` of a name without `::` (a class constant looks its
+    /// class up, which may autoload).
+    pub(crate) const DEFINED: u8 = 1;
+    /// `microtime()`, `hrtime()`: no argument or a bool.
+    pub(crate) const CLOCK: u8 = 2;
+    /// `time()`.
+    pub(crate) const NO_ARGS: u8 = 3;
+    /// `explode()` with a separator that is not empty (its `ValueError`).
+    pub(crate) const EXPLODE: u8 = 4;
+    /// `implode(string, array)` of scalars and nulls (an array element
+    /// warns, an object's `__toString()` runs).
+    pub(crate) const IMPLODE: u8 = 5;
+    /// `class_uses()`, `class_parents()`, `class_implements()` of an
+    /// object or of the name of a loaded class (another name autoloads).
+    pub(crate) const CLASS_INFO: u8 = 6;
+    /// `method_exists()` of an object, or of the name of a loaded class.
+    pub(crate) const METHOD_EXISTS: u8 = 7;
+    /// `class_exists()`, `interface_exists()`, `trait_exists()`,
+    /// `enum_exists()` of a loaded name, or without autoloading.
+    pub(crate) const CLASS_EXISTS: u8 = 8;
+    /// `assert(true)`.
+    pub(crate) const ASSERT: u8 = 9;
+    /// `mb_strlen()` in the default encoding or UTF-8 (another name can
+    /// be invalid).
+    pub(crate) const MB_STRLEN: u8 = 10;
+    /// `mb_substr()`, likewise.
+    pub(crate) const MB_SUBSTR: u8 = 11;
+    /// `mb_strpos()`, `mb_strrpos()` of two strings (an offset can be out
+    /// of range).
+    pub(crate) const MB_STRPOS: u8 = 12;
+    /// `array_values()`, `array_key_first()`, `array_key_last()`,
+    /// `array_first()`, `array_last()`, `array_keys()` of one array.
+    pub(crate) const ARRAY1: u8 = 13;
+    /// `array_reverse(array[, bool])`.
+    pub(crate) const ARRAY_BOOL: u8 = 14;
+    /// `array_merge()` of arrays.
+    pub(crate) const ARRAYS: u8 = 15;
+    /// `array_slice(array, int[, ?int[, bool]])`.
+    pub(crate) const ARRAY_SLICE: u8 = 16;
+    /// `strcspn()`, `strspn()`, `strcmp()`, `strcasecmp()` of two strings.
+    pub(crate) const STR2: u8 = 17;
+    /// `preg_quote(string[, ?string])`.
+    pub(crate) const PREG_QUOTE: u8 = 18;
+    /// `ucfirst()`, `lcfirst()`, `crc32()`, `function_exists()` of a
+    /// string.
+    pub(crate) const STR1: u8 = 19;
+}
+
+/// The [`leaf`] class of the builtin function named `lc` (lower case).
+pub(crate) fn leaf_id(lc: &[u8]) -> u8 {
+    match lc {
+        b"defined" => leaf::DEFINED,
+        b"microtime" | b"hrtime" => leaf::CLOCK,
+        b"time" => leaf::NO_ARGS,
+        b"explode" => leaf::EXPLODE,
+        b"implode" | b"join" => leaf::IMPLODE,
+        b"class_uses" | b"class_parents" | b"class_implements" => leaf::CLASS_INFO,
+        b"method_exists" => leaf::METHOD_EXISTS,
+        b"class_exists" | b"interface_exists" | b"trait_exists" | b"enum_exists" => {
+            leaf::CLASS_EXISTS
+        }
+        b"assert" => leaf::ASSERT,
+        b"mb_strlen" => leaf::MB_STRLEN,
+        b"mb_substr" => leaf::MB_SUBSTR,
+        b"mb_strpos" | b"mb_strrpos" => leaf::MB_STRPOS,
+        b"array_values" | b"array_key_first" | b"array_key_last" | b"array_first"
+        | b"array_last" | b"array_keys" => leaf::ARRAY1,
+        b"array_reverse" => leaf::ARRAY_BOOL,
+        b"array_merge" => leaf::ARRAYS,
+        b"array_slice" => leaf::ARRAY_SLICE,
+        b"strcspn" | b"strspn" | b"strcmp" | b"strcasecmp" => leaf::STR2,
+        b"preg_quote" => leaf::PREG_QUOTE,
+        b"ucfirst" | b"lcfirst" | b"crc32" | b"function_exists" => leaf::STR1,
+        _ => leaf::NONE,
+    }
+}
+
+/// Whether `enc` names UTF-8 as the mbstring functions take it.
+fn is_utf8_name(enc: &[u8]) -> bool {
+    enc.eq_ignore_ascii_case(b"utf-8") || enc.eq_ignore_ascii_case(b"utf8")
+}
+
+impl Vm {
+    /// Whether the arguments `args` have a shape of leaf class `id`
+    /// ([`leaf`]): the handler then reports nothing, throws nothing, runs
+    /// no PHP code and looks at no frame, so that calling it without its
+    /// own shows nowhere. Every value is matched by its kind (a reference
+    /// or a value its parameter would coerce is the framed call's).
+    pub(crate) fn leaf_args(&self, id: u8, args: &[&Value]) -> bool {
+        use Value::{Array, Bool, Float, Int, Null, Object, Str};
+        let loaded = |name: &ZStr| self.find_class(name.as_bytes()).is_some();
+        match (id, args) {
+            (leaf::DEFINED, [Str(name)]) => {
+                crate::call::find_double_colon(name.as_bytes()).is_none()
+            }
+            (leaf::CLOCK, [] | [Bool(_)])
+            | (leaf::NO_ARGS, [])
+            | (leaf::CLASS_INFO, [Object(_)] | [Object(_), Bool(_)])
+            | (leaf::METHOD_EXISTS, [Object(_), Str(_)])
+            | (leaf::CLASS_EXISTS, [Str(_), Bool(false)])
+            | (leaf::ASSERT, [Bool(true)] | [Bool(true), _])
+            | (leaf::MB_STRLEN, [Str(_)])
+            | (leaf::MB_SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
+            | (leaf::MB_STRPOS | leaf::STR2, [Str(_), Str(_)])
+            | (leaf::ARRAY1, [Array(_)])
+            | (leaf::ARRAY_BOOL, [Array(_)] | [Array(_), Bool(_)])
+            | (
+                leaf::ARRAY_SLICE,
+                [Array(_), Int(_)]
+                | [Array(_), Int(_), Int(_) | Null]
+                | [Array(_), Int(_), Int(_) | Null, Bool(_)],
+            )
+            | (leaf::PREG_QUOTE, [Str(_)] | [Str(_), Str(_) | Null])
+            | (leaf::STR1, [Str(_)]) => true,
+            (leaf::EXPLODE, [Str(sep), Str(_)]) | (leaf::EXPLODE, [Str(sep), Str(_), Int(_)]) => {
+                !sep.is_empty()
+            }
+            (leaf::IMPLODE, [Str(_), Array(pieces)]) => pieces
+                .values()
+                .all(|v| matches!(v, Null | Bool(_) | Int(_) | Float(_) | Str(_))),
+            (leaf::CLASS_INFO, [Str(name)] | [Str(name), Bool(_)])
+            | (leaf::METHOD_EXISTS, [Str(name), Str(_)])
+            | (leaf::CLASS_EXISTS, [Str(name)] | [Str(name), Bool(true)]) => loaded(name),
+            (leaf::MB_STRLEN, [Str(_), Str(enc)])
+            | (leaf::MB_SUBSTR, [Str(_), Int(_), Int(_) | Null, Str(enc)]) => {
+                is_utf8_name(enc.as_bytes())
+            }
+            (leaf::ARRAYS, [_, ..]) => args.iter().all(|a| matches!(a, Array(_))),
+            _ => false,
+        }
+    }
+}
+
 /// Whether `call` of builtin `b` runs frameless. php-src's frameless
 /// internal calls (`ZEND_FRAMELESS_ICALL_n`) skip the call frame and
 /// synthesise one from the opline when the function reports an error
@@ -1550,22 +1688,50 @@ impl Vm {
             self.put_call_result(dst, v);
             return Some(Ok(()));
         }
-        // The declared defaults of omitted trailing parameters, read as
-        // in [`Vm::frameless_icall_in_place`].
-        let sig = b.signature();
-        let (nparams, required) = (sig.params.len(), sig.required as usize);
+        self.frameless_handler_call(b, n, dst, live)
+    }
+
+    /// The handler of builtin `b` called on the caller's frame with the
+    /// `n` arguments sent into the argument buffer of the pooled frame at
+    /// `live` (moved out of it: the buffer is left empty) and the declared
+    /// defaults of the omitted trailing parameters; then the interrupt
+    /// check, the buffers back to their pools and the result stored in
+    /// `dst`. The caller has saved the resume point and settled that the
+    /// handler cannot see that it has no frame.
+    pub(crate) fn frameless_handler_call(
+        &mut self,
+        b: &Rc<Builtin>,
+        n: usize,
+        dst: Option<u32>,
+        live: usize,
+    ) -> Option<VmResult<()>> {
         // The arguments move from the frame's buffer into a pooled
         // record taken whole for the call (`CallBufs::take_args`), the
         // length stored once, and the emptied buffer is cut without a
         // `Drain`.
         let mut args = self.call_bufs.take_args();
-        args.values.reserve(nparams.max(n));
+        args.values.reserve(b.signature().params.len().max(n));
         {
             let sent = &mut self.frames.vec[live].args;
             args.values
                 .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
             sent.clear();
         }
+        self.frameless_handler_run(b, args, dst)
+    }
+
+    /// [`Vm::frameless_handler_call`] with the sent arguments already in
+    /// `args.values` (a record of `CallBufs::take_args`).
+    pub(crate) fn frameless_handler_run(
+        &mut self,
+        b: &Rc<Builtin>,
+        mut args: Box<crate::func::Args>,
+        dst: Option<u32>,
+    ) -> Option<VmResult<()>> {
+        // The declared defaults of omitted trailing parameters, read as
+        // in [`Vm::frameless_icall_in_place`].
+        let sig = b.signature();
+        let (nparams, required) = (sig.params.len(), sig.required as usize);
         push_passed(&mut args.passed, args.values.len());
         self.pending_call_dst = dst;
         if self.magic_call_name.is_some() {
