@@ -3285,7 +3285,10 @@ impl Vm {
     /// through `IS_INDIRECT` ([`Vm::global_ref_mirrors`]).
     fn globals_array(&self) -> Value {
         let st = self.globals.borrow();
-        let mut t = php_runtime::HashTable::new();
+        // Sized once (`zend_array_dup` of the symbol table): grown from
+        // empty, the copy of a few thousand globals rehashed a dozen times
+        // (`array_key_exists($name, $GLOBALS)` of MediaWiki's config).
+        let mut t = php_runtime::HashTable::with_capacity_mixed(st.names.len());
         for (n, v) in st.names.iter().zip(&st.slots) {
             let Some(v) = v else { continue };
             let v = match v {
