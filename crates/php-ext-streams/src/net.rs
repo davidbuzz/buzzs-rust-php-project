@@ -109,18 +109,17 @@ impl StreamOps for FdSockOps {
 
     fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
         let fd = self.raw().ok_or(OpFailed)?;
-        // SAFETY: `buf` is a valid readable buffer of `buf.len()` bytes.
-        let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), libc::MSG_NOSIGNAL) };
-        if n < 0 {
-            let e = errno();
-            if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
-                return Ok(0);
+        // `php_sockop_write()`: a blocking socket waits for room no longer
+        // than its timeout, and says so (`timed_out`).
+        match php_streams::sys::sock_send(fd, buf, self.blocked, self.timeout, &mut self.timed_out)
+        {
+            Ok(n) => Ok(n),
+            Err(errno) => {
+                // `php_sockop_write()`'s warning.
+                st.send_failed(buf.len(), errno);
+                Err(OpFailed)
             }
-            // `php_sockop_write()`'s warning.
-            st.send_failed(buf.len(), e);
-            return Err(OpFailed);
         }
-        Ok(usize::try_from(n).unwrap_or(0))
     }
 
     fn close(&mut self, _st: &mut StreamState, preserve: bool) -> i32 {

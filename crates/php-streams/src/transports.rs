@@ -69,15 +69,6 @@ impl Sock {
             Sock::Udg(s) => s.recv(buf),
         }
     }
-
-    fn send(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Sock::Tcp(s) => s.write(buf),
-            Sock::Udp(s) => s.send(buf),
-            Sock::Unix(s) => s.write(buf),
-            Sock::Udg(s) => s.send(buf),
-        }
-    }
 }
 
 /// Socket stream ops (`php_stream_socket_ops` and friends).
@@ -142,12 +133,12 @@ impl StreamOps for SocketOps {
     }
 
     fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
-        let sock = self.sock.as_mut().ok_or(OpFailed)?;
-        match sock.send(buf) {
+        let fd = self.sock.as_ref().ok_or(OpFailed)?.fd();
+        // `php_sockop_write()`: the wait for room ends with the timeout.
+        match sys::sock_send(fd, buf, self.is_blocked, self.timeout, &mut self.timed_out) {
             Ok(n) => Ok(n),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(e) => {
-                st.send_failed(buf.len(), sys::errno_of(&e));
+            Err(errno) => {
+                st.send_failed(buf.len(), errno);
                 Err(OpFailed)
             }
         }

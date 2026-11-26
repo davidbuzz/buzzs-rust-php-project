@@ -494,6 +494,62 @@ pub fn poll_fds(fds: &[(RawFd, i16)], timeout_ms: i32) -> Result<Vec<i16>, i32> 
     Ok(p.iter().map(|e| e.revents).collect())
 }
 
+/// The `send` of a socket stream's write (`php_sockop_write()` in
+/// `main/streams/xp_socket.c`). A blocking socket with a timeout sends
+/// without waiting (`MSG_DONTWAIT`) and, when there is no room, waits for
+/// it itself for at most `timeout`, then sends again; without a timeout
+/// (`None`) the `send` waits. A socket that is not blocking never waits.
+///
+/// `Ok(n)`: `n` bytes were sent; 0 when a non-blocking socket has no room.
+/// `*timed_out` (the stream's `timed_out`) is cleared when the wait
+/// begins and set when it ends without room.
+///
+/// # Errors
+/// The `errno` of the failed `send`; `EAGAIN` when the wait timed out.
+pub fn sock_send(
+    fd: RawFd,
+    buf: &[u8],
+    blocked: bool,
+    timeout: Option<std::time::Duration>,
+    timed_out: &mut bool,
+) -> Result<usize, i32> {
+    let mut flags = libc::MSG_NOSIGNAL;
+    if blocked && timeout.is_some() {
+        flags |= libc::MSG_DONTWAIT;
+    }
+    let ms = timeout.map_or(-1, |t| i32::try_from(t.as_millis()).unwrap_or(i32::MAX));
+    loop {
+        // SAFETY: `buf` is a valid readable buffer of `buf.len()` bytes.
+        let n = unsafe { libc::send(fd, buf.as_ptr().cast(), buf.len(), flags) };
+        if n >= 0 {
+            return Ok(usize::try_from(n).unwrap_or(0));
+        }
+        let errno = last_errno();
+        // `PHP_IS_TRANSIENT_ERROR`.
+        if errno != libc::EAGAIN && errno != libc::EWOULDBLOCK {
+            return Err(errno);
+        }
+        if !blocked {
+            // No error for a non-blocking stream: no byte was written.
+            return Ok(0);
+        }
+        *timed_out = false;
+        // `php_pollfd_for(POLLOUT)`: any event (an error or a hang-up too,
+        // which the next `send` reports) ends the wait.
+        loop {
+            match poll_fds(&[(fd, libc::POLLOUT)], ms) {
+                Ok(events) if events.first().is_some_and(|&e| e != 0) => break,
+                Ok(_) => {
+                    *timed_out = true;
+                    return Err(errno);
+                }
+                Err(libc::EINTR) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
 /// `setsockopt(fd, level, name, &int)`; failures are ignored like PHP's
 /// unchecked calls.
 pub fn setsockopt_int(fd: RawFd, level: i32, name: i32, value: i32) {
@@ -793,6 +849,38 @@ mod tests {
         assert!(names.iter().any(|n| n == b".."));
         d.rewind();
         assert!(d.read().is_some());
+    }
+
+    /// Expected values from php8.5: a write to a socket nobody reads
+    /// returns what fitted, the next one fails with EAGAIN once the
+    /// timeout passed, and `timed_out` is set.
+    #[test]
+    fn sock_send_waits_for_room_no_longer_than_the_timeout() {
+        use std::os::fd::AsRawFd;
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let fd = a.as_raw_fd();
+        let data = vec![b'a'; 1 << 20];
+        let wait = Some(std::time::Duration::from_millis(50));
+        let mut timed_out = false;
+        let mut sent = 0;
+        let errno = loop {
+            match sock_send(fd, &data, true, wait, &mut timed_out) {
+                Ok(n) => {
+                    assert!(n > 0);
+                    sent += n;
+                }
+                Err(e) => break e,
+            }
+        };
+        assert!(sent > 0 && sent < data.len());
+        assert_eq!(errno, libc::EAGAIN);
+        assert!(timed_out);
+        // A non-blocking socket without room: no byte, no error, and the
+        // flag is left as it was.
+        set_blocking(fd, false).unwrap();
+        let mut flag = false;
+        assert_eq!(sock_send(fd, &data, false, wait, &mut flag), Ok(0));
+        assert!(!flag);
     }
 
     #[test]
