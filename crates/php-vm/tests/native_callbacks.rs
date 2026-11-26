@@ -1567,3 +1567,354 @@ Deprecated: Using null as the key parameter for array_key_exists() is deprecated
 "#
     );
 }
+
+/// `trim()`, `ltrim()` and `rtrim()` with a character list as quick rows
+/// (a list without a `..` range), and the lists left to the handler (the
+/// ranges and their warnings), with coerced and wrong arguments. Expected
+/// output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn trim_with_character_lists() {
+    assert_eq!(
+        run(r#"<?php
+namespace TR;
+function run() {
+  $o = [];
+  foreach (['xxabxx', '', 'xxxx', "ab\0", ' a b ', 'abc'] as $v) foreach (['x', '', ' ', "\0", 'ab', 'a..c', 'z..a', '..', 'a..'] as $c) {
+    $o[] = trim($v, $c) . '|' . ltrim($v, $c) . '|' . rtrim($v, $c);
+  }
+  try { $o[] = trim([], 'x'); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+  $o[] = trim(123, '1'); $o[] = rtrim(1.50, '0');
+  return json_encode($o);
+}
+for ($i = 0; $i < 3; $i++) { $out = run(); if ($i == 0) echo $out, "\n"; }
+echo $out, "\n";
+"#),
+        r#"
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+["ab|abxx|xxab","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","||","||","||","||","||","||","||","||","||","||","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","ab\u0000|ab\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","ab|ab\u0000|ab","\u0000|\u0000|ab\u0000","\u0000|\u0000|ab\u0000","b\u0000|b\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","b\u0000|b\u0000|ab\u0000"," a b | a b | a b "," a b | a b | a b ","a b|a b | a b"," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b ","abc|abc|abc","abc|abc|abc","abc|abc|abc","abc|abc|abc","c|c|abc","||","bc|bc|abc","abc|abc|abc","bc|bc|abc","trim(): Argument #1 ($string) must be of type string, array given","23","1.5"]
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, '..'-range needs to be incrementing in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the left of '..' in t.php on line 6
+
+Warning: trim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: ltrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+
+Warning: rtrim(): Invalid '..'-range, no character to the right of '..' in t.php on line 6
+["ab|abxx|xxab","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","xxabxx|xxabxx|xxabxx","||","||","||","||","||","||","||","||","||","||","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","xxxx|xxxx|xxxx","ab\u0000|ab\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","ab|ab\u0000|ab","\u0000|\u0000|ab\u0000","\u0000|\u0000|ab\u0000","b\u0000|b\u0000|ab\u0000","ab\u0000|ab\u0000|ab\u0000","b\u0000|b\u0000|ab\u0000"," a b | a b | a b "," a b | a b | a b ","a b|a b | a b"," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b "," a b | a b | a b ","abc|abc|abc","abc|abc|abc","abc|abc|abc","abc|abc|abc","c|c|abc","||","bc|bc|abc","abc|abc|abc","bc|bc|abc","trim(): Argument #1 ($string) must be of type string, array given","23","1.5"]
+"#
+    );
+}

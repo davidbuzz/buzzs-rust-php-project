@@ -976,6 +976,22 @@ fn trim_default(s: &ZStr, mode: TrimMode) -> ZStr {
     }
 }
 
+/// `trim()`, `ltrim()` or `rtrim()` of `s` with the character list
+/// `chars`, which holds no `..` range (the handler then reports nothing),
+/// as the handler returns it: see [`trim_default`].
+#[inline(never)]
+fn trim_chars(s: &ZStr, chars: &ZStr, mode: TrimMode) -> ZStr {
+    let mut notices = php_stdstr::error::Notices::new();
+    let r = php_stdstr::transform::trim(s.as_bytes(), Some(chars.as_bytes()), mode, &mut notices);
+    if r.len() == s.len() {
+        s.clone()
+    } else if r.is_empty() {
+        ZStr::empty()
+    } else {
+        ZStr::from(r)
+    }
+}
+
 /// [`quick_id_n`] of `strpos()` with two or three arguments.
 pub(crate) const QUICK_STRPOS: u8 = 0x50;
 /// [`quick_id_n`] of `substr()` with two or three arguments.
@@ -1013,6 +1029,10 @@ pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
         (b"str_starts_with", 2) => QUICK_STR_STARTS,
         (b"str_ends_with", 2) => QUICK_STR_ENDS,
         (b"array_key_exists", 2) => QUICK_KEY_EXISTS,
+        // (Two arguments: a character list, `quick_eval_2`.)
+        (b"trim", 2) => QUICK_TRIM,
+        (b"ltrim", 2) => QUICK_LTRIM,
+        (b"rtrim", 2) => QUICK_RTRIM,
         _ => return None,
     };
     Some((id, frameless_flags(lc) >> flags::FRAMELESS_SHIFT))
@@ -1087,6 +1107,15 @@ pub(crate) fn quick_eval_2(id: u8, a: &Value, b: &Value) -> Option<Value> {
         // `"1"` finding the int key.)
         (QUICK_KEY_EXISTS, Str(k), Value::Array(a)) => Bool(a.get_sym_zstr(k).is_some()),
         (QUICK_KEY_EXISTS, Int(k), Value::Array(a)) => Bool(a.get_int(*k).is_some()),
+        (QUICK_TRIM, Str(v), Str(chars)) if !has_char_range(chars.as_bytes()) => {
+            Str(trim_chars(v, chars, TrimMode::Both))
+        }
+        (QUICK_LTRIM, Str(v), Str(chars)) if !has_char_range(chars.as_bytes()) => {
+            Str(trim_chars(v, chars, TrimMode::Left))
+        }
+        (QUICK_RTRIM, Str(v), Str(chars)) if !has_char_range(chars.as_bytes()) => {
+            Str(trim_chars(v, chars, TrimMode::Right))
+        }
         _ => return None,
     })
 }
@@ -2574,6 +2603,11 @@ mod tests {
             ("in_array", vec![s("1e0"), strs(&["a", "1"])]),
             ("in_array", vec![s(" 1"), strs(&["01"])]),
             ("in_array", vec![s("1"), strs(&[])]),
+            ("trim", vec![s("xxabxx"), s("x")]),
+            ("trim", vec![s("abc"), s("")]),
+            ("ltrim", vec![s("  \tab "), s(" \t")]),
+            ("rtrim", vec![s("ab\0\0"), s("\0")]),
+            ("rtrim", vec![s("aaa"), s("a")]),
             ("str_contains", vec![s("hello"), s("ell")]),
             ("str_contains", vec![s("hello"), s("")]),
             ("str_contains", vec![s("hello"), s("elx")]),
@@ -2632,6 +2666,8 @@ mod tests {
             ("in_array", vec![Value::Int(1), letters()]),
             ("in_array", vec![ints(), ints(), t.clone()]),
             ("str_contains", vec![s("abc"), Value::Int(1)]),
+            ("trim", vec![s("abc"), s("a..c")]),
+            ("trim", vec![s("abc"), Value::Int(1)]),
         ];
         for (name, args) in declined {
             let (id, _) =
@@ -2640,7 +2676,7 @@ mod tests {
             assert!(quick_eval_n(id, &refs).is_none(), "{name} {args:?}");
         }
         // Other arities and functions have no id.
-        for (name, argc) in [("max", 3), ("in_array", 4), ("strpos", 4), ("trim", 2)] {
+        for (name, argc) in [("max", 3), ("in_array", 4), ("strpos", 4), ("trim", 3)] {
             assert!(quick_id_n(name.as_bytes(), argc).is_none(), "{name}/{argc}");
         }
         assert_eq!(quick_id_n(b"ord", 1), super::quick_id(b"ord"));
