@@ -1710,14 +1710,12 @@ fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(sv("cli"))
 }
 
-fn phpversion(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+/// `PHP_FUNCTION(phpversion)` (`ext/standard/info.c`).
+fn phpversion(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if a.has(0) && !a.at(0).is_null() {
-        let e = s(a, 0).to_ascii_lowercase();
-        return Ok(match e.as_bytes() {
-            b"core" | b"standard" | b"date" | b"pcre" | b"spl" | b"json" | b"random"
-            | b"reflection" | b"hash" => sv(crate::PHP_VERSION),
-            _ => Value::Bool(false),
-        });
+        let e = s(a, 0);
+        return Ok(crate::module_version(vm, &e.to_string_lossy())
+            .map_or(Value::Bool(false), |v| sv(v.as_str())));
     }
     Ok(sv(crate::PHP_VERSION))
 }

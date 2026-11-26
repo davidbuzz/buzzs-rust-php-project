@@ -96,9 +96,6 @@ impl Extension for Opcache {
     }
 
     fn register(&self, module: &mut ModuleBuilder<'_>) {
-        // Also register "opcache" in loaded extensions so tests with `--EXTENSIONS-- opcache` pass
-        module.vm().loaded_extensions.push("opcache".to_string());
-
         // Register INI directives
         register_ini(module);
 

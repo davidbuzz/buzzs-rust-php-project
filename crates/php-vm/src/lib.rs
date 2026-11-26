@@ -87,6 +87,30 @@ pub const LOADED_EXTENSIONS: &[&str] = &[
     "hash",
 ];
 
+/// `zend_get_module_version()`: the version of the loaded module `name`
+/// (any case), as its `zend_module_entry` gives it. Every bundled module
+/// reports `PHP_VERSION` (Core included, `php_module_startup()` sets it)
+/// except the three below.
+pub(crate) fn module_version(vm: &Vm, name: &str) -> Option<String> {
+    let loaded = crate::LOADED_EXTENSIONS
+        .iter()
+        .copied()
+        .chain(vm.loaded_extensions.iter().map(String::as_str))
+        .any(|m| m.eq_ignore_ascii_case(name));
+    if !loaded {
+        return None;
+    }
+    Some(match name.to_ascii_lowercase().as_str() {
+        // DOM_API_VERSION (ext/dom/php_dom.h).
+        "dom" => "20031129".to_string(),
+        // PHP_MYSQLND_VERSION (ext/mysqlnd/mysqlnd.h).
+        "mysqlnd" => format!("mysqlnd {}", crate::PHP_VERSION),
+        // PHP_ZEND_TEST_VERSION (ext/zend_test/php_test.h).
+        "zend_test" => "0.1.0".to_string(),
+        _ => crate::PHP_VERSION.to_string(),
+    })
+}
+
 /// Room to reserve in the function, class and constant tables before
 /// start-up registers into them ([`Vm::new_core`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
