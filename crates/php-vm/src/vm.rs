@@ -3127,7 +3127,9 @@ pub struct Vm {
     pub(crate) user_opcode_handlers: Vec<(&'static str, crate::observer::UserOpcodeHandler)>,
     /// Dropped last (fields drop in declaration order), after the units and
     /// class tables above: releases this thread's kept class links that
-    /// only the dropped VM's scripts held.
+    /// only the dropped VM's scripts held.  Read by nothing: the guard
+    /// works through its `Drop`.
+    #[allow(dead_code)]
     pub(crate) linked_guard: crate::classlink::LinkedGuard,
 }
 

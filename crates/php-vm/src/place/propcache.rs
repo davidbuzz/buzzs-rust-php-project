@@ -988,7 +988,7 @@ impl Vm {
         let scope = scope_addr(frame);
         if let Ok(mut cache) = code.prop_cache.try_borrow_mut() {
             if let Some(e) = cache.get_mut(pid as usize) {
-                if let Some(mut alt) = e.alt.take() {
+                if let Some(alt) = e.alt.take() {
                     if alt.class_addr == Rc::as_ptr(&cls) as usize && alt.scope_addr == scope {
                         let mut prev = std::mem::replace(e, *alt);
                         prev.alt = None;
