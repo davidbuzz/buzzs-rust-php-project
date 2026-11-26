@@ -2227,13 +2227,18 @@ fn unserialize_with_options(
     let pos = u.cur.pos;
     let result = match parsed {
         Ok(Some(v)) => {
-            if pos < buf.len() {
+            // A handler that throws must not skip the restore and the
+            // destroy below: the context would stay open, and every later
+            // call would join it and inherit this call's options.
+            let warned = if pos < buf.len() {
                 vm.docref(
                     E_WARNING,
                     &format!("Extra data starting at offset {pos} of {} bytes", buf.len()),
-                )?;
-            }
-            Ok(Some(v))
+                )
+            } else {
+                Ok(())
+            };
+            warned.map(|()| Some(v))
         }
         Ok(None) => {
             // Forbid later references to the slots of the failed part.
@@ -2243,8 +2248,8 @@ fn unserialize_with_options(
             vm.docref(
                 E_WARNING,
                 &format!("Error at offset {pos} of {} bytes", buf.len()),
-            )?;
-            Ok(None)
+            )
+            .map(|()| None)
         }
         Err(t) => {
             for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
@@ -2666,5 +2671,34 @@ mod tests {
     fn s_format_escapes() {
         assert_eq!(unescape(b"a\\41b", 0, 3), Some((b"aAb".to_vec(), 5)));
         assert_eq!(unescape(b"\\4", 0, 1), None);
+    }
+
+    /// A warning of `unserialize()` that a user error handler turns into an
+    /// exception still closes the call: its options and its `var_hash` end
+    /// with it (expected output from C PHP 8.5).
+    #[test]
+    fn options_end_with_a_call_whose_warning_throws() {
+        let out = run(r#"<?php
+class Foo { public $x = 1; }
+function chk($l) { echo $l, ": ", get_class(unserialize('O:3:"Foo":0:{}')), "\n"; }
+set_error_handler(function ($no, $str) { throw new ErrorException($str, 0, $no); });
+try { unserialize('{1:somebroken}', ['allowed_classes' => false]); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+chk("error");
+try { unserialize('O:3:"Foo":1:{garbage', ['allowed_classes' => ['Bar'], 'max_depth' => 3]); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+chk("error in object");
+try { unserialize('i:1;i:2;', ['allowed_classes' => false, 'max_depth' => 3]); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+chk("extra data");
+var_dump(unserialize('a:1:{i:0;a:1:{i:0;a:1:{i:0;a:1:{i:0;a:1:{i:0;i:1;}}}}}') !== false);
+"#);
+        assert_eq!(
+            out,
+            "ErrorException: unserialize(): Error at offset 0 of 14 bytes\n\
+             error: Foo\n\
+             ErrorException: unserialize(): Error at offset 13 of 20 bytes\n\
+             error in object: Foo\n\
+             ErrorException: unserialize(): Extra data starting at offset 4 of 8 bytes\n\
+             extra data: Foo\n\
+             bool(true)\n"
+        );
     }
 }
