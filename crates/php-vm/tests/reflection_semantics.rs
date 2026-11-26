@@ -112,6 +112,34 @@ foreach ([A::s(), A::u(), B::v(), $rebound, (new A)->m(...)] as $f) {
     );
 }
 
+/// A float default is printed with its fraction (`1.0`, `0.0`, `-0.0`:
+/// `smart_str_append_scalar()`), in a parameter's and a property's string
+/// and inside an array, so that the text evaluates to the same float; a
+/// constant's string has the plain conversion. A proxy generator that
+/// re-reads the printed default turned `-0.0` into the integer 0.
+/// Expected output from php8.5.
+#[test]
+fn float_defaults_are_printed_with_their_fraction() {
+    assert_eq!(
+        run(r"<?php
+function f($a = -0.0, $b = 1.0, $c = 0.0, $d = [1.5, -0.0, 2.0], $e = 1e100, $g = .5, $h = -1.5) {}
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) { echo $p, PHP_EOL; }
+class P { public $x = 1.0; public $y = [-0.0]; const C = 1.0; }
+echo new ReflectionProperty('P', 'x'), new ReflectionProperty('P', 'y'), new ReflectionClassConstant('P', 'C');
+"),
+        "Parameter #0 [ <optional> $a = -0.0 ]\n\
+         Parameter #1 [ <optional> $b = 1.0 ]\n\
+         Parameter #2 [ <optional> $c = 0.0 ]\n\
+         Parameter #3 [ <optional> $d = [1.5, -0.0, 2.0] ]\n\
+         Parameter #4 [ <optional> $e = 1.0E+100 ]\n\
+         Parameter #5 [ <optional> $g = 0.5 ]\n\
+         Parameter #6 [ <optional> $h = -1.5 ]\n\
+         Property [ public $x = 1.0 ]\n\
+         Property [ public $y = [-0.0] ]\n\
+         Constant [ public float C ] { 1 }\n"
+    );
+}
+
 /// bug49719.phpt / `property_exists.phpt`: a parent's private property is
 /// not a property of the subclass.
 #[test]

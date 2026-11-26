@@ -77,7 +77,10 @@ fn scalar_repr(vm: &Vm, v: &Value) -> Option<Vec<u8>> {
         Value::Bool(true) => b"true".to_vec(),
         Value::Bool(false) => b"false".to_vec(),
         Value::Int(i) => i.to_string().into_bytes(),
-        Value::Float(d) => fmt_double(vm, *d).into_bytes(),
+        // `smart_str_append_double(.., precision, true)`: a whole number
+        // keeps its `.0` (a constant's own string, `fmt_double`, does
+        // not), so the text read back is a float again, `-0.0` too.
+        Value::Float(d) => php_runtime::float::format_double(*d, vm.precision, true).into_bytes(),
         Value::Str(s) => {
             let mut o = vec![b'\''];
             escaped(&mut o, s.as_bytes());
