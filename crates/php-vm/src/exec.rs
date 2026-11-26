@@ -525,6 +525,64 @@ impl Vm {
         Ok(true)
     }
 
+    /// `$obj->p[$dim] = $val` / `$obj->p[] = $val` of a property holding
+    /// an object (`ZEND_ASSIGN_DIM` on the property's `FETCH_OBJ_W`
+    /// result: `zend_assign_to_object_dim`): as
+    /// [`Vm::assign_dim_array_access`], the object read on the property
+    /// cache's hit (declared and initialized, or existing dynamic: no
+    /// `__get()`), its class's user `offsetSet()` called with the offset
+    /// (`null` when appending) and the value. Only a statement (no result
+    /// operand); `Ok(false)`, nothing changed, otherwise.
+    #[inline(never)]
+    pub(crate) fn assign_prop_dim_array_access(
+        &mut self,
+        place: crate::opcode::PlaceId,
+        dim: Operand,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> VmResult<bool> {
+        if dst.is_some() {
+            return Ok(false);
+        }
+        let f = self.frame();
+        let Some(Value::Object(obj)) = spec::props::read_hit(f, place) else {
+            return Ok(false);
+        };
+        let Some(m) = crate::object::class_of(&obj)
+            .user_array_access()
+            .and_then(|fns| fns.set.clone())
+        else {
+            return Ok(false);
+        };
+        let dim_ok = match dim {
+            Operand::Cv(d) => f
+                .cvs
+                .get(d as usize)
+                .and_then(crate::vm::CvSlot::get)
+                .is_some(),
+            Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Lit(_) | Operand::Unused => true,
+        };
+        if !dim_ok {
+            return Ok(false);
+        }
+        let v = match val {
+            Operand::Cv(c) => match self.read_cv_op_data(c) {
+                CvOpData::Value(v) => v,
+                CvOpData::Deferred | CvOpData::Undefined => return Ok(false),
+            },
+            other => {
+                let v = self.read(other)?;
+                self.copy_on_assign(v)
+            }
+        };
+        let key = match dim {
+            Operand::Unused => Value::Null,
+            other => self.read(other)?.deref(),
+        };
+        self.call_method_n(&obj, &m, [key, v])?;
+        Ok(true)
+    }
+
     /// `$cv[$dim]` read of an object (`zend_std_read_dimension`): the
     /// class's user `offsetGet()` ([`Vm::array_access_target`]) called with
     /// the offset (dereferenced), and in `Is` mode (`??`) its

@@ -1179,3 +1179,40 @@ run();
 "#
     );
 }
+
+/// `$this->p[] = $v` / `$this->p[$k] = $v` of properties holding
+/// `ArrayAccess` objects (their `offsetSet()` called from the tape's
+/// decline step): a throwing `offsetSet()`, a readonly property, a native
+/// `ArrayObject`, an array property, a property behind `__get()`, an
+/// unset property, the assignment as an expression. Expected output:
+/// `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn property_dimension_writes_of_array_access_objects() {
+    assert_eq!(
+        run(r#"<?php
+namespace D;
+class OA implements \ArrayAccess { public $a = []; function offsetSet($k, $v): void { if ($v === 'boom') throw new \RuntimeException('boom'); if ($k === null) $this->a[] = $v; else $this->a[$k] = $v; }
+  function offsetGet($k): mixed { return $this->a[$k] ?? null; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetUnset($k): void { unset($this->a[$k]); } }
+class M { public function __get($n) { echo "get($n) "; return $this->hidden; } private $hidden; function __construct() { $this->hidden = new OA; } }
+class T { protected $props; public $arr = []; public readonly OA $ro; public \ArrayObject $ao; public $dyn;
+  function __construct() { $this->props = new OA; $this->ro = new OA; $this->ao = new \ArrayObject; }
+  function add($p) { $this->props[] = $p; $this->props['k' . $p] = $p; $this->arr[] = $p; $this->ro[] = $p; $this->ao[] = $p; return $this; }
+  function count() { return count($this->props->a) . '/' . count($this->arr) . '/' . count($this->ro->a) . '/' . count($this->ao); }
+  function expr($p) { return $this->props[] = $p; } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $t = new T; for ($j = 0; $j < 5; $j++) $t->add($j); echo $t->count(), ' ', $t->expr('e'), ' ';
+    try { $t->add('boom'); } catch (\RuntimeException $e) { echo $e->getMessage(), '@', $e->getLine(), ' '; }
+    $m = new M; $m->hidden[] = 'x'; echo count((fn() => $this->hidden->a)->call($m)), ' ';
+    $u = new T; try { (function () { unset($this->props); $this->props[] = 1; })->call($u); } catch (\Error $e) { echo get_class($e), ' '; }
+    echo json_encode((fn() => $this->props)->call($u)), "\n";
+  }
+}
+run();
+"#),
+        r#"10/5/5/5 e boom@3 get(hidden) 1 [1]
+10/5/5/5 e boom@3 get(hidden) 1 [1]
+10/5/5/5 e boom@3 get(hidden) 1 [1]
+"#
+    );
+}

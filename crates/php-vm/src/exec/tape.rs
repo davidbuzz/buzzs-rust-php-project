@@ -2716,6 +2716,28 @@ fn declined_vm_step(
             DECLINED
         };
     }
+    // `$this->p[] = $v` / `$this->p[$k] = $v` of a property holding an
+    // `ArrayAccess` object (Lodata's ObjectArray): its `offsetSet()` called
+    // here (`Vm::assign_prop_dim_array_access`), after the resume point is
+    // saved and a call being prepared became the pending one.
+    if let Some(&Op::AssignObjPropDim {
+        place,
+        dim,
+        val,
+        dst,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.assign_prop_dim_array_access(place, dim, val, dst) {
+            Ok(true) => at + 1,
+            Ok(false) => DECLINED,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
     // `A::m(...)`, `static::m(...)` not prepared on the tape (an argument
     // is itself a call, or a superglobal): `Vm::run`'s arm
     // (`Vm::op_init_static_call`, the call pending), here, after
