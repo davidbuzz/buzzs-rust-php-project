@@ -5154,7 +5154,11 @@ impl Vm {
         if propcache::cacheable(p) && self.prop_cache_unset(pid) {
             return Ok(());
         }
-        let (base, segs) = self.resolve_place_ex(pid, false, false, PlaceOp::Unset)?;
+        let (base, segs) = match self.resolve_place_ex(pid, false, false, PlaceOp::Unset) {
+            Ok(r) => r,
+            Err(t @ Throw::Exception(_)) => return Err(self.unset_after_offset_threw(pid, t)),
+            Err(t) => return Err(t),
+        };
         if let RBase::Undef(_) = &base {
             return Ok(());
         }
@@ -5183,6 +5187,32 @@ impl Vm {
             }
         }
         self.write_place(base, &segs, WOp::Unset).map(|_| ())
+    }
+
+    /// `unset($obj[$undef])` whose "Undefined variable" warning was turned
+    /// into an exception by the error handler: `ZEND_UNSET_DIM` goes on
+    /// with a null offset, and for an object without ArrayAccess
+    /// `zend_std_unset_dimension` throws "Cannot use object of type ... as
+    /// array" (`zend_bad_array_access`), chained onto the handler's
+    /// exception, as for the writes ([`Vm::object_as_array_error`]). Any
+    /// other place gives the exception back as it is.
+    #[cold]
+    #[inline(never)]
+    fn unset_after_offset_threw(&mut self, pid: PlaceId, t: Throw) -> Throw {
+        let code = self.frame().code.clone();
+        let Some(p) = code.places.get(pid as usize) else {
+            return t;
+        };
+        let (PlaceBase::Cv(cv), [Seg::Dim(_)]) = (&p.base, &p.segs[..]) else {
+            return t;
+        };
+        let Some(Value::Object(obj)) = self.cv_get(*cv).map(|v| v.deref()) else {
+            return t;
+        };
+        if crate::ext::hooks_of(&obj).is_some() || self.instance_of(&obj, b"arrayaccess") {
+            return t;
+        }
+        self.object_as_array_error(&obj, Some(t), false)
     }
 
     /// `ZEND_UNSET_STATIC_PROP`: the class is fetched, then the name, and
