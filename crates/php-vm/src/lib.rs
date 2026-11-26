@@ -26,6 +26,7 @@ mod classlink;
 mod closure;
 pub mod compiler;
 mod configuration;
+pub mod connection;
 mod context;
 mod discard;
 mod enums;
@@ -420,10 +421,13 @@ impl Vm {
     }
 
     /// The engine's part of `php_request_startup()`, for a SAPI that runs
-    /// the other steps itself: `zend_activate()` (the collector's
-    /// `gc_reset()`) and the request's execution timer
+    /// the other steps itself: the connection status
+    /// ([`php_sapi::connection::request_startup`]), `zend_activate()` (the
+    /// collector's `gc_reset()`) and the request's execution timer
     /// ([`Vm::request_timer`]).
     pub fn activate(&mut self) {
+        // `PG(connection_status) = PHP_CONNECTION_NORMAL`.
+        php_sapi::connection::request_startup();
         gc::mark_activated();
         self.request_timer();
     }

@@ -20,8 +20,7 @@ use crate::backend::{Backend, IntField, StrField, Table, TableOp};
 use crate::config::ProcessConfig;
 use crate::headers::{HeaderFacts, HeaderOp, SapiHeaders};
 use php_runtime::{Value, ZStr};
-use php_support::output::{status as output_status, OutputHost};
-use php_vm::{Throw, Vm, VmOptions, VmResult};
+use php_vm::{Vm, VmOptions, VmResult};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -77,8 +76,9 @@ struct TimerState {
     hard_secs: i64,
     /// The soft expiry fired; the armed limit is `hard_timeout`.
     hard_armed: bool,
-    /// Soft expiries so far: each is `php_on_timeout()`, which ORs
-    /// `PHP_CONNECTION_TIMEOUT` into `PG(connection_status)`.
+    /// Soft expiries so far. `php_on_timeout()` ORs
+    /// `PHP_CONNECTION_TIMEOUT` into `PG(connection_status)` when the VM
+    /// handles the expiry (`php_sapi::connection::timed_out`).
     timeouts: u64,
 }
 
@@ -201,16 +201,6 @@ pub struct RequestCtx {
     output_disabled: Cell<bool>,
     /// Whether implicit flush is enabled (`implicit_flush` or `zlib.output_compression`).
     pub implicit_flush: Cell<bool>,
-    /// `PG(connection_status) & PHP_CONNECTION_ABORTED`: the client went
-    /// away.
-    pub aborted: Cell<bool>,
-    /// `php_handle_aborted_connection()` ran for the abort an `ap_rwrite`
-    /// noticed (see [`abort_interrupt`]).
-    abort_handled: Cell<bool>,
-    /// [`Timer::timeouts`] when the abort was last recorded: the abort
-    /// assigns `PG(connection_status) = PHP_CONNECTION_ABORTED`, dropping
-    /// the `PHP_CONNECTION_TIMEOUT` bit of earlier timeouts.
-    timeouts_at_abort: Cell<u64>,
     /// The request body.
     pub body: RefCell<Body>,
     /// Whether `ap_setup_client_block` ran (and whether a body follows).
@@ -227,7 +217,7 @@ impl std::fmt::Debug for RequestCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RequestCtx")
             .field("headers", &self.headers)
-            .field("aborted", &self.aborted)
+            .field("connection_status", &php_sapi::connection::status())
             .finish_non_exhaustive()
     }
 }
@@ -293,7 +283,6 @@ impl RequestCtx {
             ..HeaderFacts::default()
         };
         let headers_only = facts.method == b"HEAD";
-        let is_aborted = backend.int_field(IntField::Aborted) != 0;
         RequestCtx {
             backend,
             headers: RefCell::new(SapiHeaders::new(status)),
@@ -301,9 +290,6 @@ impl RequestCtx {
             headers_only,
             output_disabled: Cell::new(false),
             implicit_flush: Cell::new(false),
-            aborted: Cell::new(is_aborted),
-            abort_handled: Cell::new(false),
-            timeouts_at_abort: Cell::new(0),
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
@@ -354,38 +340,21 @@ impl RequestCtx {
         self.headers_only
     }
 
-    /// `PG(connection_status)`: `PHP_CONNECTION_ABORTED` once the client
-    /// is gone, plus `PHP_CONNECTION_TIMEOUT` for a timeout since the abort
-    /// was last recorded (or since the request started).
+    /// Whether `r->connection->aborted` says the client is gone.
+    fn client_gone(&self) -> bool {
+        self.backend.int_field(IntField::Aborted) != 0
+    }
+
+    /// `PG(connection_status)`, with an abort Apache saw recorded first.
     pub fn connection_status(&self) -> i64 {
-        if !self.aborted.get() && self.backend.int_field(IntField::Aborted) != 0 {
-            self.record_abort();
-        }
-        let mut status = 0;
-        if self.aborted.get() {
-            status |= CONNECTION_ABORTED;
-        }
-        if self.timer.timeouts() > self.timeouts_at_abort.get() {
-            status |= CONNECTION_TIMEOUT;
-        }
-        status
+        self.record_if_gone();
+        php_sapi::connection::status()
     }
 
-    /// `PG(connection_status) = PHP_CONNECTION_ABORTED`.
-    fn record_abort(&self) {
-        self.aborted.set(true);
-        self.timeouts_at_abort.set(self.timer.timeouts());
-    }
-
-    /// The client went away (`ap_rwrite` / `ap_rflush` failed).  Records
-    /// the abort and asks the executor for a safe point, where
-    /// [`abort_interrupt`] runs `php_handle_aborted_connection()`; a caller
-    /// holding the VM does that directly.
-    fn note_abort(&self) {
-        let first = !self.aborted.get();
-        self.record_abort();
-        if first {
-            php_vm::interrupt::request_interrupt();
+    /// Records the abort `r->connection->aborted` shows, if not done yet.
+    fn record_if_gone(&self) {
+        if !php_sapi::connection::aborted() && self.client_gone() {
+            php_sapi::connection::record_abort();
         }
     }
 
@@ -417,11 +386,11 @@ impl RequestCtx {
                 _ => {}
             }
         }
-        if self.output_disabled.get() || self.aborted.get() {
+        if self.output_disabled.get() || php_sapi::connection::aborted() {
             return;
         }
-        if self.backend.int_field(IntField::Aborted) != 0 || !self.backend.write(data) {
-            self.note_abort();
+        if self.client_gone() || !self.backend.write(data) {
+            php_vm::connection::note_abort(None);
         } else if self.implicit_flush.get() && ACTIVE_VM.with(|p| p.get().is_null()) {
             self.flush();
         }
@@ -432,14 +401,14 @@ impl RequestCtx {
     /// `php_handle_aborted_connection()`).
     pub fn flush(&self) -> bool {
         self.send_headers();
-        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
-            self.note_abort();
+        if php_sapi::connection::aborted() || self.client_gone() {
+            php_vm::connection::note_abort(None);
             return false;
         }
-        if self.backend.flush() && self.backend.int_field(IntField::Aborted) == 0 {
+        if self.backend.flush() && !self.client_gone() {
             return true;
         }
-        self.note_abort();
+        php_vm::connection::note_abort(None);
         false
     }
 
@@ -456,8 +425,8 @@ impl RequestCtx {
     /// `sapi_module.read_post()`: fills `buf` as far as possible; returns
     /// the number of bytes read (0 at the end).
     pub fn read_post(&self, buf: &mut [u8]) -> usize {
-        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
-            self.note_abort();
+        if php_sapi::connection::aborted() || self.client_gone() {
+            php_vm::connection::note_abort(None);
             return 0;
         }
         if !self.body_available() {
@@ -466,12 +435,12 @@ impl RequestCtx {
         let mut total = 0;
         while total < buf.len() {
             if self.backend.int_field(IntField::Aborted) != 0 {
-                self.note_abort();
+                php_vm::connection::note_abort(None);
                 break;
             }
             let n = self.backend.body_read(&mut buf[total..]);
             let Ok(n) = usize::try_from(n) else {
-                self.note_abort();
+                php_vm::connection::note_abort(None);
                 break;
             };
             if n == 0 {
@@ -577,46 +546,19 @@ pub fn implicit_flush(vm: &mut Vm) {
     }
 }
 
-/// `php_handle_aborted_connection()`: `PG(connection_status) =
-/// PHP_CONNECTION_ABORTED`, output disabled for the rest of the request
-/// (`php_output_set_status`), and a bailout — the script stops, shutdown
-/// functions and destructors still run — unless `ignore_user_abort` is on.
+/// `php_handle_aborted_connection()`: see
+/// [`php_vm::connection::handle_aborted_connection`].
 pub fn handle_aborted_connection(vm: &mut Vm) -> VmResult<()> {
-    with_ctx(RequestCtx::record_abort);
-    stop_for_aborted_connection(vm)
+    php_vm::connection::handle_aborted_connection(vm)
 }
 
-/// The rest of `php_handle_aborted_connection()` once the status is
-/// recorded.
-fn stop_for_aborted_connection(vm: &mut Vm) -> VmResult<()> {
-    with_ctx(|c| c.abort_handled.set(true));
-    // `php_output_set_status(PHP_OUTPUT_DISABLED)`.  Spelled out: `Vm`
-    // has an inherent `output(&[u8])` method.
-    OutputHost::output(vm).set_status(output_status::DISABLED);
-    if vm.ini_bool("ignore_user_abort") {
-        Ok(())
-    } else {
-        Err(Throw::Exit)
-    }
-}
-
-/// The module's VM interrupt handler: finishes
-/// `php_handle_aborted_connection()` once for an abort that `ap_rwrite`
-/// noticed — [`RequestCtx::write`] recorded the status but has no VM;
-/// php-src bails out from inside `ub_write`.
+/// The module's VM interrupt handler: an abort Apache saw on its own
+/// (`r->connection->aborted`, which the watchdog polls) is recorded, then
+/// `php_handle_aborted_connection()` finishes once as for one `ap_rwrite`
+/// noticed ([`php_vm::connection::finish_pending_abort`]).
 pub fn abort_interrupt(vm: &mut Vm) -> VmResult<()> {
-    let due = with_ctx(|c| {
-        if !c.aborted.get() && c.backend.int_field(IntField::Aborted) != 0 {
-            c.record_abort();
-        }
-        c.aborted.get() && !c.abort_handled.get()
-    })
-    .unwrap_or(false);
-    if due {
-        stop_for_aborted_connection(vm)
-    } else {
-        Ok(())
-    }
+    with_ctx(RequestCtx::record_if_gone);
+    php_vm::connection::finish_pending_abort(vm)
 }
 
 /// The VM's `timer_hook` (`zend_set_timeout()`): (re)arms the request's
@@ -871,8 +813,8 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
         vm.shutdown_functions
             .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
 
-        if ctx.backend.int_field(IntField::Aborted) != 0 {
-            ctx.record_abort();
+        if ctx.client_gone() {
+            php_sapi::connection::record_abort();
             if !vm.ini_bool("ignore_user_abort") {
                 finish(vm, &ctx);
                 vm.request_reset();
@@ -1040,7 +982,7 @@ mod tests {
         assert!(ctx.headers_sent());
         ctx.write(b" there");
         assert!(ctx.flush());
-        assert!(!ctx.aborted.get());
+        assert!(!php_sapi::connection::aborted());
         assert_eq!(ctx.connection_status(), 0);
     }
 
@@ -1060,44 +1002,12 @@ mod tests {
         *m.disconnected.borrow_mut() = true;
         let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
         ctx.write(b"hi");
-        assert!(ctx.aborted.get());
+        assert!(php_sapi::connection::aborted());
         assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
         assert!(!ctx.flush());
         // Later writes are dropped without touching the server again.
         ctx.write(b"more");
-        assert!(ctx.aborted.get());
-    }
-
-    #[test]
-    fn connection_status_reports_timeouts() {
-        let timer = Arc::new(Timer::default());
-        let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
-        timer.reset_at(0, 1, 0);
-        assert_eq!(timer.check(SEC), Expiry::Soft);
-        assert_eq!(timer.timeouts(), 1);
-        assert_eq!(ctx.connection_status(), CONNECTION_TIMEOUT);
-    }
-
-    #[test]
-    fn an_abort_replaces_the_status_and_a_timeout_adds_to_it() {
-        // `PG(connection_status) = PHP_CONNECTION_ABORTED` drops an earlier
-        // timeout; `php_on_timeout()` ORs a later one in.
-        let timer = Arc::new(Timer::default());
-        let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
-        timer.reset_at(0, 1, 0);
-        assert_eq!(timer.check(SEC), Expiry::Soft);
-        ctx.record_abort();
-        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
-        // set_time_limit() in a shutdown function, then a second timeout.
-        timer.reset_at(SEC, 1, 0);
-        assert_eq!(timer.check(2 * SEC), Expiry::Soft);
-        assert_eq!(
-            ctx.connection_status(),
-            CONNECTION_ABORTED | CONNECTION_TIMEOUT
-        );
-        // Another failed flush records the abort again.
-        ctx.record_abort();
-        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        assert!(php_sapi::connection::aborted());
     }
 
     #[test]
@@ -1129,8 +1039,8 @@ mod tests {
     fn client_aborted_field_detected() {
         let m = MockBackend::default().with_int(IntField::Aborted, 1);
         let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
-        assert!(ctx.aborted.get());
         assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        assert!(php_sapi::connection::aborted());
         assert!(!ctx.flush());
     }
 

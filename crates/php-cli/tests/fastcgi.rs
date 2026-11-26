@@ -633,3 +633,97 @@ fn request_state_does_not_reach_the_next_request() {
         "the second request saw the first one's state"
     );
 }
+
+/// A page that keeps writing after the client left: the log shows how far
+/// it got, what the shutdown function saw, and that destructors ran.
+const ABORT_SCRIPT: &str = r#"<?php
+$log = $_SERVER['ABORT_LOG'];
+if (isset($_GET['ignore'])) {
+    ignore_user_abort(true);
+}
+class D { function __destruct() { file_put_contents($GLOBALS['log'], 'dtor;', FILE_APPEND); } }
+$d = new D;
+register_shutdown_function(function () use ($log) {
+    file_put_contents($log, 'shutdown:' . connection_status() . ':' . var_export(connection_aborted(), true) . ';', FILE_APPEND);
+});
+for ($i = 0; $i < 200; $i++) {
+    echo str_repeat('x', 65536);
+    flush();
+    usleep(10000);
+}
+file_put_contents($log, 'completed;', FILE_APPEND);
+"#;
+
+/// Requests [`ABORT_SCRIPT`] from `php-cgi -b`, reads the first output
+/// record, closes the connection and returns the script's log once the
+/// shutdown function wrote it.
+fn abort_after_first_output(query: &str) -> String {
+    let dir = TempDir::new(&format!("fcgi-abort-{}", query.len()));
+    let script = dir.0.join("abort.php");
+    std::fs::write(&script, ABORT_SCRIPT).unwrap();
+    let log = dir.0.join("abort.log");
+    let port = free_port();
+    let mut child = Command::new(PHP_CGI)
+        .args(["-n", "-b", &format!("127.0.0.1:{port}")])
+        .env_remove("PHP_FCGI_CHILDREN")
+        .env_remove("PHP_FCGI_MAX_REQUESTS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    wait_for(&mut child, "php-cgi -b", || {
+        TcpStream::connect(&addr).is_ok()
+    })
+    .unwrap();
+    let _proc = Proc(child);
+    let mut s = TcpStream::connect(&addr).unwrap();
+    let mut p = Vec::new();
+    for (k, v) in [
+        ("SCRIPT_FILENAME", script.to_str().unwrap()),
+        ("REQUEST_METHOD", "GET"),
+        ("QUERY_STRING", query),
+        ("ABORT_LOG", log.to_str().unwrap()),
+    ] {
+        pair(&mut p, k, v);
+    }
+    let mut wire = record(BEGIN_REQUEST, 1, &[0, 1, 0, 0, 0, 0, 0, 0]);
+    wire.extend(record(PARAMS, 1, &p));
+    wire.extend(record(PARAMS, 1, b""));
+    wire.extend(record(STDIN, 1, b""));
+    s.write_all(&wire).unwrap();
+    match read_record(&mut s) {
+        Some((STDOUT, 1, _)) => {}
+        other => panic!("the first output record: {other:?}"),
+    }
+    drop(s);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("shutdown:") && text.contains("dtor;") {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "the script didn't end: {text:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `php_handle_aborted_connection()` (`sapi_fcgi_ub_write`): once a write
+/// to the gone client fails, the script stops; shutdown functions and
+/// destructors still run and see `PHP_CONNECTION_ABORTED`.
+#[test]
+fn a_gone_client_stops_the_script() {
+    let log = abort_after_first_output("");
+    assert!(!log.contains("completed;"), "{log}");
+    assert!(log.contains("shutdown:1:true;"), "{log}");
+}
+
+/// With `ignore_user_abort`, the script runs to its end; its output is
+/// dropped.
+#[test]
+fn ignore_user_abort_keeps_the_script_running() {
+    let log = abort_after_first_output("ignore=1");
+    assert!(log.starts_with("completed;"), "{log}");
+    assert!(log.contains("shutdown:1:true;"), "{log}");
+}

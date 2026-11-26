@@ -501,7 +501,8 @@ impl Vm {
     fn handle_interrupt(&mut self) -> VmResult<()> {
         INTERRUPT.store(false, Ordering::Release);
         if TIMED_OUT.swap(false, Ordering::AcqRel) {
-            // `zend_timeout`.
+            // `php_on_timeout()`, then `zend_timeout`.
+            php_sapi::connection::timed_out();
             let n = self.timeout_seconds;
             let msg = format!(
                 "Maximum execution time of {n} second{} exceeded",
@@ -509,6 +510,7 @@ impl Vm {
             );
             return self.error(crate::errors::level::ERROR, &msg);
         }
+        crate::connection::finish_pending_abort(self)?;
         for h in self.interrupt_handlers.clone() {
             h(self)?;
         }

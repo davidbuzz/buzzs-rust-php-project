@@ -2802,9 +2802,21 @@ pub(crate) fn register(vm: &mut Vm) {
         "unregister_tick_function(callable $callback): void",
         crate::interrupt::unregister_tick_function,
     );
-    reg(vm, "ignore_user_abort(?bool $enable = null): int", ret_zero);
-    reg(vm, "connection_status(): int", ret_zero);
-    reg(vm, "connection_aborted(): int", ret_zero);
+    reg(
+        vm,
+        "ignore_user_abort(?bool $enable = null): bool",
+        crate::connection::ignore_user_abort,
+    );
+    reg(
+        vm,
+        "connection_status(): int",
+        crate::connection::connection_status,
+    );
+    reg(
+        vm,
+        "connection_aborted(): bool",
+        crate::connection::connection_aborted,
+    );
     reg(vm, "php_sapi_name(): string|false", php_sapi_name);
     reg(
         vm,
