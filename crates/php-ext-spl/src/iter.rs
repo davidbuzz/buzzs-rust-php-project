@@ -8,7 +8,7 @@
 use crate::host::{rt_throw, VmHost};
 use php_runtime::ZStr;
 use php_runtime::{RtResult, Value};
-use php_spl::ObjectIterator;
+use php_spl::{ObjectIterator, SplHost};
 use php_vm::ext::{
     acc, class_flags, Args, ClassBuilder, ClassHooks, NativeFn, NativeIterator, VmResult,
 };
@@ -43,6 +43,11 @@ pub fn finish<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
 pub struct SplNativeIter {
     it: Box<dyn ObjectIterator>,
     index: i64,
+    /// Whether the steps run with the VM lent to the stream layer: a
+    /// directory or file iterator (also one wrapped in an
+    /// `IteratorIterator` or `RegexIterator`) over a user stream wrapper
+    /// calls the wrapper's methods on every step.
+    bridged: bool,
 }
 
 impl std::fmt::Debug for SplNativeIter {
@@ -55,28 +60,48 @@ impl SplNativeIter {
     /// Wraps an SPL iterator.
     #[must_use]
     pub fn new(it: Box<dyn ObjectIterator>) -> Self {
-        SplNativeIter { it, index: 0 }
+        SplNativeIter {
+            it,
+            index: 0,
+            bridged: php_streams::wrapper::has_volatile(),
+        }
+    }
+
+    /// Runs one step of the iterator through a host.
+    fn step<T>(
+        &mut self,
+        vm: &mut Vm,
+        f: impl FnOnce(&mut dyn ObjectIterator, &mut dyn SplHost) -> RtResult<T>,
+    ) -> VmResult<T> {
+        let it = &mut *self.it;
+        if self.bridged {
+            let _entry = crate::files::enter();
+            crate::files::run_bridged(vm, |h| f(it, h))
+        } else {
+            with_host(vm, |h| f(it, h))
+        }
     }
 }
 
 impl NativeIterator for SplNativeIter {
     fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
         self.index = 0;
-        with_host(vm, |h| self.it.rewind(h))
+        self.step(vm, |it, h| it.rewind(h))
     }
     fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
-        with_host(vm, |h| self.it.valid(h))
+        self.step(vm, |it, h| it.valid(h))
     }
     fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
-        with_host(vm, |h| self.it.current(h)).map(Option::unwrap_or_default)
+        self.step(vm, |it, h| it.current(h))
+            .map(Option::unwrap_or_default)
     }
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
-        let k = with_host(vm, |h| self.it.key(h))?;
+        let k = self.step(vm, |it, h| it.key(h))?;
         Ok(k.unwrap_or(Value::Int(self.index)))
     }
     fn next(&mut self, vm: &mut Vm) -> VmResult<()> {
         self.index += 1;
-        with_host(vm, |h| self.it.next(h))
+        self.step(vm, |it, h| it.next(h))
     }
     fn fetch(
         &mut self,
@@ -100,7 +125,7 @@ impl NativeIterator for SplNativeIter {
             self.index += 1;
         }
         let index = self.index;
-        let r = with_host(vm, |h| self.it.fetch(h, advance, want_key))?;
+        let r = self.step(vm, |it, h| it.fetch(h, advance, want_key))?;
         Ok(r.map(|(v, k)| {
             let k = want_key.then(|| k.unwrap_or(Value::Int(index)));
             (v.unwrap_or_default(), k)

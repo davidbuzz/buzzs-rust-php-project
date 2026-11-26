@@ -37,6 +37,18 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     }
+    if matches!(
+        name.as_str(),
+        "iterator_to_array" | "iterator_count" | "iterator_apply"
+    ) && php_streams::wrapper::has_volatile()
+    {
+        // The iterator may read a directory or file of a user stream
+        // wrapper: its steps run with the VM lent to the stream layer.
+        let _entry = crate::files::enter();
+        return crate::files::run_bridged(vm, |host| {
+            php_spl::call_function(host, &name, &args).unwrap_or(Ok(Value::Null))
+        });
+    }
     let r = {
         let _entry = crate::files::enter();
         // `php-spl` validates the (rewritten) callable again: without
