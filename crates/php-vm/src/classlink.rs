@@ -672,13 +672,32 @@ impl Vm {
         if let Some(kv) = self.constants.get_key_value(name) {
             return Some(kv);
         }
-        let p = name.iter().rposition(|&c| c == b'\\')?;
+        let Some(p) = name.iter().rposition(|&c| c == b'\\') else {
+            return self.find_special_constant(name);
+        };
         if let std::borrow::Cow::Owned(k) = constant_key(name) {
             if let Some(kv) = self.constants.get_key_value(k.as_slice()) {
                 return Some(kv);
             }
         }
         self.find_constant_ns_ci(name, p)
+    }
+
+    /// `zend_get_special_const()`: `true`, `false` and `null` name the
+    /// `TRUE`, `FALSE` and `NULL` constants in any case.
+    #[cold]
+    #[inline(never)]
+    fn find_special_constant(&self, name: &[u8]) -> Option<(&ZStr, &Value)> {
+        let key: &[u8] = if name.eq_ignore_ascii_case(b"true") {
+            b"TRUE"
+        } else if name.eq_ignore_ascii_case(b"false") {
+            b"FALSE"
+        } else if name.eq_ignore_ascii_case(b"null") {
+            b"NULL"
+        } else {
+            return None;
+        };
+        self.constants.get_key_value(key)
     }
 
     /// The slow end of [`Vm::find_global_constant`]: a constant declared
@@ -1833,6 +1852,7 @@ impl Vm {
                 weak,
                 parent_c,
                 interfaces_c,
+                &direct_ifaces,
                 traits_c,
                 &trait_rules,
                 cflag,
@@ -3044,6 +3064,7 @@ fn build_class(
     weak: &Weak<Class>,
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
+    direct_ifaces: &[Rc<Class>],
     traits: Vec<Rc<Class>>,
     rules: &TraitRules,
     cflag: u32,
@@ -3670,7 +3691,11 @@ fn build_class(
         }
     }
     binder.bind(decl, true);
-    for i in &interfaces {
+    // `zend_do_implement_interfaces`: the interfaces the declaration names
+    // come before the ones they extend, so a method an interface overrides
+    // is taken from it and not from the interface it extends (each named
+    // interface already holds every method it inherits).
+    for i in direct_ifaces.iter().chain(&interfaces) {
         for lc in &i.method_order {
             if methods.contains_key(lc) {
                 continue;

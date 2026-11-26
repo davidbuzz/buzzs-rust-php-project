@@ -328,7 +328,7 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         None => Err(vm.make_throw(
             "Error",
-            &format!("Undefined constant \"{}\"", name.to_string_lossy()),
+            &format!("Undefined constant \"{}\"", String::from_utf8_lossy(n)),
         )),
     }
 }
@@ -3034,6 +3034,11 @@ pub(crate) fn register(vm: &mut Vm) {
     );
     constant(vm, "ZEND_THREAD_SAFE", Value::Bool(false));
     constant(vm, "ZEND_DEBUG_BUILD", Value::Bool(false));
+    // `zend_register_standard_constants()`: real constants, which
+    // `get_defined_constants()` lists and `defined()` finds.
+    constant(vm, "TRUE", Value::Bool(true));
+    constant(vm, "FALSE", Value::Bool(false));
+    constant(vm, "NULL", Value::Null);
     constant(vm, "PHP_INT_MAX", Value::Int(i64::MAX));
     constant(vm, "PHP_INT_MIN", Value::Int(i64::MIN));
     constant(vm, "PHP_FLOAT_EPSILON", Value::Float(f64::EPSILON));
