@@ -3301,7 +3301,13 @@ impl Vm {
                 }
                 other => other.clone(),
             };
-            t.insert(ArrayKey::from_zstr(n), v);
+            // The names of a symbol table are unique: a name that is no
+            // integer in digits is appended without the probe.
+            if ArrayKey::surely_str(n.as_bytes()) {
+                t.add_new_str(n.clone(), v);
+            } else {
+                t.insert(ArrayKey::from_zstr(n), v);
+            }
         }
         Value::Array(ZArray::from_table(t))
     }
