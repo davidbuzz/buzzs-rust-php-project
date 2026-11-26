@@ -1216,3 +1216,38 @@ run();
 "#
     );
 }
+
+/// Objects written into properties from a base class's methods run for
+/// several subclasses (the cache's refill path): untyped, class- and
+/// interface-typed properties, a wrong class's `TypeError`, the replaced
+/// object's destructor, the reference counts `debug_zval_dump()` shows.
+/// Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn object_writes_on_the_refill_path() {
+    assert_eq!(
+        run(r#"<?php
+namespace O;
+interface I {} class Box implements I { function __construct(public $v = 0) {} function __destruct() { if ($this->v === 'd') echo "~d "; } } class Other {}
+abstract class Base { protected $p; protected Box $typed; protected ?I $iface = null;
+  public function __construct($x) { $this->p = new \stdClass; $this->typed = new Box(1); $this->iface = $x; }
+  function set($o) { $this->p = $o; return $this; } function setTyped($o) { $this->typed = $o; } function rc() { ob_start(); debug_zval_dump($this->p); return preg_replace("/#\d+ /", "", strtok(ob_get_clean(), "\n")); } }
+class A extends Base {} class B extends Base {} class C extends Base {}
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    foreach ([A::class, B::class, C::class] as $c) {
+      $o = new $c(new Box); $b = new Box('d'); $o->set($b); echo $o->rc(), ' '; unset($b); echo $o->rc(), ' '; $o->set(new Box(2)); echo $o->rc(), ' ';
+      try { $o->setTyped(new Other); } catch (\TypeError $e) { echo 'TE '; }
+      try { new $c(new Other); } catch (\TypeError $e) { echo 'TEi '; }
+      $o->setTyped(new Box(3));
+    }
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi 
+object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi 
+object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) refcount(2){ TE TEi 
+"#
+    );
+}

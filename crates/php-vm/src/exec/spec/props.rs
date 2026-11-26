@@ -1377,7 +1377,14 @@ impl Vm {
                 return true;
             }
         }
-        let Some(v) = self.peek_plain_value(val) else {
+        // A plain value, or an object (its handle copied: `ZVAL_COPY` of
+        // the `OP_DATA` operand; a consumed temporary is released below):
+        // `$this->p = new Foo` from a base class's constructor run for
+        // many subclasses.
+        let Some(v) = self
+            .peek_plain_value(val)
+            .or_else(|| self.peek_object_value(val))
+        else {
             return false;
         };
         match self.prop_cache_assign(pid, v) {

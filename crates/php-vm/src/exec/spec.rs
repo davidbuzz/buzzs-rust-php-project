@@ -1368,6 +1368,21 @@ impl Vm {
         plain_value_in(self.frame(), op)
     }
 
+    /// The object (not behind a reference) an `OP_DATA` operand of the
+    /// current frame holds, its handle copied, without consuming it.
+    pub(super) fn peek_object_value(&self, op: Operand) -> Option<Value> {
+        let f = self.frame();
+        let v = match op {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+            Operand::Lit(_) | Operand::Unused => return None,
+        };
+        match v {
+            Value::Object(o) => Some(Value::Object(o.clone())),
+            _ => None,
+        }
+    }
+
     /// [`dim_value_in`] of the current frame.
     pub(super) fn peek_dim_value(&self, op: Operand) -> Option<Value> {
         dim_value_in(self.frame(), op)
