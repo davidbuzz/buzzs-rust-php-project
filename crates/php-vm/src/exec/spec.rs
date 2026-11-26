@@ -776,6 +776,17 @@ fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
     let guard;
     let arr = match slot {
         Value::Array(a) => a,
+        // `isset($s[$i])` of a string with an int offset
+        // (`zend_isset_dim_slow`'s `str_offset`: a negative offset counts
+        // from the end). `empty()` and other offsets: the generic op.
+        Value::Str(s) if !empty => {
+            let DimRef::Int(i) = key else {
+                return None;
+            };
+            let len = i64::try_from(s.len()).ok()?;
+            let at = if i < 0 { i + len } else { i };
+            return Some((0..len).contains(&at));
+        }
         Value::Reference(r) => {
             guard = r.try_borrow()?;
             match &*guard {

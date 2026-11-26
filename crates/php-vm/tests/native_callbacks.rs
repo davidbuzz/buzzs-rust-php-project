@@ -1251,3 +1251,88 @@ object(O\Box)(1) refcount(3){ object(O\Box)(1) refcount(2){ ~d object(O\Box)(1) 
 "#
     );
 }
+
+/// `isset($s[$k])` / `empty($s[$k])` of strings: int offsets (negative
+/// ones from the end) on the fast path, every other offset (numeric and
+/// other strings, floats, bools, null) and `empty()` generic; arrays,
+/// null and ints as containers. Expected output: `/usr/bin/php8.5`
+/// (8.5.13).
+#[test]
+fn string_offset_isset() {
+    assert_eq!(
+        run(r#"<?php
+function t(string $s, $k) { return var_export(isset($s[$k]), true) . var_export(empty($s[$k]), true); }
+function q(string $id) { return isset($id[0]) && ($id[0] === '`' || $id[0] === '"' || $id[0] === '['); }
+function u($v) { return var_export(isset($v[0]), true) . var_export(isset($v[-1]), true) . var_export(isset($v[5]), true); }
+$out = '';
+for ($i = 0; $i < 3; $i++) {
+  $out = '';
+  foreach (['', 'a', 'abc', '0', "\0"] as $s) foreach ([0, 1, 2, -1, -3, -4, '0', '1', '-1', 'x', '1.0', 1.5, true, null] as $k) $out .= t($s, $k) . ' ';
+  $out .= var_export(q('`a`'), true) . var_export(q(''), true) . var_export(q('[x'), true) . u('ab') . u('') . u(['a']) . u(null) . u(5);
+}
+echo $out, "\n";
+"#),
+        r#"
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 2
+falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue truefalse falsetrue falsetrue truefalse falsetrue falsetrue truefalse falsetrue truefalse falsetrue falsetrue falsetrue falsetrue truefalse truefalse truefalse truefalse truefalse truefalse falsetrue truefalse truefalse truefalse falsetrue falsetrue truefalse truefalse truefalse truetrue falsetrue falsetrue truetrue falsetrue falsetrue truetrue falsetrue truetrue falsetrue falsetrue falsetrue falsetrue truetrue truefalse falsetrue falsetrue truefalse falsetrue falsetrue truefalse falsetrue truefalse falsetrue falsetrue falsetrue falsetrue truefalse truefalsetruetruetruefalsefalsefalsefalsetruefalsefalsefalsefalsefalsefalsefalsefalse
+"#
+    );
+}
