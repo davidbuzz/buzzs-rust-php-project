@@ -824,10 +824,11 @@ impl Vm {
         let room = crate::SymbolRoom::with_extensions(extensions.len());
         let mut vm = Vm::new_core(opts, stdout, room);
         for e in extensions {
-            if !vm
-                .loaded_extensions
-                .iter()
-                .any(|n| n.eq_ignore_ascii_case(e.name()))
+            // A module that adds to one of the engine's own (`Core`: the
+            // `UPLOAD_ERR_*` constants) is not listed a second time.
+            let listed = |n: &str| n.eq_ignore_ascii_case(e.name());
+            if !crate::LOADED_EXTENSIONS.iter().any(|n| listed(n))
+                && !vm.loaded_extensions.iter().any(|n| listed(n))
             {
                 vm.loaded_extensions.push(e.name().to_string());
             }

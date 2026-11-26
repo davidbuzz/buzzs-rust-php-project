@@ -962,13 +962,15 @@ pub const UPLOAD_ERR: &[(&str, i64)] = &[
 ];
 
 /// Registers the `UPLOAD_ERR_*` constants; core constants that every SAPI
-/// has (the CLI binary can register this module too).
+/// has (the CLI binary can register this module too). They belong to
+/// `Core` (`php_rfc1867_register_constants()` runs in
+/// `php_module_startup()`), so this is not a module of its own.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rfc1867Constants;
 
 impl Extension for Rfc1867Constants {
     fn name(&self) -> &'static str {
-        "rfc1867"
+        "Core"
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {

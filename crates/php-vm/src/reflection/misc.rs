@@ -865,8 +865,8 @@ fn re_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn re_get_version(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let _ = this_ext(vm, a)?;
-    Ok(zs(crate::PHP_VERSION))
+    let m = this_ext(vm, a)?;
+    Ok(crate::module_version(vm, &m).map_or(Value::Null, |v| zs(&v)))
 }
 
 /// The functions of extension `m` in registration order
