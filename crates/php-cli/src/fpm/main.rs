@@ -350,6 +350,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         log::log(level, "", 0, msg, None);
     });
     let cfg = Config::load(&a.opts);
+    php_ext_streams::sapi_is_not_cli();
     if let Err(status) = startup::module_startup(&cfg) {
         return status;
     }

@@ -803,6 +803,7 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
             };
             let exts = crate::extensions::all();
             let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
+            php_ext_streams::sapi_is_not_cli();
             let vm = Vm::with_extensions(&opts, Box::new(ApacheOutput), &refs);
             *borrow = Some(vm);
         }

@@ -255,7 +255,7 @@ fn sync_settings(vm: &Vm) {
         auto_detect_line_endings: vm.ini_bool("auto_detect_line_endings"),
         default_socket_timeout: vm.ini_long("default_socket_timeout"),
         html_errors: vm.ini_bool("html_errors"),
-        sapi_is_cli: true,
+        sapi_is_cli: crate::sapi_is_cli(),
         user_agent: vm.ini_string("user_agent").filter(|v| !v.is_empty()),
         from_address: vm.ini_string("from").filter(|v| !v.is_empty()),
         realpath_cache_size_limit: vm.ini_long("realpath_cache_size"),

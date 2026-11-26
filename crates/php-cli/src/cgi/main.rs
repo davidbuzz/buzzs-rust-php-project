@@ -389,6 +389,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     for w in &cfg.warnings {
         let _ = std::io::stderr().write_all(format!("PHP:  {w}\n").as_bytes());
     }
+    php_ext_streams::sapi_is_not_cli();
     if let Err(status) = startup::module_startup(&cfg) {
         return status;
     }

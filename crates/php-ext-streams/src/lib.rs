@@ -46,6 +46,32 @@ use php_vm::Vm;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Streams;
 
+/// Whether this process's SAPI is the CLI (`!strcmp(sapi_module.name,
+/// "cli")` in main/streams/php_fopen_wrapper.c and
+/// `cli_register_file_handles()` in sapi/cli/php_cli.c).
+static SAPI_IS_CLI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Says that this process's SAPI is not the CLI: called once by CGI, FPM,
+/// the built-in web server and the Apache module before they make a VM.
+/// Their VMs then get no `STDIN`, `STDOUT` and `STDERR` (only the CLI
+/// registers them), `php://stdin` and its siblings are opened on a
+/// duplicate of the descriptor, and `php://fd/N` is refused, as in
+/// php-src.
+///
+/// Without it every VM of such a process opened the three streams for
+/// constants its SAPI then removed, each on a duplicate that nothing
+/// closed (they are `NO_CLOSE`, as the CLI's must be): three descriptors
+/// a VM, which is what an FPM master with many pools ran out of on reload
+/// and `php-cgi -T` lost with every run.
+pub fn sapi_is_not_cli() {
+    SAPI_IS_CLI.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the SAPI is the CLI ([`sapi_is_not_cli`] was not called).
+pub(crate) fn sapi_is_cli() -> bool {
+    SAPI_IS_CLI.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Opens `php://stdin` & co. as the CLI's `STDIN`/`STDOUT`/`STDERR`.
 fn register_std_streams(m: &mut ModuleBuilder<'_>) {
     for (i, (name, url, mode)) in [
@@ -107,7 +133,9 @@ impl Extension for Streams {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         bridge::install_hooks();
-        register_std_streams(m);
+        if sapi_is_cli() {
+            register_std_streams(m);
+        }
         errors::register(m);
         files::register(m);
         stat::register(m);

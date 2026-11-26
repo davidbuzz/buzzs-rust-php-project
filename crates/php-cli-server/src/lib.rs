@@ -150,6 +150,8 @@ pub fn maybe_run(raw: &[Vec<u8>], extensions: ExtensionFactory) -> Option<i32> {
 
 /// `do_cli_server()`.
 pub fn run(opts: &Options, extensions: ExtensionFactory) -> i32 {
+    // The SAPI is "cli-server" from here on, not "cli".
+    php_ext_streams::sapi_is_not_cli();
     log::set_level(log::LOG_MESSAGE - opts.quiet);
     let document_root: Vec<u8> = if let Some(dr) = &opts.document_root {
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(dr));
