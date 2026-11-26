@@ -139,6 +139,6 @@ foreach ([fn() => gmp_root("abc", null), fn() => gmp_testbit("x", 1.5), fn() => 
          TypeError: gmp_div_q(): Argument #3 ($rounding_mode) must be of type int, array given\n\
          TypeError: gmp_scan0(): Argument #2 ($start) must be of type int, string given\n\
          [8192] gmp_export(): Passing null to parameter #3 ($flags) of type int is deprecated\n\
-         ''\n"
+         '\x01'\n"
     );
 }

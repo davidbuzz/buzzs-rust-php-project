@@ -600,7 +600,16 @@ Warning: A non-numeric value encountered in t.php on line 19
 /// reference into it (`$r`) keep their own semantics.
 #[test]
 fn globals_dim_writes_from_functions_reach_global_scope_frames() {
+    // (`j()` writes what json_encode() would: the bare VM has no ext/json.)
     let src = r#"<?php
+function j($v) {
+    if (!is_array($v)) { return is_string($v) ? '"' . $v . '"' : (string) $v; }
+    $list = true; $n = 0;
+    foreach ($v as $k => $_) { if ($k !== $n) { $list = false; } $n++; }
+    $s = ''; $first = true;
+    foreach ($v as $k => $e) { $s .= ($first ? '' : ',') . ($list ? '' : '"' . $k . '":') . j($e); $first = false; }
+    return ($list ? '[' : '{') . $s . ($list ? ']' : '}');
+}
 function w() {
     for ($i = 0; $i < 3; $i++) { $GLOBALS["g"][$i] = $i * 10; }
     $GLOBALS["g"][] = "app";
@@ -618,20 +627,20 @@ $n = ["c" => 1];
 $keep = $g;
 $r = &$h["x"];
 w();
-echo json_encode([$g, $h, $s, $n, $keep, $r]), "\n";
+echo j([$g, $h, $s, $n, $keep, $r]), "\n";
 $g[] = "top";
 w();
-echo json_encode([$g, $h, $n]), "\n";
+echo j([$g, $h, $n]), "\n";
 function inc() { $GLOBALS["k"][] = count($GLOBALS["k"]); }
 $k = [];
 for ($j = 0; $j < 3; $j++) { inc(); }
-echo json_encode($k), "\n";
+echo j($k), "\n";
 $m = [0];
 function addm($v) { $GLOBALS["m"][] = $v; }
 addm(1);
-echo json_encode($m), "\n";
-eval('$e = []; addm(2); $e[] = count($m); function adde($v) { $GLOBALS["e"][] = $v; } adde(7); echo json_encode([$m, $e]), "\n";');
-echo json_encode([$m, $e]), "\n";
+echo j($m), "\n";
+eval('$e = []; addm(2); $e[] = count($m); function adde($v) { $GLOBALS["e"][] = $v; } adde(7); echo j([$m, $e]), "\n";');
+echo j([$m, $e]), "\n";
 "#;
     let expected = r#"[{"0":0,"2":20,"3":"app"},{"x":{"1":1,"2":2}},"ab",{"c":6},[],{"1":1,"2":2}]
 [{"0":0,"2":20,"3":"app","4":"top","5":"app"},{"x":{"1":1,"2":2}},{"c":11}]

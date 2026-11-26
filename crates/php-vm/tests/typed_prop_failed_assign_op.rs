@@ -97,7 +97,7 @@ int(0)
 Unsupported operand types: int + array
 int(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 10
+Warning: Array to string conversion in t.php on line 10
 string(6) "qArray"
 Modulo by zero
 int(0)
@@ -140,7 +140,7 @@ int(0)
 Unsupported operand types: int + array
 int(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 10
+Warning: Array to string conversion in t.php on line 10
 string(6) "qArray"
 Modulo by zero
 int(0)
@@ -183,7 +183,7 @@ int(0)
 Unsupported operand types: int + array
 int(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 10
+Warning: Array to string conversion in t.php on line 10
 string(6) "qArray"
 Modulo by zero
 int(0)
@@ -234,11 +234,11 @@ int(0)
 DivisionByZeroError: Division by zero
 int(0)
 
-Deprecated: Implicit conversion from float 2.5 to int loses precision in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 11
+Deprecated: Implicit conversion from float 2.5 to int loses precision in t.php on line 11
 DivisionByZeroError: Modulo by zero
 float(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 12
+Warning: Array to string conversion in t.php on line 12
 TypeError: Cannot assign string to property T::$i of type int
 int(3)
 TypeError: Unsupported operand types: int + string
@@ -257,11 +257,11 @@ int(0)
 DivisionByZeroError: Division by zero
 int(0)
 
-Deprecated: Implicit conversion from float 2.5 to int loses precision in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 11
+Deprecated: Implicit conversion from float 2.5 to int loses precision in t.php on line 11
 DivisionByZeroError: Modulo by zero
 float(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 12
+Warning: Array to string conversion in t.php on line 12
 TypeError: Cannot assign string to property T::$i of type int
 int(3)
 TypeError: Unsupported operand types: int + string
@@ -280,11 +280,11 @@ int(0)
 DivisionByZeroError: Division by zero
 int(0)
 
-Deprecated: Implicit conversion from float 2.5 to int loses precision in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 11
+Deprecated: Implicit conversion from float 2.5 to int loses precision in t.php on line 11
 DivisionByZeroError: Modulo by zero
 float(0)
 
-Warning: Array to string conversion in /tmp/claude-1000/-home-buzz-phprust/10ccc654-2f19-46e3-bef1-a80a2e409923/scratchpad/t44/r/t.php on line 12
+Warning: Array to string conversion in t.php on line 12
 TypeError: Cannot assign string to property T::$i of type int
 int(3)
 TypeError: Unsupported operand types: int + string
