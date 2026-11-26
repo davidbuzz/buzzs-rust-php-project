@@ -1536,12 +1536,20 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
             }
             return;
         };
+        // The script's name from here on is its opened path
+        // (`php_fopen_primary_script()` → `_php_stream_fopen()`:
+        // `expand_filepath()`, the name made absolute against the directory
+        // the request started in): `__FILE__`, `__DIR__`, the messages and
+        // `get_included_files()` of `php-cgi sub/x.php` show the absolute
+        // name, and `__DIR__ . '/y.php'` finds its neighbour after the
+        // change of directory below.
+        let opened = php_streams::paths::expand_filepath(&path).unwrap_or_else(|| path.clone());
         if !cgi.no_chdir {
             if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
                 let _ = std::env::set_current_dir(dir);
             }
         }
-        (src, path.clone())
+        (src, opened)
     };
     // php_execute_script(): max_execution_time after max_input_time.
     vm.script_timer();

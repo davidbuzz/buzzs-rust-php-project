@@ -136,3 +136,41 @@ fn post_max_size_warning_precedes_x_powered_by() {
     let out = cgi_raw("postok", "<?php echo 1;", &[], "POST", b"a=1");
     assert!(out.starts_with("X-Powered-By: PHP/"), "{out}");
 }
+
+/// `php-cgi sub/x.php` from the command line, a relative name: the script
+/// is named by its opened path (`php_fopen_primary_script()`, whose
+/// `expand_filepath()` makes it absolute before the change into the
+/// script's directory). `__DIR__` was "sub" inside ".../sub", so
+/// `include __DIR__ . '/y.php'` looked for "sub/y.php" there and failed.
+/// Expected output from php-cgi8.5.
+#[test]
+fn a_relative_script_name_is_the_absolute_opened_path() {
+    let dir = TempDir::new("relname");
+    let base = dir.0.canonicalize().unwrap();
+    std::fs::create_dir_all(base.join("sub")).unwrap();
+    std::fs::write(
+        base.join("sub/x.php"),
+        "<?php\necho __FILE__, \"\\n\", __DIR__, \"\\n\", getcwd(), \"\\n\", \
+         implode(',', get_included_files()), \"\\n\";\n\
+         echo include __DIR__ . '/y.php';\necho $u;\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("sub/y.php"), "<?php return \"y\\n\";").unwrap();
+    let out = Command::new(PHP_CGI)
+        .args(["-n", "-q", "-d", "html_errors=0", "sub/x.php"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir(&base)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    let b = base.display();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "{b}/sub/x.php\n{b}/sub\n{b}/sub\n{b}/sub/x.php\ny\n\
+             \nWarning: Undefined variable $u in {b}/sub/x.php on line 4\n"
+        )
+    );
+}
