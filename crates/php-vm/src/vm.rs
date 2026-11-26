@@ -1548,9 +1548,31 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
 #[inline]
 fn fit_released<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
     if v.len() > n {
-        v.truncate(n);
+        forget_released(v, n);
     } else if v.len() < n {
         v.resize_with(n, make);
+    }
+}
+
+/// Empties `v`, whose elements are all in their released state
+/// ([`fit_released`] to no element; [`Frame::reinit_for_builtin`]).
+#[inline]
+fn cut_released<T>(v: &mut Vec<T>) {
+    forget_released(v, 0);
+}
+
+/// Cuts `v` to `n` elements without dropping the ones cut, which own
+/// nothing (released slots, scalars): each is popped and forgotten, a
+/// loop that reads nothing it uses and compiles to one store of the
+/// length. `truncate` and `clear` run the drop glue of every element (a
+/// jump on the tag of each temporary, or a call of the out-of-line glue:
+/// ~10 instructions each), and a forgotten `drain` leaves a call of the
+/// drain's own out-of-line drop (~22 instructions a cut).
+#[inline(always)]
+#[allow(clippy::inline_always)] // a store, in the callers' own loops
+pub(crate) fn forget_released<T>(v: &mut Vec<T>, n: usize) {
+    while v.len() > n {
+        std::mem::forget(v.pop());
     }
 }
 
@@ -1801,20 +1823,19 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn reinit_for_builtin(&mut self, empty_code: &Rc<OpArray>) {
+        debug_assert!(self.slots_released());
         self.released_direct = false;
         self.kind = FrameKind::Builtin;
-        if !self.tmps.is_empty() {
-            self.tmps.clear();
-        }
-        if !self.iters.is_empty() {
-            self.iters.clear();
-        }
-        if !self.fins.is_empty() {
-            self.fins.clear();
-        }
-        if !self.cvs.is_empty() {
-            self.cvs.clear();
-        }
+        // The slots of the user function called in this frame before are
+        // released (they own nothing) and are cut as
+        // [`Frame::reinit_for_call`] cuts them: `clear` ran the drop glue
+        // of every temporary, out of line (490,000 times a request of a
+        // framework application, where builtin and user calls alternate
+        // at every depth).
+        cut_released(&mut self.tmps);
+        cut_released(&mut self.iters);
+        cut_released(&mut self.fins);
+        cut_released(&mut self.cvs);
         // Kept by `keeps_function` for a user function.
         clear_opt(&mut self.ufunc);
         if !Rc::ptr_eq(&self.code, empty_code) {
@@ -2048,11 +2069,26 @@ impl Frame {
     }
 
     /// [`Frame::release_returning`]'s release of the temporaries.
+    ///
+    /// The tag is tested where the value is, as for the compiled
+    /// variables ([`release_cv_in_place`]): most temporaries of a
+    /// returning frame are `null` already (the op that read one took it),
+    /// which costs the test alone, a scalar costs the store of `null`,
+    /// and only a counted value is moved out and dropped. Taking every
+    /// slot first moved each value to the stack and stored `null` before
+    /// its tag was looked at (~11 instructions a temporary, a third of a
+    /// return's instructions in a framework application's request).
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
     fn release_direct_tmps(&mut self) {
         for t in &mut self.tmps {
-            release_slot(std::mem::take(t));
+            match t {
+                Value::Null => {}
+                Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+                    std::mem::forget(std::mem::replace(t, Value::Null));
+                }
+                _ => drop(std::mem::take(t)),
+            }
         }
     }
 
@@ -2152,6 +2188,23 @@ impl Frame {
         self.clear_for_reuse(empty_code);
     }
 
+    /// Whether the frame's variable store is its own and holds nothing:
+    /// the store the last user call made in this pooled frame left (a
+    /// released frame keeps its store for the next one,
+    /// [`Frame::clear_for_reuse`]). A builtin's frame does not use it, and
+    /// there is nothing in it to release.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of `release_native`
+    fn holds_empty_store(&mut self) -> bool {
+        Rc::get_mut(&mut self.vars).is_some_and(|rc| {
+            let vs = rc.get_mut();
+            vs.slots.is_empty()
+                && vs.names.shared.is_none()
+                && vs.names.owned.is_empty()
+                && vs.index.is_none()
+        })
+    }
+
     /// [`Frame::clear_builtin_for_reuse`] of the builtin frame the tape's
     /// internal call made current (`exec/tape/calls.rs`, `call_native`):
     /// that call set only its function, name and passed arguments, which
@@ -2159,7 +2212,14 @@ impl Frame {
     /// in the released state [`Frame::reinit_for_builtin`] left, which is
     /// tested. `false`, having released nothing, when the handler left
     /// more behind (a pending call, a symbol table, an `@`, named
-    /// arguments, a store of its own): the full release then runs.
+    /// arguments, a variable store that holds something): the full release
+    /// then runs.
+    ///
+    /// The store is the shared empty one in a frame only builtins used,
+    /// and the frame's own in one a user function was called in before
+    /// ([`Frame::holds_empty_store`]): in an application nearly every
+    /// frame is of the second kind, and refusing those sent every builtin
+    /// call of a request through the full release (62,700 of 64,400).
     ///
     /// Always inline (its two callers, the tape's call and
     /// `Vm::call_builtin_pooled`, run it once a call): out of line its
@@ -2182,7 +2242,7 @@ impl Frame {
             || self.statics.is_some()
             || !self.tmps.is_empty()
             || !self.cvs.is_empty()
-            || !Rc::ptr_eq(&self.vars, empty_vars)
+            || !(Rc::ptr_eq(&self.vars, empty_vars) || self.holds_empty_store())
         {
             return false;
         }

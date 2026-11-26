@@ -4587,7 +4587,7 @@ impl Vm {
             return;
         }
         if self.frames.len() >= depth {
-            let args = std::mem::take(&mut self.frames[depth - 1].args);
+            let mut args = std::mem::take(&mut self.frames[depth - 1].args);
             // Frames left above the builtin's (none, normally) go; the
             // builtin frame itself is released into the pool, as php-src
             // pops its call frame off the VM stack without touching the
@@ -4597,7 +4597,20 @@ impl Vm {
             }
             self.frames
                 .release_builtin_top(&self.empty_code, &self.empty_vars);
-            self.put_arg_vec(args);
+            // The arguments are released once the frame is, and the
+            // pooled frame keeps the buffer: the next builtin call readied
+            // in it pushes its arguments there
+            // (`exec::tape::calls::send_native_run`). Moved to the buffer
+            // pool instead, it left the frame without one, and every such
+            // call allocated a buffer, which the next call through here
+            // freed again (54,000 times a request of a framework
+            // application).
+            if args.capacity() <= 256 {
+                args.clear();
+                if let Some(frame) = self.frames.vec.get_mut(depth - 1) {
+                    frame.args = args;
+                }
+            }
         }
     }
 
@@ -7815,6 +7828,16 @@ mod buffer_tests {
         capacities
     }
 
+    /// After `pop_frames_to` released the only frame, which held one of
+    /// the pool's buffers (`before` are the pool's capacities then): the
+    /// pooled frame keeps that buffer, emptied, and the pool has the rest.
+    fn assert_kept_buffer(vm: &Vm, before: &[usize]) {
+        let kept = &vm.frames.vec[0].args;
+        assert!(kept.is_empty());
+        assert_eq!(kept.capacity(), 8);
+        assert_eq!(capacities(vm), before[1..]);
+    }
+
     #[test]
     fn builtin_backtrace_buffers_survive_coercion_named_args_and_callbacks() {
         let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
@@ -7851,9 +7874,11 @@ restore_error_handler();
         vm.frames.push(frame);
         let depth = vm.frames.len();
         vm.pop_frames_to(depth);
-        assert_eq!(capacities(&vm), before);
         assert_eq!(held.refcount(), 1);
         assert!(vm.frames.is_empty());
+        // The pooled frame keeps the buffer, emptied, for the next call
+        // readied in it; the pool is the one buffer short.
+        assert_kept_buffer(&vm, &before);
     }
 
     #[test]
@@ -7889,7 +7914,7 @@ restore_error_handler();
         let depth = vm.frames.len();
         vm.pop_frames_to(depth);
         assert!(vm.frames.is_empty());
-        assert_eq!(capacities(&vm), before);
+        assert_kept_buffer(&vm, &before);
         assert_eq!(arg.refcount(), 1);
         assert_eq!(tmp.refcount(), 1);
     }
