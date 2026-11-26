@@ -25,8 +25,8 @@
 
 use super::{Br, Inst, TOp};
 use crate::exec::spec::{
-    fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean, incdec_static_prop_in, prop_op_in,
-    read_hit, store_fetched_in,
+    assign_prop_dim_in, fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean,
+    incdec_static_prop_in, isset_prop_dim_in, prop_op_in, read_hit, store_fetched_in,
 };
 use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
@@ -133,6 +133,40 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 e,
                 k: u8::from(mode == FetchMode::Is),
                 ..plain(TOp::FetchObjPropDim)
+            }
+        }
+        // `$obj->prop[dim] = val` / `$obj->prop[] = val` and
+        // `isset($obj->prop[dim])`: the op is read back from the op array
+        // (`d`).
+        Op::AssignObjPropDim {
+            place,
+            dim,
+            val,
+            dst,
+        } => {
+            if !place_ok(code, place)
+                || !val_ok(code, dim)
+                || !val_ok(code, val)
+                || dst.is_some_and(|d| d >= code.num_tmps)
+            {
+                return None;
+            }
+            Inst {
+                a: place,
+                d: i as u32,
+                ..plain(TOp::AssignObjPropDim)
+            }
+        }
+        Op::IssetObjPropDim {
+            place, dim, dst, ..
+        } => {
+            if !place_ok(code, place) || !val_ok(code, dim) || dst >= code.num_tmps {
+                return None;
+            }
+            Inst {
+                a: place,
+                d: i as u32,
+                ..plain(TOp::IssetObjPropDim)
             }
         }
         Op::AssignObjProp { place, val, .. } => {
@@ -502,6 +536,51 @@ fn fetch_prop_cold(f: &mut Frame, inst: &Inst) -> bool {
     };
     store_fetched_in(f, inst.b, None, v);
     true
+}
+
+/// `Op::AssignObjPropDim` (`ZEND_FETCH_OBJ_W` + `ZEND_ASSIGN_DIM` on a
+/// property cache hit): the store into the array a declared property
+/// holds, in the frame alone (`assign_prop_dim_in`), where it ran through
+/// the VM (`run_vm_op`) before: a parser's stack writes
+/// (`$this->semStack[$pos] = $v`). Declines a miss.
+///
+/// # Safety
+/// As [`prop_in`]; `inst.d` is the index of an `Op::AssignObjPropDim`.
+#[inline(never)]
+pub(super) unsafe fn assign_prop_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::AssignObjPropDim {
+        place,
+        dim,
+        val,
+        dst,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    assign_prop_dim_in(f, place, dim, val, dst)
+}
+
+/// `Op::IssetObjPropDim` on a property cache hit, as [`assign_prop_dim`]
+/// (`isset_prop_dim_in`).
+///
+/// # Safety
+/// As [`prop_in`]; `inst.d` is the index of an `Op::IssetObjPropDim`.
+#[inline(never)]
+pub(super) unsafe fn isset_prop_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::IssetObjPropDim {
+        place,
+        dim,
+        dst,
+        empty,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        return false;
+    };
+    isset_prop_dim_in(f, place, dim, dst, empty)
 }
 
 /// The offset operand a `FetchObjPropDim` instruction carries in `d`

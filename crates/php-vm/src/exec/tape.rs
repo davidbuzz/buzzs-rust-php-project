@@ -1400,6 +1400,8 @@ tape_ops! {
         FetchObjProp = (props::fetch_prop, 1, poll_f),
         FetchObjPropTo = (props::fetch_prop_to, 1, branch_poll_f),
         FetchObjPropDim = (props::fetch_prop_dim, 1, branch_poll_f),
+        AssignObjPropDim = (props::assign_prop_dim, 1, poll_f),
+        IssetObjPropDim = (props::isset_prop_dim, 1, poll_f),
         AssignObjProp = (props::prop_in, 1, poll_f),
         AssignOpObjProp = (props::prop_in, 1, poll_f),
         IncDecObjProp = (props::prop_in, 1, poll_f),
@@ -2719,6 +2721,24 @@ fn declined_vm_step(
             None => DECLINED,
         };
     }
+    // `isset($obj->name[dim])` the tape's own test declined: the VM's
+    // (`Vm::isset_obj_prop_dim_fast`), as the `VmOp` row ran it.
+    if let Some(&Op::IssetObjPropDim {
+        place,
+        dim,
+        dst,
+        empty,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        return match vm.isset_obj_prop_dim_fast(place, dim, empty) {
+            Some(r) => {
+                vm.set_tmp(dst, Value::Bool(r));
+                at + 1
+            }
+            None => DECLINED,
+        };
+    }
     // `$this->name = $v` whose site cache holds other classes (a base
     // class's or a trait's method writing for many subclasses): the write
     // and the cache's refill (`Vm::assign_obj_prop_fast`, `Vm::run`'s
@@ -2748,6 +2768,11 @@ fn declined_vm_step(
     {
         flush(vm, prep);
         vm.frame_mut().ip = at + 1;
+        // The VM's hit and the cache's refill first (the write this op
+        // took as a `VmOp` row before it had a row of its own).
+        if vm.assign_obj_prop_dim_fast(place, dim, val, dst) {
+            return at + 1;
+        }
         return match vm.assign_prop_dim_array_access(place, dim, val, dst) {
             Ok(true) => at + 1,
             Ok(false) => DECLINED,
