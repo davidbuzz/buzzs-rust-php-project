@@ -15,6 +15,7 @@ rust-version.workspace = true
 # local-exec, so the binaries are unchanged.
 mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
 libc = "0.2"
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true

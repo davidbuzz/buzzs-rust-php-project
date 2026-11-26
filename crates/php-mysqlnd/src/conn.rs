@@ -126,7 +126,7 @@ impl OptionValue<'_> {
             OptionValue::Int(i) => i as u32,
             OptionValue::Str(s) => {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let v = crate::codec::atoll(s) as u32;
+                let v = php_support::atol(s) as u32;
                 v
             }
             OptionValue::Null => 0,
@@ -588,7 +588,7 @@ impl ConnData {
         let mut parts = [0i64; 3];
         for (i, part) in parts.iter_mut().enumerate() {
             let start = p;
-            let (val, used) = strtol(&b[start.min(b.len())..]);
+            let (val, used) = php_support::strtol(&b[start.min(b.len())..]);
             *part = val;
             p = start + used;
             if i < 2 {
@@ -1789,26 +1789,6 @@ impl ConnData {
             true,
         )
     }
-}
-
-/// `strtol(p, &end, 10)` returning (value, bytes consumed).
-fn strtol(b: &[u8]) -> (i64, usize) {
-    let mut i = 0;
-    while i < b.len() && b[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let start = i;
-    if i < b.len() && (b[i] == b'-' || b[i] == b'+') {
-        i += 1;
-    }
-    let ds = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == ds {
-        return (0, 0);
-    }
-    (crate::codec::atoll(&b[start..i]), i)
 }
 
 /// `mysqlnd_escape_string_for_tx_name_in_comment`

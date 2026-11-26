@@ -264,7 +264,7 @@ pub fn unix_socket_addr(name: &[u8]) -> io::Result<std::os::unix::net::SocketAdd
 
 /// `parse_port()`: `strtol()` semantics, rejecting values outside 0..=65535.
 fn parse_port(p: &str) -> Option<u16> {
-    let (v, _) = crate::util::strtol(p.as_bytes());
+    let (v, _) = php_support::strtol(p.as_bytes());
     u16::try_from(v).ok()
 }
 

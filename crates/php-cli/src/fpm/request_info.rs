@@ -316,7 +316,7 @@ pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> Req
     info.path_translated = script_path_translated.filter(|p| env::is_valid_path(p));
     info.query_string = env.get("QUERY_STRING");
     info.content_type = content_type.unwrap_or_default();
-    info.content_length = content_length.as_deref().map_or(0, env::atol);
+    info.content_length = content_length.as_deref().map_or(0, php_support::atol);
     info.authorization = env.get("HTTP_AUTHORIZATION");
     info
 }

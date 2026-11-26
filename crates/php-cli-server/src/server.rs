@@ -588,7 +588,8 @@ pub fn startup_workers() -> Vec<libc::pid_t> {
     let Some(workers) = std::env::var_os("PHP_CLI_SERVER_WORKERS") else {
         return Vec::new();
     };
-    let n = crate::atol(workers.as_bytes());
+    // ZEND_ATOL(), without the K/M/G of an INI quantity.
+    let n = php_support::atol(workers.as_bytes());
     if n <= 1 {
         log::raw(b"number of workers must be larger than 1\n");
         return Vec::new();

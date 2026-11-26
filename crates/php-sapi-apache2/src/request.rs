@@ -657,11 +657,7 @@ pub fn is_fatal_level(level: i64) -> bool {
 /// `PG(display_errors)` as a boolean.
 pub fn display_errors(vm: &Vm) -> bool {
     let v = vm.ini_string("display_errors").unwrap_or_default();
-    let v = v.to_ascii_lowercase();
-    match v.as_slice() {
-        b"on" | b"yes" | b"true" | b"stdout" | b"stderr" => true,
-        _ => crate::headers::strtol(&v) != 0,
-    }
+    php_support::ini::display_errors_mode(Some(&v)) != 0
 }
 
 /// The 500 status of `php_error_cb` for a fatal error with

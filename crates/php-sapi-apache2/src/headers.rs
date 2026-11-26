@@ -248,7 +248,7 @@ impl SapiHeaders {
         if key.eq_ignore_ascii_case(b"content-type") {
             self.content_type = Some(val);
         } else if key.eq_ignore_ascii_case(b"content-length") {
-            backend.set_content_length(strtol(&val));
+            backend.set_content_length(php_support::atol(&val));
         } else if replace {
             backend.table_op(Table::HeadersOut, TableOp::Set, key, &val);
         } else {
@@ -333,46 +333,11 @@ fn clamp_code(code: i64) -> i32 {
     i32::try_from(code).unwrap_or(if code < 0 { i32::MIN } else { i32::MAX })
 }
 
-/// `strtol(s, NULL, 10)` with saturation.
-pub(crate) fn strtol(s: &[u8]) -> i64 {
-    let mut i = 0;
-    while i < s.len() && is_c_space(s[i]) {
-        i += 1;
-    }
-    let neg = match s.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    let mut v: i64 = 0;
-    while let Some(d) = s.get(i).filter(|c| c.is_ascii_digit()) {
-        let d = i64::from(d - b'0');
-        v = if neg {
-            v.saturating_mul(10).saturating_sub(d)
-        } else {
-            v.saturating_mul(10).saturating_add(d)
-        };
-        i += 1;
-    }
-    v
-}
-
-/// `atoi()` (saturating to `i32`).
-fn atoi(s: &[u8]) -> i32 {
-    clamp_code(strtol(s))
-}
-
 /// `sapi_extract_response_code()`.
 fn extract_response_code(line: &[u8]) -> i32 {
     for (i, &c) in line.iter().enumerate() {
         if c == b' ' && line.get(i + 1).copied().unwrap_or(0) != b' ' {
-            return atoi(&line[i + 1..]);
+            return php_support::atoi(&line[i + 1..]);
         }
     }
     200
@@ -652,5 +617,7 @@ mod tests {
         assert_eq!(extract_response_code(b"HTTP/1.1 418 I'm a teapot"), 418);
         assert_eq!(extract_response_code(b"HTTP/1.1"), 200);
         assert_eq!(extract_response_code(b"HTTP/1.1  500"), 500);
+        // atoi(): the low 32 bits of the long, as glibc's (int) strtol().
+        assert_eq!(extract_response_code(b"HTTP/1.1 4294967497 X"), 201);
     }
 }

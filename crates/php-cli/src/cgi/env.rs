@@ -169,25 +169,6 @@ impl Default for RequestInfo {
     }
 }
 
-/// C `atol()`.
-pub fn atol(s: &[u8]) -> i64 {
-    let s = s.trim_ascii_start();
-    let (neg, digits) = match s.first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let mut v: i64 = 0;
-    for &c in digits.iter().take_while(|c| c.is_ascii_digit()) {
-        v = v.saturating_mul(10).saturating_add(i64::from(c - b'0'));
-    }
-    if neg {
-        -v
-    } else {
-        v
-    }
-}
-
 /// `is_valid_path()`: rejects paths with a `..` segment.
 pub fn is_valid_path(path: &[u8]) -> bool {
     if path.starts_with(b"..") && matches!(path.get(2), None | Some(b'/' | b'\\')) {
@@ -382,7 +363,7 @@ pub fn init_request_info(env: &mut Env, settings: &Settings, fs: &dyn Fs) -> Req
     info.request_method = env.get("REQUEST_METHOD");
     info.query_string = env.get("QUERY_STRING");
     info.content_type = content_type.unwrap_or_default();
-    info.content_length = content_length.as_deref().map_or(0, atol);
+    info.content_length = content_length.as_deref().map_or(0, php_support::atol);
     info.authorization = env.get("HTTP_AUTHORIZATION");
     info
 }
@@ -692,12 +673,5 @@ mod tests {
             Some(&b"Content-Type"[..])
         );
         assert_eq!(request_header_name(b"PATH"), None);
-    }
-
-    #[test]
-    fn atol_prefix() {
-        assert_eq!(atol(b" 12abc"), 12);
-        assert_eq!(atol(b"-3"), -3);
-        assert_eq!(atol(b""), 0);
     }
 }

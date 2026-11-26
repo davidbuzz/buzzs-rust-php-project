@@ -380,53 +380,10 @@ impl IniStore {
 /// the value and whether the whole string was consumed.
 fn strtol_full(s: &[u8]) -> (i64, bool) {
     let s = s.split(|&c| c == 0).next().unwrap_or_default();
-    let mut i = 0;
-    while i < s.len() && matches!(s[i], b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    let start = i;
-    let mut v: i64 = 0;
-    while i < s.len() && s[i].is_ascii_digit() {
-        let digit = i64::from(s[i] - b'0');
-        v = if neg {
-            v.saturating_mul(10).saturating_sub(digit)
-        } else {
-            v.saturating_mul(10).saturating_add(digit)
-        };
-        i += 1;
-    }
-    if i == start {
+    match php_support::strtol(s) {
         // No conversion: endptr = s.
-        return (0, s.is_empty());
-    }
-    (v, i == s.len())
-}
-
-/// `ZEND_ATOL`.
-fn atol(s: &[u8]) -> i64 {
-    let s = s.split(|&c| c == 0).next().unwrap_or_default();
-    let mut i = 0;
-    while i < s.len() && s[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let neg = i < s.len() && s[i] == b'-';
-    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
-        i += 1;
-    }
-    let mut v: i64 = 0;
-    while i < s.len() && s[i].is_ascii_digit() {
-        v = v.saturating_mul(10).saturating_add(i64::from(s[i] - b'0'));
-        i += 1;
-    }
-    if neg {
-        -v
-    } else {
-        v
+        (_, 0) => (0, s.is_empty()),
+        (v, end) => (v, end == s.len()),
     }
 }
 
@@ -826,7 +783,7 @@ pub(crate) fn on_modify(h: &mut dyn SessionHost, idx: usize, v: &[u8], stage: In
             true
         }
         Kind::Rfc1867Freq => {
-            let n = atol(v);
+            let n = php_support::atol(v);
             if n < 0 {
                 warn(
                     h,
@@ -1027,8 +984,6 @@ mod tests {
         assert_eq!(strtol_full(b"abc"), (0, false));
         assert_eq!(strtol_full(b""), (0, true));
         assert_eq!(strtol_full(b"40\0x"), (40, true));
-        assert_eq!(atol(b"10%"), 10);
-        assert_eq!(atol(b"-3"), -3);
     }
 
     #[test]

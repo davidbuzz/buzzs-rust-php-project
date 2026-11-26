@@ -156,9 +156,6 @@ fn tracked_mode_env_selection() {
     assert!(!on(Some("0"), Some("0")));
     assert!(!on(Some("0"), None));
     assert!(!on(None, Some("1")));
-    assert_eq!(atol(b"  +42abc"), 42);
-    assert_eq!(atol(b"-7"), -7);
-    assert_eq!(atol(b"x1"), 0);
 }
 
 #[test]

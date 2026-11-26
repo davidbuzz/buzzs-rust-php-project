@@ -5,7 +5,7 @@
 use crate::args::{CertArg, Certificate, KeyArg};
 use crate::error::PhpResult;
 use crate::ffi::{self, Asn1Str, Bio, CheckCert, ExtText, NameRef, X509Cert, X509Stack, X509Store};
-use crate::util::{atoi, bin2hex, timegm};
+use crate::util::{bin2hex, timegm};
 use crate::value::{BoolOrInt, PhpArray, PhpValue};
 use crate::OpenSsl;
 
@@ -65,6 +65,8 @@ impl OpenSsl {
             ));
             return -1;
         }
+        // atoi() on each field, as php_openssl_asn1_time_to_time_t() reads them.
+        let atoi = |s: &[u8]| i64::from(php_support::atoi(s));
         let sec = atoi(&b[len - 3..]);
         let min = atoi(&b[len - 5..len - 3]);
         let hour = atoi(&b[len - 7..len - 5]);

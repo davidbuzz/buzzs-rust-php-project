@@ -198,25 +198,6 @@ pub fn get_params(env: &mut Env, body: &[u8]) -> bool {
     true
 }
 
-/// C `atoi()`.
-pub fn atoi(s: &str) -> i64 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let mut v: i64 = 0;
-    for c in digits.bytes().take_while(u8::is_ascii_digit) {
-        v = v.saturating_mul(10).saturating_add(i64::from(c - b'0'));
-    }
-    if neg {
-        -v
-    } else {
-        v
-    }
-}
-
 /// A listening socket.
 #[derive(Debug)]
 pub enum Listener {
@@ -261,7 +242,7 @@ fn is_port_number(s: &str) -> bool {
 pub fn listen(path: &str) -> Option<(Listener, Option<Vec<IpAddr>>)> {
     // `short port = atoi(...)`: the value as a 16-bit port.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let port_of = |s: &str| atoi(s) as i32 as u16;
+    let port_of = |s: &str| php_support::atoi(s.as_bytes()) as u16;
     let mut tcp: Option<(String, u16)> = None;
     if let Some(colon) = path.find(':') {
         let port = port_of(&path[colon + 1..]);
@@ -964,14 +945,6 @@ mod tests {
         assert!(!get_params(&mut env, &[3, 3, b'a', b'b']));
         // A 4-byte length cut short.
         assert!(!get_params(&mut env, &[0x80, 0, 0]));
-    }
-
-    #[test]
-    fn atoi_as_c() {
-        assert_eq!(atoi("  42abc"), 42);
-        assert_eq!(atoi("-7"), -7);
-        assert_eq!(atoi("x"), 0);
-        assert_eq!(atoi(""), 0);
     }
 
     #[test]

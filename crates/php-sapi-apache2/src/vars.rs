@@ -135,7 +135,7 @@ impl Limits {
                 .unwrap_or_else(|| vm.ini_long("max_input_vars")),
             max_multipart_body_parts: options.max_multipart_body_parts.unwrap_or_else(|| {
                 vm.ini_string("max_multipart_body_parts")
-                    .map_or(-1, |v| crate::headers::strtol(&v))
+                    .map_or(-1, |v| php_support::atol(&v))
             }),
             post_max_size: options
                 .post_max_size
@@ -192,7 +192,7 @@ fn pend_err(vm: &mut Vm, pending: &mut Option<Throw>, r: VmResult<()>) -> VmResu
 fn content_length(ctx: &RequestCtx) -> i64 {
     ctx.backend
         .table_get(Table::HeadersIn, b"Content-Length")
-        .map_or(0, |v| crate::headers::strtol(&v))
+        .map_or(0, |v| php_support::atol(&v))
 }
 
 /// `sapi_read_standard_form_data()`: unless `Content-Length` exceeds

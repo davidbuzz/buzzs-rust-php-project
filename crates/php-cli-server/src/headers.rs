@@ -285,14 +285,14 @@ impl SapiHeaders {
                 buf.clone_from(line);
                 buf.truncate(MAX_HEADER_LENGTH);
                 if let Some(sp) = space {
-                    response_status = clamp_code(atoi(&line[sp + 1..]));
+                    response_status = php_support::atoi(&line[sp + 1..]);
                 }
             } else if let (Some(line), Some(sp)) = (&self.status_line, space) {
                 if sp >= 5 && line[..5].eq_ignore_ascii_case(b"HTTP/") {
                     buf.extend_from_slice(b"Status:");
                     buf.extend_from_slice(&line[sp..]);
                     buf.truncate(MAX_HEADER_LENGTH - 1);
-                    response_status = clamp_code(atoi(&line[sp + 1..]));
+                    response_status = php_support::atoi(&line[sp + 1..]);
                 } else {
                     has_status = self.default_status(&mut buf, is_status);
                 }
@@ -344,11 +344,6 @@ impl SapiHeaders {
     }
 }
 
-/// C `atoi()`.
-fn atoi(s: &[u8]) -> i64 {
-    strtol(s)
-}
-
 /// C `isspace()`.
 fn is_c_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
@@ -363,41 +358,11 @@ fn clamp_code(code: i64) -> i32 {
     i32::try_from(code).unwrap_or(if code < 0 { i32::MIN } else { i32::MAX })
 }
 
-/// `strtol(s, NULL, 10)` with saturation.
-pub(crate) fn strtol(s: &[u8]) -> i64 {
-    let mut i = 0;
-    while i < s.len() && is_c_space(s[i]) {
-        i += 1;
-    }
-    let neg = match s.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    let mut v: i64 = 0;
-    while let Some(d) = s.get(i).filter(|c| c.is_ascii_digit()) {
-        let d = i64::from(d - b'0');
-        v = if neg {
-            v.saturating_mul(10).saturating_sub(d)
-        } else {
-            v.saturating_mul(10).saturating_add(d)
-        };
-        i += 1;
-    }
-    v
-}
-
 /// `sapi_extract_response_code()`.
 fn extract_response_code(line: &[u8]) -> i32 {
     for (i, &c) in line.iter().enumerate() {
         if c == b' ' && line.get(i + 1).copied().unwrap_or(0) != b' ' {
-            return clamp_code(strtol(&line[i + 1..]));
+            return php_support::atoi(&line[i + 1..]);
         }
     }
     200
@@ -605,5 +570,7 @@ mod tests {
     fn response_code_extraction() {
         assert_eq!(extract_response_code(b"HTTP/1.1 418 I'm a teapot"), 418);
         assert_eq!(extract_response_code(b"HTTP/1.1"), 200);
+        // atoi(): the low 32 bits of the long, as glibc's (int) strtol().
+        assert_eq!(extract_response_code(b"HTTP/1.1 4294967497 X"), 201);
     }
 }

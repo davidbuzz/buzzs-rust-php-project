@@ -458,6 +458,9 @@ dependencies = [
 [[package]]
 name = "php-date"
 version = "0.1.0"
+dependencies = [
+ "php-support",
+]
 
 [[package]]
 name = "php-dom"
@@ -1057,6 +1060,7 @@ name = "php-filter"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-support",
 ]
 
 [[package]]
@@ -1064,6 +1068,7 @@ name = "php-ftp"
 version = "0.1.0"
 dependencies = [
  "openssl",
+ "php-support",
 ]
 
 [[package]]
@@ -1135,6 +1140,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mimalloc",
+ "php-support",
 ]
 
 [[package]]
@@ -1145,6 +1151,7 @@ dependencies = [
  "php-hash",
  "php-memlimit",
  "php-runtime",
+ "php-support",
 ]
 
 [[package]]
@@ -1161,6 +1168,7 @@ version = "0.1.0"
 dependencies = [
  "openssl",
  "openssl-sys",
+ "php-support",
 ]
 
 [[package]]
@@ -1195,6 +1203,7 @@ dependencies = [
  "php-mysqlnd",
  "php-runtime",
  "php-sqlite",
+ "php-support",
 ]
 
 [[package]]
@@ -1346,6 +1355,7 @@ dependencies = [
  "php-lexer",
  "php-random",
  "php-runtime",
+ "php-support",
 ]
 
 [[package]]
@@ -1359,6 +1369,7 @@ dependencies = [
  "libc",
  "php-memlimit",
  "php-stdstr",
+ "php-support",
  "php-uri",
 ]
 

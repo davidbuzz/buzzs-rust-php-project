@@ -131,11 +131,7 @@ fn ini_bytes(vm: &Vm, name: &str) -> Vec<u8> {
 
 /// `PG(display_errors)` as a boolean.
 pub fn display_errors(vm: &Vm) -> bool {
-    let v = ini_bytes(vm, "display_errors").to_ascii_lowercase();
-    match v.as_slice() {
-        b"on" | b"yes" | b"true" | b"stdout" | b"stderr" => true,
-        _ => crate::headers::strtol(&v) != 0,
-    }
+    php_support::ini::display_errors_mode(Some(&ini_bytes(vm, "display_errors"))) != 0
 }
 
 fn input_settings(vm: &Vm) -> InputSettings {
@@ -387,7 +383,7 @@ impl Limits {
                 .unwrap_or_else(|| vm.ini_long("max_input_vars")),
             max_multipart_body_parts: options.max_multipart_body_parts.unwrap_or_else(|| {
                 vm.ini_string("max_multipart_body_parts")
-                    .map_or(-1, |v| crate::headers::strtol(&v))
+                    .map_or(-1, |v| php_support::atol(&v))
             }),
             post_max_size: options
                 .post_max_size
@@ -1140,6 +1136,23 @@ mod tests {
                 .collect(),
         };
         Vm::with_extensions(&opts, Box::new(std::io::sink()), &[])
+    }
+
+    /// `php_get_display_errors_mode()`: a number is `(uint8_t) ZEND_ATOL`.
+    #[test]
+    fn display_errors_reads_like_php() {
+        for (value, on) in [
+            ("0", false),
+            ("stderr", true),
+            ("256", false),
+            ("258", true),
+        ] {
+            assert_eq!(
+                display_errors(&vm_with(&[("display_errors", value)])),
+                on,
+                "{value}"
+            );
+        }
     }
 
     /// `REQUEST_PARSE_BODY_OPTION_GET()`: an option replaces its INI value.

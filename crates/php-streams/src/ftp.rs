@@ -61,12 +61,6 @@ fn cstr(s: &[u8]) -> &[u8] {
     s.iter().position(|&c| c == 0).map_or(s, |i| &s[..i])
 }
 
-/// `atoi()`: `strtol()` truncated to an `int`.
-#[allow(clippy::cast_possible_truncation)]
-fn atoi(s: &[u8]) -> i32 {
-    crate::util::strtol(s).0 as i32
-}
-
 /// Whether `code` is a 2xx reply.
 fn ok2xx(code: i64) -> bool {
     (200..=299).contains(&code)
@@ -104,7 +98,7 @@ fn get_result(stream: &mut Stream, line: &mut Vec<u8>) -> i64 {
             break;
         }
     }
-    crate::util::strtol(cstr(line)).0
+    php_support::strtol(cstr(line)).0
 }
 
 /// The connect timeout of `php_stream_xport_create(..., NULL timeout)`:
@@ -371,14 +365,14 @@ fn parse_pasv(line: &[u8]) -> (u16, Option<Vec<u8>>) {
     // `(unsigned short) strtoul(...)`: wrap like the C casts.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let to_u16 = |v: i64| v as u16;
-    let (msb, n) = crate::util::strtol(&l[i..]);
+    let (msb, n) = php_support::strtol(&l[i..]);
     let mut portno = to_u16(msb).wrapping_mul(256);
     i += n;
     if l.get(i) != Some(&b',') {
         return (0, None);
     }
     i += 1;
-    let (lsb, _) = crate::util::strtol(&l[i..]);
+    let (lsb, _) = php_support::strtol(&l[i..]);
     portno = portno.wrapping_add(to_u16(lsb));
     (portno, Some(ip))
 }
@@ -402,7 +396,7 @@ fn parse_epsv(line: &[u8]) -> u16 {
     if bars < 3 {
         return 0;
     }
-    crate::util::strtol(&l[i + 1..]).0 as u16
+    php_support::strtol(&l[i + 1..]).0 as u16
 }
 
 /// `php_fopen_do_pasv()`: `EPSV`, falling back to `PASV`. Returns the data
@@ -544,7 +538,8 @@ pub fn open_url(
         let l = cstr(&line);
         if let Some(sp) = l.iter().position(|&c| c == b' ') {
             // `size_t file_size = atoi(...)`.
-            file_size = u64::from_ne_bytes(i64::from(atoi(&l[sp + 1..])).to_ne_bytes());
+            file_size =
+                u64::from_ne_bytes(i64::from(php_support::atoi(&l[sp + 1..])).to_ne_bytes());
             context::notify_file_size(context, file_size, l, result);
         }
     } else if read_write == 2 {
@@ -840,7 +835,7 @@ fn url_stat_impl(url: &[u8], context: Option<&ContextRef>) -> Result<StatBuf, ()
     send_cmd(&mut stream, b"SIZE", rpath);
     result = get_result(&mut stream, &mut line);
     if ok2xx(result) {
-        sb.size = i64::from(atoi(line.get(4..).unwrap_or_default()));
+        sb.size = i64::from(php_support::atoi(line.get(4..).unwrap_or_default()));
     } else if sb.mode & S_IFDIR != 0 {
         // Servers may fail SIZE on directories.
         sb.size = 0;

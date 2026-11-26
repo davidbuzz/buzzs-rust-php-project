@@ -1070,7 +1070,8 @@ fn to_u64(v: i64) -> u64 {
 }
 
 /// `php_get_display_errors_mode()`: 0 off, 1 stdout, 2 stderr.
-fn display_errors_mode(value: Option<&[u8]>) -> i64 {
+#[must_use]
+pub fn display_errors_mode(value: Option<&[u8]>) -> i64 {
     let Some(v) = value else { return 1 };
     for (word, mode) in [
         (&b"on"[..], 1),

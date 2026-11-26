@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-support = { path = "../php-support" }
 # FTPS (`ftp_ssl_connect`) needs control over the SSL_CTX that
 # php-openssl's `tls::connect` does not expose: no peer verification
 # (ext/ftp never verifies), and TLS session reuse from the control

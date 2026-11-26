@@ -113,21 +113,7 @@ fn binary_stat(t: u8) -> Stat {
     }
 }
 
-/// glibc `strtoll`: optional whitespace and sign, decimal digits, saturating.
-#[must_use]
-pub fn atoll(s: &[u8]) -> i64 {
-    let (neg, digits) = split_sign(s);
-    let mut v: i128 = 0;
-    for &d in digits {
-        v = (v * 10 + i128::from(d - b'0')).min(i128::from(i64::MAX) + 1);
-    }
-    let v = if neg { -v } else { v };
-    #[allow(clippy::cast_possible_truncation)]
-    let r = v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
-    r
-}
-
-/// glibc `strtoull`: like [`atoll`] but unsigned (a leading '-' negates
+/// glibc `strtoull`: like `strtoll` ([`php_support::atol`]) but unsigned (a leading '-' negates
 /// modulo 2^64), saturating at `u64::MAX`.
 #[must_use]
 pub fn strtoull(s: &[u8]) -> u64 {
@@ -483,7 +469,7 @@ pub fn decode_text_row(
             }
         } else if as_int_or_float && php_type == PhpType::Long && f.flags & ZEROFILL_FLAG == 0 {
             if pack_len < 8 {
-                Value::Int(atoll(data))
+                Value::Int(php_support::atol(data))
             } else {
                 let v = strtoull(data);
                 if f.flags & UNSIGNED_FLAG != 0 && v > i64::MAX as u64 {
@@ -668,8 +654,6 @@ mod tests {
 
     #[test]
     fn c_integer_parsing() {
-        assert_eq!(atoll(b" -12x"), -12);
-        assert_eq!(atoll(b"99999999999999999999"), i64::MAX);
         assert_eq!(strtoull(b"-1"), u64::MAX);
         assert_eq!(strtoull(b"184467440737095516150"), u64::MAX);
     }

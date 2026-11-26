@@ -44,34 +44,11 @@ fn strcspn(s: &[u8], start: usize, end: usize, chars: &[u8]) -> usize {
         .map_or(end, |p| start + p)
 }
 
-/// `ZEND_STRTOL(buf, &end, 10)` on a port buffer (which stops at NUL):
-/// `Some(value)` when at least one digit was consumed.
+/// `ZEND_STRTOL(buf, &end, 10)` on a port buffer (a C string, so it
+/// stops at NUL): `Some(value)` when at least one digit was consumed.
 fn strtol(buf: &[u8]) -> Option<i64> {
-    let buf = buf.split(|&b| b == 0).next().unwrap_or_default();
-    let mut i = 0;
-    while i < buf.len() && (buf[i] == b' ' || (0x09..=0x0d).contains(&buf[i])) {
-        i += 1;
-    }
-    let neg = match buf.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
-        }
-        Some(b'+') => {
-            i += 1;
-            false
-        }
-        _ => false,
-    };
-    let digits = buf[i..].iter().take_while(|b| b.is_ascii_digit()).count();
-    if digits == 0 {
-        return None;
-    }
-    let mut v: i64 = 0;
-    for &d in &buf[i..i + digits] {
-        v = v.saturating_mul(10).saturating_add(i64::from(d - b'0'));
-    }
-    Some(if neg { -v } else { v })
+    let (v, end) = php_support::strtol(buf);
+    (end > 0).then_some(v)
 }
 
 fn port_value(buf: &[u8]) -> Option<u16> {

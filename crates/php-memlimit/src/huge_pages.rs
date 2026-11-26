@@ -25,7 +25,7 @@ const MI_OPTION_ALLOW_THP: c_int = 43;
 /// value parses (like `ZEND_ATOL`) to non-zero.
 #[must_use]
 pub fn huge_pages_from_env(value: Option<&[u8]>) -> bool {
-    value.is_some_and(|v| crate::atol(v) != 0)
+    value.is_some_and(|v| php_support::atol(v) != 0)
 }
 
 /// Lets the allocator use transparent huge pages (`on`), or not, as
