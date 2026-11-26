@@ -38,6 +38,45 @@ list with the php-src files each one ports is in [CLAUDE.md](CLAUDE.md). The imp
 | `phpt-runner` | Rust port of `run-tests.php`; runs `.phpt` files and reports pass rates |
 | `php-*` (the rest) | one library per extension, each with its own oracle-driven test suite |
 
+## Installing Rust
+
+The project builds with the latest stable Rust. These are the steps of the official install
+page, https://rust-lang.org/tools/install/.
+
+Install (macOS, Linux, or another Unix-like OS):
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Update an existing installation to the latest stable:
+
+```sh
+rustup --version
+rustup update
+```
+
+All tools are installed to the `~/.cargo/bin` directory: `rustc`, `cargo` and `rustup`.
+`rustup` tries to add that directory to your `PATH` during installation. The change may not
+take effect until the console is restarted or you log out and in again, and on some systems it
+does not succeed at all. If `rustc --version` fails after installing, this is the most likely
+reason.
+
+Versions:
+
+- **Minimum:** Rust 1.85 (`rust-version` in `Cargo.toml`; `cargo` refuses to build with an
+  older compiler).
+- **Maximum:** none.
+- **What CI builds with:** 1.95.0 in the gating jobs (`.github/matrix.php`), and the latest
+  stable in a nightly job of its own (`LATEST_STABLE_RUST`), so that a compiler change shows
+  up there first.
+- The x86-64 and AArch64 JIT emits machine code that relies on how the compiler lays out a
+  PHP value. After changing compiler version, run `cargo test -p php-vm value_layout`: if it
+  fails, run with `BUZZS_JIT=0` and report it.
+
+The extension crates also link system C libraries (libxml2, ICU, libgd, OpenSSL and others);
+the package list CI installs on Ubuntu 24.04 is `.github/actions/apt-x64/action.yml`.
+
 ## Building and running
 
 ```sh
