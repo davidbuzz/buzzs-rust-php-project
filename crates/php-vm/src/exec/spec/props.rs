@@ -333,6 +333,36 @@ fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
     v
 }
 
+/// `$this->name[dim]` / `$cv->name[dim]` read on a property cache hit in
+/// frame `f` alone ([`read_dim_hit`], or the silent miss of `Is` mode):
+/// the part of [`Vm::fetch_obj_prop_dim_fast`] that needs no VM, which the
+/// tape runs as an instruction of its own (`tape::props::fetch_prop_dim`).
+/// Whether the folded `AssignCv`'s variable took the value; `None`, with
+/// nothing changed, on a miss.
+#[inline(always)]
+pub(in crate::exec) fn fetch_prop_dim_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    dst: u32,
+    to: Option<u32>,
+    mode: FetchMode,
+) -> Option<bool> {
+    if mode == FetchMode::List {
+        return None;
+    }
+    if let Some(v) = read_dim_hit(f, pid, dim) {
+        super::release_str_tmp_in(f, dim);
+        return Some(store_fetched_in(f, dst, to, v));
+    }
+    // `$this->name['k'] ?? d` with nothing there: null, silently.
+    if mode == FetchMode::Is && is_dim_miss_hit(f, pid, dim) {
+        super::release_str_tmp_in(f, dim);
+        return Some(store_fetched_in(f, dst, to, Value::Null));
+    }
+    None
+}
+
 /// The element of `a` at the int or string offset `key`, dereferenced and
 /// copied (`zend_fetch_dimension_address_inner` with `BP_VAR_R`, then
 /// `ZVAL_COPY_DEREF`). A string offset's probe is inlined
@@ -1342,14 +1372,8 @@ impl Vm {
             return None;
         }
         if let Some(f) = self.frames.last_mut() {
-            if let Some(v) = read_dim_hit(f, pid, dim) {
-                super::release_str_tmp_in(f, dim);
-                return Some(store_fetched_in(f, dst, to, v));
-            }
-            // `$this->name['k'] ?? d` with nothing there: null, silently.
-            if mode == FetchMode::Is && is_dim_miss_hit(f, pid, dim) {
-                super::release_str_tmp_in(f, dim);
-                return Some(store_fetched_in(f, dst, to, Value::Null));
+            if let Some(stored) = fetch_prop_dim_in(f, pid, dim, dst, to, mode) {
+                return Some(stored);
             }
         }
         let key = self.peek_dim_key(dim)?;

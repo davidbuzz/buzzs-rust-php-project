@@ -1399,6 +1399,7 @@ tape_ops! {
         // ---- props (exec/tape/props.rs) ----
         FetchObjProp = (props::fetch_prop, 1, poll_f),
         FetchObjPropTo = (props::fetch_prop_to, 1, branch_poll_f),
+        FetchObjPropDim = (props::fetch_prop_dim, 1, branch_poll_f),
         AssignObjProp = (props::prop_in, 1, poll_f),
         AssignOpObjProp = (props::prop_in, 1, poll_f),
         IncDecObjProp = (props::prop_in, 1, poll_f),
@@ -2696,6 +2697,24 @@ fn declined_vm_step(
     {
         flush(vm, prep);
         return match vm.fetch_obj_prop_fast(place, dst, to, mode) {
+            Some(skipped) => at + 1 + usize::from(skipped),
+            None => DECLINED,
+        };
+    }
+    // `$obj->name[dim]` the tape's own read (`props::fetch_prop_dim`)
+    // declined: the VM's hit and the cache's refill
+    // (`Vm::fetch_obj_prop_dim_fast`, the read this op took as a `VmOp`
+    // row before it had a row of its own). No user code runs.
+    if let Some(&Op::FetchObjPropDim {
+        place,
+        dim,
+        dst,
+        to,
+        mode,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        return match vm.fetch_obj_prop_dim_fast(place, dim, dst, to, mode) {
             Some(skipped) => at + 1 + usize::from(skipped),
             None => DECLINED,
         };
