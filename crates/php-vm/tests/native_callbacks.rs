@@ -1064,3 +1064,38 @@ protV\PV\QV\PV\QCall to protected method V\P::prot() from global scopeCall to pr
 "#
     );
 }
+
+/// Static call starts the tape cannot prepare (an argument is a call or
+/// a superglobal) run from its decline step: autoloading, unknown classes
+/// and methods, `__callStatic()`, `parent::` forwarding `$this`, a throw
+/// while the arguments are evaluated. Expected output: `/usr/bin/php8.5`
+/// (8.5.13).
+#[test]
+fn unprepared_static_calls() {
+    assert_eq!(
+        run(r#"<?php
+namespace W;
+spl_autoload_register(function ($c) { echo "load($c) "; if ($c === 'W\Late') { eval('namespace W; class Late { static function m($x) { return "late$x"; } }'); } });
+class Str { static function studly($s) { return ucfirst($s); } static function wrap(...$a) { return '[' . implode(',', $a) . ']'; } }
+class Base { public $n = 'b'; function who($x) { return static::class . $this->n . $x; } static function __callStatic($m, $a) { return "cs:$m:" . count($a); } }
+class Kid extends Base { function who($x) { return 'kid>' . parent::who(self::id(strtoupper($x))) . static::magic(strlen($x)); } static function id($v) { return $v; } }
+function boom() { throw new \RuntimeException('boom'); }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $k = new Kid;
+    echo Str::studly(strtolower('ABC')), Str::wrap(count([1, 2]), Str::studly('x'), $_GET['n'] ?? 1), ' ', $k->who('q'), ' ';
+    echo Late::m(strlen('ab')), ' ';
+    try { echo Nope::m(strlen('a')); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo Str::missing(strlen('a')); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { echo Str::wrap(boom()); } catch (\RuntimeException $e) { echo $e->getMessage(), '@', $e->getLine(), ' '; }
+    echo Base::other(strlen('abc'), 2), "\n";
+  }
+}
+run();
+"#),
+        r#"Abc[2,X,1] kid>W\KidbQcs:magic:1 load(W\Late) late2 load(W\Nope) Class "W\Nope" not found Call to undefined method W\Str::missing() boom@7 cs:other:2
+Abc[2,X,1] kid>W\KidbQcs:magic:1 late2 load(W\Nope) Class "W\Nope" not found Call to undefined method W\Str::missing() boom@7 cs:other:2
+Abc[2,X,1] kid>W\KidbQcs:magic:1 late2 load(W\Nope) Class "W\Nope" not found Call to undefined method W\Str::missing() boom@7 cs:other:2
+"#
+    );
+}

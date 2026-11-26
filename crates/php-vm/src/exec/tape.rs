@@ -2700,6 +2700,28 @@ fn declined_vm_step(
             None => DECLINED,
         };
     }
+    // `A::m(...)`, `static::m(...)` not prepared on the tape (an argument
+    // is itself a call, or a superglobal): `Vm::run`'s arm
+    // (`Vm::op_init_static_call`, the call pending), here, after
+    // `SAVE_OPLINE()` (the class may be autoloaded). Its `Send`s and
+    // `DoCall` follow on the tape.
+    if let Some(Op::InitStaticCall {
+        class:
+            class @ (ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static),
+        name: name @ Operand::Lit(_),
+    }) = ops.get(at)
+    {
+        let name = *name;
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.op_init_static_call(class, name) {
+            Ok(()) => at + 1,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
     // `new self(...)`, `new static(...)`, `new $class(...)` (not prepared on
     // the tape): `Vm::run`'s arm (`Vm::op_new`: the object, and its
     // constructor's call pending), here, after `SAVE_OPLINE()`: the class
