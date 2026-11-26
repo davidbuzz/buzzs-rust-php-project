@@ -47,6 +47,7 @@ mod main_stack;
 #[allow(dead_code)]
 #[path = "../memcap.rs"]
 mod memcap;
+mod peer_watch;
 // `php-fpm` uses the parts `php-cgi` does not (`set_fpm`, `RequestDone`'s
 // bookkeeping fields).
 #[allow(dead_code)]

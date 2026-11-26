@@ -127,6 +127,125 @@ pub fn poll_in(fd: RawFd, timeout_ms: i32) -> Poll {
     }
 }
 
+/// What [`peek`] saw on a socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peeked {
+    /// This many bytes wait to be read (they stay unread).
+    Bytes(usize),
+    /// Nothing waits.
+    Nothing,
+    /// The peer closed the connection.
+    Closed,
+    /// `recv` failed with this `errno` (other than `EINTR`, `EAGAIN`,
+    /// `ECONNRESET`).
+    Failed(i32),
+}
+
+/// `recv(fd, buf, MSG_PEEK | MSG_DONTWAIT)`: what waits on the socket,
+/// without reading it and without waiting.
+pub fn peek(fd: RawFd, buf: &mut [u8]) -> Peeked {
+    loop {
+        // SAFETY: `buf` is valid for writes of `buf.len()` bytes for the
+        // whole call; `MSG_PEEK` leaves the data queued.
+        let n = unsafe {
+            libc::recv(
+                fd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if n == 0 {
+            return Peeked::Closed;
+        }
+        if n > 0 {
+            return Peeked::Bytes(n.unsigned_abs());
+        }
+        match errno() {
+            libc::EINTR => {}
+            libc::EAGAIN => return Peeked::Nothing,
+            // The peer reset the connection: it is gone, as with end of file.
+            libc::ECONNRESET => return Peeked::Closed,
+            other => return Peeked::Failed(other),
+        }
+    }
+}
+
+/// Whether the peer closed its side of the socket or the connection failed
+/// (`POLLRDHUP`, `POLLHUP`, `POLLERR`), without waiting.
+pub fn peer_closed(fd: RawFd) -> bool {
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLRDHUP,
+        revents: 0,
+    };
+    // SAFETY: one valid `pollfd` that lives for the whole call.
+    let r = unsafe { libc::poll(&raw mut p, 1, 0) };
+    r > 0 && p.revents & (libc::POLLRDHUP | libc::POLLHUP | libc::POLLERR) != 0
+}
+
+/// A pipe, both ends close-on-exec (`pipe2(O_CLOEXEC)`).
+pub fn pipe() -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `fds` is valid for writes of two descriptors.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: pipe2 succeeded, so both are new descriptors owned by no one
+    // else.
+    Ok(unsafe {
+        (
+            std::os::fd::OwnedFd::from_raw_fd(fds[0]),
+            std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+        )
+    })
+}
+
+/// What [`wait_either`] woke for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Woke {
+    /// The socket has something to read, or its peer closed it.
+    Socket,
+    /// The control descriptor is readable.
+    Control,
+    /// `poll` failed other than with `EINTR`.
+    Failed(i32),
+}
+
+/// Waits until `control` is readable or, when `socket` is given, the
+/// socket has something to read or was closed by its peer.
+pub fn wait_either(control: RawFd, socket: Option<RawFd>) -> Woke {
+    let mut fds = [
+        libc::pollfd {
+            fd: control,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            // A negative descriptor is ignored by poll.
+            fd: socket.unwrap_or(-1),
+            events: libc::POLLIN | libc::POLLRDHUP,
+            revents: 0,
+        },
+    ];
+    loop {
+        // SAFETY: two valid `pollfd`s that live for the whole call.
+        let r = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+        if r < 0 {
+            match errno() {
+                libc::EINTR => continue,
+                e => return Woke::Failed(e),
+            }
+        }
+        if fds[0].revents != 0 {
+            return Woke::Control;
+        }
+        if fds[1].revents != 0 {
+            return Woke::Socket;
+        }
+    }
+}
+
 extern "C" fn shutdown_handler(signo: libc::c_int) {
     if signo == libc::SIGUSR1 || signo == libc::SIGTERM {
         IN_SHUTDOWN.store(true, Ordering::SeqCst);
