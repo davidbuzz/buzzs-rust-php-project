@@ -98,6 +98,8 @@ pub(crate) fn object_for(vm: &mut Vm, o: &Obj, name: Option<&ZStr>) -> VmResult<
             }
         }
     }
+    // (`init` holds the initializer's last handle while it runs.)
+    drop(i);
     init(vm, o)
 }
 
@@ -171,6 +173,14 @@ pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
     }
     let initial_refs = o.refcount();
     let r = init_uninit(vm, o, &i);
+    // The initializer goes with the info it was part of
+    // (`zend_lazy_object_del_info()`, `zend_lazy_object_init_proxy()`):
+    // this copy was its last handle, and what it alone held is destructed
+    // here, before the operation that started the initialization goes on.
+    drop(i);
+    if r.is_ok() && crate::object::has_pending_destructors() {
+        vm.run_pending_destructors()?;
+    }
     // `GC_DELREF(obj) == 0`: the initializer dropped every reference but
     // the handle the caller borrowed `o` through (the counterpart of
     // php-src's `GC_ADDREF` around the initializer).
@@ -244,11 +254,18 @@ fn init_uninit(vm: &mut Vm, o: &Obj, i: &LazyInfo) -> VmResult<Obj> {
             .set(d.flags.get() & !(oflags::PROPS_TABLE | oflags::EMPTY_IND));
         let frozen = crate::lazy::set_stale_slots(d, None);
         drop(frozen);
+        // The factory is released once it has run
+        // (`zend_lazy_object_init_proxy()`: the instance takes its place
+        // in the info), outside the borrow of the info: what it captured
+        // may be destructed here.
+        let mut factory = Value::Null;
         with_info(o, |x| {
             x.initialized = true;
             x.initializing = false;
             x.instance = Some(inst.clone());
+            factory = std::mem::take(&mut x.initializer);
         });
+        drop(factory);
         return Ok(inst);
     }
     // Ghost: initialize lazy properties to their default value.
@@ -585,7 +602,11 @@ pub(crate) fn rc_initialize_lazy_object(vm: &mut Vm, a: &mut Args) -> VmResult<V
 pub(crate) fn rc_is_uninitialized_lazy_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, _) = this_class_obj(vm, a)?;
     let o = obj_of_class(vm, a, 0, &c, "isUninitializedLazyObject")?;
-    Ok(Value::Bool(is_uninit(&o)))
+    // While its initializer runs the object is not lazy
+    // (`zend_lazy_object_init()` clears the flags before the call).
+    Ok(Value::Bool(
+        info(&o).is_some_and(|i| !i.initialized && !i.initializing),
+    ))
 }
 
 pub(crate) fn rc_mark_lazy_object_as_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -833,7 +854,16 @@ pub(crate) fn proxy_instance(o: &Obj) -> Option<Obj> {
 #[allow(dead_code)] // VM hook (`clone`), see the module docs
 pub(crate) fn clone_lazy(vm: &mut Vm, o: &Obj) -> VmResult<Option<Value>> {
     let Some(i) = info(o) else { return Ok(None) };
-    if !i.initialized {
+    // While its initializer runs the object is not lazy
+    // (`zend_lazy_object_init()` clears the flags first): `clone $this`
+    // in a method the initializer calls is a plain clone, where starting
+    // the initializer again never ended.
+    if i.initializing {
+        return Ok(None);
+    }
+    let initialized = i.initialized;
+    drop(i);
+    if !initialized {
         init(vm, o)?;
     }
     let Some(i) = info(o) else { return Ok(None) };
@@ -841,13 +871,16 @@ pub(crate) fn clone_lazy(vm: &mut Vm, o: &Obj) -> VmResult<Option<Value>> {
         return Ok(None);
     };
     let cls = object::class_of(o).clone();
+    // `zend_lazy_object_clone()`: the new proxy is made first, then the
+    // clone of the real instance (the order their handle numbers are
+    // taken in).
+    let np = object::new_object(cls.clone(), vec![None; cls.props.len()]);
+    let d = object::data(&np);
+    d.flags.set(d.flags.get() | oflags::DESTRUCTED);
     let new_inst = vm.clone_value(Value::Object(inst))?;
     let Value::Object(new_inst) = new_inst else {
         return Ok(None);
     };
-    let np = object::new_object(cls.clone(), vec![None; cls.props.len()]);
-    let d = object::data(&np);
-    d.flags.set(d.flags.get() | oflags::DESTRUCTED);
     set_info(
         &np,
         Some(LazyInfo {

@@ -144,3 +144,78 @@ echo "end\n";
 "#;
     assert_eq!(run(src), "init\nD gone\nend\n");
 }
+
+/// `clone $this` in a method a ghost's initializer calls on the ghost is
+/// a plain clone: the object is not lazy while it is initialized
+/// (`zend_lazy_object_init()` clears the flags before the call). Started
+/// again for the clone, the initializer never ended (a container that
+/// builds a lazy service through its "wither" methods). Expected output
+/// from php8.5.
+#[test]
+fn cloning_a_ghost_inside_its_initializer_is_a_plain_clone() {
+    assert_eq!(
+        run(r"<?php
+class Wither { public $foo; public $bar = 'b';
+  function withFoo2($foo): static { $new = clone $this; $new->foo = $foo; return $new; } }
+$r = new ReflectionClass(Wither::class);
+$n = 0;
+$ghost = $r->newLazyGhost(function ($o) use (&$n, $r) {
+    if (++$n > 3) throw new Exception('recursion');
+    $c = $o->withFoo2(1);
+    var_dump($c->foo, $c->bar, $r->isUninitializedLazyObject($c), $r->isUninitializedLazyObject($o));
+    $o->foo = 2;
+});
+var_dump($ghost->foo, $n);
+var_dump($ghost);
+"),
+        "int(1)\nstring(1) \"b\"\nbool(false)\nbool(false)\nint(2)\nint(1)\n\
+         object(Wither)#3 (2) {\n  [\"foo\"]=>\n  int(2)\n  [\"bar\"]=>\n  string(1) \"b\"\n}\n"
+    );
+}
+
+/// A lazy proxy's factory is released once it has run
+/// (`zend_lazy_object_init_proxy()`): what it alone held is destructed
+/// then, before the property read that started the initialization
+/// completes, and the closure's handle number is free for the next object
+/// (here the clone of the proxy). Expected output from php8.5.
+#[test]
+fn a_proxy_releases_its_factory_once_initialized() {
+    assert_eq!(
+        run(r"<?php
+class Foo {}
+class Wither { public $foo;
+  function withFoo1(Foo $foo): static { return $this->withFoo2($foo); }
+  function withFoo2(Foo $foo): static { $new = clone $this; $new->foo = $foo; return $new; } }
+class Held { function __destruct() { echo 'released', PHP_EOL; } }
+$r = new ReflectionClass(Wither::class);
+$held = new Held;
+$proxy = $r->newLazyProxy(function () use ($held) { $s = new Wither; return $s->withFoo1(new Foo); });
+unset($held);
+echo 'before', PHP_EOL;
+var_dump($proxy->foo instanceof Foo);
+echo 'after', PHP_EOL;
+"),
+        "before\nreleased\nbool(true)\nafter\n"
+    );
+}
+
+/// The clone of an initialized proxy is a new proxy made before the clone
+/// of its real instance (`zend_lazy_object_clone()`): it takes the handle
+/// number the released factory gave back, the instance's clone the next
+/// free one. Expected output from php8.5.
+#[test]
+fn a_cloned_proxy_is_made_before_the_clone_of_its_instance() {
+    assert_eq!(
+        run(r"<?php
+class Foo {}
+class Wither { public $foo;
+  function withFoo1(Foo $foo): static { return $this->withFoo2($foo); }
+  function withFoo2(Foo $foo): static { $new = clone $this; $new->foo = $foo; return $new; } }
+$r = new ReflectionClass(Wither::class);
+$proxy = $r->newLazyProxy(function () { $s = new Wither; return $s->withFoo1(new Foo); });
+var_dump($proxy->foo instanceof Foo);
+var_dump($proxy->withFoo1($proxy->foo));
+"),
+        "bool(true)\nlazy proxy object(Wither)#2 (1) {\n  [\"instance\"]=>\n  object(Wither)#4 (1) {\n    [\"foo\"]=>\n    object(Foo)#5 (0) {\n    }\n  }\n}\n"
+    );
+}
