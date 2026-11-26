@@ -1441,3 +1441,79 @@ ab:010010 fs:110001 pv:001000 __call:010000 tmp:000100 tm:010000 tsp:101000 ts:1
 "#
     );
 }
+
+/// Namespaced calls of the quick-row builtins (`in_array()`, `strpos()`,
+/// `substr()`, `min()`/`max()`, `str_*()`, case and trim functions):
+/// answered on the tape from the call site's slot; their errors; a
+/// namespaced function of the same name declared before the site's first
+/// run (called) and after it (the site keeps the global function).
+/// Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn namespaced_quick_calls() {
+    assert_eq!(
+        run(r#"<?php
+namespace App {
+  function run($s, $h) {
+    $o = [];
+    $o[] = in_array($s, $h); $o[] = in_array($s, $h, true); $o[] = in_array(1, ['1']); $o[] = in_array('1e0', ['1']);
+    $o[] = strpos($s, 'b'); $o[] = substr($s, 1); $o[] = substr($s, -2, 1); $o[] = max(3, 7); $o[] = min('a', 'b');
+    $o[] = str_contains($s, 'c'); $o[] = str_starts_with($s, 'a'); $o[] = str_ends_with($s, 'z');
+    $o[] = strtolower($s); $o[] = strtoupper($s); $o[] = trim(" $s "); $o[] = ltrim("x$s", 'x'); $o[] = rtrim("{$s}\n");
+    return json_encode($o);
+  }
+  function edge() {
+    $o = [];
+    try { $o[] = strpos('abc', 'b', 10); } catch (\ValueError $e) { $o[] = $e->getMessage(); }
+    try { $o[] = substr([], 1); } catch (\TypeError $e) { $o[] = $e->getMessage(); }
+    $o[] = @strpos(null ?? 'x', 'x'); $o[] = max([1, 5]); $o[] = min(2.5, 1);
+    $o[] = in_array(null, [0, false]); $o[] = in_array('abc', [0]);
+    return json_encode($o);
+  }
+}
+namespace Late {
+  function call() { return strtoupper('late'); }
+}
+namespace Own {
+  function strtolower($s) { return "own:$s"; }
+  function call() { return strtolower('X'); }
+}
+namespace {
+  for ($i = 0; $i < 300; $i++) { $r = App\run('abc', ['x', 'abc']) . App\edge() . Late\call() . Own\call(); if ($i == 0) echo $r, "\n"; }
+  echo $r, "\n";
+  // declared after the site's first run: the site keeps the global function
+  eval('namespace Late; function strtoupper($s) { return "late:$s"; }');
+  echo Late\call(), "\n";
+}
+"#),
+        r#"[true,true,true,true,1,"bc","b",7,"a",true,true,false,"abc","ABC","abc","abc","abc"]["strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)","substr(): Argument #1 ($string) must be of type string, array given",0,5,1,true,false]LATEown:X
+[true,true,true,true,1,"bc","b",7,"a",true,true,false,"abc","ABC","abc","abc","abc"]["strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)","substr(): Argument #1 ($string) must be of type string, array given",0,5,1,true,false]LATEown:X
+LATE
+"#
+    );
+}
+
+/// A loose `in_array()` answered without the handler: numeric and other
+/// strings (`zend_fast_equal_strings`, overflowing numbers), ints, and the
+/// shapes left to the handler (mixed types, references, floats, null).
+/// Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn loose_in_array() {
+    assert_eq!(
+        run(r#"<?php
+namespace L;
+function t($n, $h) { return (int)in_array($n, $h) . (int)in_array($n, $h, false); }
+function g($n, $h) { return (int)\in_array($n, $h); }
+$cases = [
+  ['1', ['01']], ['1e1', ['10']], [' 1', ['1']], ['1 ', ['1']], ['abc', ['ABC']], ['', ['0']], ['0', ['']], ["a\0b", ["a\0b"]], ["a\0b", ["a\0c"]],
+  ['1', ['1.0']], ['1', ['0x1']], ['-0', ['0']], ['+1', ['1']], ['.5', ['0.5']], ['1e1000', ['1e999']], ['9223372036854775807', ['9223372036854775808']],
+  [5, [1, 5]], [5, ['5']], ['5', [5]], ['abc', [0]], [0, ['abc']], [null, ['']], ['x', []], [1.5, ['1.5']], ['1.5', [1.5]], ['a', ['b', 'a', 3]], ['a', [3, 'a']],
+];
+$ref = 'z'; $withRef = ['y', &$ref];
+$out = '';
+for ($i = 0; $i < 3; $i++) { $out = ''; foreach ($cases as [$n, $h]) { $out .= t($n, $h) . g($n, $h) . ' '; } $out .= t('z', $withRef) . t('q', $withRef); }
+echo $out, "\n";
+"#),
+        r#"111 111 111 111 000 000 000 111 000 111 000 111 111 111 000 000 111 111 111 000 000 111 000 111 111 111 111 1100
+"#
+    );
+}
