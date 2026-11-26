@@ -2159,10 +2159,14 @@ const HIDDEN_CLASSES: &[&[u8]] = &[b"fibergracefulexit"];
 /// `get_declared_class_impl()`: the class table in declaration order;
 /// aliases (`class_alias()`) are listed by their lowercase key.
 fn declared(vm: &Vm, pred: fn(&Class) -> bool) -> Value {
-    let mut seen = std::collections::HashSet::new();
+    // Borrowed names and the VM's hasher: `PHPUnit` asks for the declared
+    // classes around every test file it loads, and a set of cloned names
+    // under `SipHash`, grown from empty, was 2% of `MediaWiki`'s unit suite.
+    let mut seen: rustc_hash::FxHashSet<&ZStr> = rustc_hash::FxHashSet::default();
+    seen.reserve(vm.class_order.len());
     let mut out = Vec::new();
     for lc in &vm.class_order {
-        if !seen.insert(lc.clone()) || HIDDEN_CLASSES.contains(&lc.as_bytes()) {
+        if !seen.insert(lc) || HIDDEN_CLASSES.contains(&lc.as_bytes()) {
             continue;
         }
         let Some(c) = vm.classes.get(lc) else {
