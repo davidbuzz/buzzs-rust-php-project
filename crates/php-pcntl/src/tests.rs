@@ -751,6 +751,11 @@ isolated_test!(alarm_and_priority, iso_alarm_and_priority, {
     let left = p.alarm(0).unwrap();
     assert!((99..=100).contains(&left));
     let nice = p.getpriority(None, 0).unwrap();
+    if nice >= 19 {
+        // Already at the lowest priority (a `nice -n 19` run): there is
+        // none below it to move to.
+        return;
+    }
     p.setpriority(nice + 1, None, 0).unwrap();
     assert_eq!(p.getpriority(None, 0).unwrap(), nice + 1);
     if !is_root() {

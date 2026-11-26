@@ -37,6 +37,11 @@ fn run(source: &[u8], name: &str) -> Vec<u8> {
     let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
     let _status = vm.run_script(source, name);
     drop(vm);
+    // The next script runs on this thread: it gets a fresh objects store
+    // and collector, as a process of its own would have (`php --repeat`
+    // does the same between runs). Without it the next script's objects
+    // take the handles this one freed, in the order it freed them.
+    php_vm::reset::release_dropped_vm_objects();
     sink.0.take()
 }
 

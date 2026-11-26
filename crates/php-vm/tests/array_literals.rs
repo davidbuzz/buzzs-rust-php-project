@@ -37,7 +37,15 @@ impl Write for Sink {
     }
 }
 
+/// The scripts read `memory_get_usage()`, and the counting allocator is
+/// the process's: a script running in another test thread at the same
+/// time would be counted with them. One script at a time.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run(source: &str) -> String {
+    let _alone = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sink = Sink::default();
     let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
     vm.run_script(source.as_bytes(), "t.php");

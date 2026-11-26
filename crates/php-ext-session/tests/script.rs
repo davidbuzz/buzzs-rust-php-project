@@ -134,7 +134,9 @@ fn run_requests(requests: &[&str]) -> Vec<String> {
 /// sides: `ini_get()` (the VM registry) and the session's own value. The
 /// INI synchronisation skips its pass when neither side changed; this
 /// checks that the skip never keeps a value of the previous request.
-/// Expected values from php8.5.
+/// Expected values from php8.5. (`ini_get()` reads the registry's local
+/// value, which is what `ini_get_all()` lists; that function is
+/// ext/standard's and this VM has ext/session alone.)
 #[test]
 fn ini_changes_of_a_request_are_gone_in_the_next() {
     let first = r#"<?php ob_start();
@@ -142,13 +144,10 @@ fn ini_changes_of_a_request_are_gone_in_the_next() {
         session_name("first");
         var_dump(ini_get("session.name"), session_name(), ini_get("session.gc_maxlifetime"));"#;
     let second = r#"<?php ob_start();
-        var_dump(ini_get("session.name"), session_name(), ini_get("session.gc_maxlifetime"));
-        $all = ini_get_all("session");
-        var_dump($all["session.name"]["local_value"], $all["session.gc_maxlifetime"]["local_value"]);"#;
+        var_dump(ini_get("session.name"), session_name(), ini_get("session.gc_maxlifetime"));"#;
     let outs = run_requests(&[first, second, first, second]);
     let changed = "string(5) \"first\"\nstring(5) \"first\"\nstring(2) \"77\"\n";
-    let restored = "string(9) \"PHPSESSID\"\nstring(9) \"PHPSESSID\"\nstring(4) \"1440\"\n\
-                    string(9) \"PHPSESSID\"\nstring(4) \"1440\"\n";
+    let restored = "string(9) \"PHPSESSID\"\nstring(9) \"PHPSESSID\"\nstring(4) \"1440\"\n";
     assert_eq!(outs, [changed, restored, changed, restored]);
 }
 

@@ -1009,13 +1009,16 @@ fn is_dynamic_call(vm: &Vm) -> bool {
         i -= 1;
         match &ops[i] {
             Op::DoCall { .. } => nested += 1,
+            // `ZEND_INIT_USER_CALL` (`call_user_func()` compiled in place)
+            // sets `ZEND_CALL_DYNAMIC` as `ZEND_INIT_DYNAMIC_CALL` does.
             Op::InitDynCall { .. }
+            | Op::InitUserCall { .. }
             | Op::InitFCall { .. }
             | Op::InitMethodCall { .. }
             | Op::InitStaticCall { .. }
             | Op::New { .. } => {
                 if nested == 0 {
-                    return matches!(ops[i], Op::InitDynCall { .. });
+                    return matches!(ops[i], Op::InitDynCall { .. } | Op::InitUserCall { .. });
                 }
                 nested -= 1;
             }

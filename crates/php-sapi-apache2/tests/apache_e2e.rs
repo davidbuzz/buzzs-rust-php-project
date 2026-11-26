@@ -20,22 +20,31 @@ use std::time::{Duration, Instant};
 
 const MODULES: &str = "/usr/lib/apache2/modules";
 
-/// The module next to this test binary (`target/<profile>/deps`, where
-/// cargo leaves the cdylib of a test dependency, or the profile directory
-/// of a plain build): the newer one.
+/// The module cargo built for this test (a cdylib of a test dependency),
+/// or the one a plain build linked into the profile directory: the newer
+/// one.
 fn module() -> PathBuf {
+    const NAME: &str = "libphprust_apache2.so";
     let exe = std::env::current_exe().unwrap();
-    let deps = exe.parent().unwrap();
-    let profile = deps.parent().unwrap();
-    let mtime = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
-    [
-        deps.join("libphprust_apache2.so"),
-        profile.join("libphprust_apache2.so"),
-    ]
-    .into_iter()
-    .filter(|p| p.is_file())
-    .max_by_key(|p| mtime(p))
-    .expect("libphprust_apache2.so was not built")
+    let mtime = |p: &PathBuf| p.metadata().and_then(|m| m.modified()).ok();
+    // Where Cargo puts the two differs by version. Up to 1.9x the test is
+    // `target/<profile>/deps/<test>` with the module beside it. Newer ones
+    // give every unit a directory, `target/<profile>/build/<package>/<hash>/out/`,
+    // and the module is in another `<hash>` of the package. A plain build
+    // also links it into `target/<profile>`. So: each directory above the
+    // test, and the `out` of each directory in it.
+    let mut candidates = Vec::new();
+    for dir in exe.ancestors().skip(1).take(5) {
+        candidates.push(dir.join(NAME));
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            candidates.extend(entries.flatten().map(|e| e.path().join("out").join(NAME)));
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|p| p.is_file())
+        .max_by_key(mtime)
+        .expect("libphprust_apache2.so was not built")
 }
 
 fn apache2() -> Option<PathBuf> {
