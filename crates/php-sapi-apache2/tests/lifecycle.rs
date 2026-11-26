@@ -52,7 +52,18 @@ fn ini(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A request changes the process's working directory to its script's and
+/// puts it back at the end (`php_execute_script()`), and these tests are
+/// threads of one process: one sequence of requests at a time. Beside
+/// another test's request, `getcwd()` in a script could see the directory
+/// that request had just restored (`cwd_is_script_dir` failed so under
+/// load).
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run_sequence(reqs: Vec<(&str, Req)>) -> Vec<Response> {
+    let _alone = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = scratch();
     let owned: Vec<(String, Req)> = reqs.into_iter().map(|(n, r)| (n.to_string(), r)).collect();
     std::thread::Builder::new()

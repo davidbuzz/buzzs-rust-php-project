@@ -578,8 +578,10 @@ fn php_src_zend_sample_passes() {
         return;
     };
     let base = php_src().join("Zend/tests");
+    // (Not add_001.phpt: the JUnit test below runs it, and two runners on
+    // one test at a time share its temporary files in the php-src tree.)
     let sample = [
-        "add_001.phpt",
+        "add_003.phpt",
         "add_002.phpt",
         "and_001.phpt",
         "array_unpack/basic.phpt",

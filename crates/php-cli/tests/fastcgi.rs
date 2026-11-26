@@ -590,9 +590,13 @@ fn request_state_does_not_reach_the_next_request() {
         "<?php if (isset($_GET['set'])) { stream_context_set_default(['http' => ['user_agent' => 'leaky']]); umask(077); echo 'set'; } else { echo json_encode(stream_context_get_options(stream_context_get_default())), ' ', decoct(umask()); }",
     )
     .unwrap();
-    let port = free_port();
+    // A socket of its own, not a TCP port: a port found free can be taken
+    // by another test's server before this one binds it (the request then
+    // reached a server that was shut down under it, and came back empty).
+    let socket = dir.0.join("cgi.sock");
     let mut child = Command::new(PHP_CGI)
-        .args(["-n", "-b", &format!("127.0.0.1:{port}")])
+        .args(["-n", "-b"])
+        .arg(&socket)
         .env_remove("PHP_FCGI_CHILDREN")
         .env_remove("PHP_FCGI_MAX_REQUESTS")
         .stdin(Stdio::null())
@@ -600,15 +604,14 @@ fn request_state_does_not_reach_the_next_request() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let addr = format!("127.0.0.1:{port}");
     wait_for(&mut child, "php-cgi -b", || {
-        TcpStream::connect(&addr).is_ok()
+        UnixStream::connect(&socket).is_ok()
     })
     .unwrap();
     let _proc = Proc(child);
     let script = script.to_str().unwrap();
     let request = |query: &str| {
-        let mut s = TcpStream::connect(&addr).unwrap();
+        let mut s = UnixStream::connect(&socket).unwrap();
         let params = [
             ("SCRIPT_FILENAME", script),
             ("REQUEST_METHOD", "GET"),
