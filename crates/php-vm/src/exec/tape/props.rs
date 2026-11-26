@@ -25,7 +25,8 @@
 
 use super::{Br, Inst, TOp};
 use crate::exec::spec::{
-    fetch_prop_dim_in, incdec_static_prop_in, prop_op_in, read_hit, store_fetched_in,
+    fetch_prop_dim_lean, fetch_prop_dim_rest, fetch_prop_lean, incdec_static_prop_in, prop_op_in,
+    read_hit, store_fetched_in,
 };
 use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
@@ -91,10 +92,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 }
             }
         }
-        // `$obj->prop[dim]` read: the op is read back from the op array
-        // (`d`); `c` jumps past a folded `AssignCv` whose variable took the
-        // value. `store_fetched_in` indexes without bounds checks, so the
-        // temporary and the variable are validated here.
+        // `$obj->prop[dim]` read, pre-decoded: `a` the place, `b` the
+        // temporary (low half) and the folded `AssignCv`'s variable plus
+        // one (high half; 0: none), `d` and `e` the offset operand
+        // ([`dim_operand`]), `k` whether the read is silent (`??`), `c`
+        // the jump past a folded `AssignCv` whose variable took the value.
+        // `d` of the cold path's op is recovered from the tape position.
         Op::FetchObjPropDim {
             place,
             dim,
@@ -106,18 +109,29 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 || !place_ok(code, place)
                 || !val_ok(code, dim)
                 || dst >= code.num_tmps
-                || to.is_some_and(|cv| (cv as usize) >= code.cv_names.len())
+                || dst > 0xffff
+                || to.is_some_and(|cv| (cv as usize) >= code.cv_names.len() || cv >= 0xffff)
             {
                 return None;
             }
+            let (e, d) = match dim {
+                Operand::Cv(i) => (0, i),
+                Operand::Tmp(t) => (1, t),
+                Operand::Lit(l) => (2, l),
+                Operand::TmpKeep(t) => (3, t),
+                Operand::Unused => return None,
+            };
             let c = match to {
                 Some(_) => super::rel(code, i, u32::try_from(i + 2).ok()?)?,
                 None => 0,
             };
             Inst {
                 a: place,
+                b: dst | (to.map_or(0, |cv| cv + 1) << 16),
                 c,
-                d: i as u32,
+                d,
+                e,
+                k: u8::from(mode == FetchMode::Is),
                 ..plain(TOp::FetchObjPropDim)
             }
         }
@@ -471,6 +485,18 @@ fn read_hit_slow(f: &Frame, pid: crate::opcode::PlaceId) -> Option<php_runtime::
 pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
+    if fetch_prop_lean(f, inst.a, inst.b, None).is_some() {
+        return true;
+    }
+    fetch_prop_cold(f, inst)
+}
+
+/// The hits [`fetch_prop`]'s lean form leaves (a dynamic property, a
+/// reference in the slot or the base, a temporary holding a value to
+/// release), out of line.
+#[cold]
+#[inline(never)]
+fn fetch_prop_cold(f: &mut Frame, inst: &Inst) -> bool {
     let Some(v) = read_prop(f, inst.a) else {
         return false;
     };
@@ -478,32 +504,62 @@ pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
     true
 }
 
+/// The offset operand a `FetchObjPropDim` instruction carries in `d`
+/// (index) and `e` (kind), as `lower` wrote them.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a three-way select in each handler
+fn dim_operand(inst: &Inst) -> Operand {
+    match inst.e {
+        0 => Operand::Cv(inst.d),
+        1 => Operand::Tmp(inst.d),
+        2 => Operand::Lit(inst.d),
+        _ => Operand::TmpKeep(inst.d),
+    }
+}
+
 /// `Op::FetchObjPropDim` (`ZEND_FETCH_OBJ_R` then `ZEND_FETCH_DIM_R`, or
 /// the `_IS` pair, on a property cache hit): the element of the array a
 /// declared property holds, into the read's temporary or the variable of
 /// the `AssignCv` folded behind it (then the jump past that op), in the
-/// frame alone (`fetch_prop_dim_in`). A parser's table reads
-/// (`$this->action[$idx]`) ran through the VM (`run_vm_op`) before.
-/// Declines a miss, nothing changed.
+/// frame alone (`fetch_prop_dim_lean`: the element copied straight from
+/// the array into its destination). A parser's table reads
+/// (`$this->action[$idx]`) ran through the VM (`run_vm_op`) before. The
+/// other hits are [`fetch_prop_dim_cold`]'s; a miss declines, nothing
+/// changed.
 ///
 /// # Safety
-/// As [`prop_in`]; `inst.d` is the index of an `Op::FetchObjPropDim` whose
-/// temporary and folded variable `lower` validated.
+/// As [`prop_in`]; the operands are those `lower` validated.
 #[inline(never)]
 pub(super) unsafe fn fetch_prop_dim(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    let Some(&Op::FetchObjPropDim {
-        place,
-        dim,
-        dst,
-        to,
-        mode,
-    }) = f.code.ops.get(inst.d as usize)
-    else {
-        return Br::Decline;
+    let to = (inst.b >> 16).checked_sub(1);
+    match fetch_prop_dim_lean(f, inst.a, dim_operand(inst), inst.b & 0xffff, to) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        // SAFETY: the caller's contract.
+        None => unsafe { fetch_prop_dim_cold(frame, inst) },
+    }
+}
+
+/// The hits [`fetch_prop_dim`]'s lean form leaves (`fetch_prop_dim_rest`),
+/// out of line so that its operands are not kept alive across the lean
+/// read.
+///
+/// # Safety
+/// As [`fetch_prop_dim`].
+#[cold]
+#[inline(never)]
+unsafe fn fetch_prop_dim_cold(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let to = (inst.b >> 16).checked_sub(1);
+    let mode = if inst.k == 0 {
+        FetchMode::Read
+    } else {
+        FetchMode::Is
     };
-    match fetch_prop_dim_in(f, place, dim, dst, to, mode) {
+    match fetch_prop_dim_rest(f, inst.a, dim_operand(inst), inst.b & 0xffff, to, mode) {
         Some(true) => Br::Jump,
         Some(false) => Br::Fall,
         None => Br::Decline,
@@ -522,6 +578,17 @@ pub(super) unsafe fn fetch_prop_dim(frame: *mut Frame, inst: &Inst) -> Br {
 pub(super) unsafe fn fetch_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
+    match fetch_prop_lean(f, inst.a, inst.b, Some(inst.d)) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => fetch_prop_to_cold(f, inst),
+    }
+}
+
+/// The hits [`fetch_prop_to`]'s lean form leaves, as [`fetch_prop_cold`].
+#[cold]
+#[inline(never)]
+fn fetch_prop_to_cold(f: &mut Frame, inst: &Inst) -> Br {
     let Some(v) = read_prop(f, inst.a) else {
         return Br::Decline;
     };

@@ -333,12 +333,200 @@ fn read_dim_hit(f: &Frame, pid: PlaceId, dim: Operand) -> Option<Value> {
     v
 }
 
+/// Writes a copy of `v` (not a reference) over `dest`, variant by variant:
+/// a scalar is two stores, where moving a `Value` of unknown variant
+/// through an `Option` copied it byte-wise across the stack three times.
+///
+/// # Safety
+/// `dest` is valid for writes and holds nothing that needs dropping.
+#[inline(always)]
+unsafe fn write_copy(dest: *mut Value, v: &Value) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match v {
+            Value::Null => dest.write(Value::Null),
+            Value::Bool(b) => dest.write(Value::Bool(*b)),
+            Value::Int(i) => dest.write(Value::Int(*i)),
+            Value::Float(x) => dest.write(Value::Float(*x)),
+            other => dest.write(other.clone()),
+        }
+    }
+}
+
+/// [`write_copy`] into a compiled variable's slot.
+///
+/// # Safety
+/// As [`write_copy`].
+#[inline(always)]
+unsafe fn write_copy_some(dest: *mut Option<Value>, v: &Value) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match v {
+            Value::Null => dest.write(Some(Value::Null)),
+            Value::Bool(b) => dest.write(Some(Value::Bool(*b))),
+            Value::Int(i) => dest.write(Some(Value::Int(*i))),
+            Value::Float(x) => dest.write(Some(Value::Float(*x))),
+            other => dest.write(Some(other.clone())),
+        }
+    }
+}
+
+/// Stores a copy of the fetched value `v` (not a reference; it may live in
+/// an object or array reached from `f`, never in `f`'s own temporaries or
+/// variables) as [`store_fetched_in`] stores a value: into the variable
+/// `to` of the folded `AssignCv` (`Some(true)`) or the temporary `dst`
+/// (`Some(false)`: there is no folded variable, or it holds a value to
+/// release). `None`, nothing written, when the temporary holds a value to
+/// release or the frame has a symbol table attached: the caller's general
+/// path stores then.
+///
+/// # Safety
+/// `tmps` points at `f`'s temporaries and `dst` is one of them.
+#[inline(always)]
+unsafe fn store_copy_lean(
+    f: &Frame,
+    tmps: *mut Value,
+    dst: u32,
+    to: Option<u32>,
+    v: &Value,
+) -> Option<bool> {
+    if let Some(cv) = to {
+        if !f.symtab_attached {
+            if let Some(cell) = f.cvs.get(cv as usize) {
+                // SAFETY: no reference into this variable's slot is alive:
+                // `v` does not live in the frame's variables, and the
+                // offset the caller looked up is no longer used.
+                let slot = unsafe { cell.get_mut_unchecked() };
+                if matches!(
+                    slot,
+                    None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+                ) {
+                    // SAFETY: the slot holds nothing to drop.
+                    unsafe { write_copy_some(slot, v) };
+                    return Some(true);
+                }
+                if matches!(slot, Some(Value::Str(_))) {
+                    // SAFETY: the old string is read out before the slot
+                    // is overwritten, and released after (no side effect).
+                    let old = unsafe { std::ptr::read(slot) };
+                    unsafe { write_copy_some(slot, v) };
+                    drop(old);
+                    return Some(true);
+                }
+            }
+        } else {
+            // The store mirrors the variable in the symbol table.
+            return None;
+        }
+        // A variable holding a value to release: the temporary takes the
+        // value and the `AssignCv` stores it (`store_fetched_in`).
+    }
+    // SAFETY: the caller's contract; the old value is tested first.
+    unsafe {
+        let dest = tmps.add(dst as usize);
+        if !matches!(
+            &*dest,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            return None;
+        }
+        write_copy(dest, v);
+    }
+    Some(false)
+}
+
+/// [`fetch_prop_dim_in`]'s plainest hit with the store folded in: a
+/// declared slot holding an array (directly or through a reference) of an object
+/// the base holds directly, an element that is not a reference, and a
+/// destination with nothing to release ([`store_copy_lean`]). The element
+/// is copied from the array into the destination while the slots are
+/// borrowed, without passing through an `Option<Value>`. `None`, nothing
+/// changed, for anything else.
+#[inline(always)]
+pub(in crate::exec) fn fetch_prop_dim_lean(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    if (dst as usize) >= f.tmps.len() {
+        return None;
+    }
+    let tmps = f.tmps.as_mut_ptr();
+    let f: &Frame = f;
+    let (class, slot, base) = plain_key_lean(f, pid, PC_READ)?;
+    let key = super::dim_ref_in(f, dim)?;
+    let od = plain_obj(f, base, class)?;
+    let slots = od.slots.try_borrow().ok()?;
+    // The array, directly or through a reference (left by `&$this->a`, a
+    // by-reference argument or `foreach` by reference).
+    let guard;
+    let a = match slots.get(slot) {
+        Some(Some(Value::Array(a))) => a,
+        Some(Some(Value::Reference(r))) => {
+            guard = r.try_borrow()?;
+            match &*guard {
+                Value::Array(a) => a,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let el = match key {
+        super::DimRef::Str(s) => a.sym_zstr_probe(s),
+        k => super::table_dim(a, k),
+    }?;
+    if matches!(el, Value::Reference(_)) {
+        return None;
+    }
+    // `FREE_OP2` of a string offset in a temporary, before the store (the
+    // result's temporary may be the offset's): `key` is not used again.
+    if let (Operand::Tmp(t), super::DimRef::Str(_)) = (dim, key) {
+        // SAFETY: `dim_ref_in` read this temporary, so `t` is in range;
+        // `tmps` is the frame's temporaries, which nothing else borrows
+        // from here on.
+        unsafe { *tmps.add(t as usize) = Value::Null };
+    }
+    // SAFETY: `tmps` is `f.tmps`' buffer and `dst` was checked above.
+    unsafe { store_copy_lean(f, tmps, dst, to, el) }
+}
+
+/// `$this->name` / `$cv->name` read on a property cache hit in its
+/// plainest form ([`read_plain`]: a declared, initialized slot holding a
+/// value, not a reference, of an object the base holds directly) with the
+/// store folded in ([`store_copy_lean`]): the value is copied from the
+/// slot into the destination while the slots are borrowed. `None`, nothing
+/// changed, for anything else.
+#[inline(always)]
+pub(in crate::exec) fn fetch_prop_lean(
+    f: &mut Frame,
+    pid: PlaceId,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    if (dst as usize) >= f.tmps.len() {
+        return None;
+    }
+    let tmps = f.tmps.as_mut_ptr();
+    let f: &Frame = f;
+    let (class, slot, base) = plain_key_lean(f, pid, PC_READ)?;
+    let od = plain_obj(f, base, class)?;
+    let slots = od.slots.try_borrow().ok()?;
+    match slots.get(slot)? {
+        Some(Value::Reference(_)) | None => None,
+        // SAFETY: `tmps` is `f.tmps`' buffer and `dst` was checked above.
+        Some(v) => unsafe { store_copy_lean(f, tmps, dst, to, v) },
+    }
+}
+
 /// `$this->name[dim]` / `$cv->name[dim]` read on a property cache hit in
-/// frame `f` alone ([`read_dim_hit`], or the silent miss of `Is` mode):
-/// the part of [`Vm::fetch_obj_prop_dim_fast`] that needs no VM, which the
-/// tape runs as an instruction of its own (`tape::props::fetch_prop_dim`).
-/// Whether the folded `AssignCv`'s variable took the value; `None`, with
-/// nothing changed, on a miss.
+/// frame `f` alone ([`fetch_prop_dim_lean`], else [`read_dim_hit`] or the
+/// silent miss of `Is` mode): the part of
+/// [`Vm::fetch_obj_prop_dim_fast`] that needs no VM, which the tape runs
+/// as an instruction of its own (`tape::props::fetch_prop_dim`). Whether
+/// the folded `AssignCv`'s variable took the value; `None`, with nothing
+/// changed, on a miss.
 #[inline(always)]
 pub(in crate::exec) fn fetch_prop_dim_in(
     f: &mut Frame,
@@ -351,6 +539,24 @@ pub(in crate::exec) fn fetch_prop_dim_in(
     if mode == FetchMode::List {
         return None;
     }
+    if let Some(stored) = fetch_prop_dim_lean(f, pid, dim, dst, to) {
+        return Some(stored);
+    }
+    fetch_prop_dim_rest(f, pid, dim, dst, to, mode)
+}
+
+/// The hits of [`fetch_prop_dim_in`] its lean form leaves: a reference in
+/// the slot or the element, a destination holding a value to release, a
+/// symbol table attached, the silent miss of `Is` mode. Out of line.
+#[inline(never)]
+pub(in crate::exec) fn fetch_prop_dim_rest(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    dst: u32,
+    to: Option<u32>,
+    mode: FetchMode,
+) -> Option<bool> {
     if let Some(v) = read_dim_hit(f, pid, dim) {
         super::release_str_tmp_in(f, dim);
         return Some(store_fetched_in(f, dst, to, v));
@@ -1024,6 +1230,24 @@ fn plain_key(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32, u3
     let key = (e.class_addr, e.slot as usize, e.base, e.accept);
     drop(cache);
     Some(key)
+}
+
+/// [`plain_key`] without the cache's borrow count: the entry's fields are
+/// copied out at once, and nothing runs in between that could refill the
+/// cache (the lean reads' first step).
+#[inline(always)]
+fn plain_key_lean(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32)> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    // SAFETY: the shared reference lives for the copies below only; no
+    // exclusive borrow of the cache can start meanwhile.
+    let cache = unsafe { f.code.prop_cache.try_borrow_unguarded() }.ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
+        return None;
+    }
+    Some((e.class_addr, e.slot as usize, e.base))
 }
 
 /// The data of the object the base `base` holds directly in frame `f`
