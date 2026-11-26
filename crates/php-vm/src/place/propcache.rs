@@ -1823,6 +1823,11 @@ impl Vm {
         });
         match old {
             Some(old) => {
+                // `zval_ptr_dtor` of the unset property: a possible root
+                // when it stays referenced.
+                if let Some(v) = &old {
+                    crate::gc::possible_root(v);
+                }
                 drop(old);
                 true
             }

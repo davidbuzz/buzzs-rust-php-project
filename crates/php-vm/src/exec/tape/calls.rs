@@ -3628,6 +3628,10 @@ pub(super) fn call_native(
             ) {
                 std::mem::forget(v);
             } else {
+                // `i_zval_ptr_dtor` of the unused result (`ZEND_DO_ICALL`):
+                // what `array_pop()` took out of an array becomes a
+                // possible root when it stays referenced.
+                crate::gc::possible_root(&v);
                 drop(v);
             }
         }

@@ -814,7 +814,24 @@ fn free_contents(d: &mut ObjectData, slots: &mut [Option<Value>], flags: u32) {
         if owns_nothing(&v) {
             std::mem::forget(v);
         } else {
+            // `i_zval_ptr_dtor` of the property: a value that stays
+            // referenced (an object in a cycle of its own, an array held
+            // elsewhere) becomes a possible root, as when a variable
+            // holding it is released. Without it the children of a freed
+            // owner that refer to each other were never offered to the
+            // collector: `MediaWiki`'s test suite kept 3.8 GB where
+            // php-src keeps 1.2 GB.
+            if let Some(val) = &v {
+                crate::gc::possible_root(val);
+            }
             drop(v);
+        }
+    }
+    // The dynamic properties likewise (`zend_array_destroy` of the
+    // property table).
+    if let Some(table) = &dynamic {
+        for val in table.values() {
+            crate::gc::possible_root(val);
         }
     }
     drop((dynamic, internal, stale));
