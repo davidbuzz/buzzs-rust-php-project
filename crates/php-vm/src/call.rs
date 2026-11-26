@@ -2542,7 +2542,7 @@ impl Vm {
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
-                || Rc::ptr_eq(&frame.vars, &self.globals)
+                || Rc::ptr_eq(&frame.vars_store, &self.globals)
             {
                 return None;
             }
@@ -2761,7 +2761,7 @@ impl Vm {
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
-                || Rc::ptr_eq(&frame.vars, &self.globals)
+                || Rc::ptr_eq(&frame.vars_store, &self.globals)
             {
                 return None;
             }
@@ -4133,7 +4133,7 @@ impl Vm {
         let magic_name = self.magic_call_name.clone();
         let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
         if !call.named.is_empty() {
-            frame.cold_mut().named = call.named.clone();
+            frame.cold_mut().named.clone_from(&call.named);
         }
         let spare_args = std::mem::replace(&mut frame.args, pushed_args);
         set_opt(&mut frame.this, call.this.clone());

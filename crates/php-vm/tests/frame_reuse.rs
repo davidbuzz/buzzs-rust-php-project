@@ -72,7 +72,7 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     frame.calls.reserve(1024);
     frame.cold_mut().silence_saved.resize(1024, 1);
     {
-        let mut vars = frame.vars.borrow_mut();
+        let mut vars = frame.vars().borrow_mut();
         vars.slots.resize(1024, Some(Value::Str(value.clone())));
         vars.names.to_mut().resize(1024, value);
     }
@@ -89,7 +89,7 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
         .named
         .push((ZStr::from("object"), Value::Object(object.clone())));
     frame
-        .vars
+        .vars()
         .borrow_mut()
         .slots
         .push(Some(Value::Object(object.clone())));
@@ -103,8 +103,8 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     assert_eq!(frame.iters.capacity(), 0);
     assert_eq!(frame.fins.capacity(), 0);
     assert_eq!(frame.calls.capacity(), 0);
-    assert_eq!(frame.vars.borrow().slots.capacity(), 0);
-    assert_eq!(frame.vars.borrow().names.capacity(), 0);
+    assert_eq!(frame.vars().borrow().slots.capacity(), 0);
+    assert_eq!(frame.vars().borrow().names.capacity(), 0);
     frame.reinit_for_user(vm.empty_code.clone(), FrameKind::Function);
     assert!(frame.args.is_empty());
 }
@@ -115,14 +115,14 @@ fn ordinary_buffers_retain_capacity_and_shared_stores_survive() {
     let mut frame = Frame::new_pooled(vm.empty_code.clone());
     frame.tmps.push(Value::Int(42));
     let capacity = frame.tmps.capacity();
-    frame.vars.borrow_mut().slots.push(Some(Value::Int(42)));
-    let shared = frame.vars.clone();
+    frame.vars().borrow_mut().slots.push(Some(Value::Int(42)));
+    let shared = frame.vars().clone();
     frame.clear_for_pool(&vm.empty_code);
     assert_eq!(frame.tmps.capacity(), capacity);
     assert!(frame.tmps.is_empty());
-    assert!(!Rc::ptr_eq(&shared, &frame.vars));
+    assert!(!Rc::ptr_eq(&shared, frame.vars()));
     assert!(matches!(shared.borrow().slots[0], Some(Value::Int(42))));
-    assert!(frame.vars.borrow().slots.is_empty());
+    assert!(frame.vars().borrow().slots.is_empty());
 }
 
 #[test]

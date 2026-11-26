@@ -48,7 +48,7 @@ fn a_frame_shares_the_op_arrays_cv_names_until_a_variable_is_added() {
     let code = code(&["a", "b"]);
     let f = Frame::new(code.clone(), FrameKind::Function);
     {
-        let vars = f.vars.borrow();
+        let vars = f.vars().borrow();
         assert_eq!(vars.slots.len(), 2);
         assert_eq!(vars.names.len(), 2);
         assert_eq!(vars.names[1].as_bytes(), b"b");
@@ -60,8 +60,8 @@ fn a_frame_shares_the_op_arrays_cv_names_until_a_variable_is_added() {
     }
     // A run-time variable copies the names once; the op array is untouched
     // and no longer held by the store.
-    assert_eq!(f.vars.borrow_mut().find_or_add(b"c"), 2);
-    let mut vars = f.vars.borrow_mut();
+    assert_eq!(f.vars().borrow_mut().find_or_add(b"c"), 2);
+    let mut vars = f.vars().borrow_mut();
     assert_eq!(vars.slots.len(), 3);
     assert_eq!(vars.names.len(), 3);
     assert_eq!(vars.names[0].as_bytes(), b"a");
@@ -102,10 +102,10 @@ fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
     let vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
     let first = code(&["p", "q"]);
     let mut frame = Frame::new_pooled(vm.empty_code.clone());
-    assert!(frame.vars.borrow().names.is_empty());
+    assert!(frame.vars().borrow().names.is_empty());
     frame.reinit_for_user(first.clone(), FrameKind::Function);
     {
-        let vars = frame.vars.borrow();
+        let vars = frame.vars().borrow();
         assert_eq!(vars.slots.len(), 2);
         assert_eq!(vars.names.len(), 2);
         assert_eq!(vars.names[0].as_bytes(), b"p");
@@ -113,11 +113,11 @@ fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
     }
     // This handle, the frame's `code` and the store.
     assert_eq!(Rc::strong_count(&first), 3);
-    assert_eq!(frame.vars.borrow_mut().find_or_add(b"dyn"), 2);
+    assert_eq!(frame.vars().borrow_mut().find_or_add(b"dyn"), 2);
     assert_eq!(Rc::strong_count(&first), 2);
     frame.clear_for_pool(&vm.empty_code);
     {
-        let vars = frame.vars.borrow();
+        let vars = frame.vars().borrow();
         assert!(vars.slots.is_empty());
         assert!(vars.names.is_empty());
         // The small owned buffer stays for the next run-time copy.
@@ -128,7 +128,7 @@ fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
     // Reused for another function: that one's names, nothing left over.
     let other = code(&["z"]);
     frame.reinit_for_user(other.clone(), FrameKind::Function);
-    let vars = frame.vars.borrow();
+    let vars = frame.vars().borrow();
     assert_eq!(vars.slots.len(), 1);
     assert_eq!(vars.names.len(), 1);
     assert_eq!(vars.names[0].as_bytes(), b"z");
@@ -140,7 +140,7 @@ fn lookups_in_a_large_shared_table_use_the_index() {
     let names: Vec<String> = (0..9).map(|i| format!("v{i}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let f = Frame::new(code(&refs), FrameKind::Function);
-    let mut vars = f.vars.borrow_mut();
+    let mut vars = f.vars().borrow_mut();
     assert_eq!(vars.find(b"v8"), Some(8));
     assert_eq!(vars.find(b"v9"), None);
     assert_eq!(vars.find_or_add(b"v9"), 9);
