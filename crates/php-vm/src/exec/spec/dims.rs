@@ -1062,7 +1062,9 @@ pub(in crate::exec) fn unset_dims_cv_in(f: &mut Frame, cv: u32, place: PlaceId) 
         return false;
     };
     release_place_str_tmps(f, place);
-    drop(removed);
+    // `zval_ptr_dtor` of the removed element: a possible root when it
+    // stays referenced.
+    super::super::release_rooted(removed);
     true
 }
 

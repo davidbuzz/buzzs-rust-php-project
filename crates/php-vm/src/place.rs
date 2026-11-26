@@ -986,7 +986,12 @@ pub(crate) fn descend(
                     if is_unset {
                         if last {
                             if arr.contains_key(&key) {
+                                // `zval_ptr_dtor` of the removed element:
+                                // a possible root when it stays referenced.
                                 let old = arr.make_mut().remove(&key);
+                                if let Some(v) = &old {
+                                    crate::gc::possible_root(v);
+                                }
                                 drop(old);
                             }
                             return Step::Done(Value::Null);
@@ -1526,10 +1531,16 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
                         return Step::Done(val);
                     }
                     let old = r.set(val.clone());
+                    crate::gc::possible_root(&old);
                     drop(old);
                 }
                 _ => {
+                    // `zval_ptr_dtor` of the value replaced (an element, a
+                    // static property): a possible root when it stays
+                    // referenced, as when a variable holding it is
+                    // overwritten.
                     let old = std::mem::replace(v, val.clone());
+                    crate::gc::possible_root(&old);
                     drop(old);
                 }
             }
@@ -1539,11 +1550,15 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
         WOp::MakeRef => Step::Done(Value::Reference(v.make_ref())),
         WOp::AssignRef(r) => {
             let r = std::mem::take(r);
-            *v = r.clone();
+            let old = std::mem::replace(v, r.clone());
+            crate::gc::possible_root(&old);
+            drop(old);
             Step::Done(r)
         }
         WOp::Unset => {
-            *v = Value::Null;
+            let old = std::mem::take(v);
+            crate::gc::possible_root(&old);
+            drop(old);
             Step::Done(Value::Null)
         }
         WOp::AssignDeref(d) => {

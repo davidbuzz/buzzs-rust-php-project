@@ -27,7 +27,7 @@
 // pre-match: as calls, they return their results through memory.
 #![allow(clippy::inline_always)]
 
-use super::super::{discard_unrooted, Flow, Num};
+use super::super::{discard_unrooted, release_slot_value, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
 use crate::opcode::{
@@ -957,8 +957,9 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
         return false;
     };
     // The old value is released once nothing is borrowed (a scalar is
-    // forgotten).
-    discard_unrooted(old);
+    // forgotten; an array, object or reference that stays referenced
+    // becomes a possible root: `zval_ptr_dtor` of the old value).
+    release_slot_value(old);
     if let Operand::Tmp(t) = val {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
             put_tmp(slot, Value::Null);
@@ -1401,8 +1402,10 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
     let (old, result) = old;
     drop(slots);
     // The old value is released once nothing is borrowed (a destructor
-    // may touch the object).
-    discard_unrooted(old);
+    // may touch the object); one that stays referenced becomes a possible
+    // root (`zval_ptr_dtor` of the old value: `$this->child = null` of a
+    // child in a cycle of its own was never collected).
+    release_slot_value(old);
     if let Operand::Tmp(t) = val {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
             put_tmp(slot, Value::Null);
@@ -2220,7 +2223,9 @@ pub(super) fn unset_prop_dims_in(f: &mut Frame, pid: PlaceId) -> bool {
         return false;
     };
     super::release_place_str_tmps(f, pid);
-    drop(removed);
+    // `zval_ptr_dtor` of the removed element: a possible root when it
+    // stays referenced.
+    super::super::release_rooted(removed);
     true
 }
 

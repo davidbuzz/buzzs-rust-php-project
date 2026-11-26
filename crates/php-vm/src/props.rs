@@ -2085,9 +2085,12 @@ impl Vm {
                 // from now on).
                 let old = object::data(o).slots.borrow_mut()[idx].take();
                 object::data(o).set_slot_unset(idx, true);
-                if old.is_none() {
+                let Some(old_value) = &old else {
                     return Ok(());
-                }
+                };
+                // `zval_ptr_dtor` of the unset property: a possible root
+                // when it stays referenced.
+                crate::gc::possible_root(old_value);
                 let d = object::data(o);
                 if !object::begin_stale_count(d) {
                     drop(old);
