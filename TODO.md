@@ -92,6 +92,36 @@ reference-counted values runs 2–3× C (`$y = $s` 104/62, `$a['k']` 169/123, `$
 optimization log these came from, with its landed-change tables, is git history:
 `perf/OPTIMIZATIONS.md`, removed 26 Nov.)
 
+- **What one request of a large framework application does** (counted 27 Nov with uprobes,
+  `4d54095d`, Rust 1.100.0; per request, C beside it where it has a counterpart). The work is
+  the same as C's; each piece costs more:
+  - 133,195 user function returns. 90,005 of the calls ready their pooled frame the slow
+    way (`ready_frame_slow`): the frame at that depth last ran another function. The
+    "same function as last time" fast path, which every benchmark loop takes, is taken by
+    about a third of an application's calls. `f($x, $y)` costs 1,081 instructions against
+    C's 172 (`send_run` 256 for the two arguments, `run_tape` 220 re-entered, `return_simple`
+    210, `run_call` 115, `enter` 97, `prepare` 90): about 900 more per call, 12% of the request.
+  - 52,570 `global $name` bindings at about 220 instructions each (1.1% of the request):
+    `Vm::bind_global_cached` walks the global scope's frames (`global_scope_top`) and scans
+    the top one's `symtab_slots` for the variable of that slot, on every binding. A name to
+    variable lookup on the op array would make the scan one probe; the frame walk needs a
+    cached top that stays right when the global scope's frames change.
+  - 46,542 array copies and 101,722 array frees (C: 45,838 and 85,126), six to seven
+    elements each, at five to eight times C's cycles apiece. Strings and arrays in keyed
+    arrays are counted in line since `755a51da`; what is left is three allocations a table
+    where C has two (buckets and hash index are separate blocks), the collector's own walk
+    over a released array (`gc::released_array`, 32,854 a request, before the walk that
+    frees it), and the layers a free passes through (`Rc::drop_slow`, the `Drop` impl, the
+    field glue, the vector's `IntoIter`): `$r = []; $r[] = $i;` is 1,052 instructions
+    against 323.
+  - Kernel time, page faults and forks are the same order as C's: the request is user space.
+- **Build settings measured on that page** (plain release build 1,043.4 M instructions a
+  request): the profile-guided build 911.7 M (the item above); `panic = "abort"` 1,013.4 M
+  (2.9% fewer, but an internal panic then aborts instead of unwinding through the
+  `catch_unwind` at the FFI and fiber boundaries: the owner's call); `lto = "fat"` 1,034.4 M
+  (0.9%: not worth its build); Rust 1.100.0 against 1.95.0 on the same source 0.4% fewer
+  instructions and about 7% fewer cycles (taken on a loaded box: to be repeated).
+
 - [ ] **The call protocol: bring one namespaced user call from ~850 instructions to
   C's 142.** The micro: `$s = f($i)` in a loop inside a function in `namespace App`
   (a method call likewise), the empty loop's cost subtracted; measured 25 Nov —
