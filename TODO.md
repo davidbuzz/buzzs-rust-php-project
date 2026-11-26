@@ -96,11 +96,25 @@ optimization log these came from, with its landed-change tables, is git history:
   `4d54095d`, Rust 1.100.0; per request, C beside it where it has a counterpart). The work is
   the same as C's; each piece costs more:
   - 133,195 user function returns. 90,005 of the calls ready their pooled frame the slow
-    way (`ready_frame_slow`): the frame at that depth last ran another function. The
+    way (`ready_frame_slow`): the frame at that depth last ran another function, or a
+    builtin (the next point). The
     "same function as last time" fast path, which every benchmark loop takes, is taken by
     about a third of an application's calls. `f($x, $y)` costs 1,081 instructions against
     C's 172 (`send_run` 256 for the two arguments, `run_tape` 220 re-entered, `return_simple`
     210, `run_call` 115, `enter` 97, `prepare` 90): about 900 more per call, 12% of the request.
+  - Builtin and user calls alternate at nearly every call depth, which no benchmark loop
+    does, and the pooled frame of that depth paid for it (27 Nov; fixed: the frame keeps
+    its argument buffer, the builtin's quick release takes a frame a user function used,
+    released slots are cut without their drop glue: the request went from 1,035.7 M to
+    984.9 M instructions). What is left there: 90,010 of 111,158 prepared calls a request
+    ready their frame the slow way (`ready_frame_slow` and `Frame::reinit_for_call`, about
+    200 instructions each, 1.9% of the request), 60,440 because another user function ran
+    in the frame last and 29,560 because a builtin did (it resets the slot vectors and the
+    function handles). Letting a builtin borrow the frame and give it back as it was would
+    help only the part of those 29,560 that call the same function again (0.3% of the
+    request at best): not worth it. The slow path itself is flat bookkeeping (four slot
+    vectors fitted, a dozen fields reset, three handles exchanged), which is the call
+    protocol item below.
   - 52,570 `global $name` bindings at about 220 instructions each (1.1% of the request):
     `Vm::bind_global_cached` walks the global scope's frames (`global_scope_top`) and scans
     the top one's `symtab_slots` for the variable of that slot, on every binding. A name to
@@ -282,16 +296,33 @@ optimization log these came from, with its landed-change tables, is git history:
     owner's call: report the limit the process started with (it has to survive the
     re-execution), or keep the true figure and the failure.
   - opcache with the tracing JIT asked for (`-d opcache.enable_cli=1 -d opcache.jit=tracing
-    -d opcache.jit_buffer_size=64M`): `ext/opcache/tests/jit/bug80426` (the "JIT is
-    incompatible with third party extensions that override zend_execute_ex()" warning is
-    not raised), `jit/gh13400` (`opcache_get_status()['jit']['buffer_free']` does not shrink
-    in the parent after a forked child compiled), `jit/preload_restart_function_jit` and
+    -d opcache.jit_buffer_size=64M`): `ext/opcache/tests/jit/gh13400`
+    (`opcache_get_status()['jit']['buffer_free']` does not shrink in the parent after a
+    forked child compiled), `jit/preload_restart_function_jit` and
     `jit/preload_restart_hot_counters` ("Call to undefined function preloaded_sum()" after
-    an opcache restart with preloading). All four are skipped or pass in the default run.
+    an opcache restart: preloading is wired for the CLI only, not for `php -S`, php-cgi or
+    FPM). All three are skipped or pass in the default run. (`jit/bug80426` is fixed:
+    `458b370a`.)
   - the observer variant (`-d zend_test.observer.enabled=1 -d
     zend_test.observer.show_output=0`): `ext/openssl/tests/bug79881` and
     `ext/standard/tests/serialize/bug81142` compare `memory_get_usage()` before and after
     (192 bytes more with the observer on).
+- [ ] **Preloading, found with a Symfony application's preload file** (1,750 classes; it
+  preloads and runs since `f81aea0d`). Open:
+  - `get_declared_classes()` in a request does not list what C lists for preloaded
+    code: a class alias made by the preload script (C lists its lowercase key where
+    `class_alias()` ran) and a preloaded anonymous class.
+  - The same list without preloading: C lists an anonymous class from the moment its
+    file is compiled, in the file's order (`class A {} function mk() { return new class {};
+    } class_alias('A', 'X');` gives `A, class@anonymous, x` before `mk()` ever runs); ours
+    lists it only once its `new` has run, and last (`A, x`, then `A, x, class@anonymous`).
+    `Vm::order_unit_classes` (include.rs) leaves anonymous classes out.
+  - Preloaded classes are linked again in every request (`install_persistent_declarations`),
+    where C links them once at startup: the same result, but a cost per request that grows
+    with the preload. Not measured yet.
+  - Not ours to fix: php-src master warns that a class implementing
+    `SessionHandlerInterface` lacks `create_sid()` (8.5 does not), and a Symfony 8.1
+    application in debug mode turns that warning into an exception.
 - [ ] SAPIs (from PR #9, whose `php-sapi` crate gave every SAPI one `RequestInfo`): the
   SAPI-internal request structs (the CLI's `Request`, CGI's `RequestInfo`, the built-in
   server's `Request`, Apache's accessors) still exist; move them onto `RequestInfo` with a
