@@ -79,8 +79,8 @@ pub(crate) const PC_NO_SET: u8 = 1 << 5;
 /// one `unset()` left) may be initialized directly with a value in
 /// `accept`: the class has no `__set()` (so no magic applies to it), no
 /// native write handler, no hooks or set visibility; for a readonly
-/// property, the lookup's scope is its declaring class (where its one
-/// initialization is allowed). Set without [`PC_WRITE`] for a readonly
+/// property (whatever its set visibility), the lookup's scope is its
+/// declaring class (where its one initialization is allowed). Set without [`PC_WRITE`] for a readonly
 /// property, whose initialized slot no fast path may write.
 pub(crate) const PC_INIT: u8 = 1 << 6;
 
@@ -909,7 +909,9 @@ impl Vm {
                         entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
                         entry.class_lc = info.ty.as_ref().and_then(single_class_name);
                     } else if write_ok
-                        && info.flags & flags::SET_MASK == 0
+                        // (Any set visibility, also the `protected(set)` of
+                        // a `public readonly` one, admits the declaring
+                        // class, the only scope taken here.)
                         && info.flags & flags::READONLY != 0
                         && cls.magic.set.is_none()
                         && scope.is_some_and(|sc| {

@@ -1138,3 +1138,44 @@ Class "Missing" not found
 "#
     );
 }
+
+/// Promoted `public readonly` properties (implicitly `protected(set)`)
+/// initialized on the cache hit from their declaring class; a second
+/// write, a write from outside, a subclass's constructor, `__clone()`;
+/// and a base class's property written for many subclasses (refilled on
+/// the tape's decline step), whose replaced values run destructors.
+/// Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn readonly_promotion_and_polymorphic_writes() {
+    assert_eq!(
+        run(r#"<?php
+namespace S;
+class Box { function __construct(public $v = 0) {} }
+class R { public function __construct(public readonly Box $p, public readonly string $s, protected readonly int $n = 3, public private(set) readonly array $a = []) {}
+  function again() { $this->p = new Box(9); } function n() { return $this->n; } }
+class K extends R { public function __construct(Box $b) { parent::__construct($b, 'k'); } }
+class C2 extends R { public readonly int $extra; public function __construct() { $this->extra = 5; parent::__construct(new Box(2), 'c'); } }
+class Cl { public function __construct(public readonly Box $b) {} public function __clone() { $this->b = new Box(42); } }
+abstract class Asset { protected $_name = ''; public $d; function setName($n) { $this->_name = $n; return $this; } function name() { return $this->_name; } function __destruct() {} }
+class T1 extends Asset {} class T2 extends Asset {} class T3 extends Asset {} class T4 extends Asset { function __destruct() { echo "d4 "; } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $r = new R(new Box($i), "s$i"); echo $r->p->v, $r->s, $r->n(), count($r->a), ' ';
+    try { $r->again(); } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { $r->p = new Box; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    try { new R('x', 's'); } catch (\TypeError $e) { echo 'TE ', substr($e->getMessage(), 0, 45), ' '; }
+    $k = new K(new Box(7)); echo $k->p->v, $k->s, ' ';
+    $c = new C2; echo $c->extra, $c->p->v, ' ';
+    $o = new Cl(new Box(1)); $o2 = clone $o; echo $o->b->v, $o2->b->v, ' ';
+    foreach ([new T1, new T2, new T3, new T4, new T1] as $a) { echo $a->setName("n$i")->name(); $a->d = new T4; $a->d = null; }
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"0s030 Cannot modify readonly property S\R::$p Cannot modify readonly property S\R::$p TE S\R::__construct(): Argument #1 ($p) must be  7k 52 142 n0d4 n0d4 n0d4 n0d4 n0d4 d4 
+1s130 Cannot modify readonly property S\R::$p Cannot modify readonly property S\R::$p TE S\R::__construct(): Argument #1 ($p) must be  7k 52 142 n1d4 n1d4 n1d4 n1d4 n1d4 d4 
+2s230 Cannot modify readonly property S\R::$p Cannot modify readonly property S\R::$p TE S\R::__construct(): Argument #1 ($p) must be  7k 52 142 n2d4 n2d4 n2d4 n2d4 n2d4 d4 
+"#
+    );
+}

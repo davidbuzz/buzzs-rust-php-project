@@ -2700,6 +2700,22 @@ fn declined_vm_step(
             None => DECLINED,
         };
     }
+    // `$this->name = $v` whose site cache holds other classes (a base
+    // class's or a trait's method writing for many subclasses): the write
+    // and the cache's refill (`Vm::assign_obj_prop_fast`, `Vm::run`'s
+    // pre-match arm) here. The old value's release may run a destructor:
+    // the resume point is saved first and a call being prepared becomes
+    // the pending one. A write needing `__set()` or failing a type test
+    // declines (nothing changed).
+    if let Some(&Op::AssignObjProp { place, val, dst }) = ops.get(at) {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return if vm.assign_obj_prop_fast(place, val, dst) {
+            at + 1
+        } else {
+            DECLINED
+        };
+    }
     // `A::m(...)`, `static::m(...)` not prepared on the tape (an argument
     // is itself a call, or a superglobal): `Vm::run`'s arm
     // (`Vm::op_init_static_call`, the call pending), here, after
