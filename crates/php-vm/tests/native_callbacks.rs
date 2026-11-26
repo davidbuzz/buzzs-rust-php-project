@@ -1336,3 +1336,36 @@ falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue falsetrue 
 "#
     );
 }
+
+/// `$class::NAME` with the class named by a string (run from the tape's
+/// decline step): autoloading, constant expressions, an enum's constant,
+/// an unknown class, a private and an undefined constant, an int as the
+/// class. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn class_constants_of_named_classes() {
+    assert_eq!(
+        run(r#"<?php
+namespace CC;
+spl_autoload_register(function ($c) { echo "load($c) "; if ($c === 'CC\Late') eval('namespace CC; class Late { const underlyingType = "late"; }'); });
+class F { const underlyingType = 'f'; const E = self::underlyingType . '!'; private const P = 'p'; } class G extends F { const underlyingType = null; }
+enum En: string { case A = 'a'; const D = self::A; }
+function k($factory) { return $factory::underlyingType ? $factory::underlyingType : 'none'; }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    echo k(F::class), k(G::class), k('CC\Late'), k(new F), ' ';
+    $e = F::class; echo $e::E, ' '; $n = En::class; echo $n::D->value, ' ';
+    try { k('CC\Missing'); } catch (\Error $x) { echo $x->getMessage(), ' '; }
+    try { $p = F::class; echo $p::P; } catch (\Error $x) { echo $x->getMessage(), ' '; }
+    try { $p = F::class; echo $p::NOPE; } catch (\Error $x) { echo $x->getMessage(), ' '; }
+    try { $p = 5; echo $p::X; } catch (\Error $x) { echo $x->getMessage(), ' '; }
+    echo "\n";
+  }
+}
+run();
+"#),
+        r#"fnoneload(CC\Late) latef f! a load(CC\Missing) Class "CC\Missing" not found Cannot access private constant CC\F::P Undefined constant CC\F::NOPE Class name must be a valid object or a string 
+fnonelatef f! a load(CC\Missing) Class "CC\Missing" not found Cannot access private constant CC\F::P Undefined constant CC\F::NOPE Class name must be a valid object or a string 
+fnonelatef f! a load(CC\Missing) Class "CC\Missing" not found Cannot access private constant CC\F::P Undefined constant CC\F::NOPE Class name must be a valid object or a string 
+"#
+    );
+}

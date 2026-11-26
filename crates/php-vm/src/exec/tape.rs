@@ -2738,6 +2738,30 @@ fn declined_vm_step(
             }
         };
     }
+    // `$class::NAME` of a class named by a string (Lodata's
+    // `$factory::underlyingType`; the run-time cache answers only an
+    // object's class): `Vm::run`'s arm (`Vm::fetch_class_const_cached`)
+    // here, after `SAVE_OPLINE()` (the class may be autoloaded, a constant
+    // expression evaluated).
+    if let Some(&Op::FetchClassConst {
+        class: ClassSpec::Dyn(c),
+        name: Operand::Lit(name),
+        dst,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.fetch_class_const_cached(&ClassSpec::Dyn(c), Operand::Lit(name)) {
+            Ok(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
     // `A::m(...)`, `static::m(...)` not prepared on the tape (an argument
     // is itself a call, or a superglobal): `Vm::run`'s arm
     // (`Vm::op_init_static_call`, the call pending), here, after
