@@ -491,3 +491,40 @@ fn repeat_does_not_repeat_forked_children() {
          Finished execution, repeating...\nparent\n"
     );
 }
+
+/// A preload script that fails, or exits, fails the module startup: the
+/// status is 1 whatever the script's own was (`exit_status = 1`,
+/// `sapi/cli/php_cli.c`), and the main script does not run. Expected values
+/// from php8.5.
+#[test]
+fn a_failed_preload_script_exits_with_status_1() {
+    let dir = temp_dir("preload-status");
+    for (source, stdout) in [
+        ("<?php undefined_fn();", "\nFatal error: Uncaught Error: Call to undefined function undefined_fn() in {PRE}:1\nStack trace:\n#0 {main}\n  thrown in {PRE} on line 1\n"),
+        ("<?php echo \"bye\\n\"; exit(7);", "bye\n"),
+        ("<?php echo \"bye\\n\"; exit(0);", "bye\n"),
+        ("<?php throw new Exception('x');", "\nFatal error: Uncaught Exception: x in {PRE}:1\nStack trace:\n#0 {main}\n  thrown in {PRE} on line 1\n"),
+    ] {
+        let pre = dir.join("pre.php");
+        std::fs::write(&pre, source).unwrap();
+        let pre = pre.to_string_lossy().into_owned();
+        let out = php_in(
+            &dir,
+            &[
+                "-d",
+                "opcache.enable_cli=1",
+                "-d",
+                &format!("opcache.preload={pre}"),
+                "-r",
+                "echo 'main';",
+            ],
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).replace(&pre, "{PRE}"),
+            stdout,
+            "{source}"
+        );
+        assert_eq!(out.status.code(), Some(1), "{source}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -113,7 +113,9 @@ pub(crate) fn startup(cfg: &Config) -> Result<(), i32> {
     crate::request_startup(&mut vm);
     let path = php_runtime::ZStr::from(crate::real_path(path.as_bytes()));
     let result = vm.run_preload(&source, &path);
-    let persistent = vm.finish_preload(result)?;
+    // A preload script that fails, or exits, fails the module startup,
+    // whatever its own status (`exit_status = 1`, sapi/cli/php_cli.c).
+    let persistent = vm.finish_preload(result).map_err(|_| 1)?;
     DECLARATIONS.with(|d| *d.borrow_mut() = Some(Rc::new(persistent)));
     Ok(())
 }
