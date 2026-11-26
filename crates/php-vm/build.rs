@@ -75,7 +75,12 @@ fn main() {
         let name = dir.file_name().expect("crate dir name");
         for part in ["Cargo.toml", "build.rs", "src"] {
             let root = dir.join(part);
-            println!("cargo:rerun-if-changed={}", root.display());
+            // A path that does not exist (a crate without build.rs) would
+            // make cargo rerun this script, and rebuild php-vm and every
+            // crate above it, on every build.
+            if root.exists() {
+                println!("cargo:rerun-if-changed={}", root.display());
+            }
             let mut files = BTreeSet::new();
             if root.is_dir() {
                 files_below(&root, &mut files);
