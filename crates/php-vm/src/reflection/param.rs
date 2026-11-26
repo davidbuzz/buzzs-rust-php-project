@@ -711,7 +711,9 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("isPromoted(): bool", PUB, rp_is_promoted)
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
-            PUB,
+            // Pure (`calls::pure_args`): without its frame, it declines what
+            // would autoload (the container asks every dependency).
+            PUB | crate::func::flags::PURE,
             rp_get_attributes,
         )
         .register(vm);

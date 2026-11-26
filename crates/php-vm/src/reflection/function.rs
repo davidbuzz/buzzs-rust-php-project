@@ -1148,7 +1148,8 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         )
         .method(
             "getAttributes(?string $name = null, int $flags = 0): array",
-            // Pure with at most a name (`calls::pure_args`).
+            // Pure (`calls::pure_args`): without its frame, it declines what
+            // would autoload.
             PUB | crate::func::flags::PURE,
             rf_get_attributes,
         )
