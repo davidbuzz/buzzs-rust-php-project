@@ -1487,6 +1487,32 @@ fn release_slot(v: Value) {
     }
 }
 
+/// Whether `v` is counted: anything but `null`, a boolean or a number.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per temporary of a return
+fn is_counted(v: &Value) -> bool {
+    !matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    )
+}
+
+/// Releases a temporary of a returning frame in place
+/// ([`Frame::release_direct_tmps`]): `null` costs the test alone, a
+/// scalar the store of `null`, and only a counted value is moved out and
+/// dropped.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per temporary of a return
+fn release_tmp_in_place(t: &mut Value) {
+    match t {
+        Value::Null => {}
+        Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+            std::mem::forget(std::mem::replace(t, Value::Null));
+        }
+        _ => drop(std::mem::take(t)),
+    }
+}
+
 /// Releases a compiled variable of a returning frame in place
 /// (`i_free_compiled_variables`, with its `gc_check_possible_root`): the
 /// tag is tested where the value is, so a scalar costs the store of the
@@ -2078,17 +2104,31 @@ impl Frame {
     /// slot first moved each value to the stack and stored `null` before
     /// its tag was looked at (~11 instructions a temporary, a third of a
     /// return's instructions in a framework application's request).
+    ///
+    /// Four at a time: nearly nine in ten of a returning frame's
+    /// temporaries are `null`, the rest scalars a test left behind, and a
+    /// counted one is the exception (a `return` inside a `switch` or a
+    /// `foreach`). Four tags are tested together and, when none is
+    /// counted, `null` is stored in all four; one by one each temporary
+    /// cost ten instructions of the loop.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
     fn release_direct_tmps(&mut self) {
-        for t in &mut self.tmps {
-            match t {
-                Value::Null => {}
-                Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+        let (fours, rest) = self.tmps.as_chunks_mut::<4>();
+        for four in fours {
+            if four.iter().fold(false, |any, t| any | is_counted(t)) {
+                for t in four {
+                    release_tmp_in_place(t);
+                }
+            } else {
+                for t in four {
+                    // A scalar owns nothing: overwritten, not dropped.
                     std::mem::forget(std::mem::replace(t, Value::Null));
                 }
-                _ => drop(std::mem::take(t)),
             }
+        }
+        for t in rest {
+            release_tmp_in_place(t);
         }
     }
 
