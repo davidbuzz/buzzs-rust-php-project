@@ -834,6 +834,11 @@ fn free_contents(d: &mut ObjectData, slots: &mut [Option<Value>], flags: u32) {
             crate::gc::possible_root(val);
         }
     }
+    // The native state (`free_obj` of the class: a closure's bound
+    // variables, an `ArrayObject`'s storage).
+    if let Some(state) = &internal {
+        crate::gc::root_native_state(&**state);
+    }
     drop((dynamic, internal, stale));
 }
 

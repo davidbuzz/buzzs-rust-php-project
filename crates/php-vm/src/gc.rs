@@ -714,6 +714,26 @@ pub(crate) fn possible_root_obj(o: &Obj) {
     root_obj(o);
 }
 
+/// [`possible_root`] of an array handle.
+pub(crate) fn possible_root_array(a: &php_runtime::ZArray) {
+    if a.refcount() == 1 {
+        if !a.is_empty() {
+            released_array(a);
+        }
+    } else if a.gc_root_mark() == 0 {
+        php_runtime::ref_roots::array_released(a);
+    }
+}
+
+/// [`possible_root`] of a reference handle.
+pub(crate) fn possible_root_ref(r: &php_runtime::PhpRef) {
+    if r.refcount() == 1 {
+        released_ref(r);
+    }
+}
+
+pub(crate) use traverse::root_native_state;
+
 /// [`possible_root`] of the last handle of a reference: its value.
 #[inline(never)]
 fn released_ref(r: &php_runtime::PhpRef) {
