@@ -22,6 +22,9 @@ use std::rc::Rc;
 /// [`Class::props`], [`Class::static_props`] and [`Class::method_order`].
 pub type NameMap<V> = HashMap<ZStr, V, rustc_hash::FxBuildHasher>;
 
+/// A set of names hashed as [`NameMap`] hashes them.
+pub type NameSet = std::collections::HashSet<ZStr, rustc_hash::FxBuildHasher>;
+
 /// An empty [`NameMap`] that holds `capacity` entries without regrowing.
 #[must_use]
 pub fn name_map_with_capacity<V>(capacity: usize) -> NameMap<V> {
@@ -403,6 +406,34 @@ pub struct Magic {
     pub sleep: Option<Rc<Method>>,
     /// `__wakeup`
     pub wakeup: Option<Rc<Method>>,
+    /// The class's user `ArrayAccess` methods, worked out on first use
+    /// ([`Class::user_array_access`]).
+    pub array_access: ArrayAccessCache,
+}
+
+/// [`Magic::array_access`]: filled on first use. A copy starts empty (a
+/// `Magic` copied for another class must not carry this one's methods).
+#[derive(Debug, Default)]
+pub struct ArrayAccessCache(std::cell::OnceCell<Option<Rc<ArrayAccessFns>>>);
+
+impl Clone for ArrayAccessCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/// The `ArrayAccess` methods of a class whose ancestors are all user
+/// classes, each one a user function (else `None`): what a dimension of an
+/// object of the class calls directly (`zend_std_read_dimension`,
+/// `zend_std_write_dimension`).
+#[derive(Debug, Default)]
+pub struct ArrayAccessFns {
+    /// `offsetGet`
+    pub get: Option<Rc<Method>>,
+    /// `offsetSet`
+    pub set: Option<Rc<Method>>,
+    /// `offsetExists`
+    pub exists: Option<Rc<Method>>,
 }
 
 /// Hooks of internal classes.
@@ -530,6 +561,43 @@ impl Class {
     }
 
     /// Whether `self` is `other` or derives from / implements it (by name).
+    /// The user `ArrayAccess` methods of this class
+    /// ([`Magic::array_access`]): `None` when it does not implement
+    /// `ArrayAccess` or has an internal ancestor (whose dimension handlers
+    /// are its own). A class's methods and ancestors are fixed once it is
+    /// linked, so the answer is worked out once, where every dimension of
+    /// its objects tested the interface by name and walked its parents.
+    #[inline]
+    pub fn user_array_access(self: &Rc<Class>) -> Option<&ArrayAccessFns> {
+        self.magic
+            .array_access
+            .0
+            .get_or_init(|| {
+                let mut c = Some(self);
+                while let Some(k) = c {
+                    if k.flags & cflags::INTERNAL != 0 {
+                        return None;
+                    }
+                    c = k.parent.as_ref();
+                }
+                if !self.instance_of_name(b"arrayaccess") {
+                    return None;
+                }
+                let user = |lc: &str| {
+                    self.methods
+                        .get(lc.as_bytes())
+                        .filter(|m| matches!(m.func, crate::func::Func::User(_)))
+                        .cloned()
+                };
+                Some(Rc::new(ArrayAccessFns {
+                    get: user("offsetget"),
+                    set: user("offsetset"),
+                    exists: user("offsetexists"),
+                }))
+            })
+            .as_deref()
+    }
+
     pub fn instance_of_name(self: &Rc<Class>, lc: &[u8]) -> bool {
         if self.lc_name.as_bytes() == lc {
             return true;

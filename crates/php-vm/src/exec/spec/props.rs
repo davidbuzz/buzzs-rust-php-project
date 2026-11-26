@@ -34,7 +34,7 @@ use crate::opcode::{
     ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
 };
 use crate::place::propcache::{
-    accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
+    accepts, scope_addr, PC_DYN, PC_INIT, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Obj, Value, ZArray, ZStr};
@@ -60,6 +60,29 @@ struct Hit {
     accept: u32,
     /// The entry's `PC_*` bits.
     flags: u8,
+}
+
+/// [`hit_key`] of a write: an entry with [`PC_WRITE`] or [`PC_INIT`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // the key of every cached property write
+fn write_hit_key(f: &Frame, pid: PlaceId) -> Option<Hit> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.class_addr == 0 || e.flags & (PC_WRITE | PC_INIT) == 0 || e.scope_addr != scope_addr(f) {
+        return None;
+    }
+    Some(Hit {
+        class: e.class_addr,
+        slot: e.slot as usize,
+        ok_class: e.ok_class_addr,
+        base: e.base,
+        lit: e.lit,
+        accept: e.accept,
+        flags: e.flags,
+    })
 }
 
 /// The entry of place `pid` in frame `f`'s property cache when it is filled
@@ -576,6 +599,14 @@ fn store_in(
     let slot = hit.slot;
     let mut slots = od.slots.try_borrow_mut().ok()?;
     let cell = slots.get_mut(slot)?;
+    // An init-only entry (a readonly property: `PC_INIT` without
+    // `PC_WRITE`) takes only the uninitialized slot, and not while the
+    // object is being cloned (its reinitialization is the generic op's).
+    if hit.flags & PC_WRITE == 0
+        && (cell.is_some() || od.flags.get() & crate::object::oflags::CLONING != 0)
+    {
+        return None;
+    }
     match cell {
         Some(Value::Reference(_)) => None,
         Some(cur) => Some(Some(std::mem::replace(cur, new_val))),
@@ -603,7 +634,9 @@ fn store_in(
 /// `dst` when used. Returns `false`, having changed nothing, otherwise.
 #[inline(always)]
 fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
-    let Some(hit) = hit_key(f, pid, PC_WRITE, 0) else {
+    // A write, or a readonly property's initialization (`PC_INIT` alone:
+    // `store_in` takes only its uninitialized slot).
+    let Some(hit) = write_hit_key(f, pid) else {
         return false;
     };
     let dyn_key = match dyn_name(f, &hit) {
@@ -620,7 +653,10 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
     let Some(src) = src else {
         return false;
     };
-    if matches!(src, Value::Reference(_)) || !hit_accepts(&hit, src) {
+    if matches!(src, Value::Reference(_))
+        || !(hit_accepts(&hit, src)
+            || crate::place::propcache::learn_accepted_class(&f.code, pid as usize, src))
+    {
         return false;
     }
     let new_val = copy_value(src);
@@ -919,6 +955,26 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
     Some(out)
 }
 
+/// [`plain_key`] of a write: the entry allows a plain write ([`PC_WRITE`])
+/// or the initialization of an uninitialized slot ([`PC_INIT`]); its flags
+/// come with it.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the key of every plain property write
+fn plain_write_key(f: &Frame, pid: PlaceId) -> Option<(usize, usize, u32, u32, u8)> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(pid as usize)?;
+    if e.flags & (PC_WRITE | PC_INIT) == 0 || e.flags & PC_DYN != 0 || e.scope_addr != scope_addr(f)
+    {
+        return None;
+    }
+    let key = (e.class_addr, e.slot as usize, e.base, e.accept, e.flags);
+    drop(cache);
+    Some(key)
+}
+
 /// The cache entry of place `pid` in frame `f` when it is filled in `f`'s
 /// class scope for a declared property and allows every access in `want`:
 /// the object's class address, the slot, the place's base and the
@@ -988,7 +1044,7 @@ fn read_plain(f: &Frame, pid: PlaceId) -> Option<Value> {
 /// which [`assign_hit`] then tries.
 #[inline(always)]
 fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bool {
-    let Some((class, slot, base, accept)) = plain_key(f, pid, PC_WRITE) else {
+    let Some((class, slot, base, accept, flags)) = plain_write_key(f, pid) else {
         return false;
     };
     let src = match val {
@@ -1009,19 +1065,39 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
     let Ok(mut slots) = od.slots.try_borrow_mut() else {
         return false;
     };
-    let Some(Some(cur)) = slots.get_mut(slot) else {
+    let Some(cell) = slots.get_mut(slot) else {
         return false;
     };
-    if matches!(cur, Value::Reference(_)) {
-        return false;
-    }
-    let new_val = copy_value(src);
-    let result = dst.map(|_| copy_value(&new_val));
-    let old = std::mem::replace(cur, new_val);
+    let old = match cell {
+        // An initialized slot: a plain write.
+        Some(cur) if flags & PC_WRITE != 0 && !matches!(cur, Value::Reference(_)) => {
+            let new_val = copy_value(src);
+            let result = dst.map(|_| copy_value(&new_val));
+            let old = std::mem::replace(cur, new_val);
+            (Some(old), result)
+        }
+        // An uninitialized one: its initialization (`PC_INIT`: no magic
+        // applies, and a readonly property is written from its class). A
+        // readonly property (`PC_INIT` without `PC_WRITE`) of an object
+        // being cloned is the generic op's: `__clone()` and clone-with
+        // reinitialize such a property once, which its markers count.
+        None if flags & PC_INIT != 0
+            && (flags & PC_WRITE != 0 || od.flags.get() & crate::object::oflags::CLONING == 0) =>
+        {
+            let new_val = copy_value(src);
+            let result = dst.map(|_| copy_value(&new_val));
+            *cell = Some(new_val);
+            // (As `store_in`: the slot is no longer one `unset()` left.)
+            od.set_slot_unset(slot, false);
+            (None, result)
+        }
+        _ => return false,
+    };
+    let (old, result) = old;
     drop(slots);
     // The old value is released once nothing is borrowed (a destructor
     // may touch the object).
-    discard_unrooted(Some(old));
+    discard_unrooted(old);
     if let Operand::Tmp(t) = val {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
             put_tmp(slot, Value::Null);
@@ -1301,7 +1377,14 @@ impl Vm {
                 return true;
             }
         }
-        let Some(v) = self.peek_plain_value(val) else {
+        // A plain value, or an object (its handle copied: `ZVAL_COPY` of
+        // the `OP_DATA` operand; a consumed temporary is released below):
+        // `$this->p = new Foo` from a base class's constructor run for
+        // many subclasses.
+        let Some(v) = self
+            .peek_plain_value(val)
+            .or_else(|| self.peek_object_value(val))
+        else {
             return false;
         };
         match self.prop_cache_assign(pid, v) {

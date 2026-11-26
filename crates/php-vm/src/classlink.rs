@@ -68,6 +68,7 @@ pub(crate) fn build_magic(methods: &NameMap<Rc<Method>>) -> Magic {
         unserialize: g("__unserialize"),
         sleep: g("__sleep"),
         wakeup: g("__wakeup"),
+        array_access: crate::class::ArrayAccessCache::default(),
     }
 }
 
@@ -243,14 +244,29 @@ impl Vm {
     ///
     /// [`Op::FetchClassName`]: crate::opcode::Op::FetchClassName
     /// `self::class`, `static::class` and `parent::class` of the running
-    /// user frame, as [`Vm::op_fetch_class_name`] gives them: its scope's
-    /// name, its called class's (else the scope's), its scope's parent's.
+    /// user frame, and `$obj::class` of a variable holding an object, as
+    /// [`Vm::op_fetch_class_name`] gives them: its scope's name, its called
+    /// class's (else the scope's), its scope's parent's, the object's
+    /// class's.
     /// `None` without a scope or a parent (the generic op's errors), for a
     /// builtin frame and for any other spec.
     pub(crate) fn class_name_fast(&self, spec: &ClassSpec) -> Option<Value> {
         let f = self.frames.last()?;
         if f.kind == FrameKind::Builtin {
             return None;
+        }
+        // `$obj::class` of a variable holding an object (Doctrine's
+        // `static fn (Type $type): string => $type::class`): its class's
+        // name. Anything else (a string, null, an undefined variable: the
+        // generic op's TypeError or warning) is declined.
+        if let ClassSpec::Dyn(crate::opcode::Operand::Cv(cv)) = spec {
+            if f.symtab_attached {
+                return None;
+            }
+            return match f.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)? {
+                Value::Object(o) => Some(Value::Str(object::class_of(o).name.clone())),
+                _ => None,
+            };
         }
         let scope = f.scope.as_ref()?;
         let name = match spec {

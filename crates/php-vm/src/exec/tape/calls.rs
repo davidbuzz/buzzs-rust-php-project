@@ -165,7 +165,11 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         // `self::class`, `static::class`, `parent::class`
         // (`Vm::class_name_fast`).
         Op::FetchClassName {
-            class: ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
+            class:
+                ClassSpec::SelfClass
+                | ClassSpec::Static
+                | ClassSpec::Parent
+                | ClassSpec::Dyn(Operand::Cv(_)),
             ..
         } => Some(plain(TOp::VmOp)),
         // `isset(A::$p[k])` (`Vm::static_dim_fast`).
@@ -1523,6 +1527,15 @@ fn this_place(code: &OpArray, pid: u32) -> bool {
 fn read_place(code: &OpArray, pid: u32) -> bool {
     use crate::opcode::Seg;
     code.places.get(pid as usize).is_some_and(|p| {
+        // `A::$p` / `static::$p` (`static::$classAttributes`): the static
+        // property cache hit (`spec::statics::static_prop_value_in`).
+        if let PlaceBase::StaticProp {
+            name: Operand::Lit(_),
+            ..
+        } = p.base
+        {
+            return p.segs.is_empty();
+        }
         matches!(
             p.base,
             PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::Value(Operand::Tmp(_))
@@ -1914,6 +1927,69 @@ fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     }
 }
 
+/// The frame of a user method called from native code
+/// (`zend_call_known_instance_method`: `offsetGet()`, `__toString()`,
+/// `__get()`, a callback's method), pushed as the tape's prepared calls
+/// push theirs: the pooled frame above the current one readied for `uf`
+/// (nothing to do when the last call of the same function in that slot
+/// left it, [`ready_frame`]), `$this`, the method's scope and the
+/// object's class filled, the arguments moved into the compiled
+/// variables, the `RECV`s of the passed ones skipped and the literal
+/// defaults of the others bound, and the frame entered directly
+/// (`Frame::direct`: its return releases it in one pass and keeps it
+/// ready for the next such call). The caller (`Vm::enter_method_direct`)
+/// has checked that the declaration makes a plain call, that `args` fits
+/// it, has the declared types as they are, holds no reference, and that
+/// no observer is active. Returns the frame's index (the nested
+/// execution's base), or `None`, having changed nothing, when no pooled
+/// frame is at hand or the stack is past its backstop.
+pub(crate) fn push_method_from_native(
+    vm: &mut Vm,
+    this: &Obj,
+    scope: Rc<crate::class::Class>,
+    uf: &Rc<UserFunction>,
+    args: &mut [Value],
+) -> Option<usize> {
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let frame = vm.frames.vec.get_mut(live)?;
+    if !frame.args.is_empty() {
+        return None;
+    }
+    let n = args.len();
+    ready_frame(frame, uf);
+    fill(&mut frame.this, Some(this.clone()));
+    fill(&mut frame.scope, Some(scope));
+    fill(
+        &mut frame.called,
+        Some(Rc::clone(crate::object::class_of(this))),
+    );
+    for (slot, a) in frame.cvs.iter_mut().zip(args.iter_mut()) {
+        // A readied frame's compiled variables are empty.
+        if let Some(old) = slot.as_mut().replace(std::mem::take(a)) {
+            drop(old);
+        }
+    }
+    frame.ret = RetTarget::Discard;
+    frame.caller_strict = false;
+    frame.called_from_internal = true;
+    frame.is_ctor = false;
+    #[allow(clippy::cast_possible_truncation)] // at most the parameter count
+    {
+        frame.direct_argc = n as u32;
+    }
+    frame.ip = uf.plain_first_op(n);
+    if n < uf.params.len() {
+        bind_literal_defaults(frame, uf, n);
+    }
+    frame.direct = true;
+    vm.frames.live = live + 1;
+    Some(live)
+}
+
 /// `ZEND_INIT_METHOD_CALL` of `Op::InitMethodCall { obj, name: Lit(lit) }`
 /// at `slot` in the current frame: on the method cache hit
 /// `Vm::init_method_call_fast` takes (the object's class and the calling
@@ -2043,7 +2119,7 @@ pub(super) fn pure_method_now(
             _ => return None,
         }
     };
-    let (o, b, cls) = {
+    let picked = {
         let caller = vm.frames.last()?;
         let o = match obj {
             Operand::Cv(cv) if !caller.symtab_attached => {
@@ -2072,7 +2148,24 @@ pub(super) fn pure_method_now(
         if is_static || b.flags & flags::PURE == 0 || !pure_args(&b, n) {
             return None;
         }
-        (o.clone(), b, Rc::clone(cls))
+        // A getter without arguments (`$m->getName()`): its result read
+        // from the object, without the call's `Args` (`Builtin::getter`).
+        let got = if n == 0 {
+            b.getter().and_then(|getter| getter(o))
+        } else {
+            None
+        };
+        match got {
+            Some(value) => Err(value),
+            None => Ok((o.clone(), b, Rc::clone(cls))),
+        }
+    };
+    let (o, b, cls) = match picked {
+        Ok(found) => found,
+        Err(value) => {
+            vm.frames.last_mut()?.ip = done;
+            return pure_method_done(vm, obj, dst, done, value);
+        }
     };
     let sig = b.signature();
     let nparams = sig.params.len();
@@ -2150,7 +2243,18 @@ pub(super) fn pure_method_now(
         vm.put_val_vec(values);
         vm.put_bool_vec(passed);
     }
-    let v = r.ok()?;
+    pure_method_done(vm, obj, dst, done, r.ok()?)
+}
+
+/// The end of [`pure_method_now`]'s call: a temporary `$this` released,
+/// the result `value` stored, the op after the `DoCall` (`done`) returned.
+fn pure_method_done(
+    vm: &mut Vm,
+    obj: Operand,
+    dst: Option<u32>,
+    done: usize,
+    value: Value,
+) -> Option<usize> {
     let caller = vm.frames.last_mut()?;
     if let Operand::Tmp(t) = obj {
         if let Some(slot) = caller.tmps.get_mut(t as usize) {
@@ -2158,8 +2262,8 @@ pub(super) fn pure_method_now(
         }
     }
     match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
-        Some(slot) => crate::exec::spec::put_tmp(slot, v),
-        None => drop(v),
+        Some(slot) => crate::exec::spec::put_tmp(slot, value),
+        None => drop(value),
     }
     Some(done)
 }
@@ -2999,8 +3103,15 @@ pub(super) fn enter(
     if caller.calls.len() != prep.calls_len {
         return Err(prep);
     }
-    if uf.call_shape() == CallShape::TYPED {
+    let shape = uf.call_shape();
+    if shape == CallShape::TYPED || (shape == CallShape::NOT_PLAIN && uf.near_typed()) {
+        // (A near-plain function's trailing variadic parameter is checked
+        // by its own `RECV_VARIADIC`; its arguments past the declared
+        // ones are not paired with a parameter here.)
         for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
+            if p.variadic {
+                break;
+            }
             if let Some(ty) = &p.ty {
                 if !slot
                     .get()

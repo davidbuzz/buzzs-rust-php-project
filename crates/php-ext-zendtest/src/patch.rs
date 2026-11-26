@@ -63,6 +63,7 @@ pub(crate) fn magic_of(methods: &NameMap<Rc<Method>>) -> Magic {
         unserialize: g("__unserialize"),
         sleep: g("__sleep"),
         wakeup: g("__wakeup"),
+        array_access: php_vm::class::ArrayAccessCache::default(),
     }
 }
 

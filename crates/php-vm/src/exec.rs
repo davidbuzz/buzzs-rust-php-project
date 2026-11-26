@@ -463,7 +463,7 @@ impl Vm {
         &self,
         cv: u32,
         dim: Operand,
-        lc: &[u8],
+        which: AaFn,
     ) -> Option<(Obj, Rc<crate::func::Method>)> {
         let f = self.frame();
         let obj = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
@@ -471,22 +471,13 @@ impl Vm {
             _ => return None,
         };
         let m = {
-            let cls = crate::object::class_of(&obj);
-            let mut c = Some(cls);
-            while let Some(k) = c {
-                if k.flags & crate::class::cflags::INTERNAL != 0 {
-                    return None;
-                }
-                c = k.parent.as_ref();
-            }
-            if !cls.instance_of_name(b"arrayaccess") {
-                return None;
-            }
-            let m = cls.methods.get(lc)?;
-            if !matches!(m.func, Func::User(_)) {
-                return None;
-            }
-            m.clone()
+            let fns = crate::object::class_of(&obj).user_array_access()?;
+            match which {
+                AaFn::Get => fns.get.as_ref(),
+                AaFn::Set => fns.set.as_ref(),
+                AaFn::Exists => fns.exists.as_ref(),
+            }?
+            .clone()
         };
         let dim_ok = match dim {
             Operand::Cv(d) => f
@@ -509,8 +500,13 @@ impl Vm {
     /// reference to null, false or an array: [`Vm::read_cv_op_data`]);
     /// `Ok(false)`, nothing changed, leaves every other case to the walk.
     #[inline(never)]
-    fn assign_dim_array_access(&mut self, cv: u32, dim: Operand, val: Operand) -> VmResult<bool> {
-        let Some((obj, m)) = self.array_access_target(cv, dim, b"offsetset") else {
+    pub(crate) fn assign_dim_array_access(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        val: Operand,
+    ) -> VmResult<bool> {
+        let Some((obj, m)) = self.array_access_target(cv, dim, AaFn::Set) else {
             return Ok(false);
         };
         let v = match val {
@@ -529,6 +525,64 @@ impl Vm {
         Ok(true)
     }
 
+    /// `$obj->p[$dim] = $val` / `$obj->p[] = $val` of a property holding
+    /// an object (`ZEND_ASSIGN_DIM` on the property's `FETCH_OBJ_W`
+    /// result: `zend_assign_to_object_dim`): as
+    /// [`Vm::assign_dim_array_access`], the object read on the property
+    /// cache's hit (declared and initialized, or existing dynamic: no
+    /// `__get()`), its class's user `offsetSet()` called with the offset
+    /// (`null` when appending) and the value. Only a statement (no result
+    /// operand); `Ok(false)`, nothing changed, otherwise.
+    #[inline(never)]
+    pub(crate) fn assign_prop_dim_array_access(
+        &mut self,
+        place: crate::opcode::PlaceId,
+        dim: Operand,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> VmResult<bool> {
+        if dst.is_some() {
+            return Ok(false);
+        }
+        let f = self.frame();
+        let Some(Value::Object(obj)) = spec::props::read_hit(f, place) else {
+            return Ok(false);
+        };
+        let Some(m) = crate::object::class_of(&obj)
+            .user_array_access()
+            .and_then(|fns| fns.set.clone())
+        else {
+            return Ok(false);
+        };
+        let dim_ok = match dim {
+            Operand::Cv(d) => f
+                .cvs
+                .get(d as usize)
+                .and_then(crate::vm::CvSlot::get)
+                .is_some(),
+            Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Lit(_) | Operand::Unused => true,
+        };
+        if !dim_ok {
+            return Ok(false);
+        }
+        let v = match val {
+            Operand::Cv(c) => match self.read_cv_op_data(c) {
+                CvOpData::Value(v) => v,
+                CvOpData::Deferred | CvOpData::Undefined => return Ok(false),
+            },
+            other => {
+                let v = self.read(other)?;
+                self.copy_on_assign(v)
+            }
+        };
+        let key = match dim {
+            Operand::Unused => Value::Null,
+            other => self.read(other)?.deref(),
+        };
+        self.call_method_n(&obj, &m, [key, v])?;
+        Ok(true)
+    }
+
     /// `$cv[$dim]` read of an object (`zend_std_read_dimension`): the
     /// class's user `offsetGet()` ([`Vm::array_access_target`]) called with
     /// the offset (dereferenced), and in `Is` mode (`??`) its
@@ -536,7 +590,7 @@ impl Vm {
     /// `offsetGet()` call. The result is stored as the fetch stores it.
     /// `Ok(None)`, nothing changed, leaves every other case to the walk.
     #[inline(never)]
-    fn fetch_dim_array_access(
+    pub(crate) fn fetch_dim_array_access(
         &mut self,
         cv: u32,
         dim: Operand,
@@ -547,11 +601,11 @@ impl Vm {
         if !matches!(mode, FetchMode::Read | FetchMode::Is) {
             return Ok(None);
         }
-        let Some((obj, get)) = self.array_access_target(cv, dim, b"offsetget") else {
+        let Some((obj, get)) = self.array_access_target(cv, dim, AaFn::Get) else {
             return Ok(None);
         };
         let exists = if mode == FetchMode::Is {
-            match self.array_access_target(cv, dim, b"offsetexists") {
+            match self.array_access_target(cv, dim, AaFn::Exists) {
                 Some((_, m)) => Some(m),
                 None => return Ok(None),
             }
@@ -651,7 +705,7 @@ impl Vm {
     /// table, the operand a literal, a variable or a temporary (consumed)
     /// holding an array. The result, when used, is a copy in `dst`.
     /// `false`, nothing changed, otherwise (the generic op).
-    fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+    pub(crate) fn array_union_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
         };
@@ -1137,7 +1191,11 @@ impl Vm {
                 Err(t) => Some(Err(t)),
             };
         }
-        if !switched {
+        // The base frame's own `return`, also after the tape made calls
+        // from it and came back (`switched`: `code` is the current frame's,
+        // reloaded above; a method native code calls whose body calls
+        // another, `offsetSet()` calling `$this->set()`).
+        if self.frames.len() == base + 1 {
             if let Some(Op::Return { val }) = code.ops.get(next) {
                 // `Vm::run`'s `Return` arm after the tape declined it.
                 if let Some(flow) = self.return_at_base(*val, base, next + 1) {
@@ -3289,7 +3347,7 @@ impl Vm {
         }
     }
 
-    fn cast(&mut self, kind: CastKind, source: Operand, raw: Value) -> VmResult<Value> {
+    pub(crate) fn cast(&mut self, kind: CastKind, source: Operand, raw: Value) -> VmResult<Value> {
         let (x, reference) = match raw {
             Value::Reference(r) => (r.get(), Some(r)),
             other => (other, None),
@@ -3872,7 +3930,7 @@ fn release_object(old: php_runtime::Obj) {
 
 /// [`release_slot_value`] of an array, object or reference.
 #[inline(never)]
-fn release_rooted(old: Option<Value>) {
+pub(super) fn release_rooted(old: Option<Value>) {
     if let Some(old) = &old {
         crate::gc::possible_root(old);
     }
@@ -4212,4 +4270,12 @@ mod leave_tests {
         // Plain data instructions do defer it (`oom_after_main_script.phpt`).
         assert!(defers_oom(&Op::Nop));
     }
+}
+
+/// Which `ArrayAccess` method [`Vm::array_access_target`] looks for.
+#[derive(Clone, Copy)]
+enum AaFn {
+    Get,
+    Set,
+    Exists,
 }

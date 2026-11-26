@@ -1889,8 +1889,14 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     for i in 0..code.ops.len() {
         let follows = likely_next(code, i);
         tape[i].ext = !hot::is_core(&code.ops[i]);
+        // A `Return` after it counts as tape work too: the tape makes the
+        // return itself (`Vm::return_simple`), or, at the base of a nested
+        // execution, `Vm::run_base_on_tape` makes it right after the tape
+        // (`__toString()`'s `return $this->name;`, a property read and the
+        // return, called from native code).
         tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
-            && tape.get(follows).is_some_and(|next| next.op != TOp::Exit);
+            && (tape.get(follows).is_some_and(|next| next.op != TOp::Exit)
+                || matches!(code.ops.get(follows), Some(Op::Return { .. })));
     }
     tape.into_boxed_slice()
 }
@@ -2169,9 +2175,26 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     }
                     _ => break at,
                 };
-                if next == DECLINED {
-                    break at;
-                }
+                let next = if next == DECLINED {
+                    // A dimension of an `ArrayAccess` object (`$obj[$k] = $v`,
+                    // `$obj[$k]`), `$a += $b` of arrays: run here, with the VM
+                    // at hand, rather than leaving the tape for one op of
+                    // `Vm::run` (`declined_vm_step`).
+                    let alt = declined_vm_step(vm, &mut prep, ops, at);
+                    if alt == DECLINED {
+                        break at;
+                    }
+                    let Some(f) = vm.frames.last_mut() else {
+                        return (0, NO_SAFE_POINT);
+                    };
+                    fp = f;
+                    if alt & CALL_THREW != 0 {
+                        return ((alt & !CALL_THREW) | switched, hot::THREW);
+                    }
+                    alt
+                } else {
+                    next
+                };
                 if crate::interrupt::safe_point_due() {
                     flush(vm, &mut prep);
                     return (next | switched, at);
@@ -2436,10 +2459,13 @@ fn run_call(
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
+            // A miss of a site that sees several classes (a base class's
+            // method run for many subclasses): the generic op's body here
+            // (`init_dyn_method_call_vm`), which refills the site.
             return if vm.init_method_call_fast(obj, lit, at) {
                 at + 1
             } else {
-                DECLINED
+                init_dyn_method_call_vm(vm, obj, Operand::Lit(lit), at)
             };
         }
         // `$obj->$name()` (`calls::lower`): the site's method cache hit,
@@ -2452,7 +2478,7 @@ fn run_call(
             return if super::spec::init_dyn_method_call_in(f, obj, name, at) {
                 at + 1
             } else {
-                DECLINED
+                init_dyn_method_call_vm(vm, obj, name, at)
             };
         }
         Some(&Op::New {
@@ -2570,6 +2596,295 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// `$obj->$name()` (`Op::InitMethodCall` with a variable or temporary
+/// name) whose call site's method cache missed: a site whose name changes
+/// from call to call (`$this->$method($value)` over a list of options)
+/// misses every time it changes. The generic op's body
+/// (`Vm::op_init_method_call_op`, which looks the method up in the VM's
+/// method cache and refills the site's) runs here, after `SAVE_OPLINE()`,
+/// so the call's `Send`s and `DoCall` stay on the tape. Only an object and
+/// a string name are taken; anything else (its errors) is `Vm::run`'s
+/// (`DECLINED`). `at | CALL_THREW` with `tape_throw` set when the lookup
+/// threw (an undefined or inaccessible method).
+#[cold]
+#[inline(never)]
+fn init_dyn_method_call_vm(vm: &mut Vm, obj: Operand, name: Operand, at: usize) -> usize {
+    let Some(f) = vm.frames.last() else {
+        return DECLINED;
+    };
+    if f.symtab_attached {
+        return DECLINED;
+    }
+    let peek = |o: Operand| match o {
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.tmps.get(t as usize),
+        _ => None,
+    };
+    let obj_ok = match obj {
+        Operand::Unused => f.this.is_some(),
+        o => matches!(peek(o), Some(Value::Object(_))),
+    };
+    let name_ok = match name {
+        Operand::Lit(l) => matches!(f.code.literals.get(l as usize), Some(Value::Str(_))),
+        n => matches!(peek(n), Some(Value::Str(_))),
+    };
+    if !obj_ok || !name_ok {
+        return DECLINED;
+    }
+    vm.frame_mut().ip = at + 1;
+    let r = vm
+        .method_object(obj)
+        .and_then(|o| vm.op_init_method_call_op(o, name));
+    match r {
+        Ok(()) => at + 1,
+        Err(t) => {
+            vm.tape_throw = Some(t);
+            at | CALL_THREW
+        }
+    }
+}
+
+/// A declined `Op::AssignOpCv` `+=` of two arrays (`Vm::array_union_cv`), or
+/// a declined `Op::AssignDimCv` / `Op::FetchDimCv` whose variable holds an
+/// object with user `ArrayAccess` methods (`zend_std_write_dimension` /
+/// `zend_std_read_dimension`): the method called as `Vm::run`'s arm calls
+/// it (`Vm::assign_dim_array_access`, `Vm::fetch_dim_array_access`), after
+/// the resume point is saved (`SAVE_OPLINE()`: the method's backtrace and
+/// warnings name this line) and a call being prepared became the pending
+/// one (the method runs in a nested execution above this frame). Returns
+/// the op to go on at, `at | CALL_THREW` with `tape_throw` set when the
+/// method threw, or `DECLINED`, nothing changed, for anything else (the
+/// op then runs in `Vm::run`). Out of line and cold: the tape's loop
+/// carries only the call.
+#[cold]
+#[inline(never)]
+fn declined_vm_step(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
+    // `$cv += $array` (`Vm::array_union_cv`, `Vm::run`'s arm's fast path):
+    // the frame's own data only, no user code.
+    if let Some(&Op::AssignOpCv {
+        cv,
+        op: php_runtime::BinaryOp::Add,
+        val,
+        dst,
+        ..
+    }) = ops.get(at)
+    {
+        return if vm.array_union_cv(cv, val, dst) {
+            at + 1
+        } else {
+            DECLINED
+        };
+    }
+    // `$obj->name` whose site cache holds another class (a method of a base
+    // class running for several subclasses): the read and the cache's
+    // refill (`Vm::fetch_obj_prop_fast`: a hit, else `prop_cache_read`)
+    // here, rather than `Vm::run`'s arm after a trip out of the tape. No
+    // user code runs (a miss that needs `__get()` declines).
+    if let Some(&Op::FetchObjProp {
+        place,
+        dst,
+        to,
+        mode,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        return match vm.fetch_obj_prop_fast(place, dst, to, mode) {
+            Some(skipped) => at + 1 + usize::from(skipped),
+            None => DECLINED,
+        };
+    }
+    // `$this->name = $v` whose site cache holds other classes (a base
+    // class's or a trait's method writing for many subclasses): the write
+    // and the cache's refill (`Vm::assign_obj_prop_fast`, `Vm::run`'s
+    // pre-match arm) here. The old value's release may run a destructor:
+    // the resume point is saved first and a call being prepared becomes
+    // the pending one. A write needing `__set()` or failing a type test
+    // declines (nothing changed).
+    if let Some(&Op::AssignObjProp { place, val, dst }) = ops.get(at) {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return if vm.assign_obj_prop_fast(place, val, dst) {
+            at + 1
+        } else {
+            DECLINED
+        };
+    }
+    // `$this->p[] = $v` / `$this->p[$k] = $v` of a property holding an
+    // `ArrayAccess` object (Lodata's ObjectArray): its `offsetSet()` called
+    // here (`Vm::assign_prop_dim_array_access`), after the resume point is
+    // saved and a call being prepared became the pending one.
+    if let Some(&Op::AssignObjPropDim {
+        place,
+        dim,
+        val,
+        dst,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.assign_prop_dim_array_access(place, dim, val, dst) {
+            Ok(true) => at + 1,
+            Ok(false) => DECLINED,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
+    // `$class::NAME` of a class named by a string (Lodata's
+    // `$factory::underlyingType`; the run-time cache answers only an
+    // object's class): `Vm::run`'s arm (`Vm::fetch_class_const_cached`)
+    // here, after `SAVE_OPLINE()` (the class may be autoloaded, a constant
+    // expression evaluated).
+    if let Some(&Op::FetchClassConst {
+        class: ClassSpec::Dyn(c),
+        name: Operand::Lit(name),
+        dst,
+    }) = ops.get(at)
+    {
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.fetch_class_const_cached(&ClassSpec::Dyn(c), Operand::Lit(name)) {
+            Ok(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
+    // `A::m(...)`, `static::m(...)` not prepared on the tape (an argument
+    // is itself a call, or a superglobal): `Vm::run`'s arm
+    // (`Vm::op_init_static_call`, the call pending), here, after
+    // `SAVE_OPLINE()` (the class may be autoloaded). Its `Send`s and
+    // `DoCall` follow on the tape.
+    if let Some(Op::InitStaticCall {
+        class:
+            class @ (ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static),
+        name: name @ Operand::Lit(_),
+    }) = ops.get(at)
+    {
+        let name = *name;
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.op_init_static_call(class, name) {
+            Ok(()) => at + 1,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
+    // `new self(...)`, `new static(...)`, `new $class(...)` (not prepared on
+    // the tape): `Vm::run`'s arm (`Vm::op_new`: the object, and its
+    // constructor's call pending), here, after `SAVE_OPLINE()`: the class
+    // may be autoloaded, and the constructor's `Send`s and `DoCall` follow
+    // on the tape.
+    if let Some(Op::New { class, dst, skip }) = ops.get(at) {
+        if matches!(class, ClassSpec::Named(_)) {
+            return DECLINED;
+        }
+        let (dst, skip) = (*dst, *skip);
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.op_new(class, dst) {
+            Ok(has_ctor) if !has_ctor && skip != 0 => skip as usize,
+            Ok(_) => at + 1,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
+    // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
+    // `$this->array[(string) $key] = $value`): `Vm::run`'s arm, here.
+    if let Some(&Op::Cast {
+        kind: crate::opcode::CastKind::String,
+        a,
+        dst,
+    }) = ops.get(at)
+    {
+        let is_object = {
+            let Some(f) = vm.frames.last() else {
+                return DECLINED;
+            };
+            !f.symtab_attached
+                && match a {
+                    Operand::Cv(cv) => matches!(
+                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        Some(Value::Object(_))
+                    ),
+                    Operand::Tmp(t) => matches!(f.tmps.get(t as usize), Some(Value::Object(_))),
+                    _ => false,
+                }
+        };
+        if !is_object {
+            return DECLINED;
+        }
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        let r = vm
+            .read(a)
+            .and_then(|x| vm.cast(crate::opcode::CastKind::String, a, x));
+        return match r {
+            Ok(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+        };
+    }
+    let cv = match ops.get(at) {
+        Some(&Op::AssignDimCv { cv, .. } | &Op::FetchDimCv { cv, .. }) => cv,
+        _ => return DECLINED,
+    };
+    let is_object = vm
+        .frames
+        .last()
+        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(crate::vm::CvSlot::get)
+        .is_some_and(|v| matches!(v, Value::Object(_)));
+    if !is_object {
+        return DECLINED;
+    }
+    flush(vm, prep);
+    vm.frame_mut().ip = at + 1;
+    let r = match ops[at] {
+        Op::AssignDimCv { cv, dim, val, .. } => vm
+            .assign_dim_array_access(cv, dim, val)
+            .map(|done| done.then_some(at + 1)),
+        Op::FetchDimCv {
+            cv,
+            dim,
+            dst,
+            to,
+            mode,
+            ..
+        } => vm
+            .fetch_dim_array_access(cv, dim, dst, to, mode)
+            .map(|r| r.map(|skipped| at + 1 + usize::from(skipped))),
+        _ => Ok(None),
+    };
+    match r {
+        Ok(Some(next)) => next,
+        Ok(None) => DECLINED,
+        Err(t) => {
+            vm.tape_throw = Some(t);
+            at | CALL_THREW
+        }
+    }
 }
 
 /// Runs the op at `at` that needs the VM without being a call's start
@@ -3409,7 +3724,7 @@ unsafe fn statics_static_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
     }
 }
 
-mod calls;
+pub(crate) mod calls;
 mod dims;
 pub(crate) mod jit;
 mod props;

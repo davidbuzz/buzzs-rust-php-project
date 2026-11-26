@@ -80,10 +80,13 @@ pub(crate) fn attributes_array_decl(
         name = None;
     }
     let mut out = Vec::new();
+    // `ReflectionAttribute`, looked up at the first match.
+    let mut cls: Option<Rc<Class>> = None;
     for at in attrs {
+        // (`zend_get_attribute_str`: the name as given, lowercased; a
+        // leading `\` matches nothing.)
         if let Some(f) = &name {
-            let f = f.as_bytes().strip_prefix(b"\\").unwrap_or(f.as_bytes());
-            if !at.name.eq_ignore_ascii_case(f) {
+            if !at.name.eq_ignore_ascii_case(f.as_bytes()) {
                 continue;
             }
         } else if let Some(b) = &base {
@@ -105,13 +108,23 @@ pub(crate) fn attributes_array_decl(
             file: file.clone(),
             hook,
         };
-        out.push(super::new_refl(
+        let c = match &cls {
+            Some(c) => c.clone(),
+            None => cls
+                .insert(super::refl_class(vm, "ReflectionAttribute")?)
+                .clone(),
+        };
+        out.push(super::new_refl_of(
             vm,
-            "ReflectionAttribute",
+            &c,
             Refl::Attr(Rc::new(r)),
             Some(&at.name),
             None,
         )?);
+    }
+    // (No match: the shared empty array, as `ZVAL_EMPTY_ARRAY`.)
+    if out.is_empty() {
+        return Ok(Value::Array(ZArray::new()));
     }
     Ok(Value::Array(ZArray::from_values(out)))
 }

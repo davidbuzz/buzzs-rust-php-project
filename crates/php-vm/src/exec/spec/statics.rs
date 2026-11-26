@@ -106,6 +106,25 @@ pub(in crate::exec) fn fetch_class_const_in(
     Some(store_fetched_in(f, dst, to, v))
 }
 
+/// The value of the static property of place `pid` (`A::$p`,
+/// `static::$p`, `self::$p`: a literal name, no dimensions) on a cache hit,
+/// read by value as an argument (`ZEND_FETCH_STATIC_PROP_FUNC_ARG` of a
+/// by-value parameter is a plain read): as [`fetch_static_prop_in`] reads
+/// it, without storing it. `None` for a miss, a borrowed cell and a typed
+/// property holding null (maybe uninitialized), which the generic read
+/// reports.
+pub(in crate::exec) fn static_prop_value_in(f: &Frame, pid: PlaceId) -> Option<Value> {
+    match static_prop_entry_in(f, pid, |e| {
+        Some(static_cell_value(&e.cell, e.fast_plain, FetchMode::Read))
+    }) {
+        Some(v) => v,
+        None => {
+            let (cell, typed) = static_place_cell_in(f, pid)?;
+            static_cell_value(&cell, !typed, FetchMode::Read)
+        }
+    }
+}
+
 /// [`Op::FetchStaticProp`] on a hit of the place's fast entry, on the
 /// running frame `f` alone, as [`fetch_const_in`] (see
 /// [`static_cell_value`] for what declines).

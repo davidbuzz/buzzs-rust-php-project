@@ -486,6 +486,9 @@ enum ArgPlace {
     Chain,
     /// `tmp[d1]...[dn]` (`f()['k']`).
     TmpDims(u32),
+    /// `A::$name`, `static::$name`, `self::$name`: a static property named
+    /// by a literal.
+    Static,
 }
 
 impl ArgPlace {
@@ -517,6 +520,13 @@ impl ArgPlace {
             (PlaceBase::Cv(_) | PlaceBase::This, [_, .., Seg::Prop(Operand::Lit(_))]) => {
                 ArgPlace::Chain
             }
+            (
+                PlaceBase::StaticProp {
+                    name: Operand::Lit(_),
+                    ..
+                },
+                [],
+            ) => ArgPlace::Static,
             _ => return None,
         })
     }
@@ -553,6 +563,7 @@ impl Frame {
             ArgPlace::Prop => props::read_hit(self, pid),
             ArgPlace::PropDims => props::read_prop_dims_in(self, pid),
             ArgPlace::Chain => props::read_chain_in(self, pid),
+            ArgPlace::Static => statics::static_prop_value_in(self, pid),
             ArgPlace::TmpDims(t) => {
                 let v = {
                     let Value::Array(a) = self.tmps.get(t as usize)? else {
@@ -765,6 +776,17 @@ fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
     let guard;
     let arr = match slot {
         Value::Array(a) => a,
+        // `isset($s[$i])` of a string with an int offset
+        // (`zend_isset_dim_slow`'s `str_offset`: a negative offset counts
+        // from the end). `empty()` and other offsets: the generic op.
+        Value::Str(s) if !empty => {
+            let DimRef::Int(i) = key else {
+                return None;
+            };
+            let len = i64::try_from(s.len()).ok()?;
+            let at = if i < 0 { i + len } else { i };
+            return Some((0..len).contains(&at));
+        }
         Value::Reference(r) => {
             guard = r.try_borrow()?;
             match &*guard {
@@ -1355,6 +1377,21 @@ impl Vm {
     #[allow(clippy::inline_always)] // hot OP_DATA operand read in the dispatch pre-match
     pub(super) fn peek_plain_value(&self, op: Operand) -> Option<Value> {
         plain_value_in(self.frame(), op)
+    }
+
+    /// The object (not behind a reference) an `OP_DATA` operand of the
+    /// current frame holds, its handle copied, without consuming it.
+    pub(super) fn peek_object_value(&self, op: Operand) -> Option<Value> {
+        let f = self.frame();
+        let v = match op {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+            Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+            Operand::Lit(_) | Operand::Unused => return None,
+        };
+        match v {
+            Value::Object(o) => Some(Value::Object(o.clone())),
+            _ => None,
+        }
     }
 
     /// [`dim_value_in`] of the current frame.

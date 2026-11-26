@@ -196,6 +196,11 @@ pub struct CallShape {
     /// its calls stay generic, else one more than the most arguments a
     /// plain call of it passes.
     near: Cell<u8>,
+    /// With `near`: whether a parameter other than a trailing variadic one
+    /// has a type other than `mixed`, which a near-plain call then checks
+    /// itself ([`UserFunction::near_typed`]): the `RECV`s it skips are
+    /// where the generic call checks them.
+    near_typed: Cell<bool>,
 }
 
 /// [`CallShape::near`] of a declaration whose calls all stay generic.
@@ -291,10 +296,12 @@ impl UserFunction {
     /// declared parameter bound into its compiled variable, as the generic
     /// call leaves them); a by-reference parameter that the call does not
     /// reach (fewer arguments than its position, the limit) is bound from
-    /// its default by its `RECV_INIT` like any other. Every parameter must
-    /// be untyped (or `mixed`): the plain paths check argument types only
-    /// for [`CallShape::TYPED`]. A closure with static variables is left
-    /// out (its variables are its object's, `Frame::statics`).
+    /// its default by its `RECV_INIT` like any other. The declared
+    /// parameters' types are checked by the plain paths themselves when
+    /// any is typed ([`UserFunction::near_typed`]), as the `RECV`s they
+    /// skip would; a typed variadic parameter by its own
+    /// `RECV_VARIADIC`. A closure with static variables is left out (its
+    /// variables are its object's, `Frame::statics`).
     ///
     /// The JIT and the tape's whole-function paths read only
     /// [`UserFunction::call_shape`] and keep away from these.
@@ -312,6 +319,14 @@ impl UserFunction {
         }
     }
 
+    /// Whether a near-plain call ([`UserFunction::near_plain_limit`], asked
+    /// first) must check its arguments against declared types: a parameter
+    /// other than a trailing variadic one has a type other than `mixed`.
+    #[inline]
+    pub(crate) fn near_typed(&self) -> bool {
+        self.call_shape.near_typed.get()
+    }
+
     #[cold]
     #[inline(never)]
     fn compute_near(&self) -> u8 {
@@ -322,12 +337,22 @@ impl UserFunction {
             && (self.flags & flags::CLOSURE == 0 || self.code.num_statics == 0)
             && self.code.num_finally == 0
             && nparams <= self.code.cv_names.len()
-            && self.params.iter().enumerate().all(|(i, p)| {
-                (!p.variadic || i + 1 == nparams) && p.ty.as_ref().is_none_or(TypeDecl::is_mixed)
-            });
+            && self
+                .params
+                .iter()
+                .enumerate()
+                .all(|(i, p)| !p.variadic || i + 1 == nparams);
         if !plain_rest {
             return NEAR_NO;
         }
+        // Typed declared parameters are checked by the call
+        // (`call::near_args_accepted`, the tape's `enter`); a typed variadic
+        // one by its own `RECV_VARIADIC`, which runs in the callee.
+        self.call_shape.near_typed.set(
+            self.params
+                .iter()
+                .any(|p| !p.variadic && p.ty.as_ref().is_some_and(|t| !t.is_mixed())),
+        );
         let variadic = self.params.last().is_some_and(|p| p.variadic);
         let most = if variadic { usize::MAX } else { nparams };
         let first_ref = self
@@ -467,6 +492,13 @@ pub(crate) fn first_op_after_recv(code: &OpArray, n: usize) -> u32 {
 /// The handler of a builtin function.
 pub type BuiltinFn = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 
+/// A pure method's result read from its object alone, for a call without
+/// arguments (`ReflectionMethod::getName()`): what the handler returns, or
+/// `None` where the handler is to run (its error, another kind of state).
+/// The tape's call of a pure method takes it without building the call's
+/// [`Args`] (`exec::tape::calls::pure_method_now`).
+pub type GetterFn = fn(&php_runtime::Obj) -> Option<Value>;
+
 /// The parsed part of a builtin's stub signature (`zend_internal_arg_info`).
 #[derive(Clone, Debug, Default)]
 pub struct Signature {
@@ -542,6 +574,8 @@ pub struct Builtin {
     /// (`SORT_STRING`, `Class::CONST`, `UNKNOWN`), by position
     /// ([`Builtin::cached_default`]): filled on first use.
     named_defaults: RefCell<Vec<NamedDefault>>,
+    /// [`Builtin::getter`], when the method has one.
+    getter: Cell<Option<GetterFn>>,
 }
 
 /// One parameter's entry of [`Builtin::cached_default`].
@@ -662,7 +696,20 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
+    }
+
+    /// The method's [`GetterFn`], if it has one.
+    #[inline]
+    pub(crate) fn getter(&self) -> Option<GetterFn> {
+        self.getter.get()
+    }
+
+    /// Gives the method the [`GetterFn`] `g`, which must answer as its
+    /// handler does for a call without arguments.
+    pub(crate) fn set_getter(&self, g: GetterFn) {
+        self.getter.set(Some(g));
     }
 
     /// A builtin whose signature is parsed from the static stub `text` on
@@ -685,6 +732,7 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
     }
 
@@ -702,6 +750,7 @@ impl Builtin {
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
             named_defaults: RefCell::new(Vec::new()),
+            getter: Cell::new(None),
         }
     }
 

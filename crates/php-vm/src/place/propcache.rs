@@ -75,6 +75,14 @@ pub(crate) const PC_UNSET: u8 = 1 << 4;
 /// The class has no `__set()`: a write to an undefined declared slot is
 /// stored directly (`write_std_property` in `zend_std_write_property`).
 pub(crate) const PC_NO_SET: u8 = 1 << 5;
+/// An uninitialized declared slot (a typed property without a default, or
+/// one `unset()` left) may be initialized directly with a value in
+/// `accept`: the class has no `__set()` (so no magic applies to it), no
+/// native write handler, no hooks or set visibility; for a readonly
+/// property (whatever its set visibility), the lookup's scope is its
+/// declaring class (where its one initialization is allowed). Set without [`PC_WRITE`] for a readonly
+/// property, whose initialized slot no fast path may write.
+pub(crate) const PC_INIT: u8 = 1 << 6;
 
 /// The result of probing a place's cache entry.
 enum Probe<T> {
@@ -202,6 +210,22 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
     }
     let stored = match cache.get_mut(idx) {
         Some(slot) => {
+            let mut entry = entry;
+            let mut old = std::mem::replace(slot, PropCacheEntry::default());
+            // The replaced entry, for another class, is kept as the
+            // alternate (one level: its own alternate goes, its box is
+            // reused for it, so a site cycling through three classes does
+            // not allocate per refill).
+            if old.class_addr != 0 && old.class_addr != entry.class_addr {
+                let boxed = match old.alt.take() {
+                    Some(mut b) => {
+                        *b = old;
+                        b
+                    }
+                    None => Box::new(old),
+                };
+                entry.alt = Some(boxed);
+            }
             *slot = entry;
             true
         }
@@ -261,6 +285,20 @@ fn class_accepts(code: &OpArray, idx: usize, key: &Key, value: &Value) -> bool {
     let cls = object::class_of(obj);
     let addr = Rc::as_ptr(cls) as usize;
     addr == key.ok_class || class_accepts_slow(code, idx, cls, addr)
+}
+
+/// [`class_accepts_slow`] of an object stored by the frame-local write
+/// (`exec::spec::props::assign_hit`): whether the entry's class-typed
+/// property takes it, remembering its class when it does, so that the
+/// next write of an object of that class passes the entry's one test.
+#[cold]
+#[inline(never)]
+pub(crate) fn learn_accepted_class(code: &OpArray, idx: usize, value: &Value) -> bool {
+    let Value::Object(obj) = value else {
+        return false;
+    };
+    let cls = object::class_of(obj);
+    class_accepts_slow(code, idx, cls, Rc::as_ptr(cls) as usize)
 }
 
 /// [`class_accepts`] by name, remembering an accepted class.
@@ -843,6 +881,7 @@ impl Vm {
             ok_class_addr: 0,
             ok_class: Weak::new(),
             flags: 0,
+            alt: None,
         };
         let hooks = cls.hooks.as_deref();
         let read_ok = hooks.is_none_or(|hk| hk.read_property.is_none());
@@ -865,8 +904,25 @@ impl Vm {
                             entry.flags |= PC_UNSET;
                         }
                         if cls.magic.set.is_none() {
-                            entry.flags |= PC_NO_SET;
+                            entry.flags |= PC_NO_SET | PC_INIT;
                         }
+                        entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
+                        entry.class_lc = info.ty.as_ref().and_then(single_class_name);
+                    } else if write_ok
+                        // (Any set visibility, also the `protected(set)` of
+                        // a `public readonly` one, admits the declaring
+                        // class, the only scope taken here.)
+                        && info.flags & flags::READONLY != 0
+                        && cls.magic.set.is_none()
+                        && scope.is_some_and(|sc| {
+                            sc.lc_name
+                                .as_bytes()
+                                .eq_ignore_ascii_case(info.class.as_bytes())
+                        })
+                    {
+                        // A readonly property's initialization from its
+                        // declaring class (a constructor's `$this->p = $p`).
+                        entry.flags |= PC_INIT | PC_NO_SET;
                         entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
                         entry.class_lc = info.ty.as_ref().and_then(single_class_name);
                     }
@@ -927,6 +983,22 @@ impl Vm {
         let Some(cls) = with_base_obj(frame, base, |obj| object::class_of(obj).clone()) else {
             return false;
         };
+        // The alternate entry is for this class and scope: the two swap
+        // (the alternate's class is alive: its address is the object's).
+        let scope = scope_addr(frame);
+        if let Ok(mut cache) = code.prop_cache.try_borrow_mut() {
+            if let Some(e) = cache.get_mut(pid as usize) {
+                if let Some(mut alt) = e.alt.take() {
+                    if alt.class_addr == Rc::as_ptr(&cls) as usize && alt.scope_addr == scope {
+                        let mut prev = std::mem::replace(e, *alt);
+                        prev.alt = None;
+                        e.alt = Some(Box::new(prev));
+                        return true;
+                    }
+                    e.alt = Some(alt);
+                }
+            }
+        }
         let entry = self.cache_entry_for(&cls, name, frame.scope.as_ref(), base, lit);
         store_entry(code, pid as usize, code.places.len(), entry)
     }

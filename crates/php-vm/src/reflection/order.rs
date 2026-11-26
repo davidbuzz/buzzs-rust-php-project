@@ -14,7 +14,6 @@ use crate::func::{flags, Method};
 use crate::types::TypeDecl;
 use crate::vm::Vm;
 use php_runtime::ZStr;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 /// A declared property (instance or static) as reflection sees it
@@ -150,7 +149,7 @@ pub(crate) fn find_prop(vm: &Vm, c: &Rc<Class>, name: &[u8]) -> Option<PropMeta>
 
 /// Names of `properties_info` in php-src order (inherited private
 /// properties included).
-fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
+fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut crate::class::NameSet) {
     let mut push = |n: &ZStr, out: &mut Vec<ZStr>| {
         if seen.insert(n.clone()) {
             out.push(n.clone());
@@ -159,7 +158,7 @@ fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
     let parent_names = |c: &Rc<Class>| {
         let mut pn = Vec::new();
         if let Some(p) = &c.parent {
-            prop_names(p, &mut pn, &mut HashSet::new());
+            prop_names(p, &mut pn, &mut crate::class::NameSet::default());
         }
         pn
     };
@@ -216,7 +215,7 @@ fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
 /// inherited private ones), in php-src order.
 pub(crate) fn props(vm: &Vm, c: &Rc<Class>) -> Vec<PropMeta> {
     let mut names = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = crate::class::NameSet::default();
     prop_names(c, &mut names, &mut seen);
     names
         .iter()
@@ -233,7 +232,7 @@ pub(crate) fn methods(c: &Rc<Class>) -> Rc<[Rc<Method>]> {
 /// [`methods`] worked out.
 fn method_order(c: &Rc<Class>) -> Vec<Rc<Method>> {
     let mut order: Vec<ZStr> = Vec::new();
-    let mut seen: HashSet<ZStr> = HashSet::new();
+    let mut seen = crate::class::NameSet::default();
     let mut push = |lc: ZStr, order: &mut Vec<ZStr>| {
         if c.methods.contains_key(&lc) && seen.insert(lc.clone()) {
             order.push(lc);
@@ -265,7 +264,7 @@ fn method_order(c: &Rc<Class>) -> Vec<Rc<Method>> {
 /// The constants of `c` (`constants_table`) in php-src order.
 pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
     let mut order: Vec<ZStr> = Vec::new();
-    let mut seen: HashSet<ZStr> = HashSet::new();
+    let mut seen = crate::class::NameSet::default();
     let mut push = |n: &ZStr, order: &mut Vec<ZStr>| {
         if c.const_map.contains_key(n) && seen.insert(n.clone()) {
             order.push(n.clone());

@@ -32,7 +32,14 @@ use crate::opcode::{
 use crate::types::TypeDecl;
 use php_runtime::{Value, ZStr};
 use std::collections::HashMap;
+
 use std::rc::Rc;
+
+/// The compiler's tables of names (variables, labels, `use` imports,
+/// declared functions): keyed by identifiers of the script, so hashed with
+/// [`rustc_hash::FxHasher`] rather than `SipHash` (~0.5% of a framework's
+/// start-up went to hashing them).
+pub type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
 
 /// A fatal error raised while compiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -400,7 +407,7 @@ pub(crate) struct FnCtx {
     /// [`Compiler::fetch_place`], which splits a read across lines.
     pub place_lines: Option<(Place, Vec<u32>)>,
     pub cv_names: Vec<ZStr>,
-    cv_map: HashMap<Vec<u8>, u32>,
+    cv_map: FxMap<Vec<u8>, u32>,
     pub num_tmps: u32,
     pub num_iters: u32,
     pub num_finally: u32,
@@ -410,12 +417,12 @@ pub(crate) struct FnCtx {
     pub try_table: Vec<(TryEntry, Label)>,
     pub loops: Vec<LoopInfo>,
     pub finally_stack: Vec<u32>,
-    pub labels: HashMap<Vec<u8>, (Label, Vec<usize>)>,
+    pub labels: FxMap<Vec<u8>, (Label, Vec<usize>)>,
     pub gotos: Vec<PendingGoto>,
     pub loop_ids: Vec<usize>,
     /// `FE_RESET` op of each foreach iterator (exceptions thrown while a
     /// `return` frees the loop are dispatched from the loop's position).
-    pub iter_starts: HashMap<u32, u32>,
+    pub iter_starts: FxMap<u32, u32>,
     next_loop_id: usize,
     pub line: u32,
     pub is_generator: bool,
@@ -473,7 +480,7 @@ impl FnCtx {
             places: Vec::new(),
             place_lines: None,
             cv_names: Vec::new(),
-            cv_map: HashMap::new(),
+            cv_map: FxMap::default(),
             num_tmps: 0,
             num_iters: 0,
             num_finally: 0,
@@ -482,10 +489,10 @@ impl FnCtx {
             try_table: Vec::new(),
             loops: Vec::new(),
             finally_stack: Vec::new(),
-            labels: HashMap::new(),
+            labels: FxMap::default(),
             gotos: Vec::new(),
             loop_ids: Vec::new(),
-            iter_starts: HashMap::new(),
+            iter_starts: FxMap::default(),
             next_loop_id: 0,
             line: 1,
             is_generator: false,
@@ -513,12 +520,12 @@ impl FnCtx {
 pub(crate) struct Compiler<'f> {
     pub filename: ZStr,
     pub namespace: Vec<u8>,
-    pub class_uses: HashMap<Vec<u8>, Vec<u8>>,
-    pub fn_uses: HashMap<Vec<u8>, Vec<u8>>,
-    pub const_uses: HashMap<Vec<u8>, Vec<u8>>,
+    pub class_uses: FxMap<Vec<u8>, Vec<u8>>,
+    pub fn_uses: FxMap<Vec<u8>, Vec<u8>>,
+    pub const_uses: FxMap<Vec<u8>, Vec<u8>>,
     /// `FC(seen_symbols)`: lower-case class/function names and constant
     /// names declared so far in the file, with their `ZEND_SYMBOL_*` kinds.
-    pub seen_symbols: HashMap<Vec<u8>, u8>,
+    pub seen_symbols: FxMap<Vec<u8>, u8>,
     pub strict_types: bool,
     /// `FC(declarables).ticks`: N of the active `declare(ticks=N)`.
     pub(crate) ticks: u32,
@@ -542,11 +549,11 @@ pub(crate) struct Compiler<'f> {
     pub anon_counter: u32,
     pub opts: CompileOptions,
     /// Names of functions declared in this file (for redeclare errors).
-    pub declared_functions: HashMap<Vec<u8>, u32>,
+    pub declared_functions: FxMap<Vec<u8>, u32>,
     /// `CG(function_table)` entries finalized so far: the top-level
     /// functions of this file whose compilation finished, by lower-case
     /// name. `zend_compile_args` knows their arginfo (`fbc`).
-    pub known_functions: HashMap<Vec<u8>, FunctionInfo>,
+    pub known_functions: FxMap<Vec<u8>, FunctionInfo>,
     /// The rest of `CG(function_table)`: the functions declared when the
     /// compilation started (`None`: only this file's are known).
     pub functions: Option<&'f dyn FunctionTable>,
@@ -809,10 +816,10 @@ impl<'f> Compiler<'f> {
         let mut c = Compiler {
             filename: opts.filename.clone(),
             namespace: Vec::new(),
-            class_uses: HashMap::new(),
-            fn_uses: HashMap::new(),
-            const_uses: HashMap::new(),
-            seen_symbols: HashMap::new(),
+            class_uses: FxMap::default(),
+            fn_uses: FxMap::default(),
+            const_uses: FxMap::default(),
+            seen_symbols: FxMap::default(),
             strict_types: false,
             ticks: 0,
             decls: Rc::new(DeclTable::default()),
@@ -825,8 +832,8 @@ impl<'f> Compiler<'f> {
             anon_counter: opts.anon_base,
             stack: stack::StackModel::new(opts.stack_limit),
             opts,
-            declared_functions: HashMap::new(),
-            known_functions: HashMap::new(),
+            declared_functions: FxMap::default(),
+            known_functions: FxMap::default(),
             functions,
             source,
             multibyte: program.multibyte,

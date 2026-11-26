@@ -1473,3 +1473,206 @@ Too few arguments to function App\d1(), 0 passed in t.php on line 19 and at leas
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Functions with typed declared parameters and a trailing variadic one
+/// (Doctrine's `Deprecation::triggerIfCalledFromOutside(string $package,
+/// string $link, string $message, mixed ...$args)`) take the near-plain
+/// call, which checks the declared types itself: values taken as they are,
+/// coercions and `TypeError`s go the generic way, a typed variadic's
+/// elements are checked by its `RECV_VARIADIC`; static and instance
+/// methods, functions, named arguments, `func_get_args()`, and the same
+/// under `strict_types`. Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn near_plain_calls_check_declared_types() {
+    let out = run(r#"<?php
+namespace App;
+class D {
+    public static function trig(string $package, string $link, string $message, mixed ...$args): void {
+        echo $package, '|', $link, '|', $message, '|', count($args), '|', func_num_args(), "\n";
+    }
+    public function m(int $a, float $b, ?string $c = null, int ...$rest) {
+        return var_export([$a, $b, $c, $rest, func_get_args()], true);
+    }
+}
+function f(string $s, array $opt = [], ...$more) { return $s . count($opt) . count($more); }
+for ($i = 0; $i < 3; $i++) {
+    D::trig('pkg', 'l', 'm %s', $i);
+    D::trig('pkg', 'l', 'm', 1, 'two', [3]);
+    echo (new D)->m(1, 2, 'c', 4, 5), "\n";
+    echo f('a'), f('b', [1, 2]), f('c', [], 1, 2, 3), f(s: 'n', more: 1), "\n";
+    try { D::trig(1, 2, 3, 4); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { echo (new D)->m('7', 1, null, 8), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { echo (new D)->m('x', 1), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { echo (new D)->m(1, 1, 'c', 'nope'), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { echo f('s', 'notarray'), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(
+        out,
+        r#"pkg|l|m %s|1|4
+pkg|l|m|3|6
+array (
+  0 => 1,
+  1 => 2.0,
+  2 => 'c',
+  3 => 
+  array (
+    0 => 4,
+    1 => 5,
+  ),
+  4 => 
+  array (
+    0 => 1,
+    1 => 2.0,
+    2 => 'c',
+    3 => 4,
+    4 => 5,
+  ),
+)
+a00b20c03n01
+1|2|3|1|4
+array (
+  0 => 7,
+  1 => 1.0,
+  2 => NULL,
+  3 => 
+  array (
+    0 => 8,
+  ),
+  4 => 
+  array (
+    0 => 7,
+    1 => 1.0,
+    2 => NULL,
+    3 => 8,
+  ),
+)
+App\D::m(): Argument #1 ($a) must be of type int, string given, called in t.php on line 19
+App\D::m(): Argument #4 must be of type int, string given, called in t.php on line 20
+App\f(): Argument #2 ($opt) must be of type array, string given, called in t.php on line 21
+pkg|l|m %s|1|4
+pkg|l|m|3|6
+array (
+  0 => 1,
+  1 => 2.0,
+  2 => 'c',
+  3 => 
+  array (
+    0 => 4,
+    1 => 5,
+  ),
+  4 => 
+  array (
+    0 => 1,
+    1 => 2.0,
+    2 => 'c',
+    3 => 4,
+    4 => 5,
+  ),
+)
+a00b20c03n01
+1|2|3|1|4
+array (
+  0 => 7,
+  1 => 1.0,
+  2 => NULL,
+  3 => 
+  array (
+    0 => 8,
+  ),
+  4 => 
+  array (
+    0 => 7,
+    1 => 1.0,
+    2 => NULL,
+    3 => 8,
+  ),
+)
+App\D::m(): Argument #1 ($a) must be of type int, string given, called in t.php on line 19
+App\D::m(): Argument #4 must be of type int, string given, called in t.php on line 20
+App\f(): Argument #2 ($opt) must be of type array, string given, called in t.php on line 21
+pkg|l|m %s|1|4
+pkg|l|m|3|6
+array (
+  0 => 1,
+  1 => 2.0,
+  2 => 'c',
+  3 => 
+  array (
+    0 => 4,
+    1 => 5,
+  ),
+  4 => 
+  array (
+    0 => 1,
+    1 => 2.0,
+    2 => 'c',
+    3 => 4,
+    4 => 5,
+  ),
+)
+a00b20c03n01
+1|2|3|1|4
+array (
+  0 => 7,
+  1 => 1.0,
+  2 => NULL,
+  3 => 
+  array (
+    0 => 8,
+  ),
+  4 => 
+  array (
+    0 => 7,
+    1 => 1.0,
+    2 => NULL,
+    3 => 8,
+  ),
+)
+App\D::m(): Argument #1 ($a) must be of type int, string given, called in t.php on line 19
+App\D::m(): Argument #4 must be of type int, string given, called in t.php on line 20
+App\f(): Argument #2 ($opt) must be of type array, string given, called in t.php on line 21
+"#
+    );
+    let out = run(r#"<?php
+declare(strict_types=1);
+namespace App;
+class D { public static function g(float $x, string ...$r) { return var_export([$x, $r], true); } }
+for ($i = 0; $i < 3; $i++) {
+    echo D::g(1, 'a'), "\n";
+    try { echo D::g('1'), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+    try { echo D::g(1.5, 'a', 2), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(
+        out,
+        r#"array (
+  0 => 1.0,
+  1 => 
+  array (
+    0 => 'a',
+  ),
+)
+App\D::g(): Argument #1 ($x) must be of type float, string given, called in t.php on line 7
+App\D::g(): Argument #3 must be of type string, int given, called in t.php on line 8
+array (
+  0 => 1.0,
+  1 => 
+  array (
+    0 => 'a',
+  ),
+)
+App\D::g(): Argument #1 ($x) must be of type float, string given, called in t.php on line 7
+App\D::g(): Argument #3 must be of type string, int given, called in t.php on line 8
+array (
+  0 => 1.0,
+  1 => 
+  array (
+    0 => 'a',
+  ),
+)
+App\D::g(): Argument #1 ($x) must be of type float, string given, called in t.php on line 7
+App\D::g(): Argument #3 must be of type string, int given, called in t.php on line 8
+"#
+    );
+}
