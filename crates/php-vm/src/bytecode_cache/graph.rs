@@ -859,6 +859,7 @@ impl Codec for TypeDecl {
             pure_intersection: r.bool()?,
             members: Vec::decode(r)?,
             lc_cache: std::cell::OnceCell::new(),
+            alias_ok: std::cell::RefCell::new(None),
         })
     }
 }

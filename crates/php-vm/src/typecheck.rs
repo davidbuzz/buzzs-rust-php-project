@@ -154,7 +154,7 @@ impl Vm {
                 }
                 // Objects (closures, `__invoke`) have no callable
                 // deprecations: always resolve them suppressed.
-                if m & mask::CALLABLE != 0 && self.is_callable_value(v) {
+                if m & mask::CALLABLE != 0 && (is_closure_class(cls) || self.is_callable_value(v)) {
                     return Ok(true);
                 }
                 let refs = ty.class_refs();
@@ -166,7 +166,15 @@ impl Vm {
                 {
                     return Ok(true);
                 }
-                ty.has_classes() && self.class_alias_matches(cls, refs, ctx)
+                if ty.has_classes() && self.class_alias_matches(cls, refs, ctx) {
+                    // The plain call paths test by name: let them take
+                    // objects of this class next time.
+                    if refs.intersections.is_empty() {
+                        ty.learn_alias_class(cls);
+                    }
+                    return Ok(true);
+                }
+                false
             }
         })
     }
@@ -426,3 +434,11 @@ pub(crate) fn given_type(v: &Value) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `cls` is `Closure` (final: no subclass): a closure object is
+/// callable without resolving anything (`zend_is_callable_ex` returns at
+/// once for one).
+#[inline]
+pub(crate) fn is_closure_class(cls: &Class) -> bool {
+    cls.lc_name.as_bytes() == b"closure"
+}
