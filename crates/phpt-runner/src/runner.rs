@@ -1148,7 +1148,22 @@ impl Runner {
             .unwrap_or_default();
         let script_file = dir.join(format!("{stem}.redirect.php"));
         fs::write(&script_file, script).map_err(|e| e.to_string())?;
-        let argv = self.helper_argv(false, ini_args, &[], &script_file);
+        // run-tests.php evaluates the section in its own process: the
+        // tests' opcache file cache is not this helper's (as for SKIPIF and
+        // CLEAN). With `-d opcache.file_cache_only=1` and no cache
+        // directory of its own it ended in opcache's startup fatal, and
+        // the redirect was reported as malformed.
+        let argv = self.helper_argv(
+            false,
+            ini_args,
+            &[
+                "-d",
+                "opcache.file_cache=",
+                "-d",
+                "opcache.file_cache_only=0",
+            ],
+            &script_file,
+        );
         let out = self.exec(&argv, &self.config.env, None, Capture::STDOUT_ONLY);
         let _ = fs::remove_file(&script_file);
 
