@@ -164,24 +164,30 @@ impl<'a> Scanner<'a> {
     /// of one repetition at `p`.  Reaching past the padding NUL is EOF.
     fn plus<F: Fn(&Self, usize, &mut Vec<usize>)>(&self, start: usize, item: F) -> M {
         let len = self.len();
-        let mut reach = vec![false; len + 2];
-        reach[start] = true;
+        // Bit `i` of `reach`: position `p + i` ends a run of repetitions.
+        // One repetition is at most 3 bytes, so a window of 8 positions is
+        // enough, and the scan ends where no position is reachable (it
+        // costs the length of the match, not of the rest of the input).
+        let mut reach: u8 = 1;
         let mut best = start;
         let mut alts = Vec::with_capacity(3);
-        for p in start..=len {
-            if !reach[p] {
-                continue;
-            }
-            alts.clear();
-            item(self, p, &mut alts);
-            for &l in &alts {
-                let e = p + l;
-                if e > len {
-                    return M::Eof;
+        let mut p = start;
+        while reach != 0 && p <= len {
+            if reach & 1 != 0 {
+                alts.clear();
+                item(self, p, &mut alts);
+                for &l in &alts {
+                    let e = p + l;
+                    if e > len {
+                        return M::Eof;
+                    }
+                    debug_assert!((1..8).contains(&l));
+                    reach |= 1 << l;
+                    best = best.max(e);
                 }
-                reach[e] = true;
-                best = best.max(e);
             }
+            reach >>= 1;
+            p += 1;
         }
         Self::rel(start, best)
     }
