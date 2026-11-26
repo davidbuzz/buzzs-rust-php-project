@@ -998,3 +998,39 @@ run();
 "#
     );
 }
+
+/// `new $this->factory(...)`, `new $class`, `new $object` and their errors
+/// from the tape's decline step (`Vm::op_new`: autoloading, an unknown and
+/// an abstract class, a throwing constructor, spread arguments); method
+/// call sites that see several classes start their call there too.
+/// Expected output: `/usr/bin/php8.5` (8.5.13).
+#[test]
+fn dynamic_new_on_the_tape() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+spl_autoload_register(function ($c) { echo "autoload($c) "; if ($c === 'App\Lazy') { eval('namespace App; class Lazy { function __construct(public $v = 1) {} }'); } });
+class P { function __construct(public $v = null) {} }
+class Q extends P {}
+abstract class Ab {}
+class Thr { function __construct() { throw new \LogicException('ctor'); } }
+class F { public function __construct(private string $factory) {} public function make($v) { return new $this->factory($v); } }
+function run() {
+  for ($i = 0; $i < 3; $i++) {
+    $f = new F(P::class); $g = new F(Q::class); echo get_class($f->make(1)), $f->make(2)->v, get_class($g->make(3)), ' ';
+    $c = 'App\Lazy'; $o = new $c(5); echo $o->v, ' ';
+    $c = 'App\Nope'; try { new $c; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $c = Ab::class; try { new $c; } catch (\Error $e) { echo $e->getMessage(), ' '; }
+    $c = new Q(1); $d = new $c(2); echo get_class($d), $d->v, ' ';
+    $c = Thr::class; try { new $c; } catch (\LogicException $e) { echo $e->getMessage(), '@', $e->getLine(), ' '; }
+    $c = 'App\P'; $e = new $c(...[7]); echo $e->v, "\n";
+  }
+}
+run();
+"#),
+        r#"App\P2App\Q autoload(App\Lazy) 5 autoload(App\Nope) Class "App\Nope" not found Cannot instantiate abstract class App\Ab App\Q2 ctor@7 7
+App\P2App\Q 5 autoload(App\Nope) Class "App\Nope" not found Cannot instantiate abstract class App\Ab App\Q2 ctor@7 7
+App\P2App\Q 5 autoload(App\Nope) Class "App\Nope" not found Cannot instantiate abstract class App\Ab App\Q2 ctor@7 7
+"#
+    );
+}

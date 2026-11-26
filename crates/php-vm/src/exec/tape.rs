@@ -2459,10 +2459,13 @@ fn run_call(
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
+            // A miss of a site that sees several classes (a base class's
+            // method run for many subclasses): the generic op's body here
+            // (`init_dyn_method_call_vm`), which refills the site.
             return if vm.init_method_call_fast(obj, lit, at) {
                 at + 1
             } else {
-                DECLINED
+                init_dyn_method_call_vm(vm, obj, Operand::Lit(lit), at)
             };
         }
         // `$obj->$name()` (`calls::lower`): the site's method cache hit,
@@ -2623,7 +2626,11 @@ fn init_dyn_method_call_vm(vm: &mut Vm, obj: Operand, name: Operand, at: usize) 
         Operand::Unused => f.this.is_some(),
         o => matches!(peek(o), Some(Value::Object(_))),
     };
-    if !obj_ok || !matches!(peek(name), Some(Value::Str(_))) {
+    let name_ok = match name {
+        Operand::Lit(l) => matches!(f.code.literals.get(l as usize), Some(Value::Str(_))),
+        n => matches!(peek(n), Some(Value::Str(_))),
+    };
+    if !obj_ok || !name_ok {
         return DECLINED;
     }
     vm.frame_mut().ip = at + 1;
@@ -2691,6 +2698,27 @@ fn declined_vm_step(
         return match vm.fetch_obj_prop_fast(place, dst, to, mode) {
             Some(skipped) => at + 1 + usize::from(skipped),
             None => DECLINED,
+        };
+    }
+    // `new self(...)`, `new static(...)`, `new $class(...)` (not prepared on
+    // the tape): `Vm::run`'s arm (`Vm::op_new`: the object, and its
+    // constructor's call pending), here, after `SAVE_OPLINE()`: the class
+    // may be autoloaded, and the constructor's `Send`s and `DoCall` follow
+    // on the tape.
+    if let Some(Op::New { class, dst, skip }) = ops.get(at) {
+        if matches!(class, ClassSpec::Named(_)) {
+            return DECLINED;
+        }
+        let (dst, skip) = (*dst, *skip);
+        flush(vm, prep);
+        vm.frame_mut().ip = at + 1;
+        return match vm.op_new(class, dst) {
+            Ok(has_ctor) if !has_ctor && skip != 0 => skip as usize,
+            Ok(_) => at + 1,
+            Err(t) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
         };
     }
     // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
