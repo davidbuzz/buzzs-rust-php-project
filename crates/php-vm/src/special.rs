@@ -557,6 +557,7 @@ impl Vm {
     /// no PHP code and looks at no frame, so that calling it without its
     /// own shows nowhere. Every value is matched by its kind (a reference
     /// or a value its parameter would coerce is the framed call's).
+    #[allow(clippy::unnested_or_patterns)] // one row per class and shape
     pub(crate) fn leaf_args(&self, id: u8, args: &[&Value]) -> bool {
         use Value::{Array, Bool, Float, Int, Null, Object, Str};
         let loaded = |name: &ZStr| self.find_class(name.as_bytes()).is_some();
@@ -1717,7 +1718,7 @@ impl Vm {
                 .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
             sent.clear();
         }
-        self.frameless_handler_run(b, args, dst)
+        Some(self.frameless_handler_run(b, args, dst))
     }
 
     /// [`Vm::frameless_handler_call`] with the sent arguments already in
@@ -1727,7 +1728,7 @@ impl Vm {
         b: &Rc<Builtin>,
         mut args: Box<crate::func::Args>,
         dst: Option<u32>,
-    ) -> Option<VmResult<()>> {
+    ) -> VmResult<()> {
         // The declared defaults of omitted trailing parameters, read as
         // in [`Vm::frameless_icall_in_place`].
         let sig = b.signature();
@@ -1764,12 +1765,9 @@ impl Vm {
         // Emptied (`Args::release_in_place`), back to the pool.
         args.release_in_place();
         self.call_bufs.put_args(args);
-        let v = match r {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
+        let v = r?;
         self.put_call_result(dst, v);
-        Some(Ok(()))
+        Ok(())
     }
 
     /// Stores a call's result in its temporary, or releases it when the

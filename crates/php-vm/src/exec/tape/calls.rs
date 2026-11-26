@@ -2439,7 +2439,7 @@ const LEAF_ARGS: usize = 4;
 /// function is: nothing is readied in the pooled frame and nothing sent
 /// through it (the prepared call's ~780 instructions around the handler,
 /// 12M times in two framework test suites). The index of the `DoCall`
-/// with `CALLED` or `CALL_THREW` (the caller's flags), as
+/// with `done_flag` or `threw_flag` (the caller's `CALLED`, `CALL_THREW`), as
 /// `enter_after_sends` returns a builtin's call. `None`, nothing
 /// changed, for anything else.
 pub(super) fn leaf_now(
@@ -2447,8 +2447,8 @@ pub(super) fn leaf_now(
     ops: &[Op],
     call: &Prepared,
     at: usize,
-    called: usize,
-    threw: usize,
+    done_flag: usize,
+    threw_flag: usize,
 ) -> Option<usize> {
     let Callee::Native(b, PlainCall::Named) = &call.callee else {
         return None;
@@ -2510,12 +2510,11 @@ pub(super) fn leaf_now(
     // `SAVE_OPLINE()`: the op after the `DoCall`.
     caller.ip = done + 1;
     match vm.frameless_handler_run(b, args, dst) {
-        Some(Ok(())) => Some(done | called),
-        Some(Err(t)) => {
+        Ok(()) => Some(done | done_flag),
+        Err(t) => {
             vm.tape_throw = Some(t);
-            Some(done | threw)
+            Some(done | threw_flag)
         }
-        None => None,
     }
 }
 

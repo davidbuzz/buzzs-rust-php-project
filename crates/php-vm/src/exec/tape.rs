@@ -1598,6 +1598,17 @@ fn tmp_dims_place(p: &crate::opcode::Place) -> bool {
         && p.segs.iter().all(|s| matches!(s, Seg::Dim(_)))
 }
 
+/// Whether place `place` of the current frame's code starts at a static
+/// property: the element fast paths of static properties are then tried
+/// before the others.
+#[inline]
+fn static_base(vm: &Vm, place: crate::opcode::PlaceId) -> bool {
+    vm.frames
+        .last()
+        .and_then(|f| f.code.places.get(place as usize))
+        .is_some_and(|p| matches!(p.base, crate::opcode::PlaceBase::StaticProp { .. }))
+}
+
 /// An element of a static property, `A::$name[d1]...[dn]` (a literal
 /// name, a class that is not dynamic): `spec::fetch_static_dims_in`,
 /// `spec::isset_static_dims_in`, `spec::assign_static_dims_in`.
@@ -2994,6 +3005,16 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
                 }
                 _ => None,
             };
+            // An element of a static property first, when the place is
+            // one: the attempts below each looked at the place and
+            // declined before its turn came (~250 instructions a read of
+            // a static cache).
+            let fast = fast.or_else(|| {
+                if !matches!(mode, FetchMode::Read | FetchMode::Is) || !static_base(vm, place) {
+                    return None;
+                }
+                super::spec::fetch_static_dims_in(vm.frame_mut(), place, mode == FetchMode::Is)
+            });
             match fast
                 .or_else(|| vm.fetch_prop_dims_fast(place, mode))
                 .or_else(|| vm.fetch_global_dims_fast(place, mode))
@@ -3015,8 +3036,10 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             }
         }
         // `isset()` / `empty()` of `$this->p[$k][$j]` & co. (`lower_place`).
-        Some(&Op::Isset { place, dst }) => match vm
-            .isset_prop_dims_fast(place, false)
+        Some(&Op::Isset { place, dst }) => match static_base(vm, place)
+            .then(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, false))
+            .flatten()
+            .or_else(|| vm.isset_prop_dims_fast(place, false))
             .or_else(|| super::spec::isset_static_dims_in(vm.frame_mut(), place, false))
         {
             Some(r) => {
@@ -3097,8 +3120,13 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
             let Some(v) = super::spec::dim_value_in(vm.frame(), val) else {
                 return DECLINED;
             };
-            match vm
-                .assign_prop_dims_fast(place, v)
+            let first = if static_base(vm, place) {
+                super::spec::assign_static_dims_in(vm.frame_mut(), place, v)
+            } else {
+                Err(v)
+            };
+            match first
+                .or_else(|v| vm.assign_prop_dims_fast(place, v))
                 .or_else(|v| super::spec::assign_static_dims_in(vm.frame_mut(), place, v))
                 .or_else(|v| vm.assign_dyn_prop_fast(place, v))
             {

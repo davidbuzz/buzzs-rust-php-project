@@ -54,6 +54,14 @@ pub struct StaticPropCacheEntry {
     pub cell: Rc<RefCell<Value>>,
     /// Whether the property is untyped/plain (can mutate directly in place without re-checking type hints or visibility).
     pub fast_plain: bool,
+    /// For a typed property: the builtin type bits a value may have to be
+    /// stored as it is (`place::propcache::accepts`), 0 when a store
+    /// needs the full write (`typed_refs::static_accept`). Unused when
+    /// `fast_plain`.
+    pub accept: u32,
+    /// For a typed property: the lower-case name of the one class its
+    /// type names (`?Foo`), an instance of which is stored as it is.
+    pub class_lc: Option<ZStr>,
 }
 
 thread_local! {
@@ -76,6 +84,8 @@ impl Default for StaticPropCacheEntry {
             class_ptr: 0,
             cell: UNFILLED_CELL.with(Rc::clone),
             fast_plain: false,
+            accept: 0,
+            class_lc: None,
         }
     }
 }
@@ -579,12 +589,19 @@ fn static_prop_cache_fill_in(
     if class_ptr == 0 {
         return;
     }
+    let (accept, class_lc) = if fast_plain {
+        (u32::MAX, None)
+    } else {
+        crate::typed_refs::static_accept(cell)
+    };
     let entry = StaticPropCacheEntry {
         scope_ptr,
         called_ptr,
         class_ptr,
         cell: cell.clone(),
         fast_plain,
+        accept,
+        class_lc,
     };
     let Ok(mut entries) = f.code.rt_cache.static_prop_entries.try_borrow_mut() else {
         return;
