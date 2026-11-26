@@ -2448,21 +2448,32 @@ fn run_call(
             name: Operand::Lit(lit),
         }) => {
             flush(vm, prep);
+            // A user method that only returns a property of `$this` or a
+            // literal: its value, without the call. Its lookup of the
+            // site's method is handed on.
+            let resolved = match calls::accessor_now(vm, ops, obj, lit, at) {
+                calls::MethodNow::Done(next) => return next,
+                calls::MethodNow::Resolved(entry) => Some(entry),
+                calls::MethodNow::Unknown => None,
+            };
             // A pure builtin method with arguments at hand
             // (`$m->getName()`, `$m->getAttributes(A::class)`): called at
-            // once, past its `DoCall`.
-            // A user method that only returns a property of `$this` or a
-            // literal: its value, without the call.
-            match calls::accessor_now(vm, ops, obj, lit, at) {
-                calls::MethodNow::Done(next) => return next,
-                calls::MethodNow::User => {}
-                calls::MethodNow::Unknown => {
-                    if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
-                        return next;
-                    }
+            // once, past its `DoCall`. (Not at a site that calls a user
+            // method: the test costs a few instructions, the attempt ~100
+            // every call.)
+            let user_site = match &resolved {
+                Some((func, ..)) => matches!(func, crate::func::Func::User(_)),
+                None => vm
+                    .frames
+                    .last()
+                    .is_some_and(|f| crate::call::method_site_holds_user(&f.code, at)),
+            };
+            if !user_site {
+                if let Some(next) = calls::pure_method_now(vm, ops, obj, lit, at) {
+                    return next;
                 }
             }
-            if let Some(call) = calls::prepare_method(vm, obj, lit, at) {
+            if let Some(call) = calls::prepare_method(vm, obj, lit, at, resolved) {
                 return send_and_enter(vm, prep, call, ops, at);
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
