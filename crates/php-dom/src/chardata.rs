@@ -90,7 +90,7 @@ impl Node {
     pub fn set_data(&self, value: &[u8]) -> DomResult<()> {
         let n = self.prop_node()?;
         // SAFETY: live node.
-        unsafe { ffi::xmlNodeSetContentLen(n.p(), value.as_ptr(), c_len(value.len())) };
+        unsafe { ffi::xmlNodeSetContentLen(n.p(), crate::raw::c_bytes(value), c_len(value.len())) };
         Ok(())
     }
 
@@ -451,7 +451,9 @@ impl Node {
             unsafe { ffi::xmlAddChild(n.p(), text) };
         } else {
             // SAFETY: live attribute.
-            unsafe { ffi::xmlNodeSetContentLen(n.p(), value.as_ptr(), c_len(value.len())) };
+            unsafe {
+                ffi::xmlNodeSetContentLen(n.p(), crate::raw::c_bytes(value), c_len(value.len()))
+            };
         }
         Ok(())
     }

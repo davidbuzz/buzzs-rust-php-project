@@ -400,6 +400,18 @@ pub(crate) fn c_len(len: usize) -> c_int {
     c_int::try_from(len).unwrap_or(c_int::MAX)
 }
 
+/// The pointer to hand libxml2 with `c_len(bytes.len())`: an empty
+/// slice's pointer dangles, and libxml2 (2.15 at least, in
+/// `xmlNodeSetContentLen()`) looks at the first byte whatever the length,
+/// so the empty string is passed as a terminator.
+pub(crate) fn c_bytes(bytes: &[u8]) -> *const u8 {
+    if bytes.is_empty() {
+        c"".as_ptr().cast()
+    } else {
+        bytes.as_ptr()
+    }
+}
+
 impl From<Option<N>> for Siblings {
     fn from(start: Option<N>) -> Self {
         Siblings(start)

@@ -376,7 +376,7 @@ impl Node {
         let nodep = nodep.ok_or_else(|| DomError::dom(C::InvalidState))?;
         if let Some(v) = value.filter(|v| !v.is_empty()) {
             // SAFETY: live node.
-            unsafe { ffi::xmlNodeSetContentLen(nodep.p(), v.as_ptr(), c_len(v.len())) };
+            unsafe { ffi::xmlNodeSetContentLen(nodep.p(), crate::raw::c_bytes(v), c_len(v.len())) };
         }
         self.bind_constructed(nodep);
         Ok(())
@@ -1326,7 +1326,7 @@ impl Node {
         self.invalidate_doc();
         remove_all_children(n);
         // SAFETY: live node.
-        unsafe { ffi::xmlNodeSetContentLen(n.p(), value.as_ptr(), c_len(value.len())) };
+        unsafe { ffi::xmlNodeSetContentLen(n.p(), crate::raw::c_bytes(value), c_len(value.len())) };
         Ok(())
     }
 
