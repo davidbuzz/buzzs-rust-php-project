@@ -43,6 +43,7 @@ fn run(source: &str) -> String {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one script and its expected output
 fn accessor_methods_return_what_a_call_returns() {
     let out = run(r#"<?php
 class P { private $p = 'parent-private'; protected $q = 'q'; public int $typed; public $u = 1;

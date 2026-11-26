@@ -1728,6 +1728,13 @@ pub struct MethodCallCacheEntry {
     pub name_lit: Option<u32>,
     /// Method name (for matching when called dynamically).
     pub name: ZStr,
+    /// Whether calls of this entry's method from this site can be answered
+    /// without a frame (`exec::tape::calls::accessor_now`): 0 not tried
+    /// yet, 1 no (another kind of method, or a call that passes another
+    /// number of arguments), 2 yes. The tape tests it before the attempt:
+    /// most sites call no accessor, and the attempt cost each of their
+    /// calls a scan of the sends.
+    pub accessor: std::cell::Cell<u8>,
 }
 
 /// Functions, classes and closures declared inside an op array

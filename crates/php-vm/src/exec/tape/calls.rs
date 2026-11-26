@@ -2257,63 +2257,168 @@ pub(super) fn pure_method_now(
     pure_method_done(vm, obj, dst, done, r.ok()?)
 }
 
-/// The value a call of the accessor method `uf` ([`UserFunction::accessor`]:
-/// `return $this->prop;` or `return <literal>;`) returns for the object
-/// `od` of the class at `cls_addr`, read without a frame; `scope` is the
-/// method's class scope. Nothing in such a body can be observed from
-/// inside it (no diagnostic, no user code, no backtrace): a literal is
-/// copied; a property is read through the method's own property cache,
-/// on the hit its `FETCH_OBJ_R` takes (a declared, initialized slot of an
-/// object of the cached class, read in the method's scope, holding no
-/// reference), which the first, framed call of the method fills. A
-/// declared return type must take the value as it is. `None` for
-/// anything else: the call is made.
+/// The cache entry of `$this->name` (place `place` of the accessor method
+/// `uf`'s code) for objects of the class at `cls_addr`, as the method's own
+/// `FETCH_OBJ_R` / `ASSIGN_OBJ` tests it in its frame (`spec::props`'
+/// `plain_key`): filled for that class in the method's scope (its address,
+/// `method_scope`), a declared
+/// property allowing every access in `want`. Its slot and the types a
+/// written value may have as it is.
+#[inline(always)]
+#[allow(clippy::inline_always)] // as above
+fn accessor_slot(
+    uf: &UserFunction,
+    place: u32,
+    cls_addr: usize,
+    method_scope: usize,
+    want: u8,
+) -> Option<(usize, u32)> {
+    let cache = uf.code.prop_cache.try_borrow().ok()?;
+    let e = cache.get(place as usize)?;
+    if e.class_addr != cls_addr
+        || e.scope_addr != method_scope
+        || e.base != crate::opcode::PROP_CACHE_THIS
+        || e.flags & (want | PC_DYN) != want
+    {
+        return None;
+    }
+    Some((e.slot as usize, e.accept))
+}
+
+/// [`accessor_read`] of `return $this->name;` (place `place`), in line:
+/// the value of the declared, initialized slot, when the return type
+/// takes it as it is.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the getters' whole path, one caller that matters
+fn accessor_get(
+    uf: &UserFunction,
+    place: u32,
+    od: &crate::object::ObjectData,
+    cls_addr: usize,
+    scope: usize,
+) -> Option<Value> {
+    let (slot, _) = accessor_slot(uf, place, cls_addr, scope, crate::place::propcache::PC_READ)?;
+    if !od.not_lazy() {
+        return None;
+    }
+    let slots = od.slots.try_borrow().ok()?;
+    let value = match slots.get(slot)? {
+        Some(Value::Reference(_)) | None => return None,
+        Some(v) => clone_value(v),
+    };
+    drop(slots);
+    match &uf.return_type {
+        Some(ty) if !crate::call::param_accepts(ty, &value) => None,
+        _ => Some(value),
+    }
+}
+
+/// The value a call of the accessor method `uf` ([`UserFunction::accessor`])
+/// with the arguments `args` returns for the object `o` (`od`, of the
+/// class at `cls_addr`), run without a frame; `scope` is the address of
+/// the method's class scope (0: none). Nothing in such a body can be observed from inside it (no
+/// diagnostic, no user code, no backtrace): a property is reached through
+/// the method's own property cache, on the hits its ops take in a frame
+/// (a declared, initialized slot of an object of the cached class,
+/// holding no reference), which the first, framed call of the method
+/// fills; an element test needs an array there and an int or string
+/// offset; a write needs a value the property takes as it is. A declared
+/// return type must take the result as it is. `None`, nothing changed,
+/// for anything else: the call is made.
 ///
-/// A tenth of the user calls of MediaWiki's integration tests are such
-/// getters, each of which paid a whole call (~1,000 instructions).
-#[inline]
+/// A sixth of the user calls of the `MediaWiki` integration tests are such
+/// methods, each of which paid a whole call (~1,000 instructions).
+#[inline(never)]
 fn accessor_read(
     uf: &UserFunction,
     acc: Accessor,
+    o: &Obj,
     od: &crate::object::ObjectData,
     cls_addr: usize,
-    scope: Option<&Rc<crate::class::Class>>,
+    scope: usize,
+    args: &mut [Value],
 ) -> Option<Value> {
+    use crate::place::propcache::PC_READ;
+    let returns = |value: &Value| {
+        uf.return_type
+            .as_ref()
+            .is_none_or(|ty| crate::call::param_accepts(ty, value))
+    };
+    // The array a declared slot holds, for the element tests.
     let value = match acc {
         Accessor::Lit(l) => clone_value(uf.code.literals.get(l as usize)?),
-        Accessor::Prop(place) => {
-            // The method's own `FETCH_OBJ_R` cache entry, as
-            // `spec::props::read_plain` tests it in the method's frame.
-            let slot = {
-                let cache = uf.code.prop_cache.try_borrow().ok()?;
-                let e = cache.get(place as usize)?;
-                let method_scope = scope.map_or(0, |s| Rc::as_ptr(s) as usize);
-                if e.class_addr != cls_addr
-                    || e.scope_addr != method_scope
-                    || e.base != crate::opcode::PROP_CACHE_THIS
-                    || e.flags & (crate::place::propcache::PC_READ | PC_DYN)
-                        != crate::place::propcache::PC_READ
-                {
-                    return None;
-                }
-                e.slot as usize
-            };
+        Accessor::Null => {
+            // The implicit `return;`: null, for no return type or `void`.
+            return uf
+                .return_type
+                .as_ref()
+                .is_none_or(crate::types::TypeDecl::is_void)
+                .then_some(Value::Null);
+        }
+        Accessor::This => Value::Object(o.clone()),
+        Accessor::Arg(i) => std::mem::take(args.get_mut(i as usize)?),
+        Accessor::Prop(place) => return accessor_get(uf, place, od, cls_addr, scope),
+        Accessor::IssetDim(place, i) | Accessor::KeyExists(place, i) => {
+            let (slot, _) = accessor_slot(uf, place, cls_addr, scope, PC_READ)?;
             if !od.not_lazy() {
                 return None;
             }
             let slots = od.slots.try_borrow().ok()?;
-            match slots.get(slot)? {
-                Some(Value::Reference(_)) | None => return None,
-                Some(v) => clone_value(v),
+            let Some(Some(Value::Array(a))) = slots.get(slot) else {
+                return None;
+            };
+            let el = match args.get(i as usize)? {
+                Value::Str(k) => a.get_sym(k.as_bytes()),
+                Value::Int(k) => a.get_int(*k),
+                _ => return None,
+            };
+            let found = match (acc, el) {
+                (Accessor::KeyExists(..), el) => el.is_some(),
+                // `isset()`: there and not null, through a reference.
+                (_, Some(Value::Reference(r))) => !r.try_borrow()?.is_null(),
+                (_, Some(v)) => !v.is_null(),
+                (_, None) => false,
+            };
+            Value::Bool(found)
+        }
+        Accessor::SetProp(place, i, this) => {
+            let result = if this {
+                Value::Object(o.clone())
+            } else {
+                Value::Null
+            };
+            // Every test before the store: a refusal changes nothing.
+            if this {
+                if !returns(&result) {
+                    return None;
+                }
+            } else if !uf
+                .return_type
+                .as_ref()
+                .is_none_or(crate::types::TypeDecl::is_void)
+            {
+                return None;
             }
+            let (slot, accept) = accessor_slot(uf, place, cls_addr, scope, PC_READ | PC_WRITE)?;
+            let v = args.get_mut(i as usize)?;
+            if matches!(v, Value::Reference(_)) || !accepts(accept, v) || !od.not_lazy() {
+                return None;
+            }
+            let old = {
+                let mut slots = od.slots.try_borrow_mut().ok()?;
+                match slots.get_mut(slot)? {
+                    Some(cur) if !matches!(cur, Value::Reference(_)) => {
+                        std::mem::replace(cur, std::mem::take(v))
+                    }
+                    _ => return None,
+                }
+            };
+            // `zval_ptr_dtor` of the old value, once nothing is borrowed.
+            crate::exec::release_rooted(Some(old));
+            return Some(result);
         }
     };
-    if let Some(ty) = &uf.return_type {
-        if !crate::call::param_accepts(ty, &value) {
-            return None;
-        }
-    }
-    Some(value)
+    returns(&value).then_some(value)
 }
 
 /// A method call site's cache hit (`call::method_entry_hit`): the method,
@@ -2331,25 +2436,167 @@ pub(super) enum MethodNow {
     Unknown,
 }
 
-/// `$obj->name()` of a user method that is an accessor
+/// The most arguments [`accessor_now`] passes.
+const ACCESSOR_ARGS: usize = 3;
+
+/// [`accessor_read`] of an accessor that is no getter, with or without
+/// arguments, out of the getters' line.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)] // the call site's pieces, as found
+fn accessor_other(
+    caller: &crate::vm::Frame,
+    sends: &[Operand],
+    uf: &UserFunction,
+    acc: Accessor,
+    o: &Obj,
+    od: &crate::object::ObjectData,
+    cls_addr: usize,
+    scope: usize,
+) -> Option<Value> {
+    if sends.is_empty() {
+        accessor_read(uf, acc, o, od, cls_addr, scope, &mut [])
+    } else {
+        accessor_with_args(caller, sends, uf, acc, o, od, cls_addr, scope)
+    }
+}
+
+/// [`accessor_read`] of an accessor that takes the arguments `sends` (the
+/// operands of the call's `Send`s, read in `caller`), as `ZEND_SEND_VAL` /
+/// `ZEND_SEND_VAR` copy them: an undefined variable (its warning) and a
+/// value the parameter's type coerces or refuses are the call's. Out of
+/// line: the buffer and its release are not the getters' to pay.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)] // the call site's pieces, as found
+fn accessor_with_args(
+    caller: &crate::vm::Frame,
+    sends: &[Operand],
+    uf: &UserFunction,
+    acc: Accessor,
+    o: &Obj,
+    od: &crate::object::ObjectData,
+    cls_addr: usize,
+    scope: usize,
+) -> Option<Value> {
+    if caller.symtab_attached {
+        return None;
+    }
+    let mut args = [Value::Null, Value::Null, Value::Null];
+    let n = sends.len().min(ACCESSOR_ARGS);
+    for (i, op) in sends[..n].iter().enumerate() {
+        let v = match *op {
+            Operand::Lit(l) => caller.code.literals.get(l as usize).map(clone_value),
+            Operand::Cv(cv) => cv_value(caller, cv),
+            _ => None,
+        }?;
+        let ok = uf
+            .params
+            .get(i)?
+            .ty
+            .as_ref()
+            .is_none_or(|ty| crate::call::param_accepts(ty, &v));
+        if !ok || matches!(v, Value::Reference(_)) {
+            return None;
+        }
+        args[i] = v;
+    }
+    accessor_read(uf, acc, o, od, cls_addr, scope, &mut args[..n])
+}
+
+/// `$obj->name(...)` of a user method that is an accessor
 /// ([`UserFunction::accessor`]), `ZEND_INIT_METHOD_CALL` at `at` followed
-/// directly by its `DoCall`: on the method cache hit [`prepare_method`]
-/// takes, the value is read ([`accessor_read`]) and stored as the call's
-/// result without a frame; the op after the `DoCall` is where execution
-/// goes on. A pending interrupt is the usual call's to service, after it.
+/// by `Send`s of literals or variables (by value, at most
+/// [`ACCESSOR_ARGS`]) and its `DoCall`: on the method cache hit
+/// [`prepare_method`] takes, with one argument per parameter, each defined
+/// and accepted by its parameter's type as it is, the method's one
+/// statement runs without a frame ([`accessor_read`]) and its value is
+/// the call's result; the op after the `DoCall` is where execution goes
+/// on. A pending interrupt is the usual call's to service, after it.
+/// `settled`: the site is already marked as calling an accessor.
+#[inline]
 pub(super) fn accessor_now(
     vm: &mut Vm,
     ops: &[Op],
     obj: Operand,
     lit: u32,
     at: usize,
+    settled: bool,
 ) -> MethodNow {
-    let Some(&Op::DoCall { dst }) = ops.get(at + 1) else {
-        return MethodNow::Unknown;
+    // Without arguments (the getters, most of these calls): no scan of
+    // the sends, no buffer.
+    if let Some(&Op::DoCall { dst }) = ops.get(at + 1) {
+        return accessor_call(vm, obj, lit, at, &[], dst, settled);
+    }
+    accessor_now_args(vm, ops, obj, lit, at, settled)
+}
+
+/// [`accessor_now`] of a call with arguments: the scan of its `Send`s.
+#[inline(never)]
+fn accessor_now_args(
+    vm: &mut Vm,
+    ops: &[Op],
+    obj: Operand,
+    lit: u32,
+    at: usize,
+    settled: bool,
+) -> MethodNow {
+    let mut sends = [Operand::Unused; ACCESSOR_ARGS];
+    let mut n = 0;
+    let dst = loop {
+        match ops.get(at + 1 + n) {
+            Some(&Op::DoCall { dst }) => break dst,
+            Some(&Op::Send {
+                src: ArgSrc::Val(op @ (Operand::Lit(_) | Operand::Cv(_))),
+            }) if n < ACCESSOR_ARGS => {
+                sends[n] = op;
+                n += 1;
+            }
+            // `ZEND_SEND_VAR_EX` of a plain variable: by value, the
+            // parameter being none by reference (an accessor has none).
+            Some(&Op::Send {
+                src: ArgSrc::Place(pid),
+            }) if n < ACCESSOR_ARGS => {
+                let cv = vm.frames.last().and_then(|f| place_cv(&f.code, pid));
+                match cv {
+                    Some(cv) => sends[n] = Operand::Cv(cv),
+                    None => return not_an_accessor_site(vm, at),
+                }
+                n += 1;
+            }
+            // An argument that is no plain value: never at this site.
+            _ => return not_an_accessor_site(vm, at),
+        }
     };
+    accessor_call(vm, obj, lit, at, &sends[..n], dst, settled)
+}
+
+/// Marks the call site at `at` as one [`accessor_now`] has nothing to try
+/// at (its arguments are not plain values): later calls skip the attempt.
+#[cold]
+#[inline(never)]
+fn not_an_accessor_site(vm: &Vm, at: usize) -> MethodNow {
+    if let Some(f) = vm.frames.last() {
+        crate::call::mark_method_site(&f.code, at, false);
+    }
+    MethodNow::Unknown
+}
+
+/// [`accessor_now`] once the call's `Send`s (`sends`, their operands) and
+/// its `DoCall` (result to `dst`) are known.
+#[inline(always)]
+#[allow(clippy::inline_always)] // two callers, one of them the getters'
+fn accessor_call(
+    vm: &mut Vm,
+    obj: Operand,
+    lit: u32,
+    at: usize,
+    sends: &[Operand],
+    dst: Option<u32>,
+    settled: bool,
+) -> MethodNow {
     if vm.observer.enabled || crate::interrupt::safe_point_due() {
         return MethodNow::Unknown;
     }
+    let n = sends.len();
     let found = {
         let Some(caller) = vm.frames.last() else {
             return MethodNow::Unknown;
@@ -2380,15 +2627,50 @@ pub(super) fn accessor_now(
         }
         let cls_addr = Rc::as_ptr(cls) as usize;
         let scope_addr = caller.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        // A site already known to call an accessor: the hit read in place
+        // (`method_site_user`); a miss there is the usual call's.
+        if settled {
+            let Some((uf, scope)) =
+                crate::call::method_site_user(&caller.code, at, cls_addr, scope_addr, lit)
+            else {
+                return MethodNow::Unknown;
+            };
+            let value = match uf.accessor() {
+                Some(_) if uf.params.len() != n => None,
+                Some(Accessor::Prop(place)) => accessor_get(&uf, place, od, cls_addr, scope),
+                Some(acc) => accessor_other(caller, sends, &uf, acc, o, od, cls_addr, scope),
+                None => None,
+            };
+            drop(uf);
+            return match value {
+                Some(value) => accessor_done(vm, obj, dst, at + 2 + n, value),
+                None => MethodNow::Unknown,
+            };
+        }
         let Some(entry) =
             crate::call::method_entry_hit(&caller.code, at, cls_addr, scope_addr, lit)
         else {
             return MethodNow::Unknown;
         };
+        // What the site calls is settled by its first call: later ones
+        // only come here when it is an accessor (`method_site_kind`).
+        let accessor = match &entry {
+            (Func::User(uf), _, false) => uf.accessor().filter(|_| uf.params.len() == n),
+            _ => None,
+        };
+        if !settled {
+            crate::call::mark_method_site(&caller.code, at, accessor.is_some());
+        }
         let value = match &entry {
-            (Func::User(uf), scope, false) => uf
-                .accessor()
-                .and_then(|acc| accessor_read(uf, acc, od, cls_addr, scope.as_ref())),
+            (Func::User(uf), scope, false) => accessor.and_then(|acc| {
+                let scope = scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+                match acc {
+                    // (The getters' own, small path.)
+                    Accessor::Prop(place) => accessor_get(uf, place, od, cls_addr, scope),
+                    _ if n == 0 => accessor_read(uf, acc, o, od, cls_addr, scope, &mut []),
+                    _ => accessor_with_args(caller, sends, uf, acc, o, od, cls_addr, scope),
+                }
+            }),
             _ => None,
         };
         match value {
@@ -2397,17 +2679,29 @@ pub(super) fn accessor_now(
         }
     };
     match found {
-        Ok(value) => {
-            let done = at + 2;
-            if let Some(f) = vm.frames.last_mut() {
-                f.ip = done;
-            }
-            match pure_method_done(vm, obj, dst, done, value) {
-                Some(next) => MethodNow::Done(next),
-                None => MethodNow::Unknown,
-            }
-        }
+        Ok(value) => accessor_done(vm, obj, dst, at + 2 + n, value),
         Err(entry) => MethodNow::Resolved(entry),
+    }
+}
+
+/// The end of [`accessor_call`]: the caller's resume point is the op after
+/// the `DoCall` (`done`), a temporary `$this` is released and the value
+/// stored as the call's result ([`pure_method_done`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // as above
+fn accessor_done(
+    vm: &mut Vm,
+    obj: Operand,
+    dst: Option<u32>,
+    done: usize,
+    value: Value,
+) -> MethodNow {
+    if let Some(f) = vm.frames.last_mut() {
+        f.ip = done;
+    }
+    match pure_method_done(vm, obj, dst, done, value) {
+        Some(next) => MethodNow::Done(next),
+        None => MethodNow::Unknown,
     }
 }
 

@@ -160,36 +160,70 @@ pub struct UserFunction {
     pub call_shape: CallShape,
 }
 
-/// What a user method does when its whole body is one `return` of
-/// something that needs no frame to read ([`accessor_shape`]).
+/// What a user method does when its whole body is one statement that
+/// needs no frame to run ([`accessor_shape`]). The shapes that take
+/// arguments start with one `RECV` per declared parameter, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Accessor {
     /// `return $this->name;`: the place of the read in the method's code.
     Prop(u32),
     /// `return <literal>;`: the literal's index in the method's code.
     Lit(u32),
+    /// An empty body: null.
+    Null,
+    /// `return $this;`.
+    This,
+    /// `return $param;`: the parameter's index.
+    Arg(u32),
+    /// `return isset($this->name[$param]);`: the place, the parameter.
+    IssetDim(u32, u32),
+    /// `return array_key_exists($param, $this->name);`: the place of the
+    /// property read, the parameter.
+    KeyExists(u32, u32),
+    /// `$this->name = $param;`, then nothing or `return $this;` (the
+    /// flag): the place, the parameter.
+    SetProp(u32, u32, bool),
 }
 
-/// The [`Accessor`] of `uf` ([`UserFunction::accessor`] caches it), when its code is exactly one of the shapes
-/// and nothing about its declaration needs a call to happen: no
-/// parameter, not static, abstract, a generator or returning by
-/// reference, and neither `#[\Deprecated]` nor `#[\NoDiscard]` (both
-/// report at the call). The ops after the `return` are the implicit
-/// `return;` the compiler appends.
+/// The [`Accessor`] of `uf` ([`UserFunction::accessor`] caches it), when its
+/// code is exactly one of the shapes and nothing about its declaration
+/// needs a call to happen: not static, abstract, a generator or returning
+/// by reference, neither `#[\Deprecated]` nor `#[\NoDiscard]` (both report
+/// at the call), and every parameter required, by value, not variadic and
+/// not promoted. The ops after the body are the implicit `return;` the
+/// compiler appends.
+#[allow(clippy::too_many_lines)] // one pattern per shape, side by side
 fn accessor_shape(uf: &UserFunction) -> Option<Accessor> {
-    use crate::opcode::{Op, Operand};
+    use crate::opcode::{FetchMode, Op, Operand, PlaceBase, Seg};
     const REFUSED: u32 = flags::STATIC
         | flags::ABSTRACT
         | flags::GENERATOR
         | flags::RETURN_REF
         | flags::DEPRECATED
         | flags::NODISCARD
-        | flags::NO_BODY;
-    if uf.flags & REFUSED != 0 || !uf.params.is_empty() {
+        | flags::NO_BODY
+        | flags::CTOR;
+    let n = uf.params.len();
+    if uf.flags & REFUSED != 0
+        || uf.required as usize != n
+        || uf
+            .params
+            .iter()
+            .any(|p| p.by_ref || p.variadic || p.promote != 0 || p.has_default)
+    {
         return None;
     }
     let ops = &uf.code.ops;
+    // One `RECV` per parameter, into the variable of the same index.
+    for i in 0..n {
+        let i32 = u32::try_from(i).ok()?;
+        if !matches!(ops.get(i), Some(&Op::Recv { n, cv }) if n == i32 && cv == i32) {
+            return None;
+        }
+    }
+    let body = ops.get(n..)?;
     let tail_is_return = |from: usize| {
-        ops.get(from..).is_some_and(|rest| {
+        body.get(from..).is_some_and(|rest| {
             rest.iter().all(|op| {
                 matches!(
                     op,
@@ -201,32 +235,105 @@ fn accessor_shape(uf: &UserFunction) -> Option<Accessor> {
             })
         })
     };
-    match (ops.first()?, ops.get(1)) {
-        (
-            &Op::FetchObjProp {
-                place,
-                dst,
-                to: None,
-                mode: crate::opcode::FetchMode::Read,
-            },
-            Some(&Op::Return {
-                val: Operand::Tmp(t),
-            }),
-        ) if t == dst && tail_is_return(2) => {
-            let p = uf.code.places.get(place as usize)?;
-            let plain = matches!(p.base, crate::opcode::PlaceBase::This)
-                && matches!(
-                    p.segs.as_slice(),
-                    [crate::opcode::Seg::Prop(Operand::Lit(_))]
-                );
-            plain.then_some(Accessor::Prop(place))
+    // `$this->name` alone, or with one dimension.
+    let this_prop = |place: u32, dims: usize| {
+        uf.code.places.get(place as usize).is_some_and(|p| {
+            matches!(p.base, PlaceBase::This)
+                && p.segs.len() == 1 + dims
+                && matches!(p.segs.first(), Some(Seg::Prop(Operand::Lit(_))))
+        })
+    };
+    let param = |cv: u32| ((cv as usize) < n).then_some(cv);
+    match body {
+        [] => Some(Accessor::Null),
+        [Op::Return {
+            val: Operand::Unused,
+        }, ..]
+            if tail_is_return(0) =>
+        {
+            Some(Accessor::Null)
         }
-        (
-            &Op::Return {
-                val: Operand::Lit(l),
-            },
-            _,
-        ) if tail_is_return(1) => Some(Accessor::Lit(l)),
+        [Op::Return {
+            val: Operand::Lit(l),
+        }, ..]
+            if n == 0 && tail_is_return(1) =>
+        {
+            Some(Accessor::Lit(*l))
+        }
+        [Op::Return {
+            val: Operand::Cv(cv),
+        }, ..]
+            if tail_is_return(1) =>
+        {
+            param(*cv).map(Accessor::Arg)
+        }
+        [Op::FetchThis { dst }, Op::Return {
+            val: Operand::Tmp(t),
+        }, ..]
+            if t == dst && tail_is_return(2) =>
+        {
+            Some(Accessor::This)
+        }
+        [Op::FetchObjProp {
+            place,
+            dst,
+            to: None,
+            mode: FetchMode::Read,
+        }, Op::Return {
+            val: Operand::Tmp(t),
+        }, ..]
+            if n == 0 && t == dst && tail_is_return(2) && this_prop(*place, 0) =>
+        {
+            Some(Accessor::Prop(*place))
+        }
+        [Op::IssetObjPropDim {
+            place,
+            dim: Operand::Cv(cv),
+            dst,
+            empty: false,
+        }, Op::Return {
+            val: Operand::Tmp(t),
+        }, ..]
+            if t == dst && tail_is_return(2) && this_prop(*place, 1) =>
+        {
+            param(*cv).map(|cv| Accessor::IssetDim(*place, cv))
+        }
+        [Op::FetchObjProp {
+            place,
+            dst,
+            to: None,
+            mode: FetchMode::Read,
+        }, Op::KeyExists {
+            key: Operand::Cv(cv),
+            array: Operand::Tmp(a),
+            dst: Some(r),
+        }, Op::Return {
+            val: Operand::Tmp(t),
+        }, ..]
+            if a == dst && t == r && tail_is_return(3) && this_prop(*place, 0) =>
+        {
+            param(*cv).map(|cv| Accessor::KeyExists(*place, cv))
+        }
+        [Op::AssignObjProp {
+            place,
+            val: Operand::Cv(cv),
+            dst: None,
+        }, rest @ ..]
+            if this_prop(*place, 0) =>
+        {
+            let this = match rest {
+                [Op::FetchThis { dst }, Op::Return {
+                    val: Operand::Tmp(t),
+                }, ..]
+                    if t == dst && tail_is_return(3) =>
+                {
+                    true
+                }
+                _ if tail_is_return(1) => false,
+                _ => return None,
+            };
+            param(*cv).map(|cv| Accessor::SetProp(*place, cv, this))
+        }
         _ => None,
     }
 }
@@ -244,10 +351,11 @@ fn accessor_shape(uf: &UserFunction) -> Option<Accessor> {
 #[derive(Debug, Default)]
 pub struct CallShape {
     /// [`UserFunction::accessor`]'s answer: 0 not worked out yet, 1 no
-    /// accessor, 2 a property read (its place in `accessor_arg`), 3 a
-    /// literal (its index there).
+    /// accessor, else the [`Accessor`] variant with its operands in
+    /// `accessor_arg` and `accessor_arg2`.
     accessor: Cell<u8>,
     accessor_arg: Cell<u32>,
+    accessor_arg2: Cell<u32>,
     kind: Cell<u8>,
     /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
     /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
@@ -335,10 +443,19 @@ impl UserFunction {
     /// and the flags do not change once the function is shared.
     #[inline]
     pub(crate) fn accessor(&self) -> Option<Accessor> {
+        let a = self.call_shape.accessor_arg.get();
+        let b = self.call_shape.accessor_arg2.get();
         match self.call_shape.accessor.get() {
             1 => None,
-            2 => Some(Accessor::Prop(self.call_shape.accessor_arg.get())),
-            3 => Some(Accessor::Lit(self.call_shape.accessor_arg.get())),
+            2 => Some(Accessor::Prop(a)),
+            3 => Some(Accessor::Lit(a)),
+            4 => Some(Accessor::Null),
+            5 => Some(Accessor::This),
+            6 => Some(Accessor::Arg(a)),
+            7 => Some(Accessor::IssetDim(a, b)),
+            8 => Some(Accessor::KeyExists(a, b)),
+            9 => Some(Accessor::SetProp(a, b, false)),
+            10 => Some(Accessor::SetProp(a, b, true)),
             _ => self.find_accessor(),
         }
     }
@@ -347,12 +464,20 @@ impl UserFunction {
     #[inline(never)]
     fn find_accessor(&self) -> Option<Accessor> {
         let found = accessor_shape(self);
-        let (state, arg) = match found {
-            None => (1, 0),
-            Some(Accessor::Prop(place)) => (2, place),
-            Some(Accessor::Lit(l)) => (3, l),
+        let (state, a, b) = match found {
+            None => (1, 0, 0),
+            Some(Accessor::Prop(place)) => (2, place, 0),
+            Some(Accessor::Lit(l)) => (3, l, 0),
+            Some(Accessor::Null) => (4, 0, 0),
+            Some(Accessor::This) => (5, 0, 0),
+            Some(Accessor::Arg(i)) => (6, i, 0),
+            Some(Accessor::IssetDim(place, i)) => (7, place, i),
+            Some(Accessor::KeyExists(place, i)) => (8, place, i),
+            Some(Accessor::SetProp(place, i, false)) => (9, place, i),
+            Some(Accessor::SetProp(place, i, true)) => (10, place, i),
         };
-        self.call_shape.accessor_arg.set(arg);
+        self.call_shape.accessor_arg.set(a);
+        self.call_shape.accessor_arg2.set(b);
         self.call_shape.accessor.set(state);
         found
     }
