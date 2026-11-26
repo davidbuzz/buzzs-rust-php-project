@@ -732,7 +732,7 @@ pub(crate) fn possible_root_ref(r: &php_runtime::PhpRef) {
     }
 }
 
-pub(crate) use traverse::root_native_state;
+pub(crate) use traverse::{root_frame, root_native_state};
 
 /// [`possible_root`] of the last handle of a reference: its value.
 #[inline(never)]

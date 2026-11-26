@@ -144,6 +144,17 @@ impl<'a> GcVisitor<'a> {
     }
 }
 
+/// [`root_native_state`] for a suspended frame about to be dropped (a
+/// generator closed before it finished: `zend_generator_close` frees its
+/// compiled variables with `zval_ptr_dtor`).
+pub(crate) fn root_frame(f: &Frame) {
+    let mut v = GcVisitor {
+        graph: None,
+        from: super::graph::NONE,
+    };
+    frame(&mut v, f);
+}
+
 /// `zval_ptr_dtor` of everything the native state `state` of an object
 /// being freed owns (a closure's bound variables and `$this`, a suspended
 /// generator's frame, the storage of an `ArrayObject` or

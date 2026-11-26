@@ -113,6 +113,16 @@ fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
         }
         php_spl::SplState::FixedArray(f) => v.values(&f.elements),
         php_spl::SplState::DualIt(d) => dual_it_gc(d, v),
+        // `spl_dllist_object_get_gc`: every element.
+        php_spl::SplState::DlList(d) => d.list.for_each_value(|x| v.value(x)),
+        // `spl_heap_object_get_gc` / `spl_pqueue_object_get_gc`: the live
+        // elements, with their priorities.
+        php_spl::SplState::Heap(h) => {
+            for e in h.elems.iter().take(h.count) {
+                v.value(&e.data);
+                v.value(&e.priority);
+            }
+        }
         _ => {}
     });
     if r.is_err() {
