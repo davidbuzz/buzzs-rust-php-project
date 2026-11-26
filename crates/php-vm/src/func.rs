@@ -790,6 +790,8 @@ pub struct Builtin {
     /// [`Builtin::fast_eval_id`] plus one, once worked out
     /// ([`FAST_UNKNOWN`] before).
     fast: Cell<u8>,
+    /// [`Builtin::leaf_id`] plus one, once worked out (0 before).
+    leaf: Cell<u8>,
     /// The position of the first by-reference parameter
     /// ([`Builtin::plain_call_upto`]), [`NO_REF_PARAM`] when there is none;
     /// worked out with `plain`.
@@ -920,6 +922,7 @@ impl Builtin {
             text: StubText::None,
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            leaf: Cell::new(0),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -956,6 +959,7 @@ impl Builtin {
             text: StubText::Static(text),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            leaf: Cell::new(0),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -974,6 +978,7 @@ impl Builtin {
             text: StubText::Owned(text.into()),
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            leaf: Cell::new(0),
             first_ref: Cell::new(NO_REF_PARAM),
             accepts: OnceCell::new(),
             name_str: OnceCell::new(),
@@ -989,6 +994,7 @@ impl Builtin {
             // Depend on the name.
             plain: Cell::new(PLAIN_UNKNOWN),
             fast: Cell::new(FAST_UNKNOWN),
+            leaf: Cell::new(0),
             ..self.clone()
         }
     }
@@ -1065,6 +1071,23 @@ impl Builtin {
             FAST_UNKNOWN => {
                 let id = crate::call::fast_eval_id(self.name.as_bytes());
                 self.fast.set(id + 1);
+                id
+            }
+            f => f - 1,
+        }
+    }
+
+    /// The id of the function's leaf class (`crate::special::leaf`;
+    /// `leaf::NONE` otherwise): a function whose handler, for arguments
+    /// of the class's shapes, reports nothing, throws nothing and runs
+    /// no PHP code, so the tape calls it without a frame. Worked out
+    /// once, from the name.
+    #[inline]
+    pub(crate) fn leaf_id(&self) -> u8 {
+        match self.leaf.get() {
+            0 => {
+                let id = crate::special::leaf_id(self.name.as_bytes());
+                self.leaf.set(id + 1);
                 id
             }
             f => f - 1,

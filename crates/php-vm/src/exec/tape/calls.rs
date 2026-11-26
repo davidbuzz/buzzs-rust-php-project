@@ -2425,6 +2425,113 @@ fn accessor_read(
 /// its class scope, whether it is static.
 pub(super) type MethodEntry = (Func, Option<Rc<crate::class::Class>>, bool);
 
+/// The most arguments a leaf call takes ([`leaf_now`]).
+const LEAF_ARGS: usize = 4;
+
+/// `f(...)` of a leaf builtin (`special::leaf`): `ZEND_INIT_FCALL` at `at`
+/// (its cached function in slot `site` of the caller's function cache,
+/// else in `name`'s) followed by `Send`s of literals, variables or
+/// temporaries (by value, at most [`LEAF_ARGS`]) and the `DoCall`. When
+/// the arguments have one of the shapes of the function's leaf class
+/// (`Vm::leaf_args`: the handler then reports nothing, throws nothing,
+/// runs no PHP code and looks at no frame), the handler is called at
+/// once on the caller's frame with copies of them, as a frameless
+/// function is: nothing is readied in the pooled frame and nothing sent
+/// through it (the prepared call's ~780 instructions around the handler,
+/// 12M times in two framework test suites). The index of the `DoCall`
+/// with `CALLED` or `CALL_THREW` (the caller's flags), as
+/// `enter_after_sends` returns a builtin's call. `None`, nothing
+/// changed, for anything else.
+pub(super) fn leaf_now(
+    vm: &mut Vm,
+    ops: &[Op],
+    name: u32,
+    site: Option<usize>,
+    at: usize,
+    called: usize,
+    threw: usize,
+) -> Option<usize> {
+    if vm.observer.enabled {
+        return None;
+    }
+    let caller = vm.frames.last()?;
+    let b = {
+        let cache = caller.code.fcall_cache.try_borrow().ok()?;
+        let entry = match site.and_then(|s| cache.get(s)).and_then(Option::as_ref) {
+            Some(entry) => entry,
+            None => cache.get(name as usize)?.as_ref()?,
+        };
+        let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+            return None;
+        };
+        let leaf = b.leaf_id();
+        if leaf == crate::special::leaf::NONE
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || b.plain_call_upto().0 != PlainCall::Named
+        {
+            return None;
+        }
+        Rc::clone(b)
+    };
+    // The sent values, read where they are.
+    let mut sent: [&Value; LEAF_ARGS] = [&Value::Null; LEAF_ARGS];
+    let mut tmps: [Option<u32>; LEAF_ARGS] = [None; LEAF_ARGS];
+    let mut n = 0;
+    let dst = loop {
+        let src = match ops.get(at + 1 + n)? {
+            &Op::DoCall { dst } => break dst,
+            Op::Send { src } if n < LEAF_ARGS => src,
+            _ => return None,
+        };
+        sent[n] = match *src {
+            ArgSrc::Val(Operand::Lit(l)) => caller.code.literals.get(l as usize)?,
+            ArgSrc::Val(Operand::Tmp(t)) => {
+                tmps[n] = Some(t);
+                caller.tmps.get(t as usize)?
+            }
+            ArgSrc::Val(Operand::Cv(cv)) if !caller.symtab_attached => {
+                caller.cvs.get(cv as usize)?.get()?
+            }
+            // `ZEND_SEND_VAR_EX` of a plain variable: by value (a leaf
+            // function has no by-reference parameter). An undefined one
+            // is the call's (its warning).
+            ArgSrc::Place(pid) if !caller.symtab_attached => {
+                let cv = place_cv(&caller.code, pid)?;
+                caller.cvs.get(cv as usize)?.get()?
+            }
+            _ => return None,
+        };
+        n += 1;
+    };
+    if !vm.leaf_args(b.leaf_id(), &sent[..n]) {
+        return None;
+    }
+    // The handler's copies; a temporary is consumed (its `Send` would
+    // have moved it).
+    let mut args = vm.call_bufs.take_args();
+    args.values.reserve(b.signature().params.len().max(n));
+    for v in &sent[..n] {
+        args.values.push(crate::func::copy_arg(v));
+    }
+    let done = at + 1 + n;
+    let caller = vm.frames.last_mut()?;
+    for t in tmps[..n].iter().flatten() {
+        if let Some(slot) = caller.tmps.get_mut(*t as usize) {
+            drop(std::mem::take(slot));
+        }
+    }
+    // `SAVE_OPLINE()`: the op after the `DoCall`.
+    caller.ip = done + 1;
+    match vm.frameless_handler_run(&b, args, dst) {
+        Some(Ok(())) => Some(done | called),
+        Some(Err(t)) => {
+            vm.tape_throw = Some(t);
+            Some(done | threw)
+        }
+        None => None,
+    }
+}
+
 /// What [`accessor_now`] found at a method call site.
 pub(super) enum MethodNow {
     /// The call is done: the op to go on at.
@@ -3920,6 +4027,34 @@ pub(super) fn call_native(
         if let Some(&last) = table.last() {
             if !args_accepted(&frame.args, table, last) {
                 return Err(prep);
+            }
+        }
+    }
+    // A leaf function (`special::leaf`) with arguments of its class's
+    // shapes: its handler has no use for a frame (it reports nothing,
+    // throws nothing, runs no PHP code), so it is called on the caller's,
+    // as a frameless function is. Not a method that happens to have such
+    // a name (readied with its `$this` or scopes).
+    let leaf = b.leaf_id();
+    if leaf != crate::special::leaf::NONE && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0 {
+        let frame = &vm.frames.vec[live];
+        let mut sent: [&Value; LEAF_ARGS] = [&Value::Null; LEAF_ARGS];
+        let mut plain = frame.args.len() <= LEAF_ARGS;
+        for (slot, arg) in sent.iter_mut().zip(&frame.args) {
+            match arg {
+                Some(v) => *slot = v,
+                None => plain = false,
+            }
+        }
+        if plain
+            && frame.this.is_none()
+            && frame.called.is_none()
+            && frame.scope.is_none()
+            && vm.leaf_args(leaf, &sent[..frame.args.len()])
+        {
+            vm.frames.vec[live - 1].ip = caller_ip;
+            if let Some(r) = vm.frameless_handler_call(b, n, dst, live) {
+                return Ok(r);
             }
         }
     }
