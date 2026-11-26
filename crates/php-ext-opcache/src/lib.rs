@@ -322,7 +322,24 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     check_startup_shm(vm);
     configure_cache(vm);
-    JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+    let mut jit = jit_enabled_at_startup(vm);
+    // `zend_jit_check_support()`, which `accel_post_startup` calls when the
+    // JIT is configured with a buffer: an extension that replaced
+    // `zend_execute_ex` (ext/zend_test with
+    // `zend_test.replace_zend_execute_ex=1`) turns the JIT off, with a
+    // warning.
+    if jit && is_opcache_enabled(vm) && vm.ini_bool("zend_test.replace_zend_execute_ex") {
+        let headers_sent = vm.headers_sent;
+        let _ = vm.error_at(
+            2,
+            "JIT is incompatible with third party extensions that override zend_execute_ex(). JIT disabled.",
+            &ZStr::from("Unknown"),
+            0,
+        );
+        vm.headers_sent = headers_sent;
+        jit = false;
+    }
+    JIT_ENABLED.with(|c| c.set(jit));
 }
 
 /// Sizes the in-memory cache as `zend_accel_init_shm` does: as many
