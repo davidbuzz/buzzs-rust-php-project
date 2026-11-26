@@ -2857,8 +2857,8 @@ pub struct Vm {
     /// VM's name tables are, not SipHash (paths are the request's own,
     /// not chosen keys an attacker can collide).
     ///
-    /// [`FxHasher`]: crate::class::FxHasher
-    pub included_set: HashSet<ZStr, std::hash::BuildHasherDefault<crate::class::FxHasher>>,
+    /// [`FxHasher`]: rustc_hash::FxHasher
+    pub included_set: HashSet<ZStr, rustc_hash::FxBuildHasher>,
     /// Registered class loaders, in call order
     /// (`zend_class_autoload_functions`).
     pub autoloaders: Vec<ClassLoader>,
