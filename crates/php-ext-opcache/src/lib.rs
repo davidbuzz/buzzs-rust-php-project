@@ -238,15 +238,22 @@ fn accel_log_warning(vm: &mut Vm, message: &str) {
 /// The startup-stage checks of opcache's INI handlers
 /// (`OnUpdateMemoryConsumption`, `OnUpdateInternedStringsBuffer`,
 /// `OnUpdateMaxAcceleratedFiles`, `OnUpdateMaxWastedPercentage`): a value
-/// out of range is logged and the directive keeps its default. Runs once,
-/// before the first request.
+/// out of range is logged and the directive keeps its default. Runs at
+/// module startup, as the handlers do: what it logs comes before anything
+/// a request prints (`php --repeat`'s "Executing for the first time...",
+/// which run-tests keeps the output before). Every VM of the thread puts
+/// the refused values back to their defaults; only the first one logs and
+/// sets the cache up.
 fn check_startup_ini(vm: &mut Vm) {
     thread_local! {
         static CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
-    if CHECKED.with(|c| c.replace(true)) {
-        return;
-    }
+    let first = !CHECKED.with(|c| c.replace(true));
+    let warn = |vm: &mut Vm, message: &str| {
+        if first {
+            accel_log_warning(vm, message);
+        }
+    };
     /// `MAX_INTERNED_STRINGS_BUFFER_SIZE` on 64-bit builds.
     const MAX_INTERNED_STRINGS_BUFFER_SIZE: i64 = 32767;
     /// `MIN_ACCEL_FILES` / `MAX_ACCEL_FILES`.
@@ -258,7 +265,7 @@ fn check_startup_ini(vm: &mut Vm) {
         223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793,
     ];
     if vm.ini_long("opcache.memory_consumption") < 8 {
-        accel_log_warning(
+        warn(
             vm,
             "opcache.memory_consumption is set below the required 8MB.\n",
         );
@@ -266,12 +273,12 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let size = vm.ini_long("opcache.interned_strings_buffer");
     if size < 0 {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.interned_strings_buffer must be greater than or equal to 0, {size} given.\n"),
         );
     } else if size > MAX_INTERNED_STRINGS_BUFFER_SIZE {
-        accel_log_warning(
+        warn(
             vm,
             &format!(
                 "opcache.interned_strings_buffer must be less than or equal to {MAX_INTERNED_STRINGS_BUFFER_SIZE}, {size} given.\n"
@@ -283,18 +290,18 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let files = vm.ini_long("opcache.max_accelerated_files");
     if files < MIN_ACCEL_FILES {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.max_accelerated_files is set below the required minimum ({MIN_ACCEL_FILES}).\n"),
         );
     } else if files > MAX_ACCEL_FILES {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.max_accelerated_files is set above the limit ({MAX_ACCEL_FILES}).\n"),
         );
     } else if !ACCEL_FILES_PRIMES.contains(&files) {
         // The size is kept; master only advises one of its hash primes.
-        accel_log_warning(
+        warn(
             vm,
             "opcache.max_accelerated_files should be a value in {223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793}.\n",
         );
@@ -304,11 +311,14 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let wasted = vm.ini_long("opcache.max_wasted_percentage");
     if wasted <= 0 || wasted > 50 {
-        accel_log_warning(
+        warn(
             vm,
             "opcache.max_wasted_percentage must be set between 1 and 50.\n",
         );
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
+    }
+    if !first {
+        return;
     }
     check_startup_shm(vm);
     configure_cache(vm);
@@ -483,7 +493,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
 
     m.ini_on_modify("opcache.enable", on_update_enable);
     m.ini_on_modify("opcache.jit", on_update_jit);
-    m.on_request_startup(check_startup_ini);
+    m.on_module_startup(check_startup_ini);
     m.ini(d(
         "opcache.enable",
         Some("1"),

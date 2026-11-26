@@ -20,6 +20,16 @@ pub(crate) fn install(vm: &mut Vm) {
     if vm.ini_bool("zend.multibyte") {
         let value = vm.ini_string("zend.script_encoding").unwrap_or_default();
         let (_, diagnostics) = parse_list(&value);
+        // `OnUpdateScriptEncoding` at startup, once in a process (see
+        // `ini::startup`): a later VM of this thread does not report again.
+        thread_local! {
+            static REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        let diagnostics = if REPORTED.with(|r| r.replace(true)) {
+            Vec::new()
+        } else {
+            diagnostics
+        };
         let headers_sent = vm.headers_sent;
         for diagnostic in diagnostics {
             let _ = vm.error_at(

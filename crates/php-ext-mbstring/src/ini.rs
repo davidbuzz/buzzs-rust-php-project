@@ -108,6 +108,17 @@ pub(crate) fn startup(vm: &mut Vm) {
     let diags = st.take_diagnostics();
     st.set_regex_defaults(state::with(|prev| prev.regex_defaults()));
     state::replace(st);
+    // The handlers run at `MINIT`, once in a process: a VM made for a later
+    // request on this thread (`php --repeat`, `php-cgi -T`) builds its
+    // state from the same values without reporting them again. (The
+    // second run of `php --repeat 2` repeated every "PHP Startup:" line,
+    // which run-tests keeps as that run's output.)
+    thread_local! {
+        static REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if REPORTED.with(|r| r.replace(true)) {
+        return;
+    }
     // Startup errors are displayed before the request: they do not count
     // as sent headers (other modules' INI handlers check that).
     let headers_sent = vm.headers_sent;
