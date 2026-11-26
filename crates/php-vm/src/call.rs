@@ -4333,6 +4333,14 @@ impl Vm {
                 r = Err(e);
             }
         }
+        // The resolution of this call's callable argument
+        // (`coerce_builtin_arg`) goes with the call: kept until the next
+        // builtin call cleared it, it held the callable, and what a
+        // closure captured was destructed that much later than under
+        // php-src (`array_map($f, $a); unset($f);`).
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
         // Objects released by the builtin (e.g. by-ref outputs overwriting
         // the last reference) are destructed while its frame is still
         // active, so traces show `[internal function]` + the builtin.

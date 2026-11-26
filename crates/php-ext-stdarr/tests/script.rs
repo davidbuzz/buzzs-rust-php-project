@@ -53,3 +53,23 @@ debug_zval_dump($a);
         "array(1) refcount(2){\n  [\"test\"]=>\n  string(3) \"xxx\" interned\n}\n"
     );
 }
+
+/// A builtin's callable argument is not held past the call: once the
+/// variable is unset, what the closure captured is destructed at once.
+/// (The resolution the parameter's check made stayed with the VM until
+/// the next builtin call, so the destructor ran a statement late.)
+/// Expected output from php8.5.
+#[test]
+fn a_callable_argument_is_released_with_the_call() {
+    let output = run(r"<?php
+class Held { function __destruct() { echo 'released', PHP_EOL; } }
+function mk() { $h = new Held; return function ($x) use ($h) { return $x; }; }
+$f = mk(); array_map($f, [1]); unset($f); echo 'after array_map', PHP_EOL;
+$f = mk(); $a = [2, 1]; usort($a, $f); unset($f); echo 'after usort', PHP_EOL;
+$f = mk(); array_filter([1], $f); unset($f); echo 'after array_filter', PHP_EOL;
+");
+    assert_eq!(
+        output,
+        "released\nafter array_map\nreleased\nafter usort\nreleased\nafter array_filter\n"
+    );
+}
