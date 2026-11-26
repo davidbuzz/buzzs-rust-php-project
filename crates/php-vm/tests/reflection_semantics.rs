@@ -72,6 +72,46 @@ class Missing implements HookedInterface {}
     );
 }
 
+/// `self` and `parent` in a closure's signature are not replaced by the
+/// class it is written in (`zend_is_scope_known()`: a closure can be bound
+/// to another scope): reflection shows them as written, and a call checks
+/// them against the scope the closure has then. Expected output from
+/// php8.5.
+#[test]
+fn self_and_parent_types_of_a_closure_follow_its_scope() {
+    assert_eq!(
+        run(r"<?php
+namespace N;
+class A {
+    static function s() { return fn (): self => new self; }
+    static function bad() { return fn (): self => new \stdClass; }
+    static function u() { return function (self $x): self { return $x; }; }
+    function m(self $x): self { return $x; }
+}
+class B extends A { static function v() { return fn (parent $x): parent => $x; } }
+class C {}
+var_dump(get_class((A::s())()));
+try { (A::bad())(); } catch (\TypeError $e) { echo $e->getMessage(), PHP_EOL; }
+var_dump(get_class((A::u())(new B)));
+$rebound = \Closure::bind(A::u(), null, C::class);
+var_dump(get_class($rebound(new C)));
+try { $rebound(new A); } catch (\TypeError $e) { echo get_class($e), PHP_EOL; }
+var_dump(get_class((B::v())(new A)));
+try { (B::v())(new C); } catch (\TypeError $e) { echo get_class($e), PHP_EOL; }
+foreach ([A::s(), A::u(), B::v(), $rebound, (new A)->m(...)] as $f) {
+    $r = new \ReflectionFunction($f);
+    echo $r->getReturnType()->getName();
+    foreach ($r->getParameters() as $p) { echo ' / ', $p->getType()->getName(); }
+    echo PHP_EOL;
+}
+"),
+        "string(3) \"N\\A\"\n\
+         N\\A::{closure:N\\A::bad():5}(): Return value must be of type N\\A, stdClass returned\n\
+         string(3) \"N\\B\"\nstring(3) \"N\\C\"\nTypeError\nstring(3) \"N\\A\"\nTypeError\n\
+         self\nself / self\nparent / parent\nself / self\nN\\A / N\\A\n"
+    );
+}
+
 /// bug49719.phpt / `property_exists.phpt`: a parent's private property is
 /// not a property of the subclass.
 #[test]

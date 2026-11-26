@@ -1138,10 +1138,15 @@ impl Compiler<'_> {
                             );
                         }
                         // `zend_compile_single_typename`: self/parent are not
-                        // substituted in traits or anonymous classes (GH-18373).
+                        // substituted in traits or anonymous classes
+                        // (GH-18373), nor in a closure, which can be bound
+                        // to another scope (`zend_is_scope_known()`):
+                        // reflection shows them as written, and they
+                        // mean the scope the closure has when called.
                         let known = self.current_class().filter(|c| {
                             !c.is_trait
                                 && !c.is_anon
+                                && self.closure_depth == 0
                                 && !self.opts.closure_name.as_ref().is_some_and(|name| {
                                     name.as_bytes().starts_with(b"{closure:pfa:")
                                 })
