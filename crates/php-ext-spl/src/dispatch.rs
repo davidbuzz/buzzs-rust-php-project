@@ -178,6 +178,23 @@ pub fn eval_default(src: &str, class: &str) -> Option<Value> {
     None
 }
 
+/// A stub default that goes into the signature as the stub has it, which
+/// is how reflection and the "must be compatible" diagnostics show it: a
+/// class's name (`SplFileObject::class`) and a plain double-quoted string
+/// (`"r"`). `php-spl` applies either itself when the argument is omitted.
+fn stub_text(def: &str) -> Option<String> {
+    let t = def.trim();
+    if let Some(class) = t.strip_suffix("::class") {
+        let named = !class.is_empty()
+            && class
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\');
+        return named.then(|| t.to_string());
+    }
+    let inner = t.strip_prefix('"')?.strip_suffix('"')?;
+    (!inner.contains(['"', '\\', '$', ',', ')'])).then(|| t.to_string())
+}
+
 /// Whether a declared parameter type is left to `php-spl`'s own checks.
 fn loose_type(method: &str, ty: &str) -> bool {
     method.eq_ignore_ascii_case("__construct")
@@ -216,7 +233,7 @@ fn signature(d: &MethodDef) -> String {
         s.push_str(p.name);
         if let Some(def) = p.default {
             s.push_str(" = ");
-            match eval_default(def, "").as_ref().and_then(literal) {
+            match stub_text(def).or_else(|| eval_default(def, "").as_ref().and_then(literal)) {
                 Some(l) => s.push_str(&l),
                 None => s.push_str("UNKNOWN"),
             }

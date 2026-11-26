@@ -916,3 +916,36 @@ echo "done\n";
         "a=1\nb=2\n0=3\n0=10\n1=20\n0=1\n1=2\n2=3\n5=9\nx=1\ny=2\n2,4\ndone\n"
     );
 }
+
+/// A parameter default the stub writes as a class's name
+/// (`SplFileObject::class`) is a default reflection knows: available, its
+/// value the name, no constant, and shown as the stub has it, as a string
+/// default is shown in the stub's double quotes; and an override that
+/// drops it is told what it must be compatible with. A test-double
+/// generator that found no default declared the method without one, and
+/// the class could not be declared. Expected output from php8.5.
+#[test]
+fn class_name_defaults_are_known_to_reflection() {
+    let out = run(r#"<?php
+foreach ([['SplFileInfo', 'setFileClass', 0], ['SplFileInfo', 'setInfoClass', 0], ['ArrayObject', '__construct', 2], ['SplFileInfo', 'openFile', 0]] as [$c, $m, $i]) {
+    $p = (new ReflectionMethod($c, $m))->getParameters()[$i];
+    var_dump($p->isDefaultValueAvailable(), $p->getDefaultValue(), $p->isDefaultValueConstant());
+    echo $p, "\n";
+}
+class F extends SplFileInfo { public function setFileClass(string $class = SplFileObject::class): void {} }
+class G extends SplFileInfo { public function setFileClass(string $class = 'SplFileObject'): void {} }
+$f = new SplFileInfo('x'); $f->setFileClass(); $f->setInfoClass();
+echo "ok\n";
+"#);
+    assert_eq!(
+        out,
+        "bool(true)\nstring(13) \"SplFileObject\"\nbool(false)\n\
+         Parameter #0 [ <optional> string $class = SplFileObject::class ]\n\
+         bool(true)\nstring(11) \"SplFileInfo\"\nbool(false)\n\
+         Parameter #0 [ <optional> string $class = SplFileInfo::class ]\n\
+         bool(true)\nstring(13) \"ArrayIterator\"\nbool(false)\n\
+         Parameter #2 [ <optional> string $iteratorClass = ArrayIterator::class ]\n\
+         bool(true)\nstring(1) \"r\"\nbool(false)\n\
+         Parameter #0 [ <optional> string $mode = \"r\" ]\nok\n"
+    );
+}

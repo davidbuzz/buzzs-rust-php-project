@@ -4555,6 +4555,12 @@ impl Vm {
             return DefaultResolution::Absent;
         }
         if let Some(p) = find_double_colon(text.as_bytes()) {
+            // `X::class` names the class and is no constant: the function
+            // applies it itself when the argument is omitted, as it does
+            // an `UNKNOWN` one.
+            if text.as_bytes()[p + 2..].eq_ignore_ascii_case(b"class") {
+                return DefaultResolution::Absent;
+            }
             let Some(cls) = self.find_class(&text.as_bytes()[..p]) else {
                 return DefaultResolution::Varying(None);
             };

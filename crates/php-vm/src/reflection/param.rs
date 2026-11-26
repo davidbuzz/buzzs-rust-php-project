@@ -294,6 +294,17 @@ fn builtin_default(vm: &mut Vm, f: &FnRef, idx: usize, text: &str) -> VmResult<V
         }
     }
     let t = text.trim();
+    // `X::class` (`ZEND_AST_CLASS_NAME`): the class's name.
+    if let Some(class) = t.strip_suffix("::class") {
+        let class = class.strip_prefix('\\').unwrap_or(class);
+        if !class.is_empty()
+            && class
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\')
+        {
+            return Ok(Value::Str(ZStr::from(class)));
+        }
+    }
     // A flag combination (`A::X|A::Y`): the bitwise or of the constants.
     if t.contains('|') && !t.contains(['"', '\'', '(', '[']) {
         let mut acc = 0;
