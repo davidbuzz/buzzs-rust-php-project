@@ -315,6 +315,18 @@ optimization log these came from, with its landed-change tables, is git history:
     Not applicable: stub/arginfo verification (`verify-generated-files`), the
     bundled-library checks, Windows builds, the C unit tests, the self-hosted benchmark
     (`real-time-benchmark.yml`).
+- [ ] CI, low priority (owner, 26 Nov): the x86-64 and AArch64 release jobs keep the binaries
+  they built (`php`, `php-cgi`, `php-fpm`) as a downloadable artifact for 90 days
+  (`actions/upload-artifact` with `retention-days: 90`, named by architecture and commit), so
+  that a past day's build can be fetched and measured without building it again. The jobs keep
+  only the PHPT reports (14 days) and the benchmark's profiles (30 days) so far.
+- [ ] CI `BENCHMARKING` counts too much for us: C's `php-cgi -T <warmup>,<runs>` switches
+  callgrind's counting off for start-up and the warm-up runs (`CALLGRIND_STOP_INSTRUMENTATION`,
+  `CALLGRIND_ZERO_STATS`, `CALLGRIND_START_INSTRUMENTATION` in `sapi/cgi/cgi_main.c`); ours
+  (`crates/php-cli/src/cgi/main.rs`) does not, so start-up and the 50 warm-up runs are in the
+  total that `benchmark.php` divides by 50. Our figures are comparable with each other from
+  run to run, but not with php-src's in `php/benchmarking-data` (they are about twice the
+  request's cost). Issue the three client requests, or count the measured runs alone.
 - Rules that stay: never push unless the owner asks (`git push davidbuzz master`); JIT
   knobs are `BUZZS_*` (`BUZZS_JIT=0` off, `BUZZS_JIT_DEBUG=1` reports, `BUZZS_JIT_HOT=<n>`
   compiles a loop after n back edges instead of 1,000); after a JIT change also run the
