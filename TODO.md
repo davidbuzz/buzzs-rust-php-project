@@ -270,6 +270,28 @@ optimization log these came from, with its landed-change tables, is git history:
 
 ## C. Conformance and features
 
+- [ ] **The PHPT variants upstream's CI runs, whole in-scope suite, counted 27 Nov** on the
+  release binaries of `d8241b31` (the default run has no failure). JIT off 21,498 pass, 1
+  fail; opcache with `opcache.jit=tracing` 21,498, 5; opcache with the JIT off 21,499, 1;
+  `--repeat 2` 19,506, 14 (12 of them fixed since: `c7a417c7`, `9c33f377`); the observer
+  variant 21,497, 3. What is open:
+  - `Zend/tests/stack_limit/stack_limit_010.phpt`, in every variant and in every CI job (it
+    runs only with `STACK_LIMIT_DEFAULTS_CHECK=1`, which CI sets): it expects the stack
+    `zend_call_stack_get()` detects to be the system's default (8 MB; 16 MB on GitHub's
+    runners), and ours is the 256 MB the VM raises `RLIMIT_STACK` to (`main_stack.rs`). The
+    owner's call: report the limit the process started with (it has to survive the
+    re-execution), or keep the true figure and the failure.
+  - opcache with the tracing JIT asked for (`-d opcache.enable_cli=1 -d opcache.jit=tracing
+    -d opcache.jit_buffer_size=64M`): `ext/opcache/tests/jit/bug80426` (the "JIT is
+    incompatible with third party extensions that override zend_execute_ex()" warning is
+    not raised), `jit/gh13400` (`opcache_get_status()['jit']['buffer_free']` does not shrink
+    in the parent after a forked child compiled), `jit/preload_restart_function_jit` and
+    `jit/preload_restart_hot_counters` ("Call to undefined function preloaded_sum()" after
+    an opcache restart with preloading). All four are skipped or pass in the default run.
+  - the observer variant (`-d zend_test.observer.enabled=1 -d
+    zend_test.observer.show_output=0`): `ext/openssl/tests/bug79881` and
+    `ext/standard/tests/serialize/bug81142` compare `memory_get_usage()` before and after
+    (192 bytes more with the observer on).
 - [ ] SAPIs (from PR #9, whose `php-sapi` crate gave every SAPI one `RequestInfo`): the
   SAPI-internal request structs (the CLI's `Request`, CGI's `RequestInfo`, the built-in
   server's `Request`, Apache's accessors) still exist; move them onto `RequestInfo` with a
