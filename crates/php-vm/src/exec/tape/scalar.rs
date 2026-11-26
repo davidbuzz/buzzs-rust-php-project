@@ -1083,9 +1083,9 @@ pub(super) unsafe fn match_jump(frame: *mut Frame, inst: &Inst) -> isize {
 
 /// `Op::Free` of a temporary (`ZEND_FREE`: `zval_ptr_dtor_nogc`), as
 /// `hot::step_ext` runs it: a scalar or a string is released, and so is
-/// an array another handle shares (the release drops a count). Declines
-/// anything whose release could free an array or object or run a
-/// destructor (the generic op's).
+/// an array or an object another handle shares (the release drops a
+/// count). Declines anything whose release could free an array or object
+/// or run a destructor (the generic op's).
 ///
 /// # Safety
 /// As [`move_tmp`].
@@ -1098,6 +1098,10 @@ pub(super) unsafe fn free_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     let plain = match &*slot {
         Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) => true,
         Value::Array(a) => a.refcount() >= 2,
+        // An object another handle keeps (the `$this` a fluent method
+        // returned, discarded): the release drops a count, no destructor
+        // can run and `zval_ptr_dtor_nogc` buffers no root.
+        Value::Object(o) => o.refcount() >= 2,
         _ => false,
     };
     if plain {

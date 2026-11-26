@@ -822,7 +822,14 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
                 // An array another handle shares (the source of
                 // `[$a, $b] = $x`, a constant's array): the release only
                 // drops a count (`zval_ptr_dtor_nogc`).
-                if !matches!(slot, Value::Array(a) if a.refcount() >= 2) {
+                let shared = match &*slot {
+                    Value::Array(a) => a.refcount() >= 2,
+                    // An object another handle keeps (a fluent method's
+                    // `$this`, discarded): likewise.
+                    Value::Object(o) => o.refcount() >= 2,
+                    _ => false,
+                };
+                if !shared {
                     return DECLINED;
                 }
             }
