@@ -91,6 +91,9 @@ pub struct RequestCtx {
     pub facts: RefCell<HeaderFacts>,
     /// The connection failed (`PHP_CONNECTION_ABORTED`).
     pub aborted: Cell<bool>,
+    /// `php_handle_aborted_connection()` ran for this request
+    /// ([`abort_interrupt`]).
+    pub abort_handled: Cell<bool>,
     /// `client->headers_written`.
     pub headers_written: Cell<bool>,
     /// `sapi_cli_server_discard_headers` is in effect.
@@ -221,6 +224,7 @@ impl RequestCtx {
             headers: RefCell::new(SapiHeaders::new()),
             facts: RefCell::new(facts),
             aborted: Cell::new(false),
+            abort_handled: Cell::new(false),
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
@@ -248,6 +252,7 @@ impl RequestCtx {
             headers: RefCell::new(SapiHeaders::new()),
             facts: RefCell::new(facts),
             aborted: Cell::new(false),
+            abort_handled: Cell::new(false),
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
             body: RefCell::new(Body::Unread),
@@ -295,7 +300,17 @@ impl RequestCtx {
             (None, None) => std::io::stdout().write_all(data).is_ok(),
         };
         if !ok {
-            self.aborted.set(true);
+            self.note_abort();
+        }
+    }
+
+    /// The client went away (a write to it failed):
+    /// `php_handle_aborted_connection()`. The status is recorded here,
+    /// where there is no VM, and the executor is asked for a safe point,
+    /// where [`abort_interrupt`] does the rest.
+    pub fn note_abort(&self) {
+        if !self.aborted.replace(true) {
+            php_vm::interrupt::request_interrupt();
         }
     }
 
@@ -483,6 +498,26 @@ fn str_value(s: impl AsRef<[u8]>) -> Value {
 
 fn ctx_or<R>(default: R, f: impl FnOnce(&RequestCtx) -> R) -> R {
     with_ctx(f).unwrap_or(default)
+}
+
+/// The web SAPIs' VM interrupt handler: the rest of
+/// `php_handle_aborted_connection()` once a write to the client failed
+/// ([`RequestCtx::note_abort`]). The output layer is disabled and, unless
+/// `ignore_user_abort` is on, the script ends as `zend_bailout()` ends it
+/// (its shutdown functions still run). A script that went on writing to a
+/// client that had gone was never ended, and the built-in server, which
+/// runs one request at a time, answered nothing more.
+fn abort_interrupt(vm: &mut Vm) -> VmResult<()> {
+    let due = ctx_or(false, |c| c.aborted.get() && !c.abort_handled.replace(true));
+    if !due {
+        return Ok(());
+    }
+    php_support::output::OutputHost::output(vm).set_status(php_support::output::status::DISABLED);
+    if vm.ini_bool("ignore_user_abort") {
+        Ok(())
+    } else {
+        Err(Throw::Exit)
+    }
 }
 
 fn header_result(vm: &mut Vm, r: Result<bool, crate::headers::HeaderError>) -> VmResult<bool> {
@@ -704,7 +739,7 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let ctx = CURRENT.with(|c| c.borrow().clone());
     if let Some(ctx) = ctx.as_ref().filter(|c| c.cgi.is_some() && c.fcgi.is_none()) {
         if std::io::Write::flush(&mut std::io::stdout()).is_err() {
-            ctx.aborted.set(true);
+            ctx.note_abort();
         }
         return Ok(Value::Null);
     }
@@ -713,7 +748,7 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ctx.send_headers();
         if let Some(fcgi) = &ctx.fcgi {
             if !fcgi.flush() {
-                ctx.aborted.set(true);
+                ctx.note_abort();
             }
         }
     }
@@ -822,7 +857,7 @@ fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         match fcgi {
             Some((ctx, f)) if vm.ini_bool("fastcgi.logging") => {
                 if !f.stderr(&line) {
-                    ctx.aborted.set(true);
+                    ctx.note_abort();
                 }
             }
             _ => {
@@ -1069,6 +1104,7 @@ impl Extension for CliServerModule {
         }
         {
             let vm = m.vm();
+            vm.interrupt_handlers.push(abort_interrupt);
             // cli-server, CGI and FPM have no STDIN/STDOUT/STDERR: only the
             // CLI registers them (`cli_register_file_handles`). The streams
             // are `NO_CLOSE`, so dropping them leaves descriptors 0-2 open;
