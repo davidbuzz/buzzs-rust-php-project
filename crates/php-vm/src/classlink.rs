@@ -3709,7 +3709,8 @@ struct LinkedEntry {
 /// it owns (shared cells of a parent or trait belong to that class).
 struct FreshState {
     statics: Vec<FreshStatic>,
-    consts: Vec<(Rc<ClassConst>, Option<Value>)>,
+    /// Each own constant, and whether it was evaluated at link time.
+    consts: Vec<(Rc<ClassConst>, bool)>,
     defaults: Option<Vec<Option<Value>>>,
 }
 
@@ -3765,11 +3766,20 @@ impl FreshState {
             if shared_const(k) {
                 continue;
             }
-            let v = k.value.borrow().clone();
-            if v.as_ref().is_some_and(|v| !plain(v)) || k.evaluating.get() {
-                return None;
-            }
-            consts.push((k.clone(), v));
+            // Whether the constant was evaluated when the class was
+            // linked, not its value: a copy kept here would be one more
+            // holder of a constant's array, which `debug_zval_dump()`
+            // shows (php-src: the `zend_class_constant` and the fetched
+            // temporary, nothing else). An evaluated constant never
+            // changes again, so there is nothing to put back for it.
+            let evaluated = {
+                let v = k.value.borrow();
+                if v.as_ref().is_some_and(|v| !plain(v)) || k.evaluating.get() {
+                    return None;
+                }
+                v.is_some()
+            };
+            consts.push((k.clone(), evaluated));
         }
         let defaults = cls.defaults.borrow().clone();
         if defaults.iter().flatten().flatten().any(|v| !plain(v))
@@ -3789,8 +3799,11 @@ impl FreshState {
             *st.cell.borrow_mut() = st.value.clone();
             st.initialized.set(st.was_initialized);
         }
-        for (k, v) in &self.consts {
-            *k.value.borrow_mut() = v.clone();
+        for (k, evaluated) in &self.consts {
+            // One the request evaluated is evaluated again by the next.
+            if !*evaluated {
+                *k.value.borrow_mut() = None;
+            }
             k.evaluating.set(false);
         }
         *cls.defaults.borrow_mut() = self.defaults.clone();
@@ -3872,6 +3885,30 @@ pub(crate) fn end_request() {
             Rc::strong_count(&e.decl) > 1 + own
         });
     });
+}
+
+/// The last field of a [`Vm`]: when the VM is dropped, the kept links of
+/// the declarations no script holds any more go with it, as
+/// [`end_request`] drops them between requests. (Without it a VM dropped
+/// without a request reset left its classes, their methods and closures
+/// alive in this thread's table until the next request of another VM.)
+#[derive(Debug, Default)]
+pub(crate) struct LinkedGuard;
+
+impl Drop for LinkedGuard {
+    fn drop(&mut self) {
+        // The thread's table may be gone already when the VM is dropped at
+        // thread exit.
+        let _ = LINKED.try_with(|l| {
+            if let Ok(mut l) = l.try_borrow_mut() {
+                l.retain(|_, e| {
+                    let own =
+                        usize::from(e.cls.decl.as_ref().is_some_and(|d| Rc::ptr_eq(d, &e.decl)));
+                    Rc::strong_count(&e.decl) > 1 + own
+                });
+            }
+        });
+    }
 }
 
 /// Stops recording lookups however the link ends.

@@ -324,6 +324,7 @@ impl Vm {
             prop_guards: vm::PropGuards::default(),
             observer: crate::observer::ObserverState::default(),
             user_opcode_handlers: Vec::new(),
+            linked_guard: crate::classlink::LinkedGuard,
         }
     }
 

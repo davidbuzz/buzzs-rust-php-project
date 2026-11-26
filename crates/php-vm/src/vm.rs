@@ -3124,6 +3124,10 @@ pub struct Vm {
     /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
     /// handler run before each such opcode compiled after registration.
     pub(crate) user_opcode_handlers: Vec<(&'static str, crate::observer::UserOpcodeHandler)>,
+    /// Dropped last (fields drop in declaration order), after the units and
+    /// class tables above: releases this thread's kept class links that
+    /// only the dropped VM's scripts held.
+    pub(crate) linked_guard: crate::classlink::LinkedGuard,
 }
 
 impl std::fmt::Debug for Vm {
