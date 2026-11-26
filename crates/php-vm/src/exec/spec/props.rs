@@ -722,6 +722,44 @@ fn assign_dim_hit(
     true
 }
 
+/// [`assign_dim_hit`] for the tape's own instruction
+/// (`tape::props::assign_prop_dim`).
+#[inline(always)]
+pub(in crate::exec) fn assign_prop_dim_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    assign_dim_hit(f, pid, dim, val, dst)
+}
+
+/// `isset($obj->name[dim])` / `empty($obj->name[dim])` on a property cache
+/// hit in frame `f` alone (`isset_dim_hit`), the answer stored in the
+/// temporary `dst` and a consumed string offset released: the part of
+/// [`Vm::isset_obj_prop_dim_fast`] that needs no VM, for the tape's own
+/// instruction (`tape::props::isset_prop_dim`). `false`, nothing changed,
+/// on a miss.
+#[inline(always)]
+pub(in crate::exec) fn isset_prop_dim_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    dim: Operand,
+    dst: u32,
+    empty: bool,
+) -> bool {
+    if (dst as usize) >= f.tmps.len() {
+        return false;
+    }
+    let Some(r) = isset_dim_hit(f, pid, dim, empty) else {
+        return false;
+    };
+    super::release_str_tmp_in(f, dim);
+    put_tmp(&mut f.tmps[dst as usize], Value::Bool(r));
+    true
+}
+
 /// `$this->name[dim]++` & co. (`ZEND_FETCH_OBJ_RW` + `ZEND_FETCH_DIM_RW`
 /// + `PRE/POST_INC/DEC`) on a property cache hit for writing in frame `f`
 /// alone, as [`assign_dim_hit`]: the declared slot holds an array (also
