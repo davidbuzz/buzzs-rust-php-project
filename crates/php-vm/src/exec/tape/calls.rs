@@ -2428,9 +2428,9 @@ pub(super) type MethodEntry = (Func, Option<Rc<crate::class::Class>>, bool);
 /// The most arguments a leaf call takes ([`leaf_now`]).
 const LEAF_ARGS: usize = 4;
 
-/// `f(...)` of a leaf builtin (`special::leaf`): `ZEND_INIT_FCALL` at `at`
-/// (its cached function in slot `site` of the caller's function cache,
-/// else in `name`'s) followed by `Send`s of literals, variables or
+/// `f(...)` of a leaf builtin (`special::leaf`), the callee of the call
+/// `call` just prepared (nothing was sent yet): `ZEND_INIT_FCALL` at `at`
+/// followed by `Send`s of literals, variables or
 /// temporaries (by value, at most [`LEAF_ARGS`]) and the `DoCall`. When
 /// the arguments have one of the shapes of the function's leaf class
 /// (`Vm::leaf_args`: the handler then reports nothing, throws nothing,
@@ -2445,34 +2445,21 @@ const LEAF_ARGS: usize = 4;
 pub(super) fn leaf_now(
     vm: &mut Vm,
     ops: &[Op],
-    name: u32,
-    site: Option<usize>,
+    call: &Prepared,
     at: usize,
     called: usize,
     threw: usize,
 ) -> Option<usize> {
-    if vm.observer.enabled {
+    let Callee::Native(b, PlainCall::Named) = &call.callee else {
+        return None;
+    };
+    if b.leaf_id() == crate::special::leaf::NONE
+        || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+        || vm.observer.enabled
+    {
         return None;
     }
     let caller = vm.frames.last()?;
-    let b = {
-        let cache = caller.code.fcall_cache.try_borrow().ok()?;
-        let entry = match site.and_then(|s| cache.get(s)).and_then(Option::as_ref) {
-            Some(entry) => entry,
-            None => cache.get(name as usize)?.as_ref()?,
-        };
-        let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
-            return None;
-        };
-        let leaf = b.leaf_id();
-        if leaf == crate::special::leaf::NONE
-            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
-            || b.plain_call_upto().0 != PlainCall::Named
-        {
-            return None;
-        }
-        Rc::clone(b)
-    };
     // The sent values, read where they are.
     let mut sent: [&Value; LEAF_ARGS] = [&Value::Null; LEAF_ARGS];
     let mut tmps: [Option<u32>; LEAF_ARGS] = [None; LEAF_ARGS];
@@ -2522,7 +2509,7 @@ pub(super) fn leaf_now(
     }
     // `SAVE_OPLINE()`: the op after the `DoCall`.
     caller.ip = done + 1;
-    match vm.frameless_handler_run(&b, args, dst) {
+    match vm.frameless_handler_run(b, args, dst) {
         Some(Ok(())) => Some(done | called),
         Some(Err(t)) => {
             vm.tape_throw = Some(t);
