@@ -6,7 +6,7 @@ completed item is deleted, not ticked (finished work is in git history and
 column is refreshed from a PHPT run by `scripts/update_feature_gap.py`.
 
 Status: [ ] open · [~] in progress · [-] blocked/awaiting.
-Last updated 22 Nov 2026.
+Last updated 26 Nov 2026.
 
 ## Where things stand
 
@@ -62,6 +62,95 @@ The deliverable is met on the 31 inputs. These are shapes real applications run 
 inputs do not cover, measured 21 Nov in instructions per loop iteration (ours / C);
 candidates for `perf/bench` and for work.
 
+**Laravel**, a real application outside the acceptance set (measured 25 Nov on an
+AArch64 WSL2 box, user-space instructions, ours with `BUZZS_JIT=0` — the trace JIT
+moves it under 1% — against PHP 8.5.13 in `php:8.5-cli`, opcache off): `artisan
+route:list` 4.28G against C's 1.62G (**2.64×**), `vendor/bin/phpunit tests/Unit`
+179.5G against 49.9G (**3.60×**). Run cold against running with the scripts from
+opcache's file cache: 2.6× against 4.2×, where compiling alone costs 1.4× of C —
+the gap is running code, not compiling it. Callgrind of the file-cache route:list
+(2.9G, 3.2M user calls): call machinery ~34% (~310 instructions of protocol per
+call, where C's *whole* run averages 215 per user call), interpreter dispatch
+~10%, refcounting and drops ~8%, strings ~7%, properties and objects ~6%, hash
+tables ~6%. Per operation with the JIT off (ours / C 8.5, same day): integer work
+is at C's level (empty loop 27/34, `$x + $i` 59/71); everything touching
+reference-counted values runs 2–3× C (`$y = $s` 104/62, `$a['k']` 169/123, `$o->p`
+189/84, `$o->arr['k']` 475/174, `$s . 'x'` 455/238, `isset($a['k'])` 231/118,
+`$a['z'] ?? null` 578/174); each call costs ~690 instructions more than C's. (The
+optimization log these came from, with its landed-change tables, is git history:
+`perf/OPTIMIZATIONS.md`, removed 26 Nov.)
+
+- [ ] **The call protocol: bring one namespaced user call from ~850 instructions to
+  C's 142.** The micro: `$s = f($i)` in a loop inside a function in `namespace App`
+  (a method call likewise), the empty loop's cost subtracted; measured 25 Nov —
+  `f($i)` 853 against C's 142, `$k->m($i)` 1,274 against 178; call machinery is a third of Laravel, ~310 per
+  call. Landed already: `UserFunction`'s precomputed `CallShape` (everything that
+  decides whether a call is plain — generator, by-ref, variadics, statics,
+  `finally`, defaults, types — one word plus frame sizes, worked out at
+  declaration) and the tape's direct frames (`Frame::direct`, `release_direct`).
+  What is left is spread thin over ~8 layers of out-of-line functions, none over
+  8 instructions a call: a `Frame` has ~30 fields, each checked, readied and
+  reset per call, where php-src's `zend_execute_data` is one block the call
+  fills in. Steps, in order: (a) the cold state out of the frame — the fields
+  only rare paths use (named arguments, silence state, the symbol table's slot
+  map, statics, the generator, the pending exception, magic-method and builtin
+  names) behind one pointer, `None` in a plain frame, so readying and resetting
+  touch a few words; (b) one slot block per frame — CVs and temporaries in one
+  allocation sized from the op array (the tape already addresses both through
+  `St::cvs`/`St::tmps` base pointers, so the tape does not change); (c) `send`
+  writes arguments into the callee's CVs directly, as `SEND_VAL`/`SEND_VAR` do:
+  untyped `RECV` becomes nothing, typed only the check. Design rule from the
+  failed attempts below: nothing added inside `run_core` — the call ops already
+  leave it (`WHY_CALL`) and every change stays behind that exit. The ruler is
+  `perf/interp/call-micro.php`, one user call in a loop with the empty loop
+  subtracted; measure with `perf stat -e instructions:u` at N and 11N
+  (difference / 10N cancels startup), callgrind with
+  `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` for per-function
+  counts (subtract a `none` run), C under `docker run --user $(id -u):$(id -g)
+  php:8.5-cli perf stat`; validate every step on the PHPT set and Laravel before
+  the next one starts. With steps (a)–(c), around 400 is realistic.
+- [ ] The structural decision past the protocol (the owner's to make): a plain call
+  runs through those ~8 layers whatever any one function does — no micro-trim
+  below moved Laravel, and on stable Rust a tape op cannot be its own function
+  for free (`become` and `preserve_none` are unstable; the workspace is stable,
+  `rust-version = 1.85`). Either a nightly toolchain for guaranteed tail calls —
+  each op its own function with its own register allocation, as CPython 3.14's
+  interpreter — or a baseline JIT: warm functions compiled once by a fast
+  template compiler (the trace JIT's ~1M instructions per loop is too slow for a
+  framework's thousands of functions), the call sequence emitted per call site
+  with the callee and frame size known. Either needs the frame work above under
+  it; a whole-function JIT removes only the ~10% dispatch while calls are ~34%,
+  so the protocol comes first either way.
+- [ ] Per-site caches the way php-src reads them: method calls, class constants
+  and static properties use a cache per name with checks, where php-src reads one
+  run-time cache slot per opline (the other runtime caches exist, see the
+  FEATURE_GAP Executor row).
+- [ ] Reference-counted values in the core loop: string comparison and assignment,
+  property reads, the release of objects (the GC's possible-root check) — the
+  out-of-line steps behind the 2–3× C figures above.
+- [ ] Dead ends — do not retry without a new idea (all measured against Laravel;
+  trust totals, not per-symbol percentages — the profiler's attribution on that
+  box is skewed): fused call/return over the existing `Frame` (712 → 602 per call
+  in a micro, net loss); a plain-frame state word in the core loop (calls
+  −20–30%, loops +3–11% — anything added in `run_core` shares its register
+  allocation); threaded dispatch on stable Rust; new arms in `hot::step_ext` /
+  `run_tape` (the micros improve, Laravel gets 0.1–0.3% slower each time — fast
+  paths belong in out-of-line handlers); moving `$this`/called into `Args` and
+  skipping pools in `call_pure`; caching `ArrayAccess` methods on `Class`;
+  batching a call's `Send`s (one argument per call has nothing to batch); one
+  method-cache lookup per user method call (−150 in a micro, zero on Laravel);
+  the fast return of `: static` objects (committed anyway: correct and cheap,
+  −650 in a micro, zero on Laravel); fusing calls whose arity can never run in
+  place (left unfused at compile time, `frameless_arity`). Fast paths picked from
+  micro-benchmarks alone go nowhere: four in a row looked good and did nothing
+  for Laravel. Measure the real workload first — the slow-op census patch
+  `perf/census/op-census.diff` (temporary instrumentation, keep it out of
+  commits): `git apply` it, build release, run with `DBG_OPS=1` for the ops
+  reaching `Vm::run`'s generic dispatch plus `DBG_TAPE=1` for the tape's exits,
+  counts print to stderr at exit, `git apply -R` to revert. And the standing
+  lesson: Laravel code is namespaced — any fast path keyed on global function
+  names misses it.
+
 - [ ] Ordinary (not loop-hot) code, measured 23 Nov by `perf/interp/run.sh`: instructions
   per operation with our JIT off, ours / C 8.5. Calls: a plain call 1,141 / 172, a method
   1,339 / 225, a static method 1,088 / 182, a closure 1,284 / 257, defaults filled in
@@ -74,6 +163,8 @@ candidates for `perf/bench` and for work.
   446 / 59. Element and property reads and writes are near or under C. A large framework
   page (warm opcache, one process) runs 1,706 M instructions against C's 251 M; its
   profile is flat: the generic interpreter paths, the call protocol and hash-table work.
+  Named arguments, spread and `compact`/`extract` run about 7× C in namespaced code
+  (25 Nov).
 - [ ] Code that runs with an attached symbol table (the top level of an included file, a
   function that uses `include`, `extract()`, `compact()` or `$$var`), 300 other variables
   in scope: an array write in a loop 12.0 ms against C's 2.1 (19.9 before 23 Nov's fixes;
@@ -107,13 +198,17 @@ candidates for `perf/bench` and for work.
 - [ ] Objects: `new B(...)` with a constructor body 3,129 / 1,235 (`calls::new_over` and
   the site check fail for every class whose constructor has a body); `new S("abc", $i)`
   1,450 / 742 (an old object whose slots hold strings, arrays or objects is not made
-  over in place).
+  over in place); `__get` 3,700 / 589 (still the nested `execute`); a `foreach` over a
+  user `Iterator` about 4× C (five method calls per element).
 - [ ] Arrays: `['id' => $i, 'name' => 'x', 'n' => $i]` 1,858 / 559, `[$i, $i]`
   1,029 / 404, a `foreach` over an array of arrays 370 / 158, over a list of strings
   181 / 140, with keys over a hash 174 / 141 (the general steps of `fe_fetch_into`).
 - [ ] Strings: `strtoupper()`/`strpos()`/`str_contains()` 3,251 / 1,717
   (`strs::frameless_quick_n` costs about 165 around a two- or three-argument builtin;
-  `strtoupper()` & co. are handler calls).
+  `strtoupper()` & co. are handler calls); `strrpos` 1,803 / 294 and `mb_strrpos`
+  2,354 / 540 are not frameless yet (25 Nov, namespaced).
+- [ ] `unserialize()` about 5.3× C (25 Nov): the two-pass node tree; look at the
+  representation before micro-fixing it.
 - [ ] Trace JIT coverage (`crates/php-vm/src/exec/tape/jit.rs`): float arithmetic into a
   temporary or another variable leaves the trace; property access inside inlined callee
   bodies; `self::`/`static::` scope guards for call inlining; closures; native-call
@@ -121,12 +216,12 @@ candidates for `perf/bench` and for work.
   defined at run time, a `global`) stay interpreted; a `foreach` step is no trace row;
   strings and objects moved by a trace; a handler call from a trace saves and restores
   five registers (callee-saved registers for the trace's bases would spare that).
-- [ ] The interpreter's user-call protocol (the call-redesign plan: Rc-free prepare,
-  `num_args`, fused enter, one flag word).
 - [ ] Memory allocator (FEATURE_GAP 50%): the per-allocation cost (about 81 -> 30
   instructions) is a design estimate; profile the release build and set the % from it.
 - [ ] Value layout (FEATURE_GAP 90%): one allocation per object (slots inline), the
-  reference size (72 B against php's 32), the 12-byte-per-slot hash index.
+  reference size (72 B against php's 32), the 12-byte-per-slot hash index. Peak
+  memory matters to real apps: the Laravel unit tests need `memory_limit=1G` and
+  the run holds 157 MB against C's 85 MB (25 Nov).
 - [ ] With the JIT off (`BUZZS_JIT=0`, not the default): 25/82 workloads meet the goal;
   dim_read, dim_write and abs are among those over it. Low priority: the deliverable is
   measured at the default, JIT on.
