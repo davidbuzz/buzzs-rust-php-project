@@ -391,46 +391,45 @@ unsafe fn store_copy_lean(
     v: &Value,
 ) -> Option<bool> {
     if let Some(cv) = to {
-        if !f.symtab_attached {
-            if let Some(cell) = f.cvs.get(cv as usize) {
-                // SAFETY: no reference into this variable's slot is alive:
-                // `v` does not live in the frame's variables, and the
-                // offset the caller looked up is no longer used.
-                let slot = unsafe { cell.get_mut_unchecked() };
-                if matches!(
-                    slot,
-                    None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
-                ) {
-                    // SAFETY: the slot holds nothing to drop.
-                    unsafe { write_copy_some(slot, v) };
-                    return Some(true);
-                }
-                if matches!(slot, Some(Value::Str(_))) {
-                    // SAFETY: the old string is read out before the slot
-                    // is overwritten, and released after (no side effect).
-                    let old = unsafe { std::ptr::read(slot) };
-                    unsafe { write_copy_some(slot, v) };
-                    drop(old);
-                    return Some(true);
-                }
-            }
-        } else {
+        if f.symtab_attached {
             // The store mirrors the variable in the symbol table.
             return None;
+        }
+        if let Some(cell) = f.cvs.get(cv as usize) {
+            // SAFETY: no reference into this variable's slot is alive:
+            // `v` does not live in the frame's variables, and the
+            // offset the caller looked up is no longer used.
+            let slot = unsafe { cell.get_mut_unchecked() };
+            if matches!(
+                slot,
+                None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+            ) {
+                // SAFETY: the slot holds nothing to drop.
+                unsafe { write_copy_some(slot, v) };
+                return Some(true);
+            }
+            if matches!(slot, Some(Value::Str(_))) {
+                // SAFETY: the old string is read out before the slot
+                // is overwritten, and released after (no side effect).
+                let old = unsafe { std::ptr::read(slot) };
+                unsafe { write_copy_some(slot, v) };
+                drop(old);
+                return Some(true);
+            }
         }
         // A variable holding a value to release: the temporary takes the
         // value and the `AssignCv` stores it (`store_fetched_in`).
     }
     // SAFETY: the caller's contract; the old value is tested first.
     unsafe {
-        let dest = tmps.add(dst as usize);
+        let out = tmps.add(dst as usize);
         if !matches!(
-            &*dest,
+            &*out,
             Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
         ) {
             return None;
         }
-        write_copy(dest, v);
+        write_copy(out, v);
     }
     Some(false)
 }
@@ -475,7 +474,7 @@ pub(in crate::exec) fn fetch_prop_dim_lean(
     };
     let el = match key {
         super::DimRef::Str(s) => a.sym_zstr_probe(s),
-        k => super::table_dim(a, k),
+        k @ super::DimRef::Int(_) => super::table_dim(a, k),
     }?;
     if matches!(el, Value::Reference(_)) {
         return None;
@@ -849,6 +848,18 @@ fn isset_hit(f: &Frame, pid: PlaceId, empty: bool) -> Option<bool> {
     with_hit_obj(f, &hit, |od| isset_in(od, slot, dyn_prop, empty))
 }
 
+/// Whether `v` is a reference something else holds too. A reference with
+/// one holder (what `&$this->p`, a by-reference argument or `foreach` by
+/// reference leave in a property slot once they are done) behaves as its
+/// value: `ZEND_ASSIGN_OBJ` assigns through it, which nothing can tell
+/// from replacing it with the new value, and the slot is plain again for
+/// the reads and writes after. PHP-Parser's `$self->semValue` was such a
+/// slot, and every write of it took the generic path.
+#[inline(always)]
+fn shared_ref(v: &Value) -> bool {
+    matches!(v, Value::Reference(r) if r.refcount() > 1)
+}
+
 /// Stores `new_val` into the property `hit` describes in `od` (the
 /// dynamic property `dyn_key` when set): replaces the value (not a
 /// reference) of an initialized declared slot or of an existing dynamic
@@ -882,7 +893,7 @@ fn store_in(
         return None;
     }
     match cell {
-        Some(Value::Reference(_)) => None,
+        Some(cur) if shared_ref(cur) => None,
         Some(cur) => Some(Some(std::mem::replace(cur, new_val))),
         None => {
             // `write_std_property` stores into an undefined declared
@@ -1362,7 +1373,9 @@ fn assign_plain(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> 
     };
     let old = match cell {
         // An initialized slot: a plain write.
-        Some(cur) if flags & PC_WRITE != 0 && !matches!(cur, Value::Reference(_)) => {
+        // (A reference nothing else holds is a plain value again: it is
+        // replaced with the value itself, see `shared_ref`.)
+        Some(cur) if flags & PC_WRITE != 0 && !shared_ref(cur) => {
             let new_val = copy_value(src);
             let result = dst.map(|_| copy_value(&new_val));
             let old = std::mem::replace(cur, new_val);
