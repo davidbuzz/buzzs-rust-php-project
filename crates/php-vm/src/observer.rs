@@ -147,6 +147,17 @@ pub(crate) struct ObserverState {
     unwind_exit: bool,
 }
 
+impl ObserverState {
+    /// Lets the table of observed functions go as it grew: its entries
+    /// are dropped as usual, its buffer outside the request's memory
+    /// count (see `observer_begin_top_slow`).
+    pub(crate) fn release_table(&mut self) {
+        let mut table = std::mem::take(&mut self.initialized);
+        table.clear();
+        php_memlimit::persistent(|| drop(table));
+    }
+}
+
 impl ObservedFrame {
     /// `at_end`: the opline is the one just executed (the return).
     fn from_frame(f: &Frame, at_end: bool) -> Self {
@@ -269,7 +280,15 @@ impl Vm {
             Some((_, selected)) => *selected,
             None => {
                 let selected = hooks.init.is_some_and(|init| init(self, &info));
-                self.observer.initialized.insert(key, (identity, selected));
+                // php-src keeps a function's observer handlers in its
+                // run-time cache, which is not the request's memory: the
+                // table's growth here is kept out of `memory_get_usage()`
+                // too (`unserialize(serialize(...))` left 192 bytes behind
+                // with the observer on, which
+                // ext/standard/tests/serialize/bug81142.phpt counts).
+                php_memlimit::persistent(|| {
+                    self.observer.initialized.insert(key, (identity, selected));
+                });
                 selected
             }
         };

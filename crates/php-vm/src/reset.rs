@@ -313,6 +313,7 @@ impl Vm {
         self.main_return = Value::Null;
         self.call_bufs = crate::vm::CallBufs::prewarmed(&self.empty_code);
         self.prop_guards.clear();
+        self.observer.release_table();
         self.observer = crate::observer::ObserverState::default();
         self.user_opcode_handlers.clear();
         self.ext = crate::builtins::ExtState::default();
