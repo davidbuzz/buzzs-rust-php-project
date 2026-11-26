@@ -84,6 +84,18 @@ impl LinkedList {
         self.count == 0
     }
 
+    /// Calls `f` with each value in order, without copying them (the
+    /// collector's traversal: a copy would count as one more holder).
+    pub fn for_each_value(&self, mut f: impl FnMut(&Value)) {
+        let mut cur = self.head.clone();
+        while let Some(n) = cur {
+            if let Some(d) = &n.borrow().data {
+                f(d);
+            }
+            cur = next_of(&n);
+        }
+    }
+
     /// The values in order.
     #[must_use]
     pub fn values(&self) -> Vec<Value> {

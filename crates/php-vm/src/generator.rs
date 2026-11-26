@@ -192,6 +192,11 @@ fn root_of(g: &Obj) -> Obj {
 fn close(g: &Obj) {
     with(g, |d| {
         d.state = GenState::Finished;
+        // The frame's variables are released: those that stay referenced
+        // become possible roots (`zend_generator_close`).
+        if let Some(f) = &d.frame {
+            crate::gc::root_frame(f);
+        }
         d.frame = None;
         d.spare = None;
         d.values = None;
