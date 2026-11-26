@@ -14,7 +14,7 @@
 use super::traverse::{lookup, GcVisitor};
 use crate::object::{self, ObjectData};
 use php_runtime::{Obj, ObjWeak, PhpRef, Value, ZArray};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// No node.
 pub(super) const NONE: u32 = u32::MAX;
@@ -153,8 +153,9 @@ pub(super) struct Graph {
     /// are dense and cannot be reused while the graph holds the objects;
     /// this costs 4 bytes per handle instead of a hash entry per node.
     obj_index: Vec<u32>,
-    /// Array and reference nodes by address.
-    index: HashMap<usize, u32>,
+    /// Array and reference nodes by address (one lookup per edge to an
+    /// array or a reference: under `SipHash` it was 4% of a run).
+    index: FxHashMap<usize, u32>,
     edges: Vec<u32>,
     pub cond: Vec<CondEdge>,
     /// Nodes before this index have been expanded.
@@ -401,7 +402,7 @@ impl Graph {
         self.edges = Vec::new();
         self.cond = Vec::new();
         self.obj_index = Vec::new();
-        self.index = HashMap::new();
+        self.index = FxHashMap::default();
         for n in self.nodes.iter_mut() {
             n.start = 0;
             n.len = 0;

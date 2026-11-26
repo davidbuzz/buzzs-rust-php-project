@@ -33,9 +33,9 @@ use crate::fiber::FiberData;
 use crate::generator::{Delegate, GenData};
 use crate::vm::{FinState, ForeachIter, Frame, PendingCall, VarStore};
 use php_runtime::{HashTable, Obj, ObjWeak, PhpRef, Value, ZArray};
+use rustc_hash::FxHashMap;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Receives the references held by an object's native state.
@@ -126,7 +126,9 @@ pub trait GcTraverse: Any {
 type TraverseFn = Rc<dyn Fn(&dyn Any, &mut GcVisitor<'_>)>;
 
 thread_local! {
-    static REGISTRY: RefCell<HashMap<TypeId, TraverseFn>> = RefCell::new(HashMap::new());
+    // Looked up once per object with native state in every run: a `TypeId`
+    // is already a hash, `SipHash` over it was 6% of a run.
+    static REGISTRY: RefCell<FxHashMap<TypeId, TraverseFn>> = RefCell::new(FxHashMap::default());
 }
 
 /// Registers `T` (stored with `object::set_internal`) as traversable.
