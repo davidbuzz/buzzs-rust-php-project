@@ -231,7 +231,11 @@ fn convert(
                         status = BridgeStatus::Overflow;
                         break;
                     }
-                    let la = xml_malloc(size_of::<ffi::xmlAttr>()).cast::<ffi::xmlAttr>();
+                    // libxml2 2.13 appended a field (`id`) to `xmlAttr`, which
+                    // `xmlAddID()` reads and writes: the block has room for
+                    // it, zeroed, whichever library is linked.
+                    let la_size = size_of::<ffi::xmlAttr>() + size_of::<*mut std::ffi::c_void>();
+                    let la = xml_malloc(la_size).cast::<ffi::xmlAttr>();
                     if la.is_null() {
                         status = BridgeStatus::Oom;
                         break;
@@ -239,7 +243,7 @@ fn convert(
                     // SAFETY: fresh allocation, zeroed and filled; strings
                     // interned in the document dictionary.
                     unsafe {
-                        ptr::write_bytes(la, 0, 1);
+                        ptr::write_bytes(la.cast::<u8>(), 0, la_size);
                         (*la).type_ = ffi::XML_ATTRIBUTE_NODE;
                         (*la).parent = el.p();
                         (*la).name = ffi::xmlDictLookup(

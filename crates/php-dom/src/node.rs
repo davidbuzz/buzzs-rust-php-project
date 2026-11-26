@@ -283,7 +283,9 @@ impl Node {
         }
         if set_content {
             // SAFETY: live node, s valid for its length.
-            unsafe { ffi::xmlNodeSetContentLen(n.p(), s.as_ptr(), crate::raw::c_len(s.len())) };
+            unsafe {
+                ffi::xmlNodeSetContentLen(n.p(), crate::raw::c_bytes(s), crate::raw::c_len(s.len()))
+            };
         }
         self.invalidate();
         Ok(())
