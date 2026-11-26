@@ -24,7 +24,9 @@
 //! constructor's frame.
 
 use super::{Br, Inst, TOp};
-use crate::exec::spec::{incdec_static_prop_in, prop_op_in, read_hit, store_fetched_in};
+use crate::exec::spec::{
+    fetch_prop_dim_in, incdec_static_prop_in, prop_op_in, read_hit, store_fetched_in,
+};
 use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
 use std::rc::Rc;
@@ -87,6 +89,36 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                         ..plain(TOp::FetchObjPropTo)
                     }
                 }
+            }
+        }
+        // `$obj->prop[dim]` read: the op is read back from the op array
+        // (`d`); `c` jumps past a folded `AssignCv` whose variable took the
+        // value. `store_fetched_in` indexes without bounds checks, so the
+        // temporary and the variable are validated here.
+        Op::FetchObjPropDim {
+            place,
+            dim,
+            dst,
+            to,
+            mode,
+        } => {
+            if mode == FetchMode::List
+                || !place_ok(code, place)
+                || !val_ok(code, dim)
+                || dst >= code.num_tmps
+                || to.is_some_and(|cv| (cv as usize) >= code.cv_names.len())
+            {
+                return None;
+            }
+            let c = match to {
+                Some(_) => super::rel(code, i, u32::try_from(i + 2).ok()?)?,
+                None => 0,
+            };
+            Inst {
+                a: place,
+                c,
+                d: i as u32,
+                ..plain(TOp::FetchObjPropDim)
             }
         }
         Op::AssignObjProp { place, val, .. } => {
@@ -444,6 +476,38 @@ pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
     };
     store_fetched_in(f, inst.b, None, v);
     true
+}
+
+/// `Op::FetchObjPropDim` (`ZEND_FETCH_OBJ_R` then `ZEND_FETCH_DIM_R`, or
+/// the `_IS` pair, on a property cache hit): the element of the array a
+/// declared property holds, into the read's temporary or the variable of
+/// the `AssignCv` folded behind it (then the jump past that op), in the
+/// frame alone (`fetch_prop_dim_in`). A parser's table reads
+/// (`$this->action[$idx]`) ran through the VM (`run_vm_op`) before.
+/// Declines a miss, nothing changed.
+///
+/// # Safety
+/// As [`prop_in`]; `inst.d` is the index of an `Op::FetchObjPropDim` whose
+/// temporary and folded variable `lower` validated.
+#[inline(never)]
+pub(super) unsafe fn fetch_prop_dim(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(&Op::FetchObjPropDim {
+        place,
+        dim,
+        dst,
+        to,
+        mode,
+    }) = f.code.ops.get(inst.d as usize)
+    else {
+        return Br::Decline;
+    };
+    match fetch_prop_dim_in(f, place, dim, dst, to, mode) {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
 }
 
 /// `Op::FetchObjProp` into its folded `AssignCv`'s variable `d` (`$cv =
