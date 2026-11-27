@@ -2861,6 +2861,26 @@ impl Vm {
         true
     }
 
+    /// [`Vm::return_plain`] of the base frame of a nested execution that
+    /// `Vm::run` runs (its `Return` arm): a method native code called
+    /// whose body the tape does not enter (`tape::worth_entering`: a
+    /// destructor's one assignment, ...). The execution's result, or
+    /// `None`, nothing changed, for a frame `return_at_base` is to return.
+    pub(crate) fn return_plain_base(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<Value> {
+        if self.frames.live != base + 1 || !self.frames.last().is_some_and(|f| f.plain) {
+            return None;
+        }
+        let outer = std::mem::replace(&mut self.tape_base, base + 1);
+        let done = self.return_plain::<true>(val, base, ip);
+        self.tape_base = outer;
+        done.then(|| std::mem::take(&mut self.tape_base_value))
+    }
+
     /// `ZEND_RETURN` from the frame a nested execution started with
     /// (`base`: a callback called by a builtin, `zend_call_function`):
     /// [`Vm::return_generic`]'s direct return, whose result is the

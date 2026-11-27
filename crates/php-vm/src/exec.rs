@@ -2491,7 +2491,9 @@ impl Vm {
                     // the frame the execution started with may still return
                     // directly.
                     Op::Return { val } => {
-                        if let Some(done) = self.return_at_base(*val, base, ip) {
+                        if let Some(v) = self.return_plain_base(*val, base, ip) {
+                            Flow::Done(v)
+                        } else if let Some(done) = self.return_at_base(*val, base, ip) {
                             done
                         } else {
                             let v = match val {
@@ -3662,15 +3664,16 @@ impl Vm {
     /// Runs the destructors of objects released since the last check.
     pub(crate) fn run_pending_destructors(&mut self) -> VmResult<()> {
         loop {
-            let pending = object::take_pending_destructors();
+            let mut pending = object::take_pending_destructors();
             if pending.is_empty() {
+                object::return_pending_buffer(pending);
                 return Ok(());
             }
             // `zend_objects_destroy_object`: a destructor runs with the
             // pending exception set aside; a new exception gets the pending
             // one as its innermost `previous`.
             let mut pending_err: Option<Throw> = None;
-            for o in pending {
+            for o in pending.drain(..) {
                 if let Err(e) = self.call_destructor(&o) {
                     pending_err = Some(match (pending_err.take(), e) {
                         (Some(Throw::Exception(old)), Throw::Exception(new)) => {
@@ -3688,6 +3691,7 @@ impl Vm {
                 drop(o);
                 object::release_deferred_handles(h);
             }
+            object::return_pending_buffer(pending);
             if let Some(e) = pending_err {
                 return Err(e);
             }

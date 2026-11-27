@@ -223,3 +223,45 @@ exc ok
 "#
     );
 }
+
+/// Destructors (`__destruct()` called from the safe point's queue) whose
+/// body the tape does not enter return through the plain return at the
+/// base (`Vm::return_plain_base`): order of destruction, nested objects,
+/// an exception thrown from one, a resurrected object, a destructor
+/// returning early, the queue's buffer reused. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn destructors_run_in_order_and_return_plainly() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class D { public $n; public $child; static $keep = [];
+  function __construct($n, $child = null) { $this->n = $n; $this->child = $child; }
+  function __destruct() { echo "~{$this->n} "; if ($this->n === 'res') { self::$keep[] = $this; } } }
+class T { function __destruct() { throw new RuntimeException("from dtor"); } }
+class Short { public $x; function __destruct() { $this->x = 1; echo "s "; } }
+class Ret { function __destruct() { return; } }
+for ($i = 0; $i < 3; $i++) { $d = new D("a$i"); } echo "| "; unset($d); echo "\n";
+$x = new D("outer", new D("inner", new D("deep"))); $x = null; echo "\n";
+try { $t = new T; unset($t); echo "not reached\n"; } catch (RuntimeException $e) { echo "caught ", $e->getMessage(), "\n"; }
+$r = new D("res"); unset($r); echo count(D::$keep), " kept\n";
+for ($i = 0; $i < 3; $i++) { new Short; } echo "\n";
+for ($i = 0; $i < 3; $i++) { new Ret; } echo "rets\n";
+function f() { $l = new D("local"); return 5; } echo f(), "\n";
+$arr = [new D("e1"), new D("e2")]; $arr = []; echo "\n";
+D::$keep = []; echo "\nend\n";
+"#
+        ),
+        r#"~a0 ~a1 | ~a2 
+~outer ~inner ~deep 
+caught from dtor
+~res 1 kept
+s s s 
+rets
+~local 5
+~e1 ~e2 
+
+end
+"#
+    );
+}

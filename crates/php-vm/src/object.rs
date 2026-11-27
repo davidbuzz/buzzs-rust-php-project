@@ -1389,6 +1389,11 @@ fn last_pending_handle() -> Option<u32> {
 pub fn release_deferred_handles(handle: u32) {
     let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
+            // Nearly always empty: no lookup (a hash of the handle a
+            // destructor) for nothing.
+            if s.followers.is_empty() {
+                return;
+            }
             if let Some(w) = s.followers.remove(&handle) {
                 s.free.extend(w);
             }
@@ -1400,6 +1405,23 @@ pub fn release_deferred_handles(handle: u32) {
 pub fn take_pending_destructors() -> Vec<Obj> {
     HAS_PENDING.with(|h| h.set(false));
     PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Gives the emptied buffer of [`take_pending_destructors`] back to the
+/// queue when nothing was queued meanwhile, so that the next destructor
+/// queued does not allocate a new one (an allocation and its growth per
+/// destructor when objects are freed one at a time).
+pub fn return_pending_buffer(buf: Vec<Obj>) {
+    if !buf.is_empty() || buf.capacity() == 0 || buf.capacity() > 256 {
+        return;
+    }
+    let _ = PENDING.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            if p.is_empty() && p.capacity() == 0 {
+                *p = buf;
+            }
+        }
+    });
 }
 
 /// Enables or disables destructor scheduling (disabled after fatal errors).
