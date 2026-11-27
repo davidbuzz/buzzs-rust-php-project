@@ -32,38 +32,34 @@ pub(super) enum Handle {
     Taken,
 }
 
-/// A candidate node.
+/// A candidate node: its handle and its children. What every edge into
+/// it reads or writes (the count of such edges, the marks) is kept beside
+/// the node list, in [`Graph::internal`] and [`Graph::flags`]: a few
+/// bytes a node, in one block each, where the nodes are 32 bytes each in
+/// chunks. Those are the random accesses of a run (one per edge while the
+/// graph is built, one per edge while liveness spreads).
 pub(super) struct Node {
     pub handle: Handle,
-    /// For objects: an edge to the object was seen (objects found only
-    /// through the object store were not; every reference to them is
-    /// external).
-    reached: bool,
     /// Children: `edges[start..start + len]`.
     start: u32,
     len: u32,
-    /// References from candidate nodes (edges into this node).
-    internal: u32,
-    /// Must be considered live whatever the counts say (contents could
-    /// not be enumerated).
-    pinned: bool,
-    /// Scanned black.
-    pub live: bool,
 }
+
+/// [`Graph::flags`]: for objects, an edge to the object was seen (objects
+/// found only through the object store were not; every reference to them
+/// is external).
+const REACHED: u8 = 1;
+/// [`Graph::flags`]: must be considered live whatever the counts say
+/// (contents could not be enumerated).
+const PINNED: u8 = 2;
+/// [`Graph::flags`]: scanned black.
+pub(super) const LIVE: u8 = 4;
 
 impl Node {
     /// Whether php-src counts this node in `gc_collect_cycles()`'s result
     /// (objects and arrays; "don't count references for compatibility").
     pub fn counted(&self) -> bool {
         !matches!(self.handle, Handle::Ref(_))
-    }
-
-    /// The object handle, if this is an object reached through an edge.
-    pub fn obj(&self) -> Option<&Obj> {
-        match &self.handle {
-            Handle::Obj(o) if self.reached => Some(o),
-            _ => None,
-        }
     }
 
     /// The object data, if this is an object.
@@ -149,6 +145,10 @@ impl std::ops::IndexMut<usize> for Nodes {
 #[derive(Default)]
 pub(super) struct Graph {
     pub nodes: Nodes,
+    /// Per node: `REACHED`, `PINNED`, `LIVE`.
+    flags: Vec<u8>,
+    /// Per node: the references from candidate nodes (edges into it).
+    internal: Vec<u32>,
     /// Object nodes by object handle (`NONE`: not in the graph). Handles
     /// are dense and cannot be reused while the graph holds the objects;
     /// this costs 4 bytes per handle instead of a hash entry per node.
@@ -200,13 +200,11 @@ impl Graph {
         let i = u32::try_from(self.nodes.len()).unwrap_or(NONE - 1);
         self.nodes.push(Node {
             handle,
-            reached,
             start: 0,
             len: 0,
-            internal: 0,
-            pinned: false,
-            live: false,
         });
+        self.flags.push(if reached { REACHED } else { 0 });
+        self.internal.push(0);
         i
     }
 
@@ -232,7 +230,9 @@ impl Graph {
         // collector knows about: leaves.
         let d = o.downcast_ref::<ObjectData>()?;
         if let Some(i) = self.obj_node(d.handle.get()) {
-            self.nodes[i as usize].reached = true;
+            if let Some(f) = self.flags.get_mut(i as usize) {
+                *f |= REACHED;
+            }
             return Some(i);
         }
         let i = self.push_node(Handle::Obj(o.clone()), true);
@@ -240,14 +240,27 @@ impl Graph {
         Some(i)
     }
 
+    /// The node of an array table. A table with one handle (the array a
+    /// property or an element holds for itself: most of a heap's arrays)
+    /// is reached through that handle and no other, so it is neither
+    /// looked up nor indexed: the node is made at once. (The graph's own
+    /// handle is the second; nothing else makes one while it is built.)
     pub(super) fn intern_arr(&mut self, a: &ZArray) -> u32 {
+        if a.refcount() == 1 {
+            return self.push_node(Handle::Arr(a.clone()), true);
+        }
         match self.index.get(&a.addr()) {
             Some(&i) => i,
             None => self.push(a.addr(), Handle::Arr(a.clone())),
         }
     }
 
+    /// The node of a reference; one with a single handle is not indexed
+    /// ([`Graph::intern_arr`]).
     pub(super) fn intern_ref(&mut self, r: &PhpRef) -> u32 {
+        if r.refcount() == 1 {
+            return self.push_node(Handle::Ref(r.clone()), true);
+        }
         match self.index.get(&r.addr()) {
             Some(&i) => i,
             None => self.push(r.addr(), Handle::Ref(r.clone())),
@@ -263,13 +276,42 @@ impl Graph {
 
     pub(super) fn link(&mut self, t: u32) {
         self.edges.push(t);
-        self.nodes[t as usize].internal += 1;
+        self.count_edge(t);
+    }
+
+    /// One more edge into node `t`.
+    #[inline]
+    fn count_edge(&mut self, t: u32) {
+        if let Some(n) = self.internal.get_mut(t as usize) {
+            *n += 1;
+        }
+    }
+
+    /// Whether node `i` was scanned black (after [`Graph::analyze`]).
+    #[inline]
+    pub fn live(&self, i: usize) -> bool {
+        self.flags.get(i).is_some_and(|f| f & LIVE != 0)
+    }
+
+    /// Hands the marks over (the free phase reads them while it empties
+    /// the node list); every node then reads as not live.
+    pub fn take_marks(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.flags)
+    }
+
+    /// The object handle of node `i`, if it is an object reached through
+    /// an edge.
+    pub fn obj(&self, i: usize) -> Option<&Obj> {
+        match &self.nodes[i].handle {
+            Handle::Obj(o) if self.flags.get(i).is_some_and(|f| f & REACHED != 0) => Some(o),
+            _ => None,
+        }
     }
 
     /// Records a `WeakMap` entry of the map being expanded.
     pub(super) fn cond_edge(&mut self, map: u32, key: &ObjWeak, v: &Value) {
         if let Some(t) = self.intern(v) {
-            self.nodes[t as usize].internal += 1;
+            self.count_edge(t);
             self.cond.push(CondEdge {
                 map,
                 key_handle: key.upgrade().map(|o| object::data(&o).handle.get()),
@@ -281,7 +323,9 @@ impl Graph {
 
     /// Marks the node being expanded as live.
     pub(super) fn pin(&mut self, i: u32) {
-        self.nodes[i as usize].pinned = true;
+        if let Some(f) = self.flags.get_mut(i as usize) {
+            *f |= PINNED;
+        }
     }
 
     /// Enumerates the contents of every node reachable from the roots.
@@ -360,32 +404,41 @@ impl Graph {
                 .unwrap_or(NONE);
         }
         let mut work: Vec<u32> = Vec::new();
-        for (i, n) in self.nodes.iter_mut().enumerate() {
-            let live = n.pinned || external_refs(n) != Some(0);
-            if live {
-                n.live = true;
-                work.push(u32::try_from(i).unwrap_or(0));
+        // Counted as they are marked: no pass over the nodes for the sum.
+        let mut live_nodes = 0usize;
+        let mut i: u32 = 0;
+        let marks = self.flags.iter_mut().zip(&self.internal);
+        for (node, (mark, &internal)) in self.nodes.iter().zip(marks) {
+            if *mark & PINNED != 0 || external_refs(node, *mark, internal) != Some(0) {
+                *mark |= LIVE;
+                live_nodes += 1;
+                work.push(i);
             }
+            i = i.wrapping_add(1);
         }
         loop {
             while let Some(i) = work.pop() {
-                let n = &self.nodes[i as usize];
-                let (s, l) = (n.start as usize, n.len as usize);
-                for k in s..s + l {
-                    let t = self.edges[k];
-                    let tn = &mut self.nodes[t as usize];
-                    if !tn.live {
-                        tn.live = true;
+                let node = &self.nodes[i as usize];
+                let (start, len) = (node.start as usize, node.len as usize);
+                for &t in self.edges.get(start..start + len).unwrap_or_default() {
+                    let Some(mark) = self.flags.get_mut(t as usize) else {
+                        continue;
+                    };
+                    if *mark & LIVE == 0 {
+                        *mark |= LIVE;
+                        live_nodes += 1;
                         work.push(t);
                     }
                 }
             }
             // A `WeakMap` value is live when both its map and its key are.
             for c in &self.cond {
-                let key_live = c.key == NONE || self.nodes[c.key as usize].live;
-                if key_live && self.nodes[c.map as usize].live && !self.nodes[c.value as usize].live
-                {
-                    self.nodes[c.value as usize].live = true;
+                let key_live = c.key == NONE || self.live(c.key as usize);
+                if key_live && self.live(c.map as usize) && !self.live(c.value as usize) {
+                    if let Some(mark) = self.flags.get_mut(c.value as usize) {
+                        *mark |= LIVE;
+                    }
+                    live_nodes += 1;
                     work.push(c.value);
                 }
             }
@@ -393,27 +446,26 @@ impl Graph {
                 break;
             }
         }
-        self.nodes.iter().filter(|n| !n.live).count()
+        self.nodes.len() - live_nodes
     }
 
     /// Releases the edges and indexes once the analysis and the nested-data
-    /// removal are done ([`Graph::children`] is empty afterwards).
+    /// removal are done ([`Graph::children`] is empty afterwards: a node's
+    /// range is then outside the edge list). The marks stay.
     pub fn drop_edges(&mut self) {
         self.edges = Vec::new();
         self.cond = Vec::new();
         self.obj_index = Vec::new();
         self.index = FxHashMap::default();
-        for n in self.nodes.iter_mut() {
-            n.start = 0;
-            n.len = 0;
-        }
+        self.internal = Vec::new();
     }
 
     /// Children of `i` (edges plus the `WeakMap` values it holds or keys).
     pub fn children(&self, i: u32) -> impl Iterator<Item = u32> + '_ {
         let n = &self.nodes[i as usize];
         let (s, l) = (n.start as usize, n.len as usize);
-        self.edges[s..s + l].iter().copied().chain(
+        let own = self.edges.get(s..s + l).unwrap_or_default();
+        own.iter().copied().chain(
             self.cond
                 .iter()
                 .filter(move |c| c.map == i || c.key == i)
@@ -429,10 +481,10 @@ fn obj_node_in(obj_index: &[u32], h: u32) -> Option<u32> {
 
 /// References to `n` from outside the candidate subgraph, or `None` when
 /// they cannot be determined (the node is then live).
-fn external_refs(n: &Node) -> Option<usize> {
+fn external_refs(n: &Node, flags: u8, internal: u32) -> Option<usize> {
     let strong = match &n.handle {
         // Reached through no edge: every reference to it is external.
-        Handle::Obj(_) if !n.reached => return None,
+        Handle::Obj(_) if flags & REACHED == 0 => return None,
         Handle::Obj(o) => o.refcount(),
         Handle::Arr(a) => a.refcount(),
         Handle::Ref(r) => r.refcount(),
@@ -440,6 +492,5 @@ fn external_refs(n: &Node) -> Option<usize> {
     };
     // The graph holds one handle; a negative remainder would mean an edge
     // was enumerated twice — treat as live.
-    let internal = n.internal as usize;
-    strong.checked_sub(1 + internal).or(Some(1))
+    strong.checked_sub(1 + internal as usize).or(Some(1))
 }

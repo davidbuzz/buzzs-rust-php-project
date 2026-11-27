@@ -3,7 +3,7 @@
 //! A collection run (`zend_gc_collect_cycles`): analysis, the destructor
 //! protocol, freeing, and the single re-run after destructors.
 
-use super::graph::{Graph, Handle};
+use super::graph::{Graph, Handle, Node, LIVE};
 use super::traverse::is_traversed;
 use super::{take_self_arrays, with_state, RootProvider};
 use crate::object::{self, oflags, ObjectData};
@@ -231,7 +231,7 @@ impl Vm {
         // roots, in their new slot order, come first in the buffer order.
         let white_objs = with_state(|s| {
             for &(slot, node) in &root_nodes {
-                if node.is_none_or(|n| g.nodes[n as usize].live) {
+                if node.is_none_or(|n| g.live(n as usize)) {
                     s.roots.release(slot);
                 }
             }
@@ -254,24 +254,36 @@ impl Vm {
             return Ok(res);
         }
         let n = g.nodes.len();
-        let mut count: i64 = g
-            .nodes
-            .iter()
-            .filter(|n| !n.live && n.counted())
-            .count()
-            .try_into()
-            .unwrap_or(i64::MAX);
         // Garbage objects whose destructor has to run first.
-        let in_d: Vec<bool> = g
-            .nodes
-            .iter()
-            .map(|n| !n.live && n.data().is_some_and(has_pending_dtor) && n.obj().is_some())
-            .collect();
-        let mut removed = vec![false; n];
+        let dtor_first = |g: &Graph, i: usize, n: &Node| {
+            !g.live(i) && n.data().is_some_and(has_pending_dtor) && g.obj(i).is_some()
+        };
+        // One pass for the count and for whether any destructor is due;
+        // the per-node tables of the destructor phase are made only then
+        // (most runs free garbage that has none).
+        let mut count: i64 = 0;
+        let mut any_dtor = false;
+        for (i, node) in g.nodes.iter().enumerate() {
+            if !g.live(i) {
+                count += i64::from(node.counted());
+                any_dtor = any_dtor || dtor_first(&g, i, node);
+            }
+        }
+        let in_d: Vec<bool> = if any_dtor {
+            g.nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| dtor_first(&g, i, n))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Empty without destructors: nothing is removed from the pass.
+        let mut removed = if any_dtor { vec![false; n] } else { Vec::new() };
         let mut dtors: Vec<Weak<dyn PhpObject>> = Vec::new();
         // Slots taken for garbage that is no root (`gc_add_garbage`).
         let mut placeholders: Vec<usize> = Vec::new();
-        if in_d.iter().any(|&b| b) {
+        if any_dtor {
             res.had_dtors = true;
             let white_nodes: Vec<u32> = white.iter().map(|&(_, x)| x).collect();
             // `gc_collect_white` appends the garbage it reaches from the
@@ -285,7 +297,7 @@ impl Vm {
             with_state(|s| {
                 for &x in &added {
                     let xi = x as usize;
-                    let slot = match g.nodes[xi].obj() {
+                    let slot = match g.obj(xi) {
                         Some(o) if in_d[xi] => super::buffer_obj(s, o),
                         _ => {
                             let i = s.roots.push_garbage();
@@ -308,7 +320,7 @@ impl Vm {
                     continue;
                 }
                 count -= remove_nested(&g, x, &in_d, &mut removed, &mut nested);
-                if let Some(o) = g.nodes[x as usize].obj() {
+                if let Some(o) = g.obj(x as usize) {
                     dtors.push(Rc::downgrade(o.rc()));
                 }
             }
@@ -329,7 +341,7 @@ impl Vm {
         let self_garbage: HashSet<usize> = self_nodes
             .iter()
             .map(|&x| x as usize)
-            .filter(|&x| !g.nodes[x].live && !removed[x])
+            .filter(|&x| !g.live(x) && !removed.get(x).copied().unwrap_or(false))
             .filter_map(|x| match &g.nodes[x].handle {
                 Handle::Arr(a) => Some(a.addr()),
                 _ => None,
@@ -342,11 +354,15 @@ impl Vm {
         // list itself keeps the handles (no second list: peak memory on
         // large heaps).
         g.drop_edges();
+        let marks = g.take_marks();
         for (i, node) in g.nodes.iter_mut().enumerate() {
-            if node.live || removed[i] {
+            if marks.get(i).is_none_or(|f| f & LIVE != 0)
+                || removed.get(i).copied().unwrap_or(false)
+            {
                 node.handle = Handle::Taken;
             }
         }
+        drop(marks);
         let to_free = g.nodes;
         drop(quiet);
 
@@ -365,6 +381,10 @@ impl Vm {
         let mut trash: Vec<Value> = Vec::new();
         let mut states: Vec<Box<dyn Any>> = Vec::new();
         for node in to_free.iter() {
+            // Most of the list: the live nodes, emptied above.
+            if matches!(node.handle, Handle::Taken) {
+                continue;
+            }
             match &node.handle {
                 Handle::Obj(o) => clear_object(object::data(o), &mut trash, &mut states),
                 Handle::Ref(r) => {
@@ -504,7 +524,7 @@ fn remove_nested(
     let mut x = start;
     loop {
         let xi = x as usize;
-        if !removed[xi] && !g.nodes[xi].live && (x == start || !in_d[xi]) {
+        if !removed[xi] && !g.live(xi) && (x == start || !in_d[xi]) {
             removed[xi] = true;
             if g.nodes[xi].counted() {
                 count += 1;
@@ -541,7 +561,7 @@ fn white_order(g: &Graph, roots: &[u32]) -> Vec<u32> {
     let mut added = Vec::new();
     let mut stack: Vec<u32> = Vec::new();
     let rest = (0..n)
-        .filter(|&i| !g.nodes[i].live)
+        .filter(|&i| !g.live(i))
         .filter_map(|i| u32::try_from(i).ok());
     for start in roots.iter().copied().chain(rest) {
         if seen[start as usize] {
@@ -558,7 +578,7 @@ fn white_order(g: &Graph, roots: &[u32]) -> Vec<u32> {
             let mut next = None;
             for c in g.children(x) {
                 let ci = c as usize;
-                if g.nodes[ci].live || seen[ci] {
+                if g.live(ci) || seen[ci] {
                     continue;
                 }
                 seen[ci] = true;
