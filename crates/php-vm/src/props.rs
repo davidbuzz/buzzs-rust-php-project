@@ -2723,21 +2723,31 @@ impl Vm {
         // is nothing to register (`add_object_type_sources` walks every
         // slot).
         let mut kept_ref = false;
-        let slots: Vec<Option<Value>> = d
-            .slots
-            .borrow()
-            .iter()
-            .map(|s| {
-                s.as_ref().map(|v| match v {
-                    Value::Reference(r) if r.refcount() == 1 => r.get(),
-                    v => {
-                        kept_ref |= matches!(v, Value::Reference(_));
-                        v.clone()
-                    }
-                })
-            })
-            .collect();
-        let n = object::new_object(cls.clone(), slots);
+        let n = {
+            let src = d.slots.borrow();
+            if src.iter().any(|s| matches!(s, Some(Value::Reference(_)))) {
+                let slots: Vec<Option<Value>> = src
+                    .iter()
+                    .map(|s| {
+                        s.as_ref().map(|v| match v {
+                            Value::Reference(r) if r.refcount() == 1 => r.get(),
+                            v => {
+                                kept_ref |= matches!(v, Value::Reference(_));
+                                v.clone()
+                            }
+                        })
+                    })
+                    .collect();
+                drop(src);
+                object::new_object(cls.clone(), slots)
+            } else {
+                // No reference among the slots (the common case): copied
+                // into the new object as `new` copies a class's defaults,
+                // without a vector in between (`zend_objects_clone_members`'
+                // copy of the properties table).
+                object::new_object_from_defaults(cls.clone(), &src)
+            }
+        };
         if kept_ref {
             self.add_object_type_sources(&n);
         }
