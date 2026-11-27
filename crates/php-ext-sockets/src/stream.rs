@@ -49,7 +49,9 @@ pub(crate) fn socket_stream(
     timeout_secs: i64,
 ) -> Stream {
     let label = match protocol {
-        Some("tcp://") => "tcp_socket",
+        // The tcp transport is OpenSSL's once that extension is loaded
+        // (`php_openssl_ssl_socket_factory` registers itself for "tcp").
+        Some("tcp://") => "tcp_socket/ssl",
         Some("udp://") => "udp_socket",
         Some("unix://") => "unix_socket",
         Some("udg://") => "udg_socket",
@@ -64,6 +66,13 @@ pub(crate) fn socket_stream(
     };
     let mut s = Stream::new(Box::new(ops), "r+");
     s.add_flags(flags::NO_SEEK);
+    // `php_stream_xport_create(protocol, ...)` is given the protocol and
+    // nothing else, and that name is the stream's `orig_path`: the `uri` of
+    // `stream_get_meta_data()` ("udp://", "unix://"). A stream made by the
+    // fallback (`php_stream_sock_open_from_socket`) has none.
+    if let Some(protocol) = protocol {
+        s.orig_path = Some(protocol.as_bytes().to_vec());
+    }
     s
 }
 

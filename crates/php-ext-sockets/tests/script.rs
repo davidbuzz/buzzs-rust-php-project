@@ -116,3 +116,23 @@ bool(false)
 "#
     );
 }
+
+/// `socket_export_stream()` asks for a stream of the socket's protocol and
+/// gives it nothing but the protocol's name (`php_stream_xport_create("udp://",
+/// ...)`, ext/sockets/sockets.c), which is then the stream's `uri` in
+/// `stream_get_meta_data()`; the tcp transport is the one OpenSSL registers. A
+/// debugging library builds the address it shows from that `uri`. Expected
+/// output from php8.5.
+#[test]
+fn an_exported_stream_names_its_protocol() {
+    assert_eq!(
+        run(
+            r#"foreach ([[AF_INET, SOCK_STREAM, SOL_TCP], [AF_INET6, SOCK_STREAM, SOL_TCP], [AF_INET, SOCK_DGRAM, SOL_UDP],
+                         [AF_UNIX, SOCK_STREAM, 0], [AF_UNIX, SOCK_DGRAM, 0]] as [$domain, $type, $protocol]) {
+                   $meta = stream_get_meta_data(socket_export_stream(socket_create($domain, $type, $protocol)));
+                   echo $meta['stream_type'], ' ', $meta['uri'], ' ', $meta['mode'], "\n";
+               }"#
+        ),
+        "tcp_socket/ssl tcp:// r+\ntcp_socket/ssl tcp:// r+\nudp_socket udp:// r+\nunix_socket unix:// r+\nudg_socket udg:// r+\n"
+    );
+}
