@@ -350,13 +350,18 @@ jobs:
           key: COMMUNITY
       - name: build
         uses: ./.github/actions/build-linux
-      # Upstream's `make install`: our binaries first on the PATH.
+      # Upstream's `make install` (actions/install-linux): our binaries first on the
+      # PATH, and the socket of the MySQL service for `localhost` (WordPress's test
+      # configuration names that host; without the socket its suite ended at "Error
+      # establishing a database connection" and the step passed with no test run).
       - name: make install
         run: |
           set -x
           sudo cp "$PHP_BIN_DIR/php" "$PHP_BIN_DIR/php-cgi" /usr/local/bin/
           sudo mkdir -p /etc/php.d
           sudo chmod 777 /etc/php.d
+          echo mysqli.default_socket=/var/run/mysqld/mysqld.sock    > /etc/php.d/mysqli.ini
+          echo pdo_mysql.default_socket=/var/run/mysqld/mysqld.sock > /etc/php.d/pdo_mysql.ini
       - name: Setup
         run: |
           sudo service mysql start
