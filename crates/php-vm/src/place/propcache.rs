@@ -212,18 +212,25 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
         Some(slot) => {
             let mut entry = entry;
             let mut old = std::mem::replace(slot, PropCacheEntry::default());
-            // The replaced entry, for another class, is kept as the
-            // alternate (one level: its own alternate goes, its box is
-            // reused for it, so a site cycling through three classes does
-            // not allocate per refill).
+            // The replaced entry, for another class, becomes the first
+            // alternate, before the others it had (at most `MAX_ALTS`: a
+            // base class's method running for several subclasses). The
+            // last one's box is reused for it when the chain is full, so
+            // a site cycling through more classes does not allocate per
+            // refill.
             if old.class_addr != 0 && old.class_addr != entry.class_addr {
-                let boxed = match old.alt.take() {
+                // The last alternate leaves the chain when it is full; its
+                // box takes the old first entry.
+                let spare = last_alt(&mut old);
+                let rest = old.alt.take();
+                let mut boxed = match spare {
                     Some(mut b) => {
                         *b = old;
                         b
                     }
                     None => Box::new(old),
                 };
+                boxed.alt = rest;
                 entry.alt = Some(boxed);
             }
             *slot = entry;
@@ -233,6 +240,70 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
     };
     drop(cache);
     stored
+}
+
+/// The most alternate entries a property site keeps besides its first
+/// one ([`PropCacheEntry::alt`], most recently used first).
+const MAX_ALTS: usize = 3;
+
+/// Unchains the last of `e`'s alternates when it has `MAX_ALTS` of them
+/// (its box is reused for the entry taking a place at the front).
+fn last_alt(e: &mut PropCacheEntry) -> Option<Box<PropCacheEntry>> {
+    let mut node = e.alt.as_mut()?;
+    for _ in 1..MAX_ALTS - 1 {
+        node = node.alt.as_mut()?;
+    }
+    node.alt.take()
+}
+
+/// The position in `e`'s alternates of the entry for the class at
+/// `cls_addr` in the scope at `scope` (1 for the first), read in place.
+fn alt_position(e: &PropCacheEntry, cls_addr: usize, scope: usize) -> Option<usize> {
+    let mut node = e.alt.as_deref();
+    let mut i = 1;
+    while let Some(n) = node {
+        if n.class_addr == cls_addr && n.scope_addr == scope {
+            return Some(i);
+        }
+        node = n.alt.as_deref();
+        i += 1;
+    }
+    None
+}
+
+/// Moves `e`'s alternate at position `i` (1 for the first) to the front:
+/// it becomes the first entry, the first entry its first alternate.
+fn promote_alt(e: &mut PropCacheEntry, i: usize) {
+    // Unchain the hit: the link before it skips it.
+    let hit = if i == 1 {
+        let Some(mut hit) = e.alt.take() else {
+            return;
+        };
+        e.alt = hit.alt.take();
+        hit
+    } else {
+        let mut node = match e.alt.as_mut() {
+            Some(n) => n,
+            None => return,
+        };
+        for _ in 2..i {
+            node = match node.alt.as_mut() {
+                Some(n) => n,
+                None => return,
+            };
+        }
+        let Some(mut hit) = node.alt.take() else {
+            return;
+        };
+        node.alt = hit.alt.take();
+        hit
+    };
+    // Its box takes the old first entry, which leads the alternates.
+    let mut boxed = hit;
+    std::mem::swap(e, &mut *boxed);
+    // `e` is the hit now (no alternates), `boxed` the old first entry with
+    // the chain.
+    e.alt = Some(boxed);
 }
 
 /// Whether `value` may be stored as-is in a property accepting the
@@ -983,19 +1054,16 @@ impl Vm {
         let Some(cls) = with_base_obj(frame, base, |obj| object::class_of(obj).clone()) else {
             return false;
         };
-        // The alternate entry is for this class and scope: the two swap
-        // (the alternate's class is alive: its address is the object's).
+        // An alternate entry is for this class and scope: it becomes the
+        // first, the first its first alternate (an alternate's class is
+        // alive when its address is the object's).
         let scope = scope_addr(frame);
+        let cls_addr = Rc::as_ptr(&cls) as usize;
         if let Ok(mut cache) = code.prop_cache.try_borrow_mut() {
             if let Some(e) = cache.get_mut(pid as usize) {
-                if let Some(alt) = e.alt.take() {
-                    if alt.class_addr == Rc::as_ptr(&cls) as usize && alt.scope_addr == scope {
-                        let mut prev = std::mem::replace(e, *alt);
-                        prev.alt = None;
-                        e.alt = Some(Box::new(prev));
-                        return true;
-                    }
-                    e.alt = Some(alt);
+                if let Some(i) = alt_position(e, cls_addr, scope) {
+                    promote_alt(e, i);
+                    return true;
                 }
             }
         }

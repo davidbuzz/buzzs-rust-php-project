@@ -325,3 +325,38 @@ B3 B4 side
 "#
     );
 }
+
+/// A property site in a base class's method that sees objects of many
+/// subclasses keeps an entry for each of the last four classes
+/// (`PropCacheEntry::alt`, most recently used first): a redeclared
+/// property, a subclass with `__get`/`__isset`, one with a property hook,
+/// the base's private property, reads, writes and `isset`. Expected
+/// output: php-src's (PHP 8.5).
+#[test]
+fn property_sites_keep_entries_for_several_subclasses() {
+    assert_eq!(
+        run(r#"<?php
+class B { protected $types = []; protected $x = 1; private $priv = 'bp'; public $pub = 'p';
+  function t() { return ($this->types ? 1 : $this->x) . $this->priv . $this->pub . (isset($this->zz) ? 'z' : '-'); }
+  function w($v) { $this->x = $v; $this->pub .= '!'; return $this->x; } }
+class C1 extends B {} class C2 extends B { protected $x = 2; } class C3 extends B { public $pub = 'c3'; }
+class C4 extends B { function __get($n) { return "magic:$n"; } function __isset($n) { return $n === 'zz'; } }
+class C5 extends B { public $pub { get => 'hooked'; } }
+class C6 extends B { protected $types = [1]; }
+$os = [new C1, new C2, new C3, new C4, new C5, new C6, new B];
+for ($r = 0; $r < 3; $r++) { foreach ($os as $o) echo $o->t(), " "; echo "\n"; }
+foreach ($os as $i => $o) { try { echo $o->w($i * 10), " "; } catch (Error $e) { echo get_class($e), " "; } } echo "\n";
+for ($r = 0; $r < 2; $r++) { foreach ($os as $o) echo $o->t(), " "; echo "\n"; }
+function rd($o) { return $o->pub; } for ($r = 0; $r < 2; $r++) { foreach ($os as $o) echo rd($o), ","; echo "\n"; }
+"#),
+        r#"1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
+1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
+1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
+0 10 20 30 40 50 60 
+0bpp!- 10bpp!- 20bpc3!- 30bpp!z 40bphooked- 1bpp!- 60bpp!- 
+0bpp!- 10bpp!- 20bpc3!- 30bpp!z 40bphooked- 1bpp!- 60bpp!- 
+p!,p!,c3!,p!,hooked,p!,p!,
+p!,p!,c3!,p!,hooked,p!,p!,
+"#
+    );
+}
