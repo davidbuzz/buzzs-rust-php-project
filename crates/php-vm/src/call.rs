@@ -4807,8 +4807,17 @@ impl Vm {
             if self.frames.len() > depth {
                 self.frames.truncate(depth);
             }
-            self.frames
-                .release_builtin_top(&self.empty_code, &self.empty_vars);
+            let released = self
+                .frames
+                .vec
+                .get_mut(depth - 1)
+                .is_some_and(|f| f.release_native_call(&self.empty_vars));
+            if released {
+                self.frames.live -= 1;
+            } else {
+                self.frames
+                    .release_builtin_top(&self.empty_code, &self.empty_vars);
+            }
             // The arguments are released once the frame is, and the
             // pooled frame keeps the buffer: the next builtin call readied
             // in it pushes its arguments there

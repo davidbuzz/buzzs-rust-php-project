@@ -2583,6 +2583,56 @@ impl Frame {
         true
     }
 
+    /// [`Frame::release_native`] of a builtin frame made by the generic
+    /// call (`Vm::call_builtin_impl`): an internal method called from
+    /// native code (`FilterIterator::valid()` for a `foreach`, ...) also
+    /// holds `$this`, its scope and called class, released here as
+    /// [`Frame::clear_builtin_for_reuse`] releases them (`$this` first).
+    /// The caller has taken the passed arguments out (`Vm::pop_frames_to`
+    /// releases them after the frame). `false`, having released nothing,
+    /// for a frame the handler left more in: the full release then runs.
+    /// (The full release cost each such call ~180 instructions.)
+    #[inline]
+    pub(crate) fn release_native_call(&mut self, empty_vars: &Rc<RefCell<VarStore>>) -> bool {
+        if self.kind != FrameKind::Builtin
+            || self.symtab_attached
+            || !self.calls.is_empty()
+            || self.cold_used
+            || self.magic_name.is_some()
+            || self.closure.is_some()
+            || self.statics.is_some()
+            || !self.tmps.is_empty()
+            || !self.cvs.is_empty()
+            || !self.args.is_empty()
+            || !(Rc::ptr_eq(&self.vars_store, empty_vars)
+                || !self.vars_used.get()
+                || self.holds_empty_store())
+        {
+            return false;
+        }
+        release_obj_field(&mut self.this);
+        match self.func.take() {
+            Some(Func::Builtin(b)) => drop(b),
+            None => {}
+            other => drop(other),
+        }
+        clear_opt(&mut self.builtin_name);
+        self.ip = 0;
+        clear_opt(&mut self.scope);
+        clear_opt(&mut self.called);
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        self.caller_strict = false;
+        self.called_from_internal = false;
+        self.observed = false;
+        self.observer_hidden = false;
+        self.direct = false;
+        self.plain = false;
+        self.direct_argc = 0;
+        self.released_direct = false;
+        true
+    }
+
     /// The foreach iterators, finally states and pending calls of
     /// [`Frame::clear_for_reuse`], in that order.
     #[cold]
