@@ -183,6 +183,12 @@ pub trait FastCgiStreams: std::fmt::Debug {
     fn peer_gone(&self) -> bool {
         false
     }
+    /// Whether the connection is still worth watching once
+    /// [`Self::peer_gone`] said no: `false` when what is waiting on it is
+    /// the request's own and the watch has stopped.
+    fn peer_watchable(&self) -> bool {
+        true
+    }
     /// `fcgi_end()` and `fcgi_close(request, 0, 0)` for
     /// `fastcgi_finish_request()`: `false` when the request already ended.
     /// Output written afterwards is dropped.

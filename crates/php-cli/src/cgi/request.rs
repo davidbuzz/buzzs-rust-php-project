@@ -692,11 +692,15 @@ fn run_watched(
 /// handled, and the watch goes on.
 fn peer_interrupt(vm: &mut Vm) -> VmResult<()> {
     if crate::peer_watch::take_ready() {
-        let gone = php_cli_server::sapi::with_ctx(|c| c.fcgi.as_ref().map(|f| f.peer_gone()));
-        if gone == Some(Some(true)) {
-            php_sapi::connection::record_abort();
-        } else {
-            crate::peer_watch::rearm();
+        let state = php_cli_server::sapi::with_ctx(|c| {
+            c.fcgi.as_ref().map(|f| (f.peer_gone(), f.peer_watchable()))
+        });
+        match state {
+            Some(Some((true, _))) => php_sapi::connection::record_abort(),
+            // The watch stopped for this request: not armed again (the
+            // socket stays readable, so it would only fire again at once).
+            Some(Some((false, false))) => {}
+            _ => crate::peer_watch::rearm(),
         }
     }
     php_vm::connection::finish_pending_abort(vm)

@@ -486,6 +486,9 @@ pub struct Connection {
     /// Request ids refused with `FCGI_CANT_MPX_CONN` while a request ran:
     /// their later records are skipped.
     refused: RefCell<Vec<u16>>,
+    /// The watch of the running request found `STDIN` the script has not
+    /// read ([`Connection::check_peer`]): it stops for this request.
+    watch_off: Cell<bool>,
     /// The management variables of the last [`Connection::read_request`],
     /// for a `GET_VALUES` that comes while a request runs.
     mgmt: RefCell<Option<MgmtVars>>,
@@ -507,6 +510,7 @@ impl Connection {
             out: RefCell::new(Vec::with_capacity(OUT_BUF + HEADER_LEN * 2)),
             out_hdr: Cell::new(None),
             refused: RefCell::new(Vec::new()),
+            watch_off: Cell::new(false),
             mgmt: RefCell::new(None),
         }
     }
@@ -583,6 +587,7 @@ impl Connection {
             }
         }
         self.refused.borrow_mut().clear();
+        self.watch_off.set(false);
         if hdr.len + hdr.padding > MAX_LENGTH {
             return Incoming::Failed;
         }
@@ -697,8 +702,14 @@ impl Connection {
             return Peer::Gone;
         };
         loop {
+            // The request's own `STDIN` that the script has not read (more
+            // than `CONTENT_LENGTH` was sent, or the script reads
+            // `php://input` later) is the script's: the watch stops before
+            // it, as php-src reads nothing of the connection while a script
+            // runs. What the web server does after it (closing its side
+            // once it sent everything) is then not seen either.
             if self.in_len.get() != 0 {
-                return self.partial(fd);
+                return self.stop_watching();
             }
             let mut head = [0u8; HEADER_LEN];
             let waiting = match sys::peek(fd, &mut head) {
@@ -713,6 +724,9 @@ impl Connection {
             let hdr = Header::parse(head);
             if hdr.version < VERSION_1 {
                 return self.lost();
+            }
+            if hdr.id == self.id.get() && hdr.kind == STDIN {
+                return self.stop_watching();
             }
             let mut rec = vec![0u8; HEADER_LEN + hdr.len + hdr.padding];
             let waiting = match sys::peek(fd, &mut rec) {
@@ -783,6 +797,12 @@ impl Connection {
             std::io::Error::from_raw_os_error(errno)
         ));
         self.lost()
+    }
+
+    /// Nothing more is watched for the running request.
+    fn stop_watching(&self) -> Peer {
+        self.watch_off.set(true);
+        Peer::Waiting
     }
 
     /// The connection ended under the request: it cannot be kept.
@@ -964,6 +984,10 @@ impl Connection {
 impl FastCgiStreams for Connection {
     fn peer_gone(&self) -> bool {
         self.check_peer() == Peer::Gone
+    }
+
+    fn peer_watchable(&self) -> bool {
+        !self.watch_off.get()
     }
 
     fn stdout(&self, data: &[u8]) -> bool {
