@@ -1580,6 +1580,7 @@ impl Compiler<'_> {
                     line: a.span.line,
                     strict: self.strict_types,
                     source,
+                    class_cache: crate::class::AttrClassCache::default(),
                 });
             }
         }

@@ -3954,6 +3954,18 @@ thread_local! {
     static EPOCH: Cell<u64> = const { Cell::new(1) };
 }
 
+/// The current request's number: what a cache of class lookups
+/// ([`crate::class::AttrClassCache`]) is valid for.
+pub(crate) fn request_epoch() -> u64 {
+    EPOCH.with(Cell::get)
+}
+
+/// Whether class lookups are being recorded for a link (a cached lookup
+/// would escape the record).
+pub(crate) fn lookups_logged() -> bool {
+    LOGGING.with(Cell::get)
+}
+
 /// Records a class lookup of the link being recorded.
 #[inline]
 fn note_lookup(lc: &[u8], found: Option<&Rc<Class>>) {

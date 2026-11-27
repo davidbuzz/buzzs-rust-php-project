@@ -318,6 +318,8 @@ impl Vm {
             stack_size_inis: None,
             method_name_cache: Vec::new(),
             method_name_cache_next: 0,
+            refl_classes: Vec::new(),
+            attr_filter_class: None,
             call_bufs: crate::vm::CallBufs::prewarmed(&empty_code),
             output_handler_aliases: std::collections::HashMap::new(),
             output_handler_conflicts: std::collections::HashMap::new(),

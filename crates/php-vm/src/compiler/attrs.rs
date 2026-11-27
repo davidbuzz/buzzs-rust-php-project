@@ -272,6 +272,7 @@ mod tests {
             line: 1,
             strict: false,
             source: None,
+            class_cache: crate::class::AttrClassCache::default(),
         }
     }
 

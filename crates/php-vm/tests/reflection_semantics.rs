@@ -3,6 +3,8 @@
 //! End-to-end checks of reflection (and closely related engine builtins)
 //! against the outputs of the php-src `ext/reflection` `.phpt` tests.
 
+mod common;
+
 use php_runtime::Value;
 use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::{Vm, VmOptions};
@@ -21,6 +23,16 @@ impl Write for Sink {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// [`run`] with the standard library ([`common::vm_with_stdlib`]).
+fn run_std(source: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    String::from_utf8(output).expect("UTF-8 output")
 }
 
 fn run(source: &str) -> String {
@@ -1059,4 +1071,52 @@ ReflectionProperty::isStatic ReflectionProperty::isStatic Error: Internal error:
 ReflectionProperty::isStatic direct NULL
 "#;
     assert_eq!(run(src), expected);
+}
+
+/// `getAttributes($class, IS_INSTANCEOF)` finds the filter's class and
+/// each attribute's class once a request (`AttrClassCache`,
+/// `Vm::attr_filter_class`): subclasses and interfaces of the filter,
+/// repeated calls, an attribute class an autoloader declares later (a miss
+/// is not kept), an alias, a missing filter class; `method_exists()` and
+/// `getMethod()` with names in other case (`Class::find_method`).
+/// Expected output: php-src's (PHP 8.5).
+#[test]
+fn attribute_filters_find_classes_once_a_request() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+interface Marker {}
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)] class Base {}
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)] class Child extends Base implements Marker {}
+#[Attribute] class Other {}
+class Target {
+  #[Child] #[Other] #[Base] #[Later] #[Child]
+  function m(#[Child] $p, #[Other] $q) {}
+}
+$m = new ReflectionMethod('Target', 'm');
+for ($i = 0; $i < 2; $i++) {
+  echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), " | ";
+  echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Marker::class, ReflectionAttribute::IS_INSTANCEOF))), " | ";
+  echo count($m->getAttributes(Other::class, ReflectionAttribute::IS_INSTANCEOF)), " | ";
+  foreach ($m->getParameters() as $p) echo $p->getName(), "=", count($p->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF)), " ";
+  echo "\n";
+}
+spl_autoload_register(function ($c) { echo "[autoload $c] "; if ($c === 'Later') { eval('#[Attribute] class Later extends Base {}'); } });
+echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), "\n";
+echo implode(",", array_map(fn($a) => $a->getName(), $m->getAttributes(Base::class, ReflectionAttribute::IS_INSTANCEOF))), "\n";
+class_alias('Child', 'ChildAlias');
+echo count($m->getAttributes('ChildAlias', ReflectionAttribute::IS_INSTANCEOF)), " ", count($m->getAttributes('child')), "\n";
+try { $m->getAttributes('Missing', ReflectionAttribute::IS_INSTANCEOF); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo method_exists('Target', 'M') ? "y" : "n", method_exists('Target', 'mX') ? "y" : "n", " ", (new ReflectionClass('Target'))->getMethod('M')->getName(), "\n";
+"#
+        ),
+        r#"Child,Base,Child | Child,Child | 1 | p=1 q=0 
+Child,Base,Child | Child,Child | 1 | p=1 q=0 
+[autoload Later] Child,Base,Later,Child
+Child,Base,Later,Child
+2 2
+[autoload Missing] Class "Missing" not found
+yn m
+"#
+    );
 }

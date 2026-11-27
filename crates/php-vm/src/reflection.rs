@@ -454,8 +454,20 @@ pub(crate) fn set_getters(cls: &Rc<Class>, list: &[(&str, crate::func::GetterFn)
 
 /// The reflection class named `class`, for [`new_refl_of`].
 pub(crate) fn refl_class(vm: &mut Vm, class: &str) -> VmResult<Rc<Class>> {
-    vm.find_class(class.as_bytes())
-        .ok_or_else(|| vm.make_throw("Error", &format!("Class \"{class}\" not found")))
+    // The internal reflection classes, looked up once per VM
+    // (`Vm::refl_classes`: every reflection object a loop made looked its
+    // class up by name, ~750,000 lookups in a framework application's unit
+    // tests). A user class (a subclass of one) is looked up every time.
+    if let Some((_, c)) = vm.refl_classes.iter().find(|(n, _)| &**n == class) {
+        return Ok(Rc::clone(c));
+    }
+    let c = vm
+        .find_class(class.as_bytes())
+        .ok_or_else(|| vm.make_throw("Error", &format!("Class \"{class}\" not found")))?;
+    if c.decl.is_none() && vm.refl_classes.len() < 16 {
+        vm.refl_classes.push((Box::from(class), Rc::clone(&c)));
+    }
+    Ok(c)
 }
 
 /// [`new_refl`] of a class already looked up (a loop creating many).

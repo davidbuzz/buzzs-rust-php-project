@@ -926,6 +926,7 @@ fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 line: 0,
                 strict: false,
                 source: None,
+                class_cache: crate::class::AttrClassCache::default(),
             });
         }
     }

@@ -467,6 +467,7 @@ impl Decoder<'_, '_> {
                 line: self.r.u32()?,
                 strict: self.r.bool()?,
                 source: None,
+                class_cache: crate::class::AttrClassCache::default(),
             });
         }
         Ok(out)

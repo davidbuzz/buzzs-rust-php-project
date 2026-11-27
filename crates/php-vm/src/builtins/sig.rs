@@ -667,6 +667,7 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
                     line: 0,
                     strict: false,
                     source: None,
+                    class_cache: crate::class::AttrClassCache::default(),
                 }]
             } else {
                 Vec::new()

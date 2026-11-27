@@ -3564,6 +3564,13 @@ pub struct Vm {
     )>,
     /// The entry of `method_name_cache` replaced next.
     pub(crate) method_name_cache_next: usize,
+    /// Internal reflection classes by the name `reflection::refl_class`
+    /// was asked for (internal classes live as long as the VM).
+    pub(crate) refl_classes: Vec<(Box<str>, Rc<Class>)>,
+    /// The class the last `getAttributes($name, IS_INSTANCEOF)` filtered
+    /// by, with the request it was found in (valid for the rest of that
+    /// request: see `class::AttrClassCache`).
+    pub(crate) attr_filter_class: Option<(u64, ZStr, std::rc::Weak<Class>)>,
     /// Reusable buffers of the call protocol (php-src keeps call frames and
     /// arguments on the VM stack; these pools avoid per-call mallocs).
     pub(crate) call_bufs: CallBufs,

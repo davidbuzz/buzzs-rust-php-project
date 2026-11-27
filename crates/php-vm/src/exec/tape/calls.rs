@@ -2814,15 +2814,18 @@ pub(crate) fn push_callback_from_native(
     if live == 0 || live > 50_000 {
         return None;
     }
-    if let Some(c) = closure {
-        let internal = crate::object::data(c).internal.borrow();
-        let d = internal
+    // The closure's data, borrowed once for the test and the binding.
+    let internal = closure.map(|c| crate::object::data(c).internal.borrow());
+    let cdata = match &internal {
+        Some(r) => match r
             .as_ref()
-            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>());
-        if d.is_none_or(|d| d.magic_name.is_some()) {
-            return None;
-        }
-    }
+            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())
+        {
+            Some(d) if d.magic_name.is_none() => Some(d),
+            _ => return None,
+        },
+        None => None,
+    };
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let frame = vm.frames.vec.get_mut(live)?;
     if !frame.args.is_empty() {
@@ -2851,27 +2854,21 @@ pub(crate) fn push_callback_from_native(
     if n < uf.params.len() {
         bind_literal_defaults(frame, uf, n);
     }
-    if let Some(c) = closure {
+    if let (Some(c), Some(d)) = (closure, cdata) {
         fill(&mut frame.closure, Some(c.clone()));
-        let internal = crate::object::data(c).internal.borrow();
-        if let Some(d) = internal
-            .as_ref()
-            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())
-        {
-            if frame.this.is_none() && d.this.is_some() {
-                frame.this.clone_from(&d.this);
-            }
-            if frame.scope.is_none() && d.scope.is_some() {
-                frame.scope.clone_from(&d.scope);
-            }
-            if frame.called.is_none() && d.called.is_some() {
-                frame.called.clone_from(&d.called);
-            }
-            for (cv, v) in &d.vars {
-                if let Some(slot) = frame.cvs.get_mut(*cv as usize) {
-                    if let Some(old) = slot.as_mut().replace(v.clone()) {
-                        drop(old);
-                    }
+        if frame.this.is_none() && d.this.is_some() {
+            frame.this.clone_from(&d.this);
+        }
+        if frame.scope.is_none() && d.scope.is_some() {
+            frame.scope.clone_from(&d.scope);
+        }
+        if frame.called.is_none() && d.called.is_some() {
+            frame.called.clone_from(&d.called);
+        }
+        for (cv, v) in &d.vars {
+            if let Some(slot) = frame.cvs.get_mut(*cv as usize) {
+                if let Some(old) = slot.as_mut().replace(v.clone()) {
+                    drop(old);
                 }
             }
         }

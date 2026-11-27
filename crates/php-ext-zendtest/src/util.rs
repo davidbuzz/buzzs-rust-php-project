@@ -61,6 +61,7 @@ pub(crate) fn attribute(name: &str, args: Vec<(Option<&str>, Value)>) -> Attribu
         line: 0,
         strict: false,
         source: None,
+        class_cache: php_vm::class::AttrClassCache::default(),
     }
 }
 

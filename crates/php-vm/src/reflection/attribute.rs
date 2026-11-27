@@ -83,7 +83,21 @@ pub(crate) fn attributes_array_decl(
     let mut base: Option<Rc<Class>> = None;
     let mut name = name;
     if let (Some(n), true) = (&name, fl & 2 != 0) {
-        let found = if frameless {
+        // The filter's class, found once a request
+        // (`Vm::attr_filter_class`: a framework's container asks every
+        // parameter it resolves for its attributes of one class, most
+        // having none, and the lookup by name was most of each call).
+        let epoch = crate::classlink::request_epoch();
+        let logged = crate::classlink::lookups_logged();
+        let cached = match &vm.attr_filter_class {
+            Some((e, cn, w)) if !logged && *e == epoch && cn.as_bytes() == n.as_bytes() => {
+                w.upgrade()
+            }
+            _ => None,
+        };
+        let found = if cached.is_some() {
+            cached
+        } else if frameless {
             match vm.find_class(n.as_bytes()) {
                 Some(c) => Some(c),
                 None => return decline(),
@@ -91,6 +105,9 @@ pub(crate) fn attributes_array_decl(
         } else {
             vm.lookup_class(n)?
         };
+        if let (Some(c), false) = (&found, logged) {
+            vm.attr_filter_class = Some((epoch, (*n).clone(), Rc::downgrade(c)));
+        }
         match found {
             Some(c) => base = Some(c),
             None => {
@@ -113,7 +130,18 @@ pub(crate) fn attributes_array_decl(
                 continue;
             }
         } else if let Some(b) = &base {
-            let found = if frameless {
+            // The attribute's class, found once a request
+            // (`AttrClassCache`; not while a link records its lookups).
+            let epoch = crate::classlink::request_epoch();
+            let logged = crate::classlink::lookups_logged();
+            let cached = if logged {
+                None
+            } else {
+                at.class_cache.get(epoch)
+            };
+            let found = if cached.is_some() {
+                cached
+            } else if frameless {
                 match vm.find_class(at.name.as_bytes()) {
                     Some(c) => Some(c),
                     None => return decline(),
@@ -121,6 +149,9 @@ pub(crate) fn attributes_array_decl(
             } else {
                 vm.lookup_class(&at.name)?
             };
+            if let (Some(c), false) = (&found, logged) {
+                at.class_cache.set(epoch, c);
+            }
             match found {
                 Some(ac) if ac.is_subclass_of(b) => {}
                 _ => continue,
