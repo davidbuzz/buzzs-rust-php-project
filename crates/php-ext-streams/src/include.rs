@@ -4,7 +4,8 @@
 //! (`php_stream_open_for_zend_ex()`): installed as the VM's include opener.
 //!
 //! Plain paths are left to the VM unless `include_path` contains wrapper
-//! entries. Openers installed later (e.g. phar) chain to this one.
+//! entries or the `file` wrapper itself was replaced or removed by the
+//! script. Openers installed later (e.g. phar) chain to this one.
 
 use std::cell::Cell;
 
@@ -16,6 +17,11 @@ use php_vm::ext::{IncludeOpen, IncludeOpenerFn, VmResult};
 use php_vm::Vm;
 
 use crate::bridge;
+
+/// `STREAM_OPEN_FOR_ZEND_STREAM`: set by `php_stream_open_for_zend_ex` on
+/// every file the engine opens to compile; a user wrapper sees it in the
+/// options of its `stream_open()`.
+const STREAM_OPEN_FOR_ZEND_STREAM: u32 = 0x0001_0000;
 
 thread_local! {
     static PREV: Cell<Option<IncludeOpenerFn>> = const { Cell::new(None) };
@@ -42,7 +48,19 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
     let wrapped_path = vm
         .ini_string("include_path")
         .is_some_and(|ip| php_streams::util::find_bytes(&ip, b"://").is_some());
-    if !is_url(name) && !wrapped_path {
+    // A plain path is the `file` wrapper's, and a script can put a class of
+    // its own in that wrapper's place (`stream_wrapper_unregister('file')`,
+    // `stream_wrapper_register('file', ...)`) or leave it removed: the
+    // class then opens the included file, as it opens any other (a library
+    // decompresses its data files that way), and without a `file` wrapper
+    // the include fails ("file:// wrapper is disabled ...").
+    let file_replaced = php_streams::wrapper::has_volatile()
+        && !php_streams::wrapper::find(b"file").is_some_and(|w| w.is_plain_files());
+    // `include_once` resolves the path and looks it up before it opens it:
+    // a file included before is not opened again, by any wrapper.
+    let seen =
+        file_replaced && kind.ends_with("_once") && !is_url(name) && vm.already_included(name);
+    if (!is_url(name) && !wrapped_path && !file_replaced) || seen {
         return match PREV.with(Cell::get) {
             Some(prev) => prev(vm, name, kind),
             None => Ok(IncludeOpen::NotHandled),
@@ -53,7 +71,7 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
         let s = php_streams::open::open_wrapper(
             name,
             "rb",
-            USE_PATH | REPORT_ERRORS | STREAM_OPEN_FOR_INCLUDE,
+            USE_PATH | REPORT_ERRORS | STREAM_OPEN_FOR_INCLUDE | STREAM_OPEN_FOR_ZEND_STREAM,
             &mut opened,
             None,
         );

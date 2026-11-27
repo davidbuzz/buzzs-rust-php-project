@@ -1001,6 +1001,17 @@ impl Vm {
         self.source_filter.is_some() && self.source_filter_probe.is_none_or(|probe| probe(path))
     }
 
+    /// Whether `name` resolves (`zend_resolve_path`) to a file that was
+    /// included before: what `include_once` asks before it opens anything.
+    #[must_use]
+    pub fn already_included(&self, name: &[u8]) -> bool {
+        self.resolve_include_path(name).is_some_and(|p| {
+            use std::os::unix::ffi::OsStrExt;
+            self.included_set
+                .contains(&ZStr::from(p.as_os_str().as_bytes()))
+        })
+    }
+
     fn resolve_include_path(&self, name: &[u8]) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt;
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
