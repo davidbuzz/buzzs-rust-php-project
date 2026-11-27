@@ -2716,6 +2716,109 @@ impl Vm {
         Some(crate::exec::Flow::Reload)
     }
 
+    /// `ZEND_RETURN` from a plain call's frame ([`Frame::plain`]: a call
+    /// plan's, or any prepared call of a plain declaration), tried by the
+    /// tape before [`Vm::return_simple`]: the value moved or copied into
+    /// the caller's temporary as `return_simple` moves it (a declared
+    /// return type must take it as it is; an unused result is released,
+    /// unless that may run a destructor), then the frame released in one
+    /// pass ([`Frame::release_plain`]: slots, a method's `$this` and
+    /// scopes, the call's fields) and popped. What `return_simple` tests
+    /// about the frame on every return (its kind, generator, by-reference
+    /// return, the function it keeps) is what the mark says.
+    /// `false`, nothing changed, for a frame, a value or a result slot it
+    /// leaves to `return_simple`.
+    #[inline(never)]
+    pub(crate) fn return_plain(&mut self, val: Operand, base: usize, ip: usize) -> bool {
+        let Some(fidx) = self.frames.live.checked_sub(1) else {
+            return false;
+        };
+        if fidx <= base || self.observer.enabled {
+            return false;
+        }
+        let (callers, rest) = self.frames.vec.split_at_mut(fidx);
+        let (Some(caller), Some(frame)) = (callers.last_mut(), rest.first_mut()) else {
+            return false;
+        };
+        if !frame.plain_releasable() {
+            return false;
+        }
+        // The caller's result slot (a scalar there owns nothing and is
+        // overwritten), or none for an unused result.
+        let mut dst = match frame.ret {
+            RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                Some(slot) if is_scalar(slot) => Some(slot),
+                _ => return false,
+            },
+            RetTarget::Discard => None,
+        };
+        // The declared return type must take the value as it is
+        // (`return_simple`'s rule); anything else is its to coerce or
+        // refuse.
+        let rt = frame.ufunc.as_ref().and_then(|u| u.return_type.as_ref());
+        let (scope, called) = (frame.scope.as_ref(), frame.called.as_ref());
+        let takes = |v: &Value| rt.is_none() || return_accepts_in(rt, v, scope, called);
+        match val {
+            Operand::Tmp(s) => match frame.tmps.get_mut(s as usize) {
+                // (An unused result whose release may run a destructor is
+                // `return_generic`'s.)
+                Some(slot)
+                    if !matches!(slot, Value::Reference(_))
+                        && takes(slot)
+                        && (dst.is_some() || !may_destruct(slot)) =>
+                {
+                    match dst.as_deref_mut() {
+                        Some(d) => std::mem::swap(d, slot),
+                        None => {
+                            let v = std::mem::take(slot);
+                            if is_scalar(&v) {
+                                std::mem::forget(v);
+                            } else {
+                                drop(v);
+                            }
+                        }
+                    }
+                }
+                _ => return false,
+            },
+            Operand::Cv(cv) => {
+                let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+                    return false;
+                };
+                match (slot.as_mut(), dst.as_deref_mut()) {
+                    (Some(v), Some(d)) if returns_directly(v) && takes(v) => std::mem::swap(d, v),
+                    (Some(v @ (Value::Array(_) | Value::Object(_))), Some(d)) if takes(v) => {
+                        let copy = clone_value(v);
+                        std::mem::forget(std::mem::replace(d, copy));
+                    }
+                    // Unused: the value stays in its variable, released
+                    // with the frame's.
+                    (Some(v), None) if !matches!(v, Value::Reference(_)) && takes(v) => {}
+                    _ => return false,
+                }
+            }
+            Operand::Lit(l) => match frame.code.literals.get(l as usize) {
+                Some(lit) if !matches!(lit, Value::Reference(_)) && takes(lit) => {
+                    if let Some(d) = dst.as_deref_mut() {
+                        std::mem::forget(std::mem::replace(d, clone_value(lit)));
+                    }
+                }
+                _ => return false,
+            },
+            Operand::Unused if rt.is_none_or(crate::types::TypeDecl::is_void) => {
+                if let Some(d) = dst.as_deref_mut() {
+                    std::mem::forget(std::mem::replace(d, Value::Null));
+                }
+            }
+            _ => return false,
+        }
+        // `SAVE_OPLINE()`: the release below may report this line.
+        frame.ip = ip;
+        frame.release_plain(caller.this.as_ref());
+        self.frames.pop_cleared_top();
+        true
+    }
+
     /// `ZEND_RETURN` from the frame a nested execution started with
     /// (`base`: a callback called by a builtin, `zend_call_function`):
     /// [`Vm::return_generic`]'s direct return, whose result is the

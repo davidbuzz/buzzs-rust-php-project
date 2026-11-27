@@ -1403,6 +1403,13 @@ pub struct Frame {
     /// (`exec::tape::calls::ready_frame`). Cleared by every other release
     /// and by every readying.
     pub(crate) released_direct: bool,
+    /// A plain call's frame: entered through a call plan
+    /// (`exec::tape::calls::call_plain`) or by the prepared call of a
+    /// plain declaration (`calls::enter`), with nothing but its slots, a
+    /// method's `$this` and scopes to release. Its return is
+    /// `Vm::return_plain`, which releases it through
+    /// [`Frame::release_plain`]. Cleared by every release.
+    pub(crate) plain: bool,
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -1873,6 +1880,7 @@ impl Frame {
             direct: false,
             direct_argc: 0,
             released_direct: false,
+            plain: false,
         }
     }
 
@@ -2106,6 +2114,7 @@ impl Frame {
             direct: false,
             direct_argc: 0,
             released_direct: false,
+            plain: false,
         }
     }
 
@@ -2231,8 +2240,54 @@ impl Frame {
         self.observed = false;
         self.observer_hidden = false;
         self.direct = false;
+        self.plain = false;
         self.direct_argc = 0;
         self.released_direct = false;
+    }
+
+    /// Whether a [`Frame::plain`] frame still is as its call left it but
+    /// for its slots: no symbol table attached or looked at, no rare
+    /// state, no pending call. (What [`Frame::direct_releasable`] tests,
+    /// less what the mark already says: the frame is a direct one of a
+    /// function that is kept and has no static variables.)
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every planned return
+    pub(crate) fn plain_releasable(&self) -> bool {
+        self.plain
+            && !self.symtab_attached
+            && !self.cold_used
+            && self.calls.is_empty()
+            && !self.vars_used.get()
+    }
+
+    /// The release of a [`Frame::plain_releasable`] frame at its return:
+    /// the temporaries and the compiled variables (with their possible
+    /// roots, in variable order), then a method's `$this` (its possible
+    /// root first) and scopes, as [`Frame::release_returning`] releases
+    /// them, then the call's fields. A plan's frame has no closure and no
+    /// argument buffer to release.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every planned return
+    pub(crate) fn release_plain(&mut self, caller_this: Option<&Obj>) {
+        debug_assert!(self.closure.is_none() && self.args.is_empty());
+        self.release_direct_tmps();
+        for slot in &mut self.cvs {
+            release_cv_in_place(slot.as_mut());
+        }
+        if self.this.is_some() {
+            crate::gc::call_handle_released(self, caller_this);
+            release_obj_field(&mut self.this);
+        }
+        clear_opt(&mut self.scope);
+        clear_opt(&mut self.called);
+        self.ip = 0;
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        self.caller_strict = false;
+        self.direct = false;
+        self.plain = false;
+        self.direct_argc = 0;
+        self.released_direct = true;
     }
 
     /// [`Frame::clear_for_reuse`] of a frame the tape's call protocol made
@@ -2378,6 +2433,7 @@ impl Frame {
         self.is_ctor = false;
         self.caller_strict = false;
         self.direct = false;
+        self.plain = false;
         self.direct_argc = 0;
         self.called_from_internal = false;
         // Every field is in its released state now, and the function's
@@ -2848,6 +2904,7 @@ impl Frame {
             direct: false,
             direct_argc: 0,
             released_direct: false,
+            plain: false,
         }
     }
 
