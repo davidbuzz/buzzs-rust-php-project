@@ -554,7 +554,21 @@ fn plan_reads_place(code: &OpArray, pid: u32) -> bool {
 /// (typed or not) without static variables, every required parameter
 /// passed and none past the declared ones.
 fn plan_takes(uf: &UserFunction, n: usize) -> bool {
-    matches!(uf.call_shape(), CallShape::UNTYPED | CallShape::TYPED)
+    let shape_ok = match uf.call_shape() {
+        CallShape::UNTYPED | CallShape::TYPED => true,
+        // A near-plain declaration (`UserFunction::near_plain_limit`: a
+        // trailing variadic parameter, by-reference parameters past the
+        // arguments passed) called with no argument for the variadic
+        // parameter, which its `RECV_VARIADIC` makes an empty array of as
+        // the body runs (Laravel's `value($v)`, `collect($items)`):
+        // the plain call's frame, with nothing in the argument buffer.
+        CallShape::NOT_PLAIN => {
+            crate::call::near_plain(uf, n)
+                && (uf.flags & flags::VARIADIC == 0 || n < uf.params.len())
+        }
+        _ => false,
+    };
+    shape_ok
         && uf.code.num_statics == 0
         && uf.flags & (flags::RETURN_REF | flags::GENERATOR) == 0
         && n >= uf.required as usize
@@ -666,7 +680,13 @@ fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>
     {
         plan.n = n as u8;
     }
-    plan.typed = c.uf.call_shape() == CallShape::TYPED;
+    plan.typed = match c.uf.call_shape() {
+        CallShape::TYPED => true,
+        // (A near-plain declaration: whether a declared parameter is
+        // typed, `UserFunction::near_typed`.)
+        CallShape::NOT_PLAIN => c.uf.near_typed(),
+        _ => false,
+    };
     plan.defaults = n < c.uf.params.len();
     plan.is_static = c.is_static;
     plan.first_op = c.uf.plain_first_op(n);
