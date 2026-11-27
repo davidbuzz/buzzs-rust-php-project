@@ -315,6 +315,7 @@ impl Vm {
             native_stack_base: 0,
             native_stack_size: 8 << 20,
             stack_limit_ini: None,
+            stack_size_inis: None,
             call_bufs: crate::vm::CallBufs::prewarmed(&empty_code),
             output_handler_aliases: std::collections::HashMap::new(),
             output_handler_conflicts: std::collections::HashMap::new(),

@@ -3494,6 +3494,9 @@ pub struct Vm {
     /// Cached `(zend.max_allowed_stack_size, zend.reserved_stack_size)`;
     /// both are `INI_SYSTEM`, so they never change after startup.
     pub(crate) stack_limit_ini: Option<(i64, usize)>,
+    /// `zend.max_allowed_stack_size` and `zend.reserved_stack_size` as set
+    /// ([`Vm::stack_size_inis`]), read once.
+    pub(crate) stack_size_inis: Option<(i64, i64)>,
     /// Reusable buffers of the call protocol (php-src keeps call frames and
     /// arguments on the VM stack; these pools avoid per-call mallocs).
     pub(crate) call_bufs: CallBufs,

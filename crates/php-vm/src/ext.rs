@@ -1510,6 +1510,22 @@ impl Vm {
         self.ini.get_long(name)
     }
 
+    /// `zend.max_allowed_stack_size` and `zend.reserved_stack_size`, as
+    /// [`Vm::ini_long`] reads them. Both are `INI_SYSTEM`, so they are
+    /// read once: an extension that checks its native recursion on every
+    /// call (SPL's methods) paid two lookups by name each time.
+    pub fn stack_size_inis(&mut self) -> (i64, i64) {
+        if let Some(t) = self.stack_size_inis {
+            return t;
+        }
+        let t = (
+            self.ini.get_long("zend.max_allowed_stack_size"),
+            self.ini.get_long("zend.reserved_stack_size"),
+        );
+        self.stack_size_inis = Some(t);
+        t
+    }
+
     /// An INI value as a boolean.
     pub fn ini_bool(&self, name: &str) -> bool {
         self.ini.get_bool(name)
