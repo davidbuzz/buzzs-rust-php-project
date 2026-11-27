@@ -3752,6 +3752,159 @@ impl Vm {
         Some(r)
     }
 
+    /// An internal method called from native code (`zend_call_method`:
+    /// `FilterIterator::valid()` for a `foreach`, an inner iterator's
+    /// `next()`, ...), as [`Vm::call_builtin_pooled`] calls a function: the
+    /// pooled builtin frame above the current one takes `$this`, the
+    /// method's scope and the object's class and the arguments, the handler
+    /// gets copies of them and the declared defaults of the omitted
+    /// parameters, and the frame is released by [`Vm::pop_frames_to`]
+    /// (`Frame::release_native_call`). The general way there
+    /// (`pending_for_method`, `call_pending_ex`, `call_builtin_framed`,
+    /// `call_builtin_impl`) built and moved a pending call and tested each
+    /// argument field by field: ~1,000 instructions a call.
+    ///
+    /// It applies with no observer, to a non-static method that is neither
+    /// deprecated nor `#[\NoDiscard]`, whose builtin makes a plain call
+    /// ([`Builtin::plain_call_upto`]), given at least its required
+    /// arguments and none past its parameters, each a value its parameter
+    /// takes as it is (no by-reference parameter among them), and that has
+    /// no frameless form for them. `Err` gives the arguments back,
+    /// nothing changed, otherwise.
+    #[inline(never)]
+    fn call_builtin_method_native(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        b: &Rc<Builtin>,
+        mut args: Vec<Value>,
+    ) -> Result<VmResult<Value>, Vec<Value>> {
+        if self.observer.enabled
+            || m.is_static()
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+        {
+            return Err(args);
+        }
+        let n = args.len();
+        let (kind, upto) = b.plain_call_upto();
+        if kind != crate::func::PlainCall::Named || n > upto {
+            return Err(args);
+        }
+        let sig = b.signature();
+        let nparams = sig.params.len();
+        let variadic = b.flags & flags::VARIADIC != 0;
+        if n < sig.required as usize || (!variadic && n > nparams) {
+            return Err(args);
+        }
+        // By-value arguments are passed dereferenced (`call_pending_ex`).
+        for a in &mut args {
+            if let Value::Reference(r) = a {
+                let v = r.get();
+                *a = v;
+            }
+        }
+        let table = b.accepts();
+        let last = table.last().copied().unwrap_or(u32::MAX);
+        if !args
+            .iter()
+            .enumerate()
+            .all(|(i, v)| crate::func::accept_bit(v) & table.get(i).copied().unwrap_or(last) != 0)
+        {
+            return Err(args);
+        }
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class != 0 {
+            let sent: Vec<Option<Value>> = args.iter().cloned().map(Some).collect();
+            if crate::special::frameless_args(class, &sent) {
+                return Err(args);
+            }
+        }
+        // `zend_call_function` services pending interrupts before the call.
+        if let Err(t) = self.check_interrupt() {
+            return Ok(Err(t));
+        }
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        let mut hargs = self.call_bufs.take_args();
+        let live = self.frames.live;
+        {
+            let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
+            if !frame.args.is_empty() {
+                frame.args.clear();
+            }
+            hargs.values.extend(args.iter().map(crate::func::copy_arg));
+            frame.args.extend(args.drain(..).map(Some));
+            if !frame.named().is_empty() {
+                frame.cold_mut().named.clear();
+            }
+            set_opt(&mut frame.this, Some(o.clone()));
+            set_opt(&mut frame.closure, None);
+            set_opt(&mut frame.scope, Some(m.scope()));
+            set_opt(&mut frame.called, Some(Rc::clone(object::class_of(o))));
+            set_opt(&mut frame.magic_name, None);
+            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            set_opt(&mut frame.builtin_name, Some(b.name.clone()));
+            frame.observer_hidden = false;
+        }
+        if args.capacity() > 0 {
+            drop(args);
+        }
+        let given = hargs.values.len();
+        hargs.passed.resize(given, true);
+        let upto = if variadic {
+            nparams.saturating_sub(1)
+        } else {
+            nparams
+        };
+        while hargs.values.len() < upto {
+            let i = hargs.values.len();
+            match self.builtin_default(b, i) {
+                Some(d) if i >= sig.required as usize => {
+                    hargs.values.push(d);
+                    hargs.passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        hargs.this = Some(o.clone());
+        hargs.called = Some(Rc::clone(object::class_of(o)));
+        self.pending_call_dst = None;
+        self.magic_call_name = None;
+        hargs.func = Some(Rc::clone(b));
+        let mut r = (b.handler)(self, &mut hargs);
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        if self.checked_callable.is_some() {
+            self.checked_callable = None;
+        }
+        hargs.release_in_place();
+        self.call_bufs.put_args(hargs);
+        if object::has_pending_destructors() && self.frames.live == live + 1 {
+            if let Err(e) = self.run_pending_destructors() {
+                r = match (r, e) {
+                    (Ok(_), e) => Err(e),
+                    (Err(Throw::Exception(old)), Throw::Exception(new)) => {
+                        crate::exceptions::chain_previous(&new, &old);
+                        Err(Throw::Exception(new))
+                    }
+                    (Err(old), _) => Err(old),
+                };
+            }
+        }
+        if let Some(f) = self.frames.get(live) {
+            root_released_args(&f.args);
+        }
+        self.pop_frames_to(live + 1);
+        Ok(match r {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        })
+    }
+
     /// [`Vm::call_builtin`] after its [`Vm::fast_builtin_call`] attempt
     /// (which `op_do_call` has just made itself).
     #[inline]
@@ -6059,6 +6212,13 @@ impl Vm {
     ) -> VmResult<Value> {
         if let Some(r) = self.enter_method_direct(o, m, &mut args) {
             return r;
+        }
+        if let Func::Builtin(b) = &m.func {
+            let b = Rc::clone(b);
+            match self.call_builtin_method_native(o, m, &b, args) {
+                Ok(r) => return r,
+                Err(back) => args = back,
+            }
         }
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         self.give_args(&mut call, args);
