@@ -340,6 +340,41 @@ optimization log these came from, with its landed-change tables, is git history:
   plain file and `php://temp` get it (they are written through a descriptor). Also not
   ported: C's FILE is buffered and reaches the stream at the stream's next seek, so
   `ftell()` straight after `curl_exec()` says 0 there and the log's length here.
+- [ ] **The nightly's community job, read from the run of 27 Nov** (`b22a5d8f`, issue #27).
+  A step of that job fails only on a crash or a timeout (an exit status above 128, as
+  upstream), so a green step can hold failing tests: 115,511 tests ran in 234 suites, with
+  394 errors and 96 failures in 25 of them. About 330 of those, and the one red step
+  (`cache:clear` of the Symfony demo), were one fault, fixed since: the optimizer folded
+  `$key ?? 0` in an arrow function as if the captured `$key` were an undefined local. The
+  job runs with `opcache.enable_cli=1`, so it is the one place where whole applications
+  run through the optimizer. Open, to be read again from the next run's log:
+  - `mysqli.default_socket` has no default here, where `/usr/bin/php8.5` (Debian's build)
+    has `/var/run/mysqld/mysqld.sock`, the default our `pdo_mysql.default_socket` already
+    has. `mysqli_connect('localhost', ...)` therefore fails here ("No such file or
+    directory") on a host where it connects under C. The WordPress step ended there
+    before its first test and passed; the job now sets both sockets, as upstream's install
+    action does, so that suite runs for the first time in the next nightly.
+  - Laravel, 13 of 16,853: `usort()` refusing the callback of `Collection::sortBy()` with
+    several keys (2), cached routes not found (3), `config:cache` not failing on a value
+    that cannot be serialized (3), `FileFailedJobProviderTest` counting and flushing (4),
+    `ProviderMakeCommandTest` (1).
+  - PHPUnit's own suite, 11 of 10,795, all in its property-based testing
+    (`GeneratorDeriverTest`, 8: `Closure` is given a constructor to call, "Instantiation
+    of class Closure is not allowed"; three end-to-end tests of it print something else).
+  - ReactPHP async, 2: `AwaitTest::testAwaitShouldNotCreateAnyGarbageReferences...` counts
+    8 collected cycles where it expects 0.
+  - Symfony, other than the fault above, about 96: FrameworkBundle's secrets vault
+    (sodium, about 12), Routing's compiled URL generator for route names with special
+    characters (11), HtmlSanitizer's `UrlSanitizer::parse()` giving null (8), Ldap's
+    security listener (10, `Call to a member function escape() on null`), Intl's
+    `GzipStreamWrapper` (`require` through a user wrapper returns an int;
+    `url_stat`/`mkdir` "is not implemented"), DependencyInjection's `AbstractKernelTest`
+    (5), VarDumper's closure caster (4), Config's `ReflectionClassResourceTest` (4: the
+    string form of an attribute evaluates `new MissingClass` when the source cannot be
+    read again), Security/Http's stubbed `refreshUser()` returning null (3), Cache's
+    `PhpArrayAdapter` (2: "Warm up should create a PHP file that OPCache can load in
+    memory"), AssetMapper (4), Messenger's configuration (4) and its AMPHP SQL transport
+    (4, needs a database service).
 - [ ] **A default expression is printed as written, not folded** (27 Nov):
   `ReflectionParameter::__toString()` shows `[!true, ~1, +1, -PHP_INT_MAX]` where C, whose
   compiler folds the constant parts, shows `[false, -2, 1, -PHP_INT_MAX]`
