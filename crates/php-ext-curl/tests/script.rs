@@ -120,3 +120,22 @@ var_dump(curl_escape($ch, "a b"), curl_unescape($ch, "a%20b"));
     );
     let _ = std::fs::remove_file(f);
 }
+
+/// Every constant PHP 8.5 defines with libcurl 8.5.0 (`get_defined_constants(true)['curl']`
+/// under `/usr/bin/php8.5`, saved as `name=value` lines) is defined here with the
+/// same value. Code tests for a feature with `defined()`, and takes another path
+/// without a word when a name is missing: `CURL_HTTP_VERSION_3` and
+/// `CURL_HTTP_VERSION_3ONLY` once were.
+#[test]
+fn constants_of_php_8_5_are_defined_with_their_values() {
+    let out = run(
+        r#"foreach (get_defined_constants(true)['curl'] as $k => $v) { echo $k, "=", var_export($v, true), "\n"; }"#,
+    );
+    let ours: std::collections::HashSet<&str> = out.lines().collect();
+    let missing: Vec<&str> = include_str!("fixtures/constants-8.5.txt")
+        .lines()
+        .filter(|line| !ours.contains(line))
+        .collect();
+    assert!(missing.is_empty(), "missing or different: {missing:?}");
+    assert!(ours.contains("CURL_HTTP_VERSION_3=30") && ours.contains("CURL_HTTP_VERSION_3ONLY=31"));
+}
