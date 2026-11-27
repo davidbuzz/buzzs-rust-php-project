@@ -5637,14 +5637,13 @@ impl Vm {
         }
     }
 
-    /// `isset(place)` / `empty(place)` (returns the isset or empty result).
-    #[allow(clippy::too_many_lines)]
     /// `isset($GLOBALS[$name])` with the name in a variable or a literal
     /// string (`ZEND_ISSET_ISEMPTY_VAR` on the global symbol table): the
     /// variable's value straight from the table
     /// ([`Vm::fetch_global_by_key_optional`]), without the place walk
-    /// (MediaWiki's `GlobalVarConfig` asks this for every setting it
-    /// reads). `None` for `empty()`, any other place or name.
+    /// (`MediaWiki`'s `GlobalVarConfig` asks this for every setting it
+    /// reads). `None` for `empty()`, any other place or name, and the
+    /// name of an auto-global.
     fn isset_global_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
         if empty {
             return None;
@@ -5662,11 +5661,14 @@ impl Vm {
             Operand::Lit(l) => f.code.literals.get(l as usize)?,
             _ => return None,
         };
-        // A name that may be an auto-global (`$_SERVER`, `$_REQUEST`, ...)
-        // takes the place walk: with `auto_globals_jit` one that no code
-        // named is not in the table yet, and the lookup below would create
-        // it (`isset($GLOBALS['_REQUEST'])` is false until then).
-        if !matches!(k, Value::Str(s) if s.as_bytes().first() != Some(&b'_')) {
+        let Value::Str(name) = k else {
+            return None;
+        };
+        // An auto-global's name is the walk's: `isset()` does not create
+        // one that is still armed (`auto_globals_jit`), which the fetch
+        // below would.
+        let bytes = name.as_bytes();
+        if bytes.first() == Some(&b'_') && crate::auto_globals::index(bytes).is_some() {
             return None;
         }
         let k = k.clone();
@@ -5676,6 +5678,8 @@ impl Vm {
         )
     }
 
+    /// `isset(place)` / `empty(place)` (returns the isset or empty result).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
         // `isset($this->p[$k][$j])` & co. on an array property: no walk.
         if let Some(r) = self.isset_prop_dims_fast(pid, empty) {
