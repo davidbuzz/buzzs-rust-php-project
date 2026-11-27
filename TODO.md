@@ -375,6 +375,12 @@ optimization log these came from, with its landed-change tables, is git history:
     `PhpArrayAdapter` (2: "Warm up should create a PHP file that OPCache can load in
     memory"), AssetMapper (4), Messenger's configuration (4) and its AMPHP SQL transport
     (4, needs a database service).
+- [ ] **When a user stream without `stream_stat()` is told so** (27 Nov). Reading a whole
+  stream (`file_get_contents()`, `stream_get_contents()` without a length) asks it for its
+  size first, as `_php_stream_copy_to_mem()` does, so a user wrapper's `stream_stat()` runs.
+  One without that method gets "`V::stream_stat is not implemented!`": C prints it straight
+  after `stream_open()`, ours after the read has finished (the warning is raised when the
+  call returns to the VM). The text and count match; only the place in the output differs.
 - [ ] **The stack trace of a memory-limit fatal** (27 Nov). With `fatal_error_backtraces`
   on (the default), C 8.5 prints one frame under "Allowed memory size of N bytes
   exhausted", then `{main}`: the innermost call. That is the builtin that was allocating

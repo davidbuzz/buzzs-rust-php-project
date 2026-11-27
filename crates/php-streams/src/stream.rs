@@ -1421,6 +1421,13 @@ impl Stream {
             buf.truncate(len);
             return (len > 0).then_some(buf);
         }
+        // "Avoid many reallocs by allocating a good-sized chunk to begin
+        // with, if we can": php-src asks the stream for its size here
+        // (`php_stream_stat`). The size is not needed (the buffer grows as
+        // it is filled), but the call shows: a user wrapper's
+        // `stream_stat()` runs, and one without that method is told so
+        // ("... is not implemented!").
+        let _ = self.stat();
         let mut buf = vec![0u8; CHUNK_SIZE];
         loop {
             let want = match maxlen {
