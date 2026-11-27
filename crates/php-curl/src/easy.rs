@@ -509,6 +509,15 @@ impl Easy {
                     unsafe { libc::close(d) };
                     return CURLE_BAD_FUNCTION_ARGUMENT;
                 }
+                // php-src hands libcurl the stream's own FILE, so the
+                // stream's next seek or read flushes what libcurl wrote:
+                // a script sees the verbose log while the transfer runs
+                // (a progress or write callback that rewinds the buffer
+                // and reads it). This FILE is a second one over the same
+                // file: unbuffered, each write is in the file at once.
+                // SAFETY: `fp` is the FILE just opened; a null buffer with
+                // `_IONBF` asks for no buffering.
+                unsafe { libc::setvbuf(fp, std::ptr::null_mut(), libc::_IONBF, 0) };
                 self.retained.borrow().borrow_mut().files.push(fp);
                 fp
             }
