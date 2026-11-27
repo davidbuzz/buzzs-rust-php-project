@@ -1241,6 +1241,43 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
     Some(out)
 }
 
+/// The entry of `e`'s chain for the object the place's base holds in
+/// frame `f`: `e` itself, or its first alternate when that one is for the
+/// object's class and `e` is not (a site seeing objects of two classes in
+/// turn: a base class's method for two subclasses). Testing it here,
+/// before the miss, keeps such a site off the refill path, where the two
+/// entries swapped on every access. Only a first entry that does not match
+/// pays the object's lookup.
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of every plain property hit
+fn entry_for_base<'c>(
+    f: &Frame,
+    e: &'c crate::opcode::PropCacheEntry,
+) -> &'c crate::opcode::PropCacheEntry {
+    let Some(alt) = e.alt.as_deref() else {
+        return e;
+    };
+    let obj = if e.base == PROP_CACHE_THIS {
+        f.this.as_ref()
+    } else {
+        match f.cvs.get(e.base as usize).and_then(crate::vm::CvSlot::get) {
+            Some(Value::Object(o)) => Some(o),
+            _ => None,
+        }
+    };
+    match obj {
+        Some(o) => {
+            let cls = Rc::as_ptr(&object::data(o).class) as usize;
+            if cls != e.class_addr && cls == alt.class_addr && alt.base == e.base {
+                alt
+            } else {
+                e
+            }
+        }
+        None => e,
+    }
+}
+
 /// [`plain_key`] of a write: the entry allows a plain write ([`PC_WRITE`])
 /// or the initialization of an uninitialized slot ([`PC_INIT`]); its flags
 /// come with it.
@@ -1251,7 +1288,7 @@ fn plain_write_key(f: &Frame, pid: PlaceId) -> Option<(usize, usize, u32, u32, u
         return None;
     }
     let cache = f.code.prop_cache.try_borrow().ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (PC_WRITE | PC_INIT) == 0 || e.flags & PC_DYN != 0 || e.scope_addr != scope_addr(f)
     {
         return None;
@@ -1273,7 +1310,7 @@ fn plain_key(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u32, u3
         return None;
     }
     let cache = f.code.prop_cache.try_borrow().ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
         return None;
     }
@@ -1293,7 +1330,7 @@ fn plain_key_lean(f: &Frame, pid: PlaceId, want: u8) -> Option<(usize, usize, u3
     // SAFETY: the shared reference lives for the copies below only; no
     // exclusive borrow of the cache can start meanwhile.
     let cache = unsafe { f.code.prop_cache.try_borrow_unguarded() }.ok()?;
-    let e = cache.get(pid as usize)?;
+    let e = entry_for_base(f, cache.get(pid as usize)?);
     if e.flags & (want | PC_DYN) != want || e.scope_addr != scope_addr(f) {
         return None;
     }
