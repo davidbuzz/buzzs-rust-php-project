@@ -14,7 +14,7 @@ use crate::func::{flags, Args, Func, Method};
 use crate::object;
 use crate::types::TypeDecl;
 use crate::vm::{PendingCall, Vm, VmResult};
-use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// Internal methods whose return type is tentative (`@tentative-return-type`
@@ -126,6 +126,19 @@ pub(crate) fn this_fn(vm: &mut Vm, a: &Args) -> VmResult<FnRef> {
     }
 }
 
+/// A slot of `op_array.static_variables` as `zend_hash_copy(...,
+/// zval_add_ref)` copies it into the array `getStaticVariables()` returns:
+/// a reference only the table holds is copied as its value, and one that
+/// something else holds too (the variable a closure binds by reference, the
+/// variable of a call that is running) stays that reference.
+fn table_slot(r: &PhpRef) -> Value {
+    if r.refcount() == 1 {
+        r.get()
+    } else {
+        Value::Reference(r.clone())
+    }
+}
+
 /// Static variables (closure `use` variables first) with their current
 /// values (`op_array.static_variables`).
 pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
@@ -133,15 +146,27 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
         return Vec::new();
     };
     let mut out: Vec<(ZStr, Value)> = Vec::new();
-    let cdata = f.closure.as_ref().and_then(|c| vm.closure_data(c));
+    // Read through a borrow of the closure's data: a copy of it would hold
+    // every bound reference once more, and none would count as the table's
+    // alone.
+    let closure = f.closure.as_ref();
+    let bound: Option<Vec<(u32, Value)>> = closure.and_then(|c| {
+        object::internal::<crate::closure::ClosureData, _>(c, |d| {
+            d.vars
+                .iter()
+                .map(|(cv, v)| match v {
+                    Value::Reference(r) => (*cv, table_slot(r)),
+                    other => (*cv, other.clone()),
+                })
+                .collect()
+        })
+    });
     if u.is_closure() {
         for us in &u.uses {
-            let v = cdata.as_ref().and_then(|d| {
-                d.vars
-                    .iter()
-                    .find(|(cv, _)| *cv == us.cv)
-                    .map(|(_, v)| v.deref())
-            });
+            let v = bound
+                .as_ref()
+                .and_then(|vars| vars.iter().find(|(cv, _)| *cv == us.cv))
+                .map(|(_, v)| v.clone());
             match v {
                 Some(v) => out.push((us.name.clone(), v)),
                 None if !us.implicit => out.push((us.name.clone(), Value::Null)),
@@ -149,14 +174,24 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
             }
         }
     }
-    let store = match &cdata {
-        Some(d) => d.statics.borrow().clone(),
-        None => u.statics.borrow().clone(),
+    let closure_statics = closure
+        .and_then(|c| object::internal::<crate::closure::ClosureData, _>(c, |d| d.statics.clone()));
+    let slots: Vec<Option<Value>> = {
+        let read = |store: &[Option<PhpRef>]| {
+            store
+                .iter()
+                .map(|slot| slot.as_ref().map(table_slot))
+                .collect()
+        };
+        match &closure_statics {
+            Some(store) => read(&store.borrow()),
+            None => read(&u.statics.borrow()),
+        }
     };
     for (idx, decl) in u.code.static_vars.iter().enumerate() {
         let name = decl.name.clone();
-        let v = match store.get(idx).cloned().flatten() {
-            Some(r) => Value::Reference(r),
+        let v = match slots.get(idx).cloned().flatten() {
+            Some(v) => v,
             None => decl
                 .init
                 .clone()
