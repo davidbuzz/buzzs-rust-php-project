@@ -112,12 +112,15 @@ pub struct TypeDecl {
     /// [`Self::class_refs`], computed by the first runtime check of the
     /// finished declaration; cloned along, ignored by equality.
     pub lc_cache: OnceCell<ClassRefs>,
-    /// The class of the last object the full check accepted for this type
-    /// through a `class_alias()` name (`TypeDecl::learn_alias_class`):
+    /// The class of the last object accepted for this type: by the full
+    /// check through a `class_alias()` name (`TypeDecl::learn_alias_class`;
     /// the by-name tests of the plain call paths cannot see an alias, so
-    /// every call passing such an object took the generic path. Held
-    /// weakly, which pins the address compared. Cloned along, ignored by
-    /// equality.
+    /// every call passing such an object took the generic path), or by
+    /// those by-name tests themselves (`TypeDecl::learn_class`: a call
+    /// that passes or returns objects of one class tests one address,
+    /// where the walk over the class's parents and interfaces by name
+    /// cost 110 to 190 instructions each time). Held weakly, which pins
+    /// the address compared. Cloned along, ignored by equality.
     pub alias_ok: std::cell::RefCell<Option<std::rc::Weak<crate::class::Class>>>,
 }
 
@@ -155,7 +158,19 @@ impl TypeDecl {
         }
     }
 
-    /// Whether `cls` is the class [`TypeDecl::learn_alias_class`] recorded.
+    /// Records that objects of `cls` satisfy this type by one of the names
+    /// it lists (the by-name tests of the plain call paths found so).
+    /// Whether an object satisfies a type depends on its class alone (the
+    /// caller leaves out a type with `static`, which depends on the call).
+    #[inline(never)]
+    pub(crate) fn learn_class(&self, cls: &std::rc::Rc<crate::class::Class>) {
+        if let Ok(mut slot) = self.alias_ok.try_borrow_mut() {
+            *slot = Some(std::rc::Rc::downgrade(cls));
+        }
+    }
+
+    /// Whether `cls` is the class [`TypeDecl::learn_alias_class`] or
+    /// [`TypeDecl::learn_class`] recorded.
     #[inline]
     pub(crate) fn alias_class_is(&self, cls: &std::rc::Rc<crate::class::Class>) -> bool {
         self.alias_ok.try_borrow().is_ok_and(|slot| {

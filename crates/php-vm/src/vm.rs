@@ -2691,6 +2691,45 @@ impl Frame {
         }
     }
 
+    /// Readies a [`Frame::released_direct`] frame, which the last call of
+    /// another function left, for a call of `uf`: what
+    /// [`Frame::reinit_for_call`] and the function handles' exchange do,
+    /// less what that release already guarantees (the kind, `ip`, no
+    /// pending call, rare state or symbol table, a variable store without
+    /// values, own names or index). The slot vectors are fitted to the
+    /// code, the store forgets the shared names and slots of the previous
+    /// code, and the code and both function handles are replaced.
+    /// `false`, nothing changed, when the store is shared.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per call of a changed callee
+    pub(crate) fn ready_released_for(&mut self, uf: &Rc<UserFunction>) -> bool {
+        debug_assert!(self.released_direct);
+        let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) else {
+            return false;
+        };
+        let vs = rc_mut.get_mut();
+        // Every slot is undefined (the release left the store clean).
+        forget_released(&mut vs.slots, 0);
+        clear_opt(&mut vs.names.shared);
+        let code = &uf.code;
+        fit_released(&mut self.tmps, code.num_tmps as usize, || Value::Null);
+        fit_released(&mut self.cvs, code.cv_names.len(), || CvSlot::new(None));
+        fit_released(&mut self.iters, code.num_iters as usize, || None);
+        fit_released(&mut self.fins, code.num_finally as usize, || FinState::None);
+        // The released frame holds its last function's handles
+        // (`keeps_function`).
+        drop(std::mem::replace(&mut self.code, Rc::clone(code)));
+        if let Some(old) = self.ufunc.replace(Rc::clone(uf)) {
+            drop(old);
+        }
+        if let Some(old) = self.func.replace(Func::User(Rc::clone(uf))) {
+            drop(old);
+        }
+        self.released_direct = false;
+        debug_assert!(self.is_released_for(uf));
+        true
+    }
+
     /// Re-initializes an existing frame when `cvs` and `tmps` already have the right lengths.
     #[inline(always)]
     pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
@@ -4536,6 +4575,74 @@ mod tests {
             }
             f.clear_for_reuse(&empty);
         }
+    }
+
+    /// `ready_released_for` readies a frame the direct release of one
+    /// function's call left for another function: the slot vectors fitted,
+    /// the store without the previous code's names and slots, the code and
+    /// both handles exchanged, the other function's handles released; the
+    /// frame is then as that function's own release leaves it.
+    #[test]
+    fn ready_released_for_readies_a_frame_for_another_function() {
+        let empty = Rc::new(OpArray::default());
+        let big = Rc::new(OpArray {
+            cv_names: ["a", "b", "c"].map(ZStr::from).to_vec(),
+            num_tmps: 5,
+            num_iters: 1,
+            num_finally: 1,
+            ..OpArray::default()
+        });
+        let small = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("x")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let ubig = user_function(big.clone());
+        let usmall = user_function(small.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        // A symbol table attached by an earlier call leaves the store
+        // sharing the code's names.
+        f.reinit_for_call(&big, FrameKind::Function);
+        f.cvs[0].set(Some(Value::Int(1)));
+        f.attach_symbol_table();
+        f.clear_for_reuse(&empty);
+        f.reinit_for_call(&big, FrameKind::Function);
+        f.func = Some(crate::func::Func::User(ubig.clone()));
+        f.ufunc = Some(ubig.clone());
+        f.direct = true;
+        assert!(f.release_direct());
+        assert!(f.released_direct && f.is_released_for(&ubig));
+        let big_count = Rc::strong_count(&ubig);
+        for _ in 0..2 {
+            assert!(f.ready_released_for(&usmall));
+            assert!(!f.released_direct);
+            assert!(f.is_released_for(&usmall));
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (1, 2, 0, 0)
+            );
+            assert_eq!(Rc::strong_count(&ubig), big_count - 2);
+            {
+                let vars = f.vars().borrow();
+                assert!(vars.slots.is_empty() && vars.names.is_empty());
+            }
+            f.cvs[0].set(Some(Value::Int(2)));
+            f.direct = true;
+            assert!(f.release_direct());
+            assert!(f.ready_released_for(&ubig));
+            assert!(f.is_released_for(&ubig));
+            assert_eq!(
+                (f.cvs.len(), f.tmps.len(), f.iters.len(), f.fins.len()),
+                (3, 5, 1, 1)
+            );
+            f.direct = true;
+            assert!(f.release_direct());
+        }
+        // A shared store is left to the general readying.
+        let shared = f.vars_store.clone();
+        assert!(!f.ready_released_for(&usmall));
+        assert!(f.released_direct && f.is_released_for(&ubig));
+        drop(shared);
     }
 
     #[test]

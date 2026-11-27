@@ -6361,12 +6361,32 @@ fn object_accepts(
         return false;
     }
     let cls = object::class_of(o);
-    if rt.mask & crate::types::mask::STATIC != 0 && called.is_some_and(|c| cls.is_subclass_of(c)) {
+    // A type with `static` depends on the call's called class: decided
+    // each time. Any other takes the class of the last object it took by
+    // one of its names: one address to compare.
+    let has_static = rt.mask & crate::types::mask::STATIC != 0;
+    if has_static {
+        if called.is_some_and(|c| cls.is_subclass_of(c)) {
+            return true;
+        }
+    } else if rt.alias_class_is(cls) {
+        return true;
+    }
+    // Only a match by a name the type lists is learned: one through
+    // `self` or `parent` depends on the call's scope, which differs for a
+    // trait's method in each class using it, or a rebound closure.
+    if refs.classes.iter().any(|c| match c {
+        crate::types::ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        _ => false,
+    }) {
+        if !has_static {
+            rt.learn_class(cls);
+        }
         return true;
     }
     let named = |c: &Rc<Class>| Rc::ptr_eq(&cls, c) || cls.instance_of_name(c.lc_name.as_bytes());
     refs.classes.iter().any(|c| match c {
-        crate::types::ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        crate::types::ClassRef::Named(_) => false,
         crate::types::ClassRef::Scope => scope.is_some_and(named),
         crate::types::ClassRef::Parent => scope.and_then(|s| s.parent.as_ref()).is_some_and(named),
     })
@@ -7237,6 +7257,11 @@ pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
     match v {
         Value::Object(o) if ty.intersections.is_empty() => {
             let class = object::class_of(o);
+            // The class of the last object this type took: one address to
+            // compare.
+            if !ty.classes.is_empty() && ty.alias_class_is(class) {
+                return true;
+            }
             // A closure for `callable`: nothing to resolve.
             if ty.mask & crate::types::mask::CALLABLE != 0
                 && crate::typecheck::is_closure_class(class)
@@ -7245,10 +7270,14 @@ pub(crate) fn param_accepts(ty: &crate::types::TypeDecl, v: &Value) -> bool {
             }
             // The names lower-cased as the class table keys them
             // (`TypeDecl::classes` keeps them as written).
-            ty.class_refs().classes.iter().any(|c| match c {
+            let named = ty.class_refs().classes.iter().any(|c| match c {
                 crate::types::ClassRef::Named(lc) => class.instance_of_name(lc.as_bytes()),
                 crate::types::ClassRef::Scope | crate::types::ClassRef::Parent => false,
-            }) || (!ty.classes.is_empty() && ty.alias_class_is(class))
+            });
+            if named {
+                ty.learn_class(class);
+            }
+            named
         }
         _ => false,
     }

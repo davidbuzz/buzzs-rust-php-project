@@ -1083,6 +1083,8 @@ fn call_planned(
                 None => return false,
             },
         };
+        // (Out of line: the readying inlined here cost the call sequence
+        // more in register spills than its prologue.)
         ready_frame_slow(frame, &uf);
     }
     for i in 0..n {
@@ -2680,6 +2682,12 @@ fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
 /// [`ready_frame`] of a frame in any other released state.
 #[inline(never)]
 fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
+    // Released by the return of another function's call (two thirds of
+    // an application's calls): only the slot sizes, the store's names and
+    // the handles change.
+    if frame.released_direct && frame.ready_released_for(uf) {
+        return;
+    }
     debug_assert!(
         frame.this.is_none()
             && frame.scope.is_none()
