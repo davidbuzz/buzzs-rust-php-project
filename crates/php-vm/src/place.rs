@@ -5662,7 +5662,11 @@ impl Vm {
             Operand::Lit(l) => f.code.literals.get(l as usize)?,
             _ => return None,
         };
-        if !matches!(k, Value::Str(_)) {
+        // A name that may be an auto-global (`$_SERVER`, `$_REQUEST`, ...)
+        // takes the place walk: with `auto_globals_jit` one that no code
+        // named is not in the table yet, and the lookup below would create
+        // it (`isset($GLOBALS['_REQUEST'])` is false until then).
+        if !matches!(k, Value::Str(s) if s.as_bytes().first() != Some(&b'_')) {
             return None;
         }
         let k = k.clone();
