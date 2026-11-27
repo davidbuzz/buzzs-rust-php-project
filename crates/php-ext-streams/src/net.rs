@@ -982,6 +982,13 @@ fn stream_socket_pair(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(arr))
 }
 
+/// Whether `s` is in blocking mode (`stream_get_meta_data()`'s `blocked`).
+fn stream_blocks(s: &mut Stream) -> bool {
+    s.meta_data()
+        .iter()
+        .any(|(k, v)| k == "blocked" && matches!(v, SValue::Bool(true)))
+}
+
 fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let len = a.int(1);
@@ -990,9 +997,13 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
     set_ref(a, 3, Value::Null);
-    let fd = cell
-        .get()
-        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let (fd, blocked) = match cell.get() {
+        Some(mut s) => {
+            let blocked = stream_blocks(&mut s);
+            (s.cast(CastAs::FdForSelect, false), blocked)
+        }
+        None => (None, false),
+    };
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
     };
@@ -1003,20 +1014,37 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // is "".
     // SAFETY: zeroed sockaddr_storage is a valid out-parameter.
     let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    let mut sl =
-        libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).unwrap_or(0);
-    // SAFETY: `buf` is valid for `buf.len()` bytes; `ss`/`sl` describe a
-    // sockaddr_storage that outlives the call.
-    let n = unsafe {
-        libc::recvfrom(
-            fd,
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-            flags,
-            std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
-            &raw mut sl,
-        )
+    let mut sl = 0;
+    let mut recv = |buf: &mut [u8]| {
+        sl = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>()).unwrap_or(0);
+        // SAFETY: `buf` is valid for `buf.len()` bytes; `ss`/`sl`
+        // describe a sockaddr_storage that outlives the call.
+        unsafe {
+            libc::recvfrom(
+                fd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                flags,
+                std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
+                &raw mut sl,
+            )
+        }
     };
+    let mut n = recv(&mut buf);
+    // `sock_recvfrom()` is a plain `recv()`: on a blocking stream it waits
+    // for data (a server that peeks at a new connection's first byte, to
+    // tell TLS from plain HTTP, waits for that byte). The descriptor
+    // itself may be non-blocking (the TLS-capable transport waits with
+    // `poll`), so a "would block" answer is waited out here, once; a
+    // signal ends the wait, as it ends `recv()`. Any other failure (a
+    // listening socket is not connected) is the answer at once.
+    if n < 0 && blocked && flags & (libc::MSG_DONTWAIT | libc::MSG_OOB) == 0 && {
+        let e = errno();
+        e == libc::EAGAIN || e == libc::EWOULDBLOCK
+    } {
+        wait_fd(fd, libc::POLLIN, None);
+        n = recv(&mut buf);
+    }
     if n < 0 {
         return Ok(Value::Bool(false));
     }
