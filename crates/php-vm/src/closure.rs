@@ -945,12 +945,25 @@ fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr, Value)> {
         .collect()
 }
 
+/// `Closure::__construct()`: private and empty (`private function
+/// __construct() {}`, `Zend/zend_closures.stub.php`). `new Closure` never
+/// reaches it: `zend_closure_get_constructor` throws first (the class's
+/// `NO_NEW`). It is there for what reflection shows: a class with a
+/// constructor that is not public is not instantiable
+/// (`ReflectionClass::isInstantiable()`), and a tool that builds objects
+/// from their constructors asks exactly that before it tries.
+#[allow(clippy::unnecessary_wraps)] // native handler signature
+fn closure_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Null)
+}
+
 /// Registers the `Closure` class.
 pub(crate) fn register(vm: &mut Vm) {
     init_no_statics();
     ClassBuilder::new("Closure")
         .flags(cflags::FINAL | cflags::NO_NEW | cflags::NOT_SERIALIZABLE | cflags::NO_DYNAMIC_PROPERTIES)
         .internal(InternalKind::Closure)
+        .method("__construct()", flags::PRIVATE, closure_construct)
         .method(
             "bind(Closure $closure, ?object $newThis, object|string|null $newScope = \"static\"): ?Closure",
             flags::PUBLIC | flags::STATIC,
