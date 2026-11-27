@@ -281,24 +281,10 @@ fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(ZStr::from(out)))
 }
 
-/// The exported source of argument `i` of an attribute.
+/// The exported source of argument `i` of an attribute: from the text kept
+/// when the attribute was compiled, or else from the source file read again
+/// (an attribute that came out of a cache has no text).
 fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
-    let file = r.file.clone().or_else(|| {
-        vm.frames
-            .iter()
-            .rev()
-            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
-            .map(|f| f.code.filename.clone())
-    })?;
-    let args =
-        super::source::attribute_args(vm, file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
-    let a = args.get(i)?;
-    let ns = super::export::namespace_of(&r.info.name);
-    let e = match &a.kind {
-        php_parser::ast::ArgKind::Positional(x)
-        | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
-        _ => return None,
-    };
     // The closures the argument compiled to, in order (their names are
     // what `zend_ast_export` prints for a `ZEND_AST_OP_ARRAY`).
     let closures: Vec<ZStr> = match r.info.args.get(i) {
@@ -317,6 +303,30 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
             names
         }
         _ => Vec::new(),
+    };
+    if let Some(source) = &r.info.source {
+        let exported = source.args.get(i).and_then(|text| {
+            super::export::export_attr_arg_text(text, source.namespace.as_bytes(), &closures)
+        });
+        if exported.is_some() {
+            return exported;
+        }
+    }
+    let file = r.file.clone().or_else(|| {
+        vm.frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
+            .map(|f| f.code.filename.clone())
+    })?;
+    let args =
+        super::source::attribute_args(vm, file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
+    let a = args.get(i)?;
+    let ns = super::export::namespace_of(&r.info.name);
+    let e = match &a.kind {
+        php_parser::ast::ArgKind::Positional(x)
+        | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
+        _ => return None,
     };
     Some(super::export::export_attr_arg(e, &ns, &closures))
 }

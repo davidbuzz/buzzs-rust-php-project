@@ -83,6 +83,25 @@ pub struct AttributeInfo {
     /// `ZEND_ATTRIBUTE_STRICT_TYPES`: whether the declaring file used
     /// `strict_types=1` (applied when instantiating the attribute).
     pub strict: bool,
+    /// The arguments as they are written, when the attribute was compiled
+    /// from source in this process ([`AttributeSource`]).
+    pub source: Option<Rc<AttributeSource>>,
+}
+
+/// The arguments of an attribute as they are written, kept from compilation
+/// for `ReflectionAttribute::__toString()`: php-src prints the constant
+/// expression it compiled (`zend_ast_export`), for which it needs neither
+/// the source file (code from `eval()` has none) nor the argument's value
+/// (`new MissingClass` has none).
+#[derive(Clone, Debug)]
+pub struct AttributeSource {
+    /// The namespace the attribute is used in: the names in the texts that
+    /// are not fully qualified resolve against it.
+    pub namespace: ZStr,
+    /// One text per argument, in order: its source, with the names that
+    /// `use` imports resolve spliced in fully qualified (as a parameter's
+    /// `default_text`).
+    pub args: Vec<String>,
 }
 
 /// A constant expression: a literal value or code that computes it (run in

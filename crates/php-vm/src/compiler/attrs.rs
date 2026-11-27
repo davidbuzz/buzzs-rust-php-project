@@ -271,6 +271,7 @@ mod tests {
             args: Vec::new(),
             line: 1,
             strict: false,
+            source: None,
         }
     }
 

@@ -354,6 +354,12 @@ fn strip_parens(e: Expr) -> Expr {
     e
 }
 
+/// [`export_attr_arg`] of an argument kept as text from its compilation
+/// (`AttributeSource`); `None` when the text does not parse.
+pub(crate) fn export_attr_arg_text(text: &str, ns: &[u8], closures: &[ZStr]) -> Option<Vec<u8>> {
+    parse_const_expr(text).map(|e| export_attr_arg(e, ns, closures))
+}
+
 /// `zend_ast_export` of a not yet evaluated constant expression, given its
 /// source text, the namespace it was compiled in and the class `self`
 /// refers to.

@@ -396,6 +396,19 @@ impl Compiler<'_> {
     /// imports resolve spliced in fully qualified: the reflection export
     /// re-resolves the text against the namespace only, while php-src
     /// exports the compiled AST (GH-9447).
+    /// The text of a constant expression (a parameter default, an attribute
+    /// argument) kept for the reflection export.
+    pub(crate) fn const_expr_text(&self, e: &Expr) -> String {
+        if self.multibyte {
+            String::from_utf8_lossy(&php_parser::export::export_expr(e)).into_owned()
+        } else {
+            self.default_text_with_imports(e)
+        }
+    }
+
+    /// The source text of a constant expression as reflection prints it
+    /// later: see [`Self::const_expr_text`], which also covers a source in
+    /// a multibyte script encoding.
     fn default_text_with_imports(&self, d: &Expr) -> String {
         let mut names = ImportedNames {
             c: self,
@@ -720,13 +733,7 @@ impl Compiler<'_> {
                 variadic: p.variadic,
                 ty,
                 has_default: p.default.is_some(),
-                default_text: p.default.as_ref().map(|d| {
-                    if self.multibyte {
-                        String::from_utf8_lossy(&php_parser::export::export_expr(d)).into_owned()
-                    } else {
-                        self.default_text_with_imports(d)
-                    }
-                }),
+                default_text: p.default.as_ref().map(|d| self.const_expr_text(d)),
                 promote,
                 sensitive: attrs
                     .iter()

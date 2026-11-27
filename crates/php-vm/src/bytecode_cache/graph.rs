@@ -466,6 +466,7 @@ impl Decoder<'_, '_> {
                 args,
                 line: self.r.u32()?,
                 strict: self.r.bool()?,
+                source: None,
             });
         }
         Ok(out)

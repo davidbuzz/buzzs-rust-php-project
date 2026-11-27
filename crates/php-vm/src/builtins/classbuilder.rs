@@ -218,6 +218,7 @@ impl ClassBuilder {
             args,
             line: 0,
             strict: false,
+            source: None,
         };
         self.consts
             .push((ZStr::from(name), v, flags::PUBLIC, vec![attr]));

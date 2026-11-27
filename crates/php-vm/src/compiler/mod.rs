@@ -1519,6 +1519,8 @@ impl Compiler<'_> {
             for a in &g.attributes {
                 let name = ZStr::from(self.resolve_class_name(&a.name));
                 let mut args: Vec<(Option<ZStr>, ConstExpr)> = Vec::new();
+                // What `ReflectionAttribute::__toString()` prints for them.
+                let mut texts: Vec<String> = Vec::new();
                 if let Some(al) = &a.args {
                     if al.is_first_class_callable() {
                         return self.err(
@@ -1538,6 +1540,7 @@ impl Compiler<'_> {
                                 }
                                 self.check_const_expr(e, true)?;
                                 args.push((None, self.const_expr(e)?));
+                                texts.push(self.const_expr_text(e));
                             }
                             ast::ArgKind::Named { name, value } => {
                                 uses_named = true;
@@ -1553,6 +1556,7 @@ impl Compiler<'_> {
                                 }
                                 self.check_const_expr(value, true)?;
                                 args.push((Some(n), self.const_expr(value)?));
+                                texts.push(self.const_expr_text(value));
                             }
                             ast::ArgKind::Unpack(_) => {
                                 return self.err(
@@ -1564,11 +1568,18 @@ impl Compiler<'_> {
                         }
                     }
                 }
+                let source = (!texts.is_empty()).then(|| {
+                    Rc::new(crate::class::AttributeSource {
+                        namespace: ZStr::from(self.namespace.as_slice()),
+                        args: texts,
+                    })
+                });
                 out.push(AttributeInfo {
                     name,
                     args,
                     line: a.span.line,
                     strict: self.strict_types,
+                    source,
                 });
             }
         }

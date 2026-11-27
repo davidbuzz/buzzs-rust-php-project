@@ -135,6 +135,7 @@ impl ImageBuilder {
                     .collect(),
                 line: attr.line,
                 strict: attr.strict,
+                source: attr.source.clone(),
             })
             .collect()
     }

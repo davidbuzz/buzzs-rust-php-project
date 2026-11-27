@@ -60,6 +60,7 @@ pub(crate) fn attribute(name: &str, args: Vec<(Option<&str>, Value)>) -> Attribu
             .collect(),
         line: 0,
         strict: false,
+        source: None,
     }
 }
 

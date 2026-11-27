@@ -957,6 +957,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
                 )],
                 line: 0,
                 strict: false,
+                source: None,
             }]),
         );
     }

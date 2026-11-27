@@ -666,6 +666,7 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
                     args: Vec::new(),
                     line: 0,
                     strict: false,
+                    source: None,
                 }]
             } else {
                 Vec::new()
