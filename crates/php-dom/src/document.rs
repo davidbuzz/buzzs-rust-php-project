@@ -1150,10 +1150,19 @@ impl Node {
     ) -> DomResult<()> {
         let modern = self.family_is_modern();
         let root = if modern { "Dom\\Node" } else { "DOMNode" };
-        if !host.is_subclass_of(base, root) {
+        // The two `C` parameters (zpp `CC!`): each name is looked up as
+        // `zend_lookup_class` does, the autoloader running for a class that
+        // is not declared yet (a library registers its node classes from
+        // the constructor of its document class, before any is loaded). The
+        // messages are php-src master's (`zend_wrong_class_name_error`; 8.5
+        // words both differently): a class that has to derive from another
+        // is named as it was given, in quotes, and one that only has to
+        // exist is reported by the type of the argument.
+        let (base_given, base) = (base, base.strip_prefix('\\').unwrap_or(base));
+        if !host.load_class(base)? || !host.is_subclass_of(base, root) {
             return Err(DomError::arg_type(
                 1,
-                format!("must be a class name derived from {root}, \"{base}\" given"),
+                format!("must be a class name derived from {root}, \"{base_given}\" given"),
             ));
         }
         if host.is_abstract(base) {
@@ -1173,13 +1182,26 @@ impl Node {
                 }
                 Ok(())
             }
-            Some(ext) => {
-                if !host.is_subclass_of(ext, base) {
-                    let ext_canon = host.canonical_name(ext).unwrap_or_else(|| ext.to_string());
+            Some(ext_given) => {
+                let ext = ext_given.strip_prefix('\\').unwrap_or(ext_given);
+                if !host.load_class(ext)? {
                     return Err(DomError::ArgType {
                         arg: 2,
-                        message: format!("must be a class name derived from {base_canon} or null, {ext_canon} given"),
+                        message: "must be a valid class name or null, string given".to_string(),
                     });
+                }
+                if !host.is_subclass_of(ext, base) {
+                    // `zend_argument_error(NULL, 2, ...)`: an `Error`, not
+                    // the `TypeError` the parameter checks above throw.
+                    let ext_canon = host.canonical_name(ext).unwrap_or_else(|| ext.to_string());
+                    let class = if modern {
+                        "Dom\\Document"
+                    } else {
+                        "DOMDocument"
+                    };
+                    return Err(DomError::Error(format!(
+                        "{class}::registerNodeClass(): Argument #2 ($extendedClass) must be a class name derived from {base_canon} or null, {ext_canon} given"
+                    )));
                 }
                 if host.is_abstract(ext) {
                     return Err(DomError::arg_value(2, "must not be an abstract class"));

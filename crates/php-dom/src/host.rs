@@ -76,6 +76,15 @@ pub trait DomHost {
     /// subclass of it. Unknown classes return false.
     fn is_subclass_of(&self, class: &str, base: &str) -> bool;
 
+    /// Looks a class up as a `C` parameter does (`zend_lookup_class`): the
+    /// autoloader runs for a class that is not declared yet. `Ok(false)`:
+    /// there is no such class; an exception the autoloader throws is the
+    /// error. The default knows every class (a host without autoloading).
+    fn load_class(&self, class: &str) -> Result<bool, DomError> {
+        let _ = class;
+        Ok(true)
+    }
+
     /// Whether the class is abstract.
     fn is_abstract(&self, class: &str) -> bool {
         let _ = class;

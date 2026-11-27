@@ -125,6 +125,17 @@ impl DomHost for VmHost {
         .unwrap_or_else(|| php_dom::classes::is_subclass(class, base))
     }
 
+    fn load_class(&self, class: &str) -> Result<bool, DomError> {
+        let name = php_runtime::ZStr::from(class.as_bytes());
+        match bridge::with_vm(|vm| vm.lookup_class(&name)) {
+            Some(Ok(found)) => Ok(found.is_some()),
+            Some(Err(thrown)) => Err(host_error(thrown)),
+            // No VM is lent (a tool using the library alone): the classes
+            // the library knows are all there are.
+            None => Ok(true),
+        }
+    }
+
     fn is_abstract(&self, class: &str) -> bool {
         bridge::with_vm(|vm| {
             vm.find_class(class.as_bytes())
