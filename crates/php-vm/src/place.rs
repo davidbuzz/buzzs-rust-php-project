@@ -5637,13 +5637,11 @@ impl Vm {
         }
     }
 
-    /// `isset(place)` / `empty(place)` (returns the isset or empty result).
-    #[allow(clippy::too_many_lines)]
     /// `isset($GLOBALS[$name])` with the name in a variable or a literal
     /// string (`ZEND_ISSET_ISEMPTY_VAR` on the global symbol table): the
     /// variable's value straight from the table
     /// ([`Vm::fetch_global_by_key_optional`]), without the place walk
-    /// (MediaWiki's `GlobalVarConfig` asks this for every setting it
+    /// (`MediaWiki`'s `GlobalVarConfig` asks this for every setting it
     /// reads). `None` for `empty()`, any other place or name, and the
     /// name of an auto-global.
     fn isset_global_fast(&mut self, pid: PlaceId, empty: bool) -> Option<bool> {
@@ -5680,6 +5678,8 @@ impl Vm {
         )
     }
 
+    /// `isset(place)` / `empty(place)` (returns the isset or empty result).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
         // `isset($this->p[$k][$j])` & co. on an array property: no walk.
         if let Some(r) = self.isset_prop_dims_fast(pid, empty) {
