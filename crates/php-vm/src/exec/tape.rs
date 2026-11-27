@@ -1464,6 +1464,32 @@ tape_ops! {
 /// to [`super::spec::step_ref`] before the generic loop.
 #[inline(never)]
 fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
+    // `$obj[$k] = $v` of an object: no step writes it (the `ArrayAccess`
+    // write is `declined_vm_step`'s, which the caller tries next).
+    if let Some(&Op::AssignDimCv { cv, .. }) = ops.get(at) {
+        if matches!(
+            f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+            Some(Value::Object(_))
+        ) {
+            return DECLINED;
+        }
+    }
+    // `(string) $obj`: no step converts an object (`declined_vm_step`'s).
+    if let Some(&Op::Cast {
+        kind: crate::opcode::CastKind::String,
+        a,
+        ..
+    }) = ops.get(at)
+    {
+        let obj = match a {
+            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.tmps.get(t as usize),
+            _ => None,
+        };
+        if matches!(obj, Some(Value::Object(_))) {
+            return DECLINED;
+        }
+    }
     let next = hot::step(f, ops, lits, at);
     if next != DECLINED {
         return next;
@@ -2805,6 +2831,21 @@ fn declined_vm_step(
     ops: &[Op],
     at: usize,
 ) -> usize {
+    if matches!(
+        ops.get(at),
+        Some(Op::AssignDimCv { .. } | Op::FetchDimCv { .. })
+    ) {
+        return declined_dim_object(vm, prep, ops, at);
+    }
+    if matches!(
+        ops.get(at),
+        Some(Op::Cast {
+            kind: crate::opcode::CastKind::String,
+            ..
+        })
+    ) {
+        return declined_cast_object(vm, prep, ops, at);
+    }
     // `$cv += $array` (`Vm::array_union_cv`, `Vm::run`'s arm's fast path):
     // the frame's own data only, no user code.
     if let Some(&Op::AssignOpCv {
@@ -2985,6 +3026,19 @@ fn declined_vm_step(
             }
         };
     }
+    DECLINED
+}
+
+/// [`declined_vm_step`] of `(string) $obj` (`ZEND_CAST` calling
+/// `__toString()`: Lodata's `$this->array[(string) $key] = $value`):
+/// `Vm::run`'s arm, here, tried before the other ops' arms. `DECLINED`,
+/// nothing changed, for anything else.
+fn declined_cast_object(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
     // `(string) $obj` (`ZEND_CAST` calling `__toString()`: Lodata's
     // `$this->array[(string) $key] = $value`): `Vm::run`'s arm, here.
     if let Some(&Op::Cast {
@@ -3012,9 +3066,20 @@ fn declined_vm_step(
         }
         flush(vm, prep);
         vm.frame_mut().ip = at + 1;
-        let r = vm
-            .read(a)
-            .and_then(|x| vm.cast(crate::opcode::CastKind::String, a, x));
+        let r = vm.read(a).and_then(|x| {
+            // A user `__toString()` called at once (`zend_std_cast_object_tostring`),
+            // without the runtime's conversion layers; a class with a
+            // cast handler of its own, or without the method, as `Vm::cast`
+            // converts it.
+            if let Value::Object(o) = &x {
+                if crate::ext::hooks_of(o).and_then(|h| h.cast).is_none() {
+                    if let Some(s) = vm.object_to_string_opt(o)? {
+                        return Ok(Value::Str(s));
+                    }
+                }
+            }
+            vm.cast(crate::opcode::CastKind::String, a, x)
+        });
         return match r {
             Ok(v) => {
                 vm.set_tmp(dst, v);
@@ -3026,6 +3091,20 @@ fn declined_vm_step(
             }
         };
     }
+    DECLINED
+}
+
+/// [`declined_vm_step`] of a dimension of an object (`$obj[$k] = $v`,
+/// `$obj[$k]`): the class's user `ArrayAccess` method
+/// (`Vm::assign_dim_array_access`, `Vm::fetch_dim_array_access`), tried
+/// before the other ops' arms. `DECLINED`, nothing changed, for anything
+/// else.
+fn declined_dim_object(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    at: usize,
+) -> usize {
     let cv = match ops.get(at) {
         Some(&Op::AssignDimCv { cv, .. } | &Op::FetchDimCv { cv, .. }) => cv,
         _ => return DECLINED,

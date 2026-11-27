@@ -190,3 +190,36 @@ k0:0 k1:10 k2:20
 "#
     );
 }
+
+/// `(string) $obj` of a user `__toString()` is called at once from the
+/// tape (`declined_cast_object`): keys built from objects, a throwing
+/// method, an object without one, nested conversions, an exception's own
+/// conversion. Expected output: php-src's (PHP 8.5).
+#[test]
+fn string_casts_of_objects_call_to_string() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class S { function __construct(public $n) {} function __toString(): string { return "<{$this->n}>"; } }
+class T { function __toString(): string { throw new RuntimeException("no"); } }
+class N {}
+class Nest { function __construct(public $in) {} function __toString(): string { return "[" . (string)$this->in . "]"; } }
+$s = new S(1); $arr = [];
+for ($i = 0; $i < 3; $i++) { $k = new S($i); $arr[(string)$k] = $i; $x = (string)$s; }
+echo json_encode($arr), " $x\n";
+try { $y = (string)new T; } catch (RuntimeException $e) { echo "caught ", $e->getMessage(), "\n"; }
+try { $y = (string)new N; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo (string)new Nest(new Nest(new S("z"))), "\n";
+$e = new Exception("msg"); $str = (string)$e; echo strlen($str) > 10 ? "exc ok" : "exc bad", "\n";
+$t = new S("tmp"); echo strtoupper((string)$t), " ", (string)(new S("direct")), "\n";
+"#
+        ),
+        r#"{"<0>":0,"<1>":1,"<2>":2} <1>
+caught no
+Error: Object of class N could not be converted to string
+[[<z>]]
+exc ok
+<TMP> <direct>
+"#
+    );
+}

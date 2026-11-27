@@ -1600,6 +1600,18 @@ pub(super) unsafe fn key_exists(frame: *mut Frame, inst: &Inst) -> bool {
     key_exists_in(f, key, array, dst)
 }
 
+/// Whether variable `cv` of `f` holds an object: an `ArrayAccess`
+/// container, whose write none of the array paths takes. Tested where the
+/// first of them declines, so that the write goes on to the object's
+/// dimension handler (`Vm::assign_dim_array_access`, by way of
+/// `declined_vm_step`) without trying the others (~300 instructions a
+/// write of a user `offsetSet()`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test on a declined path
+fn holds_object(f: &Frame, cv: usize) -> bool {
+    matches!(f.cvs.get(cv).and_then(CvSlot::get), Some(Value::Object(_)))
+}
+
 /// `Op::AssignDimCv`: `$cv[dim] = val` (`assign_dim_cv_in`). Releases a
 /// string offset and a consumed value temporary, so it polls.
 ///
@@ -1610,6 +1622,9 @@ pub(super) unsafe fn key_exists(frame: *mut Frame, inst: &Inst) -> bool {
 pub(super) unsafe fn assign_dim(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: as in `fetch_dim`.
     let f = unsafe { &mut *frame };
+    if holds_object(f, inst.a as usize) {
+        return false;
+    }
     let dim = operand(dim_kind(inst), inst.b);
     let val = operand(val_kind(inst), inst.p as u32);
     assign_dim_cv_in(f, inst.a, dim, val)
@@ -1638,6 +1653,9 @@ pub(super) unsafe fn assign_dim_int(frame: *mut Frame, inst: &Inst) -> bool {
     };
     if assign_packed(f, inst, i).is_some() {
         return true;
+    }
+    if holds_object(f, inst.a as usize) {
+        return false;
     }
     // SAFETY: as above; the fast path's borrow of the frame has ended.
     unsafe { assign_int_any(frame, inst) }
@@ -1668,6 +1686,10 @@ pub(super) unsafe fn assign_dim_key(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_str_lean(unsafe { &mut *frame }, inst) {
         return true;
+    }
+    // SAFETY: as above; the lean path's borrow of the frame has ended.
+    if holds_object(unsafe { &*frame }, inst.a as usize) {
+        return false;
     }
     // SAFETY: the caller's contract, passed on; the lean path's borrow of
     // the frame has ended.
@@ -1822,6 +1844,10 @@ unsafe fn assign_dim_lit(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `frame` is the current frame.
     if assign_lit_lean(unsafe { &mut *frame }, inst) {
         return true;
+    }
+    // SAFETY: as above; the lean path's borrow of the frame has ended.
+    if holds_object(unsafe { &*frame }, inst.a as usize) {
+        return false;
     }
     // SAFETY: the caller's contract, passed on; the lean path's borrow of
     // the frame has ended.
