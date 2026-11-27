@@ -331,6 +331,15 @@ optimization log these came from, with its landed-change tables, is git history:
   gives `$x` number 1 under C and 2 under ours. Seen through `var_dump()` and
   `spl_object_id()`. A closure or an object holding the last reference to one such
   object is in C's order already.
+- [ ] **curl's verbose log in a stream without a descriptor, while a handle is freed**
+  (27 Nov). `CURLOPT_STDERR` given a `php://memory`, user-space or filtered stream writes
+  through an `fopencookie()` FILE whose text reaches the stream by way of the running
+  transfer (`Handler::stderr`). What libcurl prints outside a transfer (`* Closing
+  connection` when a handle with a kept-alive connection is freed, or a multi handle is
+  cleaned up) has no transfer to go through and is dropped; C writes it to the stream. A
+  plain file and `php://temp` get it (they are written through a descriptor). Also not
+  ported: C's FILE is buffered and reaches the stream at the stream's next seek, so
+  `ftell()` straight after `curl_exec()` says 0 there and the log's length here.
 - [ ] **A default expression is printed as written, not folded** (27 Nov):
   `ReflectionParameter::__toString()` shows `[!true, ~1, +1, -PHP_INT_MAX]` where C, whose
   compiler folds the constant parts, shows `[false, -2, 1, -PHP_INT_MAX]`
