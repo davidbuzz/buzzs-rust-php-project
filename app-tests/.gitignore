@@ -1,0 +1,4 @@
+# Everything run-all-app-tests.sh fetches or produces. Nothing third-party is ever committed:
+# see README.md.
+/apps/
+/logs/
