@@ -1242,9 +1242,9 @@ fn concat_slot_in(od: &ObjectData, slot: usize, rhs: &Value, want: bool) -> Opti
 }
 
 /// The entry of `e`'s chain for the object the place's base holds in
-/// frame `f`: `e` itself, or its first alternate when that one is for the
-/// object's class and `e` is not (a site seeing objects of two classes in
-/// turn: a base class's method for two subclasses). Testing it here,
+/// frame `f`: `e` itself, or the alternate for the object's class when `e`
+/// is for another (a site seeing objects of several classes in turn: a
+/// base class's method for its subclasses). Testing it here,
 /// before the miss, keeps such a site off the refill path, where the two
 /// entries swapped on every access. Only a first entry that does not match
 /// pays the object's lookup.
@@ -1265,17 +1265,22 @@ fn entry_for_base<'c>(
             _ => None,
         }
     };
-    match obj {
-        Some(o) => {
-            let cls = Rc::as_ptr(&object::data(o).class) as usize;
-            if cls != e.class_addr && cls == alt.class_addr && alt.base == e.base {
-                alt
-            } else {
-                e
-            }
-        }
-        None => e,
+    let Some(o) = obj else {
+        return e;
+    };
+    let cls = Rc::as_ptr(&object::data(o).class) as usize;
+    if cls == e.class_addr {
+        return e;
     }
+    // The alternates (at most three: `place::propcache::MAX_ALTS`).
+    let mut node = Some(alt);
+    while let Some(a) = node {
+        if cls == a.class_addr && a.base == e.base {
+            return a;
+        }
+        node = a.alt.as_deref();
+    }
+    e
 }
 
 /// [`plain_key`] of a write: the entry allows a plain write ([`PC_WRITE`])
