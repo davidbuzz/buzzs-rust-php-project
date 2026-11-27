@@ -10,7 +10,7 @@ use php_curl::consts::{
     CURLOPT_REDIR_PROTOCOLS, CURLOPT_REDIR_PROTOCOLS_STR, CURLOPT_SSL_VERIFYHOST, CURLOPT_STDERR,
     CURLOPT_WRITEHEADER, CURLPROTO_FILE, CURL_REDIR_POST_ALL,
 };
-use php_curl::{option_kind, Callback, OptKind};
+use php_curl::{option_kind, Callback, OptKind, StderrTarget};
 use php_runtime::{Obj, Value};
 use php_vm::ext::{Args, VmResult};
 use php_vm::{object, Vm};
@@ -182,7 +182,7 @@ fn set_file(vm: &mut Vm, cx: &Ctx<'_>, curl: &Curl, opt: i64, value: &Value) -> 
                 ),
             ));
         }
-        match streams::cast_stdio(vm, r)? {
+        match streams::cast_stdio(vm, r, opt == CURLOPT_STDERR)? {
             Some(i) => info = Some(i),
             None => return Ok(false),
         }
@@ -242,12 +242,18 @@ fn set_file(vm: &mut Vm, cx: &Ctx<'_>, curl: &Curl, opt: i64, value: &Value) -> 
             curl.st.borrow_mut().read.stream = info.as_ref().map(|_| value.clone());
         }
         CURLOPT_STDERR => {
-            match &info {
-                None => curl.st.borrow_mut().std_err = None,
-                Some(i) if writable(&i.mode) => curl.st.borrow_mut().std_err = Some(value.clone()),
+            let target = match &info {
+                None => {
+                    curl.st.borrow_mut().std_err = None;
+                    StderrTarget::Process
+                }
+                Some(i) if writable(&i.mode) => {
+                    curl.st.borrow_mut().std_err = Some(value.clone());
+                    i.fd.map_or(StderrTarget::Handler, StderrTarget::Fd)
+                }
                 Some(_) => return Err(not_writable(vm, "CURLOPT_STDERR")),
-            }
-            let rc = curl.easy.set_stderr(info.and_then(|i| i.fd));
+            };
+            let rc = curl.easy.set_stderr(target);
             curl.err_no.set(rc);
             return Ok(rc == 0);
         }

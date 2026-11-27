@@ -42,20 +42,36 @@ pub(crate) fn flush(vm: &mut Vm, r: &Resource) -> VmResult<()> {
 pub(crate) struct StreamInfo {
     /// The open mode (`what->mode`).
     pub(crate) mode: String,
-    /// The descriptor (when castable), for `CURLOPT_STDERR`.
+    /// The descriptor of a stream that has one, for `CURLOPT_STDERR`.
     pub(crate) fd: Option<i32>,
 }
 
-/// `php_stream_cast(PHP_STREAM_AS_STDIO, REPORT_ERRORS)`: `None` when the
-/// stream cannot be represented as a `FILE*` (the warning is emitted).
-pub(crate) fn cast_stdio(vm: &mut Vm, r: &Resource) -> VmResult<Option<StreamInfo>> {
+/// `php_stream_cast(PHP_STREAM_AS_STDIO, REPORT_ERRORS)`. With
+/// `fopencookie()` every stream can be a `FILE*` (a plain file is its own,
+/// any other one gets a `FILE` whose functions call the stream), so this
+/// only fails for a stream that is busy. `want_fd` asks for the descriptor
+/// libcurl's verbose log is written to; without it (a stream this
+/// extension reads and writes itself) the cast is only the buffer
+/// synchronisation `_php_stream_cast()` starts with.
+pub(crate) fn cast_stdio(vm: &mut Vm, r: &Resource, want_fd: bool) -> VmResult<Option<StreamInfo>> {
     let Some(cell) = res::cell_of(r) else {
         return Ok(None);
     };
-    let out = res::with_stream(vm, &cell, |s| {
+    res::with_stream(vm, &cell, |s| {
         let mode = s.mode.clone();
-        s.cast(CastAs::Stdio, true)
-            .map(|fd| StreamInfo { mode, fd: Some(fd) })
-    })?;
-    Ok(out.flatten())
+        // The descriptor of a plain file's own `FILE`.
+        let mut fd = s.cast(CastAs::Stdio, true);
+        if !want_fd {
+            fd = None;
+        } else if fd.is_none() && s.ops_label() == "TEMP" && !s.is_filtered() {
+            // A `php://temp` stream moves to its temporary file: unlike a
+            // `FILE` that calls the stream, a descriptor also takes what
+            // libcurl prints while a handle is freed.
+            fd = s.cast(CastAs::Fd, false);
+            if fd.is_none() {
+                fd = s.cast(CastAs::Fd, true);
+            }
+        }
+        StreamInfo { mode, fd }
+    })
 }

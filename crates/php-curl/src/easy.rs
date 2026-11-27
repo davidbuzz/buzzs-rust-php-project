@@ -173,6 +173,20 @@ pub struct Easy {
     key: u64,
     errbuf: *mut [u8; ERRBUF_LEN],
     retained: RefCell<Rc<RefCell<Retained>>>,
+    /// Whether `CURLOPT_STDERR` is a [`StderrTarget::Handler`] file (its
+    /// cookie is this handle's key, so a duplicate needs its own).
+    stderr_to_handler: Cell<bool>,
+}
+
+/// Where libcurl prints its verbose log (`CURLOPT_STDERR`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StderrTarget {
+    /// The process's stderr (libcurl's default).
+    Process,
+    /// A duplicate of this descriptor, opened for appending.
+    Fd(i32),
+    /// [`Handler::stderr`], for a stream that has no descriptor.
+    Handler,
 }
 
 impl std::fmt::Debug for Easy {
@@ -215,6 +229,7 @@ impl Easy {
             key: fresh_key(),
             errbuf: new_errbuf(),
             retained: RefCell::new(Rc::default()),
+            stderr_to_handler: Cell::new(false),
         };
         e.set_defaults(cainfo);
         Some(e)
@@ -230,6 +245,7 @@ impl Easy {
             key: fresh_key(),
             errbuf: new_errbuf(),
             retained: RefCell::new(Rc::default()),
+            stderr_to_handler: Cell::new(false),
         };
         e.rebind();
         Some(e)
@@ -489,12 +505,11 @@ impl Easy {
         rc
     }
 
-    /// `CURLOPT_STDERR`: a duplicate of `fd` opened for writing, or the
-    /// process stderr for `None`.
-    pub fn set_stderr(&self, fd: Option<i32>) -> i32 {
-        let fp = match fd {
-            None => std::ptr::null_mut(),
-            Some(fd) => {
+    /// `CURLOPT_STDERR`: where the verbose log goes.
+    pub fn set_stderr(&self, target: StderrTarget) -> i32 {
+        let fp = match target {
+            StderrTarget::Process => std::ptr::null_mut(),
+            StderrTarget::Fd(fd) => {
                 // SAFETY: `dup` on a descriptor the caller owns; the copy is
                 // owned by the FILE created next.
                 let d = unsafe { libc::dup(fd) };
@@ -509,19 +524,41 @@ impl Easy {
                     unsafe { libc::close(d) };
                     return CURLE_BAD_FUNCTION_ARGUMENT;
                 }
-                // php-src hands libcurl the stream's own FILE, so the
-                // stream's next seek or read flushes what libcurl wrote:
-                // a script sees the verbose log while the transfer runs
-                // (a progress or write callback that rewinds the buffer
-                // and reads it). This FILE is a second one over the same
-                // file: unbuffered, each write is in the file at once.
-                // SAFETY: `fp` is the FILE just opened; a null buffer with
-                // `_IONBF` asks for no buffering.
-                unsafe { libc::setvbuf(fp, std::ptr::null_mut(), libc::_IONBF, 0) };
-                self.retained.borrow().borrow_mut().files.push(fp);
+                fp
+            }
+            StderrTarget::Handler => {
+                // `_php_stream_cast(PHP_STREAM_AS_STDIO)` for a stream that
+                // is not a plain file: an `fopencookie()` FILE that writes
+                // into the stream. The cookie is this handle's key, not a
+                // pointer: the write function looks the handle up.
+                let io = ffi::cookie_io_functions_t {
+                    read: None,
+                    write: Some(handler::stderr_cookie_write),
+                    seek: None,
+                    close: None,
+                };
+                // SAFETY: the mode is a valid C string and the functions
+                // live for the program; the cookie is never dereferenced.
+                let fp = unsafe { ffi::fopencookie(self.ud(), c"w".as_ptr(), io) };
+                if fp.is_null() {
+                    return CURLE_OUT_OF_MEMORY;
+                }
                 fp
             }
         };
+        if !fp.is_null() {
+            // php-src hands libcurl the stream's own FILE, so the stream's
+            // next seek or read flushes what libcurl wrote: a script sees
+            // the verbose log while the transfer runs (a progress or write
+            // callback that rewinds the buffer and reads it). This FILE is
+            // a second one over the same file, or one that writes into the
+            // stream: unbuffered, each write arrives at once.
+            // SAFETY: `fp` is the FILE just opened; a null buffer with
+            // `_IONBF` asks for no buffering.
+            unsafe { libc::setvbuf(fp, std::ptr::null_mut(), libc::_IONBF, 0) };
+            self.retained.borrow().borrow_mut().files.push(fp);
+        }
+        self.stderr_to_handler.set(target == StderrTarget::Handler);
         self.setopt_ptr_raw(CURLOPT_STDERR, fp.cast::<c_void>())
     }
 
@@ -561,6 +598,7 @@ impl Easy {
         }
         // SAFETY: live handle.
         unsafe { ffi::curl_easy_reset(raw) };
+        self.stderr_to_handler.set(false);
         self.set_defaults(cainfo);
     }
 
@@ -580,8 +618,13 @@ impl Easy {
             key: fresh_key(),
             errbuf: new_errbuf(),
             retained: RefCell::new(Rc::clone(&self.retained.borrow())),
+            stderr_to_handler: Cell::new(false),
         };
         e.rebind();
+        if self.stderr_to_handler.get() {
+            // The copied file reports under the source's key.
+            e.set_stderr(StderrTarget::Handler);
+        }
         Some(e)
     }
 

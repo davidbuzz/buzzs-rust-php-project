@@ -1289,6 +1289,13 @@ impl Stream {
                 self.writepos = 0;
             }
         }
+        // `PHP_STREAM_AS_STDIO`: only an unfiltered plain file is asked
+        // for its own `FILE`. Any other stream becomes one through
+        // `fopencookie()`, which cannot fail for the stream's sake: the
+        // caller makes that `FILE` (no descriptor, and nothing to report).
+        if kind == CastAs::Stdio && (self.ops.label() != "STDIO" || self.is_filtered()) {
+            return None;
+        }
         if self.is_filtered() && kind != CastAs::FdForSelect {
             if report_errors {
                 diag::warning("Cannot cast a filtered stream on this system");

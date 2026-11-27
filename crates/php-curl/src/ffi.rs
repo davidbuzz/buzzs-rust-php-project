@@ -167,6 +167,25 @@ pub type curl_sshhostkey_callback =
 pub type curl_push_callback =
     extern "C" fn(*mut CURL, *mut CURL, usize, *mut curl_pushheaders, *mut c_void) -> c_int;
 
+/// `cookie_io_functions_t` of `fopencookie(3)`.
+#[repr(C)]
+pub struct cookie_io_functions_t {
+    pub read: Option<extern "C" fn(*mut c_void, *mut c_char, usize) -> isize>,
+    pub write: Option<extern "C" fn(*mut c_void, *const c_char, usize) -> isize>,
+    pub seek: Option<extern "C" fn(*mut c_void, *mut i64, c_int) -> c_int>,
+    pub close: Option<extern "C" fn(*mut c_void) -> c_int>,
+}
+
+extern "C" {
+    /// `fopencookie(3)` (glibc and musl): a `FILE` whose reads, writes,
+    /// seeks and close are done by the given functions.
+    pub fn fopencookie(
+        cookie: *mut c_void,
+        mode: *const c_char,
+        io_funcs: cookie_io_functions_t,
+    ) -> *mut libc::FILE;
+}
+
 // libcurl is bound lazily (see `build.rs`): the generated stubs define the
 // functions below and load libcurl and its dependency tree (gnutls, libssh,
 // libldap, ...) on the first call, keeping them out of every start-up.

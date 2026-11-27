@@ -11,7 +11,7 @@ use php_curl::consts::{
     CURL_READFUNC_PAUSE, CURL_SEEKFUNC_CANTSEEK, CURL_SEEKFUNC_FAIL, CURL_SEEKFUNC_OK,
     CURL_WRITEFUNC_ERROR,
 };
-use php_curl::{Easy, Handler};
+use php_curl::{Easy, Handler, StderrTarget};
 use php_runtime::{Obj, Value, ZArray};
 use php_vm::ext::{Throw, VmResult};
 use php_vm::Vm;
@@ -377,6 +377,14 @@ impl Handler for Dispatch<'_> {
         self.check(r).map_or(fail, as_c_int)
     }
 
+    fn stderr(&mut self, key: u64, data: &[u8]) {
+        let Some((_, curl)) = self.lookup(key) else {
+            return;
+        };
+        let stream = curl.st.borrow().std_err.clone();
+        self.write_stream(stream.as_ref(), data);
+    }
+
     fn debug(&mut self, key: u64, kind: i32, data: &[u8]) {
         let Some((obj, curl)) = self.lookup(key) else {
             return;
@@ -571,7 +579,7 @@ pub(crate) fn verify_handlers(vm: &mut Vm, curl: &Curl, report: bool) -> VmResul
             vm.php_warning("CURLOPT_STDERR resource has gone away, resetting to stderr")?;
         }
         curl.st.borrow_mut().std_err = None;
-        curl.easy.set_stderr(None);
+        curl.easy.set_stderr(StderrTarget::Process);
     }
     if i {
         if report {

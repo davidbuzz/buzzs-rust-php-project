@@ -64,6 +64,12 @@ pub trait Handler {
     fn debug(&mut self, key: u64, kind: i32, data: &[u8]) {
         let _ = (key, kind, data);
     }
+    /// What libcurl prints to its `CURLOPT_STDERR` file (the verbose log)
+    /// when that file is the embedding's:
+    /// [`StderrTarget::Handler`](crate::easy::StderrTarget::Handler).
+    fn stderr(&mut self, key: u64, data: &[u8]) {
+        let _ = (key, data);
+    }
     /// `CURLOPT_PREREQFUNCTION`.
     fn prereq(
         &mut self,
@@ -250,6 +256,21 @@ pub(crate) extern "C" fn debug_cb(
     let d = bytes(data, size);
     dispatch(|h| h.debug(key_of(ud), kind, d));
     0
+}
+
+/// The write function of the `FILE` behind
+/// [`StderrTarget::Handler`](crate::easy::StderrTarget::Handler), whose
+/// cookie is the handle key (`stream_cookie_writer()` in php-src's
+/// main/streams/cast.c). What libcurl prints while no transfer runs (a
+/// handle being freed) has no handler to go to and is dropped.
+pub(crate) extern "C" fn stderr_cookie_write(
+    cookie: *mut c_void,
+    buf: *const c_char,
+    size: usize,
+) -> isize {
+    let d = bytes(buf, size);
+    dispatch(|h| h.stderr(key_of(cookie), d));
+    isize::try_from(size).unwrap_or(isize::MAX)
 }
 
 pub(crate) extern "C" fn prereq_cb(

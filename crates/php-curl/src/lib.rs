@@ -23,7 +23,7 @@ pub mod options;
 pub mod share;
 pub mod version;
 
-pub use easy::{Easy, MimePart, MimeSource};
+pub use easy::{Easy, MimePart, MimeSource, StderrTarget};
 pub use handler::{Handler, NoHandler};
 pub use multi::{InfoMsg, Multi};
 pub use options::{option_kind, Callback, OptKind};
