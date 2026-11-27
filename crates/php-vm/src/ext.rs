@@ -1282,12 +1282,39 @@ impl Vm {
     }
 
     /// Calls a method by name on an object.
+    ///
+    /// The method found for a class and name is remembered
+    /// ([`Vm::method_name_cache`]): an extension calling the same method
+    /// of objects of one class over and over (SPL's `FilterIterator` calling
+    /// `accept()` for every element) looks it up once, where the lookup by
+    /// name cost ~600 instructions a call. A name the class has no method
+    /// for goes the usual way (`__call`) every time.
     pub fn call_method_by_name(
         &mut self,
         o: &Obj,
         name: &str,
         args: Vec<Value>,
     ) -> VmResult<Value> {
+        let cls = crate::object::class_of(o);
+        let hit = self.method_name_cache.iter().find_map(|(c, n, m)| {
+            (std::ptr::eq(c.as_ptr(), Rc::as_ptr(cls)) && &**n == name)
+                .then(|| m.upgrade())
+                .flatten()
+        });
+        if let Some(m) = hit {
+            return Ok(self.call_method(o, &m, args)?.deref());
+        }
+        if let Some(m) = crate::call::class_method_lc(cls, name) {
+            let entry = (Rc::downgrade(cls), Box::from(name), Rc::downgrade(&m));
+            let slot = self.method_name_cache_next % METHOD_NAME_CACHE;
+            if let Some(e) = self.method_name_cache.get_mut(slot) {
+                *e = entry;
+            } else {
+                self.method_name_cache.push(entry);
+            }
+            self.method_name_cache_next = self.method_name_cache_next.wrapping_add(1);
+            return Ok(self.call_method(o, &m, args)?.deref());
+        }
         self.call_method_name(o, name, args)
     }
 
@@ -1850,3 +1877,6 @@ mod tests {
         );
     }
 }
+
+/// The entries of [`Vm::method_name_cache`].
+const METHOD_NAME_CACHE: usize = 4;

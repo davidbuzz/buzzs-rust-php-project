@@ -3547,6 +3547,16 @@ pub struct Vm {
     /// `zend.max_allowed_stack_size` and `zend.reserved_stack_size` as set
     /// ([`Vm::stack_size_inis`]), read once.
     pub(crate) stack_size_inis: Option<(i64, i64)>,
+    /// Methods `Vm::call_method_by_name` found, by class and name (both
+    /// held weakly: the addresses compared stay pinned, nothing is kept
+    /// alive), replaced in turn.
+    pub(crate) method_name_cache: Vec<(
+        std::rc::Weak<crate::class::Class>,
+        Box<str>,
+        std::rc::Weak<crate::func::Method>,
+    )>,
+    /// The entry of `method_name_cache` replaced next.
+    pub(crate) method_name_cache_next: usize,
     /// Reusable buffers of the call protocol (php-src keeps call frames and
     /// arguments on the VM stack; these pools avoid per-call mallocs).
     pub(crate) call_bufs: CallBufs,

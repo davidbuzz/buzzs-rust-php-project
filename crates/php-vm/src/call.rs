@@ -6397,7 +6397,7 @@ fn takes_args_inline(call: &PendingCall) -> bool {
 /// The method `name` of `cls`, looked up by its lower-case name: a name of
 /// up to 64 bytes is lowered on the stack (`offsetGet`, `getIterator`:
 /// the engine's own calls), a longer one in a heap buffer.
-fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
+pub(crate) fn class_method_lc(cls: &Class, name: &str) -> Option<Rc<Method>> {
     let b = name.as_bytes();
     if !b.iter().any(u8::is_ascii_uppercase) {
         return cls.methods.get(b).cloned();

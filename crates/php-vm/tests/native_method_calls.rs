@@ -265,3 +265,35 @@ end
 "#
     );
 }
+
+/// Methods native code calls by name (`Vm::call_method_by_name`: SPL's
+/// `accept()`) are remembered per class and name: several classes at one
+/// call, classes declared later under fresh names, callback and recursive
+/// filters. Expected output: php-src's (PHP 8.5).
+#[test]
+fn methods_called_by_name_from_native_code_per_class() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+// methods called by name from native code, cached per class and name
+class F1 extends FilterIterator { function accept(): bool { return $this->current() % 2 == 0; } }
+class F2 extends FilterIterator { function accept(): bool { return $this->current() > 2; } }
+foreach ([new F1(new ArrayIterator([1,2,3,4])), new F2(new ArrayIterator([1,2,3,4])), new F1(new ArrayIterator([5,6]))] as $it) {
+  foreach ($it as $k => $v) echo "$k=$v "; echo "| ";
+}
+echo "\n";
+// a class redefined per eval: same name, other class
+for ($i = 0; $i < 3; $i++) { $c = "G$i"; eval("class $c extends FilterIterator { function accept(): bool { return \$this->key() != $i; } }"); foreach (new $c(new ArrayIterator([10,20,30])) as $k => $v) echo "$k "; echo "/ "; }
+echo "\n";
+$it = new CallbackFilterIterator(new ArrayIterator(range(1, 6)), fn($v) => $v % 3 == 0); echo implode(",", iterator_to_array($it, false)), "\n";
+class R extends RecursiveFilterIterator { function accept(): bool { return true; } }
+$r = new RecursiveIteratorIterator(new R(new RecursiveArrayIterator([1, [2, [3]], 4]))); echo implode(",", iterator_to_array($r, false)), "\n";
+"#
+        ),
+        r#"1=2 3=4 | 2=3 3=4 | 1=6 | 
+1 2 / 0 2 / 0 1 / 
+3,6
+1,2,3,4
+"#
+    );
+}
