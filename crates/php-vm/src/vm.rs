@@ -2258,6 +2258,10 @@ impl Frame {
             && !self.cold_used
             && self.calls.is_empty()
             && !self.vars_used.get()
+            // A closure's function is kept in the pooled frame only when
+            // something else holds it too (`keeps_function`, as the direct
+            // release requires): a named function's table always does.
+            && (self.closure.is_none() || self.keeps_function())
     }
 
     /// The release of a [`Frame::plain_releasable`] frame at its return:
@@ -2269,14 +2273,17 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every planned return
     pub(crate) fn release_plain(&mut self, caller_this: Option<&Obj>) {
-        debug_assert!(self.closure.is_none() && self.args.is_empty());
+        debug_assert!(self.args.is_empty());
         self.release_direct_tmps();
         for slot in &mut self.cvs {
             release_cv_in_place(slot.as_mut());
         }
-        if self.this.is_some() {
+        // The call's own handle: `$this`, or a closure's object (its
+        // possible root first), as `release_direct_rest` releases them.
+        if self.this.is_some() || self.closure.is_some() {
             crate::gc::call_handle_released(self, caller_this);
             release_obj_field(&mut self.this);
+            release_obj_field(&mut self.closure);
         }
         clear_opt(&mut self.scope);
         clear_opt(&mut self.called);

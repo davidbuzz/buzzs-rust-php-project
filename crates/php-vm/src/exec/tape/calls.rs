@@ -2785,6 +2785,103 @@ pub(crate) fn push_method_from_native(
     Some(live)
 }
 
+/// The frame of a plain user callee native code calls back
+/// (`zend_call_function` for `array_map()`'s callback, `usort()`'s
+/// comparator, ...), pushed as [`push_method_from_native`] pushes a
+/// method's: the pooled frame above the current one readied for `uf`
+/// ([`ready_frame`]), the call's `$this`, scope and called class, the
+/// arguments moved into the compiled variables, the `RECV`s of the passed
+/// ones skipped and the literal defaults of the others bound, a closure's
+/// object and bound variables (with its `$this` and scopes where the call
+/// has none, as `Vm::bind_closure_vars` binds them), and the frame entered
+/// directly and marked plain (its return, the nested execution's end, is
+/// the short one). The caller (`Vm::call_prepared_direct`) has checked the
+/// declaration, the arguments and their types. `None`, nothing changed,
+/// when no pooled frame is at hand, the stack is past its backstop, or the
+/// closure carries a `__call` name.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_callback_from_native(
+    vm: &mut Vm,
+    uf: &Rc<UserFunction>,
+    this: Option<&Obj>,
+    scope: Option<&Rc<crate::class::Class>>,
+    called: Option<&Rc<crate::class::Class>>,
+    closure: Option<&Obj>,
+    strict: bool,
+    args: &mut [Value],
+) -> Option<usize> {
+    let live = vm.frames.live;
+    if live == 0 || live > 50_000 {
+        return None;
+    }
+    if let Some(c) = closure {
+        let internal = crate::object::data(c).internal.borrow();
+        let d = internal
+            .as_ref()
+            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>());
+        if d.is_none_or(|d| d.magic_name.is_some()) {
+            return None;
+        }
+    }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
+    let frame = vm.frames.vec.get_mut(live)?;
+    if !frame.args.is_empty() {
+        return None;
+    }
+    let n = args.len();
+    ready_frame(frame, uf);
+    fill(&mut frame.this, this.cloned());
+    fill(&mut frame.scope, scope.cloned());
+    fill(&mut frame.called, called.cloned());
+    for (slot, a) in frame.cvs.iter_mut().zip(args.iter_mut()) {
+        // A readied frame's compiled variables are empty.
+        if let Some(old) = slot.as_mut().replace(std::mem::take(a)) {
+            drop(old);
+        }
+    }
+    frame.ret = RetTarget::Discard;
+    frame.caller_strict = strict;
+    frame.called_from_internal = true;
+    frame.is_ctor = false;
+    #[allow(clippy::cast_possible_truncation)] // at most the parameter count
+    {
+        frame.direct_argc = n as u32;
+    }
+    frame.ip = uf.plain_first_op(n);
+    if n < uf.params.len() {
+        bind_literal_defaults(frame, uf, n);
+    }
+    if let Some(c) = closure {
+        fill(&mut frame.closure, Some(c.clone()));
+        let internal = crate::object::data(c).internal.borrow();
+        if let Some(d) = internal
+            .as_ref()
+            .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())
+        {
+            if frame.this.is_none() && d.this.is_some() {
+                frame.this.clone_from(&d.this);
+            }
+            if frame.scope.is_none() && d.scope.is_some() {
+                frame.scope.clone_from(&d.scope);
+            }
+            if frame.called.is_none() && d.called.is_some() {
+                frame.called.clone_from(&d.called);
+            }
+            for (cv, v) in &d.vars {
+                if let Some(slot) = frame.cvs.get_mut(*cv as usize) {
+                    if let Some(old) = slot.as_mut().replace(v.clone()) {
+                        drop(old);
+                    }
+                }
+            }
+        }
+    }
+    frame.direct = true;
+    frame.plain = uf.flags & flags::RETURN_REF == 0;
+    vm.frames.live = live + 1;
+    Some(live)
+}
+
 /// `ZEND_INIT_METHOD_CALL` of `Op::InitMethodCall { obj, name: Lit(lit) }`
 /// at `slot` in the current frame: on the method cache hit
 /// `Vm::init_method_call_fast` takes (the object's class and the calling
@@ -4499,11 +4596,10 @@ pub(super) fn enter(
     }
     // Released by `Frame::release_direct` at its return.
     frame.direct = true;
-    // A plain declaration called without a closure: its return is the
-    // short one (`Vm::return_plain`), whatever started the call.
-    frame.plain = !prep.closure
-        && !prep.binds
-        && matches!(shape, CallShape::UNTYPED | CallShape::TYPED)
+    // A plain declaration, a closure's too (its object and bound
+    // variables are released by `Frame::release_plain`): its return is
+    // the short one (`Vm::return_plain`), whatever started the call.
+    frame.plain = matches!(shape, CallShape::UNTYPED | CallShape::TYPED)
         && uf.code.num_statics == 0
         && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
     caller.ip = caller_ip;

@@ -2441,10 +2441,12 @@ impl Vm {
             // (`Frame::released_direct`), as after a prepared call, instead
             // of the full `Frame::clear_for_reuse` and a readying again.
             frame.direct = true;
-            // A plain declaration called without a closure: its return is
-            // the short one (`Vm::return_plain`), as after a prepared call
+            // A plain declaration: its return is the short one
+            // (`Vm::return_plain`), as after a prepared call
             // (`exec::tape::calls::enter`).
-            frame.plain = plain_decl && closure.is_none();
+            // (A closure's object, put in the frame below, is released by
+            // `Frame::release_plain` too.)
+            frame.plain = plain_decl;
             // What is left of the call owns nothing but its function
             // handle: `this`, `scope`, `called`, `closure`, the argument
             // buffer and the named arguments were taken above, the inline
@@ -6028,6 +6030,29 @@ impl Vm {
             return Some(Err(e));
         }
         let uf = Rc::clone(uf);
+        // A plain declaration: the pooled frame readied in one pass,
+        // entered directly and returned plainly
+        // (`calls::push_callback_from_native`).
+        if matches!(
+            uf.call_shape(),
+            crate::func::CallShape::UNTYPED | crate::func::CallShape::TYPED
+        ) {
+            if let Some(base) = crate::exec::tape::calls::push_callback_from_native(
+                self,
+                &uf,
+                template.this.as_ref(),
+                template.scope.as_ref(),
+                template.called.as_ref(),
+                template.closure.as_ref(),
+                template.strict,
+                args,
+            ) {
+                return Some(match self.execute(base) {
+                    Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+                    r => r,
+                });
+            }
+        }
         let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
         let frame = &mut self.frames[idx];
         frame.this.clone_from(&template.this);

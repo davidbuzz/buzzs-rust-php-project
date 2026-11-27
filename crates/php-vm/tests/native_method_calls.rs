@@ -252,7 +252,7 @@ $arr = [new D("e1"), new D("e2")]; $arr = []; echo "\n";
 D::$keep = []; echo "\nend\n";
 "#
         ),
-        r#"~a0 ~a1 | ~a2 
+        r"~a0 ~a1 | ~a2 
 ~outer ~inner ~deep 
 caught from dtor
 ~res 1 kept
@@ -262,7 +262,7 @@ rets
 ~e1 ~e2 
 
 end
-"#
+"
     );
 }
 
@@ -290,10 +290,95 @@ class R extends RecursiveFilterIterator { function accept(): bool { return true;
 $r = new RecursiveIteratorIterator(new R(new RecursiveArrayIterator([1, [2, [3]], 4]))); echo implode(",", iterator_to_array($r, false)), "\n";
 "#
         ),
-        r#"1=2 3=4 | 2=3 3=4 | 1=6 | 
+        r"1=2 3=4 | 2=3 3=4 | 1=6 | 
 1 2 / 0 2 / 0 1 / 
 3,6
 1,2,3,4
+"
+    );
+}
+
+/// Closures called directly (`$f()`): bound and by-reference `use` variables, `$this` of a closure made in a method, a closure freed after its call, one unsetting itself, static closures, closures with static variables, recursion, `Closure::bind`. Expected output: php-src's (PHP 8.5).
+#[test]
+fn closure_calls_return_plainly() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n} "; } }
+class K { public $v = 5; function make() { return fn($x) => $x + $this->v; } function maker2() { return function ($x) { return $x * $this->v; }; } }
+$k = 3; $f = fn($x) => $x + $k; $g = function ($x) use ($k, &$acc) { $acc += $x; return $x * $k; };
+for ($i = 0; $i < 3; $i++) echo $f($i), ",", $g($i), " "; echo "acc=$acc\n";
+$o = new K; $m = $o->make(); $m2 = $o->maker2(); for ($i = 0; $i < 3; $i++) echo $m($i), "/", $m2($i), " "; echo "\n";
+// closure freed while/after its call
+$h = function () { return new D("ret"); }; $r = $h(); unset($h); echo $r->n, " "; unset($r); echo "\n";
+echo (function ($a) { return $a . "!"; })("iife"), "\n";
+$once = function () use (&$once) { $once = null; return "self-unset"; }; echo $once(), " ", var_export($once, true), "\n";
+$dd = new D("captured"); $c = function () use ($dd) { return $dd->n; }; unset($dd); echo $c(), " "; unset($c); echo "| after\n";
+function gen() { $s = static fn($x) => $x * 2; return $s(21); } echo gen(), "\n";
+$cnt = function () { static $n = 0; return ++$n; }; echo $cnt(), $cnt(), $cnt(), "\n";
+$rec = function ($n) use (&$rec) { return $n <= 0 ? 0 : $n + $rec($n - 1); }; echo $rec(10), "\n";
+echo implode(",", array_map(fn($x) => $x * $k, [1, 2, 3])), "\n";
+$bound = Closure::bind(function () { return $this->v; }, new K, K::class); echo $bound(), "\n";
+echo memory_get_usage() > 0 ? "mem ok" : "", "\n";
 "#
+        ),
+        r"3,0 4,3 5,6 acc=3
+5/0 6/5 7/10 
+ret ~ret 
+iife!
+self-unset NULL
+captured ~captured | after
+42
+123
+55
+3,6,9
+5
+mem ok
+"
+    );
+}
+
+/// Callbacks native code calls (`array_map()`, `array_filter()`, `usort()`, `array_walk()`) on frames readied by `calls::push_callback_from_native`: methods and static methods as callbacks, `$this` in an arrow function, defaults, typed parameters and returns, a type error, an exception, destructors of results, `func_num_args()` and `debug_backtrace()`. Expected output: php-src's (PHP 8.5).
+#[test]
+fn callbacks_from_builtins_return_plainly() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n} "; } }
+class S { public $f = 10; function m($x) { return $x + $this->f; } static function st($x) { return $x * 2; } function viaThis() { return array_map(fn($x) => $x + $this->f, [1, 2]); } }
+$k = 2; $s = new S;
+echo implode(",", array_map(fn($x) => $x * $k, [1, 2, 3])), "\n";
+echo implode(",", array_map([$s, 'm'], [1, 2])), " ", implode(",", array_map('S::st', [1, 2])), " ", implode(",", $s->viaThis()), "\n";
+echo implode(",", array_filter([1, 2, 3, 4, 5], function ($v) use ($k) { return $v % $k == 0; })), "\n";
+$a = [5, 3, 9, 1]; usort($a, fn($x, $y) => $x <=> $y); echo implode(",", $a), "\n";
+echo implode(",", array_map(fn($x, $y = 7) => $x + $y, [1, 2])), "\n";
+echo implode(",", array_map(function (int $x): string { return "<$x>"; }, [1, 2])), "\n";
+try { array_map(function (int $x) { return $x; }, ["no"]); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { array_map(function ($x) { throw new RuntimeException("cb $x"); }, [1]); } catch (RuntimeException $e) { echo "caught ", $e->getMessage(), "\n"; }
+$objs = array_map(fn($i) => new D("m$i"), [1, 2]); echo count($objs), " "; $objs = null; echo "\n";
+$sum = 0; array_walk($a, function ($v) use (&$sum) { $sum += $v; }); echo $sum, "\n";
+echo implode(",", array_map(fn($x) => func_num_args(), [1, 2])), "\n";
+function cbt($x) { return count(debug_backtrace()); } echo implode(",", array_map('cbt', [1])), "\n";
+echo json_encode(array_map(null, [1, 2], [3, 4])), "\n";
+$gen = function () { yield 1; yield 2; }; echo implode(",", iterator_to_array($gen())), "\n";
+echo implode(",", array_map(fn($x) => strtoupper($x), ['a', 'b'])), "\n";
+"#
+        ),
+        r"2,4,6
+11,12 2,4 11,12
+2,4
+1,3,5,9
+8,9
+<1>,<2>
+TypeError: {closure:t.php:11}(): Argument #1 ($x) must be of type int, string given
+caught cb 1
+2 ~m1 ~m2 
+18
+1,1
+2
+[[1,3],[2,4]]
+1,2
+A,B
+"
     );
 }
