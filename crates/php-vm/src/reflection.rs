@@ -403,18 +403,59 @@ pub(crate) fn dn(n: &ZStr) -> String {
 
 /// Writes the `$name` / `$class` properties of a reflection object.
 pub(crate) fn set_name_props(o: &Obj, name: Option<&ZStr>, class: Option<&ZStr>) {
-    let cls = object::class_of(o).clone();
+    let cls = object::class_of(o);
+    let (name_slot, class_slot) = name_slots(cls);
     let d = object::data(o);
-    if let (Some(n), Some(pi)) = (name, cls.prop_map.get(b"name".as_slice())) {
-        if let Some(s) = d.slots.borrow_mut().get_mut(pi.slot as usize) {
+    let Ok(mut slots) = d.slots.try_borrow_mut() else {
+        return;
+    };
+    if let (Some(n), Some(i)) = (name, name_slot) {
+        if let Some(s) = slots.get_mut(i as usize) {
             *s = Some(Value::Str(n.clone()));
         }
     }
-    if let (Some(c), Some(pi)) = (class, cls.prop_map.get(b"class".as_slice())) {
-        if let Some(s) = d.slots.borrow_mut().get_mut(pi.slot as usize) {
+    if let (Some(c), Some(i)) = (class, class_slot) {
+        if let Some(s) = slots.get_mut(i as usize) {
             *s = Some(Value::Str(c.clone()));
         }
     }
+}
+
+thread_local! {
+    /// The slots of `$name` and `$class` of the reflection classes
+    /// [`set_name_props`] filled last (each reflection object made looked
+    /// both up by name): the class held weakly, which pins the address
+    /// compared.
+    static NAME_SLOTS: std::cell::RefCell<[(std::rc::Weak<Class>, Option<u32>, Option<u32>); 4]> =
+        std::cell::RefCell::new(std::array::from_fn(|_| (std::rc::Weak::new(), None, None)));
+    static NAME_SLOTS_NEXT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The slots of `cls`'s `$name` and `$class` properties ([`NAME_SLOTS`]).
+fn name_slots(cls: &Rc<Class>) -> (Option<u32>, Option<u32>) {
+    let addr = Rc::as_ptr(cls);
+    let hit = NAME_SLOTS.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|(w, _, _)| std::ptr::eq(w.as_ptr(), addr))
+            .map(|(_, n, k)| (*n, *k))
+    });
+    if let Some(h) = hit {
+        return h;
+    }
+    let n = cls.prop_map.get(b"name".as_slice()).map(|pi| pi.slot);
+    let k = cls.prop_map.get(b"class".as_slice()).map(|pi| pi.slot);
+    NAME_SLOTS.with(|c| {
+        let i = NAME_SLOTS_NEXT.with(|x| {
+            let i = x.get();
+            x.set((i + 1) % 4);
+            i
+        });
+        if let Some(e) = c.borrow_mut().get_mut(i) {
+            *e = (Rc::downgrade(cls), n, k);
+        }
+    });
+    (n, k)
 }
 
 /// The object a builtin was called on.
