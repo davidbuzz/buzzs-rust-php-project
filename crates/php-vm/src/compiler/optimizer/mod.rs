@@ -112,6 +112,15 @@ pub struct OptContext<'a> {
     /// and a by-reference one may change whenever user code runs or coerce
     /// what is assigned to it (a typed reference).
     pub bound_cvs: &'a [(u32, bool)],
+    /// An arrow function: every other CV is bound as well when the closure
+    /// is made, by value, if the enclosing scope has a variable of that
+    /// name then (`find_implicit_binds`; php-src's body starts with a
+    /// `BIND_STATIC` for each). Such a CV holds an unknown value at entry or
+    /// is undefined: nothing is known about it, and it is not in
+    /// [`Self::bound_cvs`], whose by-value entries are certain to be
+    /// assigned. Like them it keeps its slot and its assignments: the
+    /// closure binds the variables the optimized body still names.
+    pub implicit_binds: bool,
     /// The by-value parameters of a scalar-only declared type: until the
     /// function assigns one, its value has no destructor.
     pub scalar_params: &'a [u32],
@@ -190,7 +199,7 @@ fn local_objects(op_array: &OpArray, ctx: &OptContext<'_>) -> Vec<LocalObject> {
         else {
             continue;
         };
-        if val != Operand::Tmp(*t) || cv < ctx.bound_cv_prefix() {
+        if val != Operand::Tmp(*t) || cv < ctx.bound_cv_prefix(op_array) {
             continue;
         }
         if only_through_props(op_array, cv, i + 2) {
@@ -454,8 +463,15 @@ impl std::fmt::Debug for dyn super::FunctionTable + '_ {
 
 impl OptContext<'_> {
     /// One past the highest bound CV (0 when none): the prefix of CV slots
-    /// that the call and the closure binding address by number.
-    pub(crate) fn bound_cv_prefix(&self) -> u32 {
+    /// that the call and the closure binding address by number. Every CV of
+    /// an arrow function ([`Self::implicit_binds`]): the closure binds each
+    /// variable its body names, a dead branch's and an assigned-only one
+    /// included, and holds what it bound for as long as it lives (reflection
+    /// lists them; a captured object is destroyed with the closure).
+    pub(crate) fn bound_cv_prefix(&self, op_array: &OpArray) -> u32 {
+        if self.implicit_binds {
+            return u32::try_from(op_array.cv_names.len()).unwrap_or(u32::MAX);
+        }
         self.bound_cvs
             .iter()
             .map(|&(cv, _)| cv.saturating_add(1))
@@ -542,7 +558,10 @@ fn optimize_rounds(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
         if (level & PASS_14) != 0 {
             changed |= dce::run_dce(op_array, ctx);
             if (level & PASS_6) != 0 && !ctx.is_main {
-                changed |= block_pass::remove_unused_const_statics(op_array, ctx.bound_cv_prefix());
+                changed |= block_pass::remove_unused_const_statics(
+                    op_array,
+                    ctx.bound_cv_prefix(op_array),
+                );
             }
         }
         if (level & PASS_13) != 0 {
@@ -597,6 +616,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
             let ctx = OptContext {
                 is_main: true,
                 bound_cvs: &[],
+                implicit_binds: false,
                 scalar_params: &[],
                 sapi_name: None,
                 verifies_return: false,

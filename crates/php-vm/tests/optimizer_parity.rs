@@ -210,3 +210,124 @@ NULL
 ",
     );
 }
+
+/// An arrow function binds every variable its body names from the scope
+/// that makes the closure (`find_implicit_binds`), so none of them is the
+/// undefined local a function's other variables are at entry: `$key ?? 0`
+/// is the captured `$key`. (A framework's configuration builder wraps a
+/// scalar as `static fn ($v) => [$key ?? 0 => $v]`; folded to `[0 => $v]`,
+/// every such option was refused as `Unrecognized option "0"`.)
+#[test]
+fn arrow_functions_see_the_variables_they_capture() {
+    check(
+        r"<?php
+function wrap(array $types, ?string $key = null): array {
+    $out = [];
+    foreach ($types as $type) {
+        $out[] = static fn ($v) => [$key ?? 0 => $v];
+    }
+    return $out;
+}
+var_dump(wrap(['string'], 'algorithm')[0]('auto'), wrap(['bool'])[0](true));
+function outer(?string $key, $nul = null) {
+    return [
+        'coalesce' => fn () => $key ?? 'none',
+        'coalesce of null' => fn () => $nul ?? 'none',
+        'coalesce assign' => fn () => $key ??= 'assigned',
+        'nested' => fn () => (fn () => $key ?? 'none')(),
+        'default' => fn ($a = 1) => $key ?? $a,
+        'variadic' => fn (...$r) => $key ?? $r,
+        'typed' => fn (int $i = 3): string => ($key ?? 'none') . $i,
+        'cast' => fn () => (int) ($key ?? 7),
+        'not in the enclosing scope' => fn () => $nowhere ?? 'undefined',
+        'generator' => fn () => yield $key ?? 'none',
+    ];
+}
+foreach (outer('K') as $what => $f) {
+    $r = $f();
+    echo $what, ': ';
+    var_dump($r instanceof Generator ? $r->current() : $r);
+}
+class C {
+    private $x = 'px';
+    function f(?string $k) {
+        return [fn () => $k ?? 'none', static fn () => $k ?? 'none', fn () => $this->x ?? 'none'];
+    }
+}
+foreach ((new C)->f('ck') as $f) {
+    var_dump($f());
+}
+$g = 'global';
+var_dump((fn () => $g ?? 'none')());
+// A local of an ordinary function that nothing assigned is known undefined.
+function plain($a = 1) { return $u ?? $a; }
+var_dump(plain());
+",
+        r#"array(1) {
+  ["algorithm"]=>
+  string(4) "auto"
+}
+array(1) {
+  [0]=>
+  bool(true)
+}
+coalesce: string(1) "K"
+coalesce of null: string(4) "none"
+coalesce assign: string(1) "K"
+nested: string(1) "K"
+default: string(1) "K"
+variadic: string(1) "K"
+typed: string(2) "K3"
+cast: int(0)
+not in the enclosing scope: string(9) "undefined"
+generator: string(1) "K"
+string(2) "ck"
+string(2) "ck"
+string(2) "px"
+string(6) "global"
+int(1)
+"#,
+    );
+}
+
+/// The closure of an arrow function holds every variable its body names
+/// for as long as it lives, one that only a dead branch reads or that the
+/// body only assigns included: reflection lists it, and an object it holds
+/// is destroyed with the closure, not when the enclosing function returns.
+#[test]
+fn arrow_functions_keep_the_variables_they_capture() {
+    check(
+        r#"<?php
+class D {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct {$this->n}\n"; }
+}
+function dead_branch() { $o = new D('dead branch'); return fn () => false ? $o : 1; }
+function assigned_only() { $o = new D('assigned only'); return fn () => ($o = 3) + 1; }
+foreach (['dead_branch', 'assigned_only'] as $make) {
+    $f = $make();
+    echo "made\n";
+    var_dump(array_keys((new ReflectionFunction($f))->getClosureUsedVariables()), $f());
+    unset($f);
+    echo "released\n";
+}
+"#,
+        r#"made
+array(1) {
+  [0]=>
+  string(1) "o"
+}
+int(1)
+destruct dead branch
+released
+made
+array(1) {
+  [0]=>
+  string(1) "o"
+}
+int(4)
+destruct assigned only
+released
+"#,
+    );
+}

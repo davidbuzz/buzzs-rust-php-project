@@ -728,7 +728,7 @@ pub(crate) fn has_dynamic_var_access(op_array: &OpArray) -> bool {
 /// The CV slots bound before the first op: one past the highest parameter
 /// (from its `RECV`) or closure `use` binding.
 fn bound_cv_prefix(op_array: &OpArray, ctx: &OptContext<'_>) -> u32 {
-    let mut prefix = ctx.bound_cv_prefix();
+    let mut prefix = ctx.bound_cv_prefix(op_array);
     for op in &op_array.ops {
         match op {
             Op::Recv { cv, .. }

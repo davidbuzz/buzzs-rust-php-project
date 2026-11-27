@@ -463,6 +463,11 @@ pub(crate) struct FnCtx {
     /// scalar-only (`int`, `?string`, `bool|float`, ...): what they are
     /// bound to has no destructor (for the optimizer).
     pub scalar_params: Vec<u32>,
+    /// An arrow function's body: each variable it names that is not a
+    /// parameter is bound when the closure is made, if the enclosing scope
+    /// has it then (php-src's implicit `BIND_STATIC`s), so none of them is
+    /// known undefined at entry (for the optimizer).
+    pub implicit_binds: bool,
 }
 
 impl FnCtx {
@@ -512,6 +517,7 @@ impl FnCtx {
             decls: None,
             bound_cvs: Vec::new(),
             scalar_params: Vec::new(),
+            implicit_binds: false,
         }
     }
 }
@@ -1265,6 +1271,7 @@ impl Compiler<'_> {
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
+                implicit_binds: f.implicit_binds,
                 scalar_params: &f.scalar_params,
                 sapi_name: self
                     .opts

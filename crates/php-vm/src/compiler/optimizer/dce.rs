@@ -616,7 +616,10 @@ pub(crate) fn remove_overwritten_arrays(
     }
     // Not a bound variable, nor one a closure declared here captures.
     let mut pinned = vec![false; num_cvs];
-    for slot in pinned.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+    for slot in pinned
+        .iter_mut()
+        .take(ctx.bound_cv_prefix(op_array) as usize)
+    {
         *slot = true;
     }
     for f in op_array.decls.functions.borrow().iter() {
@@ -823,7 +826,10 @@ fn stores_until_replaced(
 /// ones a place names.
 fn pinned_cvs(op_array: &OpArray, ctx: &super::OptContext<'_>) -> Vec<bool> {
     let mut pinned = vec![false; op_array.cv_names.len()];
-    for slot in pinned.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+    for slot in pinned
+        .iter_mut()
+        .take(ctx.bound_cv_prefix(op_array) as usize)
+    {
         *slot = true;
     }
     for f in op_array.decls.functions.borrow().iter() {

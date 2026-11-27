@@ -873,6 +873,7 @@ impl Compiler<'_> {
             }
             BodyKind::Arrow(e) => {
                 self.f().line = e.span.line;
+                self.f().implicit_binds = true;
                 // The body is `return e;` (`zend_compile_return`): in a
                 // by-reference arrow function a variable or a call may not
                 // end a nullsafe chain (`zend_assert_not_short_circuited`).

@@ -2155,9 +2155,16 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         // A local of a function body is known undefined at entry: not a
         // parameter or closure binding, and no `$$`, `extract()`,
         // `include`, ... (references and try blocks skip this analysis).
-        if !ctx.is_main && !super::compact::has_dynamic_var_access(op_array) {
+        // An arrow function has no such local: each variable it names may
+        // hold what the enclosing scope had under that name (`fn () => $key
+        // ?? 0` is not `0`).
+        if !ctx.is_main && !ctx.implicit_binds && !super::compact::has_dynamic_var_access(op_array)
+        {
             let mut bound = vec![false; num_cvs];
-            for slot in bound.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+            for slot in bound
+                .iter_mut()
+                .take(ctx.bound_cv_prefix(op_array) as usize)
+            {
                 *slot = true;
             }
             for op in &op_array.ops {
