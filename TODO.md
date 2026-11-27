@@ -375,6 +375,19 @@ optimization log these came from, with its landed-change tables, is git history:
     `PhpArrayAdapter` (2: "Warm up should create a PHP file that OPCache can load in
     memory"), AssetMapper (4), Messenger's configuration (4) and its AMPHP SQL transport
     (4, needs a database service).
+- [ ] **The stack trace of a memory-limit fatal** (27 Nov). With `fatal_error_backtraces`
+  on (the default), C 8.5 prints one frame under "Allowed memory size of N bytes
+  exhausted", then `{main}`: the innermost call. That is the builtin that was allocating
+  (`#0 t.php(2): array_merge(Array, Array)`, `array_fill(0, 200000, 1)`,
+  `str_repeat('a', 4000000)`) or, when user code allocated, the function it runs in
+  (`#0 t.php(3): f(1)`); the functions that called it are not listed. Here the trace lists
+  every user frame (`f(...)`, `g(...)`, ...), and the builtin's own frame is there for
+  `str_repeat()` but not for `array_merge()` or `array_fill()`. Other fatals
+  (`trigger_error("x", E_USER_ERROR)`) list the same frames in both. Not established: why
+  php-src stops after one frame, whether master does as 8.5 does, and why our builtin
+  frame is missing for some functions. The leaf builtins called without a frame
+  (`special::leaf`) print today what they printed with one; once this is fixed their call
+  has to show as a frame too.
 - [ ] **A default expression is printed as written, not folded** (27 Nov):
   `ReflectionParameter::__toString()` shows `[!true, ~1, +1, -PHP_INT_MAX]` where C, whose
   compiler folds the constant parts, shows `[false, -2, 1, -PHP_INT_MAX]`
