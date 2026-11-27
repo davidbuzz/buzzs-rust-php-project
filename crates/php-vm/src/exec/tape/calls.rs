@@ -636,10 +636,15 @@ fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>
         let native = c.uf.call_shape.native.get();
         // (Only a call that passes every declared parameter is counted
         // towards that decision.)
+        // (A variadic function is never compiled whole, and nothing
+        // settles it: `compiled` declines it without refusing it. Waiting
+        // for it left the site unplanned for good, its plan attempted on
+        // every call.)
         if native == 0
             && super::jit::enabled()
             && n == c.uf.params.len()
             && n <= super::jit::NATIVE_MAX_ARGS
+            && c.uf.flags & flags::VARIADIC == 0
         {
             return;
         }
