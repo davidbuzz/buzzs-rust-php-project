@@ -198,6 +198,12 @@ pub(super) const LEFT: usize = usize::MAX - 1;
 /// a `Result`: the result stays two registers wide on every return.
 pub(super) const THREW: usize = usize::MAX - 2;
 
+/// The second half of [`super::tape::run_tape`]'s result when the base
+/// frame of the nested execution `Vm::run_base_on_tape` started returned
+/// on the tape ([`Vm::return_plain`](crate::vm::Vm)): the frame is
+/// released and popped, and the value is in `Vm::tape_base_value`.
+pub(super) const BASE_RETURNED: usize = usize::MAX - 3;
+
 /// Whether `op` is a call or a return [`super::tape::run_tape`] makes itself when its
 /// fast path applies (`Vm::push_simple_ucall`, `Vm::return_simple`).
 #[inline(always)]

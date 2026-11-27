@@ -2370,8 +2370,18 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 fresh = false;
                 // (The mark is tested here: a frame without it pays no
                 // call for the attempt.)
-                (vm.frames.last().is_some_and(|f| f.plain) && vm.return_plain(val, base, at + 1))
-                    || vm.return_simple(val, base, at + 1).is_some()
+                let plain = vm.frames.last().is_some_and(|f| f.plain);
+                (plain && vm.return_plain::<false>(val, base, at + 1)) || {
+                    // The base frame of the nested execution
+                    // `Vm::run_base_on_tape` runs: it ends here.
+                    if plain
+                        && vm.tape_base == base + 1
+                        && vm.return_plain::<true>(val, base, at + 1)
+                    {
+                        return (0, hot::BASE_RETURNED);
+                    }
+                    vm.return_simple(val, base, at + 1).is_some()
+                }
             }
             _ => false,
         };

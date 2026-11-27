@@ -1158,7 +1158,20 @@ impl Vm {
         if !tape::worth_entering(code, ip) {
             return None;
         }
+        // The base frame's plain return may end the execution on the
+        // tape (`Vm::return_plain`), without `Vm::return_at_base`.
+        let outer = std::mem::replace(&mut self.tape_base, base + 1);
         let (next, last) = tape::run_tape(self, base, code, ip);
+        self.tape_base = outer;
+        if last == hot::BASE_RETURNED {
+            let v = std::mem::take(&mut self.tape_base_value);
+            if Self::safe_point_due() {
+                if let Err(t) = self.safe_point_after_leave() {
+                    return Some(Err(t));
+                }
+            }
+            return Some(Ok(v));
+        }
         if last == hot::LEFT {
             // As `Vm::run` after a call or return on the tape whose safe
             // point is due: the frame's `ip` is stored in it.
@@ -1626,6 +1639,15 @@ impl Vm {
                             ip
                         };
                         let (mut next, last) = tape::run_tape(self, base, code, start);
+                        if last == hot::BASE_RETURNED {
+                            // The base frame returned on the tape (as the
+                            // `Return` arm's `Flow::Done` below).
+                            let v = std::mem::take(&mut self.tape_base_value);
+                            if Self::safe_point_due() {
+                                self.safe_point_after_leave()?;
+                            }
+                            return Ok(v);
+                        }
                         if last == hot::LEFT {
                             // A call or return there, with the safe point
                             // after it due (as after the fast `DoCall` and

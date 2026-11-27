@@ -4,6 +4,8 @@
 //! `ArrayAccess`, `Iterator`, `__toString()`): the direct call path and
 //! the generic one it leaves the rest to.
 
+mod common;
+
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -20,6 +22,18 @@ impl Write for Sink {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// [`run`] with the standard library ([`common::vm_with_stdlib`]).
+fn run_std(source: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = common::vm_with_stdlib(&VmOptions::default(), Box::new(sink.clone()));
+    let status = vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    let output = String::from_utf8(output).expect("UTF-8 output");
+    assert_eq!(status, 0, "{output}");
+    output
 }
 
 fn run(source: &str) -> String {
@@ -115,4 +129,64 @@ caught ts
 anything:2
 "#;
     assert_eq!(run(src), expected);
+}
+
+/// The methods native code calls (`ArrayAccess`, `Countable`,
+/// `IteratorAggregate`, `Iterator`, `__toString()`, `__get()`, callbacks)
+/// end their nested execution with the plain return on the tape
+/// (`Vm::return_plain` at the base): values, destructor order, an
+/// exception thrown from one, a return value the declared type coerces.
+/// Expected output: php-src's (PHP 8.5).
+#[test]
+fn methods_called_from_native_code_return_on_the_tape() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~D{$this->n} "; } }
+class AA implements ArrayAccess, IteratorAggregate, Countable {
+  public $d = [];
+  function offsetSet($k, $v): void { if ($k === 'boom') throw new Exception("boom"); $this->d[$k] = $v; }
+  function offsetGet($k): mixed { return $this->d[$k] ?? new D("miss$k"); }
+  function offsetExists($k): bool { return isset($this->d[$k]); }
+  function offsetUnset($k): void { unset($this->d[$k]); }
+  function getIterator(): Iterator { return new ArrayIterator($this->d); }
+  function count(): int { return count($this->d) + $this->extra(); }
+  function extra() { return 100; }
+}
+class S { function __construct(public $n) {} function __toString(): string { return $this->n . "/" . strlen($this->n); } }
+class Bad { function __toString(): string { return 42; } }
+class G { private $x = ['a' => 1]; function __get($n) { return $this->x[$n] ?? "no-$n"; } function __isset($n) { return $n === 'a'; } }
+class It implements Iterator { private $i = 0; function current(): mixed { return $this->i * 10; } function key(): mixed { return "k$this->i"; }
+  function next(): void { $this->i++; } function rewind(): void { $this->i = 0; } function valid(): bool { return $this->i < 3; } }
+$a = new AA;
+for ($i = 0; $i < 3; $i++) { $a[$i] = $i * 2; $a["s$i"] = new D("v$i"); }
+echo $a[1], " ", $a[2], " ", isset($a[1]) ? "y" : "n", isset($a[9]) ? "y" : "n", " ", count($a), "\n";
+$m = $a[7]; echo get_class($m), " "; unset($m); echo "\n";
+unset($a["s1"]); echo "\n";
+try { $a['boom'] = 1; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+foreach ($a as $k => $v) echo $k, "=", is_object($v) ? $v->n : $v, " "; echo "\n";
+$s = new S("hey"); for ($i = 0; $i < 3; $i++) echo (string)$s, " ", "x$s", " "; echo "\n";
+try { echo (string)new Bad; } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$g = new G; echo $g->a, " ", $g->b, " ", isset($g->a) ? 1 : 0, isset($g->q) ? 1 : 0, "\n";
+foreach (new It as $k => $v) echo "$k:$v "; echo "\n";
+echo implode(",", array_map(fn($x) => $x * 2, [1, 2, 3])), "\n";
+$arr = [3, 1, 2]; usort($arr, fn($p, $q) => $p <=> $q); echo implode(",", $arr), "\n";
+echo json_encode(array_filter([1, 0, 2, 3], function ($v) { return $v > 1; })), "\n";
+$a = null; echo "end\n";
+"#
+        ),
+        r#"2 4 yn 106
+D ~Dmiss7 
+~Dv1 
+caught boom
+0=0 s0=v0 1=2 2=4 s2=v2 
+hey/3 xhey/3 hey/3 xhey/3 hey/3 xhey/3 
+421 no-b 10
+k0:0 k1:10 k2:20 
+2,4,6
+1,2,3
+{"2":2,"3":3}
+~Dv0 ~Dv2 end
+"#
+    );
 }

@@ -1047,3 +1047,57 @@ end
 "#
     );
 }
+
+/// Calls whose arguments go through the generic send (`Vm::push_simple_ucall`)
+/// return through the plain return when their declaration is plain:
+/// values, destructor order, typed returns, unused results, recursion,
+/// `func_get_args()` and `debug_backtrace()`. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn generically_sent_calls_take_the_plain_return() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~D{$this->n} "; } }
+class A {
+  public $p = [1, 2];
+  function m($x, $y = 3) { return $x + $y; }
+  function obj($x): D { return new D($x); }
+  function arr($a) { $a[] = 9; return $a; }
+  function same($o) { return $o; }
+  function str(string $s): string { return $s . "!"; }
+  function none($x) { $l = new D("local$x"); }
+}
+function f($a, $b) { return [$a, $b]; }
+function g(int $i): int { return $i * 2; }
+$a = new A; $k = ['x' => 5, 'y' => [7]];
+for ($i = 0; $i < 3; $i++) {
+  echo $a->m($k['x'] ?? 0, $k['y'][0]), " ";
+  echo json_encode(f($a->p[0] + 1, $k['y'])), " ";
+  echo g(strlen("ab") + $i), " ";
+  $o = $a->obj($i . "o"); echo $o->n, " "; unset($o);
+  echo json_encode($a->arr($a->p + [5 => 1])), " ";
+  $a->none($i * 10);
+  $a->obj("discard$i");
+  echo $a->str(sprintf("%d", $i)), " ";
+  $s = $a->same(new D("s$i")); echo $s->n, " "; $s = null;
+  echo "\n";
+}
+try { g("x" . $i); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function rec($n) { return $n <= 0 ? 0 : $n + rec($n - 1 + 0 * strlen("")); }
+echo rec(50), "\n";
+function cnt() { return func_num_args() . ":" . json_encode(func_get_args()); }
+echo cnt(1 + 1, [2][0]), "\n";
+function bt() { return count(debug_backtrace()); }
+function outer($x) { return bt() + $x; }
+echo outer(1 + 1), "\n";
+"#),
+        r#"12 [2,[7]] 4 0o ~D0o {"0":1,"1":2,"5":1,"6":9} ~Dlocal0 ~Ddiscard0 0! s0 ~Ds0 
+12 [2,[7]] 6 1o ~D1o {"0":1,"1":2,"5":1,"6":9} ~Dlocal10 ~Ddiscard1 1! s1 ~Ds1 
+12 [2,[7]] 8 2o ~D2o {"0":1,"1":2,"5":1,"6":9} ~Dlocal20 ~Ddiscard2 2! s2 ~Ds2 
+g(): Argument #1 ($i) must be of type int, string given, called in t.php on line 27
+1275
+2:[2,2]
+4
+"#
+    );
+}

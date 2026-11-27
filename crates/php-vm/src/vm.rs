@@ -2284,6 +2284,8 @@ impl Frame {
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
         self.caller_strict = false;
+        // (Set by a call from native code, `calls::push_method_from_native`.)
+        self.called_from_internal = false;
         self.direct = false;
         self.plain = false;
         self.direct_argc = 0;
@@ -3438,6 +3440,15 @@ pub struct Vm {
     /// What a builtin the tape loop called threw (`exec::hot::THREW`),
     /// until `Vm::run` takes it.
     pub(crate) tape_throw: Option<Throw>,
+    /// One more than the base of the nested execution whose base frame the
+    /// tape is running from `Vm::run_base_on_tape` (0: none): that frame's
+    /// plain return may end the execution on the tape
+    /// ([`Vm::return_plain`], `exec::hot::BASE_RETURNED`).
+    pub(crate) tape_base: usize,
+    /// The value the base frame of a nested execution returned on the
+    /// tape (`exec::hot::BASE_RETURNED`), until `Vm::run_base_on_tape`
+    /// takes it.
+    pub(crate) tape_base_value: Value,
     /// Set by `op_do_call_nodiscard` when it already reported a native
     /// function's deprecation (`call_builtin_impl` consumes it).
     pub(crate) builtin_deprecation_reported: bool,

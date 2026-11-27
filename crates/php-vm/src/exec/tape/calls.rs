@@ -2778,6 +2778,9 @@ pub(crate) fn push_method_from_native(
         bind_literal_defaults(frame, uf, n);
     }
     frame.direct = true;
+    // A plain declaration (the caller's test): its return, the nested
+    // execution's end, is the short one (`Vm::return_plain` at the base).
+    frame.plain = uf.flags & flags::RETURN_REF == 0;
     vm.frames.live = live + 1;
     Some(live)
 }

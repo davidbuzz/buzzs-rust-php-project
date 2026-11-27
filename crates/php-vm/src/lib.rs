@@ -343,6 +343,8 @@ impl Vm {
             compile_no_builtins: false,
             pending_call_dst: None,
             tape_throw: None,
+            tape_base: 0,
+            tape_base_value: Value::Null,
             builtin_deprecation_reported: false,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),

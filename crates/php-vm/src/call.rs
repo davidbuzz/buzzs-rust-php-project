@@ -2339,6 +2339,13 @@ impl Vm {
             if !simple_ucall(uf, call, n) {
                 return false;
             }
+            // A plain declaration (no static variables, by-reference or
+            // variadic parameter, generator), not returning by reference.
+            let plain_decl =
+                matches!(
+                    uf.call_shape(),
+                    crate::func::CallShape::UNTYPED | crate::func::CallShape::TYPED
+                ) && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
             debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
             let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
@@ -2348,6 +2355,9 @@ impl Vm {
             if same_func && frame.released_direct {
                 debug_assert!(frame.is_released_for(uf));
                 frame.released_direct = false;
+            } else if frame.released_direct && frame.ready_released_for(uf) {
+                // Released by another function's direct return: the
+                // handles are this function's now (`same_func` below).
             } else if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
                 && frame.iters.len() == code.num_iters as usize
@@ -2431,6 +2441,10 @@ impl Vm {
             // (`Frame::released_direct`), as after a prepared call, instead
             // of the full `Frame::clear_for_reuse` and a readying again.
             frame.direct = true;
+            // A plain declaration called without a closure: its return is
+            // the short one (`Vm::return_plain`), as after a prepared call
+            // (`exec::tape::calls::enter`).
+            frame.plain = plain_decl && closure.is_none();
             // What is left of the call owns nothing but its function
             // handle: `this`, `scope`, `called`, `closure`, the argument
             // buffer and the named arguments were taken above, the inline
@@ -2448,6 +2462,10 @@ impl Vm {
             // and the length store can panic. Forgetting the rest of the
             // element leaks nothing (see above).
             let func = unsafe { std::ptr::read(&call.func) };
+            // (`ready_released_for` above may have given the frame this
+            // function's handles.)
+            let same_func = same_func
+                || matches!(&func, Func::User(f) if frame.ufunc.as_ref().is_some_and(|u| Rc::ptr_eq(u, f)));
             // SAFETY: as above: `call` was the last element and its handle
             // was read out, so the shorter vector never drops it again.
             unsafe { caller.calls.set_len(pending - 1) };
@@ -2726,14 +2744,34 @@ impl Vm {
     /// scopes, the call's fields) and popped. What `return_simple` tests
     /// about the frame on every return (its kind, generator, by-reference
     /// return, the function it keeps) is what the mark says.
+    /// The base frame of the nested execution `Vm::run_base_on_tape`
+    /// runs (`Vm::tape_base`) returns here too: its value goes to
+    /// `Vm::tape_base_value`, and the stack is left at `base`.
     /// `false`, nothing changed, for a frame, a value or a result slot it
     /// leaves to `return_simple`.
     #[inline(never)]
-    pub(crate) fn return_plain(&mut self, val: Operand, base: usize, ip: usize) -> bool {
+    pub(crate) fn return_plain<const AT_BASE: bool>(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> bool {
         let Some(fidx) = self.frames.live.checked_sub(1) else {
             return false;
         };
-        if fidx <= base || self.observer.enabled {
+        // `AT_BASE`: the base frame of the nested execution
+        // `Vm::run_base_on_tape` runs on the tape (a method native code
+        // called: `offsetGet()`, `__toString()`, ...), whose value is the
+        // execution's result, left in `tape_base_value` (`return_at_base`'s
+        // `Flow::Done`). A parameter of the type, so the ordinary return
+        // compiles to the tests it had before.
+        let at_base = AT_BASE;
+        let placed = if at_base {
+            fidx == base && fidx > 0 && self.tape_base == base + 1
+        } else {
+            fidx > base
+        };
+        if !placed || self.observer.enabled {
             return false;
         }
         let (callers, rest) = self.frames.vec.split_at_mut(fidx);
@@ -2745,12 +2783,16 @@ impl Vm {
         }
         // The caller's result slot (a scalar there owns nothing and is
         // overwritten), or none for an unused result.
-        let mut dst = match frame.ret {
-            RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
-                Some(slot) if is_scalar(slot) => Some(slot),
-                _ => return false,
-            },
-            RetTarget::Discard => None,
+        let mut dst = if at_base {
+            Some(&mut self.tape_base_value)
+        } else {
+            match frame.ret {
+                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                    Some(slot) if is_scalar(slot) => Some(slot),
+                    _ => return false,
+                },
+                RetTarget::Discard => None,
+            }
         };
         // The declared return type must take the value as it is
         // (`return_simple`'s rule); anything else is its to coerce or
