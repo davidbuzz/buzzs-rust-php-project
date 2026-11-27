@@ -3014,15 +3014,22 @@ pub(super) fn pure_method_now(
         return None;
     }
     let mut sends = [Operand::Unused; MAX_ARGS];
+    // An argument a class constant gives (`ReflectionAttribute::IS_INSTANCEOF`):
+    // the op index of its `FetchClassConst`, read from the op's cache.
+    let mut consts: [Option<usize>; MAX_ARGS] = [None; MAX_ARGS];
     let mut n = 0;
+    // The op after the init being looked at (an argument of a class
+    // constant is two ops: its fetch into a temporary, then its `Send`).
+    let mut next_op = at + 1;
     let (dst, done) = loop {
-        match ops.get(at + 1 + n)? {
-            Op::DoCall { dst } => break (*dst, at + 2 + n),
+        match ops.get(next_op)? {
+            Op::DoCall { dst } => break (*dst, next_op + 1),
             Op::Send {
                 src: ArgSrc::Val(op @ (Operand::Lit(_) | Operand::Cv(_))),
             } if n < MAX_ARGS => {
                 sends[n] = *op;
                 n += 1;
+                next_op += 1;
             }
             // `ZEND_SEND_VAR_EX` of a plain variable (a method's parameters
             // are not known when it is compiled): by value, the parameter
@@ -3033,6 +3040,25 @@ pub(super) fn pure_method_now(
                 let cv = place_cv(&vm.frames.last()?.code, *pid)?;
                 sends[n] = Operand::Cv(cv);
                 n += 1;
+                next_op += 1;
+            }
+            // `A::NAME` sent as it is fetched: its temporary is written by
+            // nothing else (the value is read from the fetch's cache below
+            // and the temporary stays empty, as the `Send` leaves it).
+            Op::FetchClassConst {
+                class:
+                    ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static,
+                name: Operand::Lit(_),
+                dst: t,
+            } if n < MAX_ARGS
+                && matches!(
+                    ops.get(next_op + 1),
+                    Some(Op::Send { src: ArgSrc::Val(Operand::Tmp(s)) }) if s == t
+                ) =>
+            {
+                consts[n] = Some(next_op);
+                n += 1;
+                next_op += 2;
             }
             _ => return None,
         }
@@ -3103,10 +3129,21 @@ pub(super) fn pure_method_now(
     {
         let caller = vm.frames.last()?;
         for (i, op) in sends[..n].iter().enumerate() {
-            let v = match *op {
-                Operand::Lit(l) => caller.code.literals.get(l as usize).map(clone_value),
-                Operand::Cv(cv) if !caller.symtab_attached => cv_value(caller, cv),
-                _ => None,
+            let v = if let Some(ci) = consts[i] {
+                match ops.get(ci) {
+                    Some(Op::FetchClassConst {
+                        class,
+                        name: Operand::Lit(nl),
+                        ..
+                    }) => crate::rtcache::class_const_hit_in(caller, class, *nl),
+                    _ => None,
+                }
+            } else {
+                match *op {
+                    Operand::Lit(l) => caller.code.literals.get(l as usize).map(clone_value),
+                    Operand::Cv(cv) if !caller.symtab_attached => cv_value(caller, cv),
+                    _ => None,
+                }
             };
             let ok = v
                 .as_ref()

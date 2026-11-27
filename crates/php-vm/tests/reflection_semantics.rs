@@ -1120,3 +1120,34 @@ yn m
 "#
     );
 }
+
+/// A pure builtin method called with a class constant among its arguments
+/// (`getAttributes(X::class, ReflectionAttribute::IS_INSTANCEOF)`) is
+/// called at once from the tape, the constant read from its fetch's
+/// cache (`calls::pure_method_now`); an invalid flag and a constant of a
+/// missing class still give the framed call's errors. Expected output:
+/// php-src's (PHP 8.5).
+#[test]
+fn pure_methods_take_class_constant_arguments() {
+    assert_eq!(
+        run_std(
+            r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class Ctx {}
+class Sub extends Ctx {}
+class C { const F = ReflectionAttribute::IS_INSTANCEOF; const BAD = 5; function m(#[Sub] $a, $b) {} }
+$m = new ReflectionMethod('C', 'm'); [$a, $b] = $m->getParameters();
+for ($i = 0; $i < 3; $i++) {
+  echo count($a->getAttributes(Ctx::class, ReflectionAttribute::IS_INSTANCEOF)), count($b->getAttributes(Ctx::class, ReflectionAttribute::IS_INSTANCEOF));
+  echo count($a->getAttributes(Ctx::class, C::F)), count($a->getAttributes(Sub::class, 0)), " ";
+}
+try { $a->getAttributes(Ctx::class, C::BAD); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $a->getAttributes(Ctx::class, Missing::X); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo $a->getName(), $m->isStatic() ? 1 : 0, "\n";
+"#
+        ),
+        r#"1011 1011 1011 ValueError: ReflectionParameter::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
+Error: Class "Missing" not found
+a0
+"#
+    );
+}
