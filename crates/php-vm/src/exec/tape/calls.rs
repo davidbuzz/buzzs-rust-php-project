@@ -445,6 +445,11 @@ pub(super) struct Plan {
     uf_addr: usize,
     /// The number of arguments.
     n: u8,
+    /// How many of them go into the callee's compiled variables: all but
+    /// a variadic call's extras, which go to the frame's argument buffer
+    /// for `RECV_VARIADIC` (after an empty entry for each bound one, the
+    /// prepared call's layout).
+    bound: u8,
     /// Whether a parameter declares a type (each argument is then tested
     /// against its parameter's).
     typed: bool,
@@ -558,22 +563,22 @@ fn plan_takes(uf: &UserFunction, n: usize) -> bool {
         CallShape::UNTYPED | CallShape::TYPED => true,
         // A near-plain declaration (`UserFunction::near_plain_limit`: a
         // trailing variadic parameter, by-reference parameters past the
-        // arguments passed) called with no argument for the variadic
-        // parameter, which its `RECV_VARIADIC` makes an empty array of as
-        // the body runs (Laravel's `value($v)`, `collect($items)`):
-        // the plain call's frame, with nothing in the argument buffer.
-        CallShape::NOT_PLAIN => {
-            crate::call::near_plain(uf, n)
-                && (uf.flags & flags::VARIADIC == 0 || n < uf.params.len())
-        }
+        // arguments passed): its `RECV_VARIADIC` makes the array of the
+        // extras as the body runs (Laravel's `value($v)`, Doctrine's
+        // `triggerIfCalledFromOutside($p, $l, $m, $x)`); the extras wait in
+        // the frame's argument buffer (`Plan::bound`).
+        CallShape::NOT_PLAIN => crate::call::near_plain(uf, n),
         _ => false,
     };
     shape_ok
         && uf.code.num_statics == 0
         && uf.flags & (flags::RETURN_REF | flags::GENERATOR) == 0
         && n >= uf.required as usize
-        && n <= uf.params.len()
+        && (n <= uf.params.len() || uf.flags & flags::VARIADIC != 0)
         && uf.code.cv_names.len() >= uf.params.len()
+        // (A variadic call's extras pass through the compiled variables
+        // after the bound ones: `variadic_extras_of`.)
+        && uf.code.cv_names.len() >= n
 }
 
 /// A call site's plan: unset until the site is looked at, then its plan
@@ -662,6 +667,7 @@ fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>
         uf: std::rc::Weak::new(),
         uf_addr: 0,
         n: 0,
+        bound: 0,
         typed: false,
         defaults: false,
         is_static: false,
@@ -681,9 +687,17 @@ fn plan_store(code: &OpArray, at: usize, site: usize, callee: Option<PlanCallee>
     };
     plan.uf = Rc::downgrade(&c.uf);
     plan.uf_addr = Rc::as_ptr(&c.uf) as usize;
+    // A variadic call's arguments past the declared parameters before the
+    // variadic one are its extras.
+    let bound = if c.uf.flags & flags::VARIADIC != 0 {
+        n.min(c.uf.params.len().saturating_sub(1))
+    } else {
+        n
+    };
     #[allow(clippy::cast_possible_truncation)] // at most `PLAN_ARGS`
     {
         plan.n = n as u8;
+        plan.bound = bound as u8;
     }
     plan.typed = match c.uf.call_shape() {
         CallShape::TYPED => true,
@@ -1113,21 +1127,7 @@ fn call_planned(
         ready_frame_slow(frame, &uf);
     }
     for i in 0..n {
-        let v = match plan.kinds[i] {
-            PLAN_CV => caller
-                .cvs
-                .get(plan.idx[i] as usize)
-                .and_then(crate::vm::CvSlot::get)
-                .map(clone_value),
-            PLAN_TMP => caller
-                .tmps
-                .get_mut(plan.idx[i] as usize)
-                .map(std::mem::take),
-            PLAN_PLACE | PLAN_THIS => fetched
-                .as_deref_mut()
-                .map(|fetched| std::mem::take(&mut fetched[i])),
-            _ => code.literals.get(plan.idx[i] as usize).map(clone_value),
-        };
+        let v = plan_arg(caller, code, plan, fetched.as_deref_mut(), i);
         if let (Some(slot), Some(v)) = (frame.cvs.get_mut(i), v) {
             if let Some(old) = slot.as_mut().replace(v) {
                 drop(old);
@@ -1167,9 +1167,65 @@ fn call_planned(
     }
     frame.direct = true;
     frame.plain = true;
+    // A variadic call's extras, put into the compiled variables after the
+    // bound ones by the loop above, go to the argument buffer.
+    if plan.bound < plan.n {
+        variadic_extras_of(plan, frame);
+    }
     caller.ip = plan.done;
     vm.frames.live = live + 1;
     true
+}
+
+/// Argument `i` of the planned call: a copy of the caller's variable or
+/// literal, its temporary moved out, or the value read from a place or
+/// `$this` before (`fetched`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per argument of a planned call
+fn plan_arg(
+    caller: &mut crate::vm::Frame,
+    code: &OpArray,
+    plan: &Plan,
+    fetched: Option<&mut [Value; PLAN_ARGS]>,
+    i: usize,
+) -> Option<Value> {
+    match plan.kinds[i] {
+        PLAN_CV => caller
+            .cvs
+            .get(plan.idx[i] as usize)
+            .and_then(crate::vm::CvSlot::get)
+            .map(clone_value),
+        PLAN_TMP => caller
+            .tmps
+            .get_mut(plan.idx[i] as usize)
+            .map(std::mem::take),
+        PLAN_PLACE | PLAN_THIS => fetched.map(|fetched| std::mem::take(&mut fetched[i])),
+        _ => code.literals.get(plan.idx[i] as usize).map(clone_value),
+    }
+}
+
+/// The arguments of a planned variadic call past the declared parameters
+/// (`Plan::bound` of them stay in their compiled variables), which
+/// [`call_planned`] put into the compiled variables that follow (the plan
+/// takes a call only when the callee has that many, `plan_takes`): moved
+/// to the frame's argument buffer, after an empty entry for each bound
+/// argument, where `RECV_VARIADIC` collects them (as after the prepared
+/// call: `variadic_extras`), those variables left empty. The buffer is
+/// not the plain release's to empty: the frame loses its mark
+/// (`return_simple` releases it). Out of line: a call without extras pays
+/// one test.
+#[cold]
+#[inline(never)]
+fn variadic_extras_of(plan: &Plan, frame: &mut crate::vm::Frame) {
+    let bound = usize::from(plan.bound);
+    for _ in 0..bound {
+        frame.args.push(None);
+    }
+    for i in bound..usize::from(plan.n) {
+        let v = frame.cvs.get_mut(i).and_then(|slot| slot.as_mut().take());
+        frame.args.push(v);
+    }
+    frame.plain = false;
 }
 
 /// The most sums [`new_stored`] computes between the sends of one `new`.
