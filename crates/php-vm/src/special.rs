@@ -2295,13 +2295,19 @@ impl Vm {
                 return Some(r);
             }
         }
-        if fc.argc >= 2 {
+        let n = usize::from(fc.argc).min(3);
+        // Whether a two- or three-argument call has an answer without its
+        // handler (`frameless_two`, the quick rows); for the others
+        // (`strtr()`, `str_replace()`, `strstr()`, ...) neither is tried.
+        let has_quick = n < 2
+            || matches!(class, fl::STR_TEST | fl::KEY_EXISTS | fl::IN_ARRAY)
+            || quick_id_n(b.name.as_bytes(), n).is_some();
+        if n >= 2 && has_quick {
             if let Some(r) = self.frameless_many(&b, class, fc, ip) {
                 return Some(r);
             }
         }
         let frame = self.frames.last_mut()?;
-        let n = usize::from(fc.argc).min(3);
         // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`),
         // written once, where the handler reads it: a literal's copy, a
         // variable's value (a reference's target). The record is a pooled
@@ -2367,7 +2373,7 @@ impl Vm {
             // then what the tape's quick rows answer for global names
             // (`strpos()`, `substr()`, `max()`, `min()`, strict `in_array()`:
             // `quick_eval_2`/`_3`, `None` for shapes they do not take).
-            2 | 3 => {
+            2 | 3 if has_quick => {
                 let sent = [args.values.first(), args.values.get(1), args.values.get(2)];
                 self.frameless_two(b.name.as_bytes(), class, &sent[..n])
                     .or_else(|| {
