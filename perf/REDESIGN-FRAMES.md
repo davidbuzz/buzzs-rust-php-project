@@ -359,3 +359,49 @@ Effort: stage 2 (slots on a chunked VM stack, generators owning blocks,
 per-fiber stack segments) is about one to two weeks. Stage 3 (headers in
 the block, protocol rewrite, the light-frame core technique on the hot
 path) is several more.
+
+### The frame stack behind its own layer (stage 1, part 2)
+
+Base f2265649. The ~320 direct `vm.frames` uses now go through
+`FrameStack` methods only; its storage (`vec`, `live`) is private to
+`vm.rs`, and it no longer derefs to `[Frame]`.
+
+| Accessor | For |
+|---|---|
+| `len()`, `is_empty()`, `last()`/`last_mut()`, `first()`/`first_mut()`, `get(i)`/`get_mut(i)`, `stack[i]` (`Index<usize>`) | the live frames, by depth |
+| `iter()` / `iter_mut()` → `FrameIter` / `FrameIterMut` | walks (backtraces, the GC's frame scan, `debug_backtrace`, the symbol-table sync); newtypes over the slice iterators, double-ended and exact-size, so callers never see a slice. An `impl Iterator` return was tried first: the borrow it holds lasts to the end of scope (it might have a destructor), which broke two extensions' code. |
+| `both_mut(i)` / `both(i)` | frames `i-1` and `i`, both present: a call's caller and the released frame it readies, a return's caller and callee |
+| `pair_mut(i)` | the same as two options (three call sites that use one side alone) |
+| `pooled(i)`, `pooled_mut(i)`, `pooled_at(i)`, `pooled_at_mut(i)` | a frame live or released (the pool slot a call is readied in) |
+| `enter_pooled(live)`, `leave_released()` | the readied frame becomes the top; the released top leaves the live frames |
+| `split_pooled_mut(i)` | the planned call and the plain return only: `both_mut`'s pair left an unfolded null test there (+2 to +6 per call, the register-allocation lottery), so those two keep the raw split |
+| `push`, `pop`, `truncate`, `push_in_place`, `push_builtin`, `ensure_pooled`, `release_*`, `pop_cleared_top`, `push_boxed`/`pop_boxed`, `drop_pool` | as before (they were already methods) |
+
+Not behind the layer: whole-stack moves. Fibers (`fiber.rs`: `insert`,
+`splice`, `drain`, `split_off`, `extend`) and the reflection call that
+runs code under a borrowed stack (`reflection/misc.rs`: `split_off`,
+`drain`, `From<Vec<Frame>>`) move `Frame` values in and out of
+`Vec<Frame>`s. Moving the headers onto a VM stack makes those moves of
+stack segments; they are the fiber design question listed above.
+
+Measured (release build of f2265649 as baseline, JIT off per call, apps
+JIT on, each twice alternating):
+
+| | baseline f2265649 | part 1 (`vec`/`live` private) | part 2 (no `Deref`) |
+|---|---:|---:|---:|
+| f / alt | 513 / 1,316 | 513 / 1,317 | 513 / 1,317 |
+| `$this->m()` / `$o->m()` / `self::s()` | 685 / 706 / 628 | 685 / 706 / 628 | 684 / 705 / 628 |
+| empty loop | 45-46 | 45-46 | 45-46 |
+| Laravel unit | 131.479-131.480G | 131.425G (-0.04%) | 131.425G (-0.04%) |
+| MW Api | 266.57-266.88G | 266.77G (-0.04%) | 266.42-266.46G (-0.06%) |
+
+(The MediaWiki baseline moved from 266.85G to 266.57G between the two
+rounds: the box's disk filled up in between. Each column is compared with
+the baseline readings alternating with it.)
+
+PHPT on the 17 directories: 0 of 12,636 results changed against the
+baseline binary. `cargo test -p php-vm`: only the known float-math
+failure. `cargo test --workspace --no-run` builds; it was run without
+debug info (`CARGO_PROFILE_DEV_DEBUG=0`), because with it the test
+binaries of the whole workspace are ~60G and filled the disk once. No
+clippy warning on a changed line.
