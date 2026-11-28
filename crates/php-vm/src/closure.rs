@@ -333,8 +333,8 @@ impl Vm {
 
     /// `$closure->__invoke(...)` (`zend_get_closure_invoke_method`): a
     /// `Closure::__invoke` trampoline with the closure's parameters.
-    pub(crate) fn closure_method_call(&self, o: &Obj, lc: &ZStr) -> Option<PendingCall> {
-        if lc.as_bytes() != b"__invoke" {
+    pub(crate) fn closure_method_call(&self, o: &Obj, lc: &[u8]) -> Option<PendingCall> {
+        if lc != b"__invoke" {
             return None;
         }
         if let Some(mut c) = self.closure_user_call(o) {

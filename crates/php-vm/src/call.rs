@@ -902,17 +902,27 @@ impl Vm {
 
     fn method_call_on(&mut self, o: &Obj, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
         let scope = self.scope();
-        let lc = if name.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            ZStr::from(name.to_ascii_lowercase())
+        // The name lower-cased on the stack (the method tables' keys): a
+        // call `__call()` answers is never cached, so this runs on each one.
+        let mut buf = [0u8; 64];
+        let long;
+        let lc: &[u8] = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            name.as_bytes()
+        } else if let Some(dst) = buf.get_mut(..name.len()) {
+            for (d, s) in dst.iter_mut().zip(name.as_bytes()) {
+                *d = s.to_ascii_lowercase();
+            }
+            dst
         } else {
-            name.clone()
+            long = name.to_ascii_lowercase();
+            long.as_bytes()
         };
         // Only a lookup for the object's own class is cached: the private
         // method rule below depends on it.
         let cacheable = Rc::ptr_eq(cls, object::class_of(o));
         // A private method of the calling scope takes precedence.
         if let Some(s) = &scope {
-            if let Some(m) = s.methods.get(&lc) {
+            if let Some(m) = s.methods.get(lc) {
                 if m.visibility() == flags::PRIVATE
                     && Rc::ptr_eq(&m.scope(), s)
                     && object::class_of(o).is_subclass_of(s)
@@ -928,7 +938,7 @@ impl Vm {
                 }
             }
         }
-        if let Some(m) = cls.methods.get(&lc).cloned() {
+        if let Some(m) = cls.methods.get(lc).cloned() {
             if self.can_access_method(&m, scope.as_ref()) {
                 if cacheable {
                     self.call_bufs.methods.insert(cls, scope.as_ref(), name, &m);
@@ -959,7 +969,7 @@ impl Vm {
                 ),
             ));
         }
-        if let Some(mut c) = self.closure_method_call(o, &lc) {
+        if let Some(mut c) = self.closure_method_call(o, lc) {
             c.magic_name = Some(ZStr::from("__invoke"));
             return Ok(c);
         }

@@ -159,7 +159,9 @@ impl Vm {
     }
 
     fn class_by_name(&self, name: &ZStr) -> Option<Rc<Class>> {
-        self.classes.get(&name.to_ascii_lowercase()).cloned()
+        // (Lower-cased on the stack: a protected property's access check
+        // looks its declaring class up on every miss of the cache.)
+        crate::classlink::with_lc(name.as_bytes(), |lc| self.classes.get(lc).cloned())
     }
 
     /// Property visibility lookup.

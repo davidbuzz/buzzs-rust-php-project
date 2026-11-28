@@ -3793,7 +3793,7 @@ fn build_class(
 /// name ([`Vm::lookup_class`], [`Vm::find_class`]) on a hit allocated
 /// two buffers (the lower-case copy and the string made of it) for a
 /// key the table is searched by as bytes.
-fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
+pub(crate) fn with_lc<R>(name: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
     let mut buf = [0u8; 128];
     if let Some(lc) = buf.get_mut(..name.len()) {
         lc.copy_from_slice(name);

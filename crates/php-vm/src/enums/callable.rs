@@ -401,7 +401,7 @@ impl Vm {
                 } else if lm.as_bytes() == b"__invoke"
                     && object::has_internal::<crate::closure::ClosureData>(&obj)
                 {
-                    if let Some(mut c) = self.closure_method_call(&obj, &lm) {
+                    if let Some(mut c) = self.closure_method_call(&obj, lm.as_bytes()) {
                         c.magic_name = Some(ZStr::from("__invoke"));
                         handler = Some(Handler::Invoke(c));
                         via_handler = true;
