@@ -1021,12 +1021,17 @@ fn call_planned(
         PlanKind::Method(obj) => {
             let o = match *obj {
                 Operand::Cv(cv) => {
-                    match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                    match caller
+                        .slots
+                        .cvs()
+                        .get(cv as usize)
+                        .and_then(crate::vm::CvSlot::get)
+                    {
                         Some(Value::Object(o)) => o,
                         _ => return false,
                     }
                 }
-                Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+                Operand::Tmp(t) => match caller.slots.tmps().get(t as usize) {
                     Some(Value::Object(o)) => o,
                     _ => return false,
                 },
@@ -1065,14 +1070,15 @@ fn call_planned(
     for i in 0..n {
         let v = match plan.kinds[i] {
             PLAN_CV => match caller
-                .cvs
+                .slots
+                .cvs()
                 .get(plan.idx[i] as usize)
                 .and_then(crate::vm::CvSlot::get)
             {
                 Some(Value::Reference(_)) | None => return false,
                 Some(v) => v,
             },
-            PLAN_TMP => match caller.tmps.get(plan.idx[i] as usize) {
+            PLAN_TMP => match caller.slots.tmps().get(plan.idx[i] as usize) {
                 Some(Value::Reference(_)) | None => return false,
                 Some(v) => v,
             },
@@ -1129,15 +1135,15 @@ fn call_planned(
     // The frame is released: its compiled variables are undefined, and
     // each argument is stored over nothing (no old value to test and drop).
     // The first loop found every source defined.
-    let slots = frame.cvs.as_mut_slice();
+    let slots = frame.slots.cvs_mut();
     for i in 0..n.min(slots.len()) {
         let idx = plan.idx[i] as usize;
         let v = match plan.kinds[i] {
-            PLAN_CV => match caller.cvs.get(idx).and_then(crate::vm::CvSlot::get) {
+            PLAN_CV => match caller.slots.cvs().get(idx).and_then(crate::vm::CvSlot::get) {
                 Some(v) => clone_value(v),
                 None => continue,
             },
-            PLAN_TMP => match caller.tmps.get_mut(idx) {
+            PLAN_TMP => match caller.slots.tmps_mut().get_mut(idx) {
                 Some(t) => std::mem::take(t),
                 None => continue,
             },
@@ -1162,11 +1168,21 @@ fn call_planned(
     if let PlanKind::Method(obj) = &plan.kind {
         // `$this`: the temporary's handle moved out, else a copy.
         let this = match *obj {
-            Operand::Tmp(t) => match caller.tmps.get_mut(t as usize).map(std::mem::take) {
+            Operand::Tmp(t) => match caller
+                .slots
+                .tmps_mut()
+                .get_mut(t as usize)
+                .map(std::mem::take)
+            {
                 Some(Value::Object(o)) => Some(o),
                 _ => None,
             },
-            Operand::Cv(cv) => match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Operand::Cv(cv) => match caller
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Object(o)) => Some(o.clone()),
                 _ => None,
             },
@@ -1220,7 +1236,11 @@ fn variadic_extras_of(plan: &Plan, frame: &mut crate::vm::Frame) {
         frame.args.push(None);
     }
     for i in bound..usize::from(plan.n) {
-        let v = frame.cvs.get_mut(i).and_then(|slot| slot.as_mut().take());
+        let v = frame
+            .slots
+            .cvs_mut()
+            .get_mut(i)
+            .and_then(|slot| slot.as_mut().take());
         frame.args.push(v);
     }
     frame.plain = false;
@@ -1547,7 +1567,12 @@ fn site_srcs(code: &OpArray, inst: &Inst) -> Option<([Src; MAX_ARGS], usize)> {
 fn arg_view<'a>(f: &'a crate::vm::Frame, site: &'a NewSite, src: Src) -> Option<Arg<'a>> {
     // A compiled variable first: the commonest argument.
     if let Src::Cv(cv) = src {
-        return match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+        return match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)?
+        {
             Value::Reference(_) => None,
             v => Some(Arg::Held(v)),
         };
@@ -1643,7 +1668,7 @@ fn new_args_end(code: &OpArray, i: usize) -> Option<u32> {
 pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> u8 {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    if f.tmps.len() <= inst.b as usize {
+    if f.slots.tmps().len() <= inst.b as usize {
         return NEW_DECLINED;
     }
     if new_target(inst).is_some_and(|cv| new_over(f, inst, cv)) {
@@ -1665,7 +1690,7 @@ pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> u8 
     let Some(o) = crate::props::new_plain(&cls) else {
         return NEW_DECLINED;
     };
-    match f.tmps.get_mut(inst.b as usize) {
+    match f.slots.tmps_mut().get_mut(inst.b as usize) {
         Some(slot) => crate::exec::spec::put_tmp(slot, Value::Object(o)),
         // (Not reached: the slot was looked for above.)
         None => crate::object::discard_rejected(o),
@@ -1682,7 +1707,12 @@ pub(super) unsafe fn new_plain(frame: *mut crate::vm::Frame, inst: &Inst) -> u8 
 /// changed, otherwise ([`new_plain`] goes on as without).
 #[inline(never)]
 fn new_over(f: &crate::vm::Frame, inst: &Inst, cv: u32) -> bool {
-    let Some(Value::Object(held)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+    let Some(Value::Object(held)) = f
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    else {
         return false;
     };
     let Some(d) = held.downcast_ref::<crate::object::ObjectData>() else {
@@ -1795,7 +1825,7 @@ unsafe fn new_filled(
     let Some(o) = new_stored(f, inst, &cls) else {
         return NEW_DECLINED;
     };
-    match f.tmps.get_mut(inst.b as usize) {
+    match f.slots.tmps_mut().get_mut(inst.b as usize) {
         Some(slot) => crate::exec::spec::put_tmp(slot, Value::Object(o)),
         // (Not reached: `new_plain` found the slot.)
         None => crate::object::discard_rejected(o),
@@ -1808,7 +1838,7 @@ unsafe fn new_filled(
 fn int_operand(f: &crate::vm::Frame, o: Operand) -> Option<i64> {
     let v = match o {
         Operand::Lit(l) => f.code.literals.get(l as usize)?,
-        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize)?.get()?,
         _ => return None,
     };
     match v {
@@ -2246,7 +2276,12 @@ impl Drop for NewArgs {
 #[allow(clippy::inline_always)] // once per argument
 fn cv_arg(f: &crate::vm::Frame, cv: u32) -> Option<Value> {
     Some(
-        match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+        match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)?
+        {
             Value::Null => Value::Null,
             Value::Bool(b) => Value::Bool(*b),
             Value::Int(i) => Value::Int(*i),
@@ -2689,14 +2724,16 @@ pub(super) fn quick_send(
         return None;
     };
     let caller = vm.frames.last_mut()?;
-    if dst.is_some_and(|d| d as usize >= caller.tmps.len()) {
+    if dst.is_some_and(|d| d as usize >= caller.slots.tmps().len()) {
         return None;
     }
-    let result = crate::special::quick_eval(id, caller.tmps.get(*t as usize)?)?;
+    let result = crate::special::quick_eval(id, caller.slots.tmps().get(*t as usize)?)?;
     // The argument is consumed: a number, or a string for `ord()`.
-    drop(std::mem::take(caller.tmps.get_mut(*t as usize)?));
+    drop(std::mem::take(
+        caller.slots.tmps_mut().get_mut(*t as usize)?,
+    ));
     caller.ip = at + 2;
-    match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+    match dst.and_then(|d| caller.slots.tmps_mut().get_mut(d as usize)) {
         Some(slot) => crate::exec::spec::put_tmp(slot, result),
         None => drop(result),
     }
@@ -2787,8 +2824,8 @@ fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     let code = &uf.code;
     // (A released frame's iterators and finally states hold nothing:
     // `Frame::clear_for_reuse`.)
-    if frame.cvs.len() == code.cv_names.len()
-        && frame.tmps.len() == code.num_tmps as usize
+    if frame.slots.cvs().len() == code.cv_names.len()
+        && frame.slots.tmps().len() == code.num_tmps as usize
         && frame.iters.len() == code.num_iters as usize
         && frame.fins.len() == code.num_finally as usize
     {
@@ -2848,7 +2885,7 @@ pub(crate) fn push_method_from_native(
         &mut frame.called,
         Some(Rc::clone(crate::object::class_of(this))),
     );
-    for (slot, a) in frame.cvs.iter_mut().zip(args.iter_mut()) {
+    for (slot, a) in frame.slots.cvs_mut().iter_mut().zip(args.iter_mut()) {
         // A readied frame's compiled variables are empty.
         if let Some(old) = slot.as_mut().replace(std::mem::take(a)) {
             drop(old);
@@ -2925,7 +2962,7 @@ pub(crate) fn push_callback_from_native(
     fill(&mut frame.this, this.cloned());
     fill(&mut frame.scope, scope.cloned());
     fill(&mut frame.called, called.cloned());
-    for (slot, a) in frame.cvs.iter_mut().zip(args.iter_mut()) {
+    for (slot, a) in frame.slots.cvs_mut().iter_mut().zip(args.iter_mut()) {
         // A readied frame's compiled variables are empty.
         if let Some(old) = slot.as_mut().replace(std::mem::take(a)) {
             drop(old);
@@ -2955,7 +2992,7 @@ pub(crate) fn push_callback_from_native(
             frame.called.clone_from(&d.called);
         }
         for (cv, v) in &d.vars {
-            if let Some(slot) = frame.cvs.get_mut(*cv as usize) {
+            if let Some(slot) = frame.slots.cvs_mut().get_mut(*cv as usize) {
                 if let Some(old) = slot.as_mut().replace(v.clone()) {
                     drop(old);
                 }
@@ -2997,12 +3034,17 @@ pub(super) fn prepare_method(
     };
     let o = match obj {
         Operand::Cv(cv) if !caller.symtab_attached => {
-            match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            match caller
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Object(o)) => o,
                 _ => return None,
             }
         }
-        Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+        Operand::Tmp(t) => match caller.slots.tmps().get(t as usize) {
             Some(Value::Object(o)) => o,
             _ => return None,
         },
@@ -3034,7 +3076,12 @@ pub(super) fn prepare_method(
     // a static method takes none (the temporary's handle is released
     // after the frame is readied).
     let (this, released) = match obj {
-        Operand::Tmp(t) => match caller.tmps.get_mut(t as usize).map(std::mem::take) {
+        Operand::Tmp(t) => match caller
+            .slots
+            .tmps_mut()
+            .get_mut(t as usize)
+            .map(std::mem::take)
+        {
             Some(Value::Object(held)) if !is_static => (Some(held), None),
             other => (None, other),
         },
@@ -3137,12 +3184,17 @@ pub(super) fn pure_method_now(
         let caller = vm.frames.last()?;
         let o = match obj {
             Operand::Cv(cv) if !caller.symtab_attached => {
-                match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                match caller
+                    .slots
+                    .cvs()
+                    .get(cv as usize)
+                    .and_then(crate::vm::CvSlot::get)
+                {
                     Some(Value::Object(o)) => o,
                     _ => return None,
                 }
             }
-            Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+            Operand::Tmp(t) => match caller.slots.tmps().get(t as usize) {
                 Some(Value::Object(o)) => o,
                 _ => return None,
             },
@@ -3488,17 +3540,17 @@ pub(super) fn leaf_now(
             ArgSrc::Val(Operand::Lit(l)) => caller.code.literals.get(l as usize)?,
             ArgSrc::Val(Operand::Tmp(t)) => {
                 tmps[n] = Some(t);
-                caller.tmps.get(t as usize)?
+                caller.slots.tmps().get(t as usize)?
             }
             ArgSrc::Val(Operand::Cv(cv)) if !caller.symtab_attached => {
-                caller.cvs.get(cv as usize)?.get()?
+                caller.slots.cvs().get(cv as usize)?.get()?
             }
             // `ZEND_SEND_VAR_EX` of a plain variable: by value (a leaf
             // function has no by-reference parameter). An undefined one
             // is the call's (its warning).
             ArgSrc::Place(pid) if !caller.symtab_attached => {
                 let cv = place_cv(&caller.code, pid)?;
-                caller.cvs.get(cv as usize)?.get()?
+                caller.slots.cvs().get(cv as usize)?.get()?
             }
             _ => return None,
         };
@@ -3517,7 +3569,7 @@ pub(super) fn leaf_now(
     let done = at + 1 + n;
     let caller = vm.frames.last_mut()?;
     for t in tmps[..n].iter().flatten() {
-        if let Some(slot) = caller.tmps.get_mut(*t as usize) {
+        if let Some(slot) = caller.slots.tmps_mut().get_mut(*t as usize) {
             drop(std::mem::take(slot));
         }
     }
@@ -3710,12 +3762,17 @@ fn accessor_call(
         };
         let o = match obj {
             Operand::Cv(cv) if !caller.symtab_attached => {
-                match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                match caller
+                    .slots
+                    .cvs()
+                    .get(cv as usize)
+                    .and_then(crate::vm::CvSlot::get)
+                {
                     Some(Value::Object(o)) => o,
                     _ => return MethodNow::Unknown,
                 }
             }
-            Operand::Tmp(t) => match caller.tmps.get(t as usize) {
+            Operand::Tmp(t) => match caller.slots.tmps().get(t as usize) {
                 Some(Value::Object(o)) => o,
                 _ => return MethodNow::Unknown,
             },
@@ -3823,11 +3880,11 @@ fn pure_method_done(
 ) -> Option<usize> {
     let caller = vm.frames.last_mut()?;
     if let Operand::Tmp(t) = obj {
-        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+        if let Some(slot) = caller.slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }
-    match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+    match dst.and_then(|d| caller.slots.tmps_mut().get_mut(d as usize)) {
         Some(slot) => crate::exec::spec::put_tmp(slot, value),
         None => drop(value),
     }
@@ -3906,12 +3963,22 @@ fn prepare_native_method(
         return None;
     }
     let (this, released) = match obj {
-        Operand::Tmp(t) => match caller.tmps.get_mut(t as usize).map(std::mem::take) {
+        Operand::Tmp(t) => match caller
+            .slots
+            .tmps_mut()
+            .get_mut(t as usize)
+            .map(std::mem::take)
+        {
             Some(Value::Object(held)) if !is_static => (Some(held), None),
             other => (None, other),
         },
         _ if is_static => (None, None),
-        Operand::Cv(cv) => match caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+        Operand::Cv(cv) => match caller
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
+        {
             Some(Value::Object(o)) => (Some(o.clone()), None),
             _ => return None,
         },
@@ -4049,7 +4116,11 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     if caller.symtab_attached {
         return None;
     }
-    let Some(Value::Object(o)) = caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+    let Some(Value::Object(o)) = caller
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
     else {
         return None;
     };
@@ -4123,7 +4194,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let caller = callers.last_mut()?;
-    if dst as usize >= caller.tmps.len() {
+    if dst as usize >= caller.slots.tmps().len() {
         return None;
     }
     let cls = caller
@@ -4140,7 +4211,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
             return None;
         }
         let o = crate::props::new_plain(&cls)?;
-        crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
+        crate::exec::spec::put_tmp(&mut caller.slots.tmps_mut()[dst as usize], Value::Object(o));
         return Some(NewDone::Skip(skip as usize));
     }
     let direct = match (crate::props::ctor_call(&cls), pool.first_mut()) {
@@ -4153,7 +4224,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     };
     let Some((uf, scope, frame)) = direct else {
         let o = crate::props::new_with_ctor(cls, &mut caller.calls)?;
-        crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
+        crate::exec::spec::put_tmp(&mut caller.slots.tmps_mut()[dst as usize], Value::Object(o));
         return Some(NewDone::Pending);
     };
     let o = crate::props::new_for_ctor(&cls)?;
@@ -4161,7 +4232,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
     fill(&mut frame.this, Some(o.clone()));
     fill(&mut frame.scope, Some(scope));
     fill(&mut frame.called, Some(cls));
-    crate::exec::spec::put_tmp(&mut caller.tmps[dst as usize], Value::Object(o));
+    crate::exec::spec::put_tmp(&mut caller.slots.tmps_mut()[dst as usize], Value::Object(o));
     Some(NewDone::Prepared(Prepared {
         limit: uf.params.len().min(MAX_ARGS),
         callee: Callee::User(uf),
@@ -4252,7 +4323,7 @@ fn send_in(
             None => return false,
         },
         ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
-            match caller.tmps.get_mut(*t as usize) {
+            match caller.slots.tmps_mut().get_mut(*t as usize) {
                 Some(slot) => match std::mem::take(slot) {
                     Value::Reference(r) => r.get(),
                     v => v,
@@ -4296,7 +4367,7 @@ fn send_in(
     };
     match prep.callee {
         Callee::User(_) => {
-            let Some(slot) = frame.cvs.get_mut(n) else {
+            let Some(slot) = frame.slots.cvs_mut().get_mut(n) else {
                 return false;
             };
             // A prepared frame's compiled variables are empty.
@@ -4367,7 +4438,7 @@ fn native_arg(caller: &mut crate::vm::Frame, src: &ArgSrc) -> Option<Value> {
     match src {
         ArgSrc::Val(Operand::Lit(i)) => caller.code.literals.get(*i as usize).map(clone_value),
         ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
-            let slot = caller.tmps.get_mut(*t as usize)?;
+            let slot = caller.slots.tmps_mut().get_mut(*t as usize)?;
             Some(match std::mem::take(slot) {
                 Value::Reference(r) => r.get(),
                 v => v,
@@ -4402,7 +4473,7 @@ fn place_arg(
 ) -> Option<Value> {
     match callee {
         Callee::User(uf) => {
-            if frame.cvs.len() <= n || uf.params.get(n).is_none_or(|p| p.by_ref) {
+            if frame.slots.cvs().len() <= n || uf.params.get(n).is_none_or(|p| p.by_ref) {
                 return None;
             }
         }
@@ -4465,11 +4536,11 @@ fn send_ref_user(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let Some(cv) = place_cv(&caller.code, *pid) else {
         return false;
     };
-    let Some(slot) = caller.cvs.get_mut(cv as usize) else {
+    let Some(slot) = caller.slots.cvs_mut().get_mut(cv as usize) else {
         return false;
     };
     let r = slot.as_mut().get_or_insert(Value::Null).make_ref();
-    let Some(dst) = frame.cvs.get_mut(n) else {
+    let Some(dst) = frame.slots.cvs_mut().get_mut(n) else {
         return false;
     };
     // A prepared frame's compiled variables are empty.
@@ -4585,7 +4656,7 @@ fn send_prefer_ref_value(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool
             .live
             .checked_sub(1)
             .and_then(|i| vm.frames.vec.get(i))
-            .and_then(|caller| caller.tmps.get(*t as usize));
+            .and_then(|caller| caller.slots.tmps().get(*t as usize));
         if !matches!(held, Some(v) if !matches!(v, Value::Reference(_))) {
             return false;
         }
@@ -4616,7 +4687,8 @@ fn send_prefer_ref_value(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool
 #[allow(clippy::inline_always)] // twice in `send`, once per argument
 fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {
     let v = frame
-        .cvs
+        .slots
+        .cvs()
         .get(cv as usize)
         .and_then(crate::vm::CvSlot::get)?;
     Some(match v {
@@ -4679,7 +4751,7 @@ pub(super) fn enter(
         // (A near-plain function's trailing variadic parameter is checked
         // by its own `RECV_VARIADIC`; its arguments past the declared
         // ones are not paired with a parameter here.)
-        for (p, slot) in uf.params.iter().zip(&frame.cvs[..n]) {
+        for (p, slot) in uf.params.iter().zip(&frame.slots.cvs()[..n]) {
             if p.variadic {
                 break;
             }
@@ -4772,7 +4844,7 @@ fn bind_literal_defaults(frame: &mut crate::vm::Frame, uf: &UserFunction, n: usi
         {
             break;
         }
-        let Some(slot) = frame.cvs.get_mut(cv as usize) else {
+        let Some(slot) = frame.slots.cvs_mut().get_mut(cv as usize) else {
             break;
         };
         if slot.get().is_some() {
@@ -4798,7 +4870,11 @@ fn variadic_extras(frame: &mut crate::vm::Frame, v: usize, n: usize) {
         frame.args.push(None);
     }
     for i in v..n {
-        let arg = frame.cvs.get_mut(i).and_then(|slot| slot.as_mut().take());
+        let arg = frame
+            .slots
+            .cvs_mut()
+            .get_mut(i)
+            .and_then(|slot| slot.as_mut().take());
         frame.args.push(arg);
     }
 }
@@ -4839,7 +4915,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
         return false;
     }
     let mut args = [0i64; super::jit::NATIVE_MAX_ARGS];
-    let Some(slots) = frame.cvs.get(..n) else {
+    let Some(slots) = frame.slots.cvs().get(..n) else {
         return false;
     };
     for (a, slot) in args.iter_mut().zip(slots) {
@@ -4852,7 +4928,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
     let Some(r) = super::jit::native_call(uf, &args[..n]) else {
         return false;
     };
-    if let Some(slots) = frame.cvs.get_mut(..n) {
+    if let Some(slots) = frame.slots.cvs_mut().get_mut(..n) {
         for slot in slots {
             // An int owns nothing.
             std::mem::forget(slot.as_mut().take());
@@ -4864,7 +4940,7 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
         frame.called = None;
         frame.closure = None;
     }
-    if let Some(slot) = dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+    if let Some(slot) = dst.and_then(|d| caller.slots.tmps_mut().get_mut(d as usize)) {
         crate::exec::spec::put_tmp(slot, Value::Int(r));
     }
     true
@@ -4947,7 +5023,7 @@ fn store_native_result(vm: &mut Vm, dst: u32, v: Value) {
         .frames
         .vec
         .get_mut(top)
-        .and_then(|f| f.tmps.get_mut(dst as usize))
+        .and_then(|f| f.slots.tmps_mut().get_mut(dst as usize))
     else {
         drop(v);
         return;
@@ -5323,7 +5399,7 @@ fn unwrap_sent_refs(vm: &mut Vm, live: usize, held: &[Value]) {
         if r.refcount() != copies || r.meta().is_some() {
             continue;
         }
-        let Some(slot) = caller.cvs.iter_mut().find(
+        let Some(slot) = caller.slots.cvs_mut().iter_mut().find(
             |s| matches!(s.get(), Some(Value::Reference(c)) if php_runtime::PhpRef::ptr_eq(c, r)),
         ) else {
             continue;
@@ -5472,7 +5548,7 @@ fn bind_closure_vars(frame: &mut crate::vm::Frame) {
         return;
     };
     for (cv, v) in &d.vars {
-        if let Some(slot) = frame.cvs.get_mut(*cv as usize) {
+        if let Some(slot) = frame.slots.cvs_mut().get_mut(*cv as usize) {
             if let Some(old) = slot.as_mut().replace(v.clone()) {
                 drop(old);
             }
@@ -5549,7 +5625,11 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
         closure: frame.closure.take(),
         ..PendingCall::new(Func::User(uf))
     };
-    for (arg, slot) in call.inline_args.iter_mut().zip(&mut frame.cvs[..prep.n]) {
+    for (arg, slot) in call
+        .inline_args
+        .iter_mut()
+        .zip(&mut frame.slots.cvs_mut()[..prep.n])
+    {
         *arg = slot.as_mut().take();
     }
     #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
@@ -5597,10 +5677,11 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
     let prepared = {
         let cb = match callee {
             Operand::Cv(cv) if !caller.symtab_attached => caller
-                .cvs
+                .slots
+                .cvs()
                 .get(cv as usize)
                 .and_then(crate::vm::CvSlot::get)?,
-            Operand::Tmp(t) => caller.tmps.get(t as usize)?,
+            Operand::Tmp(t) => caller.slots.tmps().get(t as usize)?,
             Operand::Lit(l) => caller.code.literals.get(l as usize)?,
             _ => return None,
         };
@@ -5613,7 +5694,7 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
     };
     // `FREE_OP2` of a temporary callback (the call holds what it needs).
     if let Operand::Tmp(t) = callee {
-        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+        if let Some(slot) = caller.slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }
@@ -5642,10 +5723,12 @@ pub(super) fn user_call_quick(vm: &mut Vm, callee: Operand, at: usize) -> Option
     let (cb, call) = {
         let f = vm.frames.vec.get(vm.frames.live.checked_sub(1)?)?;
         let cb = match callee {
-            Operand::Cv(cv) if !f.symtab_attached => {
-                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)?
-            }
-            Operand::Tmp(t) => f.tmps.get(t as usize)?,
+            Operand::Cv(cv) if !f.symtab_attached => f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)?,
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize)?,
             Operand::Lit(l) => f.code.literals.get(l as usize)?,
             _ => return None,
         };
@@ -5661,7 +5744,7 @@ pub(super) fn user_call_quick(vm: &mut Vm, callee: Operand, at: usize) -> Option
     // `FREE_OP2` of a temporary callback (the call holds what it needs:
     // the function, or the method and its object).
     if let Operand::Tmp(t) = callee {
-        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+        if let Some(slot) = vm.frame_mut().slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }
@@ -6136,10 +6219,12 @@ pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool
     let n = {
         let v = match src {
             Operand::Lit(l) => caller.code.literals.get(l as usize),
-            Operand::Tmp(t) => caller.tmps.get(t as usize),
-            Operand::Cv(cv) if !caller.symtab_attached => {
-                caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
-            }
+            Operand::Tmp(t) => caller.slots.tmps().get(t as usize),
+            Operand::Cv(cv) if !caller.symtab_attached => caller
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
             _ => None,
         };
         let Some(Value::Array(ht)) = v else {
@@ -6161,7 +6246,7 @@ pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool
         }
         match &prep.callee {
             Callee::User(_) => {
-                let Some(slots) = frame.cvs.get_mut(..n) else {
+                let Some(slots) = frame.slots.cvs_mut().get_mut(..n) else {
                     return false;
                 };
                 for (slot, (_, v)) in slots.iter_mut().zip(ht.iter()) {
@@ -6183,7 +6268,7 @@ pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool
     };
     // `FREE_OP1` of a temporary array.
     if let Operand::Tmp(t) = src {
-        if let Some(slot) = caller.tmps.get_mut(t as usize) {
+        if let Some(slot) = caller.slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }
@@ -6224,10 +6309,12 @@ pub(super) fn send_array_slice(
     let n = {
         let read = |o: Operand| match o {
             Operand::Lit(l) => caller.code.literals.get(l as usize),
-            Operand::Tmp(t) => caller.tmps.get(t as usize),
-            Operand::Cv(cv) if !caller.symtab_attached => {
-                caller.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
-            }
+            Operand::Tmp(t) => caller.slots.tmps().get(t as usize),
+            Operand::Cv(cv) if !caller.symtab_attached => caller
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
             _ => None,
         };
         let Some(Value::Array(ht)) = read(src) else {
@@ -6247,7 +6334,7 @@ pub(super) fn send_array_slice(
         }
         match &prep.callee {
             Callee::User(_) => {
-                let Some(slots) = frame.cvs.get_mut(..n) else {
+                let Some(slots) = frame.slots.cvs_mut().get_mut(..n) else {
                     return false;
                 };
                 for (slot, (_, v)) in slots.iter_mut().zip(ht.iter().skip(start)) {
@@ -6270,7 +6357,7 @@ pub(super) fn send_array_slice(
     // (an int or null: its release runs nothing).
     for o in [src, len] {
         if let Operand::Tmp(t) = o {
-            if let Some(slot) = caller.tmps.get_mut(t as usize) {
+            if let Some(slot) = caller.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -6322,7 +6409,12 @@ pub(super) fn init_dyn_call_named(vm: &mut Vm, cv: u32) -> bool {
         if f.symtab_attached {
             return false;
         }
-        let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+        let Some(Value::Str(s)) = f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
+        else {
             return false;
         };
         match quick_function(&vm.functions, s.as_bytes()) {
@@ -6354,10 +6446,12 @@ pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> boo
             return false;
         };
         let v = match class {
-            Operand::Cv(cv) if !f.symtab_attached => {
-                f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
-            }
-            Operand::Tmp(t) => f.tmps.get(t as usize),
+            Operand::Cv(cv) if !f.symtab_attached => f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize),
             _ => None,
         };
         let cls = match v {
@@ -6387,7 +6481,7 @@ pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> boo
         (cls, m)
     };
     if let Operand::Tmp(t) = class {
-        if let Some(slot) = vm.frame_mut().tmps.get_mut(t as usize) {
+        if let Some(slot) = vm.frame_mut().slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }

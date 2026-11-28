@@ -70,7 +70,7 @@ pub(crate) fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
     let passed = f.num_args();
     let declared = (0..passed.min(nparams)).map(|i| {
         // Not yet received (RECV pending): the passed value.
-        match f.cvs.get(i).and_then(crate::vm::CvSlot::get) {
+        match f.slots.cvs().get(i).and_then(crate::vm::CvSlot::get) {
             Some(v) => v.deref(),
             None => f
                 .args
@@ -1970,7 +1970,7 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
                     .cv_names
                     .iter()
                     .position(|n| n.as_bytes() == name.as_bytes())
-                    .and_then(|i| frame.cvs.get(i).and_then(crate::vm::CvSlot::get))
+                    .and_then(|i| frame.slots.cvs().get(i).and_then(crate::vm::CvSlot::get))
                     .is_some_and(|cv| matches!(cv, Value::Reference(c) if PhpRef::ptr_eq(c, r)));
                 if r.refcount() <= 1 + usize::from(mirrored) {
                     r.get()

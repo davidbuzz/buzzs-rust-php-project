@@ -265,7 +265,12 @@ impl Vm {
             if f.symtab_attached {
                 return None;
             }
-            return match f.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)? {
+            return match f
+                .slots
+                .cvs()
+                .get(*cv as usize)
+                .and_then(crate::vm::CvSlot::get)?
+            {
                 Value::Object(o) => Some(Value::Str(object::class_of(o).name.clone())),
                 _ => None,
             };
@@ -354,8 +359,8 @@ impl Vm {
         if f.symtab_attached {
             return None;
         }
-        let v = f.cvs.get(a as usize)?.get()?;
-        let c = f.cvs.get(b as usize)?.get()?;
+        let v = f.slots.cvs().get(a as usize)?.get()?;
+        let c = f.slots.cvs().get(b as usize)?.get()?;
         if matches!(v, Value::Reference(_)) {
             return None;
         }

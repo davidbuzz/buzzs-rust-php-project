@@ -409,7 +409,8 @@ pub(crate) fn with_base_obj<R>(
         return frame.this.as_ref().map(access);
     }
     let out = match frame
-        .cvs
+        .slots
+        .cvs()
         .get(base as usize)
         .and_then(crate::vm::CvSlot::get)
     {

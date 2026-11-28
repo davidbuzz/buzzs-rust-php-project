@@ -3199,7 +3199,8 @@ unsafe extern "C" fn jit_dim_get_wide(
         let v = {
             let f = &*frame;
             let Some(held) = f
-                .cvs
+                .slots
+                .cvs()
                 .get((word & DIM_WIDE_CV) as usize)
                 .and_then(crate::vm::CvSlot::get)
             else {
@@ -3584,7 +3585,10 @@ unsafe extern "C" fn jit_row_vm_read(
                 // its assignment, which the row covers: the interpreter's.
                 let by_ref = to.is_some_and(|cv| {
                     matches!(
-                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        f.slots
+                            .cvs()
+                            .get(cv as usize)
+                            .and_then(crate::vm::CvSlot::get),
                         Some(php_runtime::Value::Reference(_))
                     )
                 });
@@ -4741,8 +4745,11 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         let off = cv << SLOT_SHIFT;
         // SAFETY: the frame outlives the plan (the trace runs in it).
         let f = unsafe { &*st.f };
-        let Some(php_runtime::Value::Object(o)) =
-            f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)
+        let Some(php_runtime::Value::Object(o)) = f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
         else {
             rjs!("the called variable holds no object");
         };
@@ -9340,7 +9347,7 @@ unsafe fn back_edge_slow(
             if k < 12 {
                 // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
-                let d: Vec<(u8, i64)> = (0..f.cvs.len().min(8))
+                let d: Vec<(u8, i64)> = (0..f.slots.cvs().len().min(8))
                     // SAFETY: `i` is below the frame's variable count: `p` is that variable's
                     // 16-byte slot behind `st.cvs`, its tag byte and payload word initialized.
                     .map(|i| unsafe {
@@ -9367,7 +9374,7 @@ unsafe fn back_edge_slow(
             if k < 12 {
                 // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
-                let d: Vec<(u8, i64)> = (0..f.cvs.len().min(8))
+                let d: Vec<(u8, i64)> = (0..f.slots.cvs().len().min(8))
                     // SAFETY: `i` is below the frame's variable count: `p` is that variable's
                     // 16-byte slot behind `st.cvs`, its tag byte and payload word initialized.
                     .map(|i| unsafe {
@@ -9401,13 +9408,13 @@ unsafe fn back_edge_slow(
                 // The tag byte is the first byte of each slot's `Value`.
                 // SAFETY: `st.f` is the frame that runs the tape (the caller's contract).
                 let f = unsafe { &*st.f };
-                let t: Vec<u8> = (0..f.cvs.len())
+                let t: Vec<u8> = (0..f.slots.cvs().len())
                     // SAFETY: `i` is below the frame's variable count: the tag byte of that
                     // slot behind `st.cvs`.
                     .map(|i| unsafe { *(st.cvs.add(i * 16)) })
                     .collect();
                 eprintln!("jit:   cv tags = {t:?}");
-                let t: Vec<u8> = (0..f.tmps.len())
+                let t: Vec<u8> = (0..f.slots.tmps().len())
                     // SAFETY: `i` is below the frame's temporary count: the tag byte of that
                     // slot behind `st.tmps`.
                     .map(|i| unsafe { *(st.tmps.add(i * 16)) })

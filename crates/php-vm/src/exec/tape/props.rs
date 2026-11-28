@@ -58,7 +58,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         // 1-op read: the result goes to `dst` directly.
-        // `store_fetched_in` indexes `f.tmps[dst]` without a bounds check,
+        // `store_fetched_in` indexes `f.slots.tmps()[dst]` without a bounds check,
         // so validate `dst` (frames are sized to `num_tmps` by `usable`).
         Op::FetchObjProp {
             place,
@@ -376,7 +376,7 @@ pub(super) unsafe fn incdec_static(frame: *mut Frame, inst: &Inst) -> bool {
 /// release.
 fn this_const_value(f: &Frame, inst: &Inst) -> Option<php_runtime::Value> {
     if !matches!(
-        f.tmps.get(inst.p)?,
+        f.slots.tmps().get(inst.p)?,
         php_runtime::Value::Null
             | php_runtime::Value::Bool(_)
             | php_runtime::Value::Int(_)

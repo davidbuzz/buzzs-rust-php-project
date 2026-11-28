@@ -349,8 +349,8 @@ unsafe fn frame_st(f: *mut Frame) -> St {
     // SAFETY: the caller's contract.
     let fr = unsafe { &mut *f };
     St {
-        cvs: fr.cvs.as_mut_ptr().cast(),
-        tmps: fr.tmps.as_mut_ptr().cast(),
+        cvs: fr.slots.cvs_mut().as_mut_ptr().cast(),
+        tmps: fr.slots.tmps_mut().as_mut_ptr().cast(),
         lits: fr.code.literals.as_ptr().cast(),
         f,
     }
@@ -1468,7 +1468,10 @@ fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
     // write is `declined_vm_step`'s, which the caller tries next).
     if let Some(&Op::AssignDimCv { cv, .. }) = ops.get(at) {
         if matches!(
-            f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+            f.slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
             Some(Value::Object(_))
         ) {
             return DECLINED;
@@ -1482,8 +1485,12 @@ fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
     }) = ops.get(at)
     {
         let obj = match a {
-            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
-            Operand::Tmp(t) => f.tmps.get(t as usize),
+            Operand::Cv(cv) => f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get),
+            Operand::Tmp(t) => f.slots.tmps().get(t as usize),
             _ => None,
         };
         if matches!(obj, Some(Value::Object(_))) {
@@ -2009,8 +2016,8 @@ pub(super) fn worth_entering(code: &OpArray, at: usize) -> bool {
 #[allow(clippy::inline_always)] // three tests on the way into the loop
 fn usable(f: &Frame, code: &OpArray) -> bool {
     !f.symtab_attached
-        && f.cvs.len() >= code.cv_names.len()
-        && f.tmps.len() >= code.num_tmps as usize
+        && f.slots.cvs().len() >= code.cv_names.len()
+        && f.slots.tmps().len() >= code.num_tmps as usize
 }
 
 /// Runs the hot ops of the current frame (the one `code` belongs to) from
@@ -2126,8 +2133,8 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 // out of the core (none of them resizes one, but none is
                 // bound not to replace its buffer).
                 let st = St {
-                    cvs: f.cvs.as_mut_ptr().cast(),
-                    tmps: f.tmps.as_mut_ptr().cast(),
+                    cvs: f.slots.cvs_mut().as_mut_ptr().cast(),
+                    tmps: f.slots.tmps_mut().as_mut_ptr().cast(),
                     lits: lits.as_ptr().cast(),
                     f: std::ptr::from_mut(f),
                 };
@@ -2847,8 +2854,12 @@ fn plan_method_site(vm: &Vm, code: &OpArray, obj: Operand, lit: u32, at: usize, 
         return;
     };
     let o = match obj {
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
-        Operand::Tmp(t) => f.tmps.get(t as usize),
+        Operand::Cv(cv) => f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.slots.tmps().get(t as usize),
         _ => None,
     };
     let o = match (obj, o) {
@@ -2884,8 +2895,12 @@ fn init_dyn_method_call_vm(vm: &mut Vm, obj: Operand, name: Operand, at: usize) 
         return DECLINED;
     }
     let peek = |o: Operand| match o {
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
-        Operand::Tmp(t) => f.tmps.get(t as usize),
+        Operand::Cv(cv) => f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get),
+        Operand::Tmp(t) => f.slots.tmps().get(t as usize),
         _ => None,
     };
     let obj_ok = match obj {
@@ -3155,10 +3170,15 @@ fn declined_cast_object(
             !f.symtab_attached
                 && match a {
                     Operand::Cv(cv) => matches!(
-                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        f.slots
+                            .cvs()
+                            .get(cv as usize)
+                            .and_then(crate::vm::CvSlot::get),
                         Some(Value::Object(_))
                     ),
-                    Operand::Tmp(t) => matches!(f.tmps.get(t as usize), Some(Value::Object(_))),
+                    Operand::Tmp(t) => {
+                        matches!(f.slots.tmps().get(t as usize), Some(Value::Object(_)))
+                    }
                     _ => false,
                 }
         };
@@ -3213,7 +3233,7 @@ fn declined_dim_object(
     let is_object = vm
         .frames
         .last()
-        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(|f| f.slots.cvs().get(cv as usize))
         .and_then(crate::vm::CvSlot::get)
         .is_some_and(|v| matches!(v, Value::Object(_)));
     if !is_object {
@@ -3393,7 +3413,8 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
                 return DECLINED;
             };
             let undefined = |cv: u32| {
-                f.cvs
+                f.slots
+                    .cvs()
                     .get(cv as usize)
                     .and_then(crate::vm::CvSlot::get)
                     .is_none()
@@ -3566,7 +3587,7 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
 fn bind_target_plain(vm: &Vm, cv: u32) -> bool {
     vm.frames
         .last()
-        .and_then(|f| f.cvs.get(cv as usize))
+        .and_then(|f| f.slots.cvs().get(cv as usize))
         .is_some_and(|slot| {
             matches!(
                 slot.get(),
@@ -3603,7 +3624,7 @@ pub(super) fn global_slot_addr(vm: &Vm, f: &Frame, at: usize) -> usize {
                         .frames
                         .vec
                         .first()
-                        .and_then(|main| main.cvs.get(cv as usize))
+                        .and_then(|main| main.slots.cvs().get(cv as usize))
                         .map_or(0, |slot| std::ptr::from_ref(slot) as usize);
                 }
                 Some(GlobalSlot::GlobalStore(idx)) => Some(idx),

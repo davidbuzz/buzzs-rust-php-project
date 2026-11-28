@@ -575,7 +575,7 @@ impl Vm {
         };
         let nparams = uf.params.len();
         let passed = f.num_args();
-        let cv = |i: usize| f.cvs.get(i).and_then(crate::vm::CvSlot::get_clone);
+        let cv = |i: usize| f.slots.cvs().get(i).and_then(crate::vm::CvSlot::get_clone);
         let st_ref = f.vars().try_borrow().ok();
         let from_vars = |i: usize, name: &ZStr| -> Option<Value> {
             let st = st_ref.as_ref()?;

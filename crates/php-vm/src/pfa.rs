@@ -733,7 +733,7 @@ impl Vm {
                     .iter()
                     .position(|n| n.as_bytes() == name.as_bytes())
                 {
-                    f.cvs[idx].set(Some(v.clone()));
+                    f.slots.cvs_mut()[idx].set(Some(v.clone()));
                 }
                 let mut vars = f.vars().borrow_mut();
                 if let Some(idx) = vars

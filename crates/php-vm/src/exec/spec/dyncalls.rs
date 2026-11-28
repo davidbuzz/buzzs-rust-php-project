@@ -42,12 +42,12 @@ pub(in crate::exec) fn init_dyn_method_call_in(
     let hit = {
         let o = match obj {
             Operand::Cv(cv) if !f.symtab_attached => {
-                match f.cvs.get(cv as usize).and_then(CvSlot::get) {
+                match f.slots.cvs().get(cv as usize).and_then(CvSlot::get) {
                     Some(Value::Object(o)) => o,
                     _ => return false,
                 }
             }
-            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Object(o)) => o,
                 _ => return false,
             },
@@ -59,12 +59,12 @@ pub(in crate::exec) fn init_dyn_method_call_in(
         };
         let n = match name {
             Operand::Cv(cv) if !f.symtab_attached => {
-                match f.cvs.get(cv as usize).and_then(CvSlot::get) {
+                match f.slots.cvs().get(cv as usize).and_then(CvSlot::get) {
                     Some(Value::Str(s)) => s,
                     _ => return false,
                 }
             }
-            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Str(s)) => s,
                 _ => return false,
             },
@@ -109,7 +109,7 @@ pub(in crate::exec) fn init_dyn_method_call_in(
     // of temporaries): the call holds its own handle of the object.
     for op in [obj, name] {
         if let Operand::Tmp(t) = op {
-            if let Some(s) = f.tmps.get_mut(t as usize) {
+            if let Some(s) = f.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(s));
             }
         }

@@ -257,11 +257,12 @@ impl Vm {
         }
         let k = match key {
             Operand::Cv(cv) => f
-                .cvs
+                .slots
+                .cvs()
                 .get(cv as usize)
                 .and_then(crate::vm::CvSlot::get)
                 .cloned(),
-            Operand::Tmp(x) | Operand::TmpKeep(x) => f.tmps.get(x as usize).cloned(),
+            Operand::Tmp(x) | Operand::TmpKeep(x) => f.slots.tmps().get(x as usize).cloned(),
             Operand::Lit(l) => f.code.literals.get(l as usize).cloned(),
             Operand::Unused => None,
         };
@@ -1942,7 +1943,7 @@ impl Vm {
                 let Some(slot) = self
                     .frames
                     .last_mut()
-                    .and_then(|f| f.tmps.get_mut(d as usize))
+                    .and_then(|f| f.slots.tmps_mut().get_mut(d as usize))
                 else {
                     drop(v);
                     return;
@@ -2053,8 +2054,8 @@ impl Vm {
             for (slot, operand) in refs.iter_mut().zip(&fc.vals[..n]) {
                 let v = match *operand {
                     Operand::Lit(l) => frame.code.literals.get(l as usize)?,
-                    Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
-                    Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                    Operand::Cv(cv) => frame.slots.cvs().get(cv as usize)?.get()?,
+                    Operand::Tmp(t) => frame.slots.tmps().get(t as usize)?,
                     _ => return None,
                 };
                 if matches!(v, Value::Reference(_)) {
@@ -2110,7 +2111,7 @@ impl Vm {
         // them).
         for operand in &fc.vals[..n] {
             if let Operand::Tmp(t) = *operand {
-                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                     drop(std::mem::take(slot));
                 }
             }
@@ -2146,8 +2147,8 @@ impl Vm {
             let frame = self.frames.last()?;
             let arg = match fc.vals[0] {
                 Operand::Lit(l) => frame.code.literals.get(l as usize)?,
-                Operand::Cv(cv) => frame.cvs.get(cv as usize)?.get()?,
-                Operand::Tmp(t) => frame.tmps.get(t as usize)?,
+                Operand::Cv(cv) => frame.slots.cvs().get(cv as usize)?.get()?,
+                Operand::Tmp(t) => frame.slots.tmps().get(t as usize)?,
                 _ => return None,
             };
             if matches!(arg, Value::Reference(_)) || !frameless_arg1(class, arg) {
@@ -2163,7 +2164,7 @@ impl Vm {
         let frame = self.frames.last_mut()?;
         // A temporary argument is consumed (its `Send` would have moved it).
         if let Operand::Tmp(t) = fc.vals[0] {
-            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+            if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -2319,7 +2320,8 @@ impl Vm {
                     .get(l as usize)
                     .map(crate::func::copy_arg),
                 Operand::Cv(cv) => frame
-                    .cvs
+                    .slots
+                    .cvs()
                     .get(cv as usize)
                     .and_then(crate::vm::CvSlot::get)
                     .map(|v| match v {
@@ -2329,7 +2331,7 @@ impl Vm {
                 // An argument computed before the op: a copy for now; the
                 // temporary is released below, once the call is known to
                 // run here (its `Send` would have moved it).
-                Operand::Tmp(t) => frame.tmps.get(t as usize).map(|v| match v {
+                Operand::Tmp(t) => frame.slots.tmps().get(t as usize).map(|v| match v {
                     Value::Reference(r) => r.get(),
                     v => crate::func::copy_arg(v),
                 }),
@@ -2356,7 +2358,7 @@ impl Vm {
         }
         for operand in &fc.vals[..n] {
             if let Operand::Tmp(t) = *operand {
-                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                if let Some(slot) = frame.slots.tmps_mut().get_mut(t as usize) {
                     drop(std::mem::take(slot));
                 }
             }

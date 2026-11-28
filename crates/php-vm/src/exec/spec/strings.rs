@@ -36,8 +36,8 @@ use php_runtime::{Value, ZStr};
 fn peek_str_int<'a>(f: &'a Frame, lits: &'a [Value], op: Operand) -> Option<&'a Value> {
     let v = match op {
         Operand::Lit(i) => lits.get(i as usize)?,
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
         Operand::Unused => return None,
     };
     matches!(v, Value::Str(_) | Value::Int(_)).then_some(v)
@@ -70,7 +70,7 @@ fn push_part(out: &mut ZStrBuf, v: &Value) {
 #[allow(clippy::inline_always)]
 fn consume_tmp(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             if !matches!(slot, Value::Int(_)) {
                 drop(std::mem::take(slot));
             }
@@ -140,8 +140,9 @@ pub(in crate::exec) fn concat_in(
     // A left temporary holding a string: moved out, so that a unique one
     // is extended in place (`zend_string_extend`).
     if let Operand::Tmp(ta) = a {
-        if matches!(f.tmps.get(ta as usize), Some(Value::Str(_))) {
-            let Some(Value::Str(s)) = f.tmps.get_mut(ta as usize).map(std::mem::take) else {
+        if matches!(f.slots.tmps().get(ta as usize), Some(Value::Str(_))) {
+            let Some(Value::Str(s)) = f.slots.tmps_mut().get_mut(ta as usize).map(std::mem::take)
+            else {
                 return None;
             };
             let r = match peek_str_int(f, lits, b) {
@@ -168,7 +169,7 @@ pub(in crate::exec) fn concat_in(
             let r = match r {
                 Ok(r) => r,
                 Err(s) => {
-                    if let Some(slot) = f.tmps.get_mut(ta as usize) {
+                    if let Some(slot) = f.slots.tmps_mut().get_mut(ta as usize) {
                         *slot = Value::Str(s);
                     }
                     return None;

@@ -621,7 +621,7 @@ impl Vm {
                             d.value = pv;
                         }
                         if let (Some(t), Some(f)) = (dst, d.frame.as_mut()) {
-                            f.tmps[t as usize] = r;
+                            f.slots.tmps_mut()[t as usize] = r;
                         }
                     });
                 } else {
@@ -976,7 +976,7 @@ impl Vm {
         with(&root, |d| {
             if d.state != GenState::Running {
                 if let (Some(t), Some(f)) = (d.send_target, d.frame.as_mut()) {
-                    f.tmps[t as usize] = v;
+                    f.slots.tmps_mut()[t as usize] = v;
                 }
             }
         });

@@ -1409,7 +1409,7 @@ fn concat_cv_in_place(
         return None;
     };
     let idx = *cv as usize;
-    let slot = f.cvs.get(idx)?;
+    let slot = f.slots.cvs().get(idx)?;
     // SAFETY: no other reference into the slot is alive: `rhs` is an owned
     // operand or a literal, never a borrow of a variable slot.
     let val = unsafe { slot.get_mut_unchecked() };
@@ -1763,10 +1763,12 @@ impl Vm {
             return None;
         }
         let cv = *cv as usize;
-        Some(match f.cvs.get(cv).and_then(crate::vm::CvSlot::get) {
-            Some(v) => RBase::Value(v.deref()),
-            None => RBase::Undef(f.code.cv_names.get(cv)?.clone()),
-        })
+        Some(
+            match f.slots.cvs().get(cv).and_then(crate::vm::CvSlot::get) {
+                Some(v) => RBase::Value(v.deref()),
+                None => RBase::Undef(f.code.cv_names.get(cv)?.clone()),
+            },
+        )
     }
 
     /// Runs the generic access `op` to place `pid`, then detaches the
@@ -1907,7 +1909,10 @@ impl Vm {
         let wrap = !place.segs.is_empty();
         if !wrap
             && !matches!(
-                f.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get),
+                f.slots
+                    .cvs()
+                    .get(*cv as usize)
+                    .and_then(crate::vm::CvSlot::get),
                 Some(Value::Reference(_))
             )
         {
@@ -1951,7 +1956,7 @@ impl Vm {
         }
         let code = f.code.clone();
         let vars = Rc::as_ptr(&f.vars_store);
-        let slot = f.cvs.get_mut(cv as usize)?;
+        let slot = f.slots.cvs_mut().get_mut(cv as usize)?;
         let (r, wrapped) = match slot.get()? {
             Value::Reference(r) => (r.clone(), false),
             Value::Array(_) | Value::Object(_) if wrap => {
@@ -2014,7 +2019,7 @@ impl Vm {
         else {
             return;
         };
-        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+        let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) else {
             return;
         };
         let new = match after {
@@ -2075,7 +2080,7 @@ impl Vm {
             return;
         };
         let cv = *cv as usize;
-        if let Some(slot) = f.cvs.get_mut(cv) {
+        if let Some(slot) = f.slots.cvs_mut().get_mut(cv) {
             let slot = slot.as_mut();
             if matches!(slot, None | Some(Value::Null)) {
                 *slot = Some(Value::Array(ZArray::new()));
@@ -2134,7 +2139,7 @@ impl Vm {
             },
             _ => return Err(Value::Reference(r)),
         };
-        let Some(slot) = f.cvs.get_mut(cv) else {
+        let Some(slot) = f.slots.cvs_mut().get_mut(cv) else {
             return Err(Value::Reference(r));
         };
         let old = slot.set(Some(Value::Reference(r.clone())));
@@ -2178,7 +2183,7 @@ impl Vm {
             return None;
         };
         let cv = *cv as usize;
-        let slot = f.cvs.get_mut(cv)?.as_mut();
+        let slot = f.slots.cvs_mut().get_mut(cv)?.as_mut();
         Some(slot.get_or_insert(Value::Null).make_ref())
     }
 
@@ -2225,7 +2230,12 @@ impl Vm {
         match shape {
             Shape::Prop => self.prop_cache_make_ref(pid),
             Shape::CvDim(cv, key) => {
-                let slot = self.frames.last_mut()?.cvs.get_mut(cv as usize)?;
+                let slot = self
+                    .frames
+                    .last_mut()?
+                    .slots
+                    .cvs_mut()
+                    .get_mut(cv as usize)?;
                 match slot.as_mut().as_mut()? {
                     Value::Array(a) => Some(element_make_ref(a, key)),
                     Value::Reference(r) => {
@@ -2299,7 +2309,7 @@ impl Vm {
         let Some(slot) = self
             .frames
             .last_mut()
-            .and_then(|f| f.cvs.get_mut(cv as usize))
+            .and_then(|f| f.slots.cvs_mut().get_mut(cv as usize))
         else {
             return false;
         };
@@ -2356,7 +2366,12 @@ impl Vm {
             return Err(v);
         };
         let vars = Rc::as_ptr(&f.vars_store);
-        let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+        let cur = match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)
+        {
             Some(cur) => cur.deref(),
             None => return Err(v),
         };
@@ -2383,7 +2398,7 @@ impl Vm {
         else {
             return Ok(Ok(nv));
         };
-        let Some(slot) = f.cvs.get_mut(cv as usize) else {
+        let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) else {
             return Ok(Ok(nv));
         };
         let held = match slot.get() {
@@ -2440,7 +2455,12 @@ impl Vm {
             return None;
         };
         let cv = *cv;
-        let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+        let cur = match f
+            .slots
+            .cvs()
+            .get(cv as usize)
+            .and_then(crate::vm::CvSlot::get)?
+        {
             n @ (Value::Int(_) | Value::Float(_)) => n.clone(),
             _ => return None,
         };
@@ -2468,7 +2488,7 @@ impl Vm {
         if let Some(slot) = self
             .frames
             .last_mut()
-            .and_then(|f| f.cvs.get_mut(cv as usize))
+            .and_then(|f| f.slots.cvs_mut().get_mut(cv as usize))
             .map(crate::vm::CvSlot::as_mut)
         {
             // The old value is an int or a float: nothing to release.
@@ -3110,7 +3130,7 @@ impl Vm {
             .frames
             .last()
             .filter(|f| std::ptr::eq(Rc::as_ptr(&f.vars_store), vars))
-            .and_then(|f| f.cvs.get(cv as usize))
+            .and_then(|f| f.slots.cvs().get(cv as usize))
             .and_then(|slot| match slot.get() {
                 Some(Value::Reference(r)) => Some(r.clone()),
                 _ => None,
@@ -3325,7 +3345,7 @@ impl Vm {
                     .cv_names
                     .iter()
                     .position(|n| n.as_bytes() == name.as_bytes())
-                    .and_then(|i| f.cvs.get(i))
+                    .and_then(|i| f.slots.cvs().get(i))
                     .and_then(crate::vm::CvSlot::get)
                     .is_some_and(|v| matches!(v, Value::Reference(c) if PhpRef::ptr_eq(c, r)))
             })
@@ -3346,7 +3366,7 @@ impl Vm {
                 continue;
             };
             for (i, name) in f.code.cv_names.iter().enumerate() {
-                if !holds(f.cvs.get(i).and_then(crate::vm::CvSlot::get)) {
+                if !holds(f.slots.cvs().get(i).and_then(crate::vm::CvSlot::get)) {
                     continue;
                 }
                 let slot = st.find(name.as_bytes()).map(|s| s as usize);
@@ -4742,7 +4762,8 @@ impl Vm {
             return None;
         }
         let undef = f
-            .cvs
+            .slots
+            .cvs()
             .get(cv as usize)
             .map_or(false, crate::vm::CvSlot::is_none);
         undef.then_some(cv)
@@ -4766,7 +4787,7 @@ impl Vm {
         };
         let f = self.frame_mut();
         let idx = cv as usize;
-        if let Some(slot) = f.cvs.get_mut(idx) {
+        if let Some(slot) = f.slots.cvs_mut().get_mut(idx) {
             if slot.is_none() {
                 slot.set(Some(init.clone()));
                 f.sync_cv_to_symtab(cv, &init);
@@ -4788,7 +4809,7 @@ impl Vm {
             Some(Seg::Dim(Operand::Lit(i))) => Some(self.lit(*i)),
             Some(Seg::Dim(Operand::Cv(cv))) => self.cv_get(*cv),
             Some(Seg::Dim(Operand::Tmp(t) | Operand::TmpKeep(t))) => {
-                self.frame().tmps.get(*t as usize).cloned()
+                self.frame().slots.tmps().get(*t as usize).cloned()
             }
             _ => None,
         };
@@ -4910,11 +4931,11 @@ impl Vm {
         };
         let cv = *cv;
         let idx = cv as usize;
-        match f.cvs.get(idx)?.get() {
+        match f.slots.cvs().get(idx)?.get() {
             Some(Value::Int(i)) => {
                 let mut int_val = *i;
                 let res = incdec_int_slot(&mut int_val, kind)?;
-                f.cvs[idx].set(Some(Value::Int(int_val)));
+                f.slots.cvs_mut()[idx].set(Some(Value::Int(int_val)));
                 f.sync_cv_to_symtab(cv, &Value::Int(int_val));
                 Some(res)
             }
@@ -5657,7 +5678,11 @@ impl Vm {
             return None;
         }
         let k = match name {
-            Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)?,
+            Operand::Cv(cv) => f
+                .slots
+                .cvs()
+                .get(cv as usize)
+                .and_then(crate::vm::CvSlot::get)?,
             Operand::Lit(l) => f.code.literals.get(l as usize)?,
             _ => return None,
         };
@@ -5969,7 +5994,7 @@ impl Vm {
                 .iter()
                 .position(|n| n.as_bytes() == &name_bytes[..])
             {
-                if let Some(v) = f.cvs.get(cv).and_then(crate::vm::CvSlot::get) {
+                if let Some(v) = f.slots.cvs().get(cv).and_then(crate::vm::CvSlot::get) {
                     return Some(v.deref());
                 }
                 // The main script's undefined variable is the global's
@@ -6115,7 +6140,7 @@ pub(crate) mod propcache;
 fn quiet_key(f: &crate::vm::Frame, k: Operand) -> Option<ArrayKey> {
     let v = match k {
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
-        Operand::Cv(cv) => f.cvs.get(cv as usize)?.get()?,
+        Operand::Cv(cv) => f.slots.cvs().get(cv as usize)?.get()?,
         _ => return None,
     };
     match v {

@@ -82,7 +82,7 @@ fn fetch_dim_cv_other(
     dst: u32,
     to: Option<u32>,
 ) -> Option<bool> {
-    if let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(CvSlot::get) {
+    if let Some(Value::Str(s)) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get) {
         let offset = match dim_ref_in(f, dim)? {
             DimRef::Int(i) => i,
             DimRef::Str(k) => match ArrayKey::from_zstr(k) {
@@ -137,7 +137,7 @@ pub(in crate::exec) fn isset_dim_cv_in(
         return false;
     };
     release_str_tmp_in(f, dim);
-    let Some(slot) = f.tmps.get_mut(dst as usize) else {
+    let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) else {
         return false;
     };
     put_tmp(slot, Value::Bool(r));
@@ -169,7 +169,7 @@ pub(in crate::exec) fn assign_op_dim_cv_in(
     let Some(y) = Vm::peek_num(f, val) else {
         return false;
     };
-    let Some(slot) = f.cvs.get(cv as usize) else {
+    let Some(slot) = f.slots.cvs().get(cv as usize) else {
         return false;
     };
     // SAFETY: the CV slot is not otherwise borrowed: `key` is an int or a
@@ -245,7 +245,7 @@ fn concat_dim_cv_in(f: &mut Frame, cv: u32, dim: Operand, val: Operand) -> bool 
         Some(v @ (Value::Str(_) | Value::Int(_))) => v,
         _ => return false,
     };
-    let Some(slot) = f.cvs.get(cv as usize) else {
+    let Some(slot) = f.slots.cvs().get(cv as usize) else {
         return false;
     };
     // SAFETY: `key` and `add` are owned copies; nothing else borrows the
@@ -277,7 +277,7 @@ fn concat_dim_cv_in(f: &mut Frame, cv: u32, dim: Operand, val: Operand) -> bool 
     // The offset and OP_DATA temporaries are consumed.
     release_str_tmp_in(f, dim);
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
@@ -299,7 +299,7 @@ pub(in crate::exec) fn incdec_dim_cv_in(
     kind: IncDecKind,
 ) -> Option<Value> {
     let key = dim_ref_in(f, dim)?;
-    let slot = f.cvs.get(cv as usize)?;
+    let slot = f.slots.cvs().get(cv as usize)?;
     // SAFETY: as in `assign_op_dim_cv_in`, the offset `key` borrows
     // another operand, never this CV slot.
     let val_mut = unsafe { slot.get_mut_unchecked() };
@@ -365,7 +365,7 @@ fn assign_op_dim_ref_in(f: &mut Frame, cv: u32, dim: Operand, op: BinaryOp, y: N
     let Some(key) = dim_ref_in(f, dim) else {
         return false;
     };
-    let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+    let Some(Value::Reference(r)) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get) else {
         return false;
     };
     let Some(mut guard) = r.try_borrow_mut() else {
@@ -404,7 +404,7 @@ fn assign_op_dim_ref_in(f: &mut Frame, cv: u32, dim: Operand, op: BinaryOp, y: N
 #[inline(never)]
 fn incdec_dim_ref_in(f: &mut Frame, cv: u32, dim: Operand, kind: IncDecKind) -> Option<Value> {
     let key = dim_ref_in(f, dim)?;
-    let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+    let Some(Value::Reference(r)) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get) else {
         return None;
     };
     let mut guard = r.try_borrow_mut()?;
@@ -594,7 +594,7 @@ pub(in crate::exec) fn assign_dim_cv_in(
         return false;
     };
     let str_dim = matches!(wd, WriteDim::Str(_));
-    let Some(slot) = f.cvs.get(cv as usize) else {
+    let Some(slot) = f.slots.cvs().get(cv as usize) else {
         return false;
     };
     // SAFETY: the offset borrows another operand (a string offset is never
@@ -630,7 +630,7 @@ pub(in crate::exec) fn assign_dim_cv_in(
         release_str_tmp_in(f, dim);
     }
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
@@ -668,7 +668,7 @@ fn assign_dims_plain_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) ->
     let Some(v) = plain_value_in(f, val) else {
         return false;
     };
-    let Some(slot) = f.cvs.get(cv as usize) else {
+    let Some(slot) = f.slots.cvs().get(cv as usize) else {
         return false;
     };
     // SAFETY: the keys and the value are owned copies; nothing else
@@ -688,7 +688,7 @@ fn assign_dims_plain_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) ->
     discard_plain(old);
     release_place_str_tmps(f, place);
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
@@ -720,7 +720,7 @@ fn assign_dims_wide_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) -> 
     let Some(v) = dim_value_in(f, val) else {
         return false;
     };
-    let Some(slot) = f.cvs.get_mut(cv as usize) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) else {
         return false;
     };
     let res = match slot.as_mut() {
@@ -742,7 +742,7 @@ fn assign_dims_wide_in(f: &mut Frame, cv: u32, place: PlaceId, val: Operand) -> 
     }
     release_place_str_tmps(f, place);
     if let Operand::Tmp(t) = val {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Null);
         }
     }
@@ -803,7 +803,7 @@ pub(in crate::exec) fn assign_op_dims_cv_in(
     let Some(y) = Vm::peek_num(f, val) else {
         return false;
     };
-    let Some(slot) = f.cvs.get(cv as usize) else {
+    let Some(slot) = f.slots.cvs().get(cv as usize) else {
         return false;
     };
     // SAFETY: the keys are owned copies and `y` a copied number.
@@ -842,7 +842,10 @@ pub(in crate::exec) fn concat_cv_in(
     dst: Option<u32>,
 ) -> bool {
     let idx = cv as usize;
-    if !matches!(f.cvs.get(idx).and_then(CvSlot::get), Some(Value::Str(_))) {
+    if !matches!(
+        f.slots.cvs().get(idx).and_then(CvSlot::get),
+        Some(Value::Str(_))
+    ) {
         return false;
     }
     // The right-hand side, checked before anything changes (`None`: the
@@ -851,7 +854,7 @@ pub(in crate::exec) fn concat_cv_in(
     let taken;
     let rhs: Option<&Value> = match val {
         Operand::Cv(src) if src == cv => None,
-        Operand::Cv(src) => match f.cvs.get(src as usize).and_then(CvSlot::get) {
+        Operand::Cv(src) => match f.slots.cvs().get(src as usize).and_then(CvSlot::get) {
             Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v),
             _ => return false,
         },
@@ -859,21 +862,21 @@ pub(in crate::exec) fn concat_cv_in(
             Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v),
             _ => return false,
         },
-        Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+        Operand::Tmp(t) => match f.slots.tmps_mut().get_mut(t as usize) {
             Some(slot) if matches!(slot, Value::Str(_) | Value::Int(_)) => {
                 taken = std::mem::replace(slot, Value::Null);
                 Some(&taken)
             }
             _ => return false,
         },
-        Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+        Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
             Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v),
             _ => return false,
         },
         Operand::Unused => return false,
     };
     f.unsync_cv_from_symtab(cv);
-    let Some(slot) = f.cvs.get(idx) else {
+    let Some(slot) = f.slots.cvs().get(idx) else {
         return false;
     };
     // SAFETY: `rhs` never points into this slot (the variable itself is
@@ -899,7 +902,7 @@ pub(in crate::exec) fn concat_cv_in(
         let r = Value::Str(s.clone());
         f.sync_cv_to_symtab(cv, &r);
         if let Some(d) = dst {
-            if let Some(slot) = f.tmps.get_mut(d as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(d as usize) {
                 put_tmp(slot, r);
             }
         }
@@ -943,11 +946,11 @@ pub(in crate::exec) fn fe_fetch_array_in(
         v => copy_value(v),
     };
     *pos = p + 1;
-    if let Some(slot) = f.tmps.get_mut(val as usize) {
+    if let Some(slot) = f.slots.tmps_mut().get_mut(val as usize) {
         put_tmp(slot, v);
     }
     if let (Some(kt), Some(k)) = (key, k) {
-        if let Some(slot) = f.tmps.get_mut(kt as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(kt as usize) {
             put_tmp(slot, k);
         }
     }
@@ -979,7 +982,7 @@ pub(in crate::exec) fn fe_assign_in(f: &mut Frame, ops: &[Op], ip: usize, t: u32
     if src != t {
         return ip;
     }
-    let plain = match f.cvs.get(cv as usize).map(CvSlot::get) {
+    let plain = match f.slots.cvs().get(cv as usize).map(CvSlot::get) {
         Some(None) => true,
         Some(Some(v)) => !matches!(v, Value::Array(_) | Value::Object(_) | Value::Reference(_)),
         None => false,
@@ -1042,7 +1045,7 @@ pub(in crate::exec) fn unset_dims_cv_in(f: &mut Frame, cv: u32, place: PlaceId) 
     let Some(keys) = keys.get(..n).filter(|k| !k.is_empty()) else {
         return false;
     };
-    let Some(slot) = f.cvs.get_mut(cv as usize) else {
+    let Some(slot) = f.slots.cvs_mut().get_mut(cv as usize) else {
         return false;
     };
     let removed = match slot.as_mut() {
@@ -1093,7 +1096,7 @@ pub(super) fn assign_cv_dims_in(
     };
     let (keys, n) = super::props::dim_keys_in(f, &p.segs)?;
     let keys = keys.get(..n)?;
-    let old = match f.cvs.get_mut(cv as usize)?.as_mut() {
+    let old = match f.slots.cvs_mut().get_mut(cv as usize)?.as_mut() {
         Some(Value::Array(arr)) => super::props::store_dims(arr.make_mut(), keys, v),
         Some(Value::Reference(r)) => {
             let mut guard = r.try_borrow_mut()?;
@@ -1283,7 +1286,7 @@ pub(in crate::exec) fn fetch_dim_is_miss_in(
     if !plain_dims(f, &segs) {
         return None;
     }
-    let cur = f.cvs.get(cv as usize)?.get();
+    let cur = f.slots.cvs().get(cv as usize)?.get();
     if cur.is_none() && f.symtab_attached {
         return None;
     }
@@ -1308,7 +1311,7 @@ pub(in crate::exec) fn fetch_dims_is_miss_in(
     if !plain_dims(f, segs) {
         return None;
     }
-    let cur = f.cvs.get(cv as usize)?.get();
+    let cur = f.slots.cvs().get(cv as usize)?.get();
     if cur.is_none() && f.symtab_attached {
         return None;
     }
@@ -1328,7 +1331,7 @@ pub(in crate::exec) fn fetch_dims_is_miss_in(
 fn tmp_base(f: &Frame, base: Operand) -> Option<(&Value, Option<u32>)> {
     match base {
         Operand::Tmp(t) => {
-            let v = f.tmps.get(t as usize)?;
+            let v = f.slots.tmps().get(t as usize)?;
             match v {
                 Value::Array(a) if a.refcount() >= 2 => Some((v, Some(t))),
                 Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
@@ -1337,10 +1340,10 @@ fn tmp_base(f: &Frame, base: Operand) -> Option<(&Value, Option<u32>)> {
                 _ => None,
             }
         }
-        Operand::TmpKeep(t) => Some((f.tmps.get(t as usize)?, None)),
+        Operand::TmpKeep(t) => Some((f.slots.tmps().get(t as usize)?, None)),
         // `[$a, $b] = $cv` reads the variable in place (an undefined one
         // warns on the generic path).
-        Operand::Cv(c) => Some((f.cvs.get(c as usize)?.get()?, None)),
+        Operand::Cv(c) => Some((f.slots.cvs().get(c as usize)?.get()?, None)),
         Operand::Lit(l) => Some((f.code.literals.get(l as usize)?, None)),
         _ => None,
     }
@@ -1350,7 +1353,7 @@ fn tmp_base(f: &Frame, base: Operand) -> Option<(&Value, Option<u32>)> {
 /// temporaries and the consumed base temporary `base` ([`tmp_base`]).
 fn release_tmp_place(f: &mut Frame, place: PlaceId, base: Option<u32>) {
     release_place_str_tmps(f, place);
-    if let Some(slot) = base.and_then(|t| f.tmps.get_mut(t as usize)) {
+    if let Some(slot) = base.and_then(|t| f.slots.tmps_mut().get_mut(t as usize)) {
         // A scalar, or an array whose last handle is elsewhere.
         drop(std::mem::take(slot));
     }
@@ -1447,15 +1450,15 @@ pub(in crate::exec) fn key_exists_in(
             return false;
         };
         let (v, release) = match array {
-            Operand::Cv(c) => match f.cvs.get(c as usize).and_then(CvSlot::get) {
+            Operand::Cv(c) => match f.slots.cvs().get(c as usize).and_then(CvSlot::get) {
                 Some(v) => (v, None),
                 None => return false,
             },
-            Operand::Tmp(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) => match f.slots.tmps().get(t as usize) {
                 Some(v @ Value::Array(a)) if a.refcount() >= 2 => (v, Some(t)),
                 _ => return false,
             },
-            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+            Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
                 Some(v) => (v, None),
                 None => return false,
             },
@@ -1475,12 +1478,12 @@ pub(in crate::exec) fn key_exists_in(
         };
         (found, release)
     };
-    if let Some(slot) = release.and_then(|t| f.tmps.get_mut(t as usize)) {
+    if let Some(slot) = release.and_then(|t| f.slots.tmps_mut().get_mut(t as usize)) {
         // An array whose last handle is elsewhere: only a count drops.
         drop(std::mem::take(slot));
     }
     release_str_tmp_in(f, key);
-    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+    if let Some(slot) = dst.and_then(|d| f.slots.tmps_mut().get_mut(d as usize)) {
         put_tmp(slot, Value::Bool(found));
     }
     true
@@ -1510,7 +1513,7 @@ pub(in crate::exec) fn isset_cv_dims_in(
         if segs.is_empty() || !plain_dims(f, segs) {
             return None;
         }
-        let v = is_dims_value(f, f.cvs.get(cv as usize)?.get(), segs)?;
+        let v = is_dims_value(f, f.slots.cvs().get(cv as usize)?.get(), segs)?;
         if empty {
             !super::plain_truth(&v)?
         } else {
@@ -1546,7 +1549,7 @@ pub(in crate::exec) fn in_array_in(
         };
         let guard;
         let needle = match a {
-            Operand::Cv(c) => match f.cvs.get(c as usize).and_then(CvSlot::get) {
+            Operand::Cv(c) => match f.slots.cvs().get(c as usize).and_then(CvSlot::get) {
                 Some(Value::Reference(r)) => {
                     let Some(g) = r.try_borrow() else {
                         return false;
@@ -1557,7 +1560,7 @@ pub(in crate::exec) fn in_array_in(
                 Some(v) => v,
                 None => return false,
             },
-            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.slots.tmps().get(t as usize) {
                 Some(Value::Reference(_)) | None => return false,
                 Some(v) => v,
             },
@@ -1578,7 +1581,7 @@ pub(in crate::exec) fn in_array_in(
         }
     };
     release_str_tmp_in(f, a);
-    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+    if let Some(slot) = dst.and_then(|d| f.slots.tmps_mut().get_mut(d as usize)) {
         put_tmp(slot, Value::Bool(r));
     }
     true

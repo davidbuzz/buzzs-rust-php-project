@@ -488,7 +488,12 @@ pub(super) unsafe fn instance_of(frame: *mut Frame, inst: &Inst) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // the hit of `instance_of`
 fn is_cached_class(f: &Frame, cv: u32, lit: u32) -> bool {
-    let Some(Value::Object(o)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+    let Some(Value::Object(o)) = f
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    else {
         return false;
     };
     let class = Rc::as_ptr(crate::object::class_of(o));
@@ -556,7 +561,12 @@ pub(super) unsafe fn fe_reset(frame: *mut Frame, inst: &Inst) -> Br {
         // An occupied iterator: the generic op.
         return Br::Decline;
     }
-    let Some(Value::Array(a)) = f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) else {
+    let Some(Value::Array(a)) = f
+        .slots
+        .cvs()
+        .get(cv as usize)
+        .and_then(crate::vm::CvSlot::get)
+    else {
         // SAFETY: as above.
         return unsafe { fe_reset_any(frame, inst) };
     };

@@ -1050,11 +1050,13 @@ pub(crate) fn fe_fetch_ref_in(
             Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
         )
     };
-    if !free(f.tmps.get(val as usize)) || key.is_some_and(|k| !free(f.tmps.get(k as usize))) {
+    if !free(f.slots.tmps().get(val as usize))
+        || key.is_some_and(|k| !free(f.slots.tmps().get(k as usize)))
+    {
         return None;
     }
     // The iterators and the temporaries are borrowed apart.
-    let tmps = &mut f.tmps;
+    let tmps = f.slots.tmps_mut();
     let Some(Some(ForeachIter::ArrayRef { r, id })) = f.iters.get(iter as usize) else {
         return None;
     };

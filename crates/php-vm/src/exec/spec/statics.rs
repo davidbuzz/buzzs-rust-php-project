@@ -95,7 +95,7 @@ pub(in crate::exec) fn fetch_class_const_in(
         // The class operand is consumed (`FREE_OP1`): one of several
         // handles to the object, so only a count drops.
         if let Operand::Tmp(t) = op {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
                 drop(std::mem::take(slot));
             }
         }
@@ -178,7 +178,7 @@ pub(in crate::exec) fn isset_static_prop_in(
             }
         }
     };
-    let Some(slot) = f.tmps.get_mut(dst as usize) else {
+    let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) else {
         return false;
     };
     put_tmp(slot, Value::Bool(r));
@@ -267,12 +267,12 @@ pub(in crate::exec) fn assign_static_prop_in(
     crate::exec::release_slot_value(Some(old));
     // The OP_DATA temporary is consumed.
     if let Operand::Tmp(t) = val {
-        if let Some(s) = f.tmps.get_mut(t as usize) {
+        if let Some(s) = f.slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(s));
         }
     }
     if let (Some(d), Some(k)) = (dst, keep) {
-        if let Some(s) = f.tmps.get_mut(d as usize) {
+        if let Some(s) = f.slots.tmps_mut().get_mut(d as usize) {
             put_tmp(s, k);
         }
     }
@@ -293,7 +293,7 @@ pub(in crate::exec) fn incdec_static_prop_in(
     kind: IncDecKind,
     dst: Option<u32>,
 ) -> bool {
-    if dst.is_some_and(|d| d as usize >= f.tmps.len()) {
+    if dst.is_some_and(|d| d as usize >= f.slots.tmps().len()) {
         return false;
     }
     // (A typed property: an int stays an int and a float a float, which
@@ -336,7 +336,7 @@ pub(in crate::exec) fn incdec_static_prop_in(
             _ => return false,
         }
     };
-    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+    if let Some(slot) = dst.and_then(|d| f.slots.tmps_mut().get_mut(d as usize)) {
         put_tmp(slot, result);
     }
     true

@@ -79,11 +79,11 @@ fn cast_of(kind: CastKind, v: &Value) -> Option<Value> {
 /// its warning, the conversions that warn, objects).
 #[inline(never)]
 pub(in crate::exec) fn cast_in(f: &mut Frame, kind: CastKind, a: Operand, dst: u32) -> bool {
-    if f.tmps.len() <= dst as usize {
+    if f.slots.tmps().len() <= dst as usize {
         return false;
     }
     let r = match a {
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get) {
+        Operand::Cv(cv) => match f.slots.cvs().get(cv as usize).and_then(CvSlot::get) {
             Some(Value::Reference(r)) => match r.try_borrow() {
                 Some(inner) => cast_of(kind, &inner),
                 None => return false,
@@ -97,15 +97,15 @@ pub(in crate::exec) fn cast_in(f: &mut Frame, kind: CastKind, a: Operand, dst: u
         },
         Operand::Tmp(t) | Operand::TmpKeep(t) => {
             let consumed = matches!(a, Operand::Tmp(_));
-            let Some(v) = f.tmps.get(t as usize) else {
+            let Some(v) = f.slots.tmps().get(t as usize) else {
                 return false;
             };
             match v {
                 Value::Reference(_) => return false,
                 // `(array)` of a consumed array: the array itself.
                 Value::Array(_) if kind == CastKind::Array && consumed => {
-                    let v = std::mem::take(&mut f.tmps[t as usize]);
-                    super::put_tmp(&mut f.tmps[dst as usize], v);
+                    let v = std::mem::take(&mut f.slots.tmps_mut()[t as usize]);
+                    super::put_tmp(&mut f.slots.tmps_mut()[dst as usize], v);
                     return true;
                 }
                 // A consumed array whose last handle this is: its release
@@ -120,12 +120,12 @@ pub(in crate::exec) fn cast_in(f: &mut Frame, kind: CastKind, a: Operand, dst: u
         return false;
     };
     if let Operand::Tmp(t) = a {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             // `FREE_OP1`: a string or an array (a count the result may
             // still hold) is released.
             drop(std::mem::take(slot));
         }
     }
-    super::put_tmp(&mut f.tmps[dst as usize], r);
+    super::put_tmp(&mut f.slots.tmps_mut()[dst as usize], r);
     true
 }

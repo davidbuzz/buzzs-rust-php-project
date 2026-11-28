@@ -155,7 +155,7 @@ fn done(ok: bool, next: usize) -> usize {
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn untyped_ref(f: &Frame, cv: u32) -> Option<&PhpRef> {
-    match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+    match f.slots.cvs().get(cv as usize).and_then(CvSlot::get)? {
         Value::Reference(r) if r.meta().is_none() => Some(r),
         _ => None,
     }
@@ -167,7 +167,7 @@ fn untyped_ref(f: &Frame, cv: u32) -> Option<&PhpRef> {
 #[allow(clippy::inline_always)]
 fn is_ref_cv(f: &Frame, op: Operand) -> bool {
     matches!(op, Operand::Cv(cv) if matches!(
-        f.cvs.get(cv as usize).and_then(CvSlot::get),
+        f.slots.cvs().get(cv as usize).and_then(CvSlot::get),
         Some(Value::Reference(_))
     ))
 }
@@ -178,7 +178,7 @@ fn is_ref_cv(f: &Frame, op: Operand) -> bool {
 #[allow(clippy::inline_always)]
 fn tmp_free(f: &Frame, t: u32) -> bool {
     matches!(
-        f.tmps.get(t as usize),
+        f.slots.tmps().get(t as usize),
         Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
     )
 }
@@ -191,12 +191,12 @@ fn tmp_free(f: &Frame, t: u32) -> bool {
 #[inline]
 fn plain_operand(f: &Frame, lits: &[Value], op: Operand) -> Option<Value> {
     let v = match op {
-        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+        Operand::Cv(cv) => match f.slots.cvs().get(cv as usize).and_then(CvSlot::get)? {
             Value::Reference(r) => return plain_copy(&*r.try_borrow()?),
             v => v,
         },
         Operand::Lit(i) => lits.get(i as usize)?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.slots.tmps().get(t as usize)?,
         Operand::Unused => return None,
     };
     plain_copy(v)
@@ -220,7 +220,7 @@ fn plain_copy(v: &Value) -> Option<Value> {
 #[inline]
 fn consume_str_tmp(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             if matches!(slot, Value::Str(_)) {
                 *slot = Value::Null;
             }
@@ -287,7 +287,7 @@ fn incdec_ref(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> boo
         (old, new)
     };
     if let Some(t) = dst {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, if kind.is_post() { old } else { new });
         }
     }
@@ -367,7 +367,7 @@ fn assign_op_ref(
         n
     };
     if let Some(t) = dst {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, r);
         }
     }
@@ -390,8 +390,8 @@ fn assign_ref(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32>) -> bool {
     }
     // The variables, the temporaries and the literals are borrowed apart:
     // the reference stays at hand while a temporary operand is moved out.
-    let cvs = &f.cvs;
-    let tmps = &mut f.tmps;
+    let (cvs, tmps) = f.slots.split_mut();
+    let cvs: &[CvSlot] = cvs;
     let lits = &f.code.literals;
     let Some(Value::Reference(r)) = cvs.get(cv as usize).and_then(CvSlot::get) else {
         return false;
@@ -483,7 +483,7 @@ fn concat_ref(f: &mut Frame, lits: &[Value], cv: u32, val: Operand, dst: Option<
     };
     consume_str_tmp(f, val);
     if let (Some(t), Some(r)) = (dst, r) {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, r);
         }
     }
@@ -586,7 +586,7 @@ fn bin_ref(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
     drop((x, y));
     consume_str_tmp(f, a);
     consume_str_tmp(f, b);
-    if let Some(slot) = f.tmps.get_mut(dst as usize) {
+    if let Some(slot) = f.slots.tmps_mut().get_mut(dst as usize) {
         put_tmp(slot, r);
     }
     true
@@ -597,7 +597,7 @@ fn bin_ref(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
 /// [`plain_truth`]).
 #[inline(never)]
 fn truth_ref(f: &Frame, cv: u32) -> Option<bool> {
-    let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+    let Some(Value::Reference(r)) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get) else {
         return None;
     };
     plain_truth(&*r.try_borrow()?)
@@ -638,7 +638,7 @@ fn cmp_jmp_ref(
 #[inline(never)]
 fn count_ref(f: &mut Frame, cv: u32, dst: Option<u32>) -> bool {
     let n = {
-        let Some(Value::Reference(r)) = f.cvs.get(cv as usize).and_then(CvSlot::get) else {
+        let Some(Value::Reference(r)) = f.slots.cvs().get(cv as usize).and_then(CvSlot::get) else {
             return false;
         };
         match r.try_borrow().as_deref() {
@@ -647,7 +647,7 @@ fn count_ref(f: &mut Frame, cv: u32, dst: Option<u32>) -> bool {
         }
     };
     if let Some(t) = dst {
-        if let Some(slot) = f.tmps.get_mut(t as usize) {
+        if let Some(slot) = f.slots.tmps_mut().get_mut(t as usize) {
             put_tmp(slot, Value::Int(n));
         }
     }

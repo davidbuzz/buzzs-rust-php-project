@@ -544,12 +544,22 @@ impl Vm {
         let [Seg::Prop(Operand::Cv(n))] = p.segs.as_slice() else {
             return None;
         };
-        let Some(Value::Str(name)) = f.cvs.get(*n as usize).and_then(crate::vm::CvSlot::get) else {
+        let Some(Value::Str(name)) = f
+            .slots
+            .cvs()
+            .get(*n as usize)
+            .and_then(crate::vm::CvSlot::get)
+        else {
             return None;
         };
         let obj = match p.base {
             PlaceBase::This => f.this.clone()?,
-            PlaceBase::Cv(c) => match f.cvs.get(c as usize).and_then(crate::vm::CvSlot::get) {
+            PlaceBase::Cv(c) => match f
+                .slots
+                .cvs()
+                .get(c as usize)
+                .and_then(crate::vm::CvSlot::get)
+            {
                 Some(Value::Object(o)) => o.clone(),
                 _ => return None,
             },
