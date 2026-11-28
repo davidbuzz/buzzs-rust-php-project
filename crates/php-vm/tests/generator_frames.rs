@@ -222,3 +222,24 @@ done
 "
     );
 }
+
+/// A generator shared by two delegators: once one of them has run it to
+/// its end, the other still delegates to it (C 8.5 gives the same).
+#[test]
+fn shared_delegate_exhausted_by_one_delegator() {
+    let out = run(r#"<?php
+// a generator shared by two delegators: once b has run it to its end, a still delegates to it
+function shared() { yield 1; yield 2; yield 3; }
+$s = shared(); function del($s, $t) { foreach ([0] as $_) {} yield from $s; echo "del $t done\n"; }
+$a = del($s, 'a'); $b = del($s, 'b'); echo $a->current(), $b->current(), "\n"; $a->next(); echo $b->current(), "\n"; $b->next(); $b->next(); var_dump($a->valid(), $b->valid());
+"#);
+    assert_eq!(
+        out,
+        r"11
+2
+del b done
+bool(true)
+bool(false)
+"
+    );
+}
