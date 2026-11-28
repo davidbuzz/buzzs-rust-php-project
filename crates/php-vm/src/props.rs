@@ -341,7 +341,7 @@ impl Vm {
         else {
             return false;
         };
-        let Some(uf) = &f.ufunc else { return false };
+        let Some(uf) = f.ufunc() else { return false };
         match &uf.hook_prop {
             // `zend_should_call_hook`: the hook's `$this`, or the real
             // instance of an initialized lazy proxy.

@@ -570,7 +570,7 @@ impl Vm {
             }
             return out;
         }
-        let Some(uf) = &f.ufunc else {
+        let Some(uf) = f.ufunc() else {
             return out;
         };
         let nparams = uf.params.len();

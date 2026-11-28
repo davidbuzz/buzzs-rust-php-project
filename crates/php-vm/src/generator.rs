@@ -417,8 +417,7 @@ impl Vm {
         }
         let by_ref = self
             .frame()
-            .ufunc
-            .as_ref()
+            .ufunc()
             .is_some_and(|u| u.flags & flags::RETURN_REF != 0);
         let v = val.unwrap_or_default();
         // The current value of a by-reference generator is a reference:
@@ -1336,7 +1335,7 @@ fn gen_get_iterator(
         && !with(o, |d| {
             d.frame
                 .as_ref()
-                .and_then(|f| f.ufunc.as_ref())
+                .and_then(|f| f.ufunc())
                 .is_some_and(|u| u.flags & flags::RETURN_REF != 0)
         })
         .unwrap_or(false)

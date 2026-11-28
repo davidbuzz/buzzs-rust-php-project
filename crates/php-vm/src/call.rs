@@ -2381,7 +2381,7 @@ impl Vm {
                 ) && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
             debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
-            let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
+            let same_func = frame.ufn_addr() == Rc::as_ptr(uf) as usize;
             // `FrameStack::push_in_place`; nothing to ready in a frame the
             // direct return of a call of this same function released
             // (`calls::ready_frame`'s test).
@@ -2505,26 +2505,21 @@ impl Vm {
             // (`ready_released_for` above may have given the frame this
             // function's handles.)
             let same_func = same_func
-                || matches!(&func, Func::User(f) if frame.ufunc.as_ref().is_some_and(|u| Rc::ptr_eq(u, f)));
+                || matches!(&func, Func::User(f) if (frame.ufn_addr() == Rc::as_ptr(f) as usize));
             // SAFETY: as above: `call` was the last element and its handle
             // was read out, so the shorter vector never drops it again.
             unsafe { caller.calls.set_len(pending - 1) };
             if same_func {
                 // The frame holds this function already: the call's handle
                 // is released by an inline reference-count decrement (the
-                // frame's `ufunc` holds another, so it is never the last),
+                // frame's `func` holds another, so it is never the last),
                 // where dropping the `Func` was an out-of-line
                 // `drop_in_place::<Func>` call per call.
                 if let Func::User(uf) = func {
                     drop(uf);
                 }
             } else {
-                let ufunc = match &func {
-                    Func::User(uf) => Some(Rc::clone(uf)),
-                    Func::Builtin(_) => None,
-                };
-                set_opt(&mut frame.ufunc, ufunc);
-                set_opt(&mut frame.func, Some(func));
+                drop(frame.set_func(Some(func)));
             }
             (spare, closure)
         };
@@ -2602,7 +2597,7 @@ impl Vm {
             {
                 return None;
             }
-            let uf = frame.ufunc.as_ref()?;
+            let uf = crate::vm::user_fn(frame.func.as_ref())?;
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
@@ -2840,7 +2835,8 @@ impl Vm {
         // The declared return type must take the value as it is
         // (`return_simple`'s rule); anything else is its to coerce or
         // refuse.
-        let rt = frame.ufunc.as_ref().and_then(|u| u.return_type.as_ref());
+        let rt =
+            crate::vm::ufn_of(frame.func.as_ref(), frame.ufn).and_then(|u| u.return_type.as_ref());
         // (The scopes are read only for a declared type.)
         let (in_scope, late_bound) = (&frame.scope, &frame.called);
         let takes = |v: &Value| {
@@ -2974,7 +2970,7 @@ impl Vm {
             {
                 return None;
             }
-            let uf = frame.ufunc.as_ref()?;
+            let uf = crate::vm::user_fn(frame.func.as_ref())?;
             if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
                 return None;
             }
@@ -3454,8 +3450,7 @@ impl Vm {
                 }
             }
             f.ip = first_op;
-            f.func = Some(Func::User(uf.clone()));
-            f.ufunc = Some(uf);
+            drop(f.set_func(Some(Func::User(uf.clone()))));
 
             // A closure (e.g. an arrow function passed to `array_map`)
             // binds its captured variables after the arguments, as below.
@@ -3552,8 +3547,7 @@ impl Vm {
                 f.ip = init_cvs(&uf, f);
                 Some(spare)
             };
-            f.func = Some(Func::User(uf.clone()));
-            f.ufunc = Some(uf);
+            drop(f.set_func(Some(Func::User(uf.clone()))));
             spare
         };
         if let Some(spare) = spare_args {
@@ -3735,7 +3729,7 @@ impl Vm {
             set_opt(&mut frame.scope, None);
             set_opt(&mut frame.called, None);
             set_opt(&mut frame.magic_name, None);
-            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            drop(frame.set_func(Some(Func::Builtin(Rc::clone(b)))));
             set_opt(&mut frame.builtin_name, Some(b.name.clone()));
             frame.observer_hidden = false;
             spare
@@ -3892,7 +3886,7 @@ impl Vm {
             set_opt(&mut frame.scope, Some(m.scope()));
             set_opt(&mut frame.called, Some(Rc::clone(object::class_of(o))));
             set_opt(&mut frame.magic_name, None);
-            set_opt(&mut frame.func, Some(Func::Builtin(Rc::clone(b))));
+            drop(frame.set_func(Some(Func::Builtin(Rc::clone(b)))));
             set_opt(&mut frame.builtin_name, Some(b.name.clone()));
             frame.observer_hidden = false;
         }
@@ -5125,7 +5119,7 @@ impl Vm {
     fn recv_type_error(&mut self, n: u32, v: &Value) -> Throw {
         let f = self.frame();
         let func = f.func.clone();
-        let uf = f.ufunc.clone();
+        let uf = f.ufunc().cloned();
         let scope = f.scope.clone();
         let called = f.called.clone();
         let internal = f.called_from_internal;
@@ -5204,7 +5198,7 @@ impl Vm {
         // Fast path: untyped parameter, or a value accepted as-is.
         {
             let f = self.frame();
-            let uf = f.ufunc.as_ref().expect("user frame");
+            let uf = f.ufunc().expect("user frame");
             let p = uf.params.get(n as usize).or_else(|| uf.params.last());
             match p.and_then(|p| p.ty.as_ref()) {
                 None => return Ok(v),
@@ -5236,7 +5230,7 @@ impl Vm {
         // function's `Rc` keeps it alive while the check runs user code (a
         // `__toString()` of a coerced argument), so only that handle is
         // cloned, not the declaration with its class names.
-        let uf = self.frame().ufunc.clone().expect("user frame");
+        let uf = self.frame().ufunc().cloned().expect("user frame");
         let p = uf.params.get(n as usize).or_else(|| uf.params.last());
         let Some(ty) = p.and_then(|p| p.ty.as_ref()) else {
             return Ok(true);
@@ -5263,7 +5257,7 @@ impl Vm {
             let Some(v) = f.slots.cvs().get(idx).and_then(crate::vm::CvSlot::get) else {
                 return Ok(false);
             };
-            let uf = f.ufunc.as_ref().expect("user frame");
+            let uf = f.ufunc().expect("user frame");
             let p = uf.params.get(n as usize).or_else(|| uf.params.last());
             match p.and_then(|p| p.ty.as_ref()) {
                 None => return Ok(true),
@@ -5311,7 +5305,7 @@ impl Vm {
                 // Bound by init_cvs
                 let c_idx = cv as usize;
                 if let Some(v) = f.slots.cvs().get(c_idx).and_then(crate::vm::CvSlot::get) {
-                    if let Some(uf) = &f.ufunc {
+                    if let Some(uf) = f.ufunc() {
                         let p = uf.params.get(n_idx).or_else(|| uf.params.last());
                         match p.and_then(|p| p.ty.as_ref()) {
                             None => return Ok(()),
@@ -5350,7 +5344,7 @@ impl Vm {
 
     fn missing_arg_error(&mut self, n: u32) -> Throw {
         let f = self.frame();
-        let uf = f.ufunc.clone().expect("user frame");
+        let uf = f.ufunc().cloned().expect("user frame");
         let func = f.func.clone().expect("func");
         let scope = f.scope.clone();
         let passed = f.num_args();
@@ -5410,7 +5404,7 @@ impl Vm {
                 // Bound by init_cvs, or a named-argument gap (default).
                 let c_idx = cv as usize;
                 if let Some(v) = f.slots.cvs().get(c_idx).and_then(crate::vm::CvSlot::get) {
-                    if let Some(uf) = &f.ufunc {
+                    if let Some(uf) = f.ufunc() {
                         let p = uf.params.get(n_idx).or_else(|| uf.params.last());
                         match p.and_then(|p| p.ty.as_ref()) {
                             None => return Ok(true),
@@ -5472,7 +5466,7 @@ impl Vm {
         let Some(f) = self.frames.last() else {
             return false;
         };
-        let Some(uf) = f.ufunc.as_ref() else {
+        let Some(uf) = f.ufunc() else {
             return false;
         };
         let Some(p) = uf.params.get(n as usize) else {
@@ -5512,7 +5506,7 @@ impl Vm {
         // (skips building the function/type display strings).
         {
             let f = self.frame();
-            let Some(uf) = &f.ufunc else {
+            let Some(uf) = f.ufunc() else {
                 return Ok(v.unwrap_or_default());
             };
             match (&uf.return_type, &v) {
@@ -5533,7 +5527,7 @@ impl Vm {
         // the function's `Rc` keeps it alive while the check runs user code
         // (a `__toString()` of a coerced value), so only that handle is
         // cloned, not the declaration with its class names.
-        let Some(uf) = self.frame().ufunc.clone() else {
+        let Some(uf) = self.frame().ufunc().cloned() else {
             return Ok(v.unwrap_or_default());
         };
         let Some(rt) = uf.return_type.as_ref() else {
@@ -6156,8 +6150,7 @@ impl Vm {
             }
         }
         frame.ip = first_op;
-        frame.func = Some(Func::User(Rc::clone(&uf)));
-        frame.ufunc = Some(uf);
+        drop(frame.set_func(Some(Func::User(Rc::clone(&uf)))));
         if let Some(c) = &template.closure {
             self.bind_closure_vars(idx, c);
             self.frames[idx].closure = Some(c.clone());

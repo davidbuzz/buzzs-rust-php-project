@@ -937,8 +937,7 @@ impl Vm {
             Err(t) => return self.handle_top_throw(t),
         };
         let globals = self.globals.clone();
-        let mut f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, None);
-        f.ufunc = None;
+        let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, None);
         self.frames.push(f);
         let base = self.frames.len() - 1;
         if let Err(t) = self.declare_hoisted(&unit) {

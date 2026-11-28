@@ -165,8 +165,7 @@ pub(crate) fn active_function(vm: &Vm) -> Option<String> {
             return Some("main".to_owned());
         }
         let name = top
-            .ufunc
-            .as_ref()
+            .ufunc()
             .map(|u| u.name.to_string_lossy())
             .unwrap_or_default();
         return Some(match &top.scope {

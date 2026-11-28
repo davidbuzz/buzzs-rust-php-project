@@ -2543,8 +2543,7 @@ impl Vm {
                     Op::ReturnRef { place } => {
                         let by_ref = self
                             .frame()
-                            .ufunc
-                            .as_ref()
+                            .ufunc()
                             .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
                         let v = if by_ref {
                             Value::Reference(self.place_make_ref(*place)?)
@@ -3839,8 +3838,7 @@ impl Vm {
         let (ret, by_ref) = {
             let frame = &self.frames[fidx];
             let by_ref = frame
-                .ufunc
-                .as_ref()
+                .ufunc()
                 .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
             (frame.ret, by_ref)
         };
@@ -4294,7 +4292,7 @@ impl Vm {
             .get(cv as usize)
             .and_then(CvSlot::get)
             .is_some();
-        let Some(uf) = f.ufunc.as_ref() else {
+        let Some(uf) = f.ufunc() else {
             return Ok(None);
         };
         if defined || uf.flags & crate::func::flags::GENERATOR != 0 {

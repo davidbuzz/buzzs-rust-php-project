@@ -1118,12 +1118,7 @@ fn call_planned(
             }
         }
     }
-    if frame.released_direct
-        && frame
-            .ufunc
-            .as_ref()
-            .is_some_and(|f| Rc::as_ptr(f) as usize == plan.uf_addr)
-    {
+    if frame.released_direct && frame.ufn_addr() == plan.uf_addr {
         frame.released_direct = false;
     } else {
         let uf = match typed {
@@ -1207,7 +1202,7 @@ fn call_planned(
     frame.direct_argc = u32::from(plan.n);
     frame.ip = plan.first_op;
     if plan.defaults {
-        if let Some(uf) = frame.ufunc.clone() {
+        if let Some(uf) = frame.ufunc().cloned() {
             bind_literal_defaults(frame, &uf, n);
         }
     }
@@ -2798,7 +2793,7 @@ fn fill<T>(slot: &mut Option<T>, v: Option<T>) {
 #[inline(always)]
 #[allow(clippy::inline_always)] // one test per prepared call
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
-    if frame.released_direct && frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
+    if frame.released_direct && (frame.ufn_addr() == Rc::as_ptr(uf) as usize) {
         debug_assert!(frame.is_released_for(uf));
         frame.released_direct = false;
         return;
@@ -2843,13 +2838,10 @@ fn ready_frame_cold(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     } else {
         frame.reinit_for_call(code, FrameKind::Function);
     }
-    if !frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf)) {
+    if frame.ufn_addr() != Rc::as_ptr(uf) as usize {
         // The frame keeps the function across calls in this slot
         // (`Frame::clear_for_reuse`): only another function replaces it.
-        if let Some(old) = frame.ufunc.replace(Rc::clone(uf)) {
-            drop(old);
-        }
-        if let Some(old) = frame.func.replace(Func::User(Rc::clone(uf))) {
+        if let Some(old) = frame.set_func(Some(Func::User(Rc::clone(uf)))) {
             drop(old);
         }
     }
@@ -5205,7 +5197,7 @@ pub(super) fn call_native(
     {
         let frame = vm.frames.pooled_at_mut(live);
         frame.reinit_for_builtin(&vm.empty_code);
-        if let Some(old) = frame.func.replace(Func::Builtin(Rc::clone(&b))) {
+        if let Some(old) = frame.set_func(Some(Func::Builtin(Rc::clone(&b)))) {
             drop(old);
         }
         let name = (kind == PlainCall::Named).then(|| b.name.clone());

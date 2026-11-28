@@ -59,7 +59,7 @@ pub(crate) fn plain_frame_args(f: &crate::vm::Frame) -> Option<ZArray> {
     if f.symtab_attached || f.kind != FrameKind::Function {
         return None;
     }
-    let uf = f.ufunc.as_ref()?;
+    let uf = f.ufunc()?;
     if uf.params.iter().any(|p| p.variadic) {
         return None;
     }

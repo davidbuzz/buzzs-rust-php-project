@@ -1812,10 +1812,15 @@ pub struct Frame {
     pub closure: Option<Obj>,
     /// Static variable storage for this call (closures have their own).
     pub statics: Option<Rc<RefCell<Vec<Option<PhpRef>>>>>,
-    /// The function (None for top-level code).
+    /// The function (None for top-level code). Written through
+    /// [`Frame::set_func`] and [`Frame::take_func`] only, which keep `ufn`
+    /// in step.
     pub func: Option<Func>,
-    /// The user function (for user frames).
-    pub ufunc: Option<Rc<UserFunction>>,
+    /// The user function `func` holds, uncounted (stage 3.1,
+    /// `perf/REDESIGN-FRAMES.md`): `func`'s own handle keeps it alive, so
+    /// the frame holds one counted handle, not two. Read by
+    /// [`Frame::ufn_addr`] and [`ufn_of`].
+    pub(crate) ufn: Option<NonNull<UserFunction>>,
     /// The code.
     pub code: Rc<OpArray>,
     /// Next instruction.
@@ -1882,6 +1887,39 @@ pub struct Frame {
     /// `Vm::return_plain`, which releases it through
     /// [`Frame::release_plain`]. Cleared by every release.
     pub(crate) plain: bool,
+}
+
+/// The user function a frame's `func` holds ([`Frame::ufunc`]), from the
+/// field alone: for code that borrows the frame's other fields meanwhile.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test and a load
+#[must_use]
+pub fn user_fn(func: Option<&Func>) -> Option<&Rc<UserFunction>> {
+    match func {
+        Some(Func::User(u)) => Some(u),
+        _ => None,
+    }
+}
+
+/// The user function of a frame from its `func` and `ufn` fields alone
+/// ([`Frame::ufunc`] without the variant test), borrowed as long as
+/// `func`: for code that borrows the frame's other fields meanwhile.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a load
+#[must_use]
+pub(crate) fn ufn_of(
+    func: Option<&Func>,
+    ufn: Option<NonNull<UserFunction>>,
+) -> Option<&UserFunction> {
+    debug_assert_eq!(
+        ufn.map_or(0, |p| p.as_ptr() as usize),
+        user_fn(func).map_or(0, |u| Rc::as_ptr(u) as usize)
+    );
+    // SAFETY: `ufn` is the address of the function `func` holds (every
+    // write of `func` sets it: `Frame::set_func`, `Frame::take_func`), and
+    // `func` is borrowed for the result's lifetime, so the function lives
+    // at least that long.
+    ufn.map(|p| unsafe { &*p.as_ptr() })
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -2329,7 +2367,7 @@ impl Frame {
             closure: None,
             statics: None,
             func: None,
-            ufunc: None,
+            ufn: None,
             code: empty_code,
             ip: 0,
             scope: None,
@@ -2388,8 +2426,7 @@ impl Frame {
             c.pending_exc = None;
         }
         self.statics = None;
-        self.func = None;
-        self.ufunc = None;
+        drop(self.take_func());
         self.code = empty_code.clone();
         self.ip = 0;
         self.scope = None;
@@ -2482,10 +2519,7 @@ impl Frame {
             && self.keeps_function()
         {
             debug_assert!(self.slots_released());
-            debug_assert!(self
-                .ufunc
-                .as_ref()
-                .is_some_and(|uf| self.is_released_for(uf)));
+            debug_assert!(self.ufunc().is_some_and(|uf| self.is_released_for(uf)));
             self.released_direct = true;
             return;
         }
@@ -2544,8 +2578,11 @@ impl Frame {
         cut_released(&mut self.iters);
         cut_released(&mut self.fins);
         self.slots.cut_cvs();
-        // Kept by `keeps_function` for a user function.
-        clear_opt(&mut self.ufunc);
+        // Kept by `keeps_function` for a user function (`ufunc` is
+        // derived from it).
+        if self.func.is_some() {
+            drop(self.take_func());
+        }
         if !Rc::ptr_eq(&self.code, empty_code) {
             self.code = empty_code.clone();
         }
@@ -2568,7 +2605,7 @@ impl Frame {
             closure: None,
             statics: None,
             func: None,
-            ufunc: None,
+            ufn: None,
             code: empty_code.clone(),
             ip: 0,
             scope: None,
@@ -2689,8 +2726,9 @@ impl Frame {
                     clear_opt(&mut rc_mut.get_mut().names.shared);
                 }
             }
-            clear_opt(&mut self.func);
-            clear_opt(&mut self.ufunc);
+            if self.func.is_some() {
+                drop(self.take_func());
+            }
             if !Rc::ptr_eq(&self.code, empty_code) {
                 self.code = empty_code.clone();
             }
@@ -3040,7 +3078,7 @@ impl Frame {
         // The builtin's handle released in line (the function table holds
         // the function too), where `Option<Func>`'s drop glue is an
         // out-of-line call dispatching on the kind again.
-        match self.func.take() {
+        match self.take_func() {
             Some(Func::Builtin(b)) => drop(b),
             None => {}
             other => drop(other),
@@ -3087,7 +3125,7 @@ impl Frame {
             return false;
         }
         release_obj_field(&mut self.this);
-        match self.func.take() {
+        match self.take_func() {
             Some(Func::Builtin(b)) => drop(b),
             None => {}
             other => drop(other),
@@ -3150,6 +3188,44 @@ impl Frame {
         clear_opt(&mut self.magic_name);
     }
 
+    /// The user function of a user frame: the one `func` holds (stage
+    /// 3.1, `perf/REDESIGN-FRAMES.md`: one counted handle, not two).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a tag test and a load
+    #[must_use]
+    pub fn ufunc(&self) -> Option<&Rc<UserFunction>> {
+        user_fn(self.func.as_ref())
+    }
+
+    /// Sets the function, returning the one it replaces.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // two stores
+    pub fn set_func(&mut self, f: Option<Func>) -> Option<Func> {
+        self.ufn = user_fn(f.as_ref()).map(|u| NonNull::from(&**u));
+        std::mem::replace(&mut self.func, f)
+    }
+
+    /// Takes the function out.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // two stores
+    pub fn take_func(&mut self) -> Option<Func> {
+        self.ufn = None;
+        self.func.take()
+    }
+
+    /// The address of the user function (0 when the frame has none): the
+    /// planned call's test of the function a released frame holds.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a load
+    #[must_use]
+    pub(crate) fn ufn_addr(&self) -> usize {
+        debug_assert_eq!(
+            self.ufn.map_or(0, |p| p.as_ptr() as usize),
+            self.ufunc().map_or(0, |u| Rc::as_ptr(u) as usize)
+        );
+        self.ufn.map_or(0, |p| p.as_ptr() as usize)
+    }
+
     /// The number of arguments passed to the call (`ZEND_CALL_NUM_ARGS`):
     /// the argument buffer's length, or the count a directly entered frame
     /// keeps instead ([`Frame::direct_argc`]).
@@ -3184,7 +3260,7 @@ impl Frame {
             && !self.is_ctor
             && matches!(self.ret, RetTarget::Discard)
             && Rc::ptr_eq(&self.code, code)
-            && self.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf))
+            && self.ufunc().is_some_and(|f| Rc::ptr_eq(f, uf))
             && matches!(&self.func, Some(Func::User(f)) if Rc::ptr_eq(f, uf))
             && self.slots.cvs().len() == code.cv_names.len()
             && self.slots.cvs().iter().all(CvSlot::is_none)
@@ -3208,12 +3284,12 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)]
     fn keeps_function(&self) -> bool {
-        match (&self.ufunc, &self.func) {
-            (Some(u), Some(Func::User(f))) => {
-                Rc::ptr_eq(u, f)
-                    && Rc::ptr_eq(&u.code, &self.code)
+        match &self.func {
+            // (The frame's own handle is one count: another holds it.)
+            Some(Func::User(u)) => {
+                Rc::ptr_eq(&u.code, &self.code)
                     && u.code.num_statics == 0
-                    && Rc::strong_count(u) > 2
+                    && Rc::strong_count(u) > 1
             }
             _ => false,
         }
@@ -3247,10 +3323,7 @@ impl Frame {
         // The released frame holds its last function's handles
         // (`keeps_function`).
         drop(std::mem::replace(&mut self.code, Rc::clone(code)));
-        if let Some(old) = self.ufunc.replace(Rc::clone(uf)) {
-            drop(old);
-        }
-        if let Some(old) = self.func.replace(Func::User(Rc::clone(uf))) {
+        if let Some(old) = self.set_func(Some(Func::User(Rc::clone(uf)))) {
             drop(old);
         }
         self.released_direct = false;
@@ -3443,7 +3516,7 @@ impl Frame {
             closure: None,
             statics: None,
             func: None,
-            ufunc: None,
+            ufn: None,
             code,
             ip: 0,
             scope: None,
@@ -4279,7 +4352,7 @@ impl Vm {
             let Some(f) = self.frames.last() else {
                 return false;
             };
-            let found = match (&f.statics, &f.ufunc) {
+            let found = match (&f.statics, f.ufunc()) {
                 (Some(s), _) => s
                     .try_borrow()
                     .ok()
@@ -4624,8 +4697,7 @@ mod tests {
         let other = user_function(Rc::new(OpArray::default()));
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         assert!(!f.released_direct);
         // Only a frame the tape's protocol entered is released directly.
         assert!(!f.release_direct());
@@ -4650,8 +4722,7 @@ mod tests {
         f.clear_for_reuse(&empty);
         assert!(!f.released_direct);
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         f.direct = true;
         assert!(f.release_direct());
         f.reinit_for_builtin(&empty);
@@ -4677,8 +4748,7 @@ mod tests {
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         f.direct = true;
         f.direct_argc = 3;
         f.ret = super::RetTarget::Tmp(0);
@@ -4724,8 +4794,7 @@ mod tests {
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         // An argument sent, then taken back by the turned-back call.
         f.slots.cvs[0].set(Some(Value::Int(1)));
         drop(f.slots.cvs[0].as_mut().take());
@@ -4747,7 +4816,7 @@ mod tests {
         drop(uf);
         f.release_unentered(&empty);
         assert!(!f.released_direct);
-        assert!(f.ufunc.is_none() && f.func.is_none());
+        assert!(f.ufunc().is_none() && f.func.is_none());
         assert!(Rc::ptr_eq(&f.code, &empty));
     }
 
@@ -4758,20 +4827,20 @@ mod tests {
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         f.clear_for_reuse(&empty);
-        // Held by `uf` too: the frame keeps the function and its code.
-        assert!(f.ufunc.as_ref().is_some_and(|u| Rc::ptr_eq(u, &uf)));
+        // Held by `uf` too: the frame keeps the function (one handle)
+        // and its code.
+        assert!(f.ufunc().is_some_and(|u| Rc::ptr_eq(u, &uf)));
         assert!(Rc::ptr_eq(&f.code, &code));
-        assert_eq!(Rc::strong_count(&uf), 3);
+        assert_eq!(Rc::strong_count(&uf), 2);
         // Calling it again in the slot replaces nothing.
         f.reinit_same_call(&code, FrameKind::Function);
         assert!(Rc::ptr_eq(&f.code, &code));
         // Held by nothing else: the frame lets it go.
         drop(uf);
         f.clear_for_reuse(&empty);
-        assert!(f.func.is_none() && f.ufunc.is_none());
+        assert!(f.func.is_none() && f.ufunc().is_none());
         assert!(Rc::ptr_eq(&f.code, &empty));
         assert_eq!(Rc::strong_count(&code), 1);
     }
@@ -4789,8 +4858,7 @@ mod tests {
         let uf = user_function(code.clone());
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(uf.clone()));
-        f.ufunc = Some(uf.clone());
+        drop(f.set_func(Some(crate::func::Func::User(uf.clone()))));
         // `code`, `uf.code` and `f.code`: the names are shared only by a
         // symbol table's attach.
         assert_eq!(Rc::strong_count(&code), 3);
@@ -4959,7 +5027,7 @@ mod tests {
             assert_eq!(f.kind, FrameKind::Builtin);
             assert!(f.slots.cvs().is_empty() && f.slots.tmps().is_empty());
             assert!(Rc::ptr_eq(&f.code, &empty));
-            assert!(f.ufunc.is_none());
+            assert!(f.ufunc().is_none());
             f.args.push(Some(Value::Str(held.clone())));
         }
         assert_eq!(stack.len(), 1);
@@ -5180,8 +5248,7 @@ mod tests {
         f.attach_symbol_table();
         f.clear_for_reuse(&empty);
         f.reinit_for_call(&big, FrameKind::Function);
-        f.func = Some(crate::func::Func::User(ubig.clone()));
-        f.ufunc = Some(ubig.clone());
+        drop(f.set_func(Some(crate::func::Func::User(ubig.clone()))));
         f.direct = true;
         assert!(f.release_direct());
         assert!(f.released_direct && f.is_released_for(&ubig));
@@ -5199,7 +5266,7 @@ mod tests {
                 ),
                 (1, 2, 0, 0)
             );
-            assert_eq!(Rc::strong_count(&ubig), big_count - 2);
+            assert_eq!(Rc::strong_count(&ubig), big_count - 1);
             {
                 let vars = f.vars().borrow();
                 assert!(vars.slots.is_empty() && vars.names.is_empty());

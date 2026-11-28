@@ -448,7 +448,7 @@ impl Vm {
     /// Static variable slot `idx`, if initialized.
     pub(crate) fn static_slot(&mut self, idx: u32) -> Option<PhpRef> {
         if self.frame().statics.is_none() {
-            if let Some(uf) = self.frame().ufunc.clone() {
+            if let Some(uf) = self.frame().ufunc().cloned() {
                 return uf.statics.borrow().get(idx as usize).cloned().flatten();
             }
         }
@@ -469,7 +469,7 @@ impl Vm {
             b[idx].get_or_insert_with(|| PhpRef::new(v)).clone()
         }
         if self.frame().statics.is_none() {
-            if let Some(uf) = self.frame().ufunc.clone() {
+            if let Some(uf) = self.frame().ufunc().cloned() {
                 return put(&mut uf.statics.borrow_mut(), idx as usize, v);
             }
         }

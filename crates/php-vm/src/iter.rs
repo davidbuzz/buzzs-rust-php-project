@@ -252,7 +252,7 @@ impl Vm {
             && !object::internal::<crate::generator::GenData, _>(&gen, |d| {
                 d.frame
                     .as_ref()
-                    .and_then(|f| f.ufunc.as_ref())
+                    .and_then(|f| f.ufunc())
                     .is_some_and(|u| u.flags & flags::RETURN_REF != 0)
             })
             .unwrap_or(false)

@@ -1160,7 +1160,7 @@ fn recv_literal_default_in(
     }
     // A by-reference parameter the call did not reach gets a copy of the
     // default as any other (`ZEND_RECV_INIT`'s `ZVAL_COPY`: no reference).
-    let param = f.ufunc.as_ref()?.params.get(n as usize)?;
+    let param = f.ufunc()?.params.get(n as usize)?;
     if let Some(ty) = &param.ty {
         if !(ty.is_mixed() || crate::call::accepts_without_coercion(ty.mask, value)) {
             return None;
@@ -1199,7 +1199,7 @@ fn recv_computed_default_in(f: &mut Frame, n: u32, cv: u32, t: u32) -> bool {
     if matches!(value, Value::Reference(_)) {
         return false;
     }
-    let Some(uf) = f.ufunc.as_ref() else {
+    let Some(uf) = f.ufunc() else {
         return false;
     };
     let Some(param) = uf.params.get(n as usize) else {
