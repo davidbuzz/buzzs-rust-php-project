@@ -5475,18 +5475,33 @@ impl Vm {
         let Some(uf) = f.ufunc.as_ref() else {
             return false;
         };
-        if !f.named().is_empty()
-            || uf
-                .params
-                .get(n as usize)
-                .is_none_or(|p| !p.variadic || p.ty.as_ref().is_some_and(|t| !t.is_mixed()))
-        {
+        let Some(p) = uf.params.get(n as usize) else {
+            return false;
+        };
+        if !f.named().is_empty() || !p.variadic {
             return false;
         }
-        let mut arr = HashTable::new();
-        for v in f.args.iter().skip(n as usize).flatten() {
-            let _ = arr.push(v.clone());
+        let extra = f.args.iter().skip(n as usize).flatten();
+        // A typed variadic parameter (`string ...$ids`): each argument
+        // its type takes as it is (no coercion, so the same value in
+        // strict and coercive mode); anything else is the generic op's to
+        // coerce or refuse.
+        if let Some(t) = p.ty.as_ref().filter(|t| !t.is_mixed()) {
+            if !extra
+                .clone()
+                .all(|v| !v.is_reference() && accepts_without_coercion(t.mask, v))
+            {
+                return false;
+            }
         }
+        // The list built in one step (`ZEND_HASH_FILL_PACKED`, sized for
+        // the arguments).
+        let count = f.args.len().saturating_sub(n as usize);
+        let arr = if count == 0 {
+            HashTable::new()
+        } else {
+            HashTable::from_list_sized(count, extra.cloned())
+        };
         self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
         true
     }
