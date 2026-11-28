@@ -308,6 +308,34 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+/// Whether a `preg_*` call with the pattern `pattern` can report nothing
+/// (the pattern is compiled and cached for the current settings, so no
+/// compilation warning can follow), installed by the PCRE extension: the
+/// tape then calls `preg_match($pattern, $subject)` and
+/// `preg_replace($pattern, $replacement, $subject)` of strings without a
+/// frame (`special::leaf::PREG_MATCH`, `PREG_REPLACE`).
+pub type PregLeafFn = fn(&ZStr) -> bool;
+
+thread_local! {
+    static PREG_LEAF_HOOK: std::cell::Cell<Option<PregLeafFn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs the PCRE extension's [`PregLeafFn`].
+pub fn set_preg_leaf_hook(f: PregLeafFn) {
+    PREG_LEAF_HOOK.with(|h| h.set(Some(f)));
+}
+
+/// The installed [`PregLeafFn`]'s answer for `pattern`; `false` without
+/// one.
+pub(crate) fn preg_leaf(pattern: &ZStr) -> bool {
+    PREG_LEAF_HOOK
+        .try_with(std::cell::Cell::get)
+        .ok()
+        .flatten()
+        .is_some_and(|f| f(pattern))
+}
+
 /// Installs the request input parser of an extension (see
 /// [`RequestInputFn`]).
 pub fn set_request_input_hook(f: RequestInputFn) {

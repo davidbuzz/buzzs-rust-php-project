@@ -570,6 +570,11 @@ pub(crate) mod leaf {
     /// `ucfirst()`, `lcfirst()`, `crc32()`, `function_exists()` of a
     /// string.
     pub(crate) const STR1: u8 = 19;
+    /// `preg_match(string, string)` (no `$matches`: by reference) of a
+    /// pattern the PCRE extension has compiled ([`crate::ext::preg_leaf`]).
+    pub(crate) const PREG_MATCH: u8 = 20;
+    /// `preg_replace(string, string, string)`, likewise.
+    pub(crate) const PREG_REPLACE: u8 = 21;
 }
 
 /// The [`leaf`] class of the builtin function named `lc` (lower case).
@@ -597,6 +602,8 @@ pub(crate) fn leaf_id(lc: &[u8]) -> u8 {
         b"strcspn" | b"strspn" | b"strcmp" | b"strcasecmp" => leaf::STR2,
         b"preg_quote" => leaf::PREG_QUOTE,
         b"ucfirst" | b"lcfirst" | b"crc32" | b"function_exists" => leaf::STR1,
+        b"preg_match" => leaf::PREG_MATCH,
+        b"preg_replace" => leaf::PREG_REPLACE,
         _ => leaf::NONE,
     }
 }
@@ -657,6 +664,10 @@ impl Vm {
                 is_utf8_name(enc.as_bytes())
             }
             (leaf::ARRAYS, [_, ..]) => args.iter().all(|a| matches!(a, Array(_))),
+            (leaf::PREG_MATCH, [Str(pattern), Str(_)])
+            | (leaf::PREG_REPLACE, [Str(pattern), Str(_), Str(_)]) => {
+                crate::ext::preg_leaf(pattern)
+            }
             _ => false,
         }
     }

@@ -300,3 +300,50 @@ fn match_reads_arguments_in_place() {
         "int(1)\nstring(1) \"b\"\nint(1)\nint(4)\nstring(7) \"1,2,0,3\"\n"
     );
 }
+
+/// `preg_match($pattern, $subject)` and `preg_replace()` of strings, which
+/// the tape calls without a frame once the pattern is compiled
+/// (`state::leaf_cached`): results, `preg_last_error()` after match
+/// errors, a changed `pcre.backtrack_limit`, `$matches` of the same
+/// pattern, and invalid patterns, which warn on every call (also into an
+/// error handler that throws). Expected output: php-src's (PHP 8.5).
+#[test]
+fn frameless_match_and_replace_as_php_src() {
+    assert_eq!(
+        run(r#"function run() {
+  $r = [];
+  for ($i = 0; $i < 3; $i++) {
+    $r[] = preg_match('/^a(b+)c$/', 'abbbc'); $r[] = preg_match('/x/', 'abc'); $r[] = preg_last_error();
+    $r[] = preg_replace('/(b+)/', '[$1|\2|$0]', 'abbbc abc'); $r[] = preg_replace('/z/', 'y', 'abc');
+    $r[] = var_export(preg_match('/^\p{Lu}/u', "\xff bad"), true); $r[] = preg_last_error();
+    $r[] = var_export(preg_match('/(?:\D+|<\d+>)*[!?]/', 'foobar foobar foobar'), true); $r[] = preg_last_error();
+    if ($i == 1) { ini_set('pcre.backtrack_limit', '10'); } if ($i == 2) { ini_set('pcre.backtrack_limit', '1000000'); }
+    $r[] = preg_match('/^a(b+)c$/', 'abbbc', $m); $r[] = implode('/', $m);
+  }
+  echo implode(' ', $r), "\n";
+}
+run();
+for ($i = 0; $i < 2; $i++) { var_dump(preg_match('/(unclosed/', 'x')); var_dump(preg_replace('/[/', 'y', 'abc')); echo preg_last_error(), "\n"; }
+set_error_handler(function ($no, $msg) { throw new ErrorException($msg); });
+for ($i = 0; $i < 2; $i++) { try { preg_match('/bad(/', 'x'); } catch (ErrorException $e) { echo "EE: ", $e->getMessage(), " line ", $e->getLine(), "\n"; } }
+"#),
+        r#"1 0 0 a[bbb||bbb]c a[b||b]c abc false 4 false 2 1 abbbc/bbb 1 0 0 a[bbb||bbb]c a[b||b]c abc false 4 false 2 1 abbbc/bbb 1 0 0 a[bbb||bbb]c a[b||b]c abc false 4 false 2 1 abbbc/bbb
+
+Warning: preg_match(): Compilation failed: missing closing parenthesis at offset 9 in test.php on line 14
+bool(false)
+
+Warning: preg_replace(): Compilation failed: missing terminating ] for character class at offset 1 in test.php on line 14
+NULL
+1
+
+Warning: preg_match(): Compilation failed: missing closing parenthesis at offset 9 in test.php on line 14
+bool(false)
+
+Warning: preg_replace(): Compilation failed: missing terminating ] for character class at offset 1 in test.php on line 14
+NULL
+1
+EE: preg_match(): Compilation failed: missing closing parenthesis at offset 4 line 15
+EE: preg_match(): Compilation failed: missing closing parenthesis at offset 4 line 15
+"#
+    );
+}

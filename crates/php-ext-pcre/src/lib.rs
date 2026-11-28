@@ -39,6 +39,7 @@ impl Extension for Pcre {
         register_ini(m);
         m.info(module_info);
         m.on_request_startup(|_| state::reset());
+        php_vm::ext::set_preg_leaf_hook(state::leaf_cached);
         m.on_request_shutdown(|_| state::reset());
     }
 }
