@@ -524,7 +524,7 @@ pub fn register(vm: &mut Vm) {
     .method("beginTransaction(): bool", pub_, begin_transaction)
     .method("commit(): bool", pub_, commit)
     .method("errorCode(): ?string", pub_, error_code)
-    .method("errorInfo(): array", pub_, error_info)
+    .method("errorInfo(): array", pub_ | acc::PURE, error_info)
     .method("exec(string $statement): int|false", pub_, exec)
     .method("getAttribute(int $attribute): mixed", pub_, get_attribute)
     .method(

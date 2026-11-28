@@ -38,7 +38,7 @@ pub use crate::vm::{Throw, VmResult};
 /// Method/property flag bits for [`ClassBuilder`].
 pub mod acc {
     pub use crate::func::flags::{
-        ABSTRACT, DEPRECATED, FINAL, NO_MODULE, PRIVATE, PROTECTED, PUBLIC, READONLY, STATIC,
+        ABSTRACT, DEPRECATED, FINAL, NO_MODULE, PRIVATE, PROTECTED, PUBLIC, PURE, READONLY, STATIC,
         STATIC_KEEPS_THIS, VIRTUAL,
     };
 }
