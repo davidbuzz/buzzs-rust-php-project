@@ -1050,11 +1050,10 @@ impl Vm {
         dst: u32,
         to: Option<u32>,
     ) -> Option<bool> {
-        let live = self.frames.live;
+        let live = self.frames.len();
         let slot = *self
             .frames
-            .vec
-            .get(live.checked_sub(1)?)?
+            .pooled(live.checked_sub(1)?)?
             .code
             .rt_cache
             .globals
@@ -1074,7 +1073,7 @@ impl Vm {
                 if !self.main_is_global_top() {
                     return None;
                 }
-                fetched(self.frames.vec.first()?.slots.cvs().get(cv as usize)?.get())?
+                fetched(self.frames.pooled(0)?.slots.cvs().get(cv as usize)?.get())?
             }
             GlobalSlot::GlobalStore(idx) => {
                 let g = self.globals.try_borrow().ok()?;
@@ -1082,7 +1081,7 @@ impl Vm {
             }
             GlobalSlot::Empty => return None,
         };
-        let f = self.frames.vec.get_mut(live - 1)?;
+        let f = self.frames.pooled_mut(live - 1)?;
         if let Some(to) = to {
             if f.slots
                 .cvs()

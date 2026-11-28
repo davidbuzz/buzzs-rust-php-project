@@ -2341,14 +2341,13 @@ impl Vm {
         if self.observer.enabled {
             return false;
         }
-        let live = self.frames.live;
+        let live = self.frames.len();
         // `push_user_call`'s stack-depth backstop is the general path's.
         if live == 0 || live > 50_000 {
             return false;
         }
         let (spare_args, closure) = {
-            let (live_frames, pool) = self.frames.vec.split_at_mut(live);
-            let (Some(caller), Some(frame)) = (live_frames.last_mut(), pool.first_mut()) else {
+            let Some((caller, frame)) = self.frames.both_mut(live) else {
                 return false;
             };
             let caller_strict = caller.code.strict_types;
@@ -2519,13 +2518,13 @@ impl Vm {
             }
             (spare, closure)
         };
-        self.frames.live = live + 1;
+        self.frames.enter_pooled(live);
         if let Some(args) = spare_args {
             self.put_arg_vec(args);
         }
         if let Some(c) = closure {
             self.bind_closure_vars(live, &c);
-            self.frames.vec[live].closure = Some(c);
+            self.frames.pooled_at_mut(live).closure = Some(c);
         }
         true
     }
@@ -2580,14 +2579,12 @@ impl Vm {
         if self.observer.enabled {
             return None;
         }
-        let fidx = self.frames.live.checked_sub(1)?;
+        let fidx = self.frames.len().checked_sub(1)?;
         if fidx <= base {
             return None;
         }
         let old = {
-            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
-            let caller = callers.last_mut()?;
-            let frame = rest.first_mut()?;
+            let (caller, frame) = self.frames.both_mut(fidx)?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
@@ -2787,7 +2784,7 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> bool {
-        let Some(fidx) = self.frames.live.checked_sub(1) else {
+        let Some(fidx) = self.frames.len().checked_sub(1) else {
             return false;
         };
         // `AT_BASE`: the base frame of the nested execution
@@ -2805,7 +2802,9 @@ impl Vm {
         if !placed || self.observer.enabled {
             return false;
         }
-        let (callers, rest) = self.frames.vec.split_at_mut(fidx);
+        // (Split by hand, as in the planned call: see
+        // `FrameStack::split_pooled_mut`.)
+        let (callers, rest) = self.frames.split_pooled_mut(fidx);
         let (Some(caller), Some(frame)) = (callers.last_mut(), rest.first_mut()) else {
             return false;
         };
@@ -2906,7 +2905,7 @@ impl Vm {
         base: usize,
         ip: usize,
     ) -> Option<Value> {
-        if self.frames.live != base + 1 || !self.frames.last().is_some_and(|f| f.plain) {
+        if self.frames.len() != base + 1 || !self.frames.last().is_some_and(|f| f.plain) {
             return None;
         }
         let outer = std::mem::replace(&mut self.tape_base, base + 1);
@@ -2949,14 +2948,12 @@ impl Vm {
         if self.observer.enabled {
             return None;
         }
-        let fidx = self.frames.live.checked_sub(1)?;
+        let fidx = self.frames.len().checked_sub(1)?;
         if fidx < base || (fidx == base) != at_base || fidx == 0 {
             return None;
         }
         let (v, ret) = {
-            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
-            let caller = callers.last_mut()?;
-            let frame = rest.first_mut()?;
+            let (caller, frame) = self.frames.both_mut(fidx)?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
                 || frame.generator().is_some()
@@ -3692,7 +3689,7 @@ impl Vm {
         // A pooled record, taken whole for the call
         // (`CallBufs::take_args`).
         let mut args = self.call_bufs.take_args();
-        let live = self.frames.live;
+        let live = self.frames.len();
         let spare = {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
             if !frame.args.is_empty() {
@@ -3766,7 +3763,7 @@ impl Vm {
         args.release_in_place();
         self.call_bufs.put_args(args);
         // Released by the handler, destructed while its frame is current.
-        if object::has_pending_destructors() && self.frames.live == live + 1 {
+        if object::has_pending_destructors() && self.frames.len() == live + 1 {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {
                     (Ok(_), e) => Err(e),
@@ -3778,7 +3775,12 @@ impl Vm {
                 };
             }
         }
-        if self.frames.live == live + 1 && self.frames.vec[live].release_native(&self.empty_vars) {
+        if self.frames.len() == live + 1
+            && self
+                .frames
+                .pooled_at_mut(live)
+                .release_native(&self.empty_vars)
+        {
             self.frames.pop_cleared_top();
         } else {
             self.pop_frames_to(live + 1);
@@ -3861,7 +3863,7 @@ impl Vm {
             self.checked_callable = None;
         }
         let mut hargs = self.call_bufs.take_args();
-        let live = self.frames.live;
+        let live = self.frames.len();
         {
             let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
             if !frame.args.is_empty() {
@@ -3917,7 +3919,7 @@ impl Vm {
         }
         hargs.release_in_place();
         self.call_bufs.put_args(hargs);
-        if object::has_pending_destructors() && self.frames.live == live + 1 {
+        if object::has_pending_destructors() && self.frames.len() == live + 1 {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {
                     (Ok(_), e) => Err(e),
@@ -4005,11 +4007,8 @@ impl Vm {
             return None;
         }
         let id = b.fast_eval_id();
-        let live = self.frames.live;
-        let (callers, pool) = self.frames.vec.split_at_mut(live);
-        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-            return None;
-        };
+        let live = self.frames.len();
+        let (caller, frame) = self.frames.both_mut(live)?;
         if caller.calls.len() != calls_len || frame.args.len() != 1 {
             return None;
         }
@@ -5016,11 +5015,10 @@ impl Vm {
             }
             let released = self
                 .frames
-                .vec
-                .get_mut(depth - 1)
+                .pooled_mut(depth - 1)
                 .is_some_and(|f| f.release_native_call(&self.empty_vars));
             if released {
-                self.frames.live -= 1;
+                self.frames.leave_released();
             } else {
                 self.frames
                     .release_builtin_top(&self.empty_code, &self.empty_vars);
@@ -5035,7 +5033,7 @@ impl Vm {
             // application).
             if args.capacity() <= 256 {
                 args.clear();
-                if let Some(frame) = self.frames.vec.get_mut(depth - 1) {
+                if let Some(frame) = self.frames.pooled_mut(depth - 1) {
                     frame.args = args;
                 }
             }
@@ -8410,7 +8408,7 @@ mod buffer_tests {
     /// the pool's buffers (`before` are the pool's capacities then): the
     /// pooled frame keeps that buffer, emptied, and the pool has the rest.
     fn assert_kept_buffer(vm: &Vm, before: &[usize]) {
-        let kept = &vm.frames.vec[0].args;
+        let kept = &vm.frames.pooled_at(0).args;
         assert!(kept.is_empty());
         assert_eq!(kept.capacity(), 8);
         assert_eq!(capacities(vm), before[1..]);

@@ -1003,12 +1003,14 @@ fn call_planned(
     plan: &Plan,
     mut fetched: Option<&mut [Value; PLAN_ARGS]>,
 ) -> bool {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if vm.observer.enabled || live == 0 || live > 50_000 {
         return false;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
+    // (Split by hand: `both_mut` costs this sequence two instructions,
+    // its pair's null test not folded.)
+    let (callers, pool) = vm.frames.split_pooled_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         return false;
     };
@@ -1214,7 +1216,7 @@ fn call_planned(
         variadic_extras_of(plan, frame);
     }
     caller.ip = plan.done;
-    vm.frames.live = live + 1;
+    vm.frames.enter_pooled(live);
     true
 }
 
@@ -2516,14 +2518,13 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     // `push_user_call`'s stack-depth backstop is the generic path's.
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         // No pooled frame at this depth yet: the generic call pushes one.
         return None;
     };
@@ -2584,15 +2585,12 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (caller, frame) = vm.frames.both_mut(live)?;
     // A pooled frame's argument buffer is empty.
     if !frame.args.is_empty() {
         return None;
@@ -2868,12 +2866,12 @@ pub(crate) fn push_method_from_native(
     uf: &Rc<UserFunction>,
     args: &mut [Value],
 ) -> Option<usize> {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let frame = vm.frames.vec.get_mut(live)?;
+    let frame = vm.frames.pooled_mut(live)?;
     if !frame.args.is_empty() {
         return None;
     }
@@ -2907,7 +2905,7 @@ pub(crate) fn push_method_from_native(
     // A plain declaration (the caller's test): its return, the nested
     // execution's end, is the short one (`Vm::return_plain` at the base).
     frame.plain = uf.flags & flags::RETURN_REF == 0;
-    vm.frames.live = live + 1;
+    vm.frames.enter_pooled(live);
     Some(live)
 }
 
@@ -2936,7 +2934,7 @@ pub(crate) fn push_callback_from_native(
     strict: bool,
     args: &mut [Value],
 ) -> Option<usize> {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
@@ -2953,7 +2951,7 @@ pub(crate) fn push_callback_from_native(
         None => None,
     };
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let frame = vm.frames.vec.get_mut(live)?;
+    let frame = vm.frames.pooled_mut(live)?;
     if !frame.args.is_empty() {
         return None;
     }
@@ -3001,7 +2999,7 @@ pub(crate) fn push_callback_from_native(
     }
     frame.direct = true;
     frame.plain = uf.flags & flags::RETURN_REF == 0;
-    vm.frames.live = live + 1;
+    vm.frames.enter_pooled(live);
     Some(live)
 }
 
@@ -3023,15 +3021,12 @@ pub(super) fn prepare_method(
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (caller, frame) = vm.frames.both_mut(live)?;
     let o = match obj {
         Operand::Cv(cv) if !caller.symtab_attached => {
             match caller
@@ -3903,15 +3898,12 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (caller, frame) = vm.frames.both_mut(live)?;
     let slot = caller.code.literals.len() + at + 1;
     let (func, scope, called_class) = caller
         .code
@@ -4029,15 +4021,12 @@ pub(super) fn prepare_relative_static(
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (caller, frame) = vm.frames.both_mut(live)?;
     if caller.kind == FrameKind::Builtin {
         return None;
     }
@@ -4104,15 +4093,12 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (caller, frame) = vm.frames.both_mut(live)?;
     if caller.symtab_attached {
         return None;
     }
@@ -4186,14 +4172,14 @@ pub(super) enum NewDone {
 /// as `$this`); any other constructor, the generic pending call. `None`,
 /// having changed nothing, when none of that applies (the generic `New`).
 pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<NewDone> {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 {
         return None;
     }
     let observed = vm.observer.enabled;
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let caller = callers.last_mut()?;
+    let (callers, pool) = vm.frames.pair_mut(live);
+    let caller = callers?;
     if dst as usize >= caller.slots.tmps().len() {
         return None;
     }
@@ -4214,7 +4200,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
         crate::exec::spec::put_tmp(&mut caller.slots.tmps_mut()[dst as usize], Value::Object(o));
         return Some(NewDone::Skip(skip as usize));
     }
-    let direct = match (crate::props::ctor_call(&cls), pool.first_mut()) {
+    let direct = match (crate::props::ctor_call(&cls), pool) {
         (Some((Func::User(uf), scope)), Some(frame))
             if !observed && live <= 50_000 && uf.call_shape() != CallShape::NOT_PLAIN =>
         {
@@ -4258,9 +4244,8 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     if prep.n >= prep.limit {
         return false;
     }
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return false;
     };
     if caller.calls.len() != prep.calls_len {
@@ -4283,9 +4268,8 @@ pub(super) fn send_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], at: usize) 
     let mut next = at;
     loop {
         {
-            let live = vm.frames.live;
-            let (callers, pool) = vm.frames.vec.split_at_mut(live);
-            let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+            let live = vm.frames.len();
+            let Some((caller, frame)) = vm.frames.both_mut(live) else {
                 return next;
             };
             if caller.calls.len() != prep.calls_len {
@@ -4399,9 +4383,8 @@ fn send_in(
 #[inline(never)]
 pub(super) fn send_native_run(vm: &mut Vm, prep: &mut Prepared, ops: &[Op], start: usize) -> usize {
     let mut next = start;
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    if let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) {
+    let live = vm.frames.len();
+    if let Some((caller, frame)) = vm.frames.both_mut(live) {
         if matches!(prep.callee, Callee::Native(..)) && caller.calls.len() == prep.calls_len {
             while let Some(Op::Send { src }) = ops.get(next) {
                 if prep.n >= prep.limit {
@@ -4522,9 +4505,8 @@ fn send_ref_user(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let ArgSrc::Place(pid) = src else {
         return false;
     };
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return false;
     };
     if caller.calls.len() != prep.calls_len
@@ -4605,9 +4587,9 @@ fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     let next = (n + 1..limit)
         .find(|&i| b.param_ref_at(i).0)
         .unwrap_or(limit);
-    let live = vm.frames.live;
-    let caller = live.checked_sub(1).and_then(|i| vm.frames.vec.get(i));
-    match (caller, vm.frames.vec.get(live)) {
+    let live = vm.frames.len();
+    let caller = live.checked_sub(1).and_then(|i| vm.frames.pooled(i));
+    match (caller, vm.frames.pooled(live)) {
         (Some(caller), Some(frame))
             if caller.calls.len() == prep.calls_len && frame.args.len() == n => {}
         _ => return false,
@@ -4619,7 +4601,7 @@ fn send_ref_native(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
     else {
         return false;
     };
-    let Some(frame) = vm.frames.vec.get_mut(live) else {
+    let Some(frame) = vm.frames.pooled_mut(live) else {
         return false;
     };
     frame.args.push(Some(Value::Reference(r)));
@@ -4653,9 +4635,9 @@ fn send_prefer_ref_value(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool
     if let Operand::Tmp(t) = op {
         let held = vm
             .frames
-            .live
+            .len()
             .checked_sub(1)
-            .and_then(|i| vm.frames.vec.get(i))
+            .and_then(|i| vm.frames.pooled(i))
             .and_then(|caller| caller.slots.tmps().get(*t as usize));
         if !matches!(held, Some(v) if !matches!(v, Value::Reference(_))) {
             return false;
@@ -4729,7 +4711,7 @@ pub(super) fn enter(
     dst: Option<u32>,
     caller_ip: usize,
 ) -> Result<(), Prepared> {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     let n = prep.n;
     let Callee::User(uf) = &prep.callee else {
         return Err(prep);
@@ -4739,8 +4721,7 @@ pub(super) fn enter(
     if n < uf.required as usize || n > prep.limit {
         return Err(prep);
     }
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return Err(prep);
     };
     if caller.calls.len() != prep.calls_len {
@@ -4804,7 +4785,7 @@ pub(super) fn enter(
         && uf.code.num_statics == 0
         && uf.flags & (flags::VARIADIC | flags::RETURN_REF | flags::GENERATOR) == 0;
     caller.ip = caller_ip;
-    vm.frames.live = live + 1;
+    vm.frames.enter_pooled(live);
     Ok(())
 }
 
@@ -4906,9 +4887,8 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
     if n != uf.params.len() || n > super::jit::NATIVE_MAX_ARGS || uf.flags & flags::VARIADIC != 0 {
         return false;
     }
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return false;
     };
     if caller.calls.len() != prep.calls_len {
@@ -5018,11 +4998,10 @@ fn args_accepted(args: &[Option<Value>], table: &[u32], last: u32) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // once, in `call_native`
 fn store_native_result(vm: &mut Vm, dst: u32, v: Value) {
-    let top = vm.frames.live.wrapping_sub(1);
+    let top = vm.frames.len().wrapping_sub(1);
     let Some(slot) = vm
         .frames
-        .vec
-        .get_mut(top)
+        .pooled_mut(top)
         .and_then(|f| f.slots.tmps_mut().get_mut(dst as usize))
     else {
         drop(v);
@@ -5096,7 +5075,7 @@ pub(super) fn call_native(
         }
     }
     let n = prep.n;
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     {
         let sig = b.signature();
         let nparams = sig.params.len();
@@ -5104,8 +5083,7 @@ pub(super) fn call_native(
         if n < sig.required as usize || (!variadic && n > nparams) {
             return Err(prep);
         }
-        let (callers, pool) = vm.frames.vec.split_at(live);
-        let (Some(caller), Some(frame)) = (callers.last(), pool.first()) else {
+        let Some((caller, frame)) = vm.frames.both(live) else {
             return Err(prep);
         };
         if caller.calls.len() != prep.calls_len || frame.args.len() != n {
@@ -5131,7 +5109,7 @@ pub(super) fn call_native(
     // a name (readied with its `$this` or scopes).
     let leaf = b.leaf_id();
     if leaf != crate::special::leaf::NONE && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0 {
-        let frame = &vm.frames.vec[live];
+        let frame = vm.frames.pooled_at(live);
         let mut sent: [&Value; LEAF_ARGS] = [&Value::Null; LEAF_ARGS];
         let mut plain = frame.args.len() <= LEAF_ARGS;
         for (slot, arg) in sent.iter_mut().zip(&frame.args) {
@@ -5146,7 +5124,7 @@ pub(super) fn call_native(
             && frame.scope.is_none()
             && vm.leaf_args(leaf, &sent[..frame.args.len()])
         {
-            vm.frames.vec[live - 1].ip = caller_ip;
+            vm.frames.pooled_at_mut(live - 1).ip = caller_ip;
             if let Some(r) = vm.frameless_handler_call(b, n, dst, live) {
                 return Ok(r);
             }
@@ -5175,7 +5153,7 @@ pub(super) fn call_native(
     // length every time).
     let mut args = vm.call_bufs.take_args();
     args.values
-        .extend(vm.frames.vec[live].args.iter().map(|arg| match arg {
+        .extend(vm.frames.pooled_at(live).args.iter().map(|arg| match arg {
             Some(v) => crate::func::copy_arg(v),
             None => Value::Null,
         }));
@@ -5207,7 +5185,7 @@ pub(super) fn call_native(
     // there is one (a plain assignment called the out-of-line drop of the
     // old `Option` every time).
     {
-        let frame = &mut vm.frames.vec[live];
+        let frame = vm.frames.pooled_at_mut(live);
         frame.reinit_for_builtin(&vm.empty_code);
         if let Some(old) = frame.func.replace(Func::Builtin(Rc::clone(&b))) {
             drop(old);
@@ -5219,8 +5197,8 @@ pub(super) fn call_native(
         frame.observer_hidden = false;
     }
     // `SAVE_OPLINE()`: the handler may report the caller's line.
-    vm.frames.vec[live - 1].ip = caller_ip;
-    vm.frames.live = live + 1;
+    vm.frames.pooled_at_mut(live - 1).ip = caller_ip;
+    vm.frames.enter_pooled(live);
     vm.pending_call_dst = dst;
     if vm.magic_call_name.is_some() {
         vm.magic_call_name = None;
@@ -5229,7 +5207,7 @@ pub(super) fn call_native(
     // A method's `$this` and called scope, readied on the frame by
     // `prepare_method` (a function's frame has none).
     {
-        let frame = &vm.frames.vec[live];
+        let frame = vm.frames.pooled_at(live);
         if let Some(this) = &frame.this {
             args.this = Some(this.clone());
         }
@@ -5256,12 +5234,12 @@ pub(super) fn call_native(
     if sent_ref {
         // The handler's handles of the sent references are kept until the
         // variables are unwrapped below (`release_copies_but_refs`).
-        release_copies_but_refs(&mut args.values, &vm.frames.vec[live].args);
+        release_copies_but_refs(&mut args.values, &vm.frames.pooled_at(live).args);
     } else {
         args.release_in_place();
     }
     // Released by the handler, destructed while its frame is current.
-    if crate::object::has_pending_destructors() && vm.frames.live == live + 1 {
+    if crate::object::has_pending_destructors() && vm.frames.len() == live + 1 {
         if let Err(e) = vm.run_pending_destructors() {
             r = match (r, e) {
                 (Ok(_), e) => Err(e),
@@ -5274,7 +5252,7 @@ pub(super) fn call_native(
         }
     }
     if sent_ref {
-        if vm.frames.live == live + 1 {
+        if vm.frames.len() == live + 1 {
             unwrap_sent_refs(vm, live, &args.values);
         }
         args.release_in_place();
@@ -5284,20 +5262,20 @@ pub(super) fn call_native(
     // Popped off the VM stack, frames left above it (none, normally)
     // first. Released in place (`release_native`), its argument buffer
     // stays with the pooled frame for the next call at this depth.
-    if vm.frames.live > live + 1 {
+    if vm.frames.len() > live + 1 {
         vm.frames.truncate(live + 1);
     }
-    if vm.frames.live == live + 1 {
+    if vm.frames.len() == live + 1 {
         // A method's `$this` and scopes go first, as `pop_frames_to`
         // releases them with the frame.
-        let frame = &mut vm.frames.vec[live];
+        let frame = vm.frames.pooled_at_mut(live);
         if frame.this.is_some() || frame.scope.is_some() || frame.called.is_some() {
             frame.this = None;
             frame.scope = None;
             frame.called = None;
         }
     }
-    if vm.frames.live == live + 1 && vm.frames.vec[live].release_native(&vm.empty_vars) {
+    if vm.frames.len() == live + 1 && vm.frames.pooled_at_mut(live).release_native(&vm.empty_vars) {
         vm.frames.pop_cleared_top();
     } else {
         // Anything else as the generic call releases it.
@@ -5379,8 +5357,7 @@ fn release_copies_but_refs(values: &mut [Value], sent: &[Option<Value>]) {
 /// `zval_ptr_dtor_nogc` of the call's arguments never does.
 #[inline(never)]
 fn unwrap_sent_refs(vm: &mut Vm, live: usize, held: &[Value]) {
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first()) else {
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return;
     };
     // A handler that attached the caller's symbol table (`extract()`)
@@ -5443,7 +5420,7 @@ fn call_pure(
     dst: Option<u32>,
     caller_ip: usize,
 ) -> Option<VmResult<()>> {
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     let sig = b.signature();
     let nparams = sig.params.len();
     let required = sig.required as usize;
@@ -5453,8 +5430,7 @@ fn call_pure(
     let mut values = vm.call_bufs.values.pop().unwrap_or_default();
     let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
     let (this, called) = {
-        let (callers, pool) = vm.frames.vec.split_at(live);
-        let (Some(caller), Some(frame)) = (callers.last(), pool.first()) else {
+        let Some((caller, frame)) = vm.frames.both(live) else {
             vm.put_val_vec(values);
             vm.put_bool_vec(passed);
             return None;
@@ -5494,7 +5470,7 @@ fn call_pure(
             _ => break,
         }
     }
-    vm.frames.vec[live - 1].ip = caller_ip;
+    vm.frames.pooled_at_mut(live - 1).ip = caller_ip;
     let mut args = Args {
         values,
         passed,
@@ -5509,7 +5485,7 @@ fn call_pure(
     vm.put_bool_vec(passed);
     let v = r.ok()?;
     {
-        let frame = &mut vm.frames.vec[live];
+        let frame = vm.frames.pooled_at_mut(live);
         frame.args.clear();
         frame.this = None;
         frame.scope = None;
@@ -5581,9 +5557,8 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
         }
         return;
     }
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return;
     };
     let uf = match prep.callee {
@@ -5665,36 +5640,33 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
     if vm.observer.enabled {
         return None;
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return None;
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-        return None;
-    };
+    let (calling, frame) = vm.frames.both_mut(live)?;
     let prepared = {
         let cb = match callee {
-            Operand::Cv(cv) if !caller.symtab_attached => caller
+            Operand::Cv(cv) if !calling.symtab_attached => calling
                 .slots
                 .cvs()
                 .get(cv as usize)
                 .and_then(crate::vm::CvSlot::get)?,
-            Operand::Tmp(t) => caller.slots.tmps().get(t as usize)?,
-            Operand::Lit(l) => caller.code.literals.get(l as usize)?,
+            Operand::Tmp(t) => calling.slots.tmps().get(t as usize)?,
+            Operand::Lit(l) => calling.code.literals.get(l as usize)?,
             _ => return None,
         };
         match cb {
-            Value::Str(s) => user_call_named(caller, frame, s.as_bytes(), at)?,
-            Value::Array(a) => user_call_method(caller, frame, a, at)?,
-            Value::Object(o) => user_call_object(caller, frame, o)?,
+            Value::Str(s) => user_call_named(calling, frame, s.as_bytes(), at)?,
+            Value::Array(a) => user_call_method(calling, frame, a, at)?,
+            Value::Object(o) => user_call_object(calling, frame, o)?,
             _ => return None,
         }
     };
     // `FREE_OP2` of a temporary callback (the call holds what it needs).
     if let Operand::Tmp(t) = callee {
-        if let Some(slot) = caller.slots.tmps_mut().get_mut(t as usize) {
+        if let Some(slot) = calling.slots.tmps_mut().get_mut(t as usize) {
             drop(std::mem::take(slot));
         }
     }
@@ -5721,7 +5693,7 @@ pub(super) fn prepare_user_call(vm: &mut Vm, callee: Operand, at: usize) -> Opti
 /// a name not found (the generic op reports it).
 pub(super) fn user_call_quick(vm: &mut Vm, callee: Operand, at: usize) -> Option<PendingCall> {
     let (cb, call) = {
-        let f = vm.frames.vec.get(vm.frames.live.checked_sub(1)?)?;
+        let f = vm.frames.pooled(vm.frames.len().checked_sub(1)?)?;
         let cb = match callee {
             Operand::Cv(cv) if !f.symtab_attached => f
                 .slots
@@ -5848,13 +5820,12 @@ pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared
     {
         return Err(call);
     }
-    let live = vm.frames.live;
+    let live = vm.frames.len();
     if live == 0 || live > 50_000 {
         return Err(call);
     }
     vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return Err(call);
     };
     let (callee, limit) = match &call.func {
@@ -6208,9 +6179,8 @@ pub(super) fn send_array(vm: &mut Vm, prep: &mut Prepared, src: Operand) -> bool
     if prep.n != 0 {
         return false;
     }
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return false;
     };
     if caller.calls.len() != prep.calls_len {
@@ -6298,9 +6268,8 @@ pub(super) fn send_array_slice(
     if prep.n != 0 {
         return false;
     }
-    let live = vm.frames.live;
-    let (callers, pool) = vm.frames.vec.split_at_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let live = vm.frames.len();
+    let Some((caller, frame)) = vm.frames.both_mut(live) else {
         return false;
     };
     if caller.calls.len() != prep.calls_len {
@@ -6403,7 +6372,7 @@ fn slice_range(count: usize, len: Option<&Value>, skip: u32) -> Option<(usize, u
 /// table.
 pub(super) fn init_dyn_call_named(vm: &mut Vm, cv: u32) -> bool {
     let call = {
-        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+        let Some(f) = vm.frames.pooled(vm.frames.len().wrapping_sub(1)) else {
             return false;
         };
         if f.symtab_attached {
@@ -6442,7 +6411,7 @@ pub(super) fn init_dyn_call_named(vm: &mut Vm, cv: u32) -> bool {
 /// variable, a frame with an attached symbol table.
 pub(super) fn init_dyn_static_call(vm: &mut Vm, class: Operand, lit: u32) -> bool {
     let (cls, m) = {
-        let Some(f) = vm.frames.vec.get(vm.frames.live.wrapping_sub(1)) else {
+        let Some(f) = vm.frames.pooled(vm.frames.len().wrapping_sub(1)) else {
             return false;
         };
         let v = match class {

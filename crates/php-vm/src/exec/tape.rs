@@ -3622,8 +3622,7 @@ pub(super) fn global_slot_addr(vm: &Vm, f: &Frame, at: usize) -> usize {
                 Some(GlobalSlot::GlobalCv(cv)) => {
                     return vm
                         .frames
-                        .vec
-                        .first()
+                        .pooled(0)
                         .and_then(|main| main.slots.cvs().get(cv as usize))
                         .map_or(0, |slot| std::ptr::from_ref(slot) as usize);
                 }

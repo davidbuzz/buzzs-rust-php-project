@@ -829,8 +829,8 @@ impl std::fmt::Debug for CvSlot {
 /// avoiding all frame moves between stack and pool.
 #[derive(Debug, Default)]
 pub struct FrameStack {
-    pub(crate) vec: Vec<Frame>,
-    pub(crate) live: usize,
+    vec: Vec<Frame>,
+    live: usize,
 }
 
 impl FrameStack {
@@ -851,6 +851,115 @@ impl FrameStack {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.live
+    }
+
+    // ---- The call protocol's view of the pool (`perf/REDESIGN-FRAMES.md`) ----
+    //
+    // Outside this module the stack's storage (`vec`, `live`) is reached
+    // only through these and the methods below: a call readies the
+    // released frame right above the live ones (index `len()`), and enters
+    // it. A later stage that moves the frames' headers onto a VM stack
+    // replaces them here.
+
+    /// Frames `i - 1` and `i` (the latter may be the released frame above
+    /// the live ones): a call's caller and callee, or a return's.
+    ///
+    /// # Panics
+    /// When `i` is past the frames kept (live and released).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every call and return
+    pub(crate) fn pair_mut(&mut self, i: usize) -> (Option<&mut Frame>, Option<&mut Frame>) {
+        let (a, b) = self.vec.split_at_mut(i);
+        (a.last_mut(), b.first_mut())
+    }
+
+    /// Frames `i - 1` and `i` (see [`FrameStack::pair_mut`]), when both
+    /// exist.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every call and return
+    pub(crate) fn both_mut(&mut self, i: usize) -> Option<(&mut Frame, &mut Frame)> {
+        if i == 0 || i >= self.vec.len() {
+            return None;
+        }
+        let (a, b) = self.vec.split_at_mut(i);
+        Some((&mut a[i - 1], &mut b[0]))
+    }
+
+    /// [`FrameStack::both_mut`], to read.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of builtin calls
+    pub(crate) fn both(&self, i: usize) -> Option<(&Frame, &Frame)> {
+        if i == 0 || i >= self.vec.len() {
+            return None;
+        }
+        Some((&self.vec[i - 1], &self.vec[i]))
+    }
+
+    /// The frames below `i` and from `i` on (live, then released), for
+    /// the planned call and the plain return alone (`exec::tape::calls`,
+    /// `Vm::return_plain`), where
+    /// [`FrameStack::both_mut`]'s pair costs a null test the compiler does
+    /// not fold. A later stage that moves the frames onto a VM stack
+    /// replaces it with that sequence's own view.
+    ///
+    /// # Panics
+    /// When `i` is past the frames kept.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every planned call and return
+    pub(crate) fn split_pooled_mut(&mut self, i: usize) -> (&mut [Frame], &mut [Frame]) {
+        self.vec.split_at_mut(i)
+    }
+
+    /// Frame `i`, live or the released one a call is readied in.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a bounds test
+    pub(crate) fn pooled(&self, i: usize) -> Option<&Frame> {
+        self.vec.get(i)
+    }
+
+    /// Frame `i`, live or released, to change.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a bounds test
+    pub(crate) fn pooled_mut(&mut self, i: usize) -> Option<&mut Frame> {
+        self.vec.get_mut(i)
+    }
+
+    /// Frame `i`, live or released.
+    ///
+    /// # Panics
+    /// When there is no frame `i`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a bounds test
+    pub(crate) fn pooled_at(&self, i: usize) -> &Frame {
+        &self.vec[i]
+    }
+
+    /// Frame `i`, live or released, to change.
+    ///
+    /// # Panics
+    /// When there is no frame `i`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a bounds test
+    pub(crate) fn pooled_at_mut(&mut self, i: usize) -> &mut Frame {
+        &mut self.vec[i]
+    }
+
+    /// Makes the released frame readied at index `live` (the number of
+    /// live frames when the call started) the top frame: the call enters
+    /// it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a store
+    pub(crate) fn enter_pooled(&mut self, live: usize) {
+        debug_assert!(live < self.vec.len());
+        self.live = live + 1;
+    }
+
+    /// Takes the top frame, already released in place, off the live ones
+    /// (it stays in the pool).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a store
+    pub(crate) fn leave_released(&mut self) {
+        self.live -= 1;
     }
 
     #[inline(always)]
@@ -3858,8 +3967,8 @@ impl Vm {
     /// main frame's are older until it resumes.
     #[inline]
     pub(crate) fn main_is_global_top(&self) -> bool {
-        match self.frames.vec.get(1) {
-            Some(f) if self.frames.live > 1 => {
+        match self.frames.pooled(1) {
+            Some(f) if self.frames.len() > 1 => {
                 !std::ptr::eq(Rc::as_ptr(&f.vars_store), Rc::as_ptr(&self.globals))
             }
             _ => true,

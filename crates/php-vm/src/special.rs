@@ -1751,11 +1751,8 @@ impl Vm {
         if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
             return None;
         }
-        let live = self.frames.live;
-        let (callers, pool) = self.frames.vec.split_at_mut(live);
-        let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
-            return None;
-        };
+        let live = self.frames.len();
+        let (caller, frame) = self.frames.both_mut(live)?;
         if caller.calls.len() != calls_len
             || frame.args.len() != n
             || !frameless_args(class, &frame.args)
@@ -1831,10 +1828,10 @@ impl Vm {
         {
             return None;
         }
-        let live = self.frames.live;
+        let live = self.frames.len();
         {
-            let caller = self.frames.vec.get(live.checked_sub(1)?)?;
-            let frame = self.frames.vec.get(live)?;
+            let caller = self.frames.pooled(live.checked_sub(1)?)?;
+            let frame = self.frames.pooled(live)?;
             if caller.calls.len() != calls_len || frame.args.len() != n {
                 return None;
             }
@@ -1846,7 +1843,7 @@ impl Vm {
                 return None;
             }
         }
-        if let Some(caller) = self.frames.vec.get_mut(live - 1) {
+        if let Some(caller) = self.frames.pooled_mut(live - 1) {
             caller.ip = caller_ip;
         }
         self.frameless_handler_call(b, n, dst, live)
@@ -1873,7 +1870,7 @@ impl Vm {
         let mut args = self.call_bufs.take_args();
         args.values.reserve(b.signature().params.len().max(n));
         {
-            let sent = &mut self.frames.vec[live].args;
+            let sent = &mut self.frames.pooled_at_mut(live).args;
             args.values
                 .extend(sent.iter_mut().map(|arg| arg.take().unwrap_or_default()));
             sent.clear();

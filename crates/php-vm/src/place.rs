@@ -5986,7 +5986,7 @@ impl Vm {
             .first()
             .is_some_and(|f| f.kind == crate::vm::FrameKind::Main)
             && self.main_is_global_top();
-        let top = self.global_scope_top().and_then(|t| self.frames.vec.get(t));
+        let top = self.global_scope_top().and_then(|t| self.frames.pooled(t));
         if let Some(f) = top {
             if let Some(cv) = f
                 .code
