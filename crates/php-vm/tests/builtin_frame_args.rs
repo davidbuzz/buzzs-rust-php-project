@@ -422,3 +422,43 @@ array(3) {
 "
     );
 }
+
+/// `strtr(string, array)` runs frameless when it reports nothing (scalar
+/// replacements, no empty key); an empty key's warning (with its
+/// `strtr(): ` prefix), an array replacement's conversion warning and an
+/// object's `__toString()` take the framed call. Expected output:
+/// php-src's (PHP 8.5).
+#[test]
+fn strtr_with_an_array_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function run() {
+  $r = [];
+  for ($i = 0; $i < 2; $i++) {
+    $r[] = strtr('wiki?hdb??x', ['?h' => '-', '??' => '?']);
+    $r[] = strtr('abc', []); $r[] = strtr('', ['a' => 'b']); $r[] = strtr('aaa', ['a' => 'b', 'aa' => 'c']);
+    $r[] = strtr('123', [1 => 'one', 2 => 2.5, 3 => true, 'x' => null]);
+    $r[] = strtr('ab', ['' => 'E', 'a' => false]);
+    $r[] = strtr('hi all', ['hi' => 'bye', 'all' => 'everyone', 'h' => 'X']);
+  }
+  echo json_encode($r), "\n";
+  echo strtr('abc', ['a' => [1]]), "\n";
+  echo strtr('abc', ['a' => new class { function __toString() { return 'O'; } }]), "\n";
+  echo strtr('abc', 'ab', 'xy'), "\n";
+}
+run();
+"#).1,
+        r#"
+Warning: strtr(): Ignoring replacement of empty string in t.php on line 9
+
+Warning: strtr(): Ignoring replacement of empty string in t.php on line 9
+["wiki-db?x","abc","","cb","one2.51","b","bye everyone","wiki-db?x","abc","","cb","one2.51","b","bye everyone"]
+
+Warning: Array to string conversion in t.php on line 13
+Arraybc
+Obc
+xyc
+"#
+    );
+}

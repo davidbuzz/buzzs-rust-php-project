@@ -83,6 +83,8 @@ fn only_call_shapes_without_an_error_path_skip_the_frame() {
     // `..` range can warn; dirname: levels below 1 throw; in_array: loose
     // comparisons with objects (or over long haystacks) and non-scalar
     // needles; str_replace: growing replacements reserve memory first;
+    // strtr: a null `$to` is coerced (an array of scalar replacements
+    // without an empty key is frameless);
     // dynamic calls and named arguments always push the frame. Calls the VM
     // answers without the handler show the real result instead of a mark:
     // `chr()` of 0..=255, `ord()` of one byte, `trim()` of one string or
@@ -97,7 +99,7 @@ fn only_call_shapes_without_an_error_path_skip_the_frame() {
     // echoed as ""). Neither pushes a frame.
     assert_eq!(
         output(vm, &sink, status),
-        "F1B1BB\naaaaBB\nFFFBB\n1BB1B1B\nFBBB\nFBB\nFFBB\naBF\nAB65B\nFB\nB\nB\n"
+        "F1B1BB\naaaaBB\nFFFBB\n1BB1B1B\nFBBB\nFFB\nFFBB\naBF\nAB65B\nFB\nB\nB\n"
     );
 }
 

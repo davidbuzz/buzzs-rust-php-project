@@ -803,8 +803,23 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
         (fl::INTDIV, [Some(Int(dividend)), Some(Int(divisor))]) => {
             *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
         }
+        (fl::STRTR, [Some(Str(_)), Some(Array(pairs))]) => scalar_replacements(pairs),
         _ => false,
     }
+}
+
+/// Whether `strtr(string, array)` of `pairs` reports nothing: no key is
+/// the empty string ("Ignoring replacement of empty string") and every
+/// replacement is a scalar or null, converted to a string silently (an
+/// array or an object warns or throws).
+fn scalar_replacements(pairs: &php_runtime::ZArray) -> bool {
+    pairs.iter().all(|(k, v)| {
+        !matches!(k, php_runtime::ArrayKey::Str(s) if s.is_empty())
+            && matches!(
+                v,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
+    })
 }
 
 /// [`frameless_args`] of two or three arguments read in place: the same
@@ -819,6 +834,7 @@ fn frameless_args_ref(class: u32, args: &[&Value]) -> bool {
         | (fl::SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
         | (fl::STRTR, [Str(_), Str(_), Str(_)])
         | (fl::KEY_EXISTS, [Str(_) | Int(_), Array(_)]) => true,
+        (fl::STRTR, [Str(_), Array(pairs)]) => scalar_replacements(pairs),
         (fl::TRIM, [Str(_), Str(chars)]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Str(_), Int(levels)]) => *levels >= 1,
         (fl::STRPOS, [Str(haystack), Str(_), Int(offset)]) => {
@@ -3161,7 +3177,40 @@ mod tests {
         assert!(!ok(fl::MIN_MAX, &[i(1), arr(vec![])]));
         assert!(!ok(fl::MIN_MAX, &[i(1), i(2), i(3)]));
         assert!(ok(fl::STRTR, &[s("abc"), s("a"), s("b")]));
-        assert!(!ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        // strtr(string, array) of scalar replacements (an array value
+        // warns: "Array to string conversion").
+        assert!(ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        let pairs = |vals: Vec<Value>| {
+            let mut t = php_runtime::HashTable::new();
+            for (k, v) in [b"a", b"b"].iter().zip(vals) {
+                let _ = t.insert(ZStr::from(&k[..]), v);
+            }
+            Some(Value::Array(php_runtime::ZArray::from_table(t)))
+        };
+        assert!(ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                pairs(vec![Value::Str(ZStr::from("x")), Value::Int(1)])
+            ]
+        ));
+        assert!(!ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                pairs(vec![Value::Array(php_runtime::ZArray::new())])
+            ]
+        ));
+        // An empty key warns.
+        let mut t = php_runtime::HashTable::new();
+        let _ = t.insert(ZStr::from(""), Value::Int(1));
+        assert!(!ok(
+            fl::STRTR,
+            &[
+                s("abc"),
+                Some(Value::Array(php_runtime::ZArray::from_table(t)))
+            ]
+        ));
         // Math: ints are widened silently; log() bases, round() modes and
         // intdiv() by zero or overflowing can fail.
         let f = |x: f64| Some(Value::Float(x));
