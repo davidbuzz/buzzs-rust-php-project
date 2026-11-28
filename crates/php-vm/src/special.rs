@@ -1825,6 +1825,7 @@ impl Vm {
             || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
             || self.observer.enabled
             || n > MAX
+            || b.sends_ref_within(n)
         {
             return None;
         }

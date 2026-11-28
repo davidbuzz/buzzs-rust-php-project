@@ -3531,7 +3531,10 @@ pub(super) fn leaf_now(
     let dst = loop {
         let src = match ops.get(at + 1 + n)? {
             &Op::DoCall { dst } => break dst,
-            Op::Send { src } if n < LEAF_ARGS => src,
+            // (A leaf function's arguments are all by value: a call that
+            // reaches a by-reference parameter, `preg_match($re, $s, $m)`,
+            // is not one, whatever it sends.)
+            Op::Send { src } if n < LEAF_ARGS && !b.sends_ref_within(n + 1) => src,
             _ => return None,
         };
         sent[n] = match *src {
@@ -5111,7 +5114,10 @@ pub(super) fn call_native(
     // as a frameless function is. Not a method that happens to have such
     // a name (readied with its `$this` or scopes).
     let leaf = b.leaf_id();
-    if leaf != crate::special::leaf::NONE && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0 {
+    if leaf != crate::special::leaf::NONE
+        && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
+        && !b.sends_ref_within(n)
+    {
         let frame = vm.frames.pooled_at(live);
         let mut sent: [&Value; LEAF_ARGS] = [&Value::Null; LEAF_ARGS];
         let mut plain = frame.args.len() <= LEAF_ARGS;
