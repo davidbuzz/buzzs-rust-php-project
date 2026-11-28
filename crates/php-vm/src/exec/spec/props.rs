@@ -2682,6 +2682,39 @@ pub(super) fn read_chain_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
     Some(v)
 }
 
+/// [`read_chain_in`]'s `isset`-mode miss (`$this->a->name ?? x`): `null`
+/// when the object the chain reaches lacks the dynamic property its tail
+/// entry describes and no user code is to run, as [`is_miss_hit`]
+/// decides for a one-segment place. Consumed string offsets are
+/// released. `None`, nothing consumed, for the generic fetch.
+#[inline(never)]
+fn read_chain_is_miss_in(f: &mut Frame, pid: PlaceId) -> Option<Value> {
+    let (obj, idx, lit) = chain_object(f, pid)?;
+    let hit = tail_hit(f, idx, lit, &obj, PC_READ)?;
+    if hit.flags & PC_DYN == 0 {
+        return None;
+    }
+    let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+        return None;
+    };
+    let od = object::data(&obj);
+    if od.class.magic.get.is_some() || od.class.magic.isset.is_some() {
+        return None;
+    }
+    let absent = od
+        .dynamic
+        .try_borrow()
+        .ok()?
+        .as_deref()
+        .is_none_or(|t| t.get_zstr(name).is_none());
+    if !absent {
+        return None;
+    }
+    drop(obj);
+    super::release_place_str_tmps(f, pid);
+    Some(Value::Null)
+}
+
 /// The tail cache entry `idx` (literal `lit`) as a [`Hit`] for `obj` in
 /// frame `f`, when it was filled for the object's class and the frame's
 /// scope, allows every access in `want`, and the object is not lazy.
@@ -2829,8 +2862,15 @@ impl Vm {
         }
         let f = self.user_frame_mut()?;
         if !is_prop_dims_place(f, pid) {
-            // `$this->a->b`, `$list[$k]->name` & co.
-            return read_chain_in(f, pid);
+            // `$this->a->b`, `$list[$k]->name` & co.; in `Is` mode also a
+            // missing dynamic property (`?? d`).
+            return read_chain_in(f, pid).or_else(|| {
+                if mode == FetchMode::Is {
+                    read_chain_is_miss_in(f, pid)
+                } else {
+                    None
+                }
+            });
         }
         // A hit; in `Is` mode also a missing key (`?? d`).
         let read = |f: &mut Frame| {

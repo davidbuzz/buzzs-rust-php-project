@@ -468,3 +468,43 @@ dn dn
 "#
     );
 }
+
+/// `$this->a->name ?? x` and `$this->a[$k]->name ?? x` of an object
+/// without that dynamic property are `null` from the chain's tail cache
+/// entry when there is no user code to run (`__get()`, `__isset()`, a lazy
+/// object take the generic read); a property added or removed later, a
+/// middle value that is no object, `isset()` and plain reads (with their
+/// warnings) as before. Expected output: php-src's (PHP 8.5).
+#[test]
+fn coalesce_of_a_missing_property_at_a_chain_end_is_null_as_php_src() {
+    assert_eq!(
+        run(r#"<?php
+class G { function __get($n) { echo "get($n) "; return "g"; } }
+class I { function __isset($n) { echo "isset($n) "; return false; } }
+class P { public $o; public $arr = []; public $decl = 'd';
+  function rd() { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $this->o->zz ?? 'dflt'; } return implode(',', $r); }
+  function rdk($k) { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $this->arr[$k]->zz ?? 'k'; } return implode(',', $r); } }
+$p = new P;
+foreach ([new stdClass, new G, new I, null, 5, (object)['zz' => 'has'], new P] as $o) { $p->o = $o; echo $p->rd(), " | "; } echo "\n";
+$p->o = new stdClass; echo $p->rd(), " "; $p->o->zz = 'late'; echo $p->rd(), " "; unset($p->o->zz); echo $p->rd(), "\n";
+$p->arr = ['a' => new stdClass, 'b' => (object)['zz' => 'bz'], 'c' => new G]; foreach (['a', 'b', 'c', 'x'] as $k) { echo $p->rdk($k), " "; } echo "\n";
+$r = new ReflectionClass(P::class); $p->o = $r->newLazyGhost(function ($o) { echo "init "; }); echo $p->rd(), "\n";
+$p->o = new stdClass; for ($i = 0; $i < 2; $i++) { var_dump(isset($p->o->zz)); echo @$p->o->zz === null ? "n\n" : "x\n"; }
+for ($i = 0; $i < 2; $i++) { $x = $p->o->zz; } echo "done\n";
+"#),
+        r"dflt,dflt,dflt | get(zz) get(zz) get(zz) g,g,g | isset(zz) isset(zz) isset(zz) dflt,dflt,dflt | dflt,dflt,dflt | dflt,dflt,dflt | has,has,has | dflt,dflt,dflt | 
+dflt,dflt,dflt late,late,late dflt,dflt,dflt
+k,k,k bz,bz,bz get(zz) get(zz) get(zz) g,g,g k,k,k 
+init dflt,dflt,dflt
+bool(false)
+n
+bool(false)
+n
+
+Warning: Undefined property: stdClass::$zz in t.php on line 13
+
+Warning: Undefined property: stdClass::$zz in t.php on line 13
+done
+"
+    );
+}
