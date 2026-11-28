@@ -981,8 +981,8 @@ impl FrameStack {
         let idx = self.live;
         if idx < self.vec.len() {
             let f = &mut self.vec[idx];
-            if f.slots.cvs.len() == code.cv_names.len()
-                && f.slots.tmps.len() == code.num_tmps as usize
+            if f.slots.cvs().len() == code.cv_names.len()
+                && f.slots.tmps().len() == code.num_tmps as usize
                 && f.iters.len() == code.num_iters as usize
                 && f.fins.len() == code.num_finally as usize
             {
@@ -1323,6 +1323,12 @@ pub struct FrameSlots {
 }
 
 impl FrameSlots {
+    /// The slots held in these vectors: a frame built afresh.
+    #[inline]
+    fn from_vecs(tmps: Vec<Value>, cvs: Vec<CvSlot>) -> Self {
+        FrameSlots { tmps, cvs }
+    }
+
     /// The compiled variables (`ZEND_CALL_VAR_NUM(ex, 0..last_var)`).
     #[inline(always)]
     #[allow(clippy::inline_always)] // a field read
@@ -1351,6 +1357,59 @@ impl FrameSlots {
     #[allow(clippy::inline_always)] // a field read
     pub fn tmps_mut(&mut self) -> &mut [Value] {
         &mut self.tmps
+    }
+
+    /// Empties the temporaries' vector for the pool (`clear_frame_buffer`).
+    #[inline]
+    fn clear_tmps_buffer(&mut self) {
+        clear_frame_buffer(&mut self.tmps);
+    }
+
+    /// Empties the compiled variables' vector for the pool.
+    #[inline]
+    fn clear_cvs_buffer(&mut self) {
+        clear_frame_buffer(&mut self.cvs);
+    }
+
+    /// Cuts the released temporaries to none (`cut_released`).
+    #[inline]
+    fn cut_tmps(&mut self) {
+        cut_released(&mut self.tmps);
+    }
+
+    /// Cuts the released compiled variables to none.
+    #[inline]
+    fn cut_cvs(&mut self) {
+        cut_released(&mut self.cvs);
+    }
+
+    /// Fits the released temporaries to `n` (`fit_released`).
+    #[inline]
+    fn fit_tmps(&mut self, n: usize) {
+        fit_released(&mut self.tmps, n, || Value::Null);
+    }
+
+    /// Fits the released compiled variables to `n`.
+    #[inline]
+    fn fit_cvs(&mut self, n: usize) {
+        fit_released(&mut self.cvs, n, || CvSlot::new(None));
+    }
+
+    /// Gives back the temporaries' buffer when every slot is released.
+    #[inline]
+    fn shrink_released_tmps(&mut self) {
+        if self.tmps.iter().all(|v| matches!(v, Value::Null)) {
+            self.tmps = Vec::new();
+        }
+    }
+
+    /// Gives back the compiled variables' buffer when every slot is
+    /// released.
+    #[inline]
+    fn shrink_released_cvs(&mut self) {
+        if self.cvs.iter().all(CvSlot::is_none) {
+            self.cvs = Vec::new();
+        }
     }
 
     /// The temporaries' storage itself, for the tests of the frame pool
@@ -1899,10 +1958,7 @@ impl Frame {
     /// Creates a pre-allocated empty frame for the pool.
     pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
         Frame {
-            slots: FrameSlots {
-                tmps: Vec::with_capacity(16),
-                cvs: Vec::with_capacity(8),
-            },
+            slots: FrameSlots::from_vecs(Vec::with_capacity(16), Vec::with_capacity(8)),
             iters: Vec::with_capacity(4),
             fins: Vec::with_capacity(2),
             calls: Vec::with_capacity(4),
@@ -1954,11 +2010,11 @@ impl Frame {
     /// and a variable store shared with another frame is left to that
     /// frame and replaced.
     pub fn clear_for_pool(&mut self, empty_code: &Rc<OpArray>) {
-        clear_frame_buffer(&mut self.slots.tmps);
+        self.slots.clear_tmps_buffer();
         clear_frame_buffer(&mut self.iters);
         clear_frame_buffer(&mut self.fins);
         clear_frame_buffer(&mut self.calls);
-        clear_frame_buffer(&mut self.slots.cvs);
+        self.slots.clear_cvs_buffer();
         self.symtab_attached = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars_store) {
             let vs = rc_mut.get_mut();
@@ -2129,10 +2185,10 @@ impl Frame {
         // of every temporary, out of line (490,000 times a request of a
         // framework application, where builtin and user calls alternate
         // at every depth).
-        cut_released(&mut self.slots.tmps);
+        self.slots.cut_tmps();
         cut_released(&mut self.iters);
         cut_released(&mut self.fins);
-        cut_released(&mut self.slots.cvs);
+        self.slots.cut_cvs();
         // Kept by `keeps_function` for a user function.
         clear_opt(&mut self.ufunc);
         if !Rc::ptr_eq(&self.code, empty_code) {
@@ -2145,10 +2201,7 @@ impl Frame {
     /// built without allocating.
     fn empty_builtin(empty_code: &Rc<OpArray>, empty_vars: &Rc<RefCell<VarStore>>) -> Self {
         Frame {
-            slots: FrameSlots {
-                tmps: Vec::new(),
-                cvs: Vec::new(),
-            },
+            slots: FrameSlots::default(),
             iters: Vec::new(),
             fins: Vec::new(),
             calls: Vec::new(),
@@ -2195,15 +2248,11 @@ impl Frame {
         // A pooled frame keeps its cleared slots at their length for the
         // next call of the same function; a builtin frame uses none, and
         // the call paths resize them when the lengths do not match.
-        if self.slots.tmps.iter().all(|v| matches!(v, Value::Null)) {
-            self.slots.tmps = Vec::new();
-        }
+        self.slots.shrink_released_tmps();
         shrink(&mut self.iters);
         shrink(&mut self.fins);
         shrink(&mut self.calls);
-        if self.slots.cvs.iter().all(CvSlot::is_none) {
-            self.slots.cvs = Vec::new();
-        }
+        self.slots.shrink_released_cvs();
         if self.drop_empty_cold() {
             self.cold = None;
         }
@@ -2225,7 +2274,7 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every return
     fn clear_slots_for_reuse(&mut self) {
-        for t in &mut self.slots.tmps {
+        for t in self.slots.tmps_mut() {
             release_slot(std::mem::take(t));
         }
         // Foreach iterators, finally states and pending calls: absent from
@@ -2236,7 +2285,7 @@ impl Frame {
         {
             self.clear_loop_state();
         }
-        for slot in &mut self.slots.cvs {
+        for slot in self.slots.cvs_mut() {
             if let Some(old) = slot.as_mut().take() {
                 release_cv(old);
             }
@@ -2340,7 +2389,7 @@ impl Frame {
     pub(crate) fn release_plain(&mut self, caller_this: Option<&Obj>) {
         debug_assert!(self.args.is_empty());
         self.release_direct_tmps();
-        for slot in &mut self.slots.cvs {
+        for slot in self.slots.cvs_mut() {
             release_cv_in_place(slot.as_mut());
         }
         // The call's own handle: `$this`, or a closure's object (its
@@ -2385,7 +2434,7 @@ impl Frame {
         // In `clear_for_reuse`'s order: the temporaries, the compiled
         // variables, the passed arguments.
         self.release_direct_tmps();
-        for slot in &mut self.slots.cvs {
+        for slot in self.slots.cvs_mut() {
             if let Some(old) = slot.as_mut().take() {
                 release_cv(old);
             }
@@ -2454,7 +2503,7 @@ impl Frame {
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every direct return
     fn release_direct_tmps(&mut self) {
-        let (fours, rest) = self.slots.tmps.as_chunks_mut::<4>();
+        let (fours, rest) = self.slots.tmps_mut().as_chunks_mut::<4>();
         for four in fours {
             if four.iter().fold(false, |any, t| any | is_counted(t)) {
                 for t in four {
@@ -2552,7 +2601,7 @@ impl Frame {
     ) {
         if self.direct_releasable() {
             self.release_direct_tmps();
-            for slot in &mut self.slots.cvs {
+            for slot in self.slots.cvs_mut() {
                 release_cv_in_place(slot.as_mut());
             }
             self.release_direct_args();
@@ -2563,7 +2612,7 @@ impl Frame {
         if self.symtab_attached {
             crate::gc::frame_released(self, caller_this);
         } else {
-            crate::gc::cvs_released(&self.slots.cvs);
+            crate::gc::cvs_released(self.slots.cvs());
             crate::gc::call_handle_released(self, caller_this);
         }
         self.clear_for_reuse(empty_code);
@@ -2618,8 +2667,8 @@ impl Frame {
             || self.scope.is_some()
             || self.called.is_some()
             || self.statics.is_some()
-            || !self.slots.tmps.is_empty()
-            || !self.slots.cvs.is_empty()
+            || !self.slots.tmps().is_empty()
+            || !self.slots.cvs().is_empty()
             // The VM's shared empty store, or the frame's own that
             // nothing reached (`vars_used`) or that is found empty: the
             // one a user function's call left at this depth, which the
@@ -2673,8 +2722,8 @@ impl Frame {
             || self.magic_name.is_some()
             || self.closure.is_some()
             || self.statics.is_some()
-            || !self.slots.tmps.is_empty()
-            || !self.slots.cvs.is_empty()
+            || !self.slots.tmps().is_empty()
+            || !self.slots.cvs().is_empty()
             || !self.args.is_empty()
             || !(Rc::ptr_eq(&self.vars_store, empty_vars)
                 || !self.vars_used.get()
@@ -2782,9 +2831,9 @@ impl Frame {
             && Rc::ptr_eq(&self.code, code)
             && self.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf))
             && matches!(&self.func, Some(Func::User(f)) if Rc::ptr_eq(f, uf))
-            && self.slots.cvs.len() == code.cv_names.len()
-            && self.slots.cvs.iter().all(CvSlot::is_none)
-            && self.slots.tmps.len() == code.num_tmps as usize
+            && self.slots.cvs().len() == code.cv_names.len()
+            && self.slots.cvs().iter().all(CvSlot::is_none)
+            && self.slots.tmps().len() == code.num_tmps as usize
             && self.iters.len() == code.num_iters as usize
             && self.fins.len() == code.num_finally as usize
             && store_empty
@@ -2836,10 +2885,8 @@ impl Frame {
         forget_released(&mut vs.slots, 0);
         clear_opt(&mut vs.names.shared);
         let code = &uf.code;
-        fit_released(&mut self.slots.tmps, code.num_tmps as usize, || Value::Null);
-        fit_released(&mut self.slots.cvs, code.cv_names.len(), || {
-            CvSlot::new(None)
-        });
+        self.slots.fit_tmps(code.num_tmps as usize);
+        self.slots.fit_cvs(code.cv_names.len());
         fit_released(&mut self.iters, code.num_iters as usize, || None);
         fit_released(&mut self.fins, code.num_finally as usize, || FinState::None);
         // The released frame holds its last function's handles
@@ -2920,12 +2967,10 @@ impl Frame {
     /// sharing them on every call (`VarNames::share`).
     pub(crate) fn reinit_for_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
         debug_assert!(self.slots_released());
-        fit_released(&mut self.slots.tmps, code.num_tmps as usize, || Value::Null);
+        self.slots.fit_tmps(code.num_tmps as usize);
         fit_released(&mut self.iters, code.num_iters as usize, || None);
         fit_released(&mut self.fins, code.num_finally as usize, || FinState::None);
-        fit_released(&mut self.slots.cvs, code.cv_names.len(), || {
-            CvSlot::new(None)
-        });
+        self.slots.fit_cvs(code.cv_names.len());
         self.reinit_same_call(code, kind);
     }
 
@@ -2937,8 +2982,8 @@ impl Frame {
     /// newly built frame); [`Frame::reinit_for_call`] relies on it. For
     /// debug assertions.
     pub(crate) fn slots_released(&self) -> bool {
-        self.slots.tmps.iter().all(Value::is_null)
-            && self.slots.cvs.iter().all(CvSlot::is_none)
+        self.slots.tmps().iter().all(Value::is_null)
+            && self.slots.cvs().iter().all(CvSlot::is_none)
             && self.iters.iter().all(Option::is_none)
             && self.fins.iter().all(|f| matches!(f, FinState::None))
     }
@@ -3016,14 +3061,14 @@ impl Frame {
         let niters = code.num_iters as usize;
         let nfin = code.num_finally as usize;
         Frame {
-            slots: FrameSlots {
-                tmps: if ntmps == 0 {
+            slots: FrameSlots::from_vecs(
+                if ntmps == 0 {
                     Vec::new()
                 } else {
                     vec![Value::Null; ntmps]
                 },
                 cvs,
-            },
+            ),
             iters: if niters == 0 {
                 Vec::new()
             } else {
@@ -3103,7 +3148,7 @@ impl Frame {
             record_slot(&mut symtab_slots, i, slot, self.code.cv_names.len());
             let slot = slot as usize;
             if slot < st.slots.len() {
-                if let Some(val) = self.slots.cvs.get(i).and_then(CvSlot::get) {
+                if let Some(val) = self.slots.cvs().get(i).and_then(CvSlot::get) {
                     st.slots[slot] = Some(val.clone());
                 }
             }
@@ -3141,7 +3186,7 @@ impl Frame {
                 continue;
             };
             let val = sv.take();
-            if let Some(cv) = self.slots.cvs.get_mut(i) {
+            if let Some(cv) = self.slots.cvs_mut().get_mut(i) {
                 if let Some(old) = cv.set(val) {
                     crate::gc::release_duplicate(old);
                 }
@@ -3162,7 +3207,7 @@ impl Frame {
         let mut st = self.vars_store.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = mapped_slot(symtab_slots, valid, &mut st, i, name) {
-                let Some(cv) = self.slots.cvs.get_mut(i) else {
+                let Some(cv) = self.slots.cvs_mut().get_mut(i) else {
                     continue;
                 };
                 let table = st.slots.get(slot as usize).and_then(Option::as_ref);
@@ -3195,7 +3240,7 @@ impl Frame {
                     // (e.g. cleared by `clear_cv_for_symtab_slot` ahead of an
                     // in-place mutation of the shared slot); it must not wipe
                     // a live global slot that another frame still owns.
-                    let Some(cv) = self.slots.cvs.get(i).and_then(CvSlot::get) else {
+                    let Some(cv) = self.slots.cvs().get(i).and_then(CvSlot::get) else {
                         continue;
                     };
                     if st.slots[slot].as_ref().is_some_and(|t| same_handle(t, cv)) {
@@ -3210,7 +3255,7 @@ impl Frame {
     }
 
     /// Drops the duplicate handle held by the attached symbol table for `cv`
-    /// before an in-place mutation of `self.slots.cvs[cv]`, so a value owned only by
+    /// before an in-place mutation of `self.slots.cvs_mut()[cv]`, so a value owned only by
     /// this variable sees refcount 1 (`is_unique_mutable` / `make_mut`).
     /// Call [`Frame::sync_cv_to_symtab`] once the mutation is complete.
     #[inline(always)]
@@ -3255,7 +3300,7 @@ impl Frame {
                     .get(sym_idx)
                     .is_some_and(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.slots.cvs.get_mut(sym_idx) {
+                    if let Some(slot) = self.slots.cvs_mut().get_mut(sym_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -3266,7 +3311,7 @@ impl Frame {
                     .iter()
                     .position(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
-                    if let Some(slot) = self.slots.cvs.get_mut(cv_idx) {
+                    if let Some(slot) = self.slots.cvs_mut().get_mut(cv_idx) {
                         if let Some(old) = slot.set(None) {
                             crate::gc::release_duplicate(old);
                         }
@@ -3330,7 +3375,7 @@ impl Frame {
     #[allow(clippy::inline_always)]
     pub(crate) fn peek_cv<R>(&self, cv: u32, read: impl FnOnce(Option<&Value>) -> R) -> R {
         let idx = cv as usize;
-        read(self.slots.cvs.get(idx).and_then(CvSlot::get))
+        read(self.slots.cvs().get(idx).and_then(CvSlot::get))
     }
 
     /// `$cv[i]` looked up for a 64-bit integer index on a packed array:
@@ -3338,7 +3383,7 @@ impl Frame {
     #[inline(always)]
     pub(crate) fn peek_cv_dim_int(&self, cv: u32, i: i64) -> Option<Value> {
         let idx = cv as usize;
-        let slot = self.slots.cvs.get(idx).and_then(CvSlot::get)?;
+        let slot = self.slots.cvs().get(idx).and_then(CvSlot::get)?;
         let guard;
         let arr = match slot {
             Value::Array(a) => a,
@@ -3972,7 +4017,7 @@ impl Vm {
                 if names.get(i).is_none_or(|n| n.as_bytes() != bytes) {
                     return false;
                 }
-                match main.slots.cvs.get(i).and_then(CvSlot::get) {
+                match main.slots.cvs().get(i).and_then(CvSlot::get) {
                     None => {}
                     Some(Value::Reference(m)) if PhpRef::ptr_eq(m, r) => {}
                     Some(_) => return false,
