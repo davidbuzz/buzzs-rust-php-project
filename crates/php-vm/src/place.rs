@@ -5943,7 +5943,20 @@ impl Vm {
 
     /// Looks up a global variable by key value without rebuilding the global symbol table.
     pub(crate) fn fetch_global_by_key_optional(&mut self, k: &Value) -> Option<Value> {
-        self.attach_globals_symbol_table();
+        // While the main frame is the newest of the global scope, its own
+        // variables are read below and every other global is in the
+        // table: nothing to bring up to date (attaching would copy each of
+        // the main frame's variables into the table, and mark it, for one
+        // read). A top-level include or `eval` running above it has the
+        // current values in the table only once synced.
+        let main_top = self
+            .frames
+            .first()
+            .is_some_and(|f| f.kind == crate::vm::FrameKind::Main)
+            && self.main_is_global_top();
+        if !main_top {
+            self.attach_globals_symbol_table();
+        }
         let name_bytes: std::borrow::Cow<[u8]> = match k {
             Value::Str(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
             Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),

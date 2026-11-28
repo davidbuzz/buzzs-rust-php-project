@@ -282,3 +282,43 @@ bool(false)
 "
     );
 }
+
+/// Globals looked up by name (`isset($GLOBALS[$n])`,
+/// `array_key_exists($n, $GLOBALS)`, `$GLOBALS[$n] ?? d`) while the main
+/// frame is the newest of the global scope read its variables and the
+/// global table without bringing the table up to date first: variables
+/// of the main script (null, references), globals written through
+/// `$GLOBALS` and `global`, unset ones, `eval`, variable
+/// variables, a function's own variables. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn global_lookups_by_name_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$wgA = 1; $wgN = null; $ref = 5; $wgR = &$ref;
+function chk(...$names) { $o = []; foreach ($names as $n) { $o[] = $n . '=' . (isset($GLOBALS[$n]) ? 1 : 0) . (array_key_exists($n, $GLOBALS) ? 'k' : '-') . (is_scalar($GLOBALS[$n] ?? 'd') ? var_export($GLOBALS[$n] ?? 'd', true) : gettype($GLOBALS[$n])); } return implode(' ', $o); }
+echo chk('wgA', 'wgN', 'wgR', 'wgB', 'GLOBALS', 'nope'), "\n";
+$GLOBALS['wgB'] = 2; echo chk('wgB'), "\n";
+function setg() { global $wgC; $wgC = 3; $GLOBALS['wgA'] = 10; } setg(); echo chk('wgA', 'wgC'), " ", $wgA, "\n";
+$wgA = 20; echo chk('wgA'), "\n";
+unset($wgA); echo chk('wgA'), "\n";
+$ref = 7; echo chk('wgR'), "\n";
+eval('$wgEv = 4; echo chk("wgEv"), "\n";'); echo chk('wgEv'), "\n";
+for ($i = 0; $i < 3; $i++) { $k = "wgLoop$i"; $$k = $i; echo chk($k), " "; } echo "\n";
+echo count(array_filter(array_keys(get_defined_vars()), fn($k) => str_starts_with($k, 'wg'))), "\n";
+function local() { $wgLocal = 1; return chk('wgLocal'); } echo local(), "\n";
+"#).1,
+        r"wgA=1k1 wgN=0k'd' wgR=1k5 wgB=0-'d' GLOBALS=0-'d' nope=0-'d'
+wgB=1k2
+wgA=1k10 wgC=1k3 10
+wgA=1k20
+wgA=0-'d'
+wgR=1k7
+wgEv=1k4
+wgEv=1k4
+wgLoop0=1k0 wgLoop1=1k1 wgLoop2=1k2 
+8
+wgLocal=0-'d'
+"
+    );
+}
