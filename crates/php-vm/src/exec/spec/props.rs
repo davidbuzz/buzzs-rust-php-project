@@ -31,7 +31,7 @@ use super::super::{discard_unrooted, release_slot_value, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
 use crate::opcode::{
-    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, PROP_CACHE_THIS,
+    ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceBase, PlaceId, Seg, PROP_CACHE_THIS,
 };
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_INIT, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
@@ -258,15 +258,16 @@ fn read_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>) -> Option<Valu
 /// object lacks, on a hit of the place's dynamic cache entry: `true` when
 /// the read is `null` without a diagnostic and without user code
 /// (`zend_std_read_property` with `BP_VAR_IS`: no `__isset()` and no
-/// `__get()` to call, an object that is not lazy, no table entry). A
-/// table that is being borrowed, and every other case, give `false`.
+/// `__get()` to call, an object that is not lazy, no table entry), or of
+/// a variable holding no object ([`is_of_non_object`]). A table that is
+/// being borrowed, and every other case, give `false`.
 #[inline]
 pub(in crate::exec) fn is_miss_hit(f: &Frame, pid: PlaceId) -> bool {
     let Some(hit) = hit_key(f, pid, PC_READ, 0) else {
-        return false;
+        return is_of_non_object(f, pid);
     };
     let Some(name) = dyn_name(f, &hit) else {
-        return false;
+        return is_of_non_object(f, pid);
     };
     let absent = |od: &ObjectData| -> Option<bool> {
         if od.class.magic.get.is_some() || od.class.magic.isset.is_some() {
@@ -278,7 +279,35 @@ pub(in crate::exec) fn is_miss_hit(f: &Frame, pid: PlaceId) -> bool {
     if let Some(od) = hit_data(f, &hit) {
         return absent(od) == Some(true);
     }
-    base_is_ref(f, &hit) && with_hit_obj(f, &hit, absent) == Some(true)
+    if base_is_ref(f, &hit) {
+        if let Some(absent) = with_hit_obj(f, &hit, absent) {
+            return absent;
+        }
+    }
+    is_of_non_object(f, pid)
+}
+
+/// `ZEND_FETCH_OBJ_IS` (`$v->name ?? x`) of a compiled variable that holds
+/// no object (null, undefined, a scalar, an array; also through a
+/// reference) and a literal property name: `null`, silently (the handler's
+/// `ZVAL_NULL(EX_VAR(opline->result.var))` for a non-object container).
+#[inline]
+fn is_of_non_object(f: &Frame, pid: PlaceId) -> bool {
+    let Some(place) = f.code.places.get(pid as usize) else {
+        return false;
+    };
+    let (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(_))]) = (&place.base, place.segs.as_slice())
+    else {
+        return false;
+    };
+    match f.cvs.get(*cv as usize).and_then(CvSlot::get) {
+        Some(Value::Object(_)) => false,
+        Some(Value::Reference(r)) => r
+            .try_borrow()
+            .is_some_and(|v| !matches!(&*v, Value::Object(_) | Value::Reference(_))),
+        // Undefined (read silently in `isset` mode), or any other value.
+        _ => true,
+    }
 }
 
 /// `ZEND_FETCH_OBJ_R` on a cache hit: the (dereferenced) value of an

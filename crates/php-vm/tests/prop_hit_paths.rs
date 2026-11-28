@@ -403,7 +403,7 @@ class T { function m() { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $this->nop
 echo (new T)->m(), "\n";
 class TG extends T { function __get($n) { return "tg"; } } echo (new TG)->m(), "\n";
 "#),
-        r#"dflt,dflt,dflt
+        r"dflt,dflt,dflt
 now,now,now
 dflt,dflt,dflt
 get(zz) get(zz) get(zz) g,g,g
@@ -427,6 +427,44 @@ Warning: Undefined property: stdClass::$zz in t.php on line 26
 done
 tn,tn,tn
 tg,tg,tg
+"
+    );
+}
+
+/// `$v->name ?? x` of a variable holding no object (null, a scalar, an
+/// array, an undefined variable, also through a reference) is `null`
+/// without the generic read; plain reads keep their warnings, `isset()`,
+/// `empty()`, chains, `?->` and dynamic names their paths. Expected
+/// output: php-src's (PHP 8.5).
+#[test]
+fn coalesce_of_a_property_of_a_non_object_is_null_as_php_src() {
+    assert_eq!(
+        run(r#"<?php
+function rd($o) { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $o->p ?? 'd'; } return implode(',', $r); }
+foreach ([null, true, false, 0, 1.5, "str", "", [], [1], new stdClass] as $v) { echo rd($v), " "; } echo "\n";
+function und() { $r = []; for ($i = 0; $i < 2; $i++) { $r[] = $undef->p ?? 'u'; } return implode(',', $r); } echo und(), "\n";
+function viaref() { $x = null; $y = &$x; $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $x->p ?? 'rf'; if ($i == 1) { $x = new stdClass; $x->p = 'obj'; } } return implode(',', $r); } echo viaref(), "\n";
+function mixed_() { $vals = [null, (object)['p' => 1], 5, (object)[], null]; $r = []; foreach ($vals as $v) { $r[] = $v->p ?? '-'; } return implode(',', $r); } echo mixed_(), "\n";
+function plain() { $o = null; for ($i = 0; $i < 2; $i++) { $x = $o->p; } var_dump($x); } plain();
+function iss() { $o = null; for ($i = 0; $i < 2; $i++) { var_dump(isset($o->p), empty($o->p)); } } iss();
+function nested() { $o = null; for ($i = 0; $i < 2; $i++) { echo $o->p->q ?? 'n', $o?->p ?? 'ns', " "; } echo "\n"; } nested();
+function dyn() { $o = null; $n = 'p'; for ($i = 0; $i < 2; $i++) { echo $o->$n ?? 'dn', " "; } echo "\n"; } dyn();
+"#),
+        r#"d,d,d d,d,d d,d,d d,d,d d,d,d d,d,d d,d,d d,d,d d,d,d d,d,d 
+u,u
+rf,rf,obj
+-,1,-,-,-
+
+Warning: Attempt to read property "p" on null in t.php on line 7
+
+Warning: Attempt to read property "p" on null in t.php on line 7
+NULL
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+nns nns 
+dn dn 
 "#
     );
 }
