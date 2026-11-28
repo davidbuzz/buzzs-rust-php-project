@@ -2800,8 +2800,11 @@ impl Vm {
         // (`return_simple`'s rule); anything else is its to coerce or
         // refuse.
         let rt = frame.ufunc.as_ref().and_then(|u| u.return_type.as_ref());
-        let (scope, called) = (frame.scope.as_ref(), frame.called.as_ref());
-        let takes = |v: &Value| rt.is_none() || return_accepts_in(rt, v, scope, called);
+        // (The scopes are read only for a declared type.)
+        let (in_scope, late_bound) = (&frame.scope, &frame.called);
+        let takes = |v: &Value| {
+            rt.is_none() || return_accepts_in(rt, v, in_scope.as_ref(), late_bound.as_ref())
+        };
         match val {
             Operand::Tmp(s) => match frame.tmps.get_mut(s as usize) {
                 // (An unused result whose release may run a destructor is

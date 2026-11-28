@@ -1126,13 +1126,38 @@ fn call_planned(
         // more in register spills than its prologue.)
         ready_frame_slow(frame, &uf);
     }
-    for i in 0..n {
-        let v = plan_arg(caller, code, plan, fetched.as_deref_mut(), i);
-        if let (Some(slot), Some(v)) = (frame.cvs.get_mut(i), v) {
-            if let Some(old) = slot.as_mut().replace(v) {
-                drop(old);
-            }
+    // The frame is released: its compiled variables are undefined, and
+    // each argument is stored over nothing (no old value to test and drop).
+    // The first loop found every source defined.
+    let slots = frame.cvs.as_mut_slice();
+    for i in 0..n.min(slots.len()) {
+        let idx = plan.idx[i] as usize;
+        let v = match plan.kinds[i] {
+            PLAN_CV => match caller.cvs.get(idx).and_then(crate::vm::CvSlot::get) {
+                Some(v) => clone_value(v),
+                None => continue,
+            },
+            PLAN_TMP => match caller.tmps.get_mut(idx) {
+                Some(t) => std::mem::take(t),
+                None => continue,
+            },
+            PLAN_PLACE | PLAN_THIS => match fetched.as_deref_mut() {
+                Some(fetched) => std::mem::take(&mut fetched[i]),
+                None => continue,
+            },
+            _ => match code.literals.get(idx) {
+                Some(v) => clone_value(v),
+                None => continue,
+            },
+        };
+        let slot = slots[i].as_mut();
+        if slot.is_some() {
+            // (Not reached: a readied frame's variables are undefined.)
+            drop(slot.take());
         }
+        // SAFETY: the slot is `None`, which owns nothing: writing over it
+        // without a drop forgets nothing.
+        unsafe { std::ptr::write(slot, Some(v)) };
     }
     if let PlanKind::Method(obj) = &plan.kind {
         // `$this`: the temporary's handle moved out, else a copy.
@@ -1175,33 +1200,6 @@ fn call_planned(
     caller.ip = plan.done;
     vm.frames.live = live + 1;
     true
-}
-
-/// Argument `i` of the planned call: a copy of the caller's variable or
-/// literal, its temporary moved out, or the value read from a place or
-/// `$this` before (`fetched`).
-#[inline(always)]
-#[allow(clippy::inline_always)] // once per argument of a planned call
-fn plan_arg(
-    caller: &mut crate::vm::Frame,
-    code: &OpArray,
-    plan: &Plan,
-    fetched: Option<&mut [Value; PLAN_ARGS]>,
-    i: usize,
-) -> Option<Value> {
-    match plan.kinds[i] {
-        PLAN_CV => caller
-            .cvs
-            .get(plan.idx[i] as usize)
-            .and_then(crate::vm::CvSlot::get)
-            .map(clone_value),
-        PLAN_TMP => caller
-            .tmps
-            .get_mut(plan.idx[i] as usize)
-            .map(std::mem::take),
-        PLAN_PLACE | PLAN_THIS => fetched.map(|fetched| std::mem::take(&mut fetched[i])),
-        _ => code.literals.get(plan.idx[i] as usize).map(clone_value),
-    }
 }
 
 /// The arguments of a planned variadic call past the declared parameters

@@ -2073,6 +2073,8 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     // switch (two lookups of the top frame per switch cost ~13
     // instructions each).
     let mut reload = false;
+    // The plain return just tried in the loop declined: not tried again.
+    let mut ret_declined = false;
     'frames: loop {
         let Some(f) = vm.frames.last_mut() else {
             if reload {
@@ -2093,14 +2095,14 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         // only hot ops run, which neither push nor pop frames nor replace
         // a frame's `code`; and `Vm::run`, which gets this frame's `ip`
         // back with `SWITCHED`, reloads the op array from the frame itself.
-        let c: &OpArray = unsafe { &*code };
-        let ops: &[Op] = &c.ops;
-        let lits: &[Value] = &c.literals;
+        let mut c: &OpArray = unsafe { &*code };
+        let mut ops: &[Op] = &c.ops;
+        let mut lits: &[Value] = &c.literals;
         let at = if fresh || usable(f, c) {
             fresh = false;
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
-            let tbase = tape.as_ptr();
+            let mut tbase = tape.as_ptr();
             // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
             // counts hot back edges through them and may run or compile a
             // trace. Built once per frame entry (two relaxed loads off the
@@ -2161,6 +2163,25 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             && prep.is_none()
                             && calls::has_plan(c, site)
                             && calls::call_plain(vm, c, at, site);
+                        // The callee's tape taken up right here, without a
+                        // round through the frame loop (`ZEND_VM_ENTER`):
+                        // only from a tape without the JIT's back-edge
+                        // hook, into one without it.
+                        if planned && jctx.is_none() {
+                            switched = SWITCHED;
+                            // SAFETY: the callee's frame is current.
+                            if let Some((nc, nf, nb, np)) = unsafe { take_up(vm) } {
+                                code = nc;
+                                // SAFETY: held by the frame `nf`.
+                                c = unsafe { &*nc };
+                                ops = &c.ops;
+                                lits = &c.literals;
+                                tbase = nb;
+                                fp = nf;
+                                p = np;
+                                continue;
+                            }
+                        }
                         let next = if planned {
                             ENTERED
                         } else {
@@ -2239,6 +2260,41 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     // SAFETY: `out.ip` points into the tape (as above).
                     WHY_STEP if unsafe { (*out.ip).ext } => hot::step_ext(f, ops, lits, at),
                     WHY_STEP => step_slow(f, ops, lits, at),
+                    // `ZEND_RETURN` of a plain call's frame into a caller
+                    // on a tape without the JIT's back-edge hook: the
+                    // caller's tape taken up right here (`ZEND_VM_LEAVE`).
+                    WHY_EXIT
+                        if jctx.is_none()
+                            && f.plain
+                            && prep.is_none()
+                            && matches!(ops.get(at), Some(Op::Return { .. })) =>
+                    {
+                        let Some(&Op::Return { val }) = ops.get(at) else {
+                            break at;
+                        };
+                        if !vm.return_plain::<false>(val, base, at + 1) {
+                            ret_declined = true;
+                            break at;
+                        }
+                        switched = SWITCHED;
+                        // SAFETY: the caller's frame is current.
+                        if let Some((nc, nf, nb, np)) = unsafe { take_up(vm) } {
+                            code = nc;
+                            // SAFETY: held by the frame `nf`.
+                            c = unsafe { &*nc };
+                            ops = &c.ops;
+                            lits = &c.literals;
+                            tbase = nb;
+                            fp = nf;
+                            p = np;
+                            continue;
+                        }
+                        if crate::interrupt::safe_point_due() {
+                            return (0, LEFT);
+                        }
+                        reload = true;
+                        continue 'frames;
+                    }
                     WHY_POLL => {
                         flush(vm, &mut prep);
                         // SAFETY: as above.
@@ -2403,7 +2459,9 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 // (The mark is tested here: a frame without it pays no
                 // call for the attempt.)
                 let plain = vm.frames.last().is_some_and(|f| f.plain);
-                (plain && vm.return_plain::<false>(val, base, at + 1)) || {
+                // (Declined in the loop just now: not tried again.)
+                let tried = std::mem::take(&mut ret_declined);
+                (plain && !tried && vm.return_plain::<false>(val, base, at + 1)) || {
                     // The base frame of the nested execution
                     // `Vm::run_base_on_tape` runs: it ends here.
                     if plain
@@ -2431,6 +2489,43 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         // the top of the loop.
         reload = true;
     }
+}
+
+/// The current frame of `vm`, which a call or a return just made current,
+/// for [`run_tape`]'s loop to go on in without a round through its frame
+/// loop: its op array, the frame, its tape and the instruction at its
+/// resume point. `None` when a safe point is due, its tape has the JIT's
+/// tables (the loop then needs the back-edge hook) or the frame is not
+/// [`usable`].
+///
+/// # Safety
+/// The op array returned is held by the frame; it is valid while the frame
+/// stays current, as `run_tape`'s `code` is.
+#[inline(always)]
+#[allow(clippy::inline_always)] // twice in `run_tape`, a few loads
+unsafe fn take_up(vm: &mut Vm) -> Option<(*const OpArray, *mut Frame, *const Inst, *const Inst)> {
+    if crate::interrupt::safe_point_due() {
+        return None;
+    }
+    let f = vm.frames.last_mut()?;
+    let code = Rc::as_ptr(&f.code);
+    // SAFETY: held by the frame.
+    let c: &OpArray = unsafe { &*code };
+    let tape = c.tape.insts.get()?;
+    if !c
+        .tape
+        .jit_cnt
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .is_null()
+        || !usable(f, c)
+    {
+        return None;
+    }
+    let base = tape.as_ptr();
+    // SAFETY: a resume point is an op index of the op array, at most the
+    // index of the tape's sentinel.
+    let p = unsafe { base.add(f.ip.min(c.ops.len())) };
+    Some((code, std::ptr::from_mut(f), base, p))
 }
 
 /// Whether the current frame's newest pending call is of a builtin.
