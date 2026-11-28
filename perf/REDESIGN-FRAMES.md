@@ -248,3 +248,114 @@ What the full change takes (estimate):
 That is several weeks for one person, done in stages behind the existing
 API (first a `FrameView` accessor layer over today's `Frame`, then the
 storage swap), with the PHPT dirs and both apps measured at each stage.
+
+## Frame migration, stage 1: the slot accessor layer (28 Nov 2026)
+
+Base 2b46fe36. The migration to one contiguous slot block per call starts
+with an accessor layer, so that the storage swap changes one module.
+
+### The API (`crates/php-vm/src/vm.rs`)
+
+`Frame` no longer has `cvs` and `tmps` fields. It has `slots: FrameSlots`,
+whose two vectors are private to `vm.rs`:
+
+| Accessor | Gives |
+|---|---|
+| `f.slots.cvs()` / `f.slots.cvs_mut()` | `&[CvSlot]` / `&mut [CvSlot]` |
+| `f.slots.tmps()` / `f.slots.tmps_mut()` | `&[Value]` / `&mut [Value]` |
+| `f.slots.split_mut()` | `(&mut [CvSlot], &mut [Value])`: one op reads one kind and writes the other |
+| storage, `vm.rs` only | `from_vecs`, `fit_cvs`/`fit_tmps` (readying), `cut_*`, `clear_*_buffer`, `shrink_released_*` (pool release) |
+| `tmps_storage_mut()` | `#[doc(hidden)]`, only for the frame-pool tests (capacity checks) |
+
+Why a field of its own rather than methods on `Frame`: a borrow of
+`f.slots` leaves `f.code`, `f.this`, `f.iters`, ... free, just as the two
+vector fields did. With accessors on `Frame`, a slot borrow would lock the
+whole frame, and about 30 functions that hold a literal or `$this` while
+writing a slot would need restructuring. Only four functions in the whole
+crate held a variable and a temporary at once; they now use `split_mut`.
+
+Everything returns slices, so the accessors compile to the same loads as
+before. Measured against a release build of 2b46fe36 (JIT off per call;
+apps JIT on, each measured twice alternating):
+
+| | baseline 2b46fe36 | step 1 (6e823433) | step 2 (01cb0b89) |
+|---|---:|---:|---:|
+| f | 514 | 512 | 513 |
+| alt (f+g) | 1,317 | 1,315 | 1,316 |
+| `$this->m()` / `$o->m()` / `self::s()` | 684 / 705 / 628 | 686 / 706 / 628 | 685 / 706 / 627 |
+| empty loop | 45-46 | 45-46 | 45-46 |
+| Laravel unit | 131.486-131.488G | 131.490G (+0.003%) | 131.482G (-0.004%) |
+| MW Api | 266.874-266.898G | 266.871-266.888G (noise) | 266.859-266.898G (noise) |
+
+PHPT on the 17 directories: 0 of 12,636 results changed against the
+baseline binary. `cargo test -p php-vm`: only the known float-math
+failure. No clippy warning on a changed line.
+
+### What is migrated and what is not
+
+* All ~540 slot accesses outside `vm.rs`, in 30 files (the tape and its
+  families, `exec.rs`/`hot.rs`/spec helpers, `call.rs`, `place.rs`, the
+  generators, closures, reflection, the GC's frame scan, the JIT's
+  frame-reading helpers, `php-ext-stdarr`'s symbol table, the tests), are
+  migrated. The compiler enforces it: the vectors are private.
+* Inside `vm.rs`, every slot read and write goes through the accessors,
+  including the symbol-table attach and sync, the frame build from a
+  symbol table and the release loops. The only code that touches the
+  vectors is `FrameSlots`' own methods (the sizing and pool operations
+  above) and `vm.rs`'s unit tests.
+* Not behind the layer yet: the *sizing policy*. `FrameStack`'s pool
+  (`push_in_place`, `reinit_*`, `ready_released_for`, `clear_for_reuse`,
+  `release_*`, `drop_pool`) still decides when a frame's slots are
+  resized, kept or given back, by calling the `FrameSlots` methods.
+  Stage 2 replaces that policy, not just the storage.
+
+### How the stage-2 storage swap plugs in
+
+`FrameSlots` becomes `{ base: *mut Slot, ncv: u32, ntmp: u32 }` (or a
+block index), pointing into the VM stack, a `Vec<MaybeUninit<Slot>>`
+grown in chunks that never move (php-src's `zend_vm_stack` pages). The
+accessors build their slices from it. Pushing a call means bumping the
+stack top by `ncv + ntmp` slots and initialising them (CVs undefined,
+TMPs null). Popping means releasing the counted values and lowering the
+top; nothing is kept for the next call, so the pool's readying and release
+functions mostly go away. The hard parts:
+
+1. **Symbol table attach** (`attach_symbol_table`, sync, `extract`,
+   `$$x`, `get_defined_vars`): it maps CV slots into a `VarStore`. It
+   already works on `cvs_mut()` slices, so it is unaffected as long as a
+   frame's slot block does not move while attached. It does not: blocks
+   only move with their frame.
+2. **Generators**: a generator's frame lives in `GenData` as a
+   `Box<Frame>` and is swapped onto the stack at each resume
+   (`push_boxed`/`pop_boxed`). Its slots cannot live on the shared stack
+   between resumes. A generator's `FrameSlots` must own a heap block (a
+   second variant, or a block allocated off-stack at creation), and
+   `push_boxed` pushes only the header. This is also step 2 of the issue
+   ("generators keep their frame in place").
+3. **Fibers**: a fiber's frames are moved off the shared stack on
+   suspension (`split_off`/`drain`/`extend` in `fiber.rs`). Slot pointers
+   into the VM stack would dangle. Each fiber needs its own VM stack
+   segment (php-src gives every fiber its own `zend_vm_stack`), so the
+   stack must be per execution context, not per `Vm`.
+4. **GC frame scan** (`gc/traverse.rs`, `gc/collect.rs`, `gc::cvs_released`):
+   it reads slices through the accessors and keeps working unchanged. Only
+   frames saved by fibers and generators need their blocks visited, as
+   today.
+5. **JIT slot bases**: the tape core and the traces take raw `cvs`/`tmps`
+   base pointers (`St`, the trace ABI `f(st.cvs, st.tmps, frame)`). Those
+   become `base` and `base + ncv`, the same ABI. A trace that calls a
+   function (not done today) would have to reload them after the stack
+   grows, unless chunks never move, which is why the stack must be
+   chunked.
+6. **Frame headers**: `Frame` itself (≈280 bytes, ~30 fields) stays in
+   `FrameStack.vec` in stage 2. Moving the header into the block, with
+   raw function and op-array pointers and a flags word, is a separate
+   stage 3. It touches the ~320 `vm.frames` uses (backtraces, reflection,
+   `func_get_args`, exceptions), which should first get their own
+   accessor layer (`FrameStack` already hides most of it behind
+   `last`/`get`/`iter`).
+
+Effort: stage 2 (slots on a chunked VM stack, generators owning blocks,
+per-fiber stack segments) is about one to two weeks. Stage 3 (headers in
+the block, protocol rewrite, the light-frame core technique on the hot
+path) is several more.
