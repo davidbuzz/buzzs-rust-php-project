@@ -8526,7 +8526,9 @@ restore_error_handler();
         );
         frame.args = vm.call_bufs.args.pop().expect("prewarmed buffer");
         frame.args.push(Some(Value::Str(arg.clone())));
-        frame.slots.tmps_storage_mut().push(Value::Str(tmp.clone()));
+        frame
+            .slots
+            .edit_tmps_storage(|t| t.push(Value::Str(tmp.clone())));
         vm.frames.push(frame);
         let depth = vm.frames.len();
         vm.pop_frames_to(depth);

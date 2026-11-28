@@ -8,7 +8,7 @@
 //! generators resumed at different stack depths and by other generators,
 //! backtraces, `get_defined_vars()`/`compact()` across yields, references
 //! to a generator's variables, and generators in fibers. Expected output:
-//! PHP 8.5's, as the engine gave it before the change.
+//! C PHP 8.5's (`php85` oracle), which the engine gave before the change too.
 
 mod common;
 
@@ -224,14 +224,15 @@ done
 }
 
 /// A generator shared by two delegators: once one of them has run it to
-/// its end, the other still delegates to it (C 8.5 gives the same).
+/// its end, the other still delegates to it, its current value the
+/// shared generator's last (as C 8.5 gives it).
 #[test]
 fn shared_delegate_exhausted_by_one_delegator() {
     let out = run(r#"<?php
 // a generator shared by two delegators: once b has run it to its end, a still delegates to it
 function shared() { yield 1; yield 2; yield 3; }
 $s = shared(); function del($s, $t) { foreach ([0] as $_) {} yield from $s; echo "del $t done\n"; }
-$a = del($s, 'a'); $b = del($s, 'b'); echo $a->current(), $b->current(), "\n"; $a->next(); echo $b->current(), "\n"; $b->next(); $b->next(); var_dump($a->valid(), $b->valid());
+$a = del($s, 'a'); $b = del($s, 'b'); echo $a->current(), $b->current(), "\n"; $a->next(); echo $b->current(), "\n"; $b->next(); $b->next(); var_dump($a->valid(), $b->valid()); var_dump($a->current());
 "#);
     assert_eq!(
         out,
@@ -240,6 +241,7 @@ $a = del($s, 'a'); $b = del($s, 'b'); echo $a->current(), $b->current(), "\n"; $
 del b done
 bool(true)
 bool(false)
+int(3)
 "
     );
 }

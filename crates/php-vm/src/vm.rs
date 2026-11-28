@@ -12,6 +12,7 @@ use php_support::output::OutputStack;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 /// Non-local exits of the interpreter.
@@ -1563,85 +1564,177 @@ impl FrameCold {
 /// type and the frame's readying and release change. Its own field of the
 /// frame, so that a borrow of the slots leaves the frame's other fields
 /// free.
-#[derive(Debug, Default)]
 pub struct FrameSlots {
-    /// Temporaries.
+    /// The temporaries: the first `ntmp` of `tmps`' elements.
+    tmp_ptr: NonNull<Value>,
+    ntmp: u32,
+    /// The compiled variables: the first `ncv` of `cvs`' elements.
+    cv_ptr: NonNull<CvSlot>,
+    ncv: u32,
+    /// Temporaries' buffer. Past the first `ntmp`, its elements are
+    /// released slots kept for a later call that needs more (its high-water
+    /// mark): fitting the slots to another function is a length store, not
+    /// a loop over the vector (`perf/REDESIGN-FRAMES.md`, stage 2).
     tmps: Vec<Value>,
-    /// Compiled variables (inline values).
+    /// Compiled variables' buffer (inline values), likewise.
     cvs: Vec<CvSlot>,
+}
+
+impl Default for FrameSlots {
+    fn default() -> Self {
+        FrameSlots::from_vecs(Vec::new(), Vec::new())
+    }
+}
+
+impl std::fmt::Debug for FrameSlots {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameSlots")
+            .field("tmps", &self.tmps())
+            .field("cvs", &self.cvs())
+            .finish()
+    }
 }
 
 impl FrameSlots {
     /// The slots held in these vectors: a frame built afresh.
     #[inline]
     fn from_vecs(tmps: Vec<Value>, cvs: Vec<CvSlot>) -> Self {
-        FrameSlots { tmps, cvs }
+        let mut s = FrameSlots {
+            tmp_ptr: NonNull::dangling(),
+            ntmp: 0,
+            cv_ptr: NonNull::dangling(),
+            ncv: 0,
+            tmps,
+            cvs,
+        };
+        s.sync_all();
+        s
+    }
+
+    /// Points the view at the whole vectors (a frame built afresh).
+    #[inline]
+    fn sync_all(&mut self) {
+        self.sync_tmps();
+        self.sync_cvs();
+    }
+
+    /// Points the temporaries' view at the whole vector (after a change
+    /// to it that leaves no released slot past the view).
+    #[inline]
+    fn sync_tmps(&mut self) {
+        self.tmp_ptr = NonNull::from(self.tmps.as_mut_slice()).cast();
+        self.ntmp = u32::try_from(self.tmps.len()).expect("temporaries");
+    }
+
+    /// The same for the compiled variables.
+    #[inline]
+    fn sync_cvs(&mut self) {
+        self.cv_ptr = NonNull::from(self.cvs.as_mut_slice()).cast();
+        self.ncv = u32::try_from(self.cvs.len()).expect("compiled variables");
     }
 
     /// The compiled variables (`ZEND_CALL_VAR_NUM(ex, 0..last_var)`).
     #[inline(always)]
-    #[allow(clippy::inline_always)] // a field read
+    #[allow(clippy::inline_always)] // two field reads
     #[must_use]
     pub fn cvs(&self) -> &[CvSlot] {
-        &self.cvs
+        // SAFETY: the view is the first `ncv` elements of `cvs` (`ncv` is
+        // at most its length, and `cv_ptr` its buffer: every change to the
+        // vector updates both), borrowed with `self`.
+        unsafe { std::slice::from_raw_parts(self.cv_ptr.as_ptr(), self.ncv as usize) }
     }
 
     /// The compiled variables, to change.
     #[inline(always)]
-    #[allow(clippy::inline_always)] // a field read
+    #[allow(clippy::inline_always)] // two field reads
     pub fn cvs_mut(&mut self) -> &mut [CvSlot] {
-        &mut self.cvs
+        // SAFETY: as `cvs`, borrowed mutably with `self`.
+        unsafe { std::slice::from_raw_parts_mut(self.cv_ptr.as_ptr(), self.ncv as usize) }
     }
 
     /// The temporaries (`ZEND_CALL_VAR_NUM(ex, last_var..)`).
     #[inline(always)]
-    #[allow(clippy::inline_always)] // a field read
+    #[allow(clippy::inline_always)] // two field reads
     #[must_use]
     pub fn tmps(&self) -> &[Value] {
-        &self.tmps
+        // SAFETY: as `cvs`, for `tmps`.
+        unsafe { std::slice::from_raw_parts(self.tmp_ptr.as_ptr(), self.ntmp as usize) }
     }
 
     /// The temporaries, to change.
     #[inline(always)]
-    #[allow(clippy::inline_always)] // a field read
+    #[allow(clippy::inline_always)] // two field reads
     pub fn tmps_mut(&mut self) -> &mut [Value] {
-        &mut self.tmps
+        // SAFETY: as `cvs_mut`, for `tmps`.
+        unsafe { std::slice::from_raw_parts_mut(self.tmp_ptr.as_ptr(), self.ntmp as usize) }
     }
 
     /// Empties the temporaries' vector for the pool (`clear_frame_buffer`).
     #[inline]
     fn clear_tmps_buffer(&mut self) {
         clear_frame_buffer(&mut self.tmps);
+        self.sync_tmps();
     }
 
     /// Empties the compiled variables' vector for the pool.
     #[inline]
     fn clear_cvs_buffer(&mut self) {
         clear_frame_buffer(&mut self.cvs);
+        self.sync_cvs();
     }
 
-    /// Cuts the released temporaries to none (`cut_released`).
+    /// Cuts the released temporaries to none (`cut_released`): they stay
+    /// in the vector, past the view.
     #[inline]
     fn cut_tmps(&mut self) {
-        cut_released(&mut self.tmps);
+        self.ntmp = 0;
     }
 
     /// Cuts the released compiled variables to none.
     #[inline]
     fn cut_cvs(&mut self) {
-        cut_released(&mut self.cvs);
+        self.ncv = 0;
     }
 
-    /// Fits the released temporaries to `n` (`fit_released`).
-    #[inline]
+    /// Fits the released temporaries to `n`: a length store when the
+    /// vector has them (released slots past the view), else it grows.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a test and a store
+    // (`n` is at most the vector's length, which `sync_tmps` checks fits.)
+    #[allow(clippy::cast_possible_truncation)]
     fn fit_tmps(&mut self, n: usize) {
-        fit_released(&mut self.tmps, n, || Value::Null);
+        if n <= self.tmps.len() {
+            self.ntmp = n as u32;
+        } else {
+            self.grow_tmps(n);
+        }
     }
 
-    /// Fits the released compiled variables to `n`.
-    #[inline]
+    #[cold]
+    #[inline(never)]
+    fn grow_tmps(&mut self, n: usize) {
+        self.tmps.resize_with(n, || Value::Null);
+        self.sync_tmps();
+    }
+
+    /// Fits the released compiled variables to `n`, likewise.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a test and a store
+    // (`n` is at most the vector's length, which `sync_cvs` checks fits.)
+    #[allow(clippy::cast_possible_truncation)]
     fn fit_cvs(&mut self, n: usize) {
-        fit_released(&mut self.cvs, n, || CvSlot::new(None));
+        if n <= self.cvs.len() {
+            self.ncv = n as u32;
+        } else {
+            self.grow_cvs(n);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow_cvs(&mut self, n: usize) {
+        self.cvs.resize_with(n, || CvSlot::new(None));
+        self.sync_cvs();
     }
 
     /// Gives back the temporaries' buffer when every slot is released.
@@ -1649,6 +1742,7 @@ impl FrameSlots {
     fn shrink_released_tmps(&mut self) {
         if self.tmps.iter().all(|v| matches!(v, Value::Null)) {
             self.tmps = Vec::new();
+            self.sync_tmps();
         }
     }
 
@@ -1658,23 +1752,32 @@ impl FrameSlots {
     fn shrink_released_cvs(&mut self) {
         if self.cvs.iter().all(CvSlot::is_none) {
             self.cvs = Vec::new();
+            self.sync_cvs();
         }
     }
 
-    /// The temporaries' storage itself, for the tests of the frame pool
-    /// (what a released frame keeps): not for the VM's own code, which sees
-    /// slices only.
+    /// Changes the temporaries' storage itself, for the tests of the frame
+    /// pool (what a released frame keeps): not for the VM's own code,
+    /// which sees slices only. The view becomes the whole vector.
     #[doc(hidden)]
-    pub fn tmps_storage_mut(&mut self) -> &mut Vec<Value> {
-        &mut self.tmps
+    pub fn edit_tmps_storage<R>(&mut self, f: impl FnOnce(&mut Vec<Value>) -> R) -> R {
+        let r = f(&mut self.tmps);
+        self.sync_tmps();
+        r
     }
 
     /// Both, to change at once (an op reading one kind of slot and
     /// writing the other).
     #[inline(always)]
-    #[allow(clippy::inline_always)] // two field reads
+    #[allow(clippy::inline_always)] // four field reads
     pub fn split_mut(&mut self) -> (&mut [CvSlot], &mut [Value]) {
-        (&mut self.cvs, &mut self.tmps)
+        // SAFETY: as `cvs_mut` and `tmps_mut`; two vectors never overlap.
+        unsafe {
+            (
+                std::slice::from_raw_parts_mut(self.cv_ptr.as_ptr(), self.ncv as usize),
+                std::slice::from_raw_parts_mut(self.tmp_ptr.as_ptr(), self.ntmp as usize),
+            )
+        }
     }
 }
 
@@ -4390,23 +4493,24 @@ mod tests {
         let s = ZStr::from("a string held by the frame");
         f.slots.cvs[0].set(Some(Value::Str(s.clone())));
         f.slots.cvs[1].set(Some(Value::Int(3)));
-        f.slots.tmps = vec![Value::Str(s.clone()), Value::Float(1.5)];
+        f.slots
+            .edit_tmps_storage(|t| *t = vec![Value::Str(s.clone()), Value::Float(1.5)]);
         f.args.push(Some(Value::Str(s.clone())));
         f.magic_name = Some(s.clone());
         assert_eq!(s.refcount(), 5);
         let empty = Rc::new(OpArray::default());
         f.clear_for_reuse(&empty);
         assert_eq!(s.refcount(), 1);
-        assert_eq!(f.slots.cvs.len(), 2);
-        assert!(f.slots.cvs.iter().all(super::CvSlot::is_none));
-        assert_eq!(f.slots.tmps.len(), 2);
-        assert!(f.slots.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert_eq!(f.slots.cvs().len(), 2);
+        assert!(f.slots.cvs().iter().all(super::CvSlot::is_none));
+        assert_eq!(f.slots.tmps().len(), 2);
+        assert!(f.slots.tmps().iter().all(|t| matches!(t, Value::Null)));
         assert!(f.args.is_empty());
         assert!(f.magic_name.is_none());
         assert!(Rc::ptr_eq(&f.code, &empty));
         // Recycling a recycled frame changes nothing.
         f.clear_for_reuse(&empty);
-        assert_eq!(f.slots.cvs.len(), 2);
+        assert_eq!(f.slots.cvs().len(), 2);
         assert!(Rc::ptr_eq(&f.code, &empty));
     }
 
@@ -4423,13 +4527,14 @@ mod tests {
         f.slots.cvs[0].set(Some(Value::Str(s.clone())));
         f.slots.cvs[1].set(Some(Value::Array(arr)));
         f.slots.cvs[2].set(Some(Value::Reference(PhpRef::new(Value::Int(2)))));
-        f.slots.tmps = vec![Value::Str(s.clone())];
+        f.slots
+            .edit_tmps_storage(|t| *t = vec![Value::Str(s.clone())]);
         assert_eq!(s.refcount(), 4);
         f.release_returning(None, &empty);
         assert_eq!(s.refcount(), 1);
-        assert_eq!(f.slots.cvs.len(), 3);
-        assert!(f.slots.cvs.iter().all(super::CvSlot::is_none));
-        assert!(f.slots.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert_eq!(f.slots.cvs().len(), 3);
+        assert!(f.slots.cvs().iter().all(super::CvSlot::is_none));
+        assert!(f.slots.tmps().iter().all(|t| matches!(t, Value::Null)));
         assert!(Rc::ptr_eq(&f.code, &empty));
 
         let mut stack = super::FrameStack::new();
@@ -4592,8 +4697,8 @@ mod tests {
         assert_eq!(s.refcount(), 2, "the array keeps its element");
         assert_eq!(r.refcount(), 1);
         assert!(matches!(&held, Value::Array(a) if a.refcount() == 1));
-        assert!(f.slots.cvs.iter().all(super::CvSlot::is_none));
-        assert!(f.slots.tmps.iter().all(Value::is_null));
+        assert!(f.slots.cvs().iter().all(super::CvSlot::is_none));
+        assert!(f.slots.tmps().iter().all(Value::is_null));
         assert!(f.args.is_empty());
         assert!(f.released_direct);
         assert!(f.is_released_for(&uf));
@@ -4849,7 +4954,7 @@ mod tests {
         {
             let f = stack.push_builtin(&empty, &empty_vars);
             assert_eq!(f.kind, FrameKind::Builtin);
-            assert!(f.slots.cvs.is_empty() && f.slots.tmps.is_empty());
+            assert!(f.slots.cvs().is_empty() && f.slots.tmps().is_empty());
             assert!(Rc::ptr_eq(&f.code, &empty));
             assert!(f.ufunc.is_none());
             f.args.push(Some(Value::Str(held.clone())));
@@ -4860,12 +4965,12 @@ mod tests {
         assert_eq!(held.refcount(), 1);
         // The pooled frame above the builtin's is still there.
         assert_eq!(stack.vec.len(), 2);
-        assert_eq!(stack.vec[1].slots.cvs.len(), 2);
+        assert_eq!(stack.vec[1].slots.cvs().len(), 2);
         // A user call in the builtin's frame gets the right slots back.
         let idx = stack.push_in_place(&code, FrameKind::Function);
         assert_eq!(idx, 0);
-        assert_eq!(stack.vec[0].slots.cvs.len(), 2);
-        assert_eq!(stack.vec[0].slots.tmps.len(), 3);
+        assert_eq!(stack.vec[0].slots.cvs().len(), 2);
+        assert_eq!(stack.vec[0].slots.tmps().len(), 3);
     }
 
     #[test]
@@ -4918,7 +5023,9 @@ mod tests {
         ];
         let mut stack: Vec<Frame> = Vec::new();
         let held = ZStr::from("held by the moved frame");
-        pool[1].slots.tmps.push(Value::Str(held.clone()));
+        pool[1]
+            .slots
+            .edit_tmps_storage(|t| t.push(Value::Str(held.clone())));
         pool[1].ip = 7;
         // The op array: this handle plus one per frame.
         assert_eq!(Rc::strong_count(&code), 3);
@@ -4926,7 +5033,7 @@ mod tests {
         assert_eq!((pool.len(), stack.len()), (1, 1));
         assert_eq!(stack[0].ip, 7);
         assert!(
-            matches!(stack[0].slots.tmps.as_slice(), [Value::Str(s)] if s.as_bytes() == held.as_bytes())
+            matches!(stack[0].slots.tmps(), [Value::Str(s)] if s.as_bytes() == held.as_bytes())
         );
         // Moved, not copied: one frame holds the string and the code.
         assert_eq!(held.refcount(), 2);
@@ -4986,8 +5093,8 @@ mod tests {
             f.reinit_for_call(&big, FrameKind::Function);
             assert_eq!(
                 (
-                    f.slots.cvs.len(),
-                    f.slots.tmps.len(),
+                    f.slots.cvs().len(),
+                    f.slots.tmps().len(),
                     f.iters.len(),
                     f.fins.len()
                 ),
@@ -5014,8 +5121,8 @@ mod tests {
             f.reinit_for_call(&small, FrameKind::Function);
             assert_eq!(
                 (
-                    f.slots.cvs.len(),
-                    f.slots.tmps.len(),
+                    f.slots.cvs().len(),
+                    f.slots.tmps().len(),
                     f.iters.len(),
                     f.fins.len()
                 ),
@@ -5082,8 +5189,8 @@ mod tests {
             assert!(f.is_released_for(&usmall));
             assert_eq!(
                 (
-                    f.slots.cvs.len(),
-                    f.slots.tmps.len(),
+                    f.slots.cvs().len(),
+                    f.slots.tmps().len(),
                     f.iters.len(),
                     f.fins.len()
                 ),
@@ -5101,8 +5208,8 @@ mod tests {
             assert!(f.is_released_for(&ubig));
             assert_eq!(
                 (
-                    f.slots.cvs.len(),
-                    f.slots.tmps.len(),
+                    f.slots.cvs().len(),
+                    f.slots.tmps().len(),
                     f.iters.len(),
                     f.fins.len()
                 ),
@@ -5130,7 +5237,7 @@ mod tests {
         });
         let mut f = Frame::new_pooled(empty.clone());
         f.reinit_for_call(&code, FrameKind::Function);
-        assert_eq!(f.slots.tmps.len(), 3);
+        assert_eq!(f.slots.tmps().len(), 3);
         assert_eq!(f.iters.len(), 1);
         assert_eq!(f.fins.len(), 1);
         assert_eq!(f.kind, FrameKind::Function);
@@ -5179,7 +5286,7 @@ mod tests {
         assert_eq!(f.ip, 0);
         assert_eq!(f.ret, super::RetTarget::Discard);
         assert!(!f.caller_strict);
-        assert!(f.slots.tmps.is_empty() && f.args.is_empty() && f.named().is_empty());
+        assert!(f.slots.tmps().is_empty() && f.args.is_empty() && f.named().is_empty());
         assert!(f.vars().borrow().slots.is_empty());
     }
 }
