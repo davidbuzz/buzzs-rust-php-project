@@ -34,6 +34,24 @@ struct MethodMeta {
     /// Whether the call may reach PHP code or the stream layer (I/O,
     /// `XPath` callbacks, class checks) and must lend the VM.
     needs_vm: bool,
+    /// The [`fast_method`] the method is (`FAST_*`), or `FAST_NONE`.
+    fast: u8,
+}
+
+/// [`MethodMeta::fast`] values.
+const FAST_NONE: u8 = 0;
+const FAST_HAS_ATTRIBUTE: u8 = 1;
+const FAST_GET_ATTRIBUTE: u8 = 2;
+const FAST_HAS_CHILD_NODES: u8 = 3;
+
+/// The [`MethodMeta::fast`] of the method named `lc` (lower case).
+fn fast_of(lc: &str) -> u8 {
+    match lc {
+        "hasattribute" => FAST_HAS_ATTRIBUTE,
+        "getattribute" => FAST_GET_ATTRIBUTE,
+        "haschildnodes" => FAST_HAS_CHILD_NODES,
+        _ => FAST_NONE,
+    }
 }
 
 thread_local! {
@@ -83,6 +101,7 @@ fn method_meta(a: &Args, builtin: &'static str) -> MethodMeta {
     let meta = MethodMeta {
         decl: find_method(builtin, &name).map(|(c, m)| (c.name, m)),
         needs_vm: NEEDS_VM.iter().any(|n| lc.contains(n)),
+        fast: fast_of(&lc),
         name: Rc::from(name),
     };
     if key != 0 {
@@ -319,6 +338,11 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let it = crate::hooks::new_iter(Some(d), Some(this.clone()));
         return Ok(Value::Object(vm.new_internal_iterator(Box::new(it))?));
     }
+    if meta.fast != FAST_NONE {
+        if let Some(v) = fast_method(vm, a, meta.fast, &d)? {
+            return Ok(v);
+        }
+    }
     let dargs = convert_args(vm, a, &meta)?;
     let r = invoke(vm, a, &meta, || dispatch::call(&d, &name, &dargs, &VmHost))?;
     finish(vm, r, || {
@@ -329,6 +353,37 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             display_name(&class_of(&this).name).to_string_lossy(),
         )
     })
+}
+
+/// The commonest element and node reads, `hasAttribute()` and
+/// `getAttribute()` of a string and `hasChildNodes()`, without the
+/// generic argument conversion and dispatch by name: the library call
+/// `dispatch::call` makes for them (`call_node`, `call_node_2`), on the
+/// node directly, its diagnostics forwarded as there (`run::direct`).
+/// `None` for another argument shape (a coercion or a deprecation is the
+/// generic path's) and for an error, which the generic path then reports
+/// from the same call (these reads queue no diagnostic before failing).
+fn fast_method(vm: &mut Vm, a: &Args, fast: u8, d: &DomObject) -> VmResult<Option<Value>> {
+    let DomObject::Node(n) = d else {
+        return Ok(None);
+    };
+    let passed = a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1);
+    let r = match (fast, passed, a.values.first()) {
+        (FAST_HAS_ATTRIBUTE, 1, Some(Value::Str(s))) => {
+            run::direct(vm, || n.has_attribute(s.as_bytes()).map(DomValue::Bool))?
+        }
+        (FAST_GET_ATTRIBUTE, 1, Some(Value::Str(s))) => {
+            run::direct(vm, || n.get_attribute(s.as_bytes()).map(DomValue::opt_str))?
+        }
+        (FAST_HAS_CHILD_NODES, 0, _) => {
+            run::direct(vm, || n.has_child_nodes().map(DomValue::Bool))?
+        }
+        _ => return Ok(None),
+    };
+    match r {
+        Ok(v) => to_value(vm, v).map(Some),
+        Err(_) => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +399,7 @@ mod meta_cache_tests {
                     name: Rc::from("loadXML"),
                     decl: None,
                     needs_vm: true,
+                    fast: FAST_NONE,
                 },
             );
         });
