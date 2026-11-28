@@ -2146,8 +2146,11 @@ fn cut_released<T>(v: &mut Vec<T>) {
 #[inline(always)]
 #[allow(clippy::inline_always)] // a store, in the callers' own loops
 pub(crate) fn forget_released<T>(v: &mut Vec<T>, n: usize) {
-    while v.len() > n {
-        std::mem::forget(v.pop());
+    if v.len() > n {
+        // SAFETY: `n` is below the length, and the elements cut are
+        // released: they own nothing, so not dropping them forgets nothing
+        // (the callers' contract, above).
+        unsafe { v.set_len(n) };
     }
 }
 

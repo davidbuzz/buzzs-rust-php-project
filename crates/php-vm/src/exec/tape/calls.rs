@@ -2815,6 +2815,15 @@ fn ready_frame_slow(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     if frame.released_direct && frame.ready_released_for(uf) {
         return;
     }
+    ready_frame_cold(frame, uf);
+}
+
+/// [`ready_frame_slow`] of a frame not released by a direct return, or
+/// whose variable store is shared: out of line of its own, so that the
+/// common readying (a released frame for another function) saves no more
+/// registers than it uses.
+#[inline(never)]
+fn ready_frame_cold(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     debug_assert!(
         frame.this.is_none()
             && frame.scope.is_none()
