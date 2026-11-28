@@ -1947,10 +1947,16 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         // return itself (`Vm::return_simple`), or, at the base of a nested
         // execution, `Vm::run_base_on_tape` makes it right after the tape
         // (`__toString()`'s `return $this->name;`, a property read and the
-        // return, called from native code).
+        // return, called from native code). So does a `DoCall` (its row an
+        // exit the tape takes itself, `run_call`): a call without
+        // arguments right after its start, as in a callback's
+        // `return $item->getName();`.
         tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
             && (tape.get(follows).is_some_and(|next| next.op != TOp::Exit)
-                || matches!(code.ops.get(follows), Some(Op::Return { .. })));
+                || matches!(
+                    code.ops.get(follows),
+                    Some(Op::Return { .. } | Op::DoCall { .. })
+                ));
     }
     tape.into_boxed_slice()
 }
