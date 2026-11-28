@@ -476,3 +476,62 @@ readying. The per-call cost above is the first thing stage 2b's protocol
 should take back: the planned call's own view of the stack (one base
 pointer for the caller's and the callee's blocks) is what the inline
 layout had.
+
+## Stage 2b, revised: cheaper readying instead of a slot stack (28 Nov 2026)
+
+Base 63344f3f (2a integrated). The chunked slot stack for plain frames
+was prototyped and dropped (branch `proto/slot-stack`, 18a42e81). It had
+f 520 -> 574 and alt 1,326 -> 1,379. Today's pool already makes a call
+of the same function nearly free: its released frame keeps its slots
+sized and cleared. A stack makes every call pay for the bump,
+initialising the block and lowering it again. It also does not bring
+back one base for the caller's and callee's headers. The stack belongs
+in stage 3, with the headers in the same block.
+
+What was done instead:
+
+1. **High-water slot vectors** (4b7a4184). `FrameSlots` is a view (pointer
+   and length) of the first `ncv`/`ntmp` elements of its vectors. The
+   elements past it are released slots kept for a later call that needs
+   more. Fitting a released frame to another function is a length store
+   (`fit_tmps`/`fit_cvs`); growing past the mark is out of line.
+2. **The changed-callee readying out of line of its own** (33fe9d40):
+   `ready_frame_slow` keeps only `ready_released_for`, and the rest moves
+   to `ready_frame_cold`, so its prologue saves fewer registers.
+   `forget_released` cuts with one length store.
+
+Measured (release, JIT off per iteration, apps JIT on, two rounds
+alternating with the base):
+
+| | 63344f3f | 4b7a4184 | 33fe9d40 |
+|---|---:|---:|---:|
+| f / alt | 519 / 1,327 | 516 / 1,287 | 516 / 1,282 |
+| `$this->m()` / `$o->m()` / `self::s()` | 696 / 716 / 639 | 688 / 708 / 633 | 686 / 707 / 633 |
+| gen / send / fiber | 13,696 / 3,244 / 26,723 | | 13,695 / 3,235 / 27,029 |
+| Laravel unit | 130.763-130.764G | | 129.822-129.823G (-0.72%) |
+| MW Api | 264.78-264.82G | | 263.16-263.17G (-0.62%) |
+
+PHPT on the 17 directories: 0 of 12,636 results changed against the base
+binary.
+
+Tried and dropped:
+
+- **Passing `run_tape`'s current-frame pointer** to `call_plain` and
+  `return_plain` (the caller's or the returning frame not looked up
+  again). f went 516 -> 518 and `$this->m()` 686 -> 695: the extra
+  argument cost more in register allocation than the lookup.
+- **Release-time resets of the fields every planned entry rewrites**
+  (`ip`, `ret`, `caller_strict`, `direct_argc`, `direct`, `plain`). Not
+  done: the generic and builtin readying paths (`push_in_place`,
+  `push_builtin`, `ready_frame`) rely on them being reset (a stale
+  `direct_argc` alone changes `func_num_args()` and backtraces). Moving
+  the resets there moves the stores to the builtin call, which apps make
+  more often.
+
+f stays 3 above the goal of 513. What is left there is the 2a two-pointer
+cost, which only one base for both headers (stage 3) removes. The `Rc`
+traffic for `code`/`ufunc`/`func` (three exchanges per changed callee,
+~20 instructions) is still there. Removing it means deriving `ufunc` from
+`func` (59 uses) or a frame header with raw function pointers (stage 3).
+The fiber micro is 1.1% worse (not looked into; `FrameSlots`, and so
+every frame, grew by two pointers and two lengths, 24 bytes).
