@@ -535,3 +535,48 @@ traffic for `code`/`ufunc`/`func` (three exchanges per changed callee,
 `func` (59 uses) or a frame header with raw function pointers (stage 3).
 The fiber micro is 1.1% worse (not looked into; `FrameSlots`, and so
 every frame, grew by two pointers and two lengths, 24 bytes).
+
+## Stage 3: the plan (headers and slots in one block)
+
+Goal: one block per call, `[header | compiled variables | temporaries]`,
+reached from a single base pointer. The header holds raw handles (the
+function, its op array) owned through one counted reference, and the
+caller and callee of a planned call or a plain return are addressed from
+the same base. The end state is the light-frame prototype's numbers for
+every call (L4: f 416, alt 893; the straight-line estimate is ~250 per
+leaf call), not only for leaves. Each sub-step below is measurable alone
+on the ruler (f / alt / the three method calls) and the two apps. Every
+one keeps today's API: `Frame` fields that move become accessors first.
+
+| Step | What | Expected per call |
+|---|---|---|
+| 3.1 | **One function handle.** `ufunc` stops being a field and is derived from `func` (`Frame::ufunc()`, `Func::User`). It was always the same `Rc` (every writer sets both), so a changed callee's readying makes one `Rc` exchange less, and the generic user call one clone and drop less. | alt −5 to −10 per pair; f ±1 (the accessor tests the variant) |
+| 3.2 | **The op array borrowed from the function.** `code` becomes a handle that borrows `uf.code` in a user frame (raw pointer, valid while `func` holds the function) and owns an `Rc` only for main, include, eval and builtin frames. The readying of a changed callee makes no `Rc` exchange for it. Every write of `func` updates `code` with it (one setter). | alt −10 to −15 per pair |
+| 3.3 | **Headers in a depth-indexed arena.** The pooled frames live in chunks of frames that never move (64 a chunk), one per depth, and the live frames are reached through a pointer array (a generator's or a suspended fiber's frame overrides its depth's pointer, as `push_boxed` does today). The planned call and the plain return find the callee at arena slot `live`, and the caller one frame below it when the pointer array says so (one test), so both are addressed from one base. | f −4 to −7 (2a's two-pointer cost back), methods likewise |
+| 3.4 | **Slots in the arena slot.** Each arena slot carries an inline area for a few compiled variables and temporaries (spilled to today's high-water vectors when a function needs more). `St` (the tape core's slot bases) becomes the frame pointer plus constants for most calls, and the view's loads and bounds tests go. | −5 to −10 (view loads, `Option`/bounds tests per slot) |
+| 3.5 | **The VM stack proper.** Variable-size blocks `[header | cvs | tmps]` are bump-allocated on chunked pages (`zend_vm_stack`), and the pool and its readying and release states are removed: CVs are initialised on push, as `i_init_func_execute_data` does. A generator's block is on the heap (it outlives the call), and each fiber has its own stack segment. The light frame's own-core technique (`light_run`) is applied to the hot path. This step makes the per-call init cheaper than the pool's readying, which the 2b prototype showed it was not with separate headers. | toward f ~420 (L4), alt ~900 |
+| 3.6 | **Variadic declarations take the planned call** (independent of the above). A plan for `function v(...$a)` collects the extra arguments into the variadic array at the call, so the frame is plain and returns through `return_plain` instead of being materialised and leaving through `return_simple`. | a 3-argument variadic call ~3,200 → ~900 |
+
+**3.1, done.** Base 50e92558; release builds, JIT off per iteration, apps
+JIT on, two rounds alternating with the base:
+
+| | 50e92558 | 3.1 |
+|---|---:|---:|
+| f / alt | 516 / 1,283 | 514 / 1,257 |
+| `$this->m()` / `$o->m()` / `self::s()` | 687 / 708 / 632 | 687 / 709 / 634 |
+| gen / send / fiber | 13,696 / 3,236 / 27,030 | 13,705 / 3,238 / 26,935 |
+| Laravel unit | 129.722G | 129.550-129.551G (-0.13%) |
+| MW Api | 263.18G | 262.69-262.77G (-0.17%) |
+
+Deriving `ufunc` on every read (a test of `func`'s variant) first cost the
+method calls +8 (`call_plain` +5, `return_plain` +2). An uncounted copy of
+the function's address (`ufn`), set by the only two writers of `func`
+(`set_func`, `take_func`), serves the hot tests instead: the planned
+call's "same function" test and the plain return's declared type. PHPT on
+the 17 directories plus ext/intl (the change reaches php-ext-intl's and
+php-ext-simplexml's reads): 0 of 13,232 results changed.
+
+Order: 3.1 and 3.2 are small and pay on the apps' changed-callee calls
+(83% of planned calls). 3.3 and 3.4 are the layout. 3.5 is the large one,
+done last, when the frame users all go through accessors. 3.6 can go at
+any time.
