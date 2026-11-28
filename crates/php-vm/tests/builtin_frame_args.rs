@@ -495,3 +495,50 @@ abc
 "#
     );
 }
+
+/// `$s . null` on the tape: null is the empty string (no diagnostic) and
+/// the result is the string itself, as `concat_function` makes it; null on
+/// the left, both null, `.=`, chains, and a string written to after it
+/// was concatenated (copy on write). Expected output: php-src's (PHP 8.5).
+#[test]
+fn concatenation_with_null_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+function f($a, $b) { return $a . $b; } function g($a) { return 'x' . $a . 'y'; } function h($a, $b) { $t = $a . ''; return $t . $b; }
+for ($i = 0; $i < 2; $i++) {
+  var_dump(f('s', null), f(null, 's'), f(null, null), f('', null), g(null), h('ab', null), f('s', 1), f('s', 1.5), f('s', true), f('s', false));
+  $n = null; $s = 'pre'; $s .= $n; var_dump($s); $u = 'q' . $n . $n; var_dump($u);
+  $str = str_repeat('z', 3); $c = $str . null; $str[0] = 'Q'; var_dump($c, $str);
+}
+"#).1,
+        r#"string(1) "s"
+string(1) "s"
+string(0) ""
+string(0) ""
+string(2) "xy"
+string(2) "ab"
+string(2) "s1"
+string(4) "s1.5"
+string(2) "s1"
+string(1) "s"
+string(3) "pre"
+string(1) "q"
+string(3) "zzz"
+string(3) "Qzz"
+string(1) "s"
+string(1) "s"
+string(0) ""
+string(0) ""
+string(2) "xy"
+string(2) "ab"
+string(2) "s1"
+string(4) "s1.5"
+string(2) "s1"
+string(1) "s"
+string(3) "pre"
+string(1) "q"
+string(3) "zzz"
+string(3) "Qzz"
+"#
+    );
+}

@@ -2386,9 +2386,10 @@ pub(super) unsafe fn concat_tmp(frame: *mut Frame, inst: &Inst) -> bool {
     }
 }
 
-/// The value operand `b` of a concatenation row when it is a string or an
-/// int that stays where it is (a variable, a temporary, a literal), read
-/// by the kind the row records; `None` for any other value or kind.
+/// The value operand `b` of a concatenation row when it is a string, an
+/// int or null (the empty string, converted silently) that stays where it
+/// is (a variable, a temporary, a literal), read by the kind the row
+/// records; `None` for any other value or kind.
 #[inline(always)]
 #[allow(clippy::inline_always)] // one kind test per operand in the lean paths
 fn concat_rhs<'a>(f: &'a Frame, lits: &'a [Value], inst: &Inst) -> Option<&'a Value> {
@@ -2398,7 +2399,7 @@ fn concat_rhs<'a>(f: &'a Frame, lits: &'a [Value], inst: &Inst) -> Option<&'a Va
         KIND_LIT => lits.get(inst.b as usize)?,
         _ => return None,
     };
-    matches!(v, Value::Str(_) | Value::Int(_)).then_some(v)
+    matches!(v, Value::Str(_) | Value::Int(_) | Value::Null).then_some(v)
 }
 
 /// Releases a consumed value temporary `b` of a concatenation row once
@@ -2461,7 +2462,9 @@ unsafe fn concat_onto_tmp(frame: *mut Frame, inst: &Inst) -> bool {
         }
         Some(Value::Str(t)) => s.concat_owned_str_spare(t),
         Some(Value::Int(n)) => s.concat_owned_long_spare(*n),
-        // Checked above, and `b` is not the temporary just taken.
+        // `$s . null`: the string itself (`concat_function`'s empty
+        // operand); also unreachable cases (checked above, and `b` is not
+        // the temporary just taken).
         _ => s,
     };
     concat_release_rhs(f, inst);
@@ -2509,6 +2512,8 @@ unsafe fn concat_new(frame: *mut Frame, inst: &Inst) -> bool {
             }
         }
         (Some(Value::Str(s)), Some(Value::Int(n))) => s.concat_long_spare(*n),
+        // `$s . null`: the string itself, as with an empty string.
+        (Some(Value::Str(s)), Some(Value::Null)) => s.clone(),
         _ => {
             // SAFETY: the caller's contract, passed on.
             return unsafe { concat_general(frame, inst) };
