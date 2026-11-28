@@ -387,7 +387,7 @@ pub(super) const CALL_PLAN: u8 = 3;
 /// The most arguments a call plan passes.
 const PLAN_ARGS: usize = 6;
 /// The further classes a method's plan takes ([`Plan::more`]).
-const PLAN_CLASSES: usize = 3;
+const PLAN_CLASSES: usize = 7;
 /// [`Plan::kinds`]: the argument is a compiled variable of the caller.
 const PLAN_CV: u8 = 0;
 /// [`Plan::kinds`]: the argument is a literal of the caller's code.
