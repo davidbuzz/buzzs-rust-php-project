@@ -38,8 +38,8 @@ struct MethodMeta {
 
 thread_local! {
     /// `Builtin` address → metadata.
-    static METHODS: std::cell::RefCell<std::collections::HashMap<usize, MethodMeta>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static METHODS: std::cell::RefCell<rustc_hash::FxHashMap<usize, MethodMeta>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
 }
 
 /// Method names (lowercase substrings) whose implementation may perform

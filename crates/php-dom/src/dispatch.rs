@@ -933,8 +933,6 @@ fn call_node(
     host: &dyn DomHost,
 ) -> DomResult<DomValue> {
     let modern = n.family_is_modern();
-    let is_doc = crate::classes::is_subclass(class, "DOMDocument")
-        || crate::classes::is_subclass(class, "Dom\\Document");
     let v = match m {
         // ---- DOMNode / Dom\Node ----
         "appendchild" => {
@@ -1132,7 +1130,7 @@ fn call_node(
             Err(DomError::Silent) => DomValue::Bool(false),
             Err(e) => return Err(e),
         },
-        _ => return call_node_2(n, class, a, m, method, host, modern, is_doc),
+        _ => return call_node_2(n, class, a, m, method, host, modern),
     };
     Ok(v)
 }
@@ -1150,7 +1148,6 @@ fn call_node_2(
     method: &str,
     host: &dyn DomHost,
     modern: bool,
-    is_doc: bool,
 ) -> DomResult<DomValue> {
     let v = match m {
         // ---- Element ----
@@ -1285,7 +1282,13 @@ fn call_node_2(
                 .map(DomValue::NamespaceInfo)
                 .collect(),
         ),
-        _ if is_doc => return call_document(n, class, a, m, method, host, modern),
+        // (A document's own methods: the class test only for the names
+        // the node and element methods above did not take.)
+        _ if crate::classes::is_subclass(class, "DOMDocument")
+            || crate::classes::is_subclass(class, "Dom\\Document") =>
+        {
+            return call_document(n, class, a, m, method, host, modern)
+        }
         _ => return Err(undefined(class, method)),
     };
     Ok(v)
