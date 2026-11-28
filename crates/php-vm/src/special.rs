@@ -546,8 +546,8 @@ pub(crate) mod leaf {
     pub(crate) const CLASS_EXISTS: u8 = 8;
     /// `assert(true)`.
     pub(crate) const ASSERT: u8 = 9;
-    /// `mb_strlen()` in the default encoding or UTF-8 (another name can
-    /// be invalid).
+    /// `mb_strlen()` in the default encoding (also given as null) or UTF-8
+    /// (another name can be invalid).
     pub(crate) const MB_STRLEN: u8 = 10;
     /// `mb_substr()`, likewise.
     pub(crate) const MB_SUBSTR: u8 = 11;
@@ -626,8 +626,12 @@ impl Vm {
             | (leaf::METHOD_EXISTS, [Object(_), Str(_)])
             | (leaf::CLASS_EXISTS, [Str(_), Bool(false)])
             | (leaf::ASSERT, [Bool(true)] | [Bool(true), _])
-            | (leaf::MB_STRLEN, [Str(_)])
-            | (leaf::MB_SUBSTR, [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null])
+            // (A null encoding is the default one.)
+            | (leaf::MB_STRLEN, [Str(_)] | [Str(_), Null])
+            | (
+                leaf::MB_SUBSTR,
+                [Str(_), Int(_)] | [Str(_), Int(_), Int(_) | Null] | [Str(_), Int(_), Int(_) | Null, Null],
+            )
             | (leaf::MB_STRPOS | leaf::STR2, [Str(_), Str(_)])
             | (leaf::ARRAY1, [Array(_)])
             | (leaf::ARRAY_BOOL, [Array(_)] | [Array(_), Bool(_)])
@@ -2392,8 +2396,32 @@ impl Vm {
 mod tests {
     use super::{
         fl, frameless_arg1, frameless_args, frameless_args_ref, frameless_call, frameless_flags,
-        frameless_inline,
+        frameless_inline, leaf,
     };
+
+    /// `mb_strlen()` and `mb_substr()` with a null encoding (the default
+    /// one, as Laravel's `Str::length($value, $encoding = null)` passes it)
+    /// are leaf calls; an encoding name other than UTF-8, a non-string
+    /// subject and a non-int offset are not.
+    #[test]
+    fn mbstring_leaf_shapes_take_a_null_encoding() {
+        use php_runtime::ZStr;
+        let vm = crate::vm::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let s = Value::Str(ZStr::from("héllo"));
+        let utf8 = Value::Str(ZStr::from("UTF-8"));
+        let other = Value::Str(ZStr::from("ISO-8859-1"));
+        let (one, null) = (Value::Int(1), Value::Null);
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s]));
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s, &null]));
+        assert!(vm.leaf_args(leaf::MB_STRLEN, &[&s, &utf8]));
+        assert!(!vm.leaf_args(leaf::MB_STRLEN, &[&s, &other]));
+        assert!(!vm.leaf_args(leaf::MB_STRLEN, &[&one, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &one, &null]));
+        assert!(vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &utf8]));
+        assert!(!vm.leaf_args(leaf::MB_SUBSTR, &[&s, &one, &null, &other]));
+        assert!(!vm.leaf_args(leaf::MB_SUBSTR, &[&s, &s, &null, &null]));
+    }
 
     /// The two- and three-argument shape test read in place accepts
     /// exactly what `frameless_args` accepts, for every class.
