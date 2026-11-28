@@ -968,13 +968,43 @@ impl FrameStack {
     }
 
     #[inline(always)]
-    pub fn as_slice(&self) -> &[Frame] {
+    fn as_slice(&self) -> &[Frame] {
         &self.vec[..self.live]
     }
 
     #[inline(always)]
-    pub fn as_mut_slice(&mut self) -> &mut [Frame] {
+    fn as_mut_slice(&mut self) -> &mut [Frame] {
         &mut self.vec[..self.live]
+    }
+
+    /// The live frames, oldest first (`{main}` at index 0). An iterator
+    /// of its own ([`FrameIter`]), not a slice: the frames need not lie
+    /// side by side.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a slice of the live frames
+    pub fn iter(&self) -> FrameIter<'_> {
+        FrameIter(self.as_slice().iter())
+    }
+
+    /// The live frames, oldest first, to change.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a slice of the live frames
+    pub fn iter_mut(&mut self) -> FrameIterMut<'_> {
+        FrameIterMut(self.as_mut_slice().iter_mut())
+    }
+
+    /// The oldest live frame (`{main}`'s, or a nested run's base).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a slice of the live frames
+    pub fn first(&self) -> Option<&Frame> {
+        self.as_slice().first()
+    }
+
+    /// The oldest live frame, to change.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a slice of the live frames
+    pub fn first_mut(&mut self) -> Option<&mut Frame> {
+        self.as_mut_slice().first_mut()
     }
 
     #[inline]
@@ -1310,32 +1340,119 @@ impl IntoIterator for FrameStack {
     }
 }
 
-impl std::ops::Deref for FrameStack {
-    type Target = [Frame];
+/// The live frames of a [`FrameStack`], oldest first
+/// ([`FrameStack::iter`]).
+#[derive(Clone, Debug)]
+pub struct FrameIter<'a>(std::slice::Iter<'a, Frame>);
+
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl<'a> Iterator for FrameIter<'a> {
+    type Item = &'a Frame;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
+    fn next(&mut self) -> Option<&'a Frame> {
+        self.0.next()
+    }
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+    #[inline(always)]
+    fn nth(&mut self, n: usize) -> Option<&'a Frame> {
+        self.0.nth(n)
+    }
+    #[inline(always)]
+    fn last(self) -> Option<&'a Frame> {
+        self.0.last()
+    }
+    #[inline(always)]
+    fn count(self) -> usize {
+        self.0.count()
     }
 }
 
-impl std::ops::DerefMut for FrameStack {
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl<'a> DoubleEndedIterator for FrameIter<'a> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
+    fn next_back(&mut self) -> Option<&'a Frame> {
+        self.0.next_back()
+    }
+    #[inline(always)]
+    fn nth_back(&mut self, n: usize) -> Option<&'a Frame> {
+        self.0.nth_back(n)
     }
 }
 
-impl<I: std::slice::SliceIndex<[Frame]>> std::ops::Index<I> for FrameStack {
-    type Output = I::Output;
+impl ExactSizeIterator for FrameIter<'_> {}
+impl std::iter::FusedIterator for FrameIter<'_> {}
+
+/// The live frames of a [`FrameStack`], oldest first, to change
+/// ([`FrameStack::iter_mut`]).
+#[derive(Debug)]
+pub struct FrameIterMut<'a>(std::slice::IterMut<'a, Frame>);
+
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl<'a> Iterator for FrameIterMut<'a> {
+    type Item = &'a mut Frame;
     #[inline(always)]
-    fn index(&self, index: I) -> &Self::Output {
+    fn next(&mut self) -> Option<&'a mut Frame> {
+        self.0.next()
+    }
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+    #[inline(always)]
+    fn nth(&mut self, n: usize) -> Option<&'a mut Frame> {
+        self.0.nth(n)
+    }
+}
+
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl<'a> DoubleEndedIterator for FrameIterMut<'a> {
+    #[inline(always)]
+    fn next_back(&mut self) -> Option<&'a mut Frame> {
+        self.0.next_back()
+    }
+    #[inline(always)]
+    fn nth_back(&mut self, n: usize) -> Option<&'a mut Frame> {
+        self.0.nth_back(n)
+    }
+}
+
+impl ExactSizeIterator for FrameIterMut<'_> {}
+impl std::iter::FusedIterator for FrameIterMut<'_> {}
+
+impl<'a> IntoIterator for &'a FrameStack {
+    type Item = &'a Frame;
+    type IntoIter = FrameIter<'a>;
+    #[inline]
+    fn into_iter(self) -> FrameIter<'a> {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FrameStack {
+    type Item = &'a mut Frame;
+    type IntoIter = FrameIterMut<'a>;
+    #[inline]
+    fn into_iter(self) -> FrameIterMut<'a> {
+        self.iter_mut()
+    }
+}
+
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl std::ops::Index<usize> for FrameStack {
+    type Output = Frame;
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Frame {
         &self.as_slice()[index]
     }
 }
 
-impl<I: std::slice::SliceIndex<[Frame]>> std::ops::IndexMut<I> for FrameStack {
+#[allow(clippy::inline_always)] // forwarding, a few instructions each
+impl std::ops::IndexMut<usize> for FrameStack {
     #[inline(always)]
-    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+    fn index_mut(&mut self, index: usize) -> &mut Frame {
         &mut self.as_mut_slice()[index]
     }
 }
@@ -1344,24 +1461,6 @@ impl From<Vec<Frame>> for FrameStack {
     fn from(v: Vec<Frame>) -> Self {
         let live = v.len();
         Self { vec: v, live }
-    }
-}
-
-impl<'a> IntoIterator for &'a FrameStack {
-    type Item = &'a Frame;
-    type IntoIter = std::slice::Iter<'a, Frame>;
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut FrameStack {
-    type Item = &'a mut Frame;
-    type IntoIter = std::slice::IterMut<'a, Frame>;
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_mut_slice().iter_mut()
     }
 }
 
