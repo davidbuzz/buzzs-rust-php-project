@@ -362,3 +362,63 @@ wgInc=0-'d' wgB=1k100 wgNew=1k'n' wgDyn=1k'd' wgA=1k10
 "
     );
 }
+
+/// `instanceof self`, `instanceof static` and `instanceof parent` on the
+/// tape (`hot::instanceof_in`): a non-object is `false` without looking at
+/// the class (as `ZEND_INSTANCEOF` fetches it only for an object), an
+/// object is tested against the frame's scope, called class or parent;
+/// also through a reference, from static methods, and a class never
+/// loaded. Expected output: php-src's (PHP 8.5).
+#[test]
+fn instanceof_of_relative_classes_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+class A { function t($x) { return [$x instanceof self, $x instanceof static, $x instanceof A]; }
+  static function s($x) { return [$x instanceof self, $x instanceof static]; } }
+class B extends A { function p($x) { return [$x instanceof parent, $x instanceof self, $x instanceof static]; } }
+$cases = ['str', 1, null, [], new A, new B, new stdClass, 1.5, true];
+for ($i = 0; $i < 2; $i++) {
+  foreach ($cases as $c) { echo json_encode([(new A)->t($c), (new B)->t($c), (new B)->p($c), A::s($c), B::s($c)]), "\n"; }
+}
+function f($x) { return $x instanceof Missing; } var_dump(f('a'), f(new A));
+$r = &$cases[4]; foreach ([$r, 'x'] as $v) { var_dump((new B)->t($v)); }
+"#).1,
+        r"[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[true,true,true],[true,false,true],[true,false,false],[true,true],[true,false]]
+[[true,true,true],[true,true,true],[true,true,true],[true,true],[true,true]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[true,true,true],[true,false,true],[true,false,false],[true,true],[true,false]]
+[[true,true,true],[true,true,true],[true,true,true],[true,true],[true,true]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+[[false,false,false],[false,false,false],[false,false,false],[false,false],[false,false]]
+bool(false)
+bool(false)
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(false)
+}
+"
+    );
+}

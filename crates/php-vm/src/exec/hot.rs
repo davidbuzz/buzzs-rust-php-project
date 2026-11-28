@@ -164,7 +164,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
                 ..
             }
             | Op::InstanceOf {
-                class: ClassSpec::Named(_),
+                class: ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
                 ..
             }
             // `&$cv` and `$cv =& <reference>` of a plain variable
@@ -726,10 +726,14 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         // before (the generic op fills it; it never autoloads).
         Op::InstanceOf {
             a,
-            class: ClassSpec::Named(lit),
+            class:
+                ref class @ (ClassSpec::Named(_)
+                | ClassSpec::SelfClass
+                | ClassSpec::Static
+                | ClassSpec::Parent),
             dst,
         } => {
-            let Some(r) = instanceof_in(f, lits, a, lit) else {
+            let Some(r) = instanceof_in(f, lits, a, class) else {
                 return DECLINED;
             };
             set_tmp_in(f, dst, Value::Bool(r));
@@ -1354,7 +1358,12 @@ pub(super) fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8)
 /// undefined (the generic op warns) or attached to a symbol table.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32) -> Option<bool> {
+pub(super) fn instanceof_in(
+    f: &mut Frame,
+    lits: &[Value],
+    a: Operand,
+    class: &ClassSpec,
+) -> Option<bool> {
     // `ZEND_INSTANCEOF` of anything but an object is false, the class not
     // looked at (a class never loaded, `$array instanceof Enumerable` in
     // `Arr::exists()`, left every such test to the generic op).
@@ -1379,13 +1388,22 @@ pub(super) fn instanceof_in(f: &mut Frame, lits: &[Value], a: Operand, lit: u32)
         }
         return Some(false);
     }
-    let cls = f
-        .code
-        .class_cache
-        .try_borrow()
-        .ok()?
-        .get(lit as usize)?
-        .upgrade()?;
+    // The class is looked at only for an object, as `ZEND_INSTANCEOF`
+    // fetches it: a named one from the run-time cache, `self`, `static`
+    // and `parent` from the frame (none there: the generic op's error).
+    let cls = match *class {
+        ClassSpec::Named(lit) => f
+            .code
+            .class_cache
+            .try_borrow()
+            .ok()?
+            .get(lit as usize)?
+            .upgrade()?,
+        ClassSpec::SelfClass => f.scope.clone()?,
+        ClassSpec::Static => f.called.clone()?,
+        ClassSpec::Parent => f.scope.as_ref()?.parent.clone()?,
+        ClassSpec::Dyn(_) => return None,
+    };
     let test = |v: &Value| -> Option<bool> {
         Some(match v {
             Value::Object(o) => crate::object::class_of(o).is_subclass_of(&cls),

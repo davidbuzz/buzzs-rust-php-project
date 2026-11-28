@@ -309,7 +309,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             }
         }
         Op::InstanceOf {
-            class: ClassSpec::Named(_),
+            class:
+                ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Static | ClassSpec::Parent,
             ..
         } => Inst {
             d: u32::try_from(i).ok()?,
@@ -508,15 +509,11 @@ unsafe fn instance_of_any(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
     let code = Rc::clone(&f.code);
-    let Some(&Op::InstanceOf {
-        a,
-        class: ClassSpec::Named(lit),
-        dst,
-    }) = code.ops.get(inst.d as usize)
-    else {
+    let Some(Op::InstanceOf { a, class, dst }) = code.ops.get(inst.d as usize) else {
         return false;
     };
-    let Some(r) = hot::instanceof_in(f, &code.literals, a, lit) else {
+    let (a, dst) = (*a, *dst);
+    let Some(r) = hot::instanceof_in(f, &code.literals, a, class) else {
         return false;
     };
     hot::set_tmp_in(f, dst, Value::Bool(r));
