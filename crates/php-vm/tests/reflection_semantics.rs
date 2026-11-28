@@ -1162,7 +1162,8 @@ a0
 #[test]
 fn frameless_reflection_reads_match_php_src() {
     assert_eq!(
-        run_std(r#"<?php
+        run_std(
+            r#"<?php
 /** Base doc */
 class Base { /** p doc */ public $p; public function __construct() {} /** m doc */ public function m() {}
   public function __call($n, $a) {} }
@@ -1188,7 +1189,8 @@ class MyRM extends ReflectionMethod { function __construct() {} }
 foreach (['getDocComment', 'getStartLine', 'getConstructor'] as $m) { try { (new MyRC)->$m(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], "\n"; } }
 try { (new MyRM)->getDeclaringClass(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], " line ", $e->getLine(), "\n"; }
 $a = new ReflectionMethod('Kid', 'm'); $b = $a->getDeclaringClass(); $c = $a->getDeclaringClass(); var_dump($b === $c, $b == $c);
-"#),
+"#
+        ),
         r"Kid: ** Kid *|t.php|7|7 ctor=Base::__construct
 Base: ** Base doc *|t.php|3|4 ctor=Base::__construct
 ArrayObject: false|false|false|false ctor=ArrayObject::__construct
