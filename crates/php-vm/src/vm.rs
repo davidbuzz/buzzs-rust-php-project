@@ -3755,7 +3755,7 @@ impl Vm {
     /// global table. Those frames form the bottom of the stack (see
     /// [`Vm::sync_global_frames`]). `None` when there is none.
     #[inline]
-    fn global_scope_top(&self) -> Option<usize> {
+    pub(crate) fn global_scope_top(&self) -> Option<usize> {
         let globals = Rc::as_ptr(&self.globals);
         self.frames
             .iter()

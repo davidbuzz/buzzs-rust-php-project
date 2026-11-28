@@ -5943,20 +5943,6 @@ impl Vm {
 
     /// Looks up a global variable by key value without rebuilding the global symbol table.
     pub(crate) fn fetch_global_by_key_optional(&mut self, k: &Value) -> Option<Value> {
-        // While the main frame is the newest of the global scope, its own
-        // variables are read below and every other global is in the
-        // table: nothing to bring up to date (attaching would copy each of
-        // the main frame's variables into the table, and mark it, for one
-        // read). A top-level include or `eval` running above it has the
-        // current values in the table only once synced.
-        let main_top = self
-            .frames
-            .first()
-            .is_some_and(|f| f.kind == crate::vm::FrameKind::Main)
-            && self.main_is_global_top();
-        if !main_top {
-            self.attach_globals_symbol_table();
-        }
         let name_bytes: std::borrow::Cow<[u8]> = match k {
             Value::Str(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
             Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
@@ -5965,28 +5951,33 @@ impl Vm {
         if is_superglobal_name(&name_bytes) {
             self.is_auto_global(&name_bytes);
         }
-        // The main frame's own variable when that frame is the newest of
-        // the global scope; while a top-level include or `eval` runs above
-        // it (`Vm::main_is_global_top`), the table, which
-        // `attach_globals_symbol_table` just brought up to date from that
-        // frame, has the current value.
-        let main = self
+        // The newest frame of the global scope (`Vm::global_scope_top`):
+        // only its variables can be newer than the table (each frame below
+        // it synced its own when it started the include or `eval` above),
+        // so the table is not brought up to date for one read (attaching
+        // and syncing copied each of that frame's variables into it).
+        let main_top = self
             .frames
             .first()
-            .filter(|f| f.kind == crate::vm::FrameKind::Main && self.main_is_global_top());
-        if let Some(main_frame) = main {
-            if let Some(cv) = main_frame
+            .is_some_and(|f| f.kind == crate::vm::FrameKind::Main)
+            && self.main_is_global_top();
+        let top = self.global_scope_top().and_then(|t| self.frames.vec.get(t));
+        if let Some(f) = top {
+            if let Some(cv) = f
                 .code
                 .cv_names
                 .iter()
                 .position(|n| n.as_bytes() == &name_bytes[..])
             {
-                if let Some(slot) = main_frame.cvs.get(cv) {
-                    if let Some(v) = slot.get() {
-                        return Some(v.deref());
-                    }
+                if let Some(v) = f.cvs.get(cv).and_then(crate::vm::CvSlot::get) {
+                    return Some(v.deref());
                 }
-                return None;
+                // The main script's undefined variable is the global's
+                // state. An include's or `eval`'s leaves the table's value
+                // alone (`Frame::sync_cvs_to_symtab` skips it).
+                if main_top {
+                    return None;
+                }
             }
         }
         let idx = self.globals.borrow_mut().find(&name_bytes)?;

@@ -322,3 +322,43 @@ wgLocal=0-'d'
 "
     );
 }
+
+/// Globals looked up by name while a top-level `eval` (or include) is the
+/// newest frame of the global scope: its own variables first, the table
+/// for the others and for its undefined ones (as `sync_cvs_to_symtab`
+/// leaves them), globals written from functions, `unset()`, nested
+/// `eval`, variable variables, references. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn global_lookups_under_a_top_level_eval_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$wgA = 1; $wgB = 2;
+function chk(...$names) { $o = []; foreach ($names as $n) { $o[] = $n . '=' . (isset($GLOBALS[$n]) ? 1 : 0) . (array_key_exists($n, $GLOBALS) ? 'k' : '-') . var_export($GLOBALS[$n] ?? 'd', true); } return implode(' ', $o); }
+function setg() { global $wgC; $wgC = 3; $GLOBALS['wgA'] = 10; }
+$code = <<<'PHP'
+$wgInc = 1; $wgInc2 = null; echo chk('wgInc', 'wgInc2', 'wgB', 'wgA'), "\n";
+setg(); echo chk('wgA', 'wgC', 'wgInc'), " ", $wgA ?? 'u', "\n";
+$wgB = 99; echo chk('wgB'), "\n";
+unset($wgInc); echo chk('wgInc'), "\n";
+function inner() { $GLOBALS['wgNew'] = 'n'; return chk('wgNew', 'wgB'); } echo inner(), " ", $wgNew ?? 'u', "\n";
+eval('$wgEv2 = 5; echo chk("wgEv2", "wgB"), "\n";'); echo chk('wgEv2'), "\n";
+$k = 'wgDyn'; $$k = 'd'; echo chk('wgDyn'), "\n";
+$wgRef = &$wgB; $wgB = 100; echo chk('wgRef', 'wgB'), "\n";
+PHP;
+eval($code);
+echo chk('wgInc', 'wgB', 'wgNew', 'wgDyn', 'wgA'), "\n";
+"#).1,
+        r"wgInc=1k1 wgInc2=0k'd' wgB=1k2 wgA=1k1
+wgA=1k10 wgC=1k3 wgInc=1k1 10
+wgB=1k99
+wgInc=0-'d'
+wgNew=1k'n' wgB=1k99 n
+wgEv2=1k5 wgB=1k99
+wgEv2=1k5
+wgDyn=1k'd'
+wgRef=1k100 wgB=1k100
+wgInc=0-'d' wgB=1k100 wgNew=1k'n' wgDyn=1k'd' wgA=1k10
+"
+    );
+}
