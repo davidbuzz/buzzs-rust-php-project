@@ -5961,7 +5961,11 @@ impl Vm {
             && template.pfa.is_none()
             && template.magic_name.is_none()
             && match &template.func {
-                Func::User(uf) => !uf.params.iter().any(|p| p.by_ref),
+                // (A plain declaration has no by-reference parameter.)
+                Func::User(uf) => {
+                    uf.call_shape() > crate::func::CallShape::NOT_PLAIN
+                        || !uf.params.iter().any(|p| p.by_ref)
+                }
                 Func::Builtin(_) => false,
             };
         if !inline {
@@ -6043,22 +6047,34 @@ impl Vm {
             return None;
         };
         let n = args.len();
+        // A plain declaration ([`crate::func::CallShape`], cached) is none
+        // of what the other tests below look for.
+        let shape = uf.call_shape();
+        let plain = shape > crate::func::CallShape::NOT_PLAIN;
         if template.is_ctor
-            || uf.flags & flags::DEPRECATED != 0
-            || uf.is_generator()
-            || uf.code.num_statics != 0
-            || uf.code.num_finally != 0
             || self.has_observers()
             || n < uf.required as usize
             || n > uf.params.len()
             || self.frames.len() > 50_000
-            || uf.params.iter().any(|p| p.variadic || p.by_ref)
+            || (!plain
+                && (uf.flags & flags::DEPRECATED != 0
+                    || uf.is_generator()
+                    || uf.code.num_statics != 0
+                    || uf.code.num_finally != 0
+                    || uf.params.iter().any(|p| p.variadic || p.by_ref)))
         {
             return None;
         }
-        for (p, v) in uf.params.iter().zip(args.iter()) {
-            if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+        if shape == crate::func::CallShape::UNTYPED {
+            // (No parameter's type to pass: `mixed` or none.)
+            if args.iter().any(Value::is_reference) {
                 return None;
+            }
+        } else {
+            for (p, v) in uf.params.iter().zip(args.iter()) {
+                if v.is_reference() || p.ty.as_ref().is_some_and(|ty| !param_accepts(ty, v)) {
+                    return None;
+                }
             }
         }
         if let Err(e) = self.check_interrupt() {
@@ -6068,10 +6084,7 @@ impl Vm {
         // A plain declaration: the pooled frame readied in one pass,
         // entered directly and returned plainly
         // (`calls::push_callback_from_native`).
-        if matches!(
-            uf.call_shape(),
-            crate::func::CallShape::UNTYPED | crate::func::CallShape::TYPED
-        ) {
+        if plain {
             if let Some(base) = crate::exec::tape::calls::push_callback_from_native(
                 self,
                 &uf,

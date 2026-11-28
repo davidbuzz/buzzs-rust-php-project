@@ -253,15 +253,26 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
         if input.is_empty() {
             return Ok(input.clone());
         }
-        let mut out = HashTable::with_capacity(input.len());
+        let mut out;
         if input.is_packed() {
+            // `zend_hash_real_init_packed`: a list keeps its keys, so a
+            // result without holes so far takes the next key by appending.
+            out = HashTable::with_capacity_packed(input.len());
             for pos in 0..input.used() {
                 if let Some((_, v)) = input.at(pos) {
                     let r = cb.call_slice(ctx, &mut [v.clone()])?;
-                    out.insert(i64::from(pos), r);
+                    let key = i64::from(pos);
+                    if out.next_index() == key {
+                        if let Err(r) = out.push(r) {
+                            out.insert(key, r);
+                        }
+                    } else {
+                        out.insert(key, r);
+                    }
                 }
             }
         } else {
+            out = HashTable::with_capacity(input.len());
             for (k, v) in input.iter() {
                 let r = cb.call_slice(ctx, &mut [v.clone()])?;
                 let _ = out.add(k.clone(), r);

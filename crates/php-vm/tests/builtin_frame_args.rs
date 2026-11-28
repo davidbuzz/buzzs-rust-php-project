@@ -542,3 +542,97 @@ string(3) "Qzz"
 "#
     );
 }
+
+/// `array_map()` over a list with holes keeps its keys (the results are
+/// appended while the keys run on without a gap), and a builtin's
+/// callback takes the direct call only for a plain declaration: typed
+/// parameters checked (a `TypeError`), by-reference and variadic
+/// parameters, a generator and a reference argument the generic call.
+/// Expected output from `/usr/bin/php8.5`.
+#[test]
+fn array_callbacks_match_php_src() {
+    assert_eq!(
+        run(r#"<?php
+$a = [1, 2, 3, 4]; unset($a[1]);
+var_dump(array_map(fn($v) => $v * 10, $a));
+$b = [5, 6]; $b[] = 7; unset($b[2]); $b[] = 8;
+var_dump(array_map(fn($v) => $v + 1, $b));
+var_dump(array_map(fn(int $v): string => "s$v", [1, 2]));
+try { array_map(fn(int $v) => $v, ['x']); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+function byref(&$v) { $v++; return $v; }
+var_dump(array_map('byref', [1, 2]));
+function vari(...$v) { return count($v); }
+var_dump(array_map('vari', [1, 2]));
+function gen($v) { yield $v; }
+var_dump(array_map(fn($g) => get_class($g), array_map('gen', [1])));
+$x = 3; $r = &$x; $arr = [&$r, 4];
+var_dump(array_map(fn($v) => $v * 2, $arr));
+usort($arr, function (int $p, int $q) { return $p <=> $q; }); var_dump($arr);
+var_dump(array_filter([1, 0, 2, null, 3]));
+"#).1,
+        r#"array(3) {
+  [0]=>
+  int(10)
+  [2]=>
+  int(30)
+  [3]=>
+  int(40)
+}
+array(3) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(7)
+  [3]=>
+  int(9)
+}
+array(2) {
+  [0]=>
+  string(2) "s1"
+  [1]=>
+  string(2) "s2"
+}
+TypeError: {closure:t.php:7}(): Argument #1 ($v) must be of type int, string given
+
+Warning: byref(): Argument #1 ($v) must be passed by reference, value given in t.php on line 9
+
+Warning: byref(): Argument #1 ($v) must be passed by reference, value given in t.php on line 9
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+}
+array(1) {
+  [0]=>
+  string(9) "Generator"
+}
+array(2) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(8)
+}
+array(2) {
+  [0]=>
+  &int(3)
+  [1]=>
+  int(4)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(2)
+  [4]=>
+  int(3)
+}
+"#
+    );
+}
