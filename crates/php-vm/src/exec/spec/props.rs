@@ -254,6 +254,33 @@ fn read_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>) -> Option<Valu
     v
 }
 
+/// `ZEND_FETCH_OBJ_IS` (`$obj->name ?? x`) of a dynamic property the
+/// object lacks, on a hit of the place's dynamic cache entry: `true` when
+/// the read is `null` without a diagnostic and without user code
+/// (`zend_std_read_property` with `BP_VAR_IS`: no `__isset()` and no
+/// `__get()` to call, an object that is not lazy, no table entry). A
+/// table that is being borrowed, and every other case, give `false`.
+#[inline]
+pub(in crate::exec) fn is_miss_hit(f: &Frame, pid: PlaceId) -> bool {
+    let Some(hit) = hit_key(f, pid, PC_READ, 0) else {
+        return false;
+    };
+    let Some(name) = dyn_name(f, &hit) else {
+        return false;
+    };
+    let absent = |od: &ObjectData| -> Option<bool> {
+        if od.class.magic.get.is_some() || od.class.magic.isset.is_some() {
+            return Some(false);
+        }
+        let table = od.dynamic.try_borrow().ok()?;
+        Some(table.as_deref().is_none_or(|t| t.get_zstr(name).is_none()))
+    };
+    if let Some(od) = hit_data(f, &hit) {
+        return absent(od) == Some(true);
+    }
+    base_is_ref(f, &hit) && with_hit_obj(f, &hit, absent) == Some(true)
+}
+
 /// `ZEND_FETCH_OBJ_R` on a cache hit: the (dereferenced) value of an
 /// initialized declared property or of an existing dynamic property
 /// (`ZEND_DYNAMIC_PROPERTY_OFFSET`: `zend_hash_find` in
@@ -1646,6 +1673,9 @@ impl Vm {
         if let Some(f) = self.frames.last_mut() {
             if let Some(v) = read_hit(f, pid) {
                 return Some(store_fetched_in(f, dst, to, v));
+            }
+            if mode == FetchMode::Is && is_miss_hit(f, pid) {
+                return Some(store_fetched_in(f, dst, to, Value::Null));
             }
         }
         let v = self.prop_cache_read(pid)?;

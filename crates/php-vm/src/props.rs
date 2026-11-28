@@ -2753,7 +2753,7 @@ impl Vm {
         }
         let nd = object::data(&n);
         nd.copy_unset_flags(d);
-        *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
+        nd.dynamic.borrow_mut().clone_from(&d.dynamic.borrow());
         object::copy_prop_order(d, nd);
         crate::lazy::copy_stale_slots(d, nd);
         self.clone_internal(&o, &n)?;

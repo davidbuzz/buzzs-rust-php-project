@@ -349,7 +349,7 @@ foreach ($os as $i => $o) { try { echo $o->w($i * 10), " "; } catch (Error $e) {
 for ($r = 0; $r < 2; $r++) { foreach ($os as $o) echo $o->t(), " "; echo "\n"; }
 function rd($o) { return $o->pub; } for ($r = 0; $r < 2; $r++) { foreach ($os as $o) echo rd($o), ","; echo "\n"; }
 "#),
-        r#"1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
+        r"1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
 1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
 1bpp- 2bpp- 1bpc3- 1bppz 1bphooked- 1bpp- 1bpp- 
 0 10 20 30 40 50 60 
@@ -357,6 +357,76 @@ function rd($o) { return $o->pub; } for ($r = 0; $r < 2; $r++) { foreach ($os as
 0bpp!- 10bpp!- 20bpc3!- 30bpp!z 40bphooked- 1bpp!- 60bpp!- 
 p!,p!,c3!,p!,hooked,p!,p!,
 p!,p!,c3!,p!,hooked,p!,p!,
+"
+    );
+}
+
+/// `$obj->undeclared ?? x` (`ZEND_FETCH_OBJ_IS`) of an object without
+/// that dynamic property is `null` from the site's dynamic cache entry,
+/// without the generic read, when there is no user code to run: not for a
+/// class with `__get()` or `__isset()` (called as php-src calls them),
+/// nor for a lazy object (initialized first); a property added or removed
+/// later, a base held by reference, a site seeing several classes, `$this`,
+/// and `isset()`/`empty()`/plain reads (with their warnings) as before.
+/// Expected output: php-src's (PHP 8.5).
+#[test]
+fn coalesce_of_a_missing_dynamic_property_is_null_as_php_src() {
+    assert_eq!(
+        run(r#"<?php
+class G { function __get($n) { echo "get($n) "; return "g"; } }
+class I { function __isset($n) { echo "isset($n) "; return false; } }
+class IG { public $p = 1; function __isset($n) { echo "isset($n) "; return true; } function __get($n) { echo "get($n) "; return "ig"; } }
+class P { public $decl = 'd'; public ?int $typed; }
+#[AllowDynamicProperties] class D {}
+function rd($o, $n) { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $o->zz ?? 'dflt'; } return implode(',', $r); }
+function rdt($o) { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $o->typed ?? 'unin'; } return implode(',', $r); }
+$s = new stdClass; echo rd($s, 0), "\n";
+$s->zz = 'now'; echo rd($s, 0), "\n";
+unset($s->zz); echo rd($s, 0), "\n";
+echo rd(new G, 0), "\n"; echo rd(new I, 0), "\n"; echo rd(new IG, 0), "\n";
+echo rd(new P, 0), " ", rdt(new P), "\n";
+$d = new D; echo rd($d, 0), "\n"; $d->zz = 5; echo rd($d, 0), "\n";
+// alternating classes at one site
+$objs = [new stdClass, new G, new stdClass, new IG, new P];
+foreach ($objs as $o) { echo $o->zz ?? '-', " "; } echo "\n";
+// reference base
+$o = new stdClass; $ref = &$o; for ($i = 0; $i < 3; $i++) { echo $o->zz ?? 'r', ($i == 1 ? ($o->zz = 'set') && false : ''), " "; } echo "\n";
+// lazy objects
+$r = new ReflectionClass(P::class);
+$lz = $r->newLazyGhost(function ($o) { echo "init "; });
+for ($i = 0; $i < 2; $i++) { echo $lz->zz ?? 'lz', " "; } echo "\n";
+// isset / empty / plain read warnings unchanged
+$e = new stdClass; for ($i = 0; $i < 2; $i++) { var_dump(isset($e->zz), empty($e->zz)); echo @$e->zz === null ? "n " : "x "; } echo "\n";
+for ($i = 0; $i < 2; $i++) { $x = $e->zz; } echo "done\n";
+// $this inside a method
+class T { function m() { $r = []; for ($i = 0; $i < 3; $i++) { $r[] = $this->nope ?? 'tn'; } return implode(',', $r); } }
+echo (new T)->m(), "\n";
+class TG extends T { function __get($n) { return "tg"; } } echo (new TG)->m(), "\n";
+"#),
+        r#"dflt,dflt,dflt
+now,now,now
+dflt,dflt,dflt
+get(zz) get(zz) get(zz) g,g,g
+isset(zz) isset(zz) isset(zz) dflt,dflt,dflt
+isset(zz) get(zz) isset(zz) get(zz) isset(zz) get(zz) ig,ig,ig
+dflt,dflt,dflt unin,unin,unin
+dflt,dflt,dflt
+5,5,5
+- get(zz) g - isset(zz) get(zz) ig - 
+r r set 
+init lz lz 
+bool(false)
+bool(true)
+n bool(false)
+bool(true)
+n 
+
+Warning: Undefined property: stdClass::$zz in t.php on line 26
+
+Warning: Undefined property: stdClass::$zz in t.php on line 26
+done
+tn,tn,tn
+tg,tg,tg
 "#
     );
 }
