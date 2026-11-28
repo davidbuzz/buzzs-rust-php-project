@@ -4430,6 +4430,43 @@ mod match_tests {
         );
         assert!(match_op(&code).is_none(), "{:?}", code.ops);
     }
+
+    /// `zend_compile_switch`'s jump table: string cases (two or more, none
+    /// numeric) and int cases (five or more, the default counted) get a
+    /// `switch` table before their comparisons; numeric strings, mixed
+    /// types, a non-literal case and too few int cases do not.
+    #[test]
+    fn switch_takes_a_jump_table_as_php_src_does() {
+        let table = |body: &str| {
+            let code = function_code(
+                &format!("<?php function t($x) {{ switch ($x) {{ {body} }} }}"),
+                0,
+            );
+            code.ops.iter().find_map(|op| match op {
+                Op::Match { table, .. } if table.switch => Some(table.entries.len()),
+                _ => None,
+            })
+        };
+        assert_eq!(table("case 'a': case 'b': return 1;"), Some(2));
+        assert_eq!(
+            table("case 'a': return 1; default: return 2; case 'a': return 3;"),
+            Some(1)
+        );
+        assert_eq!(
+            table("case 1: case 2: case 3: case 4: case 5: return 1;"),
+            Some(5)
+        );
+        assert_eq!(
+            table("case 1: case 2: case 3: case 4: default: return 1;"),
+            Some(4)
+        );
+        assert_eq!(table("case 1: case 2: case 3: case 4: return 1;"), None);
+        assert_eq!(table("case 'a': case '1': return 1;"), None);
+        assert_eq!(table("case 'a': case ' 1e3': return 1;"), None);
+        assert_eq!(table("case 'a': case 1: return 1;"), None);
+        assert_eq!(table("case 'a': case B: return 1;"), None);
+        assert_eq!(table("case 'a': return 1;"), None);
+    }
 }
 
 #[cfg(test)]

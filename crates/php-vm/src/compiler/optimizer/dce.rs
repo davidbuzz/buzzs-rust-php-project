@@ -126,11 +126,15 @@ pub(crate) fn drop_unreachable(op_array: &mut OpArray) -> bool {
                         }
                     }
                     Op::Match { table, .. } => {
-                        // No fall-through: every table target and the default.
+                        // Every table target and the default; a `switch`
+                        // table also falls through to its `case` tests.
                         for t in table.labels() {
                             if (t as usize) < len {
                                 successors.push(inst_to_block[t as usize]);
                             }
+                        }
+                        if table.switch && b + 1 < num_blocks {
+                            successors.push(b + 1);
                         }
                     }
                     Op::New { skip: t, .. } => {

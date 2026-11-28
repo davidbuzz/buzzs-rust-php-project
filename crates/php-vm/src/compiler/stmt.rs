@@ -1170,6 +1170,17 @@ impl Compiler<'_> {
             Operand::Tmp(t) => (Operand::TmpKeep(t), Cleanup::FreeTmp(t)),
             o => (o, Cleanup::None),
         };
+        // `ZEND_SWITCH_LONG` / `ZEND_SWITCH_STRING` before the comparisons:
+        // a subject of the table's key type jumps straight to its case.
+        let keys = switch_jumptable_keys(cases);
+        let table_at = keys.is_some().then(|| {
+            let mut table = crate::opcode::MatchTable::new(0);
+            table.switch = true;
+            self.emit(Op::Match {
+                subject: subj,
+                table: Box::new(table),
+            })
+        });
         let mut case_jumps = Vec::new();
         let mut default_idx = None;
         let mut seen_default = false;
@@ -1211,9 +1222,15 @@ impl Compiler<'_> {
         for (i, j) in case_jumps {
             self.patch(j, body_starts[i]);
         }
-        match default_idx {
-            Some(d) => self.patch(jmp_default, body_starts[d]),
-            None => self.patch(jmp_default, end),
+        let no_case = default_idx.map_or(end, |d| body_starts[d]);
+        self.patch(jmp_default, no_case);
+        if let (Some(at), Some(keys)) = (table_at, keys) {
+            if let Op::Match { table, .. } = &mut self.f().ops[at] {
+                table.default = no_case;
+                for (case, key) in keys {
+                    table.insert(key, body_starts[case]);
+                }
+            }
         }
         if let Cleanup::FreeTmp(t) = cleanup {
             self.emit(Op::Free(Operand::Tmp(t)));
@@ -1584,4 +1601,40 @@ impl super::FnCtx {
         *self.pending_fast_calls() = rest;
         mine.into_iter().map(|(_, a)| a).collect()
     }
+}
+
+/// `determine_switch_jumptable_type` and `should_use_jumptable` of
+/// `zend_compile_switch`: the (case index, key) of every `case` when each
+/// is an int literal (at least five cases, the default counted) or each a
+/// string literal that is not numeric (at least two); `None` when the
+/// cases are only compared one by one. A numeric string is left out: it
+/// compares loosely equal to other spellings of its number.
+fn switch_jumptable_keys(
+    cases: &[ast::SwitchCase],
+) -> Option<Vec<(usize, crate::opcode::MatchKey)>> {
+    use crate::opcode::MatchKey;
+    let mut keys = Vec::new();
+    let mut ints = None;
+    for (i, c) in cases.iter().enumerate() {
+        let Some(cond) = &c.cond else {
+            continue;
+        };
+        let key = match &cond.kind {
+            ExprKind::Int(n) => MatchKey::Int(*n),
+            ExprKind::String(s) if !php_runtime::numeric::is_numeric(s) => {
+                MatchKey::Str(s.as_slice().into())
+            }
+            _ => return None,
+        };
+        let is_int = matches!(key, MatchKey::Int(_));
+        if *ints.get_or_insert(is_int) != is_int {
+            return None;
+        }
+        keys.push((i, key));
+    }
+    let enough = match ints? {
+        true => cases.len() >= 5,
+        false => cases.len() >= 2,
+    };
+    enough.then_some(keys)
 }

@@ -230,18 +230,21 @@ enum_codec!(MatchKey: u8 {
     Str(a) = 1,
 });
 
-/// Only the entries (in order) and the default are written; the lookup
-/// maps are rebuilt by inserting the entries again, which yields the same
-/// table because the encoded entries never repeat a key.
+/// Only the entries (in order), the default and the `switch` mark are
+/// written; the lookup maps are rebuilt by inserting the entries again,
+/// which yields the same table because the encoded entries never repeat a
+/// key.
 impl Codec for MatchTable {
     fn encode(&self, w: &mut Writer) -> EResult {
         self.entries.encode(w)?;
-        self.default.encode(w)
+        self.default.encode(w)?;
+        self.switch.encode(w)
     }
 
     fn decode(r: &mut Reader<'_>) -> DResult<Self> {
         let entries = Vec::<(MatchKey, u32)>::decode(r)?;
         let mut table = MatchTable::new(u32::decode(r)?);
+        table.switch = bool::decode(r)?;
         for (key, target) in entries {
             if !table.insert(key, target) {
                 return Err(DecodeError("duplicate match key"));
@@ -470,7 +473,10 @@ mod tests {
     fn show(op: &Op) -> String {
         match op {
             Op::Match { subject, table } => {
-                format!("Match {subject:?} {:?} {}", table.entries, table.default)
+                format!(
+                    "Match {subject:?} {:?} {} {}",
+                    table.entries, table.default, table.switch
+                )
             }
             other => format!("{other:?}"),
         }

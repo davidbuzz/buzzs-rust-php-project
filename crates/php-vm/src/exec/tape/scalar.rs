@@ -1053,8 +1053,10 @@ pub(super) unsafe fn jmp_set_tmp(frame: *mut Frame, inst: &Inst) -> Br {
 /// The subject kind of a [`TOp::MatchJ`] row (`k`) that is a literal.
 const MATCH_LIT: u8 = 3;
 
-/// `Op::Match` (`ZEND_MATCH`): the jump the op's table gives the subject
-/// (an int or a string by its key, anything else to the default arm), as
+/// `Op::Match` (`ZEND_MATCH`, and `ZEND_SWITCH_LONG` / `_STRING` for a
+/// `switch` table: another type to the next row): the jump the op's table
+/// gives the subject (an int or a string by its key, anything else to the
+/// default arm), as
 /// the byte offset of its target from this row ([`super::rel`] checked
 /// every target at lowering). 0, nothing changed, for an undefined
 /// variable (the generic op warns) and a reference (dereferenced there).
@@ -1084,7 +1086,16 @@ pub(super) unsafe fn match_jump(frame: *mut Frame, inst: &Inst) -> isize {
     // SAFETY: the caller's contract: the table lives in the op array the
     // frame runs, which outlives the frame's run of its tape.
     let table = unsafe { &*(inst.p as *const crate::opcode::MatchTable) };
-    let to = table.target(v);
+    let to = if table.switch {
+        // A `switch` table: another type goes on to the next row, the
+        // statement's `case` comparisons.
+        match table.switch_target(v) {
+            Some(to) => to,
+            None => return std::mem::size_of::<Inst>() as isize,
+        }
+    } else {
+        table.target(v)
+    };
     (to as isize - inst.d as isize) * std::mem::size_of::<Inst>() as isize
 }
 

@@ -1861,7 +1861,12 @@ impl<'a> Lower<'a> {
             }
             Op::Match { subject, table } => {
                 let s = self.z(subject);
-                let mut l = ZLine::new("MATCH").a(s).j(Z::Label(table.default));
+                let name = match (table.switch, table.entries.first()) {
+                    (true, Some((MatchKey::Int(_), _))) => "SWITCH_LONG",
+                    (true, _) => "SWITCH_STRING",
+                    (false, _) => "MATCH",
+                };
+                let mut l = ZLine::new(name).a(s).j(Z::Label(table.default));
                 l.jt = Some(
                     table
                         .entries

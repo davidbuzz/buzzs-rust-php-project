@@ -3016,6 +3016,20 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    Op::Match { subject, table } if table.switch => {
+                        // `ZEND_SWITCH_LONG` / `ZEND_SWITCH_STRING`: the
+                        // subject dereferenced; an undefined CV (no
+                        // warning here: the `case` comparisons warn) and
+                        // a value of another type go on to the next op.
+                        let v = match *subject {
+                            Operand::Cv(cv) => self.read_cv_defined(cv),
+                            o => Some(self.read(o)?.deref()),
+                        };
+                        if let Some(to) = v.as_ref().and_then(|v| table.switch_target(v)) {
+                            ip = to as usize;
+                        }
+                        Flow::Next
+                    }
                     Op::Match { subject, table } => {
                         // `ZEND_MATCH`: an undefined CV warns once
                         // (`ZVAL_UNDEFINED_OP1`), then takes the default.
