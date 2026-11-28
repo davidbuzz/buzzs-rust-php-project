@@ -1151,3 +1151,82 @@ a0
 "#
     );
 }
+
+/// The read-only reflection methods the tape calls without a frame of
+/// their own (`flags::PURE`: `getDeclaringClass()`, `getDocComment()`,
+/// `getFileName()`, `getStartLine()`, `getEndLine()`, `getConstructor()`)
+/// for user, internal, enum and trait classes, closures and a `__call()`
+/// trampoline; an uninitialized reflection object's error is the framed
+/// call's (its trace names the method). Expected output: php-src's (PHP
+/// 8.5).
+#[test]
+fn frameless_reflection_reads_match_php_src() {
+    assert_eq!(
+        run_std(r#"<?php
+/** Base doc */
+class Base { /** p doc */ public $p; public function __construct() {} /** m doc */ public function m() {}
+  public function __call($n, $a) {} }
+trait T { /** t doc */ public function tm() {} }
+/** Kid */
+class Kid extends Base { use T; protected int $q = 1; }
+enum E: string { case A = 'a'; /** f */ public function f() {} }
+function show($r) { $o = [];
+  foreach (['getDocComment', 'getFileName', 'getStartLine', 'getEndLine'] as $m) { $v = $r->$m(); $o[] = is_string($v) ? basename($v) : var_export($v, true); }
+  return implode('|', $o); }
+for ($i = 0; $i < 2; $i++) {
+  foreach ([new ReflectionClass('Kid'), new ReflectionClass('Base'), new ReflectionClass('ArrayObject'), new ReflectionClass('E'), new ReflectionClass('T'), new ReflectionEnum('E')] as $rc) {
+    $c = $rc->getConstructor(); echo $rc->getName(), ": ", show($rc), " ctor=", $c ? $c->class . '::' . $c->getName() : 'none', "\n";
+  }
+  foreach ([new ReflectionMethod('Kid', 'm'), new ReflectionMethod('Kid', 'tm'), new ReflectionMethod('ArrayObject', 'count'), new ReflectionMethod('E', 'f')] as $rm) {
+    $d = $rm->getDeclaringClass(); echo $rm->getName(), ": ", get_class($d), " ", $d->getName(), " ", show($rm), "\n";
+  }
+  foreach ([new ReflectionFunction('show'), new ReflectionFunction(fn() => 1), new ReflectionFunction('strlen'), new ReflectionFunction(Closure::fromCallable([new Kid, 'magic']))] as $rf) { echo $rf->getName(), ": ", show($rf), "\n"; }
+  foreach ([new ReflectionProperty('Kid', 'p'), new ReflectionProperty('Kid', 'q')] as $rp) { echo $rp->getName(), ": ", $rp->getDeclaringClass()->getName(), " ", var_export($rp->getDocComment(), true), "\n"; }
+}
+class MyRC extends ReflectionClass { function __construct() {} }
+class MyRM extends ReflectionMethod { function __construct() {} }
+foreach (['getDocComment', 'getStartLine', 'getConstructor'] as $m) { try { (new MyRC)->$m(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], "\n"; } }
+try { (new MyRM)->getDeclaringClass(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getTrace()[0]['function'], " line ", $e->getLine(), "\n"; }
+$a = new ReflectionMethod('Kid', 'm'); $b = $a->getDeclaringClass(); $c = $a->getDeclaringClass(); var_dump($b === $c, $b == $c);
+"#),
+        r"Kid: ** Kid *|t.php|7|7 ctor=Base::__construct
+Base: ** Base doc *|t.php|3|4 ctor=Base::__construct
+ArrayObject: false|false|false|false ctor=ArrayObject::__construct
+E: false|t.php|8|8 ctor=none
+T: false|t.php|5|5 ctor=none
+E: false|t.php|8|8 ctor=none
+m: ReflectionClass Base ** m doc *|t.php|3|3
+tm: ReflectionClass Kid ** t doc *|t.php|5|5
+count: ReflectionClass ArrayObject false|false|false|false
+f: ReflectionEnum E ** f *|t.php|8|8
+show: false|t.php|9|11
+{closure:t.php:19}: false|t.php|19|19
+strlen: false|false|false|false
+magic: false|false|false|false
+p: Base '/** p doc */'
+q: Kid false
+Kid: ** Kid *|t.php|7|7 ctor=Base::__construct
+Base: ** Base doc *|t.php|3|4 ctor=Base::__construct
+ArrayObject: false|false|false|false ctor=ArrayObject::__construct
+E: false|t.php|8|8 ctor=none
+T: false|t.php|5|5 ctor=none
+E: false|t.php|8|8 ctor=none
+m: ReflectionClass Base ** m doc *|t.php|3|3
+tm: ReflectionClass Kid ** t doc *|t.php|5|5
+count: ReflectionClass ArrayObject false|false|false|false
+f: ReflectionEnum E ** f *|t.php|8|8
+show: false|t.php|9|11
+{closure:t.php:19}: false|t.php|19|19
+strlen: false|false|false|false
+magic: false|false|false|false
+p: Base '/** p doc */'
+q: Kid false
+Error: Internal error: Failed to retrieve the reflection object @getDocComment
+Error: Internal error: Failed to retrieve the reflection object @getStartLine
+Error: Internal error: Failed to retrieve the reflection object @getConstructor
+Error: Internal error: Failed to retrieve the reflection object @getDeclaringClass line 25
+bool(false)
+bool(true)
+"
+    );
+}
