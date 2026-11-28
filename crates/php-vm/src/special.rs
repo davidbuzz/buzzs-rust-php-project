@@ -575,6 +575,10 @@ pub(crate) mod leaf {
     pub(crate) const PREG_MATCH: u8 = 20;
     /// `preg_replace(string, string, string)`, likewise.
     pub(crate) const PREG_REPLACE: u8 = 21;
+    /// `is_callable(object)`: a closure or an object with `__invoke()`
+    /// (a string or an array names a function or method, which may
+    /// autoload or deprecate).
+    pub(crate) const IS_CALLABLE: u8 = 22;
 }
 
 /// The [`leaf`] class of the builtin function named `lc` (lower case).
@@ -604,6 +608,7 @@ pub(crate) fn leaf_id(lc: &[u8]) -> u8 {
         b"ucfirst" | b"lcfirst" | b"crc32" | b"function_exists" => leaf::STR1,
         b"preg_match" => leaf::PREG_MATCH,
         b"preg_replace" => leaf::PREG_REPLACE,
+        b"is_callable" => leaf::IS_CALLABLE,
         _ => leaf::NONE,
     }
 }
@@ -649,7 +654,8 @@ impl Vm {
                 | [Array(_), Int(_), Int(_) | Null, Bool(_)],
             )
             | (leaf::PREG_QUOTE, [Str(_)] | [Str(_), Str(_) | Null])
-            | (leaf::STR1, [Str(_)]) => true,
+            | (leaf::STR1, [Str(_)])
+            | (leaf::IS_CALLABLE, [Object(_)]) => true,
             (leaf::EXPLODE, [Str(sep), Str(_)]) | (leaf::EXPLODE, [Str(sep), Str(_), Int(_)]) => {
                 !sep.is_empty()
             }

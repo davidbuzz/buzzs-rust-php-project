@@ -243,3 +243,42 @@ autoload(App\AutoY) bool(false)
 "#
     );
 }
+
+/// `is_callable($object)` runs without a frame (`special::leaf::IS_CALLABLE`):
+/// closures, `__invoke()` (inherited, private: in and out of its class's
+/// scope), `__call()`, internal objects; names and arrays keep the framed
+/// call (autoloading). Expected output: php-src's (PHP 8.5).
+#[test]
+fn is_callable_of_objects_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class Inv { public function __invoke() {} }
+class PrivInv { private function __invoke() {} function test() { return [is_callable($this), is_callable(new self)]; } }
+class Plain { public function __call($n, $a) {} public static function __callStatic($n, $a) {} }
+class ChildInv extends Inv {}
+function run() {
+  $r = [];
+  $objs = [function () {}, fn() => 1, new Inv, new ChildInv, new Plain, new \stdClass, new \ArrayObject([]), \Closure::fromCallable('strlen'), (new \ReflectionClass(Inv::class))->newInstanceWithoutConstructor()];
+  for ($i = 0; $i < 2; $i++) { foreach ($objs as $o) { $r[] = is_callable($o) ? 1 : 0; } }
+  $r[] = implode(',', array_map(fn($b) => $b ? 1 : 0, (new PrivInv)->test()));
+  $r[] = is_callable(new PrivInv) ? 1 : 0;
+  echo implode(' ', $r), "\n";
+  var_dump(is_callable('strlen'), is_callable('nope'), is_callable([new Inv, '__invoke']), is_callable('App\Inv::nope'));
+  spl_autoload_register(function ($c) { echo "autoload($c) "; });
+  var_dump(is_callable('Missing::f'), is_callable(['Missing2', 'f']));
+}
+run();
+"#).1,
+        r"
+Warning: The magic method App\PrivInv::__invoke() must have public visibility in t.php on line 4
+1 1 1 1 0 0 0 1 1 1 1 1 1 0 0 0 1 1 1,1 1
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+autoload(Missing) autoload(Missing2) bool(false)
+bool(false)
+"
+    );
+}
