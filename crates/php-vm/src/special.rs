@@ -1747,6 +1747,54 @@ impl Vm {
         self.frameless_handler_call(b, n, dst, live)
     }
 
+    /// The call of leaf builtin `b` (`leaf_id`) whose `n` arguments were
+    /// sent into the argument buffer of the pooled frame above the current
+    /// one (an argument computed between the call's start and its sends,
+    /// `assert($x instanceof C)`, which `calls::leaf_now` cannot read
+    /// ahead): when they have a shape of its leaf class
+    /// ([`Vm::leaf_args`]: the handler then reports nothing, throws
+    /// nothing, runs no PHP code and looks at no frame), the handler runs
+    /// on the caller's frame as a frameless function's does
+    /// ([`Vm::frameless_handler_call`]), `caller_ip` saved as the resume
+    /// point. `None`, nothing changed, for any other call.
+    pub(crate) fn leaf_prepared(
+        &mut self,
+        b: &Rc<Builtin>,
+        n: usize,
+        calls_len: usize,
+        dst: Option<u32>,
+        caller_ip: usize,
+    ) -> Option<VmResult<()>> {
+        const MAX: usize = 4;
+        let id = b.leaf_id();
+        if id == leaf::NONE
+            || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || self.observer.enabled
+            || n > MAX
+        {
+            return None;
+        }
+        let live = self.frames.live;
+        {
+            let caller = self.frames.vec.get(live.checked_sub(1)?)?;
+            let frame = self.frames.vec.get(live)?;
+            if caller.calls.len() != calls_len || frame.args.len() != n {
+                return None;
+            }
+            let mut sent: [&Value; MAX] = [&Value::Null; MAX];
+            for (slot, arg) in sent.iter_mut().zip(&frame.args) {
+                *slot = arg.as_ref()?;
+            }
+            if !self.leaf_args(id, &sent[..n]) {
+                return None;
+            }
+        }
+        if let Some(caller) = self.frames.vec.get_mut(live - 1) {
+            caller.ip = caller_ip;
+        }
+        self.frameless_handler_call(b, n, dst, live)
+    }
+
     /// The handler of builtin `b` called on the caller's frame with the
     /// `n` arguments sent into the argument buffer of the pooled frame at
     /// `live` (moved out of it: the buffer is left empty) and the declared

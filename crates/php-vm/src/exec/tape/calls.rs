@@ -2453,6 +2453,12 @@ pub(super) struct Prepared {
     /// method, static method or closure call, whose `$this`, scopes and
     /// closure are in the prepared frame.
     fcall: bool,
+    /// A call of a function by its name, with no `$this`, scopes or
+    /// closure in the prepared frame: an `fcall`, or a builtin an
+    /// unqualified call from namespaced code resolved to (`prepare_ns`,
+    /// php-src's `ZEND_JMP_FRAMELESS` then takes the frameless form too).
+    /// The frameless and fast-evaluated forms need it.
+    by_name: bool,
     /// A dynamic call (the pending call's `dynamic`): a closure's (`$f()`),
     /// whose bound variables are copied into the frame at `DoCall`, or a
     /// callback's (`call_user_func()`, [`prepare_user_call`]), which has
@@ -2526,6 +2532,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         n: 0,
         calls_len: caller.calls.len(),
         fcall: true,
+        by_name: true,
         closure: false,
         binds: false,
         ctor: false,
@@ -2581,6 +2588,7 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
                 n: 0,
                 calls_len: caller.calls.len(),
                 fcall: false,
+                by_name: false,
                 closure: false,
                 binds: false,
                 ctor: false,
@@ -2599,6 +2607,7 @@ pub(super) fn prepare_ns(vm: &mut Vm, name: u32, site: usize) -> Option<Prepared
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: true,
         closure: false,
         binds: false,
         ctor: false,
@@ -2653,6 +2662,7 @@ pub(super) fn prepare_quick(
         limit: 1,
         calls_len: caller.calls.len(),
         fcall: true,
+        by_name: true,
         closure: false,
         binds: false,
         ctor: false,
@@ -3045,6 +3055,7 @@ pub(super) fn prepare_method(
         n: 0,
         calls_len,
         fcall: false,
+        by_name: false,
         closure: false,
         binds: false,
         ctor: false,
@@ -3866,6 +3877,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: false,
         binds: false,
         ctor: false,
@@ -3923,6 +3935,7 @@ fn prepare_native_method(
         n: 0,
         calls_len,
         fcall: false,
+        by_name: false,
         closure: false,
         binds: false,
         ctor: false,
@@ -4008,6 +4021,7 @@ pub(super) fn prepare_relative_static(
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: false,
         binds: false,
         ctor: false,
@@ -4075,6 +4089,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: true,
         binds,
         ctor: false,
@@ -4155,6 +4170,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: false,
         binds: false,
         ctor: true,
@@ -4986,15 +5002,22 @@ pub(super) fn call_native(
     // handler (`is_string()`, `count()`, ...): the same, in place. The ids
     // are global functions', found by name: a method of the same name
     // (`BcMath\Number::sqrt()`) is not one of them, as there.
-    if prep.fcall && prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
+    if prep.by_name && prep.n == 1 && b.fast_eval_id() != crate::call::fe::NONE {
         if let Some(r) = vm.fast_eval_prepared(b, prep.calls_len, dst, caller_ip) {
             return Ok(r);
         }
     }
     // `ZEND_FRAMELESS_ICALL_n`: a function with a frameless class, called
     // on the caller's frame when its arguments allow it.
-    if prep.fcall && b.flags & flags::FRAMELESS != 0 {
+    if prep.by_name && b.flags & flags::FRAMELESS != 0 {
         if let Some(r) = vm.frameless_icall_prepared(b, prep.n, prep.calls_len, dst, caller_ip) {
+            return Ok(r);
+        }
+    }
+    // A leaf builtin (`special::leaf`) whose arguments were computed
+    // after the call started, so `leaf_now` could not take it.
+    if prep.by_name && b.leaf_id() != crate::special::leaf::NONE {
+        if let Some(r) = vm.leaf_prepared(b, prep.n, prep.calls_len, dst, caller_ip) {
             return Ok(r);
         }
     }
@@ -5806,6 +5829,7 @@ pub(super) fn prepare_pending(vm: &mut Vm, call: PendingCall) -> Result<Prepared
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: true,
         binds: true,
         ctor: false,
@@ -5876,6 +5900,7 @@ fn user_call_static(
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: true,
         binds: true,
         ctor: false,
@@ -5935,6 +5960,7 @@ fn user_call_function(
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: true,
         binds: true,
         ctor: false,
@@ -5995,6 +6021,7 @@ fn user_call_method(
         n: 0,
         calls_len: caller.calls.len(),
         fcall: false,
+        by_name: false,
         closure: true,
         binds: true,
         ctor: false,
@@ -6039,6 +6066,7 @@ fn user_call_object(
             n: 0,
             calls_len,
             fcall: false,
+            by_name: false,
             closure: true,
             binds: true,
             ctor: false,
@@ -6062,6 +6090,7 @@ fn user_call_object(
         n: 0,
         calls_len,
         fcall: false,
+        by_name: false,
         closure: true,
         binds: true,
         ctor: false,
