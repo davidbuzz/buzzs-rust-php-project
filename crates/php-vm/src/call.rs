@@ -2815,7 +2815,10 @@ impl Vm {
         // (Split by hand, as in the planned call: see
         // `FrameStack::split_pooled_mut`.)
         let (callers, rest) = self.frames.split_pooled_mut(fidx);
-        let (Some(caller), Some(frame)) = (callers.last_mut(), rest.first_mut()) else {
+        let (Some(caller), Some(frame)) = (
+            callers.last_mut().map(|f| &mut **f),
+            rest.first_mut().map(|f| &mut **f),
+        ) else {
             return false;
         };
         if !frame.plain_releasable() {

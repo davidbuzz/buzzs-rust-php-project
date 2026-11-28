@@ -822,14 +822,24 @@ impl std::fmt::Debug for CvSlot {
     }
 }
 
-/// Contiguous execution stack for call frames.
+/// The execution stack of call frames.
 ///
-/// Frames live in place on a contiguous vector (`vec[..live]`).
-/// Released frames in `vec[live..]` are retained in place (up to 8) as the pool,
-/// avoiding all frame moves between stack and pool.
+/// Each frame is in a heap block of its own (`vec[..live]` holds the
+/// pointers), which stays where it is for the frame's life: a generator's
+/// frame, kept in the generator while it is suspended, goes on and off the
+/// stack as a pointer (`FrameStack::push_boxed`, `FrameStack::pop_boxed`),
+/// as a fiber's frames do when it switches (`php-src`'s generator
+/// `execute_data` likewise stays in its own allocation,
+/// `zend_generator_create_zval`). Released frames in `vec[live..]` are
+/// retained in place (up to 128 spare) as the pool, for the next calls at
+/// their depths.
 #[derive(Debug, Default)]
 pub struct FrameStack {
-    vec: Vec<Frame>,
+    /// The frames, each in a heap block of its own that never moves while
+    /// the frame lives: pushing a generator's frame (or popping it) moves
+    /// a pointer, not the frame (`perf/REDESIGN-FRAMES.md`, stage 2a).
+    #[allow(clippy::vec_box)] // the boxes are the point: frames that never move
+    vec: Vec<Box<Frame>>,
     live: usize,
 }
 
@@ -870,7 +880,10 @@ impl FrameStack {
     #[allow(clippy::inline_always)] // part of every call and return
     pub(crate) fn pair_mut(&mut self, i: usize) -> (Option<&mut Frame>, Option<&mut Frame>) {
         let (a, b) = self.vec.split_at_mut(i);
-        (a.last_mut(), b.first_mut())
+        (
+            a.last_mut().map(|f| &mut **f),
+            b.first_mut().map(|f| &mut **f),
+        )
     }
 
     /// Frames `i - 1` and `i` (see [`FrameStack::pair_mut`]), when both
@@ -895,9 +908,9 @@ impl FrameStack {
         Some((&self.vec[i - 1], &self.vec[i]))
     }
 
-    /// The frames below `i` and from `i` on (live, then released), for
-    /// the planned call and the plain return alone (`exec::tape::calls`,
-    /// `Vm::return_plain`), where
+    /// The frames below `i` and from `i` on (live, then released), in
+    /// their boxes, for the planned call and the plain return alone
+    /// (`exec::tape::calls`, `Vm::return_plain`), where
     /// [`FrameStack::both_mut`]'s pair costs a null test the compiler does
     /// not fold. A later stage that moves the frames onto a VM stack
     /// replaces it with that sequence's own view.
@@ -906,7 +919,7 @@ impl FrameStack {
     /// When `i` is past the frames kept.
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every planned call and return
-    pub(crate) fn split_pooled_mut(&mut self, i: usize) -> (&mut [Frame], &mut [Frame]) {
+    pub(crate) fn split_pooled_mut(&mut self, i: usize) -> (&mut [Box<Frame>], &mut [Box<Frame>]) {
         self.vec.split_at_mut(i)
     }
 
@@ -914,14 +927,14 @@ impl FrameStack {
     #[inline(always)]
     #[allow(clippy::inline_always)] // a bounds test
     pub(crate) fn pooled(&self, i: usize) -> Option<&Frame> {
-        self.vec.get(i)
+        self.vec.get(i).map(|f| &**f)
     }
 
     /// Frame `i`, live or released, to change.
     #[inline(always)]
     #[allow(clippy::inline_always)] // a bounds test
     pub(crate) fn pooled_mut(&mut self, i: usize) -> Option<&mut Frame> {
-        self.vec.get_mut(i)
+        self.vec.get_mut(i).map(|f| &mut **f)
     }
 
     /// Frame `i`, live or released.
@@ -968,12 +981,12 @@ impl FrameStack {
     }
 
     #[inline(always)]
-    fn as_slice(&self) -> &[Frame] {
+    fn as_slice(&self) -> &[Box<Frame>] {
         &self.vec[..self.live]
     }
 
     #[inline(always)]
-    fn as_mut_slice(&mut self) -> &mut [Frame] {
+    fn as_mut_slice(&mut self) -> &mut [Box<Frame>] {
         &mut self.vec[..self.live]
     }
 
@@ -997,22 +1010,22 @@ impl FrameStack {
     #[inline(always)]
     #[allow(clippy::inline_always)] // a slice of the live frames
     pub fn first(&self) -> Option<&Frame> {
-        self.as_slice().first()
+        self.as_slice().first().map(|f| &**f)
     }
 
     /// The oldest live frame, to change.
     #[inline(always)]
     #[allow(clippy::inline_always)] // a slice of the live frames
     pub fn first_mut(&mut self) -> Option<&mut Frame> {
-        self.as_mut_slice().first_mut()
+        self.as_mut_slice().first_mut().map(|f| &mut **f)
     }
 
     #[inline]
     pub fn push(&mut self, frame: Frame) {
         if self.live < self.vec.len() {
-            self.vec[self.live] = frame;
+            *self.vec[self.live] = frame;
         } else {
-            self.vec.push(frame);
+            self.vec.push(Box::new(frame));
         }
         self.live += 1;
     }
@@ -1023,33 +1036,48 @@ impl FrameStack {
             return None;
         }
         self.live -= 1;
-        Some(self.vec.remove(self.live))
+        Some(*self.vec.remove(self.live))
     }
 
-    /// Pushes a boxed frame (a generator's) by swapping it with the
-    /// released frame kept in the slot for the next call at this depth:
-    /// nothing is dropped or freed, and the box comes back holding that
-    /// frame, for [`FrameStack::pop_boxed`] to swap back. With no frame
-    /// kept there, the frame moves in as [`FrameStack::push`] moves it, the
-    /// box is freed and `None` is returned.
+    /// Pushes a boxed frame (a generator's) as it is: its box takes the
+    /// place of the released frame kept for the next call at this depth,
+    /// which comes back for [`FrameStack::pop_boxed`] to put back. Only
+    /// the pointers move. With no frame kept there, the box is appended
+    /// and `None` is returned.
     #[inline]
     pub(crate) fn push_boxed(&mut self, mut frame: Box<Frame>) -> Option<Box<Frame>> {
         if let Some(slot) = self.vec.get_mut(self.live) {
-            std::mem::swap(slot, &mut *frame);
+            std::mem::swap(slot, &mut frame);
             self.live += 1;
             return Some(frame);
         }
-        self.vec.push(*frame);
+        self.vec.push(frame);
         self.live += 1;
         None
     }
 
-    /// Pops the top frame into a box: into `spare` (the box
-    /// [`FrameStack::push_boxed`] gave back) by a swap that puts the
-    /// released frame it holds back in the slot, else into a new box,
-    /// leaving an empty frame in the slot for the next push to swap with.
-    /// The frames kept above stay where they are. `None` when the stack is
-    /// empty.
+    /// Pushes a frame in its box as it is (a generator's, lent for a
+    /// backtrace or an exception made inside it), above the live ones: the
+    /// released frames kept for the next calls stay, one place up.
+    #[inline]
+    pub(crate) fn push_box(&mut self, frame: Box<Frame>) {
+        self.vec.insert(self.live, frame);
+        self.live += 1;
+    }
+
+    /// Pops the top frame in its box, as it is
+    /// ([`FrameStack::push_box`]'s converse).
+    #[inline]
+    pub(crate) fn pop_box(&mut self) -> Option<Box<Frame>> {
+        self.live = self.live.checked_sub(1)?;
+        Some(self.vec.remove(self.live))
+    }
+
+    /// Pops the top frame in its box, putting `spare` (the released frame
+    /// [`FrameStack::push_boxed`] gave back) in its place; with none, the
+    /// place is given up when it is the last one kept, and otherwise takes
+    /// an empty frame, for the frames kept above to stay where they are.
+    /// `None` when the stack is empty.
     #[inline]
     pub(crate) fn pop_boxed(
         &mut self,
@@ -1058,17 +1086,14 @@ impl FrameStack {
         empty_vars: &Rc<RefCell<VarStore>>,
     ) -> Option<Box<Frame>> {
         let top = self.live.checked_sub(1)?;
-        let slot = self.vec.get_mut(top)?;
         self.live = top;
         Some(match spare {
-            Some(mut b) => {
-                std::mem::swap(slot, &mut *b);
-                b
-            }
-            None => Box::new(std::mem::replace(
-                slot,
-                Frame::empty_builtin(empty_code, empty_vars),
-            )),
+            Some(b) => std::mem::replace(&mut self.vec[top], b),
+            None if top + 1 == self.vec.len() => self.vec.pop()?,
+            None => std::mem::replace(
+                &mut self.vec[top],
+                Box::new(Frame::empty_builtin(empty_code, empty_vars)),
+            ),
         })
     }
 
@@ -1088,18 +1113,18 @@ impl FrameStack {
 
     #[inline]
     pub fn last(&self) -> Option<&Frame> {
-        self.as_slice().last()
+        self.as_slice().last().map(|f| &**f)
     }
 
     #[inline]
     pub fn last_mut(&mut self) -> Option<&mut Frame> {
-        self.as_mut_slice().last_mut()
+        self.as_mut_slice().last_mut().map(|f| &mut **f)
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<&Frame> {
         if index < self.live {
-            self.vec.get(index)
+            self.vec.get(index).map(|f| &**f)
         } else {
             None
         }
@@ -1108,7 +1133,7 @@ impl FrameStack {
     #[inline]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut Frame> {
         if index < self.live {
-            self.vec.get_mut(index)
+            self.vec.get_mut(index).map(|f| &mut **f)
         } else {
             None
         }
@@ -1130,7 +1155,7 @@ impl FrameStack {
                 f.reinit_for_call(code, kind);
             }
         } else {
-            self.vec.push(Frame::new(code.clone(), kind));
+            self.vec.push(Box::new(Frame::new(code.clone(), kind)));
         }
         self.live += 1;
         idx
@@ -1156,7 +1181,8 @@ impl FrameStack {
         if idx < self.vec.len() {
             self.vec[idx].reinit_for_builtin(empty_code);
         } else {
-            self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
+            self.vec
+                .push(Box::new(Frame::empty_builtin(empty_code, empty_vars)));
         }
         self.live = idx + 1;
         &mut self.vec[idx]
@@ -1184,7 +1210,8 @@ impl FrameStack {
     #[cold]
     #[inline(never)]
     fn grow_pool(&mut self, empty_code: &Rc<OpArray>, empty_vars: &Rc<RefCell<VarStore>>) {
-        self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
+        self.vec
+            .push(Box::new(Frame::empty_builtin(empty_code, empty_vars)));
     }
 
     /// Releases the builtin frame on top of the stack in place
@@ -1274,7 +1301,9 @@ impl FrameStack {
         }
     }
 
-    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, Frame>
+    /// Takes the live frames in `range` off the stack, in their boxes
+    /// (a fiber's prefix stashed while it runs: they move as pointers).
+    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, Box<Frame>>
     where
         R: std::ops::RangeBounds<usize>,
     {
@@ -1293,13 +1322,22 @@ impl FrameStack {
         self.vec.drain(start..end)
     }
 
-    pub fn extend<I: IntoIterator<Item = Frame>>(&mut self, iter: I) {
+    /// Pushes frames in their boxes ([`FrameStack::drain`],
+    /// [`FrameStack::split_off`]), each in the place of the released frame
+    /// kept at its depth, as [`FrameStack::push`] puts a frame there.
+    pub fn extend<I: IntoIterator<Item = Box<Frame>>>(&mut self, iter: I) {
         for f in iter {
-            self.push(f);
+            if self.live < self.vec.len() {
+                self.vec[self.live] = f;
+            } else {
+                self.vec.push(f);
+            }
+            self.live += 1;
         }
     }
 
-    pub fn split_off(&mut self, at: usize) -> Vec<Frame> {
+    /// Takes the live frames from `at` on off the stack, in their boxes.
+    pub fn split_off(&mut self, at: usize) -> Vec<Box<Frame>> {
         if at >= self.live {
             return Vec::new();
         }
@@ -1308,32 +1346,35 @@ impl FrameStack {
         self.vec.drain(at..(at + count)).collect()
     }
 
-    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Vec<Frame>
+    /// Replaces the live frames in `range` by `replace_with` (frames in
+    /// their boxes), dropping the released ones kept above.
+    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Vec<Box<Frame>>
     where
         R: std::ops::RangeBounds<usize>,
-        I: IntoIterator<Item = Frame>,
+        I: IntoIterator<Item = Box<Frame>>,
     {
         self.vec.truncate(self.live);
-        let removed: Vec<Frame> = self.vec.splice(range, replace_with).collect();
+        let removed: Vec<Box<Frame>> = self.vec.splice(range, replace_with).collect();
         self.live = self.vec.len();
         removed
     }
 
     pub fn insert(&mut self, index: usize, element: Frame) {
         self.vec.truncate(self.live);
-        self.vec.insert(index, element);
+        self.vec.insert(index, Box::new(element));
         self.live += 1;
     }
 
-    pub fn into_vec(mut self) -> Vec<Frame> {
+    /// The live frames, in their boxes.
+    pub fn into_vec(mut self) -> Vec<Box<Frame>> {
         self.vec.truncate(self.live);
         self.vec
     }
 }
 
 impl IntoIterator for FrameStack {
-    type Item = Frame;
-    type IntoIter = std::vec::IntoIter<Frame>;
+    type Item = Box<Frame>;
+    type IntoIter = std::vec::IntoIter<Box<Frame>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.into_vec().into_iter()
@@ -1343,14 +1384,14 @@ impl IntoIterator for FrameStack {
 /// The live frames of a [`FrameStack`], oldest first
 /// ([`FrameStack::iter`]).
 #[derive(Clone, Debug)]
-pub struct FrameIter<'a>(std::slice::Iter<'a, Frame>);
+pub struct FrameIter<'a>(std::slice::Iter<'a, Box<Frame>>);
 
 #[allow(clippy::inline_always)] // forwarding, a few instructions each
 impl<'a> Iterator for FrameIter<'a> {
     type Item = &'a Frame;
     #[inline(always)]
     fn next(&mut self) -> Option<&'a Frame> {
-        self.0.next()
+        self.0.next().map(|f| &**f)
     }
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1358,11 +1399,11 @@ impl<'a> Iterator for FrameIter<'a> {
     }
     #[inline(always)]
     fn nth(&mut self, n: usize) -> Option<&'a Frame> {
-        self.0.nth(n)
+        self.0.nth(n).map(|f| &**f)
     }
     #[inline(always)]
     fn last(self) -> Option<&'a Frame> {
-        self.0.last()
+        self.0.last().map(|f| &**f)
     }
     #[inline(always)]
     fn count(self) -> usize {
@@ -1374,11 +1415,11 @@ impl<'a> Iterator for FrameIter<'a> {
 impl<'a> DoubleEndedIterator for FrameIter<'a> {
     #[inline(always)]
     fn next_back(&mut self) -> Option<&'a Frame> {
-        self.0.next_back()
+        self.0.next_back().map(|f| &**f)
     }
     #[inline(always)]
     fn nth_back(&mut self, n: usize) -> Option<&'a Frame> {
-        self.0.nth_back(n)
+        self.0.nth_back(n).map(|f| &**f)
     }
 }
 
@@ -1388,14 +1429,14 @@ impl std::iter::FusedIterator for FrameIter<'_> {}
 /// The live frames of a [`FrameStack`], oldest first, to change
 /// ([`FrameStack::iter_mut`]).
 #[derive(Debug)]
-pub struct FrameIterMut<'a>(std::slice::IterMut<'a, Frame>);
+pub struct FrameIterMut<'a>(std::slice::IterMut<'a, Box<Frame>>);
 
 #[allow(clippy::inline_always)] // forwarding, a few instructions each
 impl<'a> Iterator for FrameIterMut<'a> {
     type Item = &'a mut Frame;
     #[inline(always)]
     fn next(&mut self) -> Option<&'a mut Frame> {
-        self.0.next()
+        self.0.next().map(|f| &mut **f)
     }
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1403,7 +1444,7 @@ impl<'a> Iterator for FrameIterMut<'a> {
     }
     #[inline(always)]
     fn nth(&mut self, n: usize) -> Option<&'a mut Frame> {
-        self.0.nth(n)
+        self.0.nth(n).map(|f| &mut **f)
     }
 }
 
@@ -1411,11 +1452,11 @@ impl<'a> Iterator for FrameIterMut<'a> {
 impl<'a> DoubleEndedIterator for FrameIterMut<'a> {
     #[inline(always)]
     fn next_back(&mut self) -> Option<&'a mut Frame> {
-        self.0.next_back()
+        self.0.next_back().map(|f| &mut **f)
     }
     #[inline(always)]
     fn nth_back(&mut self, n: usize) -> Option<&'a mut Frame> {
-        self.0.nth_back(n)
+        self.0.nth_back(n).map(|f| &mut **f)
     }
 }
 
@@ -1457,8 +1498,8 @@ impl std::ops::IndexMut<usize> for FrameStack {
     }
 }
 
-impl From<Vec<Frame>> for FrameStack {
-    fn from(v: Vec<Frame>) -> Self {
+impl From<Vec<Box<Frame>>> for FrameStack {
+    fn from(v: Vec<Box<Frame>>) -> Self {
         let live = v.len();
         Self { vec: v, live }
     }

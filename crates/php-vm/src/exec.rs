@@ -3796,7 +3796,15 @@ impl Vm {
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
         if self.frames[fidx].generator().is_some() {
-            let frame = self.frames.pop().expect("frame");
+            // The frame leaves in its box, the released frame it took the
+            // place of back in its place.
+            let spare = self.frames[fidx]
+                .generator()
+                .and_then(crate::generator::take_spare);
+            let frame = self
+                .frames
+                .pop_boxed(spare, &self.empty_code, &self.empty_vars)
+                .expect("frame");
             if let Some(g) = frame.generator() {
                 crate::generator::finish_with(g, v);
             }

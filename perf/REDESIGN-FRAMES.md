@@ -405,3 +405,74 @@ failure. `cargo test --workspace --no-run` builds; it was run without
 debug info (`CARGO_PROFILE_DEV_DEBUG=0`), because with it the test
 binaries of the whole workspace are ~60G and filled the disk once. No
 clippy warning on a changed line.
+
+## Stage 2a: generators keep their frame in place (28 Nov 2026)
+
+Base 875797cb. Each frame on `FrameStack` is now in a heap block of its
+own (`vec: Vec<Box<Frame>>`), which never moves while the frame lives, as
+php-src's generator `execute_data` stays in its own allocation. A
+generator's frame stays in the generator's box. Resuming it swaps that box
+with the pool's released frame at that depth (`push_boxed`), and `yield`
+swaps them back (`pop_boxed`): two pointers move, not two 280-byte frames.
+The generator's return now also puts the pool frame back
+(`generator::take_spare`), instead of dropping it and growing the pool at
+the next call there. Creation, frames lent for a `yield from` chain or an
+exception made inside the generator, and the destructor's hidden frame
+move the box too (`push_box`/`pop_box`). Fibers' stashed frames are
+`Vec<Box<Frame>>` as well (`split_off`, `drain`, `splice`, `extend` move
+pointers).
+
+This is not the "generator's slots in a heap block of its own" variant.
+Slots are still the frame's own vectors, and in stage 2b only plain
+frames' slots move to the VM stack. The header was the expensive part,
+because it is what was swapped.
+
+Measured (release, JIT off per iteration, apps JIT on; `rd/gen.php`:
+`gen` = `foreach` over a 3-`yield` generator, `genk` = with keys and a
+local `foreach`, `from` = `yield 0; yield from gen()`, `send` = one
+`send()`, `fiber` = one `resume()`/`suspend()`, `deep` = one `next()`
+from 20 frames down):
+
+| | 875797cb | stage 2a | |
+|---|---:|---:|---:|
+| gen / genk / from | 15,317 / 14,993 / 37,699 | 13,695 / 13,684 / 32,864 | -10.6% / -8.7% / -12.8% |
+| send / fiber / deep | 3,597 / 29,384 / 2,948 | 3,243 / 26,722 / 2,594 | -9.8% / -9.1% / -12.0% |
+| f / alt | 513-514 / 1,316-1,317 | 519-520 / 1,326 | +6 / +10 |
+| `$this->m()` / `$o->m()` / `self::s()` | 685 / 707 / 628 | 693-694 / 714-716 / 637-638 | +9 / +8 / +10 |
+| empty loop | 45 | 45-46 | |
+| Laravel unit | 131.425-131.428G | 131.186-131.188G | -0.18% |
+| MW Api | 266.56-266.58G | 265.47-265.53G | -0.40% |
+
+The apps were measured three times against the base, each time
+alternating with it. Two rounds were on the build without fibers' boxed
+stashes, and one on the build with them. Those builds also passed the two
+frames of the planned call and the plain return to an inner function,
+which was dropped afterwards (see below). The final build's per-call
+counts equal theirs to within one instruction.
+
+**The cost is on every call.** The planned call and the plain return now
+reach the caller's and the callee's frames through two pointers, not at
+one base and `+280`. The compiler can no longer address both from one
+register, so the callee's pointer is spilled (`call_plain` +5,
+`return_plain` +2, from callgrind and the annotated assembly). Reading
+each box once (`.map(|f| &mut **f)` at the split) is needed: without it
+the counts were f 529 and alt 1,351. Passing the two frames to an inner
+function as `noalias` arguments was tried and changed nothing, so it was
+not kept. Both apps still come out ahead: in them, generator resumes are
+frequent enough to outweigh 5 to 10 instructions per call.
+
+Alternative measured and dropped: keeping `Vec<Frame>` and making the
+swap cheaper (three `memcpy`s through a stack buffer instead of
+`mem::swap`'s word-at-a-time exchange, which costs ~235 instructions for
+a frame, plus the pool frame put back at the return). gen 15,318 ->
+15,195 (-0.8%), with the ruler unchanged. The swaps were not the
+expensive part. The memcpys, the pool's growth and the frame drops
+around them were, and only moving pointers removes them.
+
+Where 2b plugs in: with frames that never move, a plain frame's slot
+block on the chunked VM stack can be addressed from the frame (or the
+frame put in the block's head, stage 3) without any of the pool's
+readying. The per-call cost above is the first thing stage 2b's protocol
+should take back: the planned call's own view of the stack (one base
+pointer for the caller's and the callee's blocks) is what the inline
+layout had.

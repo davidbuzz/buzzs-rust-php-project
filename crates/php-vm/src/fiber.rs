@@ -84,8 +84,10 @@ pub struct FiberData {
     co: Option<Rc<Coroutine>>,
     /// Switches back to the resumer (valid while `co` lives).
     suspender: Option<Suspender>,
-    /// The fiber's frames while it is suspended.
-    pub frames: Vec<Frame>,
+    /// The fiber's frames while it is suspended, in their boxes
+    /// (`FrameStack`): a switch moves pointers.
+    #[allow(clippy::vec_box)] // as `FrameStack`'s own
+    pub frames: Vec<Box<Frame>>,
     /// Index of the fiber's first frame in `vm.frames`.
     pub base: usize,
     /// `vm.depth` of the fiber's native stack while suspended.
@@ -211,7 +213,8 @@ enum Prefix {
     /// `n` filler frames were inserted at `pos`.
     Fillers { pos: usize, n: usize },
     /// These frames were removed from index 1.
-    Stash(Vec<Frame>),
+    #[allow(clippy::vec_box)] // as `FrameStack`'s own
+    Stash(Vec<Box<Frame>>),
 }
 
 /// The observer view of `fiber`'s context, with `caller` as `fiber->caller`.
@@ -316,8 +319,8 @@ impl Vm {
                 let n = base - d;
                 let pos = d - 1;
                 let model_idx = d.saturating_sub(2);
-                let fillers: Vec<Frame> = (0..n)
-                    .map(|_| self.filler_frame(&self.frames[model_idx]))
+                let fillers: Vec<Box<Frame>> = (0..n)
+                    .map(|_| Box::new(self.filler_frame(&self.frames[model_idx])))
                     .collect();
                 self.frames.splice(pos..pos, fillers);
                 Prefix::Fillers { pos, n }

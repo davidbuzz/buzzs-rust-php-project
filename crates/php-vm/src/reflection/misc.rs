@@ -712,7 +712,7 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .unwrap_or(vm.frames.len())
                 .min(vm.frames.len());
             let above = vm.frames.split_off(end);
-            let head: Vec<crate::vm::Frame> = vm.frames.drain(..base).collect();
+            let head: Vec<Box<crate::vm::Frame>> = vm.frames.drain(..base).collect();
             let t = vm.backtrace(false, ignore_args, provide_object, 0);
             let mid = std::mem::take(&mut vm.frames);
             vm.frames = head.into();

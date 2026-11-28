@@ -1011,7 +1011,10 @@ fn call_planned(
     // (Split by hand: `both_mut` costs this sequence two instructions,
     // its pair's null test not folded.)
     let (callers, pool) = vm.frames.split_pooled_mut(live);
-    let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
+    let (Some(caller), Some(frame)) = (
+        callers.last_mut().map(|f| &mut **f),
+        pool.first_mut().map(|f| &mut **f),
+    ) else {
         return false;
     };
     // What the call's frame holds besides its arguments. A method's

@@ -101,9 +101,9 @@ pub struct GenData {
     /// until the generator object is freed, not just while its frame
     /// lives (`zend_generator_free_storage`).
     pub(crate) closure: Option<Obj>,
-    /// While the frame runs: the box it came in, holding the released
-    /// frame it was swapped with on the stack (`FrameStack::push_boxed`),
-    /// which goes back there at the next `yield`. It holds no value.
+    /// While the frame runs: the released frame whose place it took on
+    /// the stack (`FrameStack::push_boxed`), which goes back there at the
+    /// next `yield` or at the return. It holds no value.
     spare: Option<Box<Frame>>,
 }
 
@@ -256,6 +256,12 @@ pub(crate) fn mark_finished(g: &Obj) {
     close(g);
 }
 
+/// The released frame the running `g` took the place of on the stack
+/// (`FrameStack::push_boxed`), for its return to put back there.
+pub(crate) fn take_spare(g: &Obj) -> Option<Box<Frame>> {
+    with(g, |d| d.spare.take()).flatten()
+}
+
 /// Finishes a generator with a return value.
 pub(crate) fn finish_with(g: &Obj, v: Value) {
     with(g, |d| d.ret = Some(v));
@@ -289,7 +295,7 @@ impl Vm {
     #[allow(clippy::unnecessary_wraps)] // uniform opcode handler signature
     pub(crate) fn op_generator_create(&mut self, base: usize) -> VmResult<Flow> {
         let fidx = self.frames.len() - 1;
-        let mut frame = self.frames.pop().expect("generator frame");
+        let mut frame = self.frames.pop_box().expect("generator frame");
         let ret = frame.ret;
         frame.ret = RetTarget::Discard;
         let func_name = match (&frame.func, &frame.scope) {
@@ -308,7 +314,7 @@ impl Vm {
         object::set_internal(
             &g,
             GenData {
-                frame: Some(Box::new(frame)),
+                frame: Some(frame),
                 state: GenState::Created,
                 key: None,
                 value: None,
@@ -355,8 +361,8 @@ impl Vm {
                 self.observer_end_frame(fidx, value.as_ref(), None);
             }
         }
-        // The frame moves straight from the stack into the generator (one
-        // copy, no intermediate moves through closures).
+        // The frame goes from the stack into the generator in its box (a
+        // pointer moves).
         let g = self
             .frames
             .last_mut()
@@ -652,12 +658,12 @@ impl Vm {
         let frame = with(g, |d| d.frame.take()).flatten();
         let pushed = frame.is_some();
         if let Some(f) = frame {
-            self.frames.push(*f);
+            self.frames.push_box(f);
         }
         let r = self.create_exception(class, msg, 0);
         if pushed {
-            if let Some(f) = self.frames.pop() {
-                with(g, |d| d.frame = Some(Box::new(f)));
+            if let Some(f) = self.frames.pop_box() {
+                with(g, |d| d.frame = Some(f));
             }
         }
         r
@@ -815,7 +821,7 @@ impl Vm {
                 })
                 .flatten();
                 if let Some(f) = own {
-                    self.frames.push(*f);
+                    self.frames.push_box(f);
                     self.observer_begin_top();
                     chain.push(gen.clone());
                 }
@@ -922,7 +928,7 @@ impl Vm {
             if let Some(f) = frame {
                 // Placeholders only: observers see the leaf generator
                 // run, not the ones delegating to it.
-                self.frames.push(*f);
+                self.frames.push_box(f);
                 lent.push(g);
             }
         }
@@ -936,11 +942,11 @@ impl Vm {
                 let value = with(&g, |d| d.value.clone()).flatten();
                 self.observer_end_frame(self.frames.len() - 1, value.as_ref(), thrown);
             }
-            if let Some(f) = self.frames.pop() {
+            if let Some(f) = self.frames.pop_box() {
                 with(&g, |d| {
                     d.lent = false;
                     if d.state != GenState::Finished {
-                        d.frame = Some(Box::new(f));
+                        d.frame = Some(f);
                     }
                 });
             }
@@ -1240,7 +1246,7 @@ fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = gen_obj(a);
     // php-src destroys without a call frame: the generator appears called
     // from the code that released it (or from internal code at shutdown).
-    let own = vm.frames.pop();
+    let own = vm.frames.pop_box();
     let hidden = vm.frames.is_empty();
     if hidden {
         vm.frames.push(Frame::with_vars(
@@ -1255,7 +1261,7 @@ fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.frames.pop();
     }
     if let Some(f) = own {
-        vm.frames.push(f);
+        vm.frames.push_box(f);
     }
     r.map(|()| Value::Null)
 }
