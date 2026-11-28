@@ -462,3 +462,36 @@ xyc
 "#
     );
 }
+
+/// `str_replace(array, string, string)` runs frameless when every search
+/// element is a string no shorter than the replacement; growing
+/// replacements, a count by reference, non-string elements (converted,
+/// with their warning) take the framed call. Expected output: php-src's
+/// (PHP 8.5).
+#[test]
+fn str_replace_with_an_array_of_searches_matches_php_src() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+function run() {
+  $r = [];
+  for ($i = 0; $i < 2; $i++) {
+    $r[] = str_replace(['`', '"', '[', ']'], '', '`a`."b"[c]');
+    $r[] = str_replace(['ab', 'cd'], 'x', 'abcdab'); $r[] = str_replace([], '', 'abc'); $r[] = str_replace(['', 'a'], '', 'banana');
+    $r[] = str_replace(['a', 'cd'], 'xy', 'acd'); $r[] = str_replace('"', '""', 'say "hi"');
+    $n = 0; $r[] = str_replace(['a'], '', 'aaa', $n); $r[] = $n;
+  }
+  echo json_encode($r), "\n";
+  echo str_replace([1, 2], '', '123'), "\n";
+  echo str_replace([[1]], '', 'abc'), "\n";
+}
+run();
+"#).1,
+        r#"["a.bc","xxx","abc","bnn","xyxy","say \"\"hi\"\"","",3,"a.bc","xxx","abc","bnn","xyxy","say \"\"hi\"\"","",3]
+3
+
+Warning: Array to string conversion in t.php on line 13
+abc
+"#
+    );
+}

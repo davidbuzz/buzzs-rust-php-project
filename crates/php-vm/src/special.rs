@@ -437,7 +437,9 @@ mod fl {
     pub(super) const IN_ARRAY: u32 = 14;
     /// `str_replace(string, string, string)` with a replacement no longer
     /// than the search string (a growing result first reserves its memory,
-    /// which can fail with the memory-limit fatal).
+    /// which can fail with the memory-limit fatal), and
+    /// `str_replace(array, string, string)` of search strings none shorter
+    /// than the replacement (another element is converted, which can warn).
     pub(super) const STR_REPLACE: u32 = 15;
     /// `strtr(string, string, string)`.
     pub(super) const STRTR: u32 = 16;
@@ -804,8 +806,22 @@ fn frameless_refs(class: u32, args: &[Option<&Value>]) -> bool {
             *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
         }
         (fl::STRTR, [Some(Str(_)), Some(Array(pairs))]) => scalar_replacements(pairs),
+        (fl::STR_REPLACE, [Some(Array(search)), Some(Str(replace)), Some(Str(_))]) => {
+            no_longer_searches(search, replace.len())
+        }
         _ => false,
     }
+}
+
+/// Whether `str_replace(array, string, string)` with the search strings
+/// `search` and a replacement of `replace_len` bytes reports nothing: every
+/// element is a string (another is converted, which can warn) and none is
+/// shorter than the replacement (the result cannot grow, so no memory is
+/// reserved first).
+fn no_longer_searches(search: &php_runtime::ZArray, replace_len: usize) -> bool {
+    search
+        .values()
+        .all(|v| matches!(v, Value::Str(s) if s.len() >= replace_len))
 }
 
 /// Whether `strtr(string, array)` of `pairs` reports nothing: no key is
@@ -835,6 +851,9 @@ fn frameless_args_ref(class: u32, args: &[&Value]) -> bool {
         | (fl::STRTR, [Str(_), Str(_), Str(_)])
         | (fl::KEY_EXISTS, [Str(_) | Int(_), Array(_)]) => true,
         (fl::STRTR, [Str(_), Array(pairs)]) => scalar_replacements(pairs),
+        (fl::STR_REPLACE, [Array(search), Str(replace), Str(_)]) => {
+            no_longer_searches(search, replace.len())
+        }
         (fl::TRIM, [Str(_), Str(chars)]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Str(_), Int(levels)]) => *levels >= 1,
         (fl::STRPOS, [Str(haystack), Str(_), Int(offset)]) => {
@@ -3172,6 +3191,20 @@ mod tests {
         assert!(ok(fl::STR_REPLACE, &[s("ab"), s("cd"), s("xabx")]));
         assert!(!ok(fl::STR_REPLACE, &[s("a"), s("cd"), s("xax")]));
         assert!(!ok(fl::STR_REPLACE, &[s("a"), s("b"), arr(vec![])]));
+        let strs = |v: &[&str]| arr(v.iter().map(|x| Value::Str(ZStr::from(*x))).collect());
+        assert!(ok(fl::STR_REPLACE, &[strs(&["`", "\""]), s(""), s("a`b")]));
+        assert!(ok(
+            fl::STR_REPLACE,
+            &[strs(&["ab", "cd"]), s("x"), s("abcd")]
+        ));
+        assert!(!ok(
+            fl::STR_REPLACE,
+            &[strs(&["a", "cd"]), s("xy"), s("acd")]
+        ));
+        assert!(!ok(
+            fl::STR_REPLACE,
+            &[arr(vec![Value::Int(1)]), s(""), s("1")]
+        ));
         // max()/min() of two scalars; strtr() of three strings.
         assert!(ok(fl::MIN_MAX, &[i(1), s("x")]));
         assert!(!ok(fl::MIN_MAX, &[i(1), arr(vec![])]));
